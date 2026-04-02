@@ -1,0 +1,6 @@
+{
+  "additional_field_discovery": {
+    "version": 1,
+    "description": "Reserved for future optional LLM field discovery."
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "ecommerce_listing": ["title", "price", "url", "image_url", "brand", "availability"],
+  "ecommerce_detail": ["title", "brand", "sku", "price", "sale_price", "currency", "availability", "image_url", "description", "rating", "review_count", "category"],
+  "job_listing": ["title", "company", "location", "apply_url"],
+  "job_detail": ["title", "company", "location", "salary", "job_type", "posted_date", "apply_url", "description", "requirements", "remote"],
+  "tabular": []
+}
