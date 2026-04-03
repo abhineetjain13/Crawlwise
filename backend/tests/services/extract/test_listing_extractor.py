@@ -104,3 +104,22 @@ def test_amazon_style_listing():
     records = extract_listing_records(html, "ecommerce_listing", set())
     assert len(records) == 2
     assert records[0]["title"] == "Amazon Product 1"
+
+
+def test_extract_hydrated_state_listing_records():
+    html = "<html><body><h1>Fallback</h1></body></html>"
+    manifest = type("Manifest", (), {
+        "json_ld": [],
+        "next_data": None,
+        "_hydrated_states": [
+            {"products": [
+                {"title": "Hydrated A", "url": "/p/a"},
+                {"title": "Hydrated B", "url": "/p/b"},
+            ]}
+        ],
+        "network_payloads": [],
+    })()
+    records = extract_listing_records(html, "ecommerce_listing", set(), page_url="https://example.com", manifest=manifest)
+    assert len(records) == 2
+    assert records[0]["title"] == "Hydrated A"
+    assert records[1]["url"] == "https://example.com/p/b"

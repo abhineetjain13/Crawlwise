@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CrawlCreate(BaseModel):
@@ -46,6 +46,30 @@ class CrawlRecordResponse(BaseModel):
     raw_html_path: str | None
     created_at: datetime
 
+    @model_validator(mode="after")
+    def _clean_for_display(self) -> "CrawlRecordResponse":
+        """Strip empty/null fields from data and raw noise from discovered_data.
+
+        The ``data`` dict should only expose populated logical fields.
+        ``discovered_data`` strips raw manifest containers that are useful
+        internally but are noise for the JSON/CSS view — review/promote is
+        where users resolve field mismatches.
+        """
+        self.data = {
+            k: v for k, v in self.data.items()
+            if v not in (None, "", [], {}) and not str(k).startswith("_")
+        }
+        # Strip raw manifest noise from discovered_data — keep only logical metadata
+        _noise_keys = {
+            "adapter_data", "network_payloads", "json_ld", "microdata",
+            "next_data", "tables", "_hydrated_states", "full_json_response",
+        }
+        self.discovered_data = {
+            k: v for k, v in self.discovered_data.items()
+            if k not in _noise_keys and v not in (None, "", [], {})
+        }
+        return self
+
 
 class DashboardResponse(BaseModel):
     total_runs: int
@@ -62,6 +86,19 @@ class ReviewFieldChoice(BaseModel):
     selected: bool = True
 
 
+class ReviewSelectorRule(BaseModel):
+    id: int | None = None
+    field_name: str
+    css_selector: str | None = None
+    xpath: str | None = None
+    regex: str | None = None
+    status: str | None = None
+    confidence: float | None = None
+    sample_value: str | None = None
+    source: str | None = None
+    is_active: bool = True
+
+
 class ReviewResponse(BaseModel):
     run: CrawlRunResponse
     normalized_fields: list[str]
@@ -70,12 +107,17 @@ class ReviewResponse(BaseModel):
     domain_mapping: dict[str, str]
     suggested_mapping: dict[str, str]
     selector_memory: list[dict]
+    selector_suggestions: dict[str, list[dict]]
     records: list[CrawlRecordResponse]
 
 
 class ReviewSaveRequest(BaseModel):
     selections: list[ReviewFieldChoice]
     extra_fields: list[str] = Field(default_factory=list)
+
+
+class ReviewSelectorPreviewRequest(BaseModel):
+    selectors: list[ReviewSelectorRule] = Field(default_factory=list)
 
 
 class ReviewSaveResponse(BaseModel):
@@ -85,3 +127,7 @@ class ReviewSaveResponse(BaseModel):
     selected_fields: list[str]
     canonical_fields: list[str]
     field_mapping: dict[str, str]
+
+
+class ReviewSelectorPreviewResponse(BaseModel):
+    records: list[CrawlRecordResponse]

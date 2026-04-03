@@ -15,12 +15,18 @@ export function PageHeader({
   actions?: ReactNode;
 }>) {
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-border/70 bg-panel/80 px-4 py-3 shadow-card backdrop-blur sm:flex-row sm:items-end sm:justify-between">
-      <div className="min-w-0 space-y-1.5">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-[1.7rem]">{title}</h1>
-        {description ? <p className="max-w-2xl text-sm leading-5 text-muted">{description}</p> : null}
+    <div className="animate-fade-in flex flex-col gap-2 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0 space-y-1">
+        <h1 className="text-lg font-semibold tracking-[-0.02em] text-foreground">
+          {title}
+        </h1>
+        {description ? (
+          <p className="max-w-xl text-[13px] text-muted">{description}</p>
+        ) : null}
       </div>
-      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className="flex shrink-0 items-center gap-2">{actions}</div>
+      ) : null}
     </div>
   );
 }
@@ -36,9 +42,13 @@ export function SectionHeader({
 }>) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <div className="space-y-1">
-        <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
-        {description ? <p className="text-sm text-muted">{description}</p> : null}
+      <div className="space-y-0.5">
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
+          {title}
+        </h2>
+        {description ? (
+          <p className="text-[13px] text-muted">{description}</p>
+        ) : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
@@ -46,7 +56,11 @@ export function SectionHeader({
 }
 
 export function MetricGrid({ children }: Readonly<{ children: ReactNode }>) {
-  return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{children}</div>;
+  return (
+    <div className="stagger-children grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      {children}
+    </div>
+  );
 }
 
 export function EmptyPanel({
@@ -57,10 +71,10 @@ export function EmptyPanel({
   description: string;
 }>) {
   return (
-    <Card className="grid min-h-40 place-items-center border-dashed text-center">
-      <div className="space-y-1.5">
-        <p className="text-sm font-medium text-foreground">{title}</p>
-        <p className="text-sm text-muted">{description}</p>
+    <Card className="grid min-h-32 place-items-center border-dashed text-center">
+      <div className="space-y-1">
+        <p className="text-[13px] font-medium text-foreground">{title}</p>
+        <p className="text-[13px] text-muted">{description}</p>
       </div>
     </Card>
   );
@@ -78,7 +92,7 @@ export function JsonPanel({
   className?: string;
 }>) {
   return (
-    <Card className={cn("space-y-4", className)}>
+    <Card className={cn("space-y-3", className)}>
       <SectionHeader title={title} description={subtitle} />
       {children}
     </Card>

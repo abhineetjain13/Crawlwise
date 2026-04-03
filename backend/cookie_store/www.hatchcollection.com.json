@@ -1,0 +1,464 @@
+[
+  {
+    "name": "__kla_off",
+    "value": "true",
+    "domain": "www.hatchcollection.com",
+    "path": "/collections",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__kla_off",
+    "value": "true",
+    "domain": "www.hatchcollection.com",
+    "path": "/products",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "localization",
+    "value": "US",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1806741360.372095,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "cart_currency",
+    "value": "USD",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1776414965.449858,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_shopify_y",
+    "value": "9c2219c7-cb8d-4b76-988e-c4496de8dd04",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1806762965.450102,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_shopify_s",
+    "value": "594d85eb-aca3-49a8-895f-ad72ca34324a",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775207165.450359,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_shopify_analytics",
+    "value": ":AZ1SeELMAAEA7uGjka38IJNkWXx0sfusel5zCxzTpeZua3LRmaxUPe-e7AK_I8nxjdCTymWSqvUVyYzFQx_bOFllBcJDTIHaN0jX:",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1806741106.400274,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "__attn_eat_id",
+    "value": "dbc4abfe6de14c3b9c0cc56922c59f07",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1808901312.634816,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax",
+    "partitionKey": "https://hatchcollection.com",
+    "_crHasCrossSiteAncestor": false
+  },
+  {
+    "name": "tkbl_session",
+    "value": "0f995a27-9154-456c-8c06-e58b7be1af2e",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1809765362.294805,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "solve.session",
+    "value": "4b665deb-6773-4d9c-835b-4885cba1e0c3",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1775206909,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_picky.widget.discounts.sessionId%3Ahatchcollection.myshopify.com",
+    "value": "f04896e5-6068-4b3e-95d9-d53186d3783d",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "cart",
+    "value": "hWNAaf05cjeCqbdcOXZX97gK%3Fkey%3D7245b487d63b833b00a5d3be3c5bc6a1",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1777883737.711298,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "shopify_client_id",
+    "value": "9c2219c7-cb8d-4b76-988e-c4496de8dd04",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1806741109,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__attentive_id",
+    "value": "b786b8a3990e408eaf2be8b92e3b4a95",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1808901363,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__attentive_session_id",
+    "value": "0d3df5459acc47dd98e931d894ec9c85",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775207162,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__attentive_cco",
+    "value": "1775205110266",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1808901110,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "shd_s",
+    "value": "594d85eb-aca3-49a8-895f-ad72ca34324a",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775207162.994148,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "solve.data_processing_permissions",
+    "value": "%7B%22marketing_allowed%22%3Atrue%2C%22sale_of_data_allowed%22%3Atrue%2C%22analytics_processing_allowed%22%3Atrue%2C%22preferences_processing_allowed%22%3Atrue%7D",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1775206911,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__kla_off",
+    "value": "true",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "integration",
+    "value": "{\"shopify\":{\"connected\":true},\"globalPrivacyControl\":{\"enabled\":false},\"googleConsentMode\":{\"enabled\":true},\"tiktokPixel\":{\"enabled\":false,\"script\":\"\"},\"microsoftConsentMode\":{\"enabled\":false},\"headlessCommerce\":{\"enabled\":false},\"shopId\":\"fvkKyXx4eQr9iU5tILTz\",\"createdAt\":\"2025-09-03T08:57:32.511Z\",\"pinterestConsent\":{\"enabled\":true,\"script\":\"\"},\"klaviyo\":{\"enabled\":true},\"tcf\":{\"enabled\":true},\"metaPixel\":{\"enabled\":true,\"script\":\"<!-- Facebook Pixel Code -->\\n\\n  !function(f,b,e,v,n,t,s)\\n  {if(f.fbq)return",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1775291763,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_gcl_au",
+    "value": "1.1.1065345669.1775205111",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1782981111,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__kla_id",
+    "value": "eyJjaWQiOiJNekEwWWpNeVptTXRNRFkzTnkwME0yWXpMV0ZqWXpVdE9XSTBaak5tWkRnMk5UZzQifQ==",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1809765111.345942,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_shd_y",
+    "value": "9c2219c7-cb8d-4b76-988e-c4496de8dd04",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1806309363.002236,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_attn_bopd_",
+    "value": "unknown",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1808901363,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_fbp",
+    "value": "fb.1.1775205111590.5203889709",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1782981320,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "enviveUnlockedUserId",
+    "value": "spiffy-user-id-d6c2c213-e425-4f91-9642-8c6b62a738c5",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__attentive_dv",
+    "value": "1",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775291512,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "enviveUnlockedUserIdSource",
+    "value": "shopify-web-pixel-sdk",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__attentive_ss_referrer",
+    "value": "ORGANIC",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775206912,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "first_pla_call",
+    "value": "none",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1777797114,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "yotpo_pixel",
+    "value": "3f407fa0-62b8-4718-8275-07562106fe38",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1775295115,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_sp_ses.deb4",
+    "value": "*",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1775206960,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_ga",
+    "value": "GA1.1.1721213453.1775205117",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1809765364.055432,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_hjSession_707455",
+    "value": "eyJpZCI6Ijk1NjY2NDk4LWZiNDItNDRiZi05NzBkLWNkNmJlZDBmZTgzNyIsImMiOjE3NzUyMDUxMzMzMjYsInMiOjAsInIiOjAsInNiIjowLCJzciI6MCwic2UiOjAsImZzIjoxLCJzcCI6MH0=",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775206933,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_sp_id.deb4",
+    "value": "ee5a165eb5107af9.1775205116.1.1775205160.1775205116",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1809765160.282593,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_hjSessionUser_707455",
+    "value": "eyJpZCI6ImQwZmNkZGQyLTJkYjYtNWJjNi1iNmNhLTk1YmYzYmJlZWYzMyIsImNyZWF0ZWQiOjE3NzUyMDUxMzMzMDcsImV4aXN0aW5nIjp0cnVlfQ==",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1806741335,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_shopify_marketing",
+    "value": ":AZ1SeELMAAEAQkt-KEFAesjTUo7pXgxATtxe9UcAlTabMndD7GGaoUsDTltnIyU202u-OkxIQceFtyIJ0kFfR3IZqReRZPQDhMKwVTb_RxoFBtGT:",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1806741314.961175,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "lastCollection",
+    "value": "%7B%22title%22%3A%22Leggings%20%26amp%3B%20Lounge%20Pants%22%2C%22handle%22%3A%22leggings-lounge-pants%22%7D",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1809765360.94566,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_uetsid",
+    "value": "9d4ab7402f3711f192b71542aaf68941",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775291735,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_uetvid",
+    "value": "9d4aeb202f3711f18c2d75f9ed41b87b",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1808901335,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "AMP_9bdc728a74",
+    "value": "JTdCJTIyZGV2aWNlSWQlMjIlM0ElMjIwNDAzY2FmMi1mMGExLTRkZjYtYjQwYy05NDQzMWI0Y2QwMzIlMjIlMkMlMjJzZXNzaW9uSWQlMjIlM0ExNzc1MjA1MTM0ODgxJTJDJTIyb3B0T3V0JTIyJTNBZmFsc2UlMkMlMjJwYWdlQ291bnRlciUyMiUzQTAlN0Q=",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1806741336,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_attn_",
+    "value": "eyJ1Ijoie1wiY29cIjoxNzc1MjA1MTEwMjYyLFwidW9cIjoxNzc1MjA1MTEwMjYyLFwibWFcIjoyMTkwMCxcImluXCI6ZmFsc2UsXCJ2YWxcIjpcImI3ODZiOGEzOTkwZTQwOGVhZjJiZThiOTJlM2I0YTk1XCJ9IiwiZWF0Ijoie1wiY29cIjoxNzc1MjA1MzYyMzkzLFwidW9cIjoxNzc1MjA1MzYyMzkzLFwibWFcIjozNjUwLFwiaW5cIjp0cnVlLFwidmFsXCI6XCJodHRwczovL2tzbGh0LmhhdGNoY29sbGVjdGlvbi5jb21cIn0ifQ==",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1808901362,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Strict"
+  },
+  {
+    "name": "mp_29723627-e5c7-4583-80ca-a5d24c44cc3e_perfalytics",
+    "value": "eJytjr0OwjAMhF8FRYwExUnzx85zVKnjICRURFu6oL47DiABAxvTOb7zd7mJ9iB2KwExW%2B2Do46w8VKpDpNBVxA1Se0UQLAgQXeUG%2FkOlxSL2Ii2%2FIFBT4YGF11j7Ba8t1pZvqpuz%2B5rY5zxRvEuf7Vi8FFL1fhcguGcignC716MoCJW9IUxJZ1G4nmoNawz603gNDy0HanP%2B5n6qdqwLJw48zgN13qU6j%2FW%2BTgQThXYfb6XO2WgW60%3D",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1806741363,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__attentive_pv",
+    "value": "12",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1775207163,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_ga_YMJ3WPLCWV",
+    "value": "GS2.1.s1775205116$o1$g1$t1775205364$j15$l0$h0",
+    "domain": ".hatchcollection.com",
+    "path": "/",
+    "expires": 1809765364.065201,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_shopify_essential",
+    "value": ":AZ1SeEHnAAEAw4tFB_O6aaMgrCSg8Crf9Py4-rc2USNpb7V_Ru3aHZFobWcyQyNMc-7jP3WnjigYOn-6Y6uwJldw50PyXn2jnXdDKv8MQ8V7Atvz9jGz3FeAerKvKkjcdP5bYTzFzJR7Pz34-Nwbq7nWrJamVlR6aMrq83yfzlEvbRsUzLEGyCznHOjzBzzg07RUn-_rKCZYRATqL_nfEUMvmyB0G-_wvp9VsVy8fk68pi6-m3ULUVowBMBINXyOTOe9cAJMY47NQygMk6KVcgXHT4Le-bPot2ZbwYroe4MHOP_AyV1j9EfHvBT39k7U7qHtavxDDQv3J839YvAY6hrTn6J0Qhq4nouJRlFAIpUCcQkQhzLwAUdZ2M_6z_0JUo0OknrThkyhYoyNRwKHKa1E_lVtg-b_F5rYx3_lYksdPHZEalOIQz6E2fQHQp-B6Afq0kbfyBDuxPvFgfoSwItN8c6-wFUYBc78GqIZ1nI30LXDbijAqt58Og:",
+    "domain": "www.hatchcollection.com",
+    "path": "/",
+    "expires": 1806741364.186672,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  }
+]

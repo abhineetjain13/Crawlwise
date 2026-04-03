@@ -8,7 +8,16 @@ export function Card({
   children,
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
-  return <section className={cn("rounded-xl border border-border/70 bg-panel/92 p-4 shadow-card backdrop-blur sm:p-5", className)}>{children}</section>;
+  return (
+    <section
+      className={cn(
+        "animate-fade-in rounded-lg border border-border bg-panel p-4 shadow-card sm:p-5",
+        className,
+      )}
+    >
+      {children}
+    </section>
+  );
 }
 
 export function Title({
@@ -17,15 +26,21 @@ export function Title({
   className,
 }: Readonly<{ children: ReactNode; kicker?: string; className?: string }>) {
   return (
-    <div className={cn("space-y-2", className)}>
-      {kicker ? <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand">{kicker}</p> : null}
-      <h1 className="text-balance text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{children}</h1>
+    <div className={cn("space-y-1.5", className)}>
+      {kicker ? (
+        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-accent">
+          {kicker}
+        </p>
+      ) : null}
+      <h1 className="text-xl font-semibold tracking-[-0.02em] text-foreground sm:text-2xl">
+        {children}
+      </h1>
     </div>
   );
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="max-w-2xl text-sm leading-6 text-muted">{children}</p>;
+  return <p className="max-w-xl text-[13px] leading-relaxed text-muted">{children}</p>;
 }
 
 export function Field({
@@ -34,10 +49,10 @@ export function Field({
   children,
 }: Readonly<{ label: string; hint?: string; children: ReactNode }>) {
   return (
-    <label className="grid gap-2">
-      <span className="text-sm font-medium text-foreground">{label}</span>
+    <label className="grid gap-1.5">
+      <span className="text-[13px] font-medium text-foreground">{label}</span>
       {children}
-      {hint ? <span className="text-xs text-muted">{hint}</span> : null}
+      {hint ? <span className="text-[11px] text-muted">{hint}</span> : null}
     </label>
   );
 }
@@ -47,7 +62,8 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
     <input
       {...props}
       className={cn(
-        "h-10 w-full rounded-lg border border-border bg-transparent px-3 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/20",
+        "focus-ring h-9 w-full rounded-md border border-border bg-background px-3 text-[13px] text-foreground transition placeholder:text-muted/60",
+        "hover:border-border-strong focus:border-accent",
         props.className,
       )}
     />
@@ -59,7 +75,8 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
     <textarea
       {...props}
       className={cn(
-        "min-h-24 w-full rounded-lg border border-border bg-transparent px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/20",
+        "focus-ring min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] text-foreground transition placeholder:text-muted/60",
+        "hover:border-border-strong focus:border-accent",
         props.className,
       )}
     />
@@ -70,17 +87,25 @@ export function Button({
   className,
   variant = "primary",
   ...props
-}: Readonly<ComponentPropsWithoutRef<"button"> & { variant?: "primary" | "secondary" | "ghost" }>) {
+}: Readonly<
+  ComponentPropsWithoutRef<"button"> & {
+    variant?: "primary" | "secondary" | "ghost" | "accent";
+  }
+>) {
   const variants = {
-    primary: "bg-brand text-brand-foreground shadow-sm hover:bg-brand/90",
-    secondary: "border border-border bg-panel text-foreground hover:bg-panel-strong",
-    ghost: "text-foreground hover:bg-panel-strong",
+    primary:
+      "bg-brand text-brand-foreground shadow-sm hover:opacity-90 active:opacity-80",
+    secondary:
+      "border border-border bg-background text-foreground hover:bg-panel-strong active:bg-panel-strong/80",
+    ghost: "text-foreground hover:bg-panel-strong active:bg-panel-strong/80",
+    accent:
+      "bg-accent text-white shadow-sm hover:opacity-90 active:opacity-80",
   };
   return (
     <button
       {...props}
       className={cn(
-        "inline-flex h-9 items-center justify-center rounded-lg px-3.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60",
+        "focus-ring inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] font-medium transition-all disabled:pointer-events-none disabled:opacity-50",
         variants[variant],
         className,
       )}
@@ -91,13 +116,26 @@ export function Button({
 export function Badge({
   children,
   tone = "neutral",
-}: Readonly<{ children: ReactNode; tone?: "neutral" | "success" | "warning" }>) {
+}: Readonly<{
+  children: ReactNode;
+  tone?: "neutral" | "success" | "warning" | "danger";
+}>) {
   const tones = {
-    neutral: "bg-panel-strong text-foreground",
-    success: "bg-emerald-500/12 text-emerald-600 dark:text-emerald-300",
-    warning: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+    neutral: "bg-panel-strong text-muted",
+    success: "bg-success/10 text-success",
+    warning: "bg-warning/10 text-warning",
+    danger: "bg-danger/10 text-danger",
   };
-  return <span className={cn("inline-flex rounded-lg px-3 py-1 text-xs font-semibold", tones[tone])}>{children}</span>;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium",
+        tones[tone],
+      )}
+    >
+      {children}
+    </span>
+  );
 }
 
 export function Metric({
@@ -106,10 +144,14 @@ export function Metric({
   hint,
 }: Readonly<{ label: string; value: ReactNode; hint?: ReactNode }>) {
   return (
-    <Card className="space-y-2 p-4">
-      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted">{label}</p>
-      <div className="text-3xl font-semibold tracking-tight text-foreground">{value}</div>
-      {hint ? <div className="text-xs text-muted">{hint}</div> : null}
+    <Card className="space-y-1 p-4">
+      <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-muted">
+        {label}
+      </p>
+      <div className="text-2xl font-semibold tracking-[-0.02em] text-foreground">
+        {value}
+      </div>
+      {hint ? <div className="text-[11px] text-muted">{hint}</div> : null}
     </Card>
   );
 }
@@ -120,9 +162,15 @@ export function DataList({
   empty,
 }: Readonly<{ title: string; items: ReactNode[]; empty: string }>) {
   return (
-    <Card className="space-y-4">
-      <h2 className="text-lg font-semibold text-foreground">{title}</h2>
-      {items.length ? <div className="grid gap-3">{items}</div> : <p className="text-sm text-muted">{empty}</p>}
+    <Card className="space-y-3">
+      <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
+        {title}
+      </h2>
+      {items.length ? (
+        <div className="grid gap-2">{items}</div>
+      ) : (
+        <p className="text-[13px] text-muted">{empty}</p>
+      )}
     </Card>
   );
 }
@@ -132,7 +180,12 @@ export function CodeBlock({
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
-    <pre className={cn("max-h-[28rem] overflow-auto rounded-xl border border-border bg-panel-strong/70 p-4 font-mono text-[11px] leading-6 text-foreground", className)}>
+    <pre
+      className={cn(
+        "max-h-[28rem] overflow-auto rounded-md border border-border bg-panel-strong p-4 font-mono text-[12px] leading-[1.6] text-foreground",
+        className,
+      )}
+    >
       {children}
     </pre>
   );

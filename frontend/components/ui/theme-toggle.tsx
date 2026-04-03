@@ -1,6 +1,6 @@
 "use client";
 
-import { Moon, SunMedium } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { useSyncExternalStore } from "react";
 
 import { cn } from "../../lib/utils";
@@ -8,7 +8,7 @@ import { cn } from "../../lib/utils";
 type ThemeMode = "light" | "dark";
 const THEME_STORAGE_KEY = "crawlerai-theme";
 
-export function ThemeToggle() {
+export function ThemeToggle({ compact }: Readonly<{ compact?: boolean }>) {
   const theme = useSyncExternalStore(subscribeTheme, readTheme, () => "light");
 
   function toggleTheme() {
@@ -21,13 +21,18 @@ export function ThemeToggle() {
       type="button"
       onClick={toggleTheme}
       className={cn(
-        "inline-flex size-10 items-center justify-center rounded-xl border border-border bg-panel text-foreground transition hover:bg-panel-strong",
+        "focus-ring inline-flex items-center justify-center rounded-md border border-border text-muted transition-all",
+        "hover:border-border-strong hover:text-foreground",
+        compact ? "size-7" : "size-8",
       )}
       aria-label="Toggle color theme"
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
     >
-      {theme === "dark" ? <SunMedium className="size-4" /> : <Moon className="size-4" />}
-      <span className="sr-only">{theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}</span>
+      {theme === "dark" ? (
+        <Sun className={compact ? "size-3.5" : "size-4"} />
+      ) : (
+        <Moon className={compact ? "size-3.5" : "size-4"} />
+      )}
     </button>
   );
 }

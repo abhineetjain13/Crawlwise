@@ -51,9 +51,30 @@ def test_discover_next_data():
 
 
 def test_discover_next_data_missing():
-    html = "<html><body><p>No next data</p></body></html>"
+    html = """
+    <html><body>
+    <script>window.__INITIAL_STATE__ = {"props":{"pageProps":{"product":{"name":"HydratedWidget"}}}}</script>
+    </body></html>
+    """
     manifest = discover_sources(html)
-    assert manifest.next_data is None
+    assert manifest.next_data is not None
+    assert len(manifest._hydrated_states) == 1
+    assert manifest._hydrated_states[0]["props"]["pageProps"]["product"]["name"] == "HydratedWidget"
+    assert manifest.next_data["_hydrated_states"] == manifest._hydrated_states
+
+
+def test_discover_hydrated_assignment_preserves_semicolon_in_string():
+    html = """
+    <html><body>
+    <script>
+    window.__INITIAL_STATE__ = {"props":{"message":"Hydrated;Widget","items":[1,2,3]}};
+    window.__OTHER_STATE__ = {"ok": true};
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest._hydrated_states) == 1
+    assert manifest._hydrated_states[0]["props"]["message"] == "Hydrated;Widget"
 
 
 def test_discover_microdata():

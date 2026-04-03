@@ -1,0 +1,31 @@
+{
+  "ecommerce": [
+    "[data-component-type='s-search-result']",
+    ".s-item",
+    ".product-card",
+    ".product-item",
+    ".product-tile",
+    ".product-grid-item",
+    "[data-testid='product-card']",
+    ".grid-item[data-product-id]",
+    ".collection-product-card",
+    "li.grid__item",
+    ".plp-card",
+    ".search-result-gridview-item",
+    ".product",
+    "article.product"
+  ],
+  "jobs": [
+    ".job_seen_beacon",
+    ".base-card",
+    ".job-card",
+    ".job-listing",
+    ".job-result",
+    "[data-testid='job-card']",
+    ".jobsearch-ResultsList > div",
+    "li.jobs-search__results-list-item",
+    "tr.job-row",
+    "div[data-job-id]",
+    ".opening"
+  ]
+}

@@ -41,8 +41,13 @@ async def selectors_test(
     payload: SelectorTestRequest,
     _: User = Depends(get_current_user),
 ) -> SelectorTestResponse:
-    matched_value, count = await test_selector(payload.url, payload.selector, payload.selector_type)
-    return SelectorTestResponse(matched_value=matched_value, count=count)
+    matched_value, count, selector_used = await test_selector(
+        payload.url,
+        css_selector=payload.css_selector,
+        xpath=payload.xpath,
+        regex=payload.regex,
+    )
+    return SelectorTestResponse(matched_value=matched_value, count=count, selector_used=selector_used)
 
 
 @router.get("", response_model=list[SelectorResponse])
@@ -61,7 +66,10 @@ async def selectors_create(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SelectorResponse:
-    selector = await create_selector(session, payload.model_dump())
+    try:
+        selector = await create_selector(session, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return SelectorResponse.model_validate(selector, from_attributes=True)
 
 
@@ -76,7 +84,10 @@ async def selectors_put(
     selector = result.scalar_one_or_none()
     if selector is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Selector not found")
-    updated = await update_selector(session, selector, payload.model_dump(exclude_none=True))
+    try:
+        updated = await update_selector(session, selector, payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return SelectorResponse.model_validate(updated, from_attributes=True)
 
 

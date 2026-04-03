@@ -1,0 +1,10 @@
+URL: $url
+
+Missing fields:
+$missing_fields_json
+
+Already extracted values:
+$existing_values_json
+
+HTML snippet:
+$html_snippet

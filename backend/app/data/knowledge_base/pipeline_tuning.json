@@ -1,0 +1,27 @@
+{
+  "http_timeout_seconds": 20,
+  "impersonation_target": "chrome110",
+  "browser_fallback_visible_text_min": 500,
+  "js_gate_phrases": [
+    "enable javascript",
+    "<noscript>"
+  ],
+  "default_max_records": 100,
+  "default_sleep_ms": 0,
+  "block_min_html_length": 100,
+  "block_confidence_threshold": 0.7,
+  "block_combined_signal_boost": 0.15,
+  "block_low_content_text_max": 500,
+  "block_low_content_script_min": 3,
+  "block_low_content_link_max": 3,
+  "block_combined_signal_min_count": 2,
+  "listing_min_items": 2,
+  "card_autodetect_min_siblings": 3,
+  "json_max_search_depth": 5,
+  "http_retry_status_codes": [403, 429, 503],
+  "http_max_retries": 2,
+  "stealth_prefer_ttl_hours": 24,
+  "challenge_wait_max_seconds": 12,
+  "challenge_poll_interval_ms": 2000,
+  "origin_warm_pause_ms": 2000
+}

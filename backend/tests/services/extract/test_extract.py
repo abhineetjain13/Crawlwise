@@ -111,6 +111,67 @@ def test_extract_additional_fields():
     assert candidates["custom_field"][0]["value"] == "custom_value"
 
 
+def test_extract_semantic_requested_field_responsibilities():
+    html = """
+    <html><body>
+    <h2>Responsibilities</h2>
+    <p>Build the product experience.</p>
+    <p>Ship improvements weekly.</p>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job",
+            "job_detail",
+            html,
+            manifest,
+            ["responsibilities"],
+        )
+    assert "responsibilities" in candidates
+    assert candidates["responsibilities"][0]["source"] == "semantic_section"
+    assert "Build the product experience." in candidates["responsibilities"][0]["value"]
+
+
+def test_extract_semantic_requested_field_from_accordion():
+    html = """
+    <html><body>
+    <button aria-controls="resp-panel">Responsibilities</button>
+    <div id="resp-panel">
+      <p>Build internal tools.</p>
+      <p>Support platform migrations.</p>
+    </div>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job",
+            "job_detail",
+            html,
+            manifest,
+            ["responsibilities"],
+        )
+    assert "responsibilities" in candidates
+    assert "Build internal tools." in candidates["responsibilities"][0]["value"]
+
+
+def test_extract_hydrated_state_source():
+    html = "<html><body><h1>Fallback</h1></body></html>"
+    manifest = _manifest(_hydrated_states=[{"props": {"pageProps": {"product": {"title": "Hydrated Title"}}}}])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert "title" in candidates
+    assert any(item["source"] == "hydrated_state" for item in candidates["title"])
+    assert candidates["title"][0]["value"] == "Hydrated Title"
+
+
 def test_extract_network_payloads():
     html = "<html><body>test</body></html>"
     manifest = _manifest(network_payloads=[
@@ -127,6 +188,26 @@ def test_extract_network_payloads():
     assert "title" in candidates
     net_sources = [c for c in candidates["title"] if c["source"] == "network_intercept"]
     assert len(net_sources) >= 1
+
+
+def test_extract_network_payload_coerces_nested_dict_to_scalar():
+    html = "<html><body>test</body></html>"
+    manifest = _manifest(network_payloads=[
+        {
+            "url": "https://api.example.com",
+            "body": {"product": {"dimensions": {"name": "size", "sentence": "Runs true to size"}}},
+        }
+    ])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            ["dimensions"],
+        )
+    assert "dimensions" in candidates
+    assert candidates["dimensions"][0]["value"] == "Runs true to size"
 
 
 def test_extract_priority_order():
@@ -179,3 +260,23 @@ def test_extract_respects_regex_contract_for_additional_field():
         )
     assert candidates["sku_code"][0]["source"] == "contract_regex"
     assert candidates["sku_code"][0]["value"] == "ABC-123"
+
+
+def test_extract_prefers_saved_xpath_selector_defaults():
+    html = "<html><body><h1>Saved XPath Title</h1></body></html>"
+    manifest = _manifest()
+    with patch(
+        "app.services.extract.service.get_selector_defaults",
+        return_value=[{"xpath": "//h1/text()", "status": "validated", "confidence": 0.9}],
+    ):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    selector_rows = [row for row in candidates["title"] if row["source"] == "selector"]
+    assert selector_rows
+    assert selector_rows[0]["value"] == "Saved XPath Title"
+    assert selector_rows[0]["xpath"] == "//h1/text()"

@@ -2,30 +2,38 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Circle, LoaderCircle, XCircle } from "lucide-react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { Badge, Button, Card, Input } from "../../../components/ui/primitives";
+import { Badge, Button, Card } from "../../../components/ui/primitives";
 import { PageHeader, SectionHeader } from "../../../components/ui/patterns";
 import { api } from "../../../lib/api";
-import type { CrawlLog, CrawlRecord, CrawlRun, ReviewPayload, ReviewSelection } from "../../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun, ReviewPayload, ReviewSelection, SelectorCreatePayload } from "../../../lib/api/types";
 import { cn } from "../../../lib/utils";
+import { SelectorWorkspace } from "../../../components/crawl/selector-workspace";
 
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["completed", "degraded", "failed", "cancelled"]);
 const STAGES = ["ACQUIRE", "DISCOVER", "EXTRACT", "UNIFY", "PUBLISH"] as const;
+const RECORDS_PAGE_LIMIT = 1000;
 
-type ResultTab = "csv" | "json" | "evidence" | "logs";
+type ResultTab = "csv" | "selectors" | "json" | "logs";
 type StageState = "idle" | "active" | "done" | "interrupted";
 
 export default function RunDetailPage() {
   const params = useParams<{ run_id: string }>();
+  const router = useRouter();
   const runId = Number(params.run_id);
   const [resultTab, setResultTab] = useState<ResultTab>("csv");
-  const [extraFieldInput, setExtraFieldInput] = useState("");
   const [localSelections, setLocalSelections] = useState<Record<string, ReviewSelection>>({});
   const [extraFields, setExtraFields] = useState<string[]>([]);
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [previewRecords, setPreviewRecords] = useState<CrawlRecord[] | null>(null);
+  const [isPreviewingSelectors, setIsPreviewingSelectors] = useState(false);
+  const [bulkPrefillPayload, setBulkPrefillPayload] = useState<{ additional_fields: string[]; selectors: Array<{ field_name: string; xpath?: string; regex?: string }> }>({
+    additional_fields: [],
+    selectors: [],
+  });
 
   const runQuery = useQuery({
     queryKey: ["run", runId],
@@ -46,7 +54,7 @@ export default function RunDetailPage() {
   });
   const recordsQuery = useQuery({
     queryKey: ["run-records", runId],
-    queryFn: () => api.getRecords(runId, { limit: 1000 }),
+    queryFn: () => api.getRecords(runId, { limit: RECORDS_PAGE_LIMIT }),
     enabled: Boolean(run),
     refetchInterval: pollInterval,
   });
@@ -56,11 +64,15 @@ export default function RunDetailPage() {
     enabled: Boolean(run && TERMINAL_STATUSES.has(run.status)),
   });
 
-  const logs = logsQuery.data ?? [];
-  const records = recordsQuery.data?.items ?? [];
+  const logs = useMemo(() => logsQuery.data ?? [], [logsQuery.data]);
+  const records = useMemo(() => recordsQuery.data?.items ?? [], [recordsQuery.data?.items]);
+  const displayedRecords = previewRecords ?? records;
   const review = reviewQuery.data;
   const runError = typeof run?.result_summary?.error === "string" ? run.result_summary.error : "";
-  const stageItems = useMemo(() => deriveStages(logs, run?.status), [logs, run?.status]);
+  const stageItems = useMemo(
+    () => deriveStages(logs, run?.status, readString(run?.result_summary?.current_stage)),
+    [logs, run?.status, run?.result_summary?.current_stage],
+  );
 
   useEffect(() => {
     if (!review) {
@@ -71,19 +83,52 @@ export default function RunDetailPage() {
     setExtraFields((current) => (current.length ? current : nextExtraFields));
   }, [review]);
 
+  useEffect(() => {
+    setPreviewRecords(null);
+  }, [runId, recordsQuery.data?.items]);
+
+  useEffect(() => {
+    setBulkPrefillPayload({
+      additional_fields: extraFields,
+      selectors: [],
+    });
+  }, [extraFields]);
+
   const fieldSelections = useMemo(() => {
     const defaults = buildDefaultSelections(review);
     return defaults.map((selection) => localSelections[selection.source_field] ?? selection);
   }, [localSelections, review]);
 
+  const reviewSelectedSelections = useMemo(
+    () => fieldSelections.filter((item) => item.selected && item.output_field.trim()),
+    [fieldSelections],
+  );
+
+  /* Build CSV columns from record.data keys only — no raw_data/discovered_data/source_trace noise */
+  const logicalColumns = useMemo(() => {
+    const cols = new Set<string>();
+    for (const record of displayedRecords) {
+      for (const key of Object.keys(record.data ?? {})) {
+        if (!key.startsWith("_")) cols.add(key);
+      }
+    }
+    return [...cols];
+  }, [displayedRecords]);
+
+  const selectionOutputFields = useMemo(
+    () => reviewSelectedSelections.map((item) => item.output_field.trim()).filter(Boolean),
+    [reviewSelectedSelections],
+  );
+
   const csvColumns = useMemo(() => {
-    const selected = fieldSelections.filter((item) => item.selected).map((item) => item.output_field.trim()).filter(Boolean);
-    return [...new Set([...selected, ...extraFields])];
-  }, [extraFields, fieldSelections]);
+    return [...new Set([...selectionOutputFields, ...extraFields, ...logicalColumns])];
+  }, [extraFields, logicalColumns, selectionOutputFields]);
+
+  const bulkUrls = useMemo(() => extractBulkUrls(records, csvColumns), [csvColumns, records]);
 
   const csvRows = useMemo(
-    () => buildCsvRows(records, fieldSelections, extraFields),
-    [records, extraFields, fieldSelections],
+    () => buildCsvRows(displayedRecords, csvColumns, reviewSelectedSelections),
+    [displayedRecords, csvColumns, reviewSelectedSelections],
   );
 
   async function savePromotion() {
@@ -94,107 +139,168 @@ export default function RunDetailPage() {
         selections: fieldSelections,
         extra_fields: extraFields,
       });
-      setExtraFieldInput("");
       await reviewQuery.refetch();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save promoted fields.";
       setSaveError(message);
-      window.alert(message);
     } finally {
       setIsSaving(false);
     }
-  }
-
-  function addExtraField() {
-    const value = normalizeFieldName(extraFieldInput);
-    if (!value) {
-      return;
-    }
-    setExtraFields((current) => (current.includes(value) ? current : [...current, value]));
-    setExtraFieldInput("");
   }
 
   function removeExtraField(value: string) {
     setExtraFields((current) => current.filter((item) => item !== value));
   }
 
+  async function previewSelectors(payload: { selectors: SelectorCreatePayload[] }) {
+    if (!payload.selectors.length) {
+      return;
+    }
+    setIsPreviewingSelectors(true);
+    setSaveError("");
+    try {
+      const response = await api.previewSelectors(runId, payload);
+      setPreviewRecords(response.records);
+      setResultTab("csv");
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Failed to rerun selectors on saved HTML.");
+    } finally {
+      setIsPreviewingSelectors(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader
-        title={live ? "Extraction Running" : run?.status === "completed" ? "Extraction Complete" : `Run #${runId}`}
+        title={getRunTitle(run, live, runId)}
         description={run?.url ?? "Loading run details..."}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {run ? <StatusChip status={run.status} /> : null}
+            {run ? <ExtractionVerdictChip verdict={run.result_summary?.extraction_verdict} /> : null}
             {!live ? (
               <>
-                <a href={api.exportCsv(runId)} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-panel px-3.5 text-sm font-semibold text-foreground transition hover:bg-panel-strong">
-                  CSV
+                {bulkUrls.length ? (
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() => {
+                      window.sessionStorage.setItem(
+                        "bulk-crawl-prefill-v1",
+                        JSON.stringify({
+                          urls: bulkUrls,
+                          tab: "batch",
+                          vertical: inferVertical(run?.surface),
+                          pageType: "pdp",
+                          additional_fields: bulkPrefillPayload.additional_fields,
+                          selectors: bulkPrefillPayload.selectors,
+                          sourceRunId: runId,
+                          sourceUrl: run?.url ?? "",
+                        }),
+                      );
+                      router.push("/crawl/bulk");
+                    }}
+                  >
+                    Bulk Crawl
+                  </Button>
+                ) : null}
+                <a href={api.exportCsv(runId)} target="_blank" rel="noreferrer">
+                  <Button variant="secondary" type="button">CSV</Button>
                 </a>
-                <a href={api.exportJson(runId)} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-panel px-3.5 text-sm font-semibold text-foreground transition hover:bg-panel-strong">
-                  JSON
+                <a href={api.exportJson(runId)} target="_blank" rel="noreferrer">
+                  <Button variant="secondary" type="button">JSON</Button>
                 </a>
               </>
             ) : null}
-            <Button variant="secondary" onClick={() => void Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch(), reviewQuery.refetch()])}>
+            <Button variant="ghost" onClick={() => void Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch(), reviewQuery.refetch()])}>
               Refresh
             </Button>
           </div>
         }
       />
 
-      <Card className="space-y-3">
-        <div className="grid gap-2 text-sm text-muted sm:grid-cols-2 xl:grid-cols-4">
-          <MetaLine label="Mode" value={formatRunType(run?.run_type)} />
-          <MetaLine label="Page Type" value={formatPageType(readString(run?.settings?.page_type) ?? "-")} />
-          <MetaLine label="Records" value={String(records.length)} />
-          <MetaLine label="Domain" value={readString(run?.result_summary?.domain) ?? getDomain(run?.url)} />
-        </div>
-      </Card>
+      {/* Meta row */}
+      <div className="stagger-children grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetaCard label="Mode" value={formatRunType(run?.run_type)} />
+        <MetaCard label="Page Type" value={formatPageType(readString(run?.settings?.page_type) ?? "-")} />
+        <MetaCard label="Records" value={String(displayedRecords.length)} />
+        <MetaCard label="Domain" value={readString(run?.result_summary?.domain) ?? getDomain(run?.url)} />
+      </div>
 
       {live ? (
-        <Card className="space-y-4">
+        /* Pipeline progress */
+        <Card className="space-y-3">
           <SectionHeader title="Pipeline Progress" description="Current crawl stages for this run." />
-          <div className="space-y-2">
+          {run?.run_type === "batch" || run?.run_type === "csv" ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <LiveMetaCard
+                label="Processed URLs"
+                value={`${readNumber(run?.result_summary?.processed_urls) ?? 0} / ${readNumber(run?.result_summary?.total_urls) ?? readNumber(run?.result_summary?.url_count) ?? 0}`}
+              />
+              <LiveMetaCard
+                label="Records"
+                value={String(readNumber(run?.result_summary?.record_count) ?? 0)}
+              />
+              <LiveMetaCard
+                label="Progress"
+                value={`${readNumber(run?.result_summary?.progress) ?? 0}%`}
+              />
+            </div>
+          ) : null}
+          {readString(run?.result_summary?.current_url) ? (
+            <div className="rounded-md bg-panel-strong px-3 py-2 text-[12px] text-muted">
+              {run?.result_summary?.current_url_index ? `URL ${run.result_summary.current_url_index}` : "URL"}
+              {run?.result_summary?.total_urls ? ` / ${run.result_summary.total_urls}` : ""}
+              : {readString(run?.result_summary?.current_url)}
+            </div>
+          ) : null}
+          <div className="stagger-children space-y-1">
             {stageItems.map((stage) => (
               <div
                 key={stage.label}
                 className={cn(
-                  "flex items-start gap-3 rounded-lg border px-3 py-3 transition",
-                  stage.state === "active" && "border-brand/40 bg-brand/6",
-                  stage.state === "done" && "border-emerald-500/20 bg-emerald-500/6",
-                  stage.state === "interrupted" && "border-amber-500/30 bg-amber-500/10",
-                  stage.state === "idle" && "border-border/60 bg-panel-strong/30",
+                  "flex items-center gap-3 rounded-md px-3 py-2.5 transition-all",
+                  stage.state === "active" && "bg-accent/5",
+                  stage.state === "done" && "bg-success/5",
+                  stage.state === "interrupted" && "bg-warning/5",
+                  stage.state === "idle" && "opacity-40",
                 )}
               >
-                <div className="mt-0.5 shrink-0">{renderStageIcon(stage.state)}</div>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-foreground">{stage.label}</div>
-                  <div className="text-sm text-muted">{stage.description}</div>
+                <div className="shrink-0">{renderStageIcon(stage.state)}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-foreground">{stage.label}</div>
                 </div>
+                <div className="text-[11px] text-muted">{stage.description}</div>
               </div>
             ))}
           </div>
         </Card>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_360px]">
-          <Card className="space-y-4">
-            <div className="flex flex-wrap gap-2 border-b border-border/70 pb-3">
-              <ResultTabButton active={resultTab === "csv"} onClick={() => setResultTab("csv")}>CSV View</ResultTabButton>
+        /* Results view */
+        <Card className="space-y-4">
+            {/* Tab bar */}
+            <div className="flex items-center gap-0.5 border-b border-border pb-2">
+              <ResultTabButton active={resultTab === "csv"} onClick={() => setResultTab("csv")}>Data</ResultTabButton>
               <ResultTabButton active={resultTab === "json"} onClick={() => setResultTab("json")}>JSON</ResultTabButton>
-              <ResultTabButton active={resultTab === "evidence"} onClick={() => setResultTab("evidence")}>Evidence</ResultTabButton>
+              <ResultTabButton active={resultTab === "selectors"} onClick={() => setResultTab("selectors")}>CSS Selectors</ResultTabButton>
               <ResultTabButton active={resultTab === "logs"} onClick={() => setResultTab("logs")}>Logs</ResultTabButton>
             </div>
 
             {runError ? (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-foreground">
+              <div className="rounded-md border border-warning/20 bg-warning/5 px-3 py-2.5 text-[13px] text-foreground">
                 {runError}
+              </div>
+            ) : null}
+
+            {previewRecords ? (
+              <div className="rounded-md border border-success/20 bg-success/5 px-3 py-2.5 text-[13px] text-success">
+                Showing selector rerun results from the saved HTML artifacts for this run.
               </div>
             ) : null}
 
             {resultTab === "csv" ? (
               csvColumns.length ? (
-                <div className="overflow-auto rounded-lg border border-border/70">
+                <div className="overflow-auto rounded-md border border-border">
                   <table className="compact-data-table">
                     <thead>
                       <tr>
@@ -207,11 +313,11 @@ export default function RunDetailPage() {
                     <tbody>
                       {csvRows.map((row, index) => (
                         <tr key={index}>
-                          <td>{index + 1}</td>
+                          <td className="text-muted tabular-nums">{index + 1}</td>
                           {csvColumns.map((column) => (
                             <td key={column} title={stringifyCell(row[column])}>
-                              <span className="block max-w-[280px] truncate text-foreground">
-                                {stringifyCell(row[column]) || "—"}
+                              <span className="block max-w-[260px] truncate">
+                                {stringifyCell(row[column]) || <span className="text-muted/40">--</span>}
                               </span>
                             </td>
                           ))}
@@ -221,119 +327,67 @@ export default function RunDetailPage() {
                   </table>
                 </div>
               ) : (
-                <p className="text-sm text-muted">No normalized fields available yet.</p>
+                <p className="text-[13px] text-muted">No fields extracted yet.</p>
               )
             ) : null}
 
             {resultTab === "json" ? (
-              <pre className="max-h-[40rem] overflow-auto rounded-lg bg-panel-strong/60 p-4 text-[11px] text-foreground">
-                {JSON.stringify(records.map((record) => record.data), null, 2)}
+              <pre className="max-h-[40rem] overflow-auto rounded-md border border-border bg-panel-strong p-4 font-mono text-[12px] leading-[1.6] text-foreground">
+                {JSON.stringify(displayedRecords.map((record) => cleanRecordForDisplay(record)), null, 2)}
               </pre>
             ) : null}
 
-            {resultTab === "evidence" ? (
-              <pre className="max-h-[40rem] overflow-auto rounded-lg bg-panel-strong/60 p-4 text-[11px] text-foreground">
-                {JSON.stringify(records.map((record) => ({
-                  source_url: record.source_url,
-                  raw_data: record.raw_data,
-                  discovered_data: record.discovered_data,
-                  source_trace: record.source_trace,
-                  raw_html_path: record.raw_html_path,
-                })), null, 2)}
-              </pre>
+            {resultTab === "selectors" ? (
+              <SelectorWorkspace
+                run={run}
+                review={review}
+                selections={fieldSelections}
+                onSelectionChange={(selection) =>
+                  setLocalSelections((current) => ({
+                    ...current,
+                    [selection.source_field]: selection,
+                  }))
+                }
+                extraFields={extraFields}
+                onAddExtraField={(field) => {
+                  const normalized = normalizeFieldName(field);
+                  if (!normalized) return;
+                  setExtraFields((current) => (current.includes(normalized) ? current : [...current, normalized]));
+                }}
+                onRemoveExtraField={(field) => removeExtraField(field)}
+                onSavePromotions={() => void savePromotion()}
+                isSavingPromotions={reviewQuery.isFetching || isSaving}
+                saveError={saveError}
+                onPreviewSelectors={(payload) => void previewSelectors(payload)}
+                isPreviewingSelectors={isPreviewingSelectors}
+                artifactUrl={api.reviewHtml(runId)}
+                onDraftPayloadChange={setBulkPrefillPayload}
+              />
             ) : null}
 
             {resultTab === "logs" ? <MessagesOnlyLogs logs={logs} /> : null}
-          </Card>
-
-          <Card className="space-y-4">
-            <SectionHeader
-              title="Canonical Fields"
-              description="Select, rename, and promote fields for this domain and surface."
-            />
-
-            <div className="grid gap-2">
-              {fieldSelections.map((selection) => (
-                <div key={selection.source_field} className="grid gap-2 rounded-lg border border-border/60 bg-panel-strong/25 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
-                      <input
-                        type="checkbox"
-                        checked={selection.selected}
-                        onChange={(event) =>
-                          setLocalSelections((current) => ({
-                            ...current,
-                            [selection.source_field]: { ...selection, selected: event.target.checked },
-                          }))
-                        }
-                      />
-                      {selection.source_field}
-                    </label>
-                    <span className="text-[11px] uppercase tracking-[0.18em] text-muted">Source</span>
-                  </div>
-                  <Input
-                    value={selection.output_field}
-                    onChange={(event) =>
-                      setLocalSelections((current) => ({
-                        ...current,
-                        [selection.source_field]: {
-                          ...selection,
-                          output_field: normalizeFieldName(event.target.value),
-                        },
-                      }))
-                    }
-                    placeholder="canonical_field_name"
-                  />
-                </div>
-              ))}
-            </div>
-
-            <div className="grid gap-2">
-              <div className="text-sm font-medium text-foreground">Extra Canonical Fields</div>
-              <div className="flex gap-2">
-                <Input
-                  value={extraFieldInput}
-                  onChange={(event) => setExtraFieldInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addExtraField();
-                    }
-                  }}
-                  placeholder="add field like material or trim"
-                />
-                <Button type="button" variant="secondary" onClick={addExtraField}>Add</Button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {extraFields.map((field) => (
-                  <button
-                    key={field}
-                    type="button"
-                    onClick={() => removeExtraField(field)}
-                    className="rounded-full border border-border px-3 py-1 text-xs text-foreground"
-                  >
-                    {field} ×
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-border/60 bg-panel-strong/25 p-3 text-sm text-muted">
-              Current canonical set: {(review?.canonical_fields ?? []).join(", ") || "No saved fields yet."}
-            </div>
-
-            {saveError ? (
-              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
-                {saveError}
-              </div>
-            ) : null}
-
-            <Button onClick={() => void savePromotion()} disabled={reviewQuery.isFetching || isSaving}>
-              {isSaving ? "Saving..." : "Save promoted fields"}
-            </Button>
-          </Card>
-        </div>
+        </Card>
       )}
+    </div>
+  );
+}
+
+/* --- Sub-components --- */
+
+function MetaCard({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <div className="rounded-md border border-border bg-panel px-3 py-2.5 shadow-card">
+      <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted">{label}</div>
+      <div className="mt-0.5 text-[14px] font-medium text-foreground">{value || "--"}</div>
+    </div>
+  );
+}
+
+function LiveMetaCard({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <div className="rounded-md border border-border bg-panel-strong/60 px-3 py-2.5">
+      <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted">{label}</div>
+      <div className="mt-0.5 text-[16px] font-semibold text-foreground">{value || "--"}</div>
     </div>
   );
 }
@@ -348,8 +402,10 @@ function ResultTabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "inline-flex h-8 items-center rounded-lg border px-3 text-sm font-semibold transition",
-        active ? "border-brand bg-brand text-brand-foreground" : "border-border bg-panel-strong/40 text-foreground hover:bg-panel-strong",
+        "inline-flex h-7 items-center rounded-md px-2.5 text-[13px] font-medium transition-all",
+        active
+          ? "bg-panel-strong text-foreground"
+          : "text-muted hover:text-foreground",
       )}
     >
       {children}
@@ -359,12 +415,12 @@ function ResultTabButton({
 
 function MessagesOnlyLogs({ logs }: Readonly<{ logs: CrawlLog[] }>) {
   if (!logs.length) {
-    return <p className="text-sm text-muted">No logs yet.</p>;
+    return <p className="text-[13px] text-muted">No logs yet.</p>;
   }
   return (
-    <div className="max-h-[40rem] space-y-1 overflow-auto rounded-lg border border-border/70 bg-panel-strong/25 p-3">
+    <div className="max-h-[40rem] space-y-0.5 overflow-auto rounded-md border border-border bg-panel-strong p-2">
       {logs.map((log) => (
-        <div key={log.id} className="rounded-md px-2 py-1.5 text-sm text-foreground">
+        <div key={log.id} className="rounded px-2 py-1 font-mono text-[12px] text-foreground hover:bg-background/50">
           {log.message}
         </div>
       ))}
@@ -373,64 +429,80 @@ function MessagesOnlyLogs({ logs }: Readonly<{ logs: CrawlLog[] }>) {
 }
 
 function StatusChip({ status }: Readonly<{ status: string }>) {
-  const tone = status === "completed" ? "success" : status === "failed" || status === "cancelled" ? "warning" : "neutral";
-  return <Badge tone={tone}>{status}</Badge>;
+  return <Badge tone={getStatusTone(status)}>{status}</Badge>;
 }
 
-function MetaLine({ label, value }: Readonly<{ label: string; value: string }>) {
-  return (
-    <div>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em]">{label}</div>
-      <div className="mt-1 text-sm text-foreground">{value || "—"}</div>
-    </div>
-  );
+function ExtractionVerdictChip({ verdict }: Readonly<{ verdict: string | undefined }>) {
+  if (!verdict) {
+    return null;
+  }
+  const { tone, label } = getExtractionVerdictMeta(verdict);
+  return <Badge tone={tone}>{label}</Badge>;
 }
 
 function renderStageIcon(state: StageState) {
-  if (state === "done") {
-    return <CheckCircle2 className="size-4 text-emerald-500" />;
+  if (state === "done") return <CheckCircle2 className="size-4 text-success" />;
+  if (state === "active") return <LoaderCircle className="size-4 animate-spin text-accent" />;
+  if (state === "interrupted") return <XCircle className="size-4 text-warning" />;
+  return <Circle className="size-4 text-muted/40" />;
+}
+
+/* --- Helpers --- */
+
+/** Show only populated logical fields in JSON view — no empty values, no _internal keys */
+function cleanRecordForDisplay(record: CrawlRecord): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record.data ?? {})) {
+    if (key.startsWith("_")) continue;
+    if (value === null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
+    if (typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length === 0) continue;
+    clean[key] = value;
   }
-  if (state === "active") {
-    return <LoaderCircle className="size-4 animate-spin text-brand" />;
-  }
-  if (state === "interrupted") {
-    return <XCircle className="size-4 text-amber-500" />;
-  }
-  return <Circle className="size-4 text-muted" />;
+  return clean;
 }
 
 function shouldPoll(run: CrawlRun | undefined) {
-  return !run || !TERMINAL_STATUSES.has(run.status);
+  if (!run) return true;
+  if (TERMINAL_STATUSES.has(run.status)) return false;
+  if (run.completed_at) return false;
+  if (typeof run.result_summary?.progress === "number" && run.result_summary.progress >= 100) return false;
+  if (typeof run.result_summary?.record_count === "number" && run.result_summary.record_count > 0) {
+    const stage = normalizeStage(run.result_summary?.current_stage);
+    if (stage === "UNIFY" || stage === "PUBLISH") {
+      return false;
+    }
+  }
+  return true;
 }
 
-function deriveStages(logs: CrawlLog[], status: string | undefined) {
+function deriveStages(logs: CrawlLog[], status: string | undefined, currentStage: string | undefined) {
+  const explicitStage = normalizeStage(currentStage);
+  const explicitStageIndex = explicitStage ? STAGES.indexOf(explicitStage) : -1;
   const startedIndex = STAGES.reduce((index, stage, stageIndex) => (
-    logs.some((log) => log.message.includes(`[${stage}]`)) ? stageIndex : index
+    logs.some((log) => normalizeStageLog(log.message) === stage || log.message.includes(`[${stage}]`) || log.message.includes(stageTitle(stage))) ? stageIndex : index
   ), -1);
+  const furthestIndex = Math.max(explicitStageIndex, startedIndex);
+  const activeIndex = explicitStageIndex >= 0 ? explicitStageIndex : startedIndex;
 
   return STAGES.map((stage, index) => {
     let state: StageState = "idle";
-    if (status === "completed") {
+    if (status === "completed" || status === "degraded") {
       state = "done";
     } else if (status === "failed" || status === "cancelled") {
-      if (index < startedIndex) {
+      if (index < activeIndex) {
         state = "done";
-      } else if (index === startedIndex) {
+      } else if (index === activeIndex) {
         state = "interrupted";
       }
-    } else if (startedIndex === -1) {
+    } else if (activeIndex === -1) {
       state = index === 0 ? "active" : "idle";
-    } else if (index < startedIndex) {
+    } else if (index < activeIndex || index <= furthestIndex - 1) {
       state = "done";
-    } else if (index === startedIndex) {
+    } else if (index === activeIndex) {
       state = "active";
     }
 
-    return {
-      label: stageTitle(stage),
-      state,
-      description: stageDescription(stage),
-    };
+    return { label: stageTitle(stage), state, description: stageDescription(stage) };
   });
 }
 
@@ -443,17 +515,15 @@ function stageTitle(stage: (typeof STAGES)[number]) {
 }
 
 function stageDescription(stage: (typeof STAGES)[number]) {
-  if (stage === "ACQUIRE") return "Fetching the page and loading rendered content.";
-  if (stage === "DISCOVER") return "Inspecting sources and reusable evidence.";
-  if (stage === "EXTRACT") return "Extracting candidate fields.";
-  if (stage === "UNIFY") return "Normalizing values into the target record shape.";
-  return "Saving records and memory.";
+  if (stage === "ACQUIRE") return "Fetching page content";
+  if (stage === "DISCOVER") return "Inspecting data sources";
+  if (stage === "EXTRACT") return "Extracting fields";
+  if (stage === "UNIFY") return "Normalizing records";
+  return "Saving results";
 }
 
 function buildDefaultSelections(review: ReviewPayload | undefined): ReviewSelection[] {
-  if (!review) {
-    return [];
-  }
+  if (!review) return [];
   const fields = [...new Set([...review.normalized_fields, ...review.discovered_fields])];
   return fields.map((field) => ({
     source_field: field,
@@ -462,25 +532,54 @@ function buildDefaultSelections(review: ReviewPayload | undefined): ReviewSelect
   }));
 }
 
-function buildCsvRows(records: CrawlRecord[], selections: ReviewSelection[], extraFields: string[]) {
-  const selected = selections.filter((item) => item.selected);
+function buildCsvRows(records: CrawlRecord[], columns: string[], selections: ReviewSelection[]) {
+  const selectionSources = new Map(
+    selections
+      .filter((item) => item.selected && item.output_field.trim())
+      .map((item) => [item.output_field.trim(), item.source_field] as const),
+  );
   return records.map((record) => {
     const row: Record<string, unknown> = {};
-    for (const selection of selected) {
-      row[selection.output_field] = readRecordValue(record, selection.source_field);
-    }
-    for (const field of extraFields) {
-      row[field] = row[field] ?? "";
+    for (const column of columns) {
+      const selectedSource = selectionSources.get(column);
+      row[column] = selectedSource ? readRecordValue(record, selectedSource) : readRecordValue(record, column);
     }
     return row;
   });
 }
 
 function readRecordValue(record: CrawlRecord, field: string) {
-  if (field in record.data) return record.data[field];
-  if (field in record.raw_data) return record.raw_data[field];
-  if (field in record.discovered_data) return record.discovered_data[field];
+  const data = record.data && typeof record.data === "object" ? record.data : undefined;
+  const rawData = record.raw_data && typeof record.raw_data === "object" ? record.raw_data : undefined;
+  if (data && field in data) return data[field];
+  if (rawData && field in rawData) return rawData[field];
   return "";
+}
+
+function getRunTitle(run: CrawlRun | undefined, live: boolean, runId: number) {
+  if (live) return "Extraction Running";
+  if (run?.status === "completed") return "Extraction Complete";
+  if (run?.status === "degraded") return "Extraction Degraded";
+  if (run?.status === "failed") return "Extraction Failed";
+  return `Run #${runId}`;
+}
+
+function getStatusTone(status: string) {
+  if (status === "completed") return "success" as const;
+  if (status === "degraded") return "warning" as const;
+  if (status === "failed" || status === "cancelled") return "danger" as const;
+  return "neutral" as const;
+}
+
+function getExtractionVerdictMeta(verdict: string) {
+  if (verdict === "success") return { tone: "success" as const, label: "Success" };
+  if (verdict === "partial") return { tone: "warning" as const, label: "Partial" };
+  if (verdict === "blocked") return { tone: "danger" as const, label: "Blocked" };
+  if (verdict === "listing_detection_failed") return { tone: "warning" as const, label: "No Listings" };
+  if (verdict === "schema_miss") return { tone: "warning" as const, label: "Schema Miss" };
+  if (verdict === "empty") return { tone: "danger" as const, label: "Empty" };
+  if (verdict === "error") return { tone: "danger" as const, label: "Error" };
+  return { tone: "neutral" as const, label: verdict };
 }
 
 function normalizeFieldName(value: string) {
@@ -497,11 +596,11 @@ function formatRunType(value: string | undefined) {
   if (value === "crawl") return "Single";
   if (value === "batch") return "Batch";
   if (value === "csv") return "CSV";
-  return value ?? "-";
+  return value ?? "--";
 }
 
 function formatPageType(value: string | undefined) {
-  if (!value || value === "-") return "-";
+  if (!value || value === "-") return "--";
   return value === "pdp" ? "PDP" : value.charAt(0).toUpperCase() + value.slice(1);
 }
 
@@ -509,8 +608,66 @@ function readString(value: unknown) {
   return typeof value === "string" ? value : undefined;
 }
 
+function readNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function normalizeStage(value: unknown) {
+  const stage = readString(value)?.trim().toUpperCase();
+  if (!stage) return undefined;
+  if ((STAGES as readonly string[]).includes(stage)) {
+    return stage as (typeof STAGES)[number];
+  }
+  return undefined;
+}
+
+function normalizeStageLog(message: string) {
+  const upper = message.toUpperCase();
+  if (upper.includes("ACQUIRE")) return "ACQUIRE";
+  if (upper.includes("DISCOVER")) return "DISCOVER";
+  if (upper.includes("EXTRACT")) return "EXTRACT";
+  if (upper.includes("UNIFY")) return "UNIFY";
+  if (upper.includes("PUBLISH")) return "PUBLISH";
+  return "";
+}
+
+function extractBulkUrls(records: CrawlRecord[], columns: string[]) {
+  const preferred = ["product_url", "job_url", "detail_url", "listing_url", "url", "source_url"];
+  const available = new Set(columns.map((column) => column.toLowerCase()));
+  const urlField = preferred.find((field) => available.has(field));
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  for (const record of records) {
+    const candidateFields = urlField ? [urlField] : [...available];
+    for (const field of candidateFields) {
+      const value = readString(record.data?.[field]) ?? readString(record.raw_data?.[field]) ?? readString(record.source_trace?.[field]);
+      if (!value || !value.startsWith("http")) continue;
+      if (seen.has(value)) continue;
+      seen.add(value);
+      urls.push(value);
+    }
+  }
+
+  return urls;
+}
+
+function inferVertical(surface: string | undefined) {
+  if (!surface) return "ecommerce";
+  if (surface.startsWith("job_")) return "jobs";
+  if (surface.startsWith("automobile_")) return "automobile";
+  return "ecommerce";
+}
+
 function getDomain(url: string | undefined) {
-  if (!url) return "-";
+  if (!url) return "--";
   try {
     return new URL(url).hostname;
   } catch {

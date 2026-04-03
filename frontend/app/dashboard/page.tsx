@@ -75,7 +75,7 @@ export default function DashboardPage() {
                       <p className="truncate text-sm font-semibold text-foreground">{run.url || `Run ${run.id}`}</p>
                       <p className="text-xs uppercase tracking-[0.18em] text-muted">{run.surface}</p>
                     </div>
-                    <Badge tone={run.status === "completed" ? "success" : "warning"}>{run.status}</Badge>
+                    <Badge tone={getStatusTone(run.status)}>{run.status}</Badge>
                   </div>
                 </div>
               ))}
@@ -103,4 +103,11 @@ export default function DashboardPage() {
       </div>
     </div>
   );
+}
+
+function getStatusTone(status: string) {
+  if (status === "completed") return "success" as const;
+  if (status === "degraded") return "warning" as const;
+  if (status === "failed" || status === "cancelled") return "danger" as const;
+  return "neutral" as const;
 }

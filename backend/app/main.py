@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 from app.api.auth import router as auth_router
 from app.api.crawls import router as crawls_router
@@ -14,8 +15,16 @@ from app.api.review import router as review_router
 from app.api.selectors import router as selectors_router
 from app.api.users import router as users_router
 from app.core.config import get_frontend_origins, settings
+from app.core.database import engine
+from app.core.schema_bootstrap import ensure_dev_schema
 
-app = FastAPI(title=settings.app_name)
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await ensure_dev_schema(engine)
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_frontend_origins(),

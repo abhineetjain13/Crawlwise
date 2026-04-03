@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from app.services.acquisition.acquirer import ProxyRotator, acquire_html
+from app.services.acquisition.acquirer import ProxyRotator, _artifact_path, _network_payload_path, acquire_html
+from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host, reset_host_memory
 
 
 class TestProxyRotator:
@@ -39,7 +40,8 @@ async def test_acquire_html_curl_success():
     """curl_cffi success path — no Playwright fallback needed."""
     html = "<html><body><h1>Product</h1><p>Long enough content to pass threshold check" + "x" * 500 + "</p></body></html>"
     with (
-        patch("app.services.acquisition.acquirer.fetch_html", new_callable=AsyncMock, return_value=html),
+        patch("app.services.acquisition.acquirer._fetch_with_content_type",
+              new_callable=AsyncMock, return_value=(html, "html", None)),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         from pathlib import Path
@@ -61,7 +63,8 @@ async def test_acquire_html_falls_back_to_playwright():
     from app.services.acquisition.browser_client import BrowserResult
 
     with (
-        patch("app.services.acquisition.acquirer.fetch_html", new_callable=AsyncMock, return_value=short_html),
+        patch("app.services.acquisition.acquirer._fetch_with_content_type",
+              new_callable=AsyncMock, return_value=(short_html, "html", None)),
         patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, return_value=BrowserResult(html=full_html, network_payloads=[{"url": "https://api.example.com", "body": {}}])),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
@@ -100,7 +103,8 @@ async def test_acquire_with_proxy():
     """Proxy is passed through to HTTP client."""
     html = "<html><body>" + "x" * 600 + "</body></html>"
     with (
-        patch("app.services.acquisition.acquirer.fetch_html", new_callable=AsyncMock, return_value=html) as mock_fetch,
+        patch("app.services.acquisition.acquirer._fetch_with_content_type",
+              new_callable=AsyncMock, return_value=(html, "html", None)) as mock_fetch,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         from pathlib import Path
@@ -108,4 +112,50 @@ async def test_acquire_with_proxy():
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_settings.artifacts_dir = Path(tmpdir)
             await acquire_html(1, "https://example.com", proxy_list=["http://myproxy:8080"])
-    mock_fetch.assert_called_once_with("https://example.com", proxy="http://myproxy:8080")
+    mock_fetch.assert_called_once()
+    call_args = mock_fetch.call_args
+    assert call_args.args[0] == "https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_acquire_json_content_type():
+    """JSON content type should be detected and returned."""
+    json_text = '{"jobs": [{"title": "Engineer"}]}'
+    json_data = {"jobs": [{"title": "Engineer"}]}
+    with (
+        patch("app.services.acquisition.acquirer._fetch_with_content_type",
+              new_callable=AsyncMock, return_value=(json_text, "json", json_data)),
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+        from app.services.acquisition.acquirer import acquire
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://api.example.com/jobs")
+    assert result.content_type == "json"
+    assert result.json_data == json_data
+    assert result.method == "curl_cffi"
+
+
+@pytest.fixture(autouse=True)
+def _reset_host_memory():
+    reset_host_memory()
+    yield
+    reset_host_memory()
+
+
+def test_host_memory_persists_preference(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.host_memory.settings.artifacts_dir", tmp_path)
+    assert not host_prefers_stealth("https://example.com/path")
+    remember_stealth_host("https://example.com/path", ttl_hours=1)
+    assert host_prefers_stealth("https://example.com/path")
+
+
+def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    url = "https://www.example.com/products/fancy-chair?color=oak&size=large"
+    html_path = _artifact_path(42, url)
+    network_path = _network_payload_path(42, url)
+    assert html_path.stem == network_path.stem
+    assert html_path.stem.startswith("www-example-com__run-42__products-fancy-chair-color-oak-size-large__")

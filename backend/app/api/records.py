@@ -16,13 +16,17 @@ from app.schemas.crawl import CrawlRecordResponse
 from app.services.crawl_service import get_run_records
 
 router = APIRouter(prefix="/api/crawls", tags=["records"])
+MAX_RECORD_PAGE_SIZE = 1000
+EXPORT_PAGING_HEADER = "X-Export-Paging"
+EXPORT_TOTAL_HEADER = "X-Export-Total"
+EXPORT_PARTIAL_HEADER = "X-Export-Partial"
 
 
 @router.get("/{run_id}/records", response_model=PaginatedResponse[CrawlRecordResponse])
 async def records_list(
     run_id: int,
     page: int = Query(default=1, ge=1),
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=20, ge=1, le=MAX_RECORD_PAGE_SIZE),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> PaginatedResponse[CrawlRecordResponse]:
@@ -39,12 +43,15 @@ async def export_json(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> StreamingResponse:
-    rows, _ = await get_run_records(session, run_id, 1, 1000)
-    payload = json.dumps([row.data for row in rows], indent=2)
+    rows, metadata = await _collect_export_rows(session, run_id)
+    payload = json.dumps([_clean_export_data(row.data) for row in rows], indent=2)
     return StreamingResponse(
         iter([payload]),
         media_type="application/json",
-        headers={"Content-Disposition": f"attachment; filename=run-{run_id}.json"},
+        headers={
+            "Content-Disposition": f"attachment; filename=run-{run_id}.json",
+            **_export_headers(metadata),
+        },
     )
 
 
@@ -54,17 +61,21 @@ async def export_csv(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> StreamingResponse:
-    rows, _ = await get_run_records(session, run_id, 1, 1000)
-    fieldnames = sorted({key for row in rows for key in row.data.keys()})
+    rows, metadata = await _collect_export_rows(session, run_id)
+    clean_rows = [_clean_export_data(row.data) for row in rows]
+    fieldnames = sorted({key for r in clean_rows for key in r.keys()})
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     writer.writeheader()
-    for row in rows:
-        writer.writerow(row.data)
+    for r in clean_rows:
+        writer.writerow(r)
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=run-{run_id}.csv"},
+        headers={
+            "Content-Disposition": f"attachment; filename=run-{run_id}.csv",
+            **_export_headers(metadata),
+        },
     )
 
 
@@ -74,7 +85,7 @@ async def export_discoverist(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> StreamingResponse:
-    rows, _ = await get_run_records(session, run_id, 1, 1000)
+    rows, metadata = await _collect_export_rows(session, run_id)
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["source_url", "title", "description"])
@@ -83,5 +94,44 @@ async def export_discoverist(
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=run-{run_id}-discoverist.csv"},
+        headers={
+            "Content-Disposition": f"attachment; filename=run-{run_id}-discoverist.csv",
+            **_export_headers(metadata),
+        },
     )
+
+
+async def _collect_export_rows(session: AsyncSession, run_id: int) -> tuple[list, dict[str, int | bool]]:
+    rows = []
+    page = 1
+    total = 0
+
+    while True:
+        page_rows, total = await get_run_records(session, run_id, page, MAX_RECORD_PAGE_SIZE)
+        rows.extend(page_rows)
+        if not page_rows or len(rows) >= total:
+            break
+        page += 1
+
+    return rows, {
+        "pages_used": page if rows else 1,
+        "total": total,
+        "returned": len(rows),
+        "truncated": len(rows) < total,
+    }
+
+
+def _clean_export_data(data: dict) -> dict:
+    """Strip empty/null values and internal keys from export data."""
+    return {
+        k: v for k, v in data.items()
+        if v not in (None, "", [], {}) and not str(k).startswith("_")
+    }
+
+
+def _export_headers(metadata: dict[str, int | bool]) -> dict[str, str]:
+    return {
+        EXPORT_PAGING_HEADER: str(metadata["pages_used"]),
+        EXPORT_TOTAL_HEADER: str(metadata["total"]),
+        EXPORT_PARTIAL_HEADER: "true" if metadata["truncated"] else "false",
+    }

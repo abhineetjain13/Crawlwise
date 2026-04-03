@@ -1,0 +1,4 @@
+{
+  "price_fields": ["price", "sale_price", "original_price"],
+  "price_regex": "\\d[\\d,.]*"
+}

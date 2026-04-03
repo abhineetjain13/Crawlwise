@@ -6,8 +6,10 @@ from urllib.parse import urlparse
 from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.adapters.ebay import EbayAdapter
+from app.services.adapters.greenhouse import GreenhouseAdapter
 from app.services.adapters.indeed import IndeedAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
+from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.walmart import WalmartAdapter
 
@@ -18,6 +20,8 @@ _ADAPTERS: list[BaseAdapter] = [
     EbayAdapter(),
     IndeedAdapter(),
     LinkedInAdapter(),
+    GreenhouseAdapter(),
+    RemotiveAdapter(),
     ShopifyAdapter(),  # last — uses HTML signals, not domain matching
 ]
 
@@ -36,3 +40,25 @@ async def run_adapter(url: str, html: str, surface: str) -> AdapterResult | None
     if adapter is None:
         return None
     return await adapter.extract(url, html, surface)
+
+
+async def try_blocked_adapter_recovery(url: str, surface: str) -> AdapterResult | None:
+    """Attempt limited recovery for blocked pages using public platform endpoints.
+
+    This is intentionally narrow. It does not try to defeat anti-bot pages in
+    general; it only uses known public data endpoints when a platform supports
+    them directly.
+    """
+    if surface not in {"ecommerce_listing", "ecommerce_detail"}:
+        return None
+
+    shopify = ShopifyAdapter()
+    records = await shopify.try_public_endpoint(url, surface)
+    if not records:
+        return None
+    return AdapterResult(
+        records=records,
+        source_type="shopify_adapter_recovery",
+        confidence=0.95,
+        adapter_name=shopify.name,
+    )

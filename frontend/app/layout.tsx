@@ -1,19 +1,17 @@
-import { Inter, JetBrains_Mono } from "next/font/google";
-import Script from "next/script";
+import { Geist, Geist_Mono } from "next/font/google";
 
 import "./globals.css";
 import { AppShell } from "../components/layout/app-shell";
 import { QueryProvider } from "../components/ui/query-provider";
 
-const inter = Inter({
+const geistSans = Geist({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-geist-sans",
 });
 
-const mono = JetBrains_Mono({
+const geistMono = Geist_Mono({
   subsets: ["latin"],
-  weight: ["400", "500"],
-  variable: "--font-mono",
+  variable: "--font-geist-mono",
 });
 
 const themeScript = `
@@ -27,10 +25,10 @@ const themeScript = `
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} ${mono.variable}`}>
-        <Script id="theme-bootstrap" strategy="beforeInteractive">
-          {themeScript}
-        </Script>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
         <QueryProvider>
           <AppShell>{children}</AppShell>
         </QueryProvider>

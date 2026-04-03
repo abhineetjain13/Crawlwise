@@ -1,5 +1,22 @@
-import { apiClient } from "./client";
-import type { CrawlCreatePayload, CrawlLog, CrawlRecord, CrawlRun, Dashboard, Paginated, ReviewPayload, ReviewSelection, User } from "./types";
+import { apiClient, getApiBaseUrl } from "./client";
+import type {
+  CrawlCreatePayload,
+  CrawlLog,
+  CrawlRecord,
+  CrawlRun,
+  Dashboard,
+  LlmConfigRecord,
+  LlmCostLogRecord,
+  Paginated,
+  ReviewPayload,
+  ReviewSelectorPreview,
+  ReviewSelection,
+  SelectorCreatePayload,
+  SelectorRecord,
+  SelectorTestResponse,
+  SelectorUpdatePayload,
+  User,
+} from "./types";
 
 export const api = {
   register: (email: string, password: string) =>
@@ -40,13 +57,32 @@ export const api = {
     return apiClient.get<Paginated<CrawlRecord>>(`/api/crawls/${runId}/records${query.size ? `?${query.toString()}` : ""}`);
   },
   getCrawlLogs: (runId: number) => apiClient.get<CrawlLog[]>(`/api/crawls/${runId}/logs`),
-  exportCsv: (runId: number) => `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/crawls/${runId}/export/csv`,
-  exportJson: (runId: number) => `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/crawls/${runId}/export/json`,
+  exportCsv: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/csv`,
+  exportJson: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/json`,
   getReview: (runId: number) => apiClient.get<ReviewPayload>(`/api/review/${runId}`),
+  reviewHtml: (runId: number) => `${getApiBaseUrl()}/api/review/${runId}/artifact-html`,
   saveReview: (runId: number, payload: { selections: ReviewSelection[]; extra_fields: string[] }) =>
     apiClient.post(`/api/review/${runId}/save`, payload),
+  previewSelectors: (runId: number, payload: { selectors: SelectorCreatePayload[] }) =>
+    apiClient.post<ReviewSelectorPreview>(`/api/review/${runId}/selector-preview`, payload),
   listUsers: () => apiClient.get<Paginated<User>>("/api/users"),
-  listSelectors: () => apiClient.get<Array<Record<string, unknown>>>("/api/selectors"),
+  listSelectors: (params?: { domain?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.domain) query.set("domain", params.domain);
+    return apiClient.get<SelectorRecord[]>(`/api/selectors${query.size ? `?${query.toString()}` : ""}`);
+  },
+  createSelector: (payload: SelectorCreatePayload) => apiClient.post<SelectorRecord>("/api/selectors", payload),
+  updateSelector: (selectorId: number, payload: SelectorUpdatePayload) =>
+    apiClient.put<SelectorRecord>(`/api/selectors/${selectorId}`, payload),
+  deleteSelector: (selectorId: number) => apiClient.delete<void>(`/api/selectors/${selectorId}`),
+  testSelector: (payload: { url: string; css_selector?: string | null; xpath?: string | null; regex?: string | null }) =>
+    apiClient.post<SelectorTestResponse>("/api/selectors/test", payload),
   listJobs: () => apiClient.get<Array<Record<string, unknown>>>("/api/jobs/active"),
-  listLlmConfigs: () => apiClient.get<Array<Record<string, unknown>>>("/api/llm/config"),
+  listLlmConfigs: () => apiClient.get<LlmConfigRecord[]>("/api/llm/config"),
+  listLlmCostLog: (params?: { page?: number; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.page !== undefined) query.set("page", String(params.page));
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    return apiClient.get<Paginated<LlmCostLogRecord>>(`/api/llm/cost-log${query.size ? `?${query.toString()}` : ""}`);
+  },
 };

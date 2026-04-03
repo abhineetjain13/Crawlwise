@@ -9,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
+from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
     active_jobs,
     cancel_run,
@@ -18,6 +20,18 @@ from app.services.crawl_service import (
     parse_csv_urls,
     process_run,
 )
+
+
+def _make_acq(html: str = "", **kwargs) -> AcquisitionResult:
+    """Helper to build an AcquisitionResult for test mocks."""
+    return AcquisitionResult(
+        html=html,
+        json_data=kwargs.get("json_data"),
+        content_type=kwargs.get("content_type", "html"),
+        method=kwargs.get("method", "curl_cffi"),
+        artifact_path=kwargs.get("artifact_path", "/tmp/artifact.html"),
+        network_payloads=kwargs.get("network_payloads", []),
+    )
 
 
 # --- CSV parsing ---
@@ -106,8 +120,8 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire_html", new_callable=AsyncMock,
-              return_value=(FIXTURE_HTML, "curl_cffi", "/tmp/artifact.html", [])),
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(FIXTURE_HTML)),
         patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
@@ -115,6 +129,8 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
     await db_session.refresh(run)
     assert run.status == "completed"
     assert run.result_summary["record_count"] >= 1
+    assert run.result_summary["current_stage"] == "PUBLISH"
+    assert run.result_summary["current_url"] == "https://example.com/product"
 
     # Check records
     records = (await db_session.execute(
@@ -122,6 +138,10 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
     )).scalars().all()
     assert len(records) >= 1
     assert "title" in records[0].data
+    logs = (await db_session.execute(
+        select(CrawlLog).where(CrawlLog.run_id == run.id)
+    )).scalars().all()
+    assert any("[UNIFY]" in log.message for log in logs)
 
 
 @pytest.mark.asyncio
@@ -133,7 +153,7 @@ async def test_process_run_error_handling(db_session: AsyncSession, test_user):
         "surface": "ecommerce_detail",
     })
 
-    with patch("app.services.crawl_service.acquire_html", new_callable=AsyncMock,
+    with patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
                side_effect=ConnectionError("Network unreachable")):
         await process_run(db_session, run.id)
 
@@ -153,8 +173,8 @@ async def test_process_run_batch(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire_html", new_callable=AsyncMock,
-              return_value=(FIXTURE_HTML, "curl_cffi", "/tmp/artifact.html", [])),
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(FIXTURE_HTML)),
         patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
@@ -162,6 +182,9 @@ async def test_process_run_batch(db_session: AsyncSession, test_user):
     await db_session.refresh(run)
     assert run.status == "completed"
     assert run.result_summary["record_count"] >= 2
+    assert run.result_summary["processed_urls"] == 2
+    assert run.result_summary["completed_urls"] == 2
+    assert run.result_summary["remaining_urls"] == 0
 
 
 @pytest.mark.asyncio
@@ -181,8 +204,8 @@ async def test_process_run_listing_page(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire_html", new_callable=AsyncMock,
-              return_value=(listing_html, "curl_cffi", "/tmp/artifact.html", [])),
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(listing_html)),
         patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
@@ -197,7 +220,7 @@ async def test_process_run_listing_page(db_session: AsyncSession, test_user):
 
 @pytest.mark.asyncio
 async def test_process_run_blocked_page(db_session: AsyncSession, test_user):
-    """Blocked/empty page should not produce valid records."""
+    """Blocked/empty page should not produce valid records and should mark as failed."""
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/blocked",
@@ -205,20 +228,182 @@ async def test_process_run_blocked_page(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire_html", new_callable=AsyncMock,
-              return_value=("", "curl_cffi", "/tmp/artifact.html", [])),
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq("")),
         patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
     await db_session.refresh(run)
-    assert run.status == "completed"
+    # Blocked pages now mark the run as failed, not completed
+    assert run.status == "failed"
+    assert run.result_summary.get("extraction_verdict") == "blocked"
     records = (await db_session.execute(
         select(CrawlRecord).where(CrawlRecord.run_id == run.id)
     )).scalars().all()
     # Should have a record with blocked status
     assert len(records) == 1
     assert records[0].data.get("_status") == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_process_run_challenge_page(db_session: AsyncSession, test_user):
+    """Challenge/anti-bot page should be detected and marked as blocked."""
+    challenge_html = """
+    <html><head><title>Robot or human?</title></head>
+    <body>
+    <div>Please verify you are a human</div>
+    <div class="px-captcha">Complete the security check</div>
+    <script src="perimeterx.js"></script>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/challenge",
+        "surface": "ecommerce_detail",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(challenge_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.result_summary.get("extraction_verdict") == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(db_session: AsyncSession, test_user):
+    challenge_html = """
+    <html><head><title>Just a moment...</title></head>
+    <body>
+    <div>Checking your browser before accessing the site</div>
+    <div class="cf-challenge"></div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://store.com/collections/maternity-dresses",
+        "surface": "ecommerce_listing",
+    })
+
+    recovered = AdapterResult(
+        records=[
+            {
+                "title": "Recovered Dress",
+                "brand": "BrandX",
+                "price": "89.00",
+                "url": "https://store.com/products/recovered-dress",
+            }
+        ],
+        source_type="shopify_adapter_recovery",
+        confidence=0.95,
+        adapter_name="shopify",
+    )
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(challenge_html)),
+        patch("app.services.crawl_service.try_blocked_adapter_recovery", new_callable=AsyncMock,
+              return_value=recovered),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 1
+    assert run.result_summary.get("extraction_verdict") == "success"
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().all()
+    assert len(records) == 1
+    assert records[0].data["title"] == "Recovered Dress"
+
+
+@pytest.mark.asyncio
+async def test_process_run_json_api(db_session: AsyncSession, test_user):
+    """JSON API response should be extracted via the JSON path."""
+    json_payload = {
+        "jobs": [
+            {"title": "Engineer", "company_name": "Acme", "url": "/jobs/1"},
+            {"title": "Designer", "company_name": "Beta", "url": "/jobs/2"},
+        ]
+    }
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://api.example.com/jobs",
+        "surface": "job_listing",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq("", json_data=json_payload, content_type="json")),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary["record_count"] == 2
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().all()
+    assert len(records) == 2
+    titles = {r.data["title"] for r in records}
+    assert "Engineer" in titles
+    assert "Designer" in titles
+
+
+@pytest.mark.asyncio
+async def test_process_run_listing_no_records_fails(db_session: AsyncSession, test_user):
+    """Listing page with no extractable records should be marked degraded, not completed."""
+    empty_listing_html = """
+    <html><body>
+    <h1>Products</h1>
+    <p>No products found matching your criteria.</p>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/empty-category",
+        "surface": "ecommerce_listing",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(empty_listing_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    # Should NOT be "completed" — listing extraction failed
+    assert run.status == "degraded"
+    assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
+
+
+@pytest.mark.asyncio
+async def test_extraction_verdict_in_summary(db_session: AsyncSession, test_user):
+    """Successful runs should have extraction_verdict=success in result_summary."""
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product",
+        "surface": "ecommerce_detail",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(FIXTURE_HTML)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert "extraction_verdict" in run.result_summary
+    assert run.result_summary["extraction_verdict"] in ("success", "partial")
 
 
 @pytest.mark.asyncio

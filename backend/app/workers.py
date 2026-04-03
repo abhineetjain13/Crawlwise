@@ -6,12 +6,14 @@ import asyncio
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, engine
+from app.core.schema_bootstrap import ensure_dev_schema
 from app.models.crawl import CrawlRun
 from app.tasks.crawl_tasks import run_crawl_task
 
 
 async def work_forever() -> None:
+    await ensure_dev_schema(engine)
     while True:
         async with SessionLocal() as session:
             result = await session.execute(

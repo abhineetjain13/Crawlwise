@@ -1,6 +1,7 @@
 # Dashboard aggregation service.
 from __future__ import annotations
 
+import logging
 import shutil
 from urllib.parse import urlparse
 
@@ -11,6 +12,8 @@ from app.core.config import settings
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.selector import Selector
 from app.services.knowledge_base.store import reset_learned_state
+
+logger = logging.getLogger(__name__)
 
 
 async def build_dashboard(session: AsyncSession) -> dict:
@@ -58,14 +61,14 @@ async def reset_application_data(session: AsyncSession) -> dict:
         promotions_deleted = await session.execute(delete(ReviewPromotion))
         selectors_deleted = await session.execute(delete(Selector))
         crawl_runs_deleted = await session.execute(delete(CrawlRun))
-
-        artifacts_removed = _reset_directory(settings.artifacts_dir)
-        cookies_removed = _reset_directory(settings.cookie_store_dir)
-        reset_learned_state()
         await session.commit()
     except Exception:
         await session.rollback()
         raise
+
+    artifacts_removed = _reset_directory(settings.artifacts_dir)
+    cookies_removed = _reset_directory(settings.cookie_store_dir)
+    reset_learned_state()
 
     return {
         "crawl_runs_deleted": crawl_runs_deleted.rowcount or 0,
@@ -85,10 +88,18 @@ def _reset_directory(path) -> int:
         return 0
     removed = 0
     for child in path.iterdir():
-        removed += 1
-        if child.is_dir():
-            shutil.rmtree(child, ignore_errors=True)
-        else:
-            child.unlink(missing_ok=True)
+        try:
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+            if not child.exists():
+                removed += 1
+            else:
+                logger.warning("Failed to remove path during reset: %s", child)
+        except FileNotFoundError:
+            removed += 1
+        except Exception:
+            logger.exception("Failed to remove path during reset: %s", child)
     path.mkdir(parents=True, exist_ok=True)
     return removed

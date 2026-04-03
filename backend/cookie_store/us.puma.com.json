@@ -1,0 +1,92 @@
+[
+  {
+    "name": "cybercat-auth",
+    "value": "%7B%22accessToken%22%3A%22eyJ2ZXIiOiIxLjAiLCJqa3UiOiJzbGFzL3Byb2QvYmNqcF9wcmQiLCJraWQiOiI2YTIyMDgxZi03NjQ3LTQxNGQtOGRmYy0wYjE2OTM0M2RjYzkiLCJ0eXAiOiJqd3QiLCJjbHYiOiJKMi4zLjQiLCJhbGciOiJFUzI1NiJ9.eyJhdXQiOiJHVUlEIiwic2NwIjoic2ZjYy5zaG9wcGVyLW15YWNjb3VudC5iYXNrZXRzIGNfZ2lmdGNhcmRiYWxhbmNlIHNmY2Muc2hvcHBlci1teWFjY291bnQucGF5bWVudGluc3RydW1lbnRzIHNmY2Muc2hvcHBlci1jdXN0b21lcnMubG9naW4gc2ZjYy5zaG9wcGVyLW15YWNjb3VudC5vcmRlcnMgc2ZjYy5zaG9wcGVyLXByb2R1Y3RsaXN0cyBzZmNjLnNob3BwZXItcHJvbW90aW9ucyBzZmNjLnNob3BwZXItbXlhY2NvdW50LnBheW1lbnRpbnN0cnVtZW50cy5ydyBzZmNjLnNob3BwZXItbXlhY2NvdW50LnByb2R1Y3RsaXN0cyBzZmNjLnNob3BwZXItY2F0ZWdvcmllcyBzZmNjLnNob3BwZXItbXlhY2NvdW50IHNmY2Muc2hvcHBlci1teWFjY291bnQuYWRkcmVzc2VzIHNmY2Muc2hvcHBlci1wcm9kdWN0cyBzZmNjLnNob3BwZXItbXlhY2NvdW50LnJ3IGNfaGVhZGxlc3NDdXN0b21BcGkgc2ZjYy5zaG9wcGVyLWNvbnRleHQgc2ZjYy5zaG9wcGVyLWNvbnRleHQucncgc2ZjYy5zaG9wcGVyLWN1c3RvbWVycy5yZWdpc3RlciBzZmNjLnNob3BwZXItYmFza2V0cy1vcmRlcnMgc2ZjYy5zaG9wcGVyLW15YWNjb3VudC5hZGRyZXNzZXMucncgc2ZjYy5zaG9wcGVyLW15YWNjb3VudC5wcm9kdWN0bGlzdHMucncgc2ZjYy5zaG9wcGVyLWJhc2tldHMtb3JkZXJzLnJ3IGNfcHJpY2luZ0FuZFByb21vdGlvbnNfciBzZmNjLnNob3BwZXItZ2lmdC1jZXJ0aWZpY2F0ZXMgc2ZjYy5zaG9wcGVyLXByb2R1Y3Qtc2VhcmNoIiwic3ViIjoiY2Mtc2xhczo6YmNqcF9wcmQ6OnNjaWQ6MWM4YzhhM2UtNjU2ZS00MWIxLThiNmYtZmIwNmM0NTFmMDE5Ojp1c2lkOmQ0MjY4NGZhLTdlNGQtNDdiNC04MzNmLWFhYjBkZmY2MTBmYyIsImN0eCI6InNsYXMiLCJpc3MiOiJzbGFzL3Byb2QvYmNqcF9wcmQiLCJpc3QiOjEsImRudCI6IjAiLCJhdWQiOiJjb21tZXJjZWNsb3VkL3Byb2QvYmNqcF9wcmQiLCJuYmYiOjE3NzUyMDg0ODEsInN0eSI6IlVzZXIiLCJpc2IiOiJ1aWRvOnNsYXM6OnVwbjpHdWVzdDo6dWlkbjpHdWVzdCBVc2VyOjpnY2lkOmFieGJvV2xIRVl4S2NSbDBzWXhhWVlsMGdZOjpjaGlkOk5BIiwiZXhwIjoxNzc1MjEwMzExLCJpYXQiOjE3NzUyMDg1MTEsImp0aSI6IkMyQy0xODQ0NjA0NzcwMDc0MDYzNDM3MjQ5MjY4ODA1MjUwODMyOSJ9.Lie-D5pNFfskKZzh5ATkuw8youFTyzLoBDlW4eUpqQeF_Zrixs1ksdg9bLg2QgpRPfLf7SKIdZmlrcufDB_rKQ%22%2C%22guest%22%3Atrue%2C%22refreshToken%22%3A%22rekI2pPEKoV_wgLEFrsQED-ti0Noc_MdJDoE_D70l8I%22%2C%22customerId%22%3A%22abxboWlHEYxKcRl0sYxaYYl0gY%22%2C%22uniqueShopperId%22%3A%22d42684fa-7e4d-47b4-833f-aab0dff610fc%22%2C%22customerContext%22%3A%7B%22hashKey%22%3A%228975d5d873be15c22c5c0283533d44d8c18b3233a0b92da676a5e0c939a2d3b8%22%2C%22customerGroups%22%3A%5B%5D%7D%7D",
+    "domain": "us.puma.com",
+    "path": "/us",
+    "expires": 1782984512.382312,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Strict"
+  },
+  {
+    "name": "Ldl7YnFK",
+    "value": "A0kRrFKdAQAAEPsY0b0ZzE3mYovV3oazBPa8JSmq5NL4lMBahr13uda7L09SAXq0n027pb_owH8AAEB3AAAAAA|1|0|63e16f1fa19258c5d860cc9c51d9801b33b941af",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1809768822.561109,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_clck",
+    "value": "1tvsjvi%5E2%5Eg4w%5E0%5E2284",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1806744510,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "__wid",
+    "value": "573568946",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1775208932,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "ABTastySession",
+    "value": "mrasn=&lp=https%253A%252F%252Fus.puma.com%252Fus%252Fen",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1775210623,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "ABTasty",
+    "value": "uid=gt8z9bydpmwq793z&fst=1775208504321&pst=-1&cst=1775208504321&ns=1&pvt=4&pvis=4&th=",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1809336504,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_br_uid_2",
+    "value": "uid%3D7516319299558%3Av%3D12.0%3Ats%3D1775208516797%3Ahc%3D2",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1809768825.90755,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "forterToken",
+    "value": "4471401120f948aca481ef660641a95c_1775208824946__UDF43_15ck_",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1809768826,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_clsk",
+    "value": "q68l85%5E1775208829100%5E2%5E0%5El.clarity.ms%2Fcollect",
+    "domain": ".puma.com",
+    "path": "/",
+    "expires": 1775295229,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  }
+]

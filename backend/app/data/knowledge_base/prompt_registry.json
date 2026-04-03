@@ -1,6 +1,13 @@
 {
-  "additional_field_discovery": {
-    "version": 1,
-    "description": "Reserved for future optional LLM field discovery."
+  "xpath_discovery": {
+    "system_file": "xpath_discovery.system.txt",
+    "user_file": "xpath_discovery.user.txt",
+    "response_type": "object",
+    "data_key": "selectors"
+  },
+  "missing_field_extraction": {
+    "system_file": "missing_field_extraction.system.txt",
+    "user_file": "missing_field_extraction.user.txt",
+    "response_type": "object"
   }
 }

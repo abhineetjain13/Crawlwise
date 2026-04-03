@@ -3,13 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from app.core.config import settings
+from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.pipeline_config import (
+    BLOCK_MIN_HTML_LENGTH,
+    CHALLENGE_POLL_INTERVAL_MS,
+    CHALLENGE_WAIT_MAX_SECONDS,
+    COOKIE_CONSENT_SELECTORS,
+    ORIGIN_WARM_PAUSE_MS,
+)
 
 
 @dataclass
@@ -18,23 +27,23 @@ class BrowserResult:
 
     html: str = ""
     network_payloads: list[dict] = field(default_factory=list)
+    challenge_state: str = "none"
+    origin_warmed: bool = False
+    diagnostics: dict[str, object] = field(default_factory=dict)
 
 
-COOKIE_CONSENT_SELECTORS = [
-    "button#onetrust-accept-btn-handler",
-    "button#CybotCookiebotDialogBodyUnderlayAccept",
-    "[aria-label='Accept Cookies']",
-    "[aria-label='Accept all']",
-    "button:has-text('Accept All')",
-    "button:has-text('Accept Cookies')",
-    "button:has-text('Accept')",
-    "button:has-text('I Accept')",
-    "button:has-text('Agree')",
-    ".cookie-consent-accept",
-    "#cookieConsentAccept",
-    ".fc-button.fc-cta-accept",
-    ".fc-primary-button",
-]
+@dataclass
+class ChallengeAssessment:
+    state: str
+    should_wait: bool
+    reasons: list[str] = field(default_factory=list)
+
+
+_STEALTH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
 
 
 async def fetch_rendered_html(
@@ -43,6 +52,7 @@ async def fetch_rendered_html(
     advanced_mode: str | None = None,
     max_pages: int = 5,
     max_scrolls: int = 10,
+    prefer_stealth: bool = False,
 ) -> BrowserResult:
     """Render a page with Playwright and intercept XHR/fetch responses.
 
@@ -61,7 +71,7 @@ async def fetch_rendered_html(
         if proxy:
             launch_kwargs["proxy"] = {"server": proxy}
         browser = await pw.chromium.launch(**launch_kwargs)
-        context = await browser.new_context()
+        context = await browser.new_context(**_context_kwargs(prefer_stealth))
         original_domain = _domain(url)
         await _load_cookies(context, original_domain)
         page = await context.new_page()
@@ -82,9 +92,18 @@ async def fetch_rendered_html(
 
         page.on("response", _on_response)
 
+        origin_url = _origin_url(url)
+        if origin_url and origin_url != url:
+            await _warm_origin(page, origin_url)
+            result.origin_warmed = True
+
         await _goto_with_fallback(page, url)
         await _dismiss_cookie_consent(page)
-        await asyncio.sleep(1)
+        challenge_ok, challenge_state, reasons = await _wait_for_challenge_resolution(page)
+        result.challenge_state = challenge_state
+        result.diagnostics["challenge_reasons"] = reasons
+        result.diagnostics["challenge_ok"] = challenge_ok
+        await asyncio.sleep(0.25)
 
         # Advanced crawl modes
         if advanced_mode == "scroll":
@@ -103,6 +122,9 @@ async def fetch_rendered_html(
 
         result.html = await page.content()
         result.network_payloads = intercepted
+        if result.html:
+            result.diagnostics["html_length"] = len(result.html)
+            result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
         final_domain = _domain(page.url or url)
         await _save_cookies(context, final_domain)
         if final_domain != original_domain:
@@ -133,6 +155,19 @@ async def _goto_with_fallback(page, url: str) -> None:
         pass
 
     await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+
+
+async def _warm_origin(page, origin_url: str) -> None:
+    try:
+        await page.goto(origin_url, wait_until="domcontentloaded", timeout=15_000)
+        await page.wait_for_timeout(ORIGIN_WARM_PAUSE_MS)
+        try:
+            await page.mouse.move(240, 180)
+            await page.evaluate("window.scrollBy(0, 120)")
+        except Exception:
+            pass
+    except Exception:
+        return
 
 
 async def _scroll_to_bottom(page, max_scrolls: int) -> None:
@@ -191,6 +226,109 @@ async def _dismiss_cookie_consent(page) -> None:
         await page.keyboard.press("Escape")
     except Exception:
         pass
+
+
+async def _wait_for_challenge_resolution(
+    page,
+    max_wait_ms: int = CHALLENGE_WAIT_MAX_SECONDS * 1000,
+    poll_interval_ms: int = CHALLENGE_POLL_INTERVAL_MS,
+) -> tuple[bool, str, list[str]]:
+    try:
+        html = await page.content()
+    except Exception:
+        return True, "none", []
+
+    assessment = _assess_challenge_signals(html)
+    if assessment.state == "blocked_signal":
+        return False, "blocked", assessment.reasons
+    if not assessment.should_wait:
+        return True, assessment.state, assessment.reasons
+
+    elapsed = 0
+    while elapsed < max_wait_ms:
+        await page.wait_for_timeout(poll_interval_ms)
+        elapsed += poll_interval_ms
+        try:
+            html = await page.content()
+        except Exception:
+            break
+        assessment = _assess_challenge_signals(html)
+        if assessment.state == "blocked_signal":
+            return False, "blocked", assessment.reasons
+        if not assessment.should_wait:
+            state = "waiting_resolved" if elapsed > 0 else "none"
+            return True, state, assessment.reasons
+
+    return False, "blocked", assessment.reasons
+
+
+def _assess_challenge_signals(html: str) -> ChallengeAssessment:
+    text = (html or "")[:40_000].lower()
+    strong_markers = {
+        "captcha": "captcha",
+        "verify you are human": "verification_text",
+        "checking your browser": "browser_check",
+        "cf-browser-verification": "cloudflare_verification",
+        "challenge-platform": "challenge_platform",
+        "just a moment": "interstitial_text",
+        "access denied": "access_denied",
+        "powered and protected by akamai": "akamai_banner",
+        "akamai": "akamai_marker",
+    }
+    weak_markers = {
+        "one more step": "generic_interstitial",
+        "oops!! something went wrong": "generic_error_text",
+        "error page": "error_page_text",
+    }
+    strong_hits = [label for marker, label in strong_markers.items() if marker in text]
+    weak_hits = [label for marker, label in weak_markers.items() if marker in text]
+    if detect_blocked_page(html).is_blocked:
+        return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits or weak_hits or ["blocked_detector"])
+    short_html = len(html or "") < max(BLOCK_MIN_HTML_LENGTH, 2500)
+    if short_html and strong_hits:
+        return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits + ["short_html"])
+    if len(strong_hits) >= 2:
+        reasons = strong_hits[:]
+        if short_html:
+            reasons.append("short_html")
+        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=reasons)
+    if strong_hits or weak_hits:
+        reasons = (strong_hits + weak_hits)[:]
+        if short_html:
+            reasons.append("short_html")
+        return ChallengeAssessment(state="weak_signal_ignored", should_wait=False, reasons=reasons)
+    if len(re.sub(r"<[^>]+>", " ", text).split()) < 50:
+        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=["low_visible_text"])
+    return ChallengeAssessment(state="none", should_wait=False, reasons=[])
+
+
+def _context_kwargs(prefer_stealth: bool) -> dict:
+    kwargs = {
+        "java_script_enabled": True,
+        "ignore_https_errors": True,
+        "bypass_csp": True,
+        "locale": "en-US",
+        "timezone_id": "UTC",
+        "viewport": {"width": 1365, "height": 900},
+        "device_scale_factor": 1,
+        "is_mobile": False,
+        "has_touch": False,
+        "color_scheme": "light",
+        "extra_http_headers": {
+            "Accept-Language": "en-US,en;q=0.9",
+            "Upgrade-Insecure-Requests": "1",
+        },
+    }
+    if prefer_stealth:
+        kwargs["user_agent"] = _STEALTH_USER_AGENT
+    return kwargs
+
+
+def _origin_url(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    return urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
 
 
 async def _load_cookies(context, domain: str) -> bool:
@@ -259,7 +397,6 @@ def _cookie_domain_matches(cookie_domain: str, requested_domain: str) -> bool:
         return False
     return (
         cookie_host == requested_host
-        or cookie_host.endswith(f".{requested_host}")
         or requested_host.endswith(f".{cookie_host}")
     )
 

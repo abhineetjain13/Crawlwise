@@ -1,8 +1,10 @@
 # Shopify platform adapter.
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
@@ -28,15 +30,15 @@ class ShopifyAdapter(BaseAdapter):
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records: list[dict] = []
-        # Use endpoint data when it is specific to the requested page type.
-        if surface in ("ecommerce_listing", "ecommerce_detail"):
-            api_records = await self._try_products_json(url, surface)
-            if api_records:
-                records.extend(api_records)
-        # Also try embedded JSON-LD (Shopify puts product data there)
         embedded = self._extract_embedded_product(html, url)
         if embedded:
             records.extend(embedded)
+        # Listing pages are usually best served by the public collection endpoint.
+        # Detail pages can often be satisfied from embedded Shopify JSON without a network round-trip.
+        if surface in ("ecommerce_listing", "ecommerce_detail") and (surface == "ecommerce_listing" or not records):
+            api_records = await self.try_public_endpoint(url, surface)
+            if api_records:
+                records.extend(api_records)
         return AdapterResult(
             records=records,
             source_type="shopify_adapter",
@@ -44,7 +46,7 @@ class ShopifyAdapter(BaseAdapter):
             adapter_name=self.name,
         )
 
-    async def _try_products_json(self, url: str, surface: str) -> list[dict]:
+    async def try_public_endpoint(self, url: str, surface: str) -> list[dict]:
         """Fetch Shopify product endpoint data.
 
         Listing pages use `/collections/<handle>/products.json` when possible so
@@ -69,7 +71,9 @@ class ShopifyAdapter(BaseAdapter):
             else:
                 api_url = f"{parsed.scheme}://{parsed.netloc}/products.json?limit=250"
         try:
-            resp = curl_requests.get(api_url, impersonate="chrome110", timeout=10)
+            resp = await asyncio.to_thread(
+                curl_requests.get, api_url, impersonate="chrome110", timeout=6,
+            )
             if resp.status_code != 200:
                 return []
             data = resp.json()
@@ -144,7 +148,27 @@ class ShopifyAdapter(BaseAdapter):
             return f"{scheme}:{value}"
         return value
 
-    def _normalize_price(self, value: object) -> str | int | float | None:
+    def _normalize_price(self, value: object) -> str | None:
+        if value is None:
+            return None
         if isinstance(value, int):
-            return f"{value / 100:.2f}"
-        return value
+            return format(
+                (Decimal(value) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                "f",
+            )
+        if isinstance(value, Decimal):
+            return format(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+        if isinstance(value, float):
+            return format(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                return format(
+                    Decimal(raw).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                    "f",
+                )
+            except InvalidOperation:
+                return None
+        return None

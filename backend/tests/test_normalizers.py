@@ -26,3 +26,7 @@ def test_normalize_non_string():
 
 def test_normalize_empty_string():
     assert normalize_value("title", "") == ""
+
+
+def test_normalize_description_strips_html():
+    assert normalize_value("description", "<p>Hello <strong>World</strong></p>") == "Hello World"

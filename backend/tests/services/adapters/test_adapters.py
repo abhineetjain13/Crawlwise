@@ -41,6 +41,22 @@ async def test_shopify_embedded_product():
 
 
 @pytest.mark.asyncio
+async def test_shopify_detail_prefers_embedded_product_over_public_endpoint():
+    adapter = ShopifyAdapter()
+    html = """
+    <html><body>
+    <script>var meta = {"product": {"title": "Embedded Shirt", "vendor": "BrandX", "price": 2999, "type": "Apparel"}};</script>
+    <script>Shopify.theme = {}</script>
+    </body></html>
+    """
+    with patch("app.services.adapters.shopify.curl_requests.get") as mock_get:
+        result = await adapter.extract("https://store.com/products/shirt", html, "ecommerce_detail")
+    assert len(result.records) >= 1
+    assert result.records[0]["title"] == "Embedded Shirt"
+    mock_get.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_shopify_detail_uses_handle_specific_endpoint():
     adapter = ShopifyAdapter()
     response = Mock()
@@ -117,6 +133,34 @@ async def test_shopify_listing_uses_collection_specific_endpoint():
     assert len(result.records) == 1
     assert result.records[0]["title"] == "Collection Item"
     assert mock_get.call_args.args[0] == "https://store.com/collections/summer-shirts/products.json?limit=250"
+
+
+@pytest.mark.asyncio
+async def test_shopify_public_endpoint_recovery_works_without_html_signals():
+    adapter = ShopifyAdapter()
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "products": [
+            {
+                "title": "Recovered Collection Item",
+                "vendor": "BrandX",
+                "handle": "recovered-item",
+                "variants": [{"price": "24.99", "sku": "SKU-22", "available": True}],
+                "images": [{"src": "https://cdn.example.com/recovered.jpg"}],
+                "product_type": "Apparel",
+                "tags": "featured",
+            }
+        ]
+    }
+    with patch("app.services.adapters.shopify.curl_requests.get", return_value=response) as mock_get:
+        records = await adapter.try_public_endpoint(
+            "https://store.com/collections/maternity-dresses",
+            "ecommerce_listing",
+        )
+    assert len(records) == 1
+    assert records[0]["title"] == "Recovered Collection Item"
+    assert mock_get.call_args.args[0] == "https://store.com/collections/maternity-dresses/products.json?limit=250"
 
 
 @pytest.mark.asyncio
