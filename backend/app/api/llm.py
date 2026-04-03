@@ -6,7 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db, require_admin
 from app.schemas.common import PaginatedResponse, PaginationMeta
-from app.schemas.llm import LLMConfigCreate, LLMConfigResponse, LLMConfigUpdate, LLMCostLogResponse
+from app.schemas.llm import (
+    LLMConfigCreate,
+    LLMConfigResponse,
+    LLMConfigUpdate,
+    LLMConnectionTestRequest,
+    LLMConnectionTestResponse,
+    LLMCostLogResponse,
+    LLMProviderCatalogItem,
+)
+from app.services.llm_runtime import llm_provider_catalog, test_provider_connection
 from app.services.llm_service import (
     create_config,
     get_config,
@@ -19,6 +28,13 @@ from app.services.llm_service import (
 )
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
+
+
+@router.get("/catalog", response_model=list[LLMProviderCatalogItem])
+async def llm_catalog(
+    _: object = Depends(require_admin),
+) -> list[LLMProviderCatalogItem]:
+    return [LLMProviderCatalogItem.model_validate(item) for item in llm_provider_catalog()]
 
 
 @router.get("/config", response_model=list[LLMConfigResponse])
@@ -51,6 +67,19 @@ async def llm_config_update(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="LLM config not found")
     updated = await update_config(session, config, prepare_config_update(payload.model_dump(exclude_none=True)))
     return LLMConfigResponse.model_validate(serialize_config(updated))
+
+
+@router.post("/test", response_model=LLMConnectionTestResponse)
+async def llm_test_connection(
+    payload: LLMConnectionTestRequest,
+    _: object = Depends(require_admin),
+) -> LLMConnectionTestResponse:
+    ok, message = await test_provider_connection(
+        provider=payload.provider,
+        model=payload.model,
+        api_key=payload.api_key,
+    )
+    return LLMConnectionTestResponse(ok=ok, message=message)
 
 
 @router.get("/cost-log", response_model=PaginatedResponse[LLMCostLogResponse])

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, get_db
+from app.core.dependencies import get_current_user, get_db, require_admin
 from app.models.selector import Selector
 from app.models.user import User
 from app.schemas.selector import (
@@ -17,7 +17,9 @@ from app.schemas.selector import (
     SelectorUpdate,
 )
 from app.services.selector_service import (
+    clear_all_selectors,
     create_selector,
+    delete_selectors_for_domain,
     delete_selector,
     list_selectors,
     suggest_selectors,
@@ -31,9 +33,10 @@ router = APIRouter(prefix="/api/selectors", tags=["selectors"])
 @router.post("/suggest", response_model=dict)
 async def selectors_suggest(
     payload: SelectorSuggestRequest,
+    session: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> dict:
-    return {"suggestions": await suggest_selectors(payload.url, payload.expected_columns)}
+    return {"suggestions": await suggest_selectors(session, payload.url, payload.expected_columns)}
 
 
 @router.post("/test", response_model=SelectorTestResponse)
@@ -73,6 +76,15 @@ async def selectors_create(
     return SelectorResponse.model_validate(selector, from_attributes=True)
 
 
+@router.delete("/clear-all", response_model=dict)
+async def selectors_clear_all(
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> dict:
+    deleted = await clear_all_selectors(session)
+    return {"deleted": deleted}
+
+
 @router.put("/{selector_id}", response_model=SelectorResponse)
 async def selectors_put(
     selector_id: int,
@@ -98,3 +110,13 @@ async def selectors_delete(
     _: User = Depends(get_current_user),
 ) -> None:
     await delete_selector(session, selector_id)
+
+
+@router.delete("/domain/{domain}", response_model=dict)
+async def selectors_delete_domain(
+    domain: str,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    deleted = await delete_selectors_for_domain(session, domain)
+    return {"deleted": deleted}

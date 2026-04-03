@@ -1,6 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import type { Route } from "next";
+import Link from "next/link";
 import { useState } from "react";
 
 import { Badge, Button, Card, Metric } from "../../components/ui/primitives";
@@ -65,19 +67,22 @@ export default function DashboardPage() {
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <Card className="space-y-4">
-          <SectionHeader title="Recent Runs" description="Latest five." />
+          <SectionHeader title="Recent Runs" description="Latest 10." />
           {data?.recent_runs?.length ? (
             <div className="grid gap-3">
-              {data.recent_runs.map((run) => (
-                <div key={run.id} className="rounded-[var(--radius-lg)] border border-border bg-background-elevated p-4">
+              {data.recent_runs.slice(0, 10).map((run) => (
+                <Link
+                  key={run.id}
+                  href={`/runs/${run.id}` as Route}
+                  className="no-underline rounded-[var(--radius-lg)] border border-border bg-background-elevated px-4 py-4 transition hover:border-border-strong hover:bg-panel hover:shadow-[var(--shadow-sm)]"
+                >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 space-y-1">
-                      <p className="truncate text-sm font-semibold text-foreground">{run.url || `Run ${run.id}`}</p>
-                      <p className="label-caps">{run.surface}</p>
-                    </div>
+                    <p className="min-w-0 truncate text-sm font-semibold text-foreground">
+                      {run.url || `Run ${run.id}`}
+                    </p>
                     <Badge tone={getStatusTone(run.status)}>{run.status}</Badge>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           ) : (

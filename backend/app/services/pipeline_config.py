@@ -158,6 +158,9 @@ REQUESTED_FIELD_ALIASES: dict[str, list[str]] = _load("requested_field_aliases.j
 # ---------------------------------------------------------------------------
 # 8c. Hydrated state script markers — loaded from hydrated_state_patterns.json
 #     Used by discovery to detect inline app state beyond __NEXT_DATA__.
+#     Includes site-specific lowercase sentinels such as ``__myx`` because
+#     some frameworks expose them with exact casing (for example Myntra's
+#     ``window.__myx`` bootstrap payload).
 # ---------------------------------------------------------------------------
 
 HYDRATED_STATE_PATTERNS: list[str] = _load("hydrated_state_patterns.json", [])  # type: ignore[assignment]

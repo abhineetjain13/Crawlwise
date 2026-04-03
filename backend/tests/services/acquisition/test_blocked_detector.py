@@ -75,6 +75,30 @@ def test_walmart_robot_check():
     assert result.confidence >= 0.80
 
 
+def test_kasada_challenge_detected():
+    html = (
+        '<html><head></head><body>'
+        '<script>window.KPSDK={};KPSDK.now=Date.now;</script>'
+        '<script src="/ips.js"></script>'
+        '</body></html>'
+    )
+    result = detect_blocked_page(html)
+    assert result.is_blocked
+    assert result.provider == "kasada"
+
+
+def test_akamai_cdn_page_not_blocked():
+    """A normal page served via Akamai CDN should NOT be flagged as blocked."""
+    html = (
+        '<html><head><title>Product Page</title></head><body>'
+        + '<p>Real product content</p>' * 30
+        + '<script src="https://cdn.akamaized.net/bundle.js"></script>'
+        + '</body></html>'
+    )
+    result = detect_blocked_page(html)
+    assert not result.is_blocked
+
+
 def test_provider_marker_still_blocks_with_structural_signals_present():
     html = (
         "<html><head><title>Welcome</title></head><body>"
@@ -84,4 +108,4 @@ def test_provider_marker_still_blocks_with_structural_signals_present():
     )
     result = detect_blocked_page(html)
     assert result.is_blocked
-    assert result.provider == "dd-modal"
+    assert result.provider == "datadome"

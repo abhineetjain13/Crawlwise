@@ -10,13 +10,14 @@ from pydantic import BaseModel, ConfigDict
 class LLMConfigCreate(BaseModel):
     provider: str
     model: str
-    api_key: str
+    api_key: str | None = None
     task_type: str
     per_domain_daily_budget_usd: Decimal
     global_session_budget_usd: Decimal
 
 
 class LLMConfigUpdate(BaseModel):
+    provider: str | None = None
     model: str | None = None
     api_key: str | None = None
     task_type: str | None = None
@@ -32,6 +33,7 @@ class LLMConfigResponse(BaseModel):
     provider: str
     model: str
     api_key_masked: str
+    api_key_set: bool
     task_type: str
     per_domain_daily_budget_usd: Decimal
     global_session_budget_usd: Decimal
@@ -52,3 +54,21 @@ class LLMCostLogResponse(BaseModel):
     cost_usd: Decimal
     domain: str
     created_at: datetime
+
+
+class LLMProviderCatalogItem(BaseModel):
+    provider: str
+    label: str
+    api_key_set: bool
+    recommended_models: list[str]
+
+
+class LLMConnectionTestRequest(BaseModel):
+    provider: str
+    model: str
+    api_key: str | None = None
+
+
+class LLMConnectionTestResponse(BaseModel):
+    ok: bool
+    message: str

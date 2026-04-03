@@ -78,14 +78,18 @@ async def test_acquire_html_falls_back_to_playwright():
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_advanced_mode_skips_curl():
-    """Advanced mode goes directly to Playwright."""
-    full_html = "<html><body>" + "x" * 600 + "</body></html>"
+async def test_acquire_html_advanced_mode_tries_curl_then_playwright():
+    """Advanced mode tries curl_cffi first, then escalates to Playwright."""
+    curl_html = "<html><body>" + "x" * 600 + "</body></html>"
+    playwright_html = "<html><body>" + "y" * 600 + "</body></html>"
 
     from app.services.acquisition.browser_client import BrowserResult
+    from app.services.acquisition.http_client import HttpFetchResult
 
     with (
-        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, return_value=BrowserResult(html=full_html)),
+        patch("app.services.acquisition.acquirer._fetch_with_content_type",
+              new_callable=AsyncMock, return_value=HttpFetchResult(text=curl_html, status_code=200, content_type="html")),
+        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, return_value=BrowserResult(html=playwright_html)),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         from pathlib import Path
@@ -95,7 +99,32 @@ async def test_acquire_html_advanced_mode_skips_curl():
             result_html, method, path, payloads = await acquire_html(
                 1, "https://example.com/spa", advanced_mode="scroll"
             )
+    # Playwright is preferred when advanced_mode is set, even though curl worked
     assert method == "playwright"
+
+
+@pytest.mark.asyncio
+async def test_acquire_html_advanced_mode_falls_back_to_curl_on_playwright_failure():
+    """When advanced mode Playwright crashes, fall back to curl_cffi result."""
+    curl_html = "<html><body><h1>Product</h1>" + "x" * 600 + "</body></html>"
+
+    from app.services.acquisition.http_client import HttpFetchResult
+
+    with (
+        patch("app.services.acquisition.acquirer._fetch_with_content_type",
+              new_callable=AsyncMock, return_value=HttpFetchResult(text=curl_html, status_code=200, content_type="html")),
+        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, side_effect=RuntimeError("ERR_HTTP2_PROTOCOL_ERROR")),
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result_html, method, path, payloads = await acquire_html(
+                1, "https://example.com/spa", advanced_mode="auto"
+            )
+    assert method == "curl_cffi"
+    assert "Product" in result_html
 
 
 @pytest.mark.asyncio

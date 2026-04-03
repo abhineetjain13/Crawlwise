@@ -34,22 +34,28 @@ _BLOCK_PHRASES = [
     "why do i have to complete a captcha",
 ]
 
-# Known WAF / anti-bot provider markers in raw HTML.
-_PROVIDER_MARKERS = [
-    "perimeterx",
-    "px-captcha",
-    "cloudflare",
-    "cf-challenge",
-    "cf-browser-verification",
-    "akamai",
-    "akamaized",
-    "datadome",
-    "dd-modal",
-    "kasada",
-    "incapsula",
-    "distil",
-    "shape security",
-    "arkose",
+# Active anti-bot challenge markers — high-confidence indicators that a page
+# is showing a challenge/block rather than real content.
+_ACTIVE_BLOCK_MARKERS = [
+    ("px-captcha", "perimeterx"),
+    ("cf-challenge", "cloudflare"),
+    ("cf-browser-verification", "cloudflare"),
+    ("dd-modal", "datadome"),
+    ("incapsula", "incapsula"),
+    ("distil", "distil"),
+    ("shape security", "shape security"),
+    ("arkose", "arkose"),
+]
+
+# CDN/WAF provider names that appear in scripts and assets on legitimate pages.
+# These only contribute to blocking when combined with other signals.
+_CDN_PROVIDER_MARKERS = [
+    ("perimeterx", "perimeterx"),
+    ("cloudflare", "cloudflare"),
+    ("akamai", "akamai"),
+    ("akamaized", "akamai"),
+    ("datadome", "datadome"),
+    ("kasada", "kasada"),
 ]
 
 # Title patterns commonly used by challenge pages.
@@ -132,10 +138,16 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
         if phrase in visible:
             signals.append((0.80, f"blocked_phrase:{phrase}", ""))
 
-    # 3. Check raw HTML for WAF/provider markers.
-    for marker in _PROVIDER_MARKERS:
+    # 3a. Active anti-bot challenge markers — high confidence.
+    for marker, provider in _ACTIVE_BLOCK_MARKERS:
         if marker in html_lower:
-            signals.append((0.75, f"provider_marker:{marker}", marker))
+            signals.append((0.75, f"active_block_marker:{marker}", provider))
+
+    # 3b. CDN/WAF provider names — low confidence alone, but combine with
+    # other signals. Many legitimate pages reference these providers.
+    for marker, provider in _CDN_PROVIDER_MARKERS:
+        if marker in html_lower:
+            signals.append((0.40, f"provider_marker:{marker}", provider))
 
     # 4. Structural signals: very few visible links/text but lots of scripts.
     text_len = len(visible)
@@ -143,6 +155,10 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
     link_count = html_lower.count("<a ")
     if text_len < 500 and script_count > 3 and link_count < 3:
         signals.append((0.50, "low_content_high_scripts", ""))
+
+    # 5. Kasada-specific challenge: KPSDK in very short pages.
+    if "kpsdk" in html_lower and text_len < 200:
+        signals.append((0.90, "kasada_challenge_script", "kasada"))
 
     if not signals:
         return BlockedPageResult()

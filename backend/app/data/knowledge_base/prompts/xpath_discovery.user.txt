@@ -8,3 +8,6 @@ $existing_values_json
 
 HTML snippet:
 $html_snippet
+
+Return selectors only for the requested fields that are visibly supported by the page.
+Do not return selectors for filters, menus, related links, or repeated navigation lists.

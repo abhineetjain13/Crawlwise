@@ -1,0 +1,343 @@
+[
+  {
+    "name": "Dyson Airwrap PDP",
+    "url": "https://www.dyson.in/hair-care/hair-stylers/airwrap-id-multi-styler-dryer-ceramic-pink",
+    "surface": "ecommerce_detail",
+    "status": "completed",
+    "verdict": "success",
+    "record_count": 1,
+    "fields_found": [
+      "availability",
+      "brand",
+      "description",
+      "image",
+      "image_url",
+      "price",
+      "sku",
+      "specifications",
+      "title"
+    ],
+    "fields_missing": [],
+    "expected_fields": [
+      "title",
+      "price",
+      "brand",
+      "description",
+      "image"
+    ],
+    "coverage": 1.0,
+    "sample_data": {
+      "title": "Dyson Airwrap i.d.\u2122 multi-styler and dryer (Ceramic pink/Rose gold)",
+      "description": "Easier curls, personalised to you. The only connected multi-styler, now in Ceramic pink and rose gold. For straight and wavy hair.",
+      "image": "https://dyson-h.assetsadobe2.com/is/image/content/dam/dyson/leap-petite-global/dynamic-media/personal-care/308f/primary/WEB-308F_H-AW-PDP-Primary-SW.png",
+      "availability": "https://schema.org/OutOfStock",
+      "price": "49900",
+      "specifications": "Height 272mm Length 41mm Width 48mm Power 1300W Airflow (lps) 13.5 l/s Negative ions Help reduce static Weight 0.59 kg",
+      "image_url": "https://dyson-h.assetsadobe2.com/is/image/content/dam/dyson/leap-petite-global/dynamic-media/personal-care/308f/primary/WEB-308F_H-AW-PDP-Primary-SW.png",
+      "sku": "601904-01-IN",
+      "brand": "Dyson"
+    },
+    "validation_errors": [],
+    "error": null,
+    "elapsed_seconds": 2.9,
+    "acquisition_method": "detail",
+    "logs_summary": [
+      "[INFO] [ACQUIRE] Fetching https://www.dyson.in/hair-care/hair-stylers/airwrap-id-multi-styler-dryer-ceramic-pink",
+      "[INFO] [EXTRACT] Extracting candidates",
+      "[INFO] [PUBLISH] Saved 1 detail records (verdict=success)",
+      "[INFO] Pipeline finished. 1 records. verdict=success"
+    ],
+    "result_summary": {
+      "url_count": 1,
+      "progress": 100,
+      "current_stage": "PUBLISH",
+      "current_url": "https://www.dyson.in/hair-care/hair-stylers/airwrap-id-multi-styler-dryer-ceramic-pink",
+      "current_url_index": 1,
+      "total_urls": 1,
+      "record_count": 1,
+      "domain": "dyson.in",
+      "processed_urls": 1,
+      "completed_urls": 1,
+      "remaining_urls": 0,
+      "verdict_counts": {
+        "success": 1
+      },
+      "extraction_verdict": "success",
+      "url_verdicts": [
+        "success"
+      ]
+    }
+  },
+  {
+    "name": "Arc'teryx Shoe PDP",
+    "url": "https://arcteryx.com/us/en/shop/mens/sylan-2-shoe-0155",
+    "surface": "ecommerce_detail",
+    "status": "completed",
+    "verdict": "failure",
+    "record_count": 1,
+    "fields_found": [
+      "availability",
+      "brand",
+      "category",
+      "description",
+      "dimensions",
+      "image",
+      "image_url",
+      "price",
+      "rating",
+      "review_count",
+      "sku",
+      "specifications",
+      "title"
+    ],
+    "fields_missing": [],
+    "expected_fields": [
+      "title",
+      "price",
+      "brand",
+      "description",
+      "image"
+    ],
+    "coverage": 1.0,
+    "sample_data": {
+      "title": "bharti airtel ltd. telemedia services",
+      "description": "YMAL for PDP",
+      "image": "normal",
+      "availability": "https://schema.org/InStock",
+      "price": "220",
+      "specifications": "Sylan 2 Shoe Mantis/Mantis Profile 360\u00b0 Sylan 2 Shoe Mantis/Mantis Hover Sylan 2 Shoe Mantis/Mantis Pair Sylan 2 Shoe Mantis/Mantis Sole Sylan 2 Shoe Men's Mar Run Mantis/Mantis Show more images",
+      "category": "TEXT",
+      "image_url": "normal",
+      "dimensions": "9.5",
+      "sku": "4325857861",
+      "brand": "Arc'teryx",
+      "rating": "4.8",
+      "review_count": "15"
+    },
+    "validation_errors": [
+      "invalid_title",
+      "invalid_description",
+      "invalid_image_url",
+      "invalid_category"
+    ],
+    "error": null,
+    "elapsed_seconds": 28.7,
+    "acquisition_method": "detail",
+    "logs_summary": [
+      "[INFO] [ACQUIRE] Fetching https://arcteryx.com/us/en/shop/mens/sylan-2-shoe-0155",
+      "[INFO] [EXTRACT] Extracting candidates",
+      "[INFO] [PUBLISH] Saved 1 detail records (verdict=success)",
+      "[INFO] Pipeline finished. 1 records. verdict=success"
+    ],
+    "result_summary": {
+      "url_count": 1,
+      "progress": 100,
+      "current_stage": "PUBLISH",
+      "current_url": "https://arcteryx.com/us/en/shop/mens/sylan-2-shoe-0155",
+      "current_url_index": 1,
+      "total_urls": 1,
+      "record_count": 1,
+      "domain": "arcteryx.com",
+      "processed_urls": 1,
+      "completed_urls": 1,
+      "remaining_urls": 0,
+      "verdict_counts": {
+        "success": 1
+      },
+      "extraction_verdict": "success",
+      "url_verdicts": [
+        "success"
+      ]
+    }
+  },
+  {
+    "name": "Puma Men's Listing",
+    "url": "https://us.puma.com/us/en/men/shop-all-mens",
+    "surface": "ecommerce_listing",
+    "status": "completed",
+    "verdict": "partial_success",
+    "record_count": 24,
+    "fields_found": [
+      "availability",
+      "brand",
+      "image_url",
+      "price",
+      "title",
+      "url"
+    ],
+    "fields_missing": [
+      "image"
+    ],
+    "expected_fields": [
+      "title",
+      "price",
+      "url",
+      "image"
+    ],
+    "coverage": 0.75,
+    "sample_data": {
+      "title": "PUMA x POK\u00c9MON Mostro Espeon Sneakers",
+      "url": "https://us.puma.com/us/en/pd/puma-x-pokemon-mostro-espeon-sneakers/407010?swatch=01",
+      "image_url": "https://images.puma.com/image/upload/f_auto,q_auto,b_rgb:fafafa,w_2000,h_2000/global/407010/01/sv01/fnd/PNA/fmt/png/PUMA-x-POK\u00c9MON-Mostro-Espeon-Sneakers",
+      "price": 130,
+      "availability": "http://schema.org/InStock",
+      "brand": "PUMA"
+    },
+    "validation_errors": [],
+    "error": null,
+    "elapsed_seconds": 24.3,
+    "acquisition_method": "listing",
+    "logs_summary": [
+      "[INFO] [ACQUIRE] Fetching https://us.puma.com/us/en/men/shop-all-mens",
+      "[INFO] [EXTRACT] Extracting candidates",
+      "[INFO] [PUBLISH] Saved 24 listing records (verdict=success)",
+      "[INFO] Pipeline finished. 24 records. verdict=success"
+    ],
+    "result_summary": {
+      "url_count": 1,
+      "progress": 100,
+      "current_stage": "PUBLISH",
+      "current_url": "https://us.puma.com/us/en/men/shop-all-mens",
+      "current_url_index": 1,
+      "total_urls": 1,
+      "record_count": 24,
+      "domain": "us.puma.com",
+      "processed_urls": 1,
+      "completed_urls": 1,
+      "remaining_urls": 0,
+      "verdict_counts": {
+        "success": 1
+      },
+      "extraction_verdict": "success",
+      "url_verdicts": [
+        "success"
+      ]
+    }
+  },
+  {
+    "name": "Sigma-Aldrich PDP (JS-rendered)",
+    "url": "https://www.sigmaaldrich.com/IN/en/product/supelco/26274",
+    "surface": "ecommerce_detail",
+    "status": "completed",
+    "verdict": "failure",
+    "record_count": 1,
+    "fields_found": [
+      "brand",
+      "category",
+      "description",
+      "image_url",
+      "sku",
+      "title"
+    ],
+    "fields_missing": [
+      "price",
+      "availability"
+    ],
+    "expected_fields": [
+      "title",
+      "price",
+      "description",
+      "availability"
+    ],
+    "coverage": 0.5,
+    "sample_data": {
+      "title": "SGE Needles for luer lock syringes needle size 22 ga, needle L \u00d7 O.D. 51 mm \u00d7 0.71 mm | Sigma-Aldrich",
+      "description": "needle size 22 ga, needle L \u00d7 O.D. 51\u00a0mm \u00d7 0.71\u00a0mm",
+      "category": "Equipment/Book",
+      "image_url": "/deepweb/assets/sigmaaldrich/product/images/347/685/005ee346-12fc-4565-b81a-5b5d77fc4009/640/005ee346-12fc-4565-b81a-5b5d77fc4009.jpg",
+      "sku": "26274SUPELCO",
+      "brand": "SUPELCO"
+    },
+    "validation_errors": [
+      "invalid_image_url"
+    ],
+    "error": null,
+    "elapsed_seconds": 4.2,
+    "acquisition_method": "detail",
+    "logs_summary": [
+      "[INFO] [ACQUIRE] Fetching https://www.sigmaaldrich.com/IN/en/product/supelco/26274",
+      "[INFO] [EXTRACT] Extracting candidates",
+      "[INFO] [PUBLISH] Saved 1 detail records (verdict=success)",
+      "[INFO] Pipeline finished. 1 records. verdict=success"
+    ],
+    "result_summary": {
+      "url_count": 1,
+      "progress": 100,
+      "current_stage": "PUBLISH",
+      "current_url": "https://www.sigmaaldrich.com/IN/en/product/supelco/26274",
+      "current_url_index": 1,
+      "total_urls": 1,
+      "record_count": 1,
+      "domain": "sigmaaldrich.com",
+      "processed_urls": 1,
+      "completed_urls": 1,
+      "remaining_urls": 0,
+      "verdict_counts": {
+        "success": 1
+      },
+      "extraction_verdict": "success",
+      "url_verdicts": [
+        "success"
+      ]
+    }
+  },
+  {
+    "name": "Myntra Listing (pagination)",
+    "url": "https://www.myntra.com/women-kurtas-kurtis-suits",
+    "surface": "ecommerce_listing",
+    "status": "completed",
+    "verdict": "failure",
+    "record_count": 13,
+    "fields_found": [
+      "title",
+      "url"
+    ],
+    "fields_missing": [
+      "price",
+      "image",
+      "brand"
+    ],
+    "expected_fields": [
+      "title",
+      "price",
+      "url",
+      "image",
+      "brand"
+    ],
+    "coverage": 0.4,
+    "sample_data": {
+      "title": "Sangria Printed Pure Cotton V-Neck Calf Length Straight Kurta",
+      "url": "https://www.myntra.com/kurtas/sangria/sangria-printed-pure-cotton-v-neck-calf-length-straight-kurta/40522753/buy"
+    },
+    "validation_errors": [],
+    "error": null,
+    "elapsed_seconds": 3.3,
+    "acquisition_method": "listing",
+    "logs_summary": [
+      "[INFO] [ACQUIRE] Fetching https://www.myntra.com/women-kurtas-kurtis-suits",
+      "[INFO] [EXTRACT] Extracting candidates",
+      "[INFO] [PUBLISH] Saved 13 listing records (verdict=success)",
+      "[INFO] Pipeline finished. 13 records. verdict=success"
+    ],
+    "result_summary": {
+      "url_count": 1,
+      "progress": 100,
+      "current_stage": "PUBLISH",
+      "current_url": "https://www.myntra.com/women-kurtas-kurtis-suits",
+      "current_url_index": 1,
+      "total_urls": 1,
+      "record_count": 13,
+      "domain": "myntra.com",
+      "processed_urls": 1,
+      "completed_urls": 1,
+      "remaining_urls": 0,
+      "verdict_counts": {
+        "success": 1
+      },
+      "extraction_verdict": "success",
+      "url_verdicts": [
+        "success"
+      ]
+    }
+  }
+]

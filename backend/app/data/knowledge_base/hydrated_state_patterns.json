@@ -4,5 +4,8 @@
   "__APOLLO_STATE__",
   "__PRELOADED_STATE__",
   "__INITIAL_PROPS__",
-  "__DATA__"
+  "__DATA__",
+  "__myx",
+  "__STORE__",
+  "__APP_STATE__"
 ]

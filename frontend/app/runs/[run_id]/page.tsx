@@ -3,20 +3,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Circle, LoaderCircle, XCircle } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Badge, Button, Card } from "../../../components/ui/primitives";
 import { PageHeader, SectionHeader } from "../../../components/ui/patterns";
 import { api } from "../../../lib/api";
-import type { CrawlLog, CrawlRecord, CrawlRun, ReviewPayload, ReviewSelection, SelectorCreatePayload } from "../../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun } from "../../../lib/api/types";
 import { cn } from "../../../lib/utils";
-import { SelectorWorkspace } from "../../../components/crawl/selector-workspace";
 
 const TERMINAL_STATUSES = new Set(["completed", "killed", "failed", "proxy_exhausted"]);
 const STAGES = ["ACQUIRE", "DISCOVER", "EXTRACT", "UNIFY", "PUBLISH"] as const;
 const RECORDS_PAGE_LIMIT = 1000;
 
-type ResultTab = "csv" | "selectors" | "json" | "logs";
+type ResultTab = "csv" | "json" | "logs";
 type StageState = "idle" | "active" | "done" | "interrupted";
 
 export default function RunDetailPage() {
@@ -24,16 +23,6 @@ export default function RunDetailPage() {
   const router = useRouter();
   const runId = Number(params.run_id);
   const [resultTab, setResultTab] = useState<ResultTab>("csv");
-  const [localSelections, setLocalSelections] = useState<Record<string, ReviewSelection>>({});
-  const [extraFields, setExtraFields] = useState<string[]>([]);
-  const [saveError, setSaveError] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
-  const [previewRecords, setPreviewRecords] = useState<CrawlRecord[] | null>(null);
-  const [isPreviewingSelectors, setIsPreviewingSelectors] = useState(false);
-  const [bulkPrefillPayload, setBulkPrefillPayload] = useState<{ additional_fields: string[]; selectors: Array<{ field_name: string; xpath?: string; regex?: string }> }>({
-    additional_fields: [],
-    selectors: [],
-  });
 
   const runQuery = useQuery({
     queryKey: ["run", runId],
@@ -58,51 +47,13 @@ export default function RunDetailPage() {
     enabled: Boolean(run),
     refetchInterval: pollInterval,
   });
-  const reviewQuery = useQuery({
-    queryKey: ["review", runId],
-    queryFn: () => api.getReview(runId),
-    enabled: Boolean(run && TERMINAL_STATUSES.has(run.status)),
-  });
-
   const logs = useMemo(() => logsQuery.data ?? [], [logsQuery.data]);
   const records = useMemo(() => recordsQuery.data?.items ?? [], [recordsQuery.data?.items]);
-  const displayedRecords = previewRecords ?? records;
-  const review = reviewQuery.data;
+  const displayedRecords = records;
   const runError = typeof run?.result_summary?.error === "string" ? run.result_summary.error : "";
   const stageItems = useMemo(
     () => deriveStages(logs, run?.status, readString(run?.result_summary?.current_stage)),
     [logs, run?.status, run?.result_summary?.current_stage],
-  );
-
-  useEffect(() => {
-    if (!review) {
-      return;
-    }
-    const selectedOutputs = new Set(buildDefaultSelections(review).filter((item) => item.selected).map((item) => item.output_field));
-    const nextExtraFields = review.canonical_fields.filter((field) => !selectedOutputs.has(field));
-    setExtraFields((current) => (current.length ? current : nextExtraFields));
-  }, [review]);
-
-  useEffect(() => {
-    setPreviewRecords(null);
-  }, [runId, recordsQuery.data?.items]);
-
-  useEffect(() => {
-    setBulkPrefillPayload((prev) => ({
-      ...prev,
-      additional_fields: extraFields,
-      selectors: prev.selectors ?? [],
-    }));
-  }, [extraFields]);
-
-  const fieldSelections = useMemo(() => {
-    const defaults = buildDefaultSelections(review);
-    return defaults.map((selection) => localSelections[selection.source_field] ?? selection);
-  }, [localSelections, review]);
-
-  const reviewSelectedSelections = useMemo(
-    () => fieldSelections.filter((item) => item.selected && item.output_field.trim()),
-    [fieldSelections],
   );
 
   /* Build CSV columns from record.data keys only — no raw_data/discovered_data/source_trace noise */
@@ -116,59 +67,16 @@ export default function RunDetailPage() {
     return [...cols];
   }, [displayedRecords]);
 
-  const selectionOutputFields = useMemo(
-    () => reviewSelectedSelections.map((item) => item.output_field.trim()).filter(Boolean),
-    [reviewSelectedSelections],
-  );
-
   const csvColumns = useMemo(() => {
-    return [...new Set([...selectionOutputFields, ...extraFields, ...logicalColumns])];
-  }, [extraFields, logicalColumns, selectionOutputFields]);
+    return [...new Set(logicalColumns)];
+  }, [logicalColumns]);
 
   const bulkUrls = useMemo(() => extractBulkUrls(records, csvColumns), [csvColumns, records]);
 
   const csvRows = useMemo(
-    () => buildCsvRows(displayedRecords, csvColumns, reviewSelectedSelections),
-    [displayedRecords, csvColumns, reviewSelectedSelections],
+    () => buildCsvRows(displayedRecords, csvColumns),
+    [displayedRecords, csvColumns],
   );
-
-  async function savePromotion() {
-    setSaveError("");
-    setIsSaving(true);
-    try {
-      await api.saveReview(runId, {
-        selections: fieldSelections,
-        extra_fields: extraFields,
-      });
-      await reviewQuery.refetch();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to save promoted fields.";
-      setSaveError(message);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function removeExtraField(value: string) {
-    setExtraFields((current) => current.filter((item) => item !== value));
-  }
-
-  async function previewSelectors(payload: { selectors: SelectorCreatePayload[] }) {
-    if (!payload.selectors.length) {
-      return;
-    }
-    setIsPreviewingSelectors(true);
-    setSaveError("");
-    try {
-      const response = await api.previewSelectors(runId, payload);
-      setPreviewRecords(response.records);
-      setResultTab("csv");
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "Failed to rerun selectors on saved HTML.");
-    } finally {
-      setIsPreviewingSelectors(false);
-    }
-  }
 
   return (
     <div className="space-y-4">
@@ -193,8 +101,7 @@ export default function RunDetailPage() {
                           tab: "batch",
                           vertical: inferVertical(run?.surface),
                           pageType: "pdp",
-                          additional_fields: bulkPrefillPayload.additional_fields,
-                          selectors: bulkPrefillPayload.selectors,
+                          additional_fields: [],
                           sourceRunId: runId,
                           sourceUrl: run?.url ?? "",
                         }),
@@ -213,7 +120,7 @@ export default function RunDetailPage() {
                 </a>
               </>
             ) : null}
-            <Button variant="ghost" onClick={() => void Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch(), reviewQuery.refetch()])}>
+            <Button variant="ghost" onClick={() => void Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch()])}>
               Refresh
             </Button>
           </div>
@@ -283,19 +190,12 @@ export default function RunDetailPage() {
             <div className="flex items-center gap-0.5 border-b border-border pb-2">
               <ResultTabButton active={resultTab === "csv"} onClick={() => setResultTab("csv")}>Data</ResultTabButton>
               <ResultTabButton active={resultTab === "json"} onClick={() => setResultTab("json")}>JSON</ResultTabButton>
-              <ResultTabButton active={resultTab === "selectors"} onClick={() => setResultTab("selectors")}>CSS Selectors</ResultTabButton>
               <ResultTabButton active={resultTab === "logs"} onClick={() => setResultTab("logs")}>Logs</ResultTabButton>
             </div>
 
             {runError ? (
               <div className="rounded-md border border-warning/20 bg-warning/5 px-3 py-2.5 text-[13px] text-foreground">
                 {runError}
-              </div>
-            ) : null}
-
-            {previewRecords ? (
-              <div className="rounded-md border border-success/20 bg-success/5 px-3 py-2.5 text-[13px] text-success">
-                Showing selector rerun results from the saved HTML artifacts for this run.
               </div>
             ) : null}
 
@@ -336,34 +236,6 @@ export default function RunDetailPage() {
               <pre className="max-h-[40rem] overflow-auto rounded-md border border-border bg-panel-strong p-4 font-mono text-[12px] leading-[1.6] text-foreground">
                 {JSON.stringify(displayedRecords.map((record) => cleanRecordForDisplay(record)), null, 2)}
               </pre>
-            ) : null}
-
-            {resultTab === "selectors" ? (
-              <SelectorWorkspace
-                run={run}
-                review={review}
-                selections={fieldSelections}
-                onSelectionChange={(selection) =>
-                  setLocalSelections((current) => ({
-                    ...current,
-                    [selection.source_field]: selection,
-                  }))
-                }
-                extraFields={extraFields}
-                onAddExtraField={(field) => {
-                  const normalized = normalizeFieldName(field);
-                  if (!normalized) return;
-                  setExtraFields((current) => (current.includes(normalized) ? current : [...current, normalized]));
-                }}
-                onRemoveExtraField={(field) => removeExtraField(field)}
-                onSavePromotions={() => void savePromotion()}
-                isSavingPromotions={reviewQuery.isFetching || isSaving}
-                saveError={saveError}
-                onPreviewSelectors={(payload) => void previewSelectors(payload)}
-                isPreviewingSelectors={isPreviewingSelectors}
-                artifactUrl={api.reviewHtml(runId)}
-                onDraftPayloadChange={setBulkPrefillPayload}
-              />
             ) : null}
 
             {resultTab === "logs" ? <MessagesOnlyLogs logs={logs} /> : null}
@@ -523,27 +395,11 @@ function stageDescription(stage: (typeof STAGES)[number]) {
   return "Saving results";
 }
 
-function buildDefaultSelections(review: ReviewPayload | undefined): ReviewSelection[] {
-  if (!review) return [];
-  const fields = [...new Set([...review.normalized_fields, ...review.discovered_fields])];
-  return fields.map((field) => ({
-    source_field: field,
-    output_field: review.domain_mapping[field] ?? review.suggested_mapping[field] ?? field,
-    selected: review.normalized_fields.includes(field) || review.canonical_fields.includes(field),
-  }));
-}
-
-function buildCsvRows(records: CrawlRecord[], columns: string[], selections: ReviewSelection[]) {
-  const selectionSources = new Map(
-    selections
-      .filter((item) => item.selected && item.output_field.trim())
-      .map((item) => [item.output_field.trim(), item.source_field] as const),
-  );
+function buildCsvRows(records: CrawlRecord[], columns: string[]) {
   return records.map((record) => {
     const row: Record<string, unknown> = {};
     for (const column of columns) {
-      const selectedSource = selectionSources.get(column);
-      row[column] = selectedSource ? readRecordValue(record, selectedSource) : readRecordValue(record, column);
+      row[column] = readRecordValue(record, column);
     }
     return row;
   });
@@ -583,10 +439,6 @@ function getExtractionVerdictMeta(verdict: string) {
   if (verdict === "empty") return { tone: "danger" as const, label: "Empty" };
   if (verdict === "error") return { tone: "danger" as const, label: "Error" };
   return { tone: "neutral" as const, label: verdict };
-}
-
-function normalizeFieldName(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, "_");
 }
 
 function stringifyCell(value: unknown) {

@@ -67,6 +67,7 @@ def serialize_config(config: LLMConfig) -> dict:
         "provider": config.provider,
         "model": config.model,
         "api_key_masked": mask_key(decrypted) if decrypted else "Not configured",
+        "api_key_set": bool(decrypted),
         "task_type": config.task_type,
         "per_domain_daily_budget_usd": config.per_domain_daily_budget_usd,
         "global_session_budget_usd": config.global_session_budget_usd,
@@ -76,7 +77,8 @@ def serialize_config(config: LLMConfig) -> dict:
 
 
 def prepare_config_create(payload: dict) -> dict:
-    return {**payload, "api_key_encrypted": encrypt_secret(payload["api_key"])}
+    api_key = str(payload.pop("api_key", "") or "")
+    return {**payload, "api_key_encrypted": encrypt_secret(api_key) if api_key else ""}
 
 
 def prepare_config_update(payload: dict) -> dict:

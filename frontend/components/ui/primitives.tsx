@@ -11,7 +11,7 @@ export function Card({
   return (
     <section
       className={cn(
-        "animate-fade-in rounded-[var(--radius-lg)] border border-border bg-panel p-5 shadow-card",
+        "surface-card animate-fade-in rounded-[var(--radius-lg)] border border-border/90 p-5 shadow-card",
         className,
       )}
     >

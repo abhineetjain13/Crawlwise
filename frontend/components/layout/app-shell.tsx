@@ -15,6 +15,7 @@ import {
   History,
   LayoutDashboard,
   Menu,
+  Search,
   Settings2,
   ShieldCheck,
   X,
@@ -38,7 +39,8 @@ const navGroups = [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/crawl", label: "Crawlers", icon: Globe },
       { href: "/runs", label: "History", icon: History },
-      { href: "/selectors", label: "Site Memory", icon: Database },
+      { href: "/memory", label: "Site Memory", icon: Database },
+      { href: "/selectors", label: "Selector Tool", icon: Search },
       { href: "/jobs", label: "Jobs", icon: Activity },
     ],
   },
@@ -81,7 +83,7 @@ export function AppShell({
   if (isAuthRoute) {
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <header className="flex h-[52px] items-center justify-between border-b border-border bg-background px-5">
+        <header className="surface-header flex h-[52px] items-center justify-between border-b border-border px-5">
           <div className="flex items-center gap-3">
             <div className="flex size-9 items-center justify-center rounded-[10px] bg-brand text-brand-foreground shadow-[var(--shadow-sm)]">
               <Zap className="size-4" />
@@ -176,21 +178,31 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
   return (
     <aside
       className={cn(
-        "sticky top-0 hidden h-screen shrink-0 border-r border-border bg-sidebar lg:flex lg:flex-col",
+        "surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-border lg:flex lg:flex-col",
         widthClass,
       )}
-      style={{ backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
     >
-      <div className="flex h-[52px] items-center gap-3 border-b border-border px-4">
-        <div className="flex size-9 items-center justify-center rounded-[10px] bg-brand text-brand-foreground shadow-[var(--shadow-sm)]">
-          <Zap className="size-4" />
-        </div>
+      <div className={cn("flex h-[52px] items-center border-b border-border", collapsed ? "justify-center px-2" : "justify-between gap-2 px-3")}>
         {!collapsed ? (
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-[-0.02em] text-foreground">CrawlFlow</div>
-            <div className="text-[11px] uppercase tracking-[0.06em] text-muted">Operations</div>
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-9 items-center justify-center rounded-[10px] bg-brand text-brand-foreground shadow-[var(--shadow-sm)]">
+              <Zap className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold tracking-[-0.02em] text-foreground">CrawlFlow</div>
+              <div className="text-[11px] uppercase tracking-[0.06em] text-muted">Operations</div>
+            </div>
           </div>
         ) : null}
+        <button
+          type="button"
+          onClick={() => setCollapsed((value) => !value)}
+          className="focus-ring inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-border bg-transparent text-muted transition hover:bg-background-elevated hover:text-foreground"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 py-3">
@@ -210,7 +222,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
                       "no-underline group flex h-9 items-center rounded-[var(--radius-md)] border-l-[3px] px-3 text-[14px] transition-all",
                       collapsed ? "justify-center" : "gap-3",
                       active
-                        ? "border-l-accent bg-accent-subtle text-foreground"
+                        ? "border-l-accent bg-accent-subtle text-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_18%,transparent)]"
                         : "border-l-transparent text-muted hover:bg-accent-subtle hover:text-foreground",
                     )}
                   >
@@ -225,19 +237,8 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
       </nav>
 
       <div className="border-t border-border p-3">
-        <button
-          type="button"
-          onClick={() => setCollapsed((value) => !value)}
-          className="focus-ring flex h-8 w-full items-center justify-between rounded-[var(--radius-md)] border border-border bg-transparent px-3 text-sm text-foreground transition hover:bg-background-elevated"
-        >
-          <span className="inline-flex items-center gap-2">
-            {collapsed ? <Menu className="size-4" /> : <ChevronLeft className="size-4" />}
-            {!collapsed ? "Collapse sidebar" : "Expand"}
-          </span>
-          {collapsed ? <ChevronRight className="size-4" /> : null}
-        </button>
         {!collapsed ? (
-          <div className="mt-3 flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-background-elevated px-3 py-2">
+          <div className="flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-background-elevated px-3 py-2">
             <div>
               <div className="label-caps">Theme</div>
               <div className="text-sm text-foreground">Light / Dark</div>
@@ -261,8 +262,8 @@ function ShellContent({
 
   return (
     <div className="flex min-w-0 flex-col">
-      <header className="sticky top-0 z-20 h-[52px] border-b border-border bg-background">
-        <div className="flex h-full items-center justify-between gap-4 px-4 lg:px-8">
+      <header className="surface-header sticky top-0 z-20 h-[52px] border-b border-border backdrop-blur-sm">
+        <div className="flex h-full items-center justify-between gap-3 px-4 lg:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <Button type="button" variant="secondary" onClick={onOpenMobileNav} className="h-9 w-9 px-0 lg:hidden" aria-label="Open navigation">
               <Menu className="size-4" />
@@ -271,9 +272,6 @@ function ShellContent({
               <div className="truncate text-[18px] font-semibold tracking-[var(--tracking-tight)] text-foreground">
                 {topBar.title}
               </div>
-              {topBar.description ? (
-                <div className="truncate text-[13px] text-muted">{topBar.description}</div>
-              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -305,10 +303,10 @@ function MobileNav({
       />
       <aside
         className={cn(
-          "absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] flex-col border-r border-border bg-sidebar shadow-[var(--shadow-modal)] transition-transform",
+          "surface-sidebar absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] flex-col border-r border-border transition-transform",
           open ? "translate-x-0" : "-translate-x-full",
         )}
-        style={{ backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}
+        style={{ boxShadow: "var(--surface-drawer-shadow)" }}
       >
         <div className="flex h-[52px] items-center justify-between border-b border-border px-4">
           <div className="flex items-center gap-3">
@@ -340,7 +338,7 @@ function MobileNav({
                       className={cn(
                         "no-underline flex h-9 items-center gap-3 rounded-[var(--radius-md)] border-l-[3px] px-3 text-sm transition-all",
                         active
-                          ? "border-l-accent bg-accent-subtle text-foreground"
+                          ? "border-l-accent bg-accent-subtle text-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_18%,transparent)]"
                           : "border-l-transparent text-muted hover:bg-accent-subtle hover:text-foreground",
                       )}
                     >
@@ -375,13 +373,16 @@ function getFallbackHeader(pathname: string): TopBarState {
     return { title: "Crawlers", description: "Configure, run, and review crawl jobs." };
   }
   if (pathname.startsWith("/runs/")) {
-    return { title: "Run Details", description: "Review records, selectors, and logs." };
+    return { title: "Run Details", description: "Review records, exports, and logs." };
   }
   if (pathname.startsWith("/runs")) {
     return { title: "Run History", description: "Review saved runs, outputs, and statuses." };
   }
+  if (pathname.startsWith("/memory")) {
+    return { title: "Site Memory", description: "Saved domain-level selectors and crawl memory." };
+  }
   if (pathname.startsWith("/selectors")) {
-    return { title: "Site Memory", description: "Saved domain-level mappings and selector memory." };
+    return { title: "CSS / XPath Selector", description: "LLM-assisted selector suggestion and validation." };
   }
   if (pathname.startsWith("/admin/users")) {
     return { title: "Users", description: "Accounts and roles." };

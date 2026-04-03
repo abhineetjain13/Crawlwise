@@ -10,6 +10,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.crawl import CrawlRun
 from app.core.security import decrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
@@ -102,7 +103,10 @@ async def run_prompt_task(
     raw, input_tokens, output_tokens = await _call_provider(
         provider=str(config.get("provider") or ""),
         model=str(config.get("model") or ""),
-        api_key=decrypt_secret(str(config.get("api_key_encrypted") or "")),
+        api_key=_resolve_provider_api_key(
+            provider=str(config.get("provider") or ""),
+            encrypted_value=str(config.get("api_key_encrypted") or ""),
+        ),
         system_prompt=system_prompt,
         user_prompt=rendered_user_prompt,
     )
@@ -238,6 +242,8 @@ async def _call_provider(
         return await _call_groq(api_key, model, system_prompt, user_prompt)
     if normalized_provider == "anthropic":
         return await _call_anthropic(api_key, model, system_prompt, user_prompt)
+    if normalized_provider == "nvidia":
+        return await _call_nvidia(api_key, model, system_prompt, user_prompt)
     return f"{_ERROR_PREFIX} Unsupported provider: {provider}", 0, 0
 
 
@@ -351,6 +357,35 @@ async def _call_anthropic(
     return text, int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
 
 
+async def _call_nvidia(
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> tuple[str, int, int]:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "max_tokens": 1200,
+                "temperature": 0.1,
+            },
+        )
+    if response.status_code != 200:
+        return f"{_ERROR_PREFIX} HTTP {response.status_code}: {response.text[:300]}", 0, 0
+    data = response.json()
+    return _extract_chat_completion_payload(data)
+
+
 def _extract_chat_completion_payload(data: dict[str, Any]) -> tuple[str, int, int]:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -407,3 +442,83 @@ def _estimate_cost_usd(provider: str, model: str, input_tokens: int, output_toke
     # cost as 0 until explicit rate tables are added.
     _ = (provider, model, input_tokens, output_tokens)
     return Decimal("0.0000")
+
+
+def _resolve_provider_api_key(*, provider: str, encrypted_value: str) -> str:
+    decrypted = decrypt_secret(encrypted_value) if encrypted_value else ""
+    if decrypted:
+        return decrypted
+    return _provider_env_key(provider)
+
+
+def _provider_env_key(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized == "openai":
+        return settings.openai_api_key
+    if normalized == "groq":
+        return settings.groq_api_key
+    if normalized == "anthropic":
+        return settings.anthropic_api_key
+    if normalized == "nvidia":
+        return settings.nvidia_api_key
+    return ""
+
+
+def llm_provider_catalog() -> list[dict[str, Any]]:
+    return [
+        {
+            "provider": "groq",
+            "label": "Groq",
+            "api_key_set": bool(settings.groq_api_key),
+            "recommended_models": [
+                "llama-3.1-8b-instant",
+                "llama-3.3-70b-versatile",
+            ],
+        },
+        {
+            "provider": "nvidia",
+            "label": "NVIDIA",
+            "api_key_set": bool(settings.nvidia_api_key),
+            "recommended_models": [
+                "meta/llama-3.1-70b-instruct",
+                "meta/llama-3.1-8b-instruct",
+            ],
+        },
+        {
+            "provider": "anthropic",
+            "label": "Anthropic",
+            "api_key_set": bool(settings.anthropic_api_key),
+            "recommended_models": [
+                "claude-3-5-haiku-latest",
+                "claude-sonnet-4-20250514",
+            ],
+        },
+        {
+            "provider": "openai",
+            "label": "OpenAI",
+            "api_key_set": bool(settings.openai_api_key),
+            "recommended_models": [
+                "gpt-5.4-mini",
+                "gpt-5.4",
+            ],
+        },
+    ]
+
+
+async def test_provider_connection(
+    *,
+    provider: str,
+    model: str,
+    api_key: str | None = None,
+) -> tuple[bool, str]:
+    resolved_key = str(api_key or "").strip() or _provider_env_key(provider)
+    raw, _input_tokens, _output_tokens = await _call_provider(
+        provider=provider,
+        model=model,
+        api_key=resolved_key,
+        system_prompt="Reply with valid JSON only.",
+        user_prompt='{"ok":true}',
+    )
+    if raw.startswith(_ERROR_PREFIX):
+        return False, raw.removeprefix(f"{_ERROR_PREFIX} ").strip()
+    return True, "Connection succeeded."

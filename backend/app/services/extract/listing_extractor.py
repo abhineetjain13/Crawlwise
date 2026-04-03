@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -70,7 +70,7 @@ def extract_listing_records(
     records = []
     for card in cards[:max_records]:
         record = _extract_from_card(card, target_fields, surface, page_url)
-        if record and any(v for v in record.values() if v):
+        if record and _is_meaningful_listing_record(record):
             record["_source"] = "listing_card"
             record["_selector"] = used_selector
             records.append(record)
@@ -308,7 +308,7 @@ def _try_normalize_array(items: list[dict], surface: str, page_url: str) -> list
     records = []
     for item in items:
         record = _normalize_generic_item(item, surface, page_url)
-        if record:
+        if record and _is_meaningful_listing_record(record):
             records.append(record)
     return records
 
@@ -336,6 +336,41 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
     if record:
         record["_raw_item"] = item
     return record if record else None
+
+
+def _is_meaningful_listing_record(record: dict) -> bool:
+    """Reject repeated nav/facet links that do not contain any item data."""
+    public_fields = {
+        key: value
+        for key, value in record.items()
+        if not str(key).startswith("_") and value not in (None, "", [], {})
+    }
+    if not public_fields:
+        return False
+
+    meaningful_keys = {
+        key for key in public_fields
+        if key != "url"
+    }
+    if meaningful_keys:
+        return True
+
+    url_value = str(public_fields.get("url") or "").strip()
+    if not url_value:
+        return False
+    return not _looks_like_facet_or_filter_url(url_value)
+
+
+def _looks_like_facet_or_filter_url(url_value: str) -> bool:
+    parsed = urlparse(url_value)
+    query_keys = {key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+    facet_keys = {"sv", "facet", "filter", "filters", "color", "size", "material", "sort"}
+    if query_keys & facet_keys:
+        return True
+
+    path = parsed.path.lower()
+    facet_fragments = ("/see-all", "/filter", "/filters", "/facet")
+    return any(fragment in path for fragment in facet_fragments) and bool(parsed.query)
 
 
 def _find_object_arrays(data: object, max_depth: int = 5) -> list[list[dict]]:

@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     groq_api_key: str = ""
+    nvidia_api_key: str = ""
 
 
 settings = Settings()

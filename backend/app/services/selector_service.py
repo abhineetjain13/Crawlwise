@@ -10,7 +10,9 @@ import regex as regex_lib
 
 from app.models.selector import Selector
 from app.services.acquisition.http_client import fetch_html
-from app.services.knowledge_base.store import save_selector_defaults
+from app.services.domain_utils import normalize_domain
+from app.services.knowledge_base.store import get_selector_defaults, save_selector_defaults
+from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import build_deterministic_selector_suggestions, extract_selector_value
 
 
@@ -57,6 +59,33 @@ async def delete_selector(session: AsyncSession, selector_id: int) -> None:
     await _sync_selector_defaults(session, domain, field_name)
 
 
+async def delete_selectors_for_domain(session: AsyncSession, domain: str) -> int:
+    normalized_domain = str(domain or "").strip().lower()
+    if not normalized_domain:
+        return 0
+    result = await session.execute(select(Selector).where(Selector.domain == normalized_domain))
+    rows = list(result.scalars().all())
+    if not rows:
+        return 0
+    await session.execute(delete(Selector).where(Selector.domain == normalized_domain))
+    await session.commit()
+    for field_name in {row.field_name for row in rows}:
+        await _sync_selector_defaults(session, normalized_domain, field_name)
+    return len(rows)
+
+
+async def clear_all_selectors(session: AsyncSession) -> int:
+    result = await session.execute(select(Selector))
+    rows = list(result.scalars().all())
+    if not rows:
+        return 0
+    await session.execute(delete(Selector))
+    await session.commit()
+    for domain, field_name in {(row.domain, row.field_name) for row in rows}:
+        await _sync_selector_defaults(session, domain, field_name)
+    return len(rows)
+
+
 async def test_selector(
     url: str,
     *,
@@ -73,9 +102,64 @@ async def test_selector(
     )
 
 
-async def suggest_selectors(url: str, expected_columns: list[str]) -> dict[str, list[dict]]:
+async def suggest_selectors(session: AsyncSession, url: str, expected_columns: list[str]) -> dict[str, list[dict]]:
     html_text = await fetch_html(url)
-    return build_deterministic_selector_suggestions(html_text, expected_columns)
+    domain = normalize_domain(url)
+    selector_defaults = {
+        field_name: get_selector_defaults(domain, field_name)
+        for field_name in expected_columns
+    }
+    deterministic = build_deterministic_selector_suggestions(
+        html_text,
+        expected_columns,
+        selector_defaults=selector_defaults,
+    )
+    llm_rows, _llm_error = await discover_xpath_candidates(
+        session,
+        run_id=0,
+        domain=domain,
+        url=url,
+        html_text=html_text,
+        missing_fields=expected_columns,
+        existing_values={},
+    )
+    llm_grouped: dict[str, list[dict]] = {}
+    for row in llm_rows:
+        field_name = str(row.get("field_name") or "").strip().lower()
+        xpath = str(row.get("xpath") or "").strip()
+        css_selector = str(row.get("css_selector") or "").strip()
+        if not field_name or not any([xpath, css_selector]):
+            continue
+        llm_grouped.setdefault(field_name, []).append({
+            "field_name": field_name,
+            "xpath": xpath or None,
+            "css_selector": css_selector or None,
+            "regex": None,
+            "status": "suggested",
+            "confidence": row.get("confidence"),
+            "sample_value": str(row.get("expected_value") or row.get("sample_value") or "").strip() or None,
+            "source": "llm_discovered",
+        })
+
+    merged: dict[str, list[dict]] = {}
+    for field_name in expected_columns:
+        normalized_field = str(field_name or "").strip().lower()
+        merged_rows = [*(selector_defaults.get(normalized_field) or []), *(deterministic.get(normalized_field) or []), *(llm_grouped.get(normalized_field) or [])]
+        deduped: list[dict] = []
+        seen: set[tuple[str | None, str | None, str | None]] = set()
+        for row in merged_rows:
+            key = (
+                str(row.get("xpath") or "") or None,
+                str(row.get("css_selector") or "") or None,
+                str(row.get("regex") or "") or None,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
+        if deduped:
+            merged[normalized_field] = deduped
+    return merged
 
 
 async def _sync_selector_defaults(session: AsyncSession, domain: str, field_name: str) -> None:

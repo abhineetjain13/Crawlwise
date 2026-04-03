@@ -137,33 +137,17 @@ async def _acquire_once(
     prefer_stealth: bool,
     sleep_ms: int,
 ) -> AcquisitionResult | None:
-    if advanced_mode:
-        if sleep_ms > 0:
-            await asyncio.sleep(sleep_ms / 1000)
-        browser_result = await fetch_rendered_html(
-            url,
-            proxy=proxy,
-            advanced_mode=advanced_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            prefer_stealth=prefer_stealth,
-            request_delay_ms=sleep_ms,
-        )
-        if not browser_result.html or detect_blocked_page(browser_result.html).is_blocked:
-            return None
-        return AcquisitionResult(
-            html=browser_result.html,
-            content_type="html",
-            method="playwright",
-            artifact_path=str(_artifact_path(run_id, url)),
-            network_payloads=browser_result.network_payloads,
-        )
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
 
+    # Always try curl_cffi first — it's faster and more resilient to HTTP/2 issues.
     if sleep_ms > 0:
         await asyncio.sleep(sleep_ms / 1000)
     fetch_result = await _fetch_with_content_type(url, proxy)
     normalized = _normalize_fetch_result(fetch_result)
     html = normalized.text
+    curl_result: AcquisitionResult | None = None
+
     if normalized.content_type == "json":
         return AcquisitionResult(
             html=html,
@@ -186,8 +170,17 @@ async def _acquire_once(
     if blocked.is_blocked:
         remember_stealth_host(url)
         prefer_stealth = True
-    if not needs_browser:
-        return AcquisitionResult(
+
+    # Keep the curl_cffi result as a fallback even if we escalate to browser,
+    # but only when the content is substantive enough to be useful for extraction.
+    has_useful_content = (
+        html
+        and not blocked.is_blocked
+        and len(visible_text) >= BROWSER_FALLBACK_VISIBLE_TEXT_MIN
+        and normalized.status_code not in {403, 429, 503}
+    )
+    if has_useful_content:
+        curl_result = AcquisitionResult(
             html=html,
             json_data=normalized.json_data,
             content_type=normalized.content_type,
@@ -195,26 +188,47 @@ async def _acquire_once(
             artifact_path=str(_artifact_path(run_id, url)),
         )
 
+    if not needs_browser and not advanced_mode:
+        return curl_result or AcquisitionResult(
+            html=html,
+            json_data=normalized.json_data,
+            content_type=normalized.content_type,
+            method="curl_cffi",
+            artifact_path=str(_artifact_path(run_id, url)),
+        )
+
+    # Escalate to Playwright for JS rendering or advanced crawl modes.
     if sleep_ms > 0:
         await asyncio.sleep(sleep_ms / 1000)
-    browser_result = await fetch_rendered_html(
-        url,
-        proxy=proxy,
-        prefer_stealth=prefer_stealth,
-        advanced_mode=advanced_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        request_delay_ms=sleep_ms,
-    )
-    if not browser_result.html or detect_blocked_page(browser_result.html).is_blocked:
-        return None
-    return AcquisitionResult(
-        html=browser_result.html,
-        content_type="html",
-        method="playwright",
-        artifact_path=str(_artifact_path(run_id, url)),
-        network_payloads=browser_result.network_payloads,
-    )
+    try:
+        browser_result = await fetch_rendered_html(
+            url,
+            proxy=proxy,
+            prefer_stealth=prefer_stealth,
+            advanced_mode=advanced_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            request_delay_ms=sleep_ms,
+        )
+    except Exception as exc:
+        _log.warning("Playwright failed for %s: %s — falling back to curl_cffi result", url, exc)
+        return curl_result
+
+    if browser_result.html and not detect_blocked_page(browser_result.html).is_blocked:
+        return AcquisitionResult(
+            html=browser_result.html,
+            content_type="html",
+            method="playwright",
+            artifact_path=str(_artifact_path(run_id, url)),
+            network_payloads=browser_result.network_payloads,
+        )
+
+    # Playwright returned empty or blocked — prefer curl_cffi result if available.
+    if curl_result:
+        _log.info("Playwright returned blocked/empty for %s — using curl_cffi fallback", url)
+        return curl_result
+
+    return None
 
 
 async def _fetch_with_content_type(url: str, proxy: str | None) -> HttpFetchResult:

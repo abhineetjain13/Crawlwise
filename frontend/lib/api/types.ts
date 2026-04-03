@@ -169,16 +169,42 @@ export type SelectorTestResponse = {
   selector_used?: string | null;
 };
 
+export type SelectorSuggestion = {
+  field_name?: string | null;
+  css_selector?: string | null;
+  xpath?: string | null;
+  regex?: string | null;
+  sample_value?: string | null;
+  source?: string | null;
+};
+
+export type SelectorSuggestResponse = {
+  suggestions: Record<string, SelectorSuggestion[]>;
+};
+
 export type LlmConfigRecord = {
   id: number;
   provider: string;
   model: string;
   api_key_masked: string;
+  api_key_set: boolean;
   task_type: string;
   per_domain_daily_budget_usd: string;
   global_session_budget_usd: string;
   is_active: boolean;
   created_at: string;
+};
+
+export type LlmProviderCatalogItem = {
+  provider: string;
+  label: string;
+  api_key_set: boolean;
+  recommended_models: string[];
+};
+
+export type LlmConnectionTestResponse = {
+  ok: boolean;
+  message: string;
 };
 
 export type LlmCostLogRecord = {

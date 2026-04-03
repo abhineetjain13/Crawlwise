@@ -7,13 +7,16 @@ import type {
   CrawlRun,
   Dashboard,
   LlmConfigRecord,
+  LlmConnectionTestResponse,
   LlmCostLogRecord,
+  LlmProviderCatalogItem,
   Paginated,
   ReviewPayload,
   ReviewSelectorPreview,
   ReviewSelection,
   SelectorCreatePayload,
   SelectorRecord,
+  SelectorSuggestResponse,
   SelectorTestResponse,
   SelectorUpdatePayload,
   User,
@@ -86,14 +89,42 @@ export const api = {
     if (params?.domain) query.set("domain", params.domain);
     return apiClient.get<SelectorRecord[]>(`/api/selectors${query.size ? `?${query.toString()}` : ""}`);
   },
+  suggestSelectors: (payload: { url: string; expected_columns: string[] }) =>
+    apiClient.post<SelectorSuggestResponse>("/api/selectors/suggest", payload),
   createSelector: (payload: SelectorCreatePayload) => apiClient.post<SelectorRecord>("/api/selectors", payload),
   updateSelector: (selectorId: number, payload: SelectorUpdatePayload) =>
     apiClient.put<SelectorRecord>(`/api/selectors/${selectorId}`, payload),
   deleteSelector: (selectorId: number) => apiClient.delete<void>(`/api/selectors/${selectorId}`),
+  deleteSelectorsByDomain: (domain: string) =>
+    apiClient.delete<{ deleted: number }>(`/api/selectors/domain/${encodeURIComponent(domain)}`),
+  clearAllSiteMemory: () => apiClient.delete<{ deleted: number }>("/api/selectors/clear-all"),
   testSelector: (payload: { url: string; css_selector?: string | null; xpath?: string | null; regex?: string | null }) =>
     apiClient.post<SelectorTestResponse>("/api/selectors/test", payload),
   listJobs: () => apiClient.get<ActiveJob[]>("/api/jobs/active"),
+  listLlmCatalog: () => apiClient.get<LlmProviderCatalogItem[]>("/api/llm/catalog"),
   listLlmConfigs: () => apiClient.get<LlmConfigRecord[]>("/api/llm/config"),
+  createLlmConfig: (payload: {
+    provider: string;
+    model: string;
+    api_key?: string;
+    task_type: string;
+    per_domain_daily_budget_usd: string;
+    global_session_budget_usd: string;
+  }) => apiClient.post<LlmConfigRecord>("/api/llm/config", payload),
+  updateLlmConfig: (
+    configId: number,
+    payload: Partial<{
+      provider: string;
+      model: string;
+      api_key: string;
+      task_type: string;
+      per_domain_daily_budget_usd: string;
+      global_session_budget_usd: string;
+      is_active: boolean;
+    }>,
+  ) => apiClient.put<LlmConfigRecord>(`/api/llm/config/${configId}`, payload),
+  testLlmConnection: (payload: { provider: string; model: string; api_key?: string }) =>
+    apiClient.post<LlmConnectionTestResponse>("/api/llm/test", payload),
   listLlmCostLog: (params?: { page?: number; limit?: number }) => {
     const query = new URLSearchParams();
     if (params?.page !== undefined) query.set("page", String(params.page));

@@ -149,20 +149,29 @@ async def _goto_with_fallback(page, url: str) -> None:
     `networkidle` times out even though the page is already usable. We still
     want the rendered DOM in those cases, so fall back to `load` and then
     `domcontentloaded` before failing the crawl.
+
+    Also handles non-timeout errors (e.g. ERR_HTTP2_PROTOCOL_ERROR) by
+    retrying with less strict wait conditions before giving up.
     """
-    try:
-        await page.goto(url, wait_until="networkidle", timeout=30_000)
-        return
-    except PlaywrightTimeoutError:
-        pass
-
-    try:
-        await page.goto(url, wait_until="load", timeout=15_000)
-        return
-    except PlaywrightTimeoutError:
-        pass
-
-    await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+    strategies = [
+        ("networkidle", 30_000),
+        ("load", 15_000),
+        ("domcontentloaded", 15_000),
+    ]
+    last_error = None
+    for wait_until, timeout in strategies:
+        try:
+            await page.goto(url, wait_until=wait_until, timeout=timeout)
+            return
+        except PlaywrightTimeoutError:
+            last_error = None
+            continue
+        except Exception as exc:
+            last_error = exc
+            logger.debug("goto(%s, wait_until=%s) failed: %s", url, wait_until, exc)
+            continue
+    if last_error is not None:
+        raise last_error
 
 
 async def _warm_origin(page, origin_url: str) -> None:
@@ -287,7 +296,6 @@ def _assess_challenge_signals(html: str) -> ChallengeAssessment:
         "just a moment": "interstitial_text",
         "access denied": "access_denied",
         "powered and protected by akamai": "akamai_banner",
-        "akamai": "akamai_marker",
     }
     weak_markers = {
         "one more step": "generic_interstitial",

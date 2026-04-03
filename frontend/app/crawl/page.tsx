@@ -12,6 +12,8 @@ import {
   GripVertical,
   Plus,
   RotateCcw,
+  Shield,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   X,
@@ -89,7 +91,6 @@ export default function CrawlPage() {
   const [additionalDraft, setAdditionalDraft] = useState("");
   const [additionalFields, setAdditionalFields] = useState<string[]>([]);
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
-  const [fieldPanelOpen, setFieldPanelOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [pendingDispatch, setPendingDispatch] = useState<PendingDispatch | null>(null);
   const [configError, setConfigError] = useState("");
@@ -448,36 +449,11 @@ export default function CrawlPage() {
     <div className="space-y-4">
       <PageHeader
         title="Crawlers"
-        description={
-          crawlPhase === "config"
-            ? "Configure Category or PDP crawls."
-            : crawlPhase === "running"
-              ? "Live crawl execution."
-              : "Crawl output workspace."
-        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {crawlPhase !== "config" ? (
               <Button variant="secondary" type="button" onClick={resetToConfig}>
                 New Crawl
-              </Button>
-            ) : null}
-            {crawlPhase === "config" ? (
-              <Button
-                variant="accent"
-                type="button"
-                onClick={() => {
-                  try {
-                    setPendingDispatch(buildDispatch(config));
-                    setPreviewOpen(true);
-                    setConfigError("");
-                  } catch (error) {
-                    setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
-                  }
-                }}
-                disabled={!canPreview(config)}
-              >
-                Review Before Running
               </Button>
             ) : null}
             {crawlPhase === "complete" && crawlTab === "category" && selectedRecords.length ? (
@@ -508,21 +484,28 @@ export default function CrawlPage() {
           <div className="space-y-4">
             <Card className="space-y-4">
               <SectionHeader
-                title="Crawl Type"
-                description="The crawler page runs as a single state machine: configure, run, then review output."
+                title="Target URL"
+                action={
+                  <Button
+                    variant="accent"
+                    type="button"
+                    disabled={!canPreview(config)}
+                    onClick={() => {
+                      try {
+                        setPendingDispatch(buildDispatch(config));
+                        setPreviewOpen(true);
+                        setConfigError("");
+                      } catch (error) {
+                        setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
+                      }
+                    }}
+                  >
+                    Review Before Running
+                  </Button>
+                }
               />
-              <TabBar
-                value={crawlTab}
-                onChange={(value) => setCrawlTab(value as CrawlTab)}
-                options={[
-                  { value: "category", label: "Category Crawl" },
-                  { value: "pdp", label: "PDP Crawl" },
-                ]}
-              />
-
               {crawlTab === "category" ? (
                 <SegmentedMode
-                  label="Category Mode"
                   value={categoryMode}
                   onChange={(value) => setCategoryMode(value as CategoryMode)}
                   options={[
@@ -533,7 +516,6 @@ export default function CrawlPage() {
                 />
               ) : (
                 <SegmentedMode
-                  label="PDP Mode"
                   value={pdpMode}
                   onChange={(value) => setPdpMode(value as PdpMode)}
                   options={[
@@ -543,13 +525,8 @@ export default function CrawlPage() {
                   ]}
                 />
               )}
-            </Card>
-
-            <Card className="space-y-4">
-              <SectionHeader title="Target" description="Provide the source URL or input list for this run." />
               {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
                 <label className="grid gap-1.5">
-                  <span className="label-caps">URL List</span>
                   <Textarea
                     value={bulkUrls}
                     onChange={(event) => setBulkUrls(event.target.value)}
@@ -559,7 +536,6 @@ export default function CrawlPage() {
                 </label>
               ) : crawlTab === "pdp" && pdpMode === "csv" ? (
                 <label className="grid gap-1.5">
-                  <span className="label-caps">CSV Upload</span>
                   <Input
                     type="file"
                     accept=".csv,text/csv"
@@ -569,7 +545,6 @@ export default function CrawlPage() {
                 </label>
               ) : (
                 <label className="grid gap-1.5">
-                  <span className="label-caps">Target URL</span>
                   <Input
                     value={targetUrl}
                     onChange={(event) => setTargetUrl(event.target.value)}
@@ -594,46 +569,34 @@ export default function CrawlPage() {
 
             <Card className="space-y-4">
               <div className="flex items-center justify-between gap-4">
-                <SectionHeader
-                  title="Field Configuration"
-                  description="Manual XPath and regex selectors are validated on blur before dispatch."
-                />
-                <div className="flex items-center gap-2">
-                  <Button variant="secondary" type="button" onClick={() => setFieldPanelOpen((current) => !current)}>
-                    <ChevronDown className={cn("size-3.5 transition-transform", fieldPanelOpen && "rotate-180")} />
-                    {fieldPanelOpen ? "Hide Fields" : "Configure Fields"}
-                  </Button>
-                  <Button variant="ghost" type="button" onClick={addManualField}>
-                    <Plus className="size-3.5" />
-                    New Field
-                  </Button>
-                </div>
+                <SectionHeader title="Field Configuration" />
+                <Button variant="ghost" type="button" onClick={addManualField}>
+                  <Plus className="size-3.5" />
+                  New Field
+                </Button>
               </div>
-
-              {fieldPanelOpen ? (
-                <div className="space-y-3">
-                  {fieldRows.length ? (
-                    fieldRows.map((row) => (
-                      <ManualFieldEditor
-                        key={row.id}
-                        row={row}
-                        onChange={(patch) =>
-                          setFieldRows((current) =>
-                            current.map((entry) => (entry.id === row.id ? { ...entry, ...patch } : entry)),
-                          )
-                        }
-                        onDelete={() =>
-                          setFieldRows((current) => current.filter((entry) => entry.id !== row.id))
-                        }
-                      />
-                    ))
-                  ) : (
-                    <div className="rounded-[var(--radius-lg)] border border-dashed border-border bg-panel px-4 py-6 text-sm text-muted">
-                      No manual fields defined yet.
-                    </div>
-                  )}
-                </div>
-              ) : null}
+              <div className="space-y-3">
+                {fieldRows.length ? (
+                  fieldRows.map((row) => (
+                    <ManualFieldEditor
+                      key={row.id}
+                      row={row}
+                      onChange={(patch) =>
+                        setFieldRows((current) =>
+                          current.map((entry) => (entry.id === row.id ? { ...entry, ...patch } : entry)),
+                        )
+                      }
+                      onDelete={() =>
+                        setFieldRows((current) => current.filter((entry) => entry.id !== row.id))
+                      }
+                    />
+                  ))
+                ) : (
+                  <div className="rounded-[var(--radius-lg)] border border-dashed border-border bg-panel px-4 py-6 text-sm text-muted">
+                    No manual fields yet.
+                  </div>
+                )}
+              </div>
             </Card>
 
             {configError ? (
@@ -645,46 +608,60 @@ export default function CrawlPage() {
 
           <div className="space-y-4 xl:sticky xl:top-[68px] xl:self-start">
             <Card className="space-y-4">
-              <SectionHeader title="Smart Extraction" description="Off by default. Uses LLM discovery before crawl start." />
-              <SettingBlock title="Smart Extraction" description={smartExtraction ? "Adds ~10–30s before crawl starts." : "Uses saved Site Memory and manual fields only."}>
-                <Toggle checked={smartExtraction} onChange={setSmartExtraction} />
-              </SettingBlock>
-            </Card>
-
-            <Card className="space-y-4">
-              <SectionHeader title="Advanced Crawl" description="Request delay, max records, and max pages live in the dispatch payload." />
-              <SettingBlock title="Advanced Crawl" description={advancedEnabled ? "Custom limits enabled." : "Defaults: 500ms, 100 records, 10 pages."}>
-                <Toggle checked={advancedEnabled} onChange={setAdvancedEnabled} />
-              </SettingBlock>
-              {advancedEnabled ? (
-                <div className="space-y-4 rounded-[var(--radius-lg)] border border-border bg-panel px-4 py-4">
-                  <SliderRow label="Request Delay" value={requestDelay} min={0} max={5000} step={100} suffix=" ms" onChange={setRequestDelay} onReset={() => setRequestDelay(String(DEFAULT_REQUEST_DELAY))} />
-                  <SliderRow label="Max Records" value={maxRecords} min={1} max={10000} step={1} onChange={setMaxRecords} onReset={() => setMaxRecords(String(DEFAULT_MAX_RECORDS))} />
-                  <SliderRow label="Max Pages" value={maxPages} min={1} max={500} step={1} onChange={setMaxPages} onReset={() => setMaxPages(String(DEFAULT_MAX_PAGES))} />
+              <SectionHeader title="Run Settings" />
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="label-caps">Crawl Surface</div>
+                  <TabBar
+                    value={crawlTab}
+                    onChange={(value) => setCrawlTab(value as CrawlTab)}
+                    options={[
+                      { value: "category", label: "Category Crawl" },
+                      { value: "pdp", label: "PDP Crawl" },
+                    ]}
+                  />
                 </div>
-              ) : null}
-            </Card>
 
-            <Card className="space-y-4">
-              <SectionHeader title="Proxy" description="When enabled, requests are dispatched through the configured proxy pool." />
-              <SettingBlock title="Use Proxy Pool" description={proxyEnabled ? "One proxy per line." : "Direct crawl path disabled only when proxy is off."}>
-                <Toggle checked={proxyEnabled} onChange={setProxyEnabled} />
-              </SettingBlock>
-              {proxyEnabled ? (
-                <Textarea
-                  value={proxyInput}
-                  onChange={(event) => setProxyInput(event.target.value)}
-                  placeholder={"host:port\nhost:port:user:pass"}
-                  className="min-h-[140px] font-mono text-sm"
-                />
-              ) : null}
-            </Card>
-
-            <Card className="space-y-3">
-              <SectionHeader title="Run" description="Open the review modal before dispatching the job." />
-              <Button variant="accent" type="submit" className="w-full" disabled={!canPreview(config)}>
-                Review Before Running
-              </Button>
+                <div className="space-y-2">
+                  <SettingSection
+                    label="Smart Extraction"
+                    description="Enable LLM fallback when selectors miss."
+                    icon={<Sparkles className="size-4" />}
+                    checked={smartExtraction}
+                    onChange={setSmartExtraction}
+                  />
+                  <SettingSection
+                    label="Advanced Crawl"
+                    description="Request delay, records, and page limits."
+                    icon={<SlidersHorizontal className="size-4" />}
+                    checked={advancedEnabled}
+                    onChange={setAdvancedEnabled}
+                  >
+                    <div className="space-y-4 rounded-[var(--radius-lg)] border border-border bg-background px-4 py-4">
+                      <SliderRow label="Request Delay" value={requestDelay} min={0} max={5000} step={100} suffix=" ms" onChange={setRequestDelay} onReset={() => setRequestDelay(String(DEFAULT_REQUEST_DELAY))} />
+                      <SliderRow label="Max Records" value={maxRecords} min={1} max={10000} step={1} onChange={setMaxRecords} onReset={() => setMaxRecords(String(DEFAULT_MAX_RECORDS))} />
+                      <SliderRow label="Max Pages" value={maxPages} min={1} max={500} step={1} onChange={setMaxPages} onReset={() => setMaxPages(String(DEFAULT_MAX_PAGES))} />
+                    </div>
+                  </SettingSection>
+                  <SettingSection
+                    label="Proxy"
+                    description="Route requests through the proxy list."
+                    icon={<Shield className="size-4" />}
+                    checked={proxyEnabled}
+                    onChange={setProxyEnabled}
+                  >
+                    <div className="space-y-3 rounded-[var(--radius-lg)] border border-border bg-background px-4 py-4">
+                      <div className="label-caps">Proxy Pool</div>
+                      <Textarea
+                        value={proxyInput}
+                        onChange={(event) => setProxyInput(event.target.value)}
+                        placeholder={"host:port\nhost:port:user:pass"}
+                        className="min-h-[140px] font-mono text-sm"
+                      />
+                    </div>
+                  </SettingSection>
+                </div>
+              </div>
             </Card>
           </div>
         </form>
@@ -1259,7 +1236,12 @@ function TabBar({
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
-          className={cn("rounded-[4px] px-3 py-1 text-sm font-medium", value === option.value ? "bg-background-elevated text-foreground shadow-[var(--shadow-sm)]" : "text-muted")}
+          className={cn(
+            "rounded-[4px] px-3 py-1 text-sm font-medium transition-colors",
+            value === option.value
+              ? "bg-accent text-white shadow-[var(--shadow-sm)]"
+              : "text-muted hover:text-foreground",
+          )}
         >
           {option.label}
         </button>
@@ -1269,45 +1251,86 @@ function TabBar({
 }
 
 function SegmentedMode({
-  label,
   value,
   onChange,
   options,
 }: Readonly<{
-  label: string;
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
 }>) {
   return (
-    <div className="space-y-1.5">
-      <div className="label-caps">{label}</div>
-      <div className="inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-border bg-panel p-0.5">
-        {options.map((option) => (
-          <button key={option.value} type="button" onClick={() => onChange(option.value)} className={cn("rounded-[4px] px-3 py-1 text-sm font-medium", value === option.value ? "bg-background-elevated text-foreground shadow-[var(--shadow-sm)]" : "text-muted")}>
-            {option.label}
-          </button>
-        ))}
-      </div>
+    <div className="inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-border bg-panel p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "rounded-[4px] px-3 py-1 text-sm font-medium transition-colors",
+            value === option.value
+              ? "bg-accent text-white shadow-[var(--shadow-sm)]"
+              : "text-muted hover:text-foreground",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
 
-function SettingBlock({ title, description, children }: Readonly<{ title: string; description: string; children: ReactNode }>) {
+function SettingSection({
+  label,
+  description,
+  icon,
+  checked,
+  onChange,
+  children,
+}: Readonly<{ label: string; description: string; icon: ReactNode; checked: boolean; onChange: (value: boolean) => void; children?: ReactNode }>) {
   return (
-    <div className="flex items-center justify-between rounded-[var(--radius-lg)] border border-border bg-panel p-4">
-      <div>
-        <div className="label-caps">{title}</div>
-        <div className="text-sm text-muted">{description}</div>
+    <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-panel">
+      <div className="flex min-h-[76px] items-center justify-between gap-4 px-4 py-3.5">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className={cn("mt-0.5 shrink-0 transition-colors", checked ? "text-foreground" : "text-muted")}>
+            {icon}
+          </div>
+          <div className="min-w-0">
+            <div className="label-caps">{label}</div>
+            <div className="text-sm text-muted">{description}</div>
+          </div>
+        </div>
+        <Toggle checked={checked} onChange={onChange} ariaLabel={label} />
       </div>
-      <div>{children}</div>
+      {children ? (
+        <div
+          className={cn(
+            "overflow-hidden transition-[max-height] duration-200 ease-out",
+            checked ? "max-h-[480px]" : "max-h-0",
+          )}
+        >
+          <div className="border-t border-border p-4">
+            {children}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function Toggle({ checked, onChange }: Readonly<{ checked: boolean; onChange: (value: boolean) => void }>) {
+function Toggle({
+  checked,
+  onChange,
+  ariaLabel,
+}: Readonly<{ checked: boolean; onChange: (value: boolean) => void; ariaLabel?: string }>) {
   return (
-    <button type="button" onClick={() => onChange(!checked)} className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition-colors", checked ? "bg-accent" : "bg-border")}>
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      aria-pressed={checked}
+      onClick={() => onChange(!checked)}
+      className={cn("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", checked ? "bg-accent" : "bg-border")}
+    >
       <span className={cn("inline-block size-4 rounded-full bg-white shadow-sm transition-transform", checked ? "translate-x-4" : "translate-x-0.5")} />
     </button>
   );
@@ -1361,11 +1384,12 @@ function AdditionalFieldInput({
   return (
     <label className="grid gap-1.5">
       <span className="label-caps">Additional Fields</span>
-      <div className="text-xs text-muted">Comma-separated field names the crawler will look for during extraction.</div>
       <Input value={value} onChange={(event) => handleChange(event.target.value)} onBlur={handleBlur} placeholder="price, sku, availability, brand" className="font-mono text-sm" />
-      <div className="flex flex-wrap gap-1.5">
-        {chips.length ? chips.map((field) => <button key={field} type="button" onClick={() => onRemove(field)} className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs"><span>{field}</span><X className="size-3.5" /></button>) : <span className="text-sm text-muted">No additional fields added yet.</span>}
-      </div>
+      {chips.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {chips.map((field) => <button key={field} type="button" onClick={() => onRemove(field)} className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs"><span>{field}</span><X className="size-3.5" /></button>)}
+        </div>
+      ) : null}
     </label>
   );
 }
@@ -1446,7 +1470,7 @@ function Metric({ label, value }: Readonly<{ label: string; value: string | numb
 }
 
 function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: string; mono?: boolean }>) {
-  return <div className="flex items-start justify-between gap-4 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2"><div className="label-caps">{label}</div><div className={cn("max-w-[60%] text-right text-sm", mono && "font-mono text-xs")}>{value || "--"}</div></div>;
+  return <div className="flex items-start justify-between gap-4 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2"><div className="shrink-0 label-caps">{label}</div><div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-sm", mono && "font-mono text-xs")}>{value || "--"}</div></div>;
 }
 
 function formatTimestamp(value: string) {
