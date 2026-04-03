@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from bs4 import BeautifulSoup
 import pytest
 
 from app.schemas.selector import SelectorCreate, SelectorTestRequest
 from app.services.selector_service import _normalize_selector_payload
-from app.services.xpath_service import extract_selector_value
+from app.services.xpath_service import build_absolute_xpath, extract_selector_value
 
 
 def test_selector_create_requires_one_selector():
@@ -51,3 +52,33 @@ def test_extract_selector_value_times_out_bad_regex(monkeypatch: pytest.MonkeyPa
     assert value is None
     assert count == 0
     assert selector_used is None
+
+
+def test_build_absolute_xpath_prefers_unique_id_anchor():
+    soup = BeautifulSoup(
+        "<html><body><section><h1 id='product-title'>Chair</h1></section></body></html>",
+        "html.parser",
+    )
+
+    xpath = build_absolute_xpath(soup.select_one("#product-title"))
+
+    assert xpath == "//h1[@id='product-title']"
+
+
+def test_build_absolute_xpath_uses_relative_anchor_instead_of_full_dom_path():
+    soup = BeautifulSoup(
+        """
+        <html><body>
+          <main data-testid="product-page">
+            <section><span class="price-value">$19</span></section>
+          </main>
+        </body></html>
+        """,
+        "html.parser",
+    )
+
+    xpath = build_absolute_xpath(soup.select_one(".price-value"))
+
+    assert xpath is not None
+    assert xpath.startswith("//main[@data-testid='product-page']/")
+    assert "/html" not in xpath

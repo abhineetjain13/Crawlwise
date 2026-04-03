@@ -23,7 +23,6 @@ class SelectorCreate(BaseModel):
     xpath: str | None = None
     regex: str | None = None
     status: str | None = "validated"
-    confidence: float | None = None
     sample_value: str | None = None
     source: str | None = "manual"
     source_run_id: int | None = None
@@ -41,7 +40,6 @@ class SelectorUpdate(BaseModel):
     xpath: str | None = None
     regex: str | None = None
     status: str | None = None
-    confidence: float | None = None
     sample_value: str | None = None
     source: str | None = None
     source_run_id: int | None = None
@@ -58,7 +56,6 @@ class SelectorResponse(BaseModel):
     xpath: str | None
     regex: str | None
     status: str
-    confidence: float | None
     sample_value: str | None
     source: str
     source_run_id: int | None

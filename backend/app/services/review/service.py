@@ -67,7 +67,6 @@ async def build_review_payload(session: AsyncSession, run_id: int) -> dict | Non
                 "xpath": row.xpath,
                 "regex": row.regex,
                 "status": row.status,
-                "confidence": row.confidence,
                 "sample_value": row.sample_value,
                 "source": row.source,
                 "source_run_id": row.source_run_id,
@@ -101,8 +100,8 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
         for row in selected_rows
     }
     domain = _domain(run.url)
-    save_domain_mapping(domain, run.surface, mapping)
-    canonical_fields = save_canonical_fields(run.surface, list(mapping.values()))
+    await save_domain_mapping(domain, run.surface, mapping)
+    canonical_fields = await save_canonical_fields(run.surface, list(mapping.values()))
     promotion = ReviewPromotion(
         run_id=run.id,
         domain=domain,
@@ -217,7 +216,6 @@ def _build_selector_suggestions(
             "css_selector": selector.css_selector,
             "regex": selector.regex,
             "status": selector.status,
-            "confidence": selector.confidence,
             "sample_value": selector.sample_value,
             "source": selector.source,
         }

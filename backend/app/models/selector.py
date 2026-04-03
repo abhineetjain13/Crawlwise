@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import StrEnum
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, Float, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -38,7 +38,6 @@ class Selector(Base):
         default=SelectorStatus.VALIDATED,
         server_default=SelectorStatus.PENDING.value,
     )
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     sample_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(30), default="manual")
     source_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)

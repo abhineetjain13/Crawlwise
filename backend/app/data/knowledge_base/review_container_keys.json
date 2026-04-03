@@ -16,7 +16,6 @@
   "promoted_fields",
   "coverage",
   "is_blocked",
-  "confidence",
   "reason",
   "provider"
 ]

@@ -28,7 +28,7 @@ def extract_candidates(
     Sources are checked in priority order (adapter > network > JSON-LD > microdata > selectors > DOM).
 
     Returns:
-        (candidates, source_trace) — candidates maps field -> list of {value, source, confidence}
+        (candidates, source_trace) — candidates maps field -> list of {value, source}
     """
     soup = BeautifulSoup(html, "html.parser")
     tree = _build_xpath_tree(html)
@@ -50,7 +50,6 @@ def extract_candidates(
                 rows.append({
                     "value": xpath_value,
                     "source": "contract_xpath",
-                    "confidence": 0.99,
                     "xpath": contract_rule.get("xpath"),
                     "css_selector": None,
                     "regex": None,
@@ -61,17 +60,16 @@ def extract_candidates(
                 rows.append({
                     "value": regex_value,
                     "source": "contract_regex",
-                    "confidence": 0.98,
                     "xpath": None,
                     "css_selector": None,
                     "regex": contract_rule.get("regex"),
                     "sample_value": regex_value,
                 })
 
-        # 1. Adapter data (rank 1, highest confidence)
+        # 1. Adapter data (rank 1)
         for record in manifest.adapter_data:
             if isinstance(record, dict) and field_name in record and record[field_name]:
-                rows.append({"value": record[field_name], "source": "adapter", "confidence": 0.95})
+                rows.append({"value": record[field_name], "source": "adapter"})
 
         # 2. Network payloads (rank 2)
         for payload in manifest.network_payloads:
@@ -79,32 +77,32 @@ def extract_candidates(
             if isinstance(body, (dict, list)):
                 val = _coerce_candidate_value(_deep_get_aliases(body, field_name))
                 if val is not None:
-                    rows.append({"value": val, "source": "network_intercept", "confidence": 0.90})
+                    rows.append({"value": val, "source": "network_intercept"})
 
         # 3. Hydrated app state / __NEXT_DATA__ (rank 3)
         for state in manifest._hydrated_states:
             val = _coerce_candidate_value(_deep_get_aliases(state, field_name))
             if val is not None:
-                rows.append({"value": val, "source": "hydrated_state", "confidence": 0.89})
+                rows.append({"value": val, "source": "hydrated_state"})
                 break
         if manifest.next_data:
             val = _coerce_candidate_value(_deep_get_aliases(manifest.next_data, field_name))
             if val is not None:
-                rows.append({"value": val, "source": "next_data", "confidence": 0.88})
+                rows.append({"value": val, "source": "next_data"})
 
         # 4. JSON-LD (rank 4)
         for payload in manifest.json_ld:
             if isinstance(payload, dict):
                 val = _coerce_candidate_value(_deep_get_aliases(payload, field_name))
                 if val is not None:
-                    rows.append({"value": val, "source": "json_ld", "confidence": 0.90})
+                    rows.append({"value": val, "source": "json_ld"})
 
         # 5. Microdata/RDFa (rank 5)
         for item in manifest.microdata:
             if isinstance(item, dict):
                 val = _coerce_candidate_value(_deep_get_aliases(item, field_name))
                 if val is not None:
-                    rows.append({"value": val, "source": "microdata", "confidence": 0.85})
+                    rows.append({"value": val, "source": "microdata"})
 
         # 6. Semantic sections/specifications extracted from page-local HTML
         semantic_rows = resolve_requested_field_values(
@@ -115,7 +113,7 @@ def extract_candidates(
         )
         semantic_value = semantic_rows.get(field_name)
         if semantic_value not in (None, "", [], {}):
-            rows.append({"value": semantic_value, "source": "semantic_section", "confidence": 0.87})
+            rows.append({"value": semantic_value, "source": "semantic_section"})
 
         # 7. Saved domain selectors (rank 7)
         selectors = get_selector_defaults(domain, field_name)
@@ -127,11 +125,9 @@ def extract_candidates(
                 regex=selector.get("regex"),
             )
             if value:
-                confidence = selector.get("confidence")
                 rows.append({
                     "value": value,
                     "source": "selector",
-                    "confidence": 0.80 if confidence is None else confidence,
                     "xpath": selector.get("xpath"),
                     "css_selector": selector.get("css_selector"),
                     "regex": selector.get("regex"),
@@ -178,7 +174,6 @@ def _dom_pattern(soup: BeautifulSoup, field_name: str) -> dict | None:
     return {
         "value": value,
         "source": "dom",
-        "confidence": 0.60,
         "xpath": build_absolute_xpath(node),
         "css_selector": selector,
         "regex": None,

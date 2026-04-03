@@ -201,7 +201,9 @@ export default function SiteMemoryPage() {
                       <tbody>
                         {group.fields.map((selector) => {
                           const draft = drafts[selector.id];
-                          const selectorValue = draft?.xpath ?? draft?.css_selector ?? draft?.regex ?? selector.xpath ?? selector.css_selector ?? selector.regex ?? "";
+                          const selectorValue = draft !== undefined
+                            ? draft.xpath ?? draft.css_selector ?? draft.regex ?? ""
+                            : selector.xpath ?? selector.css_selector ?? selector.regex ?? "";
                           const isEditing = Boolean(draft);
                           return (
                             <tr key={selector.id}>
@@ -338,9 +340,10 @@ function groupByDomain(selectors: SelectorRecord[], runs: CrawlRun[]) {
 
   const grouped = new Map<string, SelectorRecord[]>();
   for (const selector of selectors) {
-    const domain = selector.domain;
+    const domain = normalizeDomain(selector.domain);
+    if (!domain) continue;
     const rows = grouped.get(domain) ?? [];
-    rows.push(selector);
+    rows.push({ ...selector, domain });
     grouped.set(domain, rows);
   }
 

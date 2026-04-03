@@ -72,7 +72,7 @@ def test_walmart_robot_check():
     """ + "x" * 200 + "</body></html>"
     result = detect_blocked_page(html)
     assert result.is_blocked
-    assert result.confidence >= 0.80
+    assert result.reason
 
 
 def test_kasada_challenge_detected():

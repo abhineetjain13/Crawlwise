@@ -20,13 +20,17 @@ import {
 } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 
 import { PageHeader, SectionHeader } from "../../components/ui/patterns";
 import { Badge, Button, Card, Input, Textarea } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 import type { CrawlConfig, CrawlPhase, CrawlRecord, CrawlRun } from "../../lib/api/types";
+import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
+import { ACTIVE_STATUSES, TERMINAL_STATUSES } from "../../lib/constants/crawl-statuses";
+import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
+import { POLLING_INTERVALS, UI_DELAYS } from "../../lib/constants/timing";
 import { cn } from "../../lib/utils";
 
 type CrawlTab = "category" | "pdp";
@@ -62,13 +66,7 @@ type IntelligenceSuggestion = {
   state: SuggestionState;
 };
 
-const TERMINAL_STATUSES = new Set<CrawlRun["status"]>(["completed", "killed", "failed", "proxy_exhausted"]);
-const ACTIVE_STATUSES = new Set<CrawlRun["status"]>(["pending", "running", "paused"]);
 const LOG_FILTERS: LogLevel[] = ["INFO", "WARN", "ERROR", "PROXY"];
-const DEFAULT_REQUEST_DELAY = 500;
-const DEFAULT_MAX_RECORDS = 100;
-const DEFAULT_MAX_PAGES = 10;
-const BULK_PREFILL_KEY = "bulk-crawl-prefill-v1";
 
 export default function CrawlPage() {
   const router = useRouter();
@@ -83,9 +81,9 @@ export default function CrawlPage() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [smartExtraction, setSmartExtraction] = useState(false);
   const [advancedEnabled, setAdvancedEnabled] = useState(false);
-  const [requestDelay, setRequestDelay] = useState(String(DEFAULT_REQUEST_DELAY));
-  const [maxRecords, setMaxRecords] = useState(String(DEFAULT_MAX_RECORDS));
-  const [maxPages, setMaxPages] = useState(String(DEFAULT_MAX_PAGES));
+  const [requestDelay, setRequestDelay] = useState(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS));
+  const [maxRecords, setMaxRecords] = useState(String(CRAWL_DEFAULTS.MAX_RECORDS));
+  const [maxPages, setMaxPages] = useState(String(CRAWL_DEFAULTS.MAX_PAGES));
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [proxyInput, setProxyInput] = useState("");
   const [additionalDraft, setAdditionalDraft] = useState("");
@@ -119,7 +117,7 @@ export default function CrawlPage() {
     queryKey: ["crawl-run", runId],
     queryFn: () => api.getCrawl(runId as number),
     enabled: runId !== null,
-    refetchInterval: (query) => (query.state.data && ACTIVE_STATUSES.has(query.state.data.status) ? 2000 : false),
+    refetchInterval: (query) => (query.state.data && ACTIVE_STATUSES.has(query.state.data.status) ? POLLING_INTERVALS.ACTIVE_JOB_MS : false),
   });
   const run = runQuery.data;
 
@@ -129,7 +127,7 @@ export default function CrawlPage() {
     enabled: runId !== null && Boolean(run),
     refetchInterval: () => {
       const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
-      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? 2000 : false;
+      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? POLLING_INTERVALS.RECORDS_MS : false;
     },
   });
   const logsQuery = useQuery({
@@ -138,7 +136,7 @@ export default function CrawlPage() {
     enabled: runId !== null,
     refetchInterval: () => {
       const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
-      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? 2000 : false;
+      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? POLLING_INTERVALS.LOGS_MS : false;
     },
   });
   const reviewQuery = useQuery({
@@ -158,14 +156,14 @@ export default function CrawlPage() {
       return;
     }
     if (terminal) {
-      const timer = window.setTimeout(() => setCrawlPhase("complete"), 1500);
+      const timer = window.setTimeout(() => setCrawlPhase("complete"), UI_DELAYS.PHASE_TRANSITION_MS);
       return () => window.clearTimeout(timer);
     }
     setCrawlPhase("running");
   }, [run, terminal]);
 
   useEffect(() => {
-    const stored = window.sessionStorage.getItem(BULK_PREFILL_KEY);
+    const stored = window.sessionStorage.getItem(STORAGE_KEYS.BULK_PREFILL);
     if (!stored) {
       return;
     }
@@ -183,7 +181,7 @@ export default function CrawlPage() {
     } catch {
       // Ignore malformed prefill data.
     } finally {
-      window.sessionStorage.removeItem(BULK_PREFILL_KEY);
+      window.sessionStorage.removeItem(STORAGE_KEYS.BULK_PREFILL);
     }
   }, []);
 
@@ -191,20 +189,28 @@ export default function CrawlPage() {
     if (!live || !logViewportRef.current) {
       return;
     }
-    const node = logViewportRef.current;
-    const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 50;
-    if (atBottom) {
-      node.scrollTop = node.scrollHeight;
-    } else {
-      setLiveJumpAvailable(true);
-    }
+    const frame = window.requestAnimationFrame(() => {
+      const node = logViewportRef.current;
+      if (!node) {
+        return;
+      }
+      const { scrollHeight, scrollTop, clientHeight } = node;
+      const atBottom = scrollHeight - scrollTop - clientHeight < CRAWL_DEFAULTS.SCROLL_THRESHOLD_PX;
+      if (atBottom) {
+        node.scrollTop = scrollHeight;
+        setLiveJumpAvailable(false);
+      } else {
+        setLiveJumpAvailable(true);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [logs, live]);
 
   useEffect(() => {
     if (!bulkBanner) {
       return;
     }
-    const timer = window.setTimeout(() => setBulkBanner(""), 5000);
+    const timer = window.setTimeout(() => setBulkBanner(""), UI_DELAYS.BANNER_AUTO_HIDE_MS);
     return () => window.clearTimeout(timer);
   }, [bulkBanner]);
 
@@ -252,9 +258,14 @@ export default function CrawlPage() {
       csv_file: csvFile,
       smart_extraction: smartExtraction,
       advanced_enabled: advancedEnabled,
-      request_delay_ms: clampNumber(requestDelay, 0, 5000, DEFAULT_REQUEST_DELAY),
-      max_records: clampNumber(maxRecords, 1, 10000, DEFAULT_MAX_RECORDS),
-      max_pages: clampNumber(maxPages, 1, 500, DEFAULT_MAX_PAGES),
+      request_delay_ms: clampNumber(
+        requestDelay,
+        CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
+        CRAWL_LIMITS.MAX_REQUEST_DELAY_MS,
+        CRAWL_DEFAULTS.REQUEST_DELAY_MS,
+      ),
+      max_records: clampNumber(maxRecords, CRAWL_LIMITS.MIN_RECORDS, CRAWL_LIMITS.MAX_RECORDS, CRAWL_DEFAULTS.MAX_RECORDS),
+      max_pages: clampNumber(maxPages, CRAWL_LIMITS.MIN_PAGES, CRAWL_LIMITS.MAX_PAGES, CRAWL_DEFAULTS.MAX_PAGES),
       proxy_enabled: proxyEnabled,
       proxy_lines: proxyEnabled ? parseLines(proxyInput) : [],
       additional_fields: additionalFields,
@@ -417,7 +428,7 @@ export default function CrawlPage() {
       return;
     }
     window.sessionStorage.setItem(
-      BULK_PREFILL_KEY,
+      STORAGE_KEYS.BULK_PREFILL,
       JSON.stringify({
         urls,
         additional_fields: additionalFields,
@@ -472,9 +483,10 @@ export default function CrawlPage() {
           <button
             type="button"
             onClick={() => setBulkBanner("")}
+            aria-label="Close banner"
             className="inline-flex size-7 items-center justify-center rounded-md text-muted transition hover:text-foreground"
           >
-            <X className="size-4" />
+            <X className="size-4" aria-hidden="true" />
           </button>
         </div>
       ) : null}
@@ -527,29 +539,35 @@ export default function CrawlPage() {
               )}
               {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
                 <label className="grid gap-1.5">
+                  <span className="label-caps">URLs (one per line)</span>
                   <Textarea
                     value={bulkUrls}
                     onChange={(event) => setBulkUrls(event.target.value)}
                     placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
                     className="min-h-[220px] font-mono text-sm"
+                    aria-label="Bulk URLs input"
                   />
                 </label>
               ) : crawlTab === "pdp" && pdpMode === "csv" ? (
                 <label className="grid gap-1.5">
+                  <span className="label-caps">CSV File</span>
                   <Input
                     type="file"
                     accept=".csv,text/csv"
                     onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
                     className="h-auto py-3"
+                    aria-label="CSV file input"
                   />
                 </label>
               ) : (
                 <label className="grid gap-1.5">
+                  <span className="label-caps">Target URL</span>
                   <Input
                     value={targetUrl}
                     onChange={(event) => setTargetUrl(event.target.value)}
                     placeholder={crawlTab === "category" ? "https://example.com/collections/chairs" : "https://example.com/products/oak-chair"}
                     className="font-mono text-sm"
+                    aria-label="Target URL input"
                   />
                 </label>
               )}
@@ -638,9 +656,9 @@ export default function CrawlPage() {
                     onChange={setAdvancedEnabled}
                   >
                     <div className="space-y-4 rounded-[var(--radius-lg)] border border-border bg-background px-4 py-4">
-                      <SliderRow label="Request Delay" value={requestDelay} min={0} max={5000} step={100} suffix=" ms" onChange={setRequestDelay} onReset={() => setRequestDelay(String(DEFAULT_REQUEST_DELAY))} />
-                      <SliderRow label="Max Records" value={maxRecords} min={1} max={10000} step={1} onChange={setMaxRecords} onReset={() => setMaxRecords(String(DEFAULT_MAX_RECORDS))} />
-                      <SliderRow label="Max Pages" value={maxPages} min={1} max={500} step={1} onChange={setMaxPages} onReset={() => setMaxPages(String(DEFAULT_MAX_PAGES))} />
+                      <SliderRow label="Request Delay" value={requestDelay} min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS} max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS} step={100} suffix=" ms" onChange={setRequestDelay} onReset={() => setRequestDelay(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS))} />
+                      <SliderRow label="Max Records" value={maxRecords} min={CRAWL_LIMITS.MIN_RECORDS} max={CRAWL_LIMITS.MAX_RECORDS} step={1} onChange={setMaxRecords} onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))} />
+                      <SliderRow label="Max Pages" value={maxPages} min={CRAWL_LIMITS.MIN_PAGES} max={CRAWL_LIMITS.MAX_PAGES} step={1} onChange={setMaxPages} onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))} />
                     </div>
                   </SettingSection>
                   <SettingSection
@@ -657,6 +675,7 @@ export default function CrawlPage() {
                         onChange={(event) => setProxyInput(event.target.value)}
                         placeholder={"host:port\nhost:port:user:pass"}
                         className="min-h-[140px] font-mono text-sm"
+                        aria-label="Proxy pool input"
                       />
                     </div>
                   </SettingSection>
@@ -713,14 +732,12 @@ export default function CrawlPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (logViewportRef.current) {
-                          logViewportRef.current.scrollTop = logViewportRef.current.scrollHeight;
-                        }
+                        scrollViewportToBottom(logViewportRef);
                         setLiveJumpAvailable(false);
                       }}
                       className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs"
                     >
-                      <ChevronsDown className="size-3.5" />
+                      <ChevronsDown className="size-3.5" aria-hidden="true" />
                       Jump to Latest
                     </button>
                   ) : null}
@@ -1131,15 +1148,19 @@ function normalizeLogLevel(level: string) {
   return String(level || "").trim().toUpperCase() as LogLevel;
 }
 
-function useLogViewport(logsLength: number, ref?: RefObject<HTMLDivElement | null>) {
+function useLogViewport(_logsLength: number, ref?: RefObject<HTMLDivElement | null>) {
   const internalRef = useRef<HTMLDivElement | null>(null);
-  const viewportRef = ref ?? internalRef;
-  useEffect(() => {
-    if (viewportRef.current) {
-      viewportRef.current.scrollTop = viewportRef.current.scrollHeight;
+  return ref ?? internalRef;
+}
+
+function scrollViewportToBottom(ref: RefObject<HTMLDivElement | null>) {
+  window.requestAnimationFrame(() => {
+    const node = ref.current;
+    if (!node) {
+      return;
     }
-  }, [logsLength, viewportRef]);
-  return viewportRef;
+    node.scrollTop = node.scrollHeight;
+  });
 }
 
 function PreviewModal({
@@ -1153,20 +1174,67 @@ function PreviewModal({
   onLaunch: () => void;
   launchError: string;
 }>) {
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const urls = dispatch.urls ?? (dispatch.url ? [dispatch.url] : []);
   const proxyCount = Array.isArray(dispatch.settings.proxy_list) ? dispatch.settings.proxy_list.length : 0;
   const smartExtraction = Boolean(dispatch.settings.llm_enabled);
   const proxyEnabled = Boolean(dispatch.settings.proxy_enabled);
+
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    getFocusableElements(modalRef.current)[0]?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const focusable = getFocusableElements(modalRef.current);
+      if (!focusable.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const activeElement = document.activeElement;
+      if (event.shiftKey && activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocusedRef.current?.focus();
+    };
+  }, [onCancel]);
+
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-[540px] rounded-[var(--radius-xl)] border border-border bg-background-elevated p-5 shadow-[var(--shadow-modal)]">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" role="presentation">
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="crawl-preview-title"
+        aria-describedby="crawl-preview-description"
+        className="w-full max-w-[540px] rounded-[var(--radius-xl)] border border-border bg-background-elevated p-5 shadow-[var(--shadow-modal)]"
+      >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-base font-semibold tracking-[-0.02em]">Review Before Running</div>
-            <div className="text-sm text-muted">Confirm the payload before the job is dispatched.</div>
+            <div id="crawl-preview-title" className="text-base font-semibold tracking-[-0.02em]">Review Before Running</div>
+            <div id="crawl-preview-description" className="text-sm text-muted">Confirm the payload before the job is dispatched.</div>
           </div>
-          <button type="button" onClick={onCancel} className="inline-flex size-8 items-center justify-center rounded-md border border-border text-muted transition hover:text-foreground">
-            <X className="size-4" />
+          <button type="button" onClick={onCancel} aria-label="Close preview" className="inline-flex size-8 items-center justify-center rounded-md border border-border text-muted transition hover:text-foreground">
+            <X className="size-4" aria-hidden="true" />
           </button>
         </div>
         <div className="mt-4 space-y-2">
@@ -1197,7 +1265,7 @@ function PreviewModal({
   );
 }
 
-function LogTerminal({
+const LogTerminal = memo(function LogTerminal({
   logs,
   live = false,
   viewportRef,
@@ -1208,7 +1276,7 @@ function LogTerminal({
 }>) {
   const ref = useLogViewport(logs.length, viewportRef);
   return (
-    <div ref={ref} className="crawl-terminal max-h-[320px] min-h-[260px] space-y-1.5">
+    <div ref={ref} className="crawl-terminal max-h-[320px] min-h-[260px] space-y-1.5" role="log" aria-live={live ? "polite" : "off"} aria-atomic="false">
       {logs.length ? logs.map((log) => (
         <div key={log.id} className="font-mono text-[12px] leading-6">
           <span className="text-muted">[{formatTimestamp(log.created_at)}]</span>{" "}
@@ -1218,7 +1286,7 @@ function LogTerminal({
       )) : <div className="text-sm text-muted">{live ? "Waiting for log output..." : "No logs captured for this run."}</div>}
     </div>
   );
-}
+});
 
 function TabBar({
   value,
@@ -1387,7 +1455,7 @@ function AdditionalFieldInput({
       <Input value={value} onChange={(event) => handleChange(event.target.value)} onBlur={handleBlur} placeholder="price, sku, availability, brand" className="font-mono text-sm" />
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
-          {chips.map((field) => <button key={field} type="button" onClick={() => onRemove(field)} className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs"><span>{field}</span><X className="size-3.5" /></button>)}
+          {chips.map((field) => <button key={field} type="button" onClick={() => onRemove(field)} aria-label={`Remove ${field}`} className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs"><span>{field}</span><X className="size-3.5" aria-hidden="true" /></button>)}
         </div>
       ) : null}
     </label>
@@ -1404,9 +1472,20 @@ function ManualFieldEditor({ row, onChange, onDelete }: Readonly<{ row: FieldRow
       </label>
       <ValidatedField label="XPath" value={row.xpath} state={row.xpathState} placeholder="//span[@class='price']" onChange={(value) => onChange({ xpath: value })} onBlur={(value) => onChange({ xpathState: validateXPath(value) })} />
       <ValidatedField label="Regex" value={row.regex} state={row.regexState} placeholder="\\$[\\d,.]+" onChange={(value) => onChange({ regex: value })} onBlur={(value) => onChange({ regexState: validateRegex(value) })} />
-      <div className="flex items-end justify-end"><button type="button" onClick={onDelete} className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-danger hover:bg-danger/10"><Trash2 className="size-3.5" /></button></div>
+      <div className="flex items-end justify-end"><button type="button" onClick={onDelete} aria-label={`Delete ${row.fieldName || "manual field"}`} className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-danger hover:bg-danger/10"><Trash2 className="size-3.5" aria-hidden="true" /></button></div>
     </div>
   );
+}
+
+function getFocusableElements(container: HTMLDivElement | null) {
+  if (!container) {
+    return [] as HTMLElement[];
+  }
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
 }
 
 function ValidatedField({

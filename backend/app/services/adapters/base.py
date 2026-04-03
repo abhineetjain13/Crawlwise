@@ -11,7 +11,6 @@ class AdapterResult:
 
     records: list[dict] = field(default_factory=list)
     source_type: str = "adapter"
-    confidence: float = 0.95
     adapter_name: str = ""
 
 

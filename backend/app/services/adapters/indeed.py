@@ -1,8 +1,6 @@
 # Indeed job board adapter.
 from __future__ import annotations
 
-import json
-
 from bs4 import BeautifulSoup
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
@@ -27,7 +25,6 @@ class IndeedAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="indeed_adapter",
-            confidence=0.88,
             adapter_name=self.name,
         )
 

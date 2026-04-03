@@ -1,9 +1,9 @@
 {
   "title": ["title", "name", "job_title", "position", "headline", "productName", "product_name"],
   "url": ["url", "link", "href", "apply_url", "canonical_url", "product_url", "landingPageUrl"],
-  "price": ["price", "amount", "cost", "sale_price", "regular_price", "current_price", "mrp"],
+  "price": ["price", "amount", "cost", "sale_price", "current_price"],
   "sale_price": ["sale_price", "saleprice", "sellingprice", "newprice", "discount_price", "discountedPrice"],
-  "original_price": ["compare_at_price", "list_price", "regular_price", "was_price", "original_price"],
+  "original_price": ["compare_at_price", "list_price", "regular_price", "was_price", "original_price", "mrp"],
   "currency": ["currency", "currency_code", "price_currency"],
   "brand": ["brand", "vendor", "manufacturer", "company_name", "brand_name", "designer"],
   "image_url": ["image", "image_url", "thumbnail", "img", "photo", "logo", "featured_image", "primary_image", "searchImage"],

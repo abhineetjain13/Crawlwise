@@ -66,7 +66,7 @@ def test_extract_from_adapter_data():
     assert "title" in candidates
     adapter_sources = [c for c in candidates["title"] if c["source"] == "adapter"]
     assert len(adapter_sources) >= 1
-    assert adapter_sources[0]["confidence"] == 0.95
+    assert adapter_sources[0]["value"] == "Adapter Title"
 
 
 def test_extract_dom_patterns():
@@ -267,7 +267,7 @@ def test_extract_prefers_saved_xpath_selector_defaults():
     manifest = _manifest()
     with patch(
         "app.services.extract.service.get_selector_defaults",
-        return_value=[{"xpath": "//h1/text()", "status": "validated", "confidence": 0.9}],
+        return_value=[{"xpath": "//h1/text()", "status": "validated"}],
     ):
         candidates, _ = extract_candidates(
             "https://example.com/product",

@@ -13,7 +13,7 @@ import traceback
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lxml import etree
 
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
@@ -40,6 +40,7 @@ from app.services.normalizers.field_normalizers import normalize_value
 from app.services.pipeline_config import VERDICT_CORE_FIELDS_DETAIL, VERDICT_CORE_FIELDS_LISTING
 from app.services.domain_utils import normalize_domain
 from app.services.requested_field_policy import expand_requested_fields
+from app.services.url_safety import ensure_public_crawl_targets
 from app.services.xpath_service import validate_xpath_candidate
 
 
@@ -59,8 +60,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -> CrawlRun:
-    urls = payload.get("urls") or []
     settings = dict(payload.get("settings", {}))
+    urls = payload.get("urls") or []
+    await ensure_public_crawl_targets(_collect_target_urls(payload, settings))
     _validate_extraction_contract(settings.get("extraction_contract") or [])
     settings["max_records"] = max(1, int(settings.get("max_records", 100) or 100))
     settings["sleep_ms"] = max(0, int(settings.get("sleep_ms", 0) or 0))
@@ -115,6 +117,13 @@ async def list_runs(
 
 async def get_run(session: AsyncSession, run_id: int) -> CrawlRun | None:
     return await session.get(CrawlRun, run_id)
+
+
+async def delete_run(session: AsyncSession, run: CrawlRun) -> None:
+    if normalize_status(run.status) in ACTIVE_STATUSES:
+        raise ValueError(f"Cannot delete run in state: {run.status}")
+    await session.delete(run)
+    await session.commit()
 
 
 async def get_run_records(
@@ -526,8 +535,7 @@ async def _process_single_url(
                     recovered.records, additional_fields, extraction_contract,
                     surface,
                 )
-            await _log(session, run.id, "warning",
-                       f"[BLOCKED] {url} — {blocked.reason} (confidence={blocked.confidence:.2f})")
+            await _log(session, run.id, "warning", f"[BLOCKED] {url} — {blocked.reason}")
             record = CrawlRecord(
                 run_id=run.id,
                 source_url=url,
@@ -919,53 +927,56 @@ async def _set_stage(
 
 
 async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -> None:
-    await session.rollback()
-    run = await session.get(CrawlRun, run_id)
-    if run is None:
-        return
-
-    result_summary = dict(run.result_summary or {})
-    result_summary["error"] = error_msg
-    result_summary["progress"] = result_summary.get("progress", 0)
-    result_summary["extraction_verdict"] = "error"
-    if normalize_status(run.status) not in TERMINAL_STATUSES:
-        update_run_status(run, CrawlStatus.FAILED)
-    run.result_summary = result_summary
-
     try:
-        await _log(session, run.id, "error", f"Pipeline failed: {error_msg}")
-        await session.commit()
-    except Exception:
         await session.rollback()
-        run = await session.get(CrawlRun, run_id)
+    except Exception:
+        logger.exception("Rollback failed before failure recovery", extra={"run_id": run_id})
+
+    bind = session.bind
+    if bind is None:
+        raise RuntimeError("Unable to recover crawl failure state without an active session bind")
+
+    recovery_session_factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
+    async with recovery_session_factory() as recovery_session:
+        run = await recovery_session.get(CrawlRun, run_id)
         if run is None:
             return
-        retry_summary = dict(run.result_summary or {})
-        retry_summary["error"] = error_msg
-        retry_summary["progress"] = retry_summary.get("progress", 0)
-        retry_summary["extraction_verdict"] = "error"
+        result_summary = dict(run.result_summary or {})
+        result_summary["error"] = error_msg
+        result_summary["progress"] = result_summary.get("progress", 0)
+        result_summary["extraction_verdict"] = "error"
         if normalize_status(run.status) not in TERMINAL_STATUSES:
             update_run_status(run, CrawlStatus.FAILED)
-        run.result_summary = retry_summary
+        run.result_summary = result_summary
+        recovery_session.add(CrawlLog(run_id=run.id, level="error", message=f"Pipeline failed: {error_msg}"))
         try:
-            await session.commit()
+            await recovery_session.commit()
         except Exception:
             try:
-                await session.rollback()
+                await recovery_session.rollback()
             except Exception:
-                logger.exception(
-                    "Rollback failed after double commit failure while marking crawl run failed",
-                    extra={"run_id": run_id},
-                )
-            logger.error(
-                "Double commit failure while marking crawl run failed",
-                extra={
-                    "run_id": run.id,
-                    "run_status": run.status,
-                    "traceback": traceback.format_exc(),
-                },
-            )
+                logger.exception("Rollback failed during failure recovery", extra={"run_id": run_id})
+            logger.error("Failed to persist crawl failure state", extra={"run_id": run.id, "traceback": traceback.format_exc()})
             raise
+
+
+def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
+    candidates: list[str] = []
+    direct_url = str(payload.get("url") or "").strip()
+    if direct_url:
+        candidates.append(direct_url)
+    for value in payload.get("urls") or []:
+        candidate = str(value or "").strip()
+        if candidate:
+            candidates.append(candidate)
+    for value in settings.get("urls") or []:
+        candidate = str(value or "").strip()
+        if candidate:
+            candidates.append(candidate)
+    csv_content = str(settings.get("csv_content") or "")
+    if csv_content:
+        candidates.extend(parse_csv_urls(csv_content))
+    return list(dict.fromkeys(candidates))
 
 
 async def _count_run_records(session: AsyncSession, run_id: int) -> int:
@@ -1110,7 +1121,6 @@ async def _collect_detail_llm_suggestions(
             "css_selector": str(row.get("css_selector") or "").strip() or None,
             "regex": None,
             "status": "validated",
-            "confidence": row.get("confidence") or 0.78,
             "sample_value": matched_value or expected_value,
             "source": "llm_xpath",
         })
@@ -1118,7 +1128,6 @@ async def _collect_detail_llm_suggestions(
         trace_candidates.setdefault(field_name, []).append(_compact_dict({
             "value": matched_value,
             "source": "llm_xpath",
-            "confidence": row.get("confidence") or 0.78,
             "xpath": xpath,
             "css_selector": suggestion.get("css_selector"),
             "sample_value": matched_value or expected_value,
@@ -1168,7 +1177,6 @@ async def _collect_detail_llm_suggestions(
         trace_candidates.setdefault(field_name, []).append(_compact_dict({
             "value": value,
             "source": "llm_value",
-            "confidence": 0.7,
             "sample_value": value,
         }))
         llm_cleanup_suggestions[field_name] = _compact_dict({

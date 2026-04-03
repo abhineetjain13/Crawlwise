@@ -75,9 +75,15 @@ export default function SelectorsPage() {
     }
   }
 
-  function updateRow(key: string, patch: Partial<SelectorRow>) {
-    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
-  }
+function updateRow(key: string, patch: Partial<SelectorRow>) {
+  setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+}
+
+function nextEditedState(state: RowState): RowState {
+  if (state === "saved") return "accepted";
+  if (state === "idle") return "idle";
+  return state;
+}
 
   function addFieldRow() {
     setRows((current) => [...current, createEmptyRow()]);
@@ -190,7 +196,7 @@ export default function SelectorsPage() {
           css_selector: row.kind === "css_selector" ? row.selectorValue.trim() : undefined,
           regex: row.kind === "regex" ? row.selectorValue.trim() : undefined,
           sample_value: row.extractedValue.trim() || undefined,
-          source: row.source || "llm_xpath",
+          source: row.source || (row.kind === "xpath" ? "llm_xpath" : row.kind === "css_selector" ? "llm_css" : "llm_regex"),
           status: "validated",
           is_active: true,
         };
@@ -297,7 +303,7 @@ export default function SelectorsPage() {
                           <span className="label-caps">Field Name</span>
                           <Input
                             value={row.fieldName}
-                            onChange={(event) => updateRow(row.key, { fieldName: event.target.value, state: row.state === "saved" ? "saved" : "idle" })}
+                            onChange={(event) => updateRow(row.key, { fieldName: event.target.value, state: nextEditedState(row.state) })}
                             placeholder="price"
                           />
                         </label>
@@ -306,7 +312,7 @@ export default function SelectorsPage() {
                           <span className="label-caps">Type</span>
                           <select
                             value={row.kind}
-                            onChange={(event) => updateRow(row.key, { kind: event.target.value as SelectorKind, state: row.state === "saved" ? "saved" : "idle" })}
+                            onChange={(event) => updateRow(row.key, { kind: event.target.value as SelectorKind, state: nextEditedState(row.state) })}
                             className="control-select focus-ring"
                           >
                             <option value="xpath">XPath</option>
@@ -320,7 +326,7 @@ export default function SelectorsPage() {
                           <div className="relative">
                             <Input
                               value={row.selectorValue}
-                              onChange={(event) => updateRow(row.key, { selectorValue: event.target.value, state: row.state === "saved" ? "saved" : "idle" })}
+                              onChange={(event) => updateRow(row.key, { selectorValue: event.target.value, state: nextEditedState(row.state) })}
                               placeholder={row.kind === "xpath" ? "//span[@class='price']" : row.kind === "css_selector" ? ".price" : "\\$[\\d,.]+"}
                               className="pr-10 font-mono text-sm"
                             />
@@ -438,7 +444,7 @@ function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggesti
       kind: "css_selector",
       selectorValue: suggestion.css_selector,
       extractedValue: suggestion.sample_value || "",
-      source: suggestion.source || "llm_xpath",
+      source: suggestion.source || "llm_css",
       state: "idle",
     };
   }
@@ -449,7 +455,7 @@ function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggesti
       kind: "regex",
       selectorValue: suggestion.regex,
       extractedValue: suggestion.sample_value || "",
-      source: suggestion.source || "llm_xpath",
+      source: suggestion.source || "llm_regex",
       state: "idle",
     };
   }

@@ -56,7 +56,6 @@ export default function DashboardPage() {
         <Metric label="Total Runs" value={data?.total_runs ?? 0} />
         <Metric label="Active Runs" value={data?.active_runs ?? 0} />
         <Metric label="Total Records" value={data?.total_records ?? 0} />
-        <Metric label="Success Rate" value={`${data?.success_rate ?? 0}%`} />
       </MetricGrid>
 
       {resetError ? (

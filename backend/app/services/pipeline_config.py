@@ -60,12 +60,9 @@ DEFAULT_SLEEP_MS: int = _TUNING.get("default_sleep_ms", 0)
 
 # Blocked-page detection
 BLOCK_MIN_HTML_LENGTH: int = _TUNING.get("block_min_html_length", 100)
-BLOCK_CONFIDENCE_THRESHOLD: float = _TUNING.get("block_confidence_threshold", 0.70)
-BLOCK_COMBINED_SIGNAL_BOOST: float = _TUNING.get("block_combined_signal_boost", 0.15)
 BLOCK_LOW_CONTENT_TEXT_MAX: int = _TUNING.get("block_low_content_text_max", 500)
 BLOCK_LOW_CONTENT_SCRIPT_MIN: int = _TUNING.get("block_low_content_script_min", 3)
 BLOCK_LOW_CONTENT_LINK_MAX: int = _TUNING.get("block_low_content_link_max", 3)
-BLOCK_COMBINED_SIGNAL_MIN_COUNT: int = _TUNING.get("block_combined_signal_min_count", 2)
 
 # Listing detection
 LISTING_MIN_ITEMS: int = _TUNING.get("listing_min_items", 2)
@@ -265,5 +262,5 @@ if not REVIEW_CONTAINER_KEYS:
     REVIEW_CONTAINER_KEYS = {
         "adapter_data", "network_payloads", "next_data", "json_ld",
         "microdata", "tables", "content_type", "source",
-        "is_blocked", "confidence", "reason", "provider",
+        "is_blocked", "reason", "provider",
     }

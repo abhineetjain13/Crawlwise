@@ -24,13 +24,12 @@ import {
 
 import { api } from "../../lib/api";
 import { ApiError } from "../../lib/api/client";
+import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/primitives";
 import type { TopBarState } from "./top-bar-context";
 import { TopBarProvider, useTopBarHeader } from "./top-bar-context";
 import { ThemeToggle } from "../ui/theme-toggle";
-
-const SIDEBAR_KEY = "crawlerai-sidebar-collapsed";
 
 const navGroups = [
   {
@@ -144,6 +143,12 @@ export function AppShell({
   return (
     <TopBarProvider>
       <div className="min-h-screen bg-background text-foreground">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-accent focus:px-3 focus:py-2 focus:text-sm focus:text-white"
+        >
+          Skip to main content
+        </a>
         <div className="lg:hidden border-b border-border bg-warning/10 px-4 py-2 text-xs text-foreground">
           Best viewed on desktop. Minimum supported viewport is 1024px.
         </div>
@@ -162,7 +167,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
     if (typeof window === "undefined") {
       return false;
     }
-    const stored = window.localStorage.getItem(SIDEBAR_KEY);
+    const stored = window.localStorage.getItem(STORAGE_KEYS.SIDEBAR_COLLAPSED);
     if (stored === "true" || stored === "false") {
       return stored === "true";
     }
@@ -170,7 +175,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
   });
 
   useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_KEY, String(collapsed));
+    window.localStorage.setItem(STORAGE_KEYS.SIDEBAR_COLLAPSED, String(collapsed));
   }, [collapsed]);
 
   const widthClass = collapsed ? "lg:w-[56px]" : "lg:w-[220px]";
@@ -269,9 +274,9 @@ function ShellContent({
               <Menu className="size-4" />
             </Button>
             <div className="min-w-0">
-              <div className="truncate text-[18px] font-semibold tracking-[var(--tracking-tight)] text-foreground">
+              <h1 className="truncate text-[18px] font-semibold tracking-[var(--tracking-tight)] text-foreground">
                 {topBar.title}
-              </div>
+              </h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -281,7 +286,7 @@ function ShellContent({
         </div>
       </header>
 
-      <main className="min-w-0 flex-1 px-4 py-4 lg:px-8 lg:py-5">
+      <main id="main-content" className="min-w-0 flex-1 px-4 py-4 lg:px-8 lg:py-5">
         <div className="mx-auto w-full max-w-[1440px]">{children}</div>
       </main>
     </div>

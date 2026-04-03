@@ -27,7 +27,6 @@ class EbayAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="ebay_adapter",
-            confidence=0.88,
             adapter_name=self.name,
         )
 

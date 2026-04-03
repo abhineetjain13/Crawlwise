@@ -106,7 +106,7 @@ async def suggest_selectors(session: AsyncSession, url: str, expected_columns: l
     html_text = await fetch_html(url)
     domain = normalize_domain(url)
     selector_defaults = {
-        field_name: get_selector_defaults(domain, field_name)
+        str(field_name or "").strip().lower(): get_selector_defaults(domain, field_name)
         for field_name in expected_columns
     }
     deterministic = build_deterministic_selector_suggestions(
@@ -136,7 +136,6 @@ async def suggest_selectors(session: AsyncSession, url: str, expected_columns: l
             "css_selector": css_selector or None,
             "regex": None,
             "status": "suggested",
-            "confidence": row.get("confidence"),
             "sample_value": str(row.get("expected_value") or row.get("sample_value") or "").strip() or None,
             "source": "llm_discovered",
         })
@@ -174,7 +173,7 @@ async def _sync_selector_defaults(session: AsyncSession, domain: str, field_name
         .order_by(Selector.created_at.desc())
     )
     selectors = list(result.scalars().all())
-    save_selector_defaults(
+    await save_selector_defaults(
         domain,
         field_name,
         [
@@ -183,7 +182,6 @@ async def _sync_selector_defaults(session: AsyncSession, domain: str, field_name
                 "css_selector": selector.css_selector,
                 "regex": selector.regex,
                 "status": selector.status,
-                "confidence": selector.confidence,
                 "sample_value": selector.sample_value,
                 "source": selector.source,
             }
@@ -200,7 +198,6 @@ def _normalize_selector_payload(payload: dict) -> dict:
         "xpath": str(payload.get("xpath") or "").strip() or None,
         "regex": str(payload.get("regex") or "").strip() or None,
         "status": str(payload.get("status") or "validated").strip() or "validated",
-        "confidence": payload.get("confidence"),
         "sample_value": str(payload.get("sample_value") or "").strip() or None,
         "source": str(payload.get("source") or "manual").strip() or "manual",
         "source_run_id": payload.get("source_run_id"),

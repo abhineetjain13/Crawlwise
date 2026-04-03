@@ -30,7 +30,6 @@ class WalmartAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="walmart_adapter",
-            confidence=0.90,
             adapter_name=self.name,
         )
 

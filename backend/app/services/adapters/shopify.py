@@ -42,7 +42,6 @@ class ShopifyAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="shopify_adapter",
-            confidence=0.95,
             adapter_name=self.name,
         )
 

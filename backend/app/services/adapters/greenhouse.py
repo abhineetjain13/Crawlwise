@@ -50,7 +50,6 @@ class GreenhouseAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="greenhouse_adapter",
-            confidence=0.92,
             adapter_name=self.name,
         )
 

@@ -48,11 +48,11 @@ async def records_list(
 async def export_json(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    _: User = Depends(get_current_user),
 ) -> StreamingResponse:
     from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
-    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+    if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail="Run not found")
     rows, metadata = await _collect_export_rows(session, run_id)
     payload = json.dumps([_clean_export_data(row.data) for row in rows], indent=2)
@@ -70,11 +70,11 @@ async def export_json(
 async def export_csv(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    _: User = Depends(get_current_user),
 ) -> StreamingResponse:
     from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
-    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+    if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail="Run not found")
     rows, metadata = await _collect_export_rows(session, run_id)
     clean_rows = [_clean_export_data(row.data) for row in rows]
@@ -98,11 +98,11 @@ async def export_csv(
 async def export_discoverist(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    _: User = Depends(get_current_user),
 ) -> StreamingResponse:
     from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
-    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+    if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail="Run not found")
     rows, metadata = await _collect_export_rows(session, run_id)
     buffer = StringIO()

@@ -1,7 +1,6 @@
 # Amazon platform adapter.
 from __future__ import annotations
 
-import json
 import re
 
 from bs4 import BeautifulSoup
@@ -30,7 +29,6 @@ class AmazonAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="amazon_adapter",
-            confidence=0.90,
             adapter_name=self.name,
         )
 

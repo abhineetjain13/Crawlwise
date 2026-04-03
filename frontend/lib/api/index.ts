@@ -54,6 +54,7 @@ export const api = {
     return apiClient.get<Paginated<CrawlRun>>(`/api/crawls${query.size ? `?${query.toString()}` : ""}`);
   },
   getCrawl: (runId: number) => apiClient.get<CrawlRun>(`/api/crawls/${runId}`),
+  deleteCrawl: (runId: number) => apiClient.delete<void>(`/api/crawls/${runId}`),
   pauseCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/pause`, {}),
   resumeCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/resume`, {}),
   killCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/kill`, {}),
@@ -108,8 +109,8 @@ export const api = {
     model: string;
     api_key?: string;
     task_type: string;
-    per_domain_daily_budget_usd: string;
-    global_session_budget_usd: string;
+    per_domain_daily_budget_usd: number;
+    global_session_budget_usd: number;
   }) => apiClient.post<LlmConfigRecord>("/api/llm/config", payload),
   updateLlmConfig: (
     configId: number,
@@ -118,8 +119,8 @@ export const api = {
       model: string;
       api_key: string;
       task_type: string;
-      per_domain_daily_budget_usd: string;
-      global_session_budget_usd: string;
+      per_domain_daily_budget_usd: number;
+      global_session_budget_usd: number;
       is_active: boolean;
     }>,
   ) => apiClient.put<LlmConfigRecord>(`/api/llm/config/${configId}`, payload),

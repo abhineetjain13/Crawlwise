@@ -22,6 +22,14 @@ def event_loop():
     loop.close()
 
 
+@pytest.fixture(autouse=True)
+def _stub_public_dns_resolution(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "app.services.url_safety._resolve_host_ips",
+        lambda _hostname, _port: ["93.184.216.34"],
+    )
+
+
 @pytest_asyncio.fixture
 async def db_session():
     """Create an in-memory SQLite database for each test."""

@@ -21,7 +21,8 @@ export default function AdminLlmPage() {
   const costQuery = useQuery({ queryKey: ["llm-cost-log"], queryFn: () => api.listLlmCostLog({ limit: 20 }) });
 
   const catalog = catalogQuery.data;
-  const configs = configsQuery.data ?? [];
+  const configRows = configsQuery.data;
+  const configs = configRows ?? [];
   const costLogs = costQuery.data?.items ?? [];
 
   const [provider, setProvider] = useState("groq");
@@ -37,6 +38,13 @@ export default function AdminLlmPage() {
     () => catalog?.find((item) => item.provider === provider),
     [catalog, provider],
   );
+  const activeSavedConfig = useMemo(
+    () => (configRows ?? []).find((item) => item.provider === provider && item.task_type === taskType && item.is_active),
+    [configRows, provider, taskType],
+  );
+  const hasSavedKey = Boolean(activeSavedConfig?.api_key_set);
+  const hasEnvKey = Boolean(activeProvider?.api_key_set);
+  const hasDraftKey = Boolean(apiKey.trim());
   const effectiveModel = model || activeProvider?.recommended_models?.[0] || "";
 
   const testMutation = useMutation({
@@ -52,14 +60,14 @@ export default function AdminLlmPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: ({ dailyBudgetValue, sessionBudgetValue }: { dailyBudgetValue: number; sessionBudgetValue: number }) =>
       api.createLlmConfig({
         provider,
         model: effectiveModel,
         api_key: apiKey || undefined,
         task_type: taskType,
-        per_domain_daily_budget_usd: dailyBudget,
-        global_session_budget_usd: sessionBudget,
+        per_domain_daily_budget_usd: dailyBudgetValue,
+        global_session_budget_usd: sessionBudgetValue,
       }),
     onSuccess: () => {
       setApiKey("");
@@ -72,6 +80,32 @@ export default function AdminLlmPage() {
       setTestMessage(error instanceof Error ? error.message : "Failed to save configuration.");
     },
   });
+
+  function handleCreateConfig() {
+    const dailyBudgetValue = Number(dailyBudget.trim());
+    const sessionBudgetValue = Number(sessionBudget.trim());
+    if (!dailyBudget.trim() || !sessionBudget.trim()) {
+      setTestOk(false);
+      setTestMessage("Budgets are required.");
+      return;
+    }
+    if (!Number.isFinite(dailyBudgetValue) || dailyBudgetValue < 0) {
+      setTestOk(false);
+      setTestMessage("Daily budget must be a non-negative number.");
+      return;
+    }
+    if (!Number.isFinite(sessionBudgetValue) || sessionBudgetValue < 0) {
+      setTestOk(false);
+      setTestMessage("Session budget must be a non-negative number.");
+      return;
+    }
+    if (!hasDraftKey && !hasEnvKey && !hasSavedKey) {
+      setTestOk(false);
+      setTestMessage("Provide an API key override or configure an env-backed key before saving.");
+      return;
+    }
+    createMutation.mutate({ dailyBudgetValue, sessionBudgetValue });
+  }
 
   return (
     <div className="space-y-6">
@@ -154,7 +188,7 @@ export default function AdminLlmPage() {
                 setTestOk(null);
                 setTestMessage("");
               }}
-              placeholder={activeProvider?.api_key_set ? "Env-backed key detected; leave blank to use it." : "Paste API key"}
+              placeholder={hasEnvKey ? "Env-backed key detected; leave blank to use it." : hasSavedKey ? "Saved key exists for this task; enter a new one to replace it." : "Paste API key"}
             />
           </label>
 
@@ -170,8 +204,11 @@ export default function AdminLlmPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Badge tone={activeProvider?.api_key_set ? "success" : "warning"}>
-            {activeProvider?.api_key_set ? "env key ready" : "env key missing"}
+          <Badge tone={hasEnvKey ? "success" : "warning"}>
+            {hasEnvKey ? "env key ready" : "env key missing"}
+          </Badge>
+          <Badge tone={hasSavedKey || hasDraftKey ? "success" : "warning"}>
+            {hasDraftKey ? "new key entered" : hasSavedKey ? "saved key ready" : "no saved key"}
           </Badge>
           {testMessage ? (
             <div className={testOk ? "text-[13px] text-success" : "text-[13px] text-danger"}>
@@ -188,8 +225,8 @@ export default function AdminLlmPage() {
           <Button
             type="button"
             variant="accent"
-            onClick={() => createMutation.mutate()}
-            disabled={createMutation.isPending || !provider || !effectiveModel || testOk !== true}
+            onClick={handleCreateConfig}
+            disabled={createMutation.isPending || !provider || !effectiveModel}
           >
             <CheckCircle2 className="size-3.5" />
             {createMutation.isPending ? "Saving..." : "Save Configuration"}

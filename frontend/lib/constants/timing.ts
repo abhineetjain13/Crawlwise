@@ -1,0 +1,10 @@
+export const POLLING_INTERVALS = {
+  ACTIVE_JOB_MS: 2000,
+  RECORDS_MS: 2000,
+  LOGS_MS: 2000,
+} as const;
+
+export const UI_DELAYS = {
+  PHASE_TRANSITION_MS: 1500,
+  BANNER_AUTO_HIDE_MS: 5000,
+} as const;

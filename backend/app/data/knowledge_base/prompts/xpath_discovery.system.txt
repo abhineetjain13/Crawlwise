@@ -12,7 +12,6 @@ Rules:
   - "xpath": required valid XPath
   - "css_selector": optional CSS selector or null
   - "expected_value": optional short sample value or null
-  - "confidence": number between 0 and 1
 - Prefer XPath that targets the actual value node.
 - Prefer selectors anchored to stable labels, headings, table cells, JSON-LD-backed DOM, or semantic product detail sections.
 - Never target navigation, breadcrumbs, menus, carousels, swatches, filters, sort controls, footer links, or recommendation modules.

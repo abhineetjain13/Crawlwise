@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,6 +32,11 @@ class CrawlRunResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+
+    @model_validator(mode="after")
+    def _sanitize_settings(self) -> "CrawlRunResponse":
+        self.settings = _sanitize_crawl_settings(self.settings)
+        return self
 
 
 class CrawlRecordResponse(BaseModel):
@@ -77,7 +83,6 @@ class DashboardResponse(BaseModel):
     total_records: int
     recent_runs: list[CrawlRunResponse]
     top_domains: list[dict]
-    success_rate: float
 
 
 class ReviewFieldChoice(BaseModel):
@@ -93,7 +98,6 @@ class ReviewSelectorRule(BaseModel):
     xpath: str | None = None
     regex: str | None = None
     status: str | None = None
-    confidence: float | None = None
     sample_value: str | None = None
     source: str | None = None
     is_active: bool = True
@@ -147,3 +151,62 @@ class LLMCommitResponse(BaseModel):
     run_id: int
     updated_records: int
     updated_fields: int
+
+
+_SENSITIVE_SETTING_KEYS = {
+    "api_key",
+    "api_key_encrypted",
+    "authorization",
+    "proxy_password",
+}
+
+
+def _sanitize_crawl_settings(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    sanitized: dict[str, object] = {}
+    for key, raw_value in value.items():
+        normalized_key = str(key or "").strip()
+        if normalized_key in _SENSITIVE_SETTING_KEYS:
+            continue
+        if normalized_key in {"proxy_list", "proxies"} and isinstance(raw_value, list):
+            sanitized[normalized_key] = [_mask_proxy_url(item) for item in raw_value]
+            continue
+        if normalized_key == "proxy" and isinstance(raw_value, str):
+            sanitized[normalized_key] = _mask_proxy_url(raw_value)
+            continue
+        if isinstance(raw_value, dict):
+            sanitized[normalized_key] = _sanitize_crawl_settings(raw_value)
+            continue
+        if isinstance(raw_value, list):
+            sanitized[normalized_key] = [
+                _sanitize_crawl_settings(item) if isinstance(item, dict) else item
+                for item in raw_value
+            ]
+            continue
+        sanitized[normalized_key] = raw_value
+    return sanitized
+
+
+def _mask_proxy_url(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return raw
+    if not parsed.username and not parsed.password:
+        return raw
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    masked_netloc = f"***:***@{host}" if host else "***:***"
+    rebuilt = SplitResult(
+        scheme=parsed.scheme,
+        netloc=masked_netloc,
+        path=parsed.path,
+        query=parsed.query,
+        fragment=parsed.fragment,
+    )
+    return urlunsplit(rebuilt)

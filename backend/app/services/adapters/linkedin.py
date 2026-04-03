@@ -28,7 +28,6 @@ class LinkedInAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="linkedin_adapter",
-            confidence=0.85,
             adapter_name=self.name,
         )
 

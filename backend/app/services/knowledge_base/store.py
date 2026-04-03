@@ -1,7 +1,10 @@
 # File-backed knowledge-base access.
 from __future__ import annotations
 
+import asyncio
 import json
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2] / "data" / "knowledge_base"
@@ -10,6 +13,15 @@ MAPPING_FILE = BASE_DIR / "field_mappings.json"
 SELECTOR_FILE = BASE_DIR / "selector_defaults.json"
 PROMPT_FILE = BASE_DIR / "prompt_registry.json"
 PROMPTS_DIR = BASE_DIR / "prompts"
+
+
+@dataclass
+class _KnowledgeBaseCache:
+    canonical_schemas: dict[str, list[str]] = field(default_factory=dict)
+    field_mappings: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    selector_defaults: dict[str, dict[str, list[dict]]] = field(default_factory=dict)
+    prompt_registry: dict[str, dict] = field(default_factory=dict)
+    prompt_files: dict[str, str] = field(default_factory=dict)
 
 
 def _load_json(path: Path, fallback: dict | list) -> dict | list:
@@ -23,48 +35,18 @@ def _write_json(path: Path, payload: dict | list) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def load_canonical_schemas() -> dict[str, list[str]]:
-    return dict(_load_json(SCHEMA_FILE, {}))
-
-
-def get_canonical_fields(surface: str) -> list[str]:
-    return load_canonical_schemas().get(surface, [])
-
-
-def save_canonical_fields(surface: str, fields: list[str]) -> list[str]:
-    schemas = load_canonical_schemas()
-    existing = schemas.setdefault(surface, [])
-    merged: list[str] = []
-    seen: set[str] = set()
-    for field in [*existing, *fields]:
-        value = str(field or "").strip()
-        if not value or value in seen:
+def _load_prompt_files() -> dict[str, str]:
+    if not PROMPTS_DIR.exists():
+        return {}
+    prompt_files: dict[str, str] = {}
+    for path in PROMPTS_DIR.rglob("*"):
+        if not path.is_file():
             continue
-        merged.append(value)
-        seen.add(value)
-    schemas[surface] = merged
-    _write_json(SCHEMA_FILE, schemas)
-    return merged
+        prompt_files[path.relative_to(PROMPTS_DIR).as_posix()] = path.read_text(encoding="utf-8")
+    return prompt_files
 
 
-def load_field_mappings() -> dict[str, dict[str, dict[str, str]]]:
-    return dict(_load_json(MAPPING_FILE, {}))
-
-
-def get_domain_mapping(domain: str, surface: str) -> dict[str, str]:
-    mappings = load_field_mappings()
-    return mappings.get(domain, {}).get(surface, {})
-
-
-def save_domain_mapping(domain: str, surface: str, mapping: dict[str, str]) -> None:
-    mappings = load_field_mappings()
-    domain_rows = mappings.setdefault(domain, {})
-    current = domain_rows.setdefault(surface, {})
-    current.update(mapping)
-    _write_json(MAPPING_FILE, mappings)
-
-
-def load_selector_defaults() -> dict[str, dict[str, list[dict]]]:
+def load_selector_defaults_from_disk() -> dict[str, dict[str, list[dict]]]:
     raw = dict(_load_json(SELECTOR_FILE, {}))
     normalized: dict[str, dict[str, list[dict]]] = {}
     for domain, domain_rows in raw.items():
@@ -79,40 +61,96 @@ def load_selector_defaults() -> dict[str, dict[str, list[dict]]]:
     return normalized
 
 
+def _build_cache() -> _KnowledgeBaseCache:
+    return _KnowledgeBaseCache(
+        canonical_schemas=dict(_load_json(SCHEMA_FILE, {})),
+        field_mappings=dict(_load_json(MAPPING_FILE, {})),
+        selector_defaults=load_selector_defaults_from_disk(),
+        prompt_registry=dict(_load_json(PROMPT_FILE, {})),
+        prompt_files=_load_prompt_files(),
+    )
+
+
+async def _persist_json(path: Path, payload: dict | list) -> None:
+    snapshot = deepcopy(payload)
+    await asyncio.to_thread(_write_json, path, snapshot)
+
+
+def load_canonical_schemas() -> dict[str, list[str]]:
+    return deepcopy(_CACHE.canonical_schemas)
+
+
+def get_canonical_fields(surface: str) -> list[str]:
+    return list(_CACHE.canonical_schemas.get(surface, []))
+
+
+async def save_canonical_fields(surface: str, fields: list[str]) -> list[str]:
+    existing = list(_CACHE.canonical_schemas.get(surface, []))
+    merged: list[str] = []
+    seen: set[str] = set()
+    for field in [*existing, *fields]:
+        value = str(field or "").strip()
+        if not value or value in seen:
+            continue
+        merged.append(value)
+        seen.add(value)
+    _CACHE.canonical_schemas[surface] = merged
+    await _persist_json(SCHEMA_FILE, _CACHE.canonical_schemas)
+    return merged
+
+
+def load_field_mappings() -> dict[str, dict[str, dict[str, str]]]:
+    return deepcopy(_CACHE.field_mappings)
+
+
+def get_domain_mapping(domain: str, surface: str) -> dict[str, str]:
+    return dict(_CACHE.field_mappings.get(domain, {}).get(surface, {}))
+
+
+async def save_domain_mapping(domain: str, surface: str, mapping: dict[str, str]) -> None:
+    domain_rows = _CACHE.field_mappings.setdefault(domain, {})
+    current = domain_rows.setdefault(surface, {})
+    current.update(mapping)
+    await _persist_json(MAPPING_FILE, _CACHE.field_mappings)
+
+
+def load_selector_defaults() -> dict[str, dict[str, list[dict]]]:
+    return deepcopy(_CACHE.selector_defaults)
+
+
 def get_selector_defaults(domain: str, field_name: str) -> list[dict]:
-    domain_rows = load_selector_defaults().get(domain, {})
-    return list(domain_rows.get(field_name, []))
+    domain_rows = _CACHE.selector_defaults.get(domain, {})
+    return [dict(row) for row in domain_rows.get(field_name, [])]
 
 
-def save_selector_defaults(domain: str, field_name: str, values: list[dict]) -> None:
-    payload = load_selector_defaults()
-    payload.setdefault(domain, {})[field_name] = [
+async def save_selector_defaults(domain: str, field_name: str, values: list[dict]) -> None:
+    _CACHE.selector_defaults.setdefault(domain, {})[field_name] = [
         row for row in (_normalize_selector_row(value) for value in values)
         if row
     ]
-    _write_json(SELECTOR_FILE, payload)
+    await _persist_json(SELECTOR_FILE, _CACHE.selector_defaults)
 
 
 def load_prompt_registry() -> dict[str, dict]:
-    return dict(_load_json(PROMPT_FILE, {}))
+    return deepcopy(_CACHE.prompt_registry)
 
 
 def get_prompt_task(task_type: str) -> dict | None:
-    registry = load_prompt_registry()
-    task = registry.get(task_type)
+    task = _CACHE.prompt_registry.get(task_type)
     return task if isinstance(task, dict) else None
 
 
 def load_prompt_file(relative_path: str) -> str:
-    path = PROMPTS_DIR / relative_path
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
+    return str(_CACHE.prompt_files.get(relative_path, ""))
 
 
-def reset_learned_state() -> None:
-    _write_json(MAPPING_FILE, {})
-    _write_json(SELECTOR_FILE, {})
+async def reset_learned_state() -> None:
+    _CACHE.field_mappings = {}
+    _CACHE.selector_defaults = {}
+    await asyncio.gather(
+        _persist_json(MAPPING_FILE, _CACHE.field_mappings),
+        _persist_json(SELECTOR_FILE, _CACHE.selector_defaults),
+    )
 
 
 def _normalize_selector_row(value: object) -> dict | None:
@@ -137,7 +175,9 @@ def _normalize_selector_row(value: object) -> dict | None:
         "css_selector": css_selector,
         "regex": regex,
         "status": str(value.get("status") or "validated"),
-        "confidence": value.get("confidence"),
         "sample_value": str(value.get("sample_value") or "").strip() or None,
         "source": str(value.get("source") or "knowledge_base"),
     }
+
+
+_CACHE = _build_cache()

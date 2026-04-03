@@ -96,13 +96,13 @@ async def ensure_test_user(session) -> int:
     if not _is_test_environment():
         raise RuntimeError("ensure_test_user may only run in a test environment.")
     from app.models.user import User
-    result = await session.execute(select(User).limit(1))
+    test_email = os.getenv("AUDIT_TEST_EMAIL", "audit@test.local")
+    result = await session.execute(select(User).where(User.email == test_email).limit(1))
     user = result.scalar_one_or_none()
     if user:
         return user.id
     # Create a minimal test user
     from app.core.security import hash_password
-    test_email = os.getenv("AUDIT_TEST_EMAIL", "audit@test.local")
     test_password = os.getenv("AUDIT_TEST_PASSWORD") or secrets.token_urlsafe(24)
     test_user = User(
         email=test_email,
@@ -177,7 +177,7 @@ async def run_single_site(site: dict, user_id: int) -> dict:
 
             if records:
                 first = records[0]
-                report["sample_data"] = _normalize_sample_data(first.data)
+                report["sample_data"] = _normalize_sample_data(first.data, site["surface"])
                 report["acquisition_method"] = (first.source_trace or {}).get("method") or (first.source_trace or {}).get("type")
                 all_fields = set()
                 for r in records:
@@ -284,12 +284,16 @@ def _is_test_environment() -> bool:
     return env in {"test", "testing"} or testing in {"1", "true", "yes"}
 
 
-def _normalize_sample_data(sample_data: dict | None) -> dict | None:
+def _normalize_sample_data(sample_data: dict | None, surface: str | None = None) -> dict | None:
     if not isinstance(sample_data, dict):
         return None
     normalized = dict(sample_data)
     if "sku" in normalized and normalized["sku"] is not None:
         normalized["sku"] = str(normalized["sku"])
+    if surface:
+        normalized.setdefault("surface", surface)
+        if "listing" in surface:
+            normalized.setdefault("is_listing", True)
     return normalized
 
 
@@ -325,7 +329,11 @@ def _validate_sample_data(sample_data: dict | None) -> list[str]:
 
     errors: list[str] = []
     title = str(sample_data.get("title") or "").strip()
-    if not title or title.lower() in PLACEHOLDER_VALUES or not PRODUCT_TITLE_PATTERN.search(title):
+    surface = str(sample_data.get("surface") or "").strip().lower()
+    is_listing = bool(sample_data.get("is_listing")) or surface in {"listing", "tiles", "ecommerce_listing"}
+    if not title or title.lower() in PLACEHOLDER_VALUES:
+        errors.append("invalid_title")
+    elif not is_listing and not PRODUCT_TITLE_PATTERN.search(title):
         errors.append("invalid_title")
 
     description = str(sample_data.get("description") or "").strip()

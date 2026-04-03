@@ -1,7 +1,7 @@
 # Listing page extractor — finds repeating cards and extracts N records.
 #
 # Strategy order:
-#   1. JSON-LD item lists (high confidence structured data)
+#   1. JSON-LD item lists (structured data)
 #   2. Embedded app state (__NEXT_DATA__, hydrated state)
 #   3. Network payloads (XHR/fetch intercepted JSON arrays)
 #   4. DOM card detection (CSS selectors + auto-detect)

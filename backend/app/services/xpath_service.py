@@ -133,7 +133,6 @@ def build_deterministic_selector_suggestions(
                         "css_selector": dom_selector,
                         "regex": None,
                         "status": "deterministic",
-                        "confidence": 0.6,
                         "sample_value": _node_value(node),
                         "source": "deterministic_dom",
                     })
@@ -147,22 +146,27 @@ def build_absolute_xpath(node: Tag | NavigableString) -> str | None:
         node = node.parent
     if not isinstance(node, Tag):
         return None
+    soup = _document_root(node)
+    if not isinstance(soup, (BeautifulSoup, Tag)):
+        return None
+
+    anchored = _unique_anchor_xpath(node, soup, allow_class=False)
+    if anchored:
+        return anchored
+
     segments: list[str] = []
     current: Tag | None = node
-    while current is not None and current.name != "[document]":
-        if not current.name:
-            current = current.parent if isinstance(current.parent, Tag) else None
-            continue
-        siblings = [
-            sibling
-            for sibling in current.parent.find_all(current.name, recursive=False)
-        ] if isinstance(current.parent, Tag) else [current]
-        index = siblings.index(current) + 1 if len(siblings) > 1 else 1
-        segments.append(f"{current.name}[{index}]")
+    while isinstance(current, Tag) and current.name != "[document]":
+        anchor = _unique_anchor_xpath(current, soup, allow_class=current is not node)
+        if anchor:
+            if not segments:
+                return anchor
+            return f"{anchor}/{'/'.join(reversed(segments))}"
+        segments.append(_relative_segment(current))
         current = current.parent if isinstance(current.parent, Tag) else None
     if not segments:
         return None
-    return "/" + "/".join(reversed(segments))
+    return f"//{'/'.join(reversed(segments))}"
 
 
 def _build_xpath_tree(document_html: str):
@@ -208,7 +212,6 @@ def _normalize_suggestion(value: dict) -> dict | None:
         "css_selector": css_selector,
         "regex": regex,
         "status": str(value.get("status") or "validated"),
-        "confidence": value.get("confidence"),
         "sample_value": str(value.get("sample_value") or value.get("value") or "").strip() or None,
         "source": str(value.get("source") or "selector_memory"),
     }
@@ -224,6 +227,111 @@ def _dedupe_suggestions(rows: list[dict]) -> list[dict]:
         seen.add(key)
         deduped.append(row)
     return deduped
+
+
+def _unique_anchor_xpath(node: Tag, root: BeautifulSoup | Tag, *, allow_class: bool = True) -> str | None:
+    attr_candidates = [
+        "id",
+        "data-testid",
+        "data-test",
+        "data-qa",
+        "itemprop",
+        "name",
+        "aria-label",
+        "title",
+    ]
+    for attr_name in attr_candidates:
+        attr_value = _stable_attr_value(node.get(attr_name))
+        if not attr_value:
+            continue
+        selector = _attribute_xpath(node.name, attr_name, attr_value)
+        if _is_unique_xpath(root, selector):
+            return selector
+
+    class_value = _stable_class_value(node.get("class"))
+    if allow_class and class_value:
+        selector = f"//{node.name}[contains(concat(' ', normalize-space(@class), ' '), ' {class_value} ')]"
+        if _is_unique_xpath(root, selector):
+            return selector
+    return None
+
+
+def _relative_segment(node: Tag) -> str:
+    class_value = _stable_class_value(node.get("class"))
+    if class_value and _is_unique_class_among_siblings(node, class_value):
+        selector = f"{node.name}[contains(concat(' ', normalize-space(@class), ' '), ' {class_value} ')]"
+        return selector
+    siblings = [
+        sibling
+        for sibling in node.parent.find_all(node.name, recursive=False)
+    ] if isinstance(node.parent, Tag) else [node]
+    index = siblings.index(node) + 1 if len(siblings) > 1 else 1
+    return f"{node.name}[{index}]"
+
+
+def _is_unique_xpath(root: BeautifulSoup | Tag, xpath: str) -> bool:
+    html_text = str(root)
+    tree = _build_xpath_tree(html_text)
+    if tree is None:
+        return False
+    try:
+        return len(tree.xpath(xpath)) == 1
+    except etree.XPathError:
+        return False
+
+
+def _document_root(node: Tag) -> BeautifulSoup | Tag:
+    current: BeautifulSoup | Tag = node
+    while isinstance(current.parent, Tag):
+        current = current.parent
+    return current
+
+
+def _is_unique_class_among_siblings(node: Tag, class_value: str) -> bool:
+    if not isinstance(node.parent, Tag):
+        return True
+    sibling_matches = 0
+    for sibling in node.parent.find_all(node.name, recursive=False):
+        classes = {str(value).strip() for value in (sibling.get("class") or []) if str(value).strip()}
+        if class_value in classes:
+            sibling_matches += 1
+    return sibling_matches == 1
+
+
+def _attribute_xpath(tag_name: str, attr_name: str, attr_value: str) -> str:
+    return f"//{tag_name}[@{attr_name}={_xpath_literal(attr_value)}]"
+
+
+def _stable_attr_value(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text or any(ch.isspace() for ch in text):
+        return None
+    return text
+
+
+def _stable_class_value(value: object) -> str | None:
+    classes = value if isinstance(value, list) else str(value or "").split()
+    for class_name in classes:
+        candidate = str(class_name or "").strip()
+        if not candidate or candidate.isdigit() or len(candidate) < 3:
+            continue
+        return candidate
+    return None
+
+
+def _xpath_literal(value: str) -> str:
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    parts = value.split("'")
+    pieces = []
+    for index, part in enumerate(parts):
+        if part:
+            pieces.append(f"'{part}'")
+        if index < len(parts) - 1:
+            pieces.append("\"'\"")
+    return f"concat({', '.join(pieces)})"
 
 
 def _loose_text_match(actual: str, expected: str) -> bool:

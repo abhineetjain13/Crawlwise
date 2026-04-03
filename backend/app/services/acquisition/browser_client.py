@@ -159,12 +159,13 @@ async def _goto_with_fallback(page, url: str) -> None:
         ("domcontentloaded", 15_000),
     ]
     last_error = None
+    last_timeout: PlaywrightTimeoutError | None = None
     for wait_until, timeout in strategies:
         try:
             await page.goto(url, wait_until=wait_until, timeout=timeout)
             return
-        except PlaywrightTimeoutError:
-            last_error = None
+        except PlaywrightTimeoutError as exc:
+            last_timeout = exc
             continue
         except Exception as exc:
             last_error = exc
@@ -172,6 +173,8 @@ async def _goto_with_fallback(page, url: str) -> None:
             continue
     if last_error is not None:
         raise last_error
+    if last_timeout is not None:
+        raise last_timeout
 
 
 async def _warm_origin(page, origin_url: str) -> None:

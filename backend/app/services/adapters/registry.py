@@ -73,7 +73,6 @@ async def try_blocked_adapter_recovery(
         return AdapterResult(
             records=records,
             source_type="shopify_adapter_recovery",
-            confidence=0.95,
             adapter_name=shopify.name,
         )
     return None

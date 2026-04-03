@@ -55,14 +55,6 @@ async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) 
         )
     recent_result = await session.execute(run_scope.order_by(CrawlRun.created_at.desc()).limit(10))
     recent_runs = list(recent_result.scalars().all())
-    success_count = int(
-        (
-            await session.execute(
-                select(func.count()).select_from(run_scope.where(CrawlRun.status == "completed").subquery())
-            )
-        ).scalar()
-        or 0
-    )
     domain_rows = await session.execute(select(CrawlRun.url) if user_id is None else select(CrawlRun.url).where(CrawlRun.user_id == user_id))
     counts: dict[str, int] = {}
     for url in domain_rows.scalars().all():
@@ -78,7 +70,6 @@ async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) 
         "total_records": total_records,
         "recent_runs": recent_runs,
         "top_domains": top_domains,
-        "success_rate": round((success_count / total_runs) * 100, 2) if total_runs else 0.0,
     }
 
 
@@ -96,7 +87,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
 
     artifacts_removed = _reset_directory(settings.artifacts_dir)
     cookies_removed = _reset_directory(settings.cookie_store_dir)
-    reset_learned_state()
+    await reset_learned_state()
 
     return {
         "crawl_runs_deleted": crawl_runs_deleted.rowcount or 0,

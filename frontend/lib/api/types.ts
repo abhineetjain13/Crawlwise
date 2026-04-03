@@ -75,7 +75,6 @@ export type SelectorRuleInput = {
   xpath?: string | null;
   regex?: string | null;
   status?: string | null;
-  confidence?: number | null;
   sample_value?: string | null;
   source?: string | null;
   is_active?: boolean;
@@ -111,7 +110,6 @@ export type Dashboard = {
   total_records: number;
   recent_runs: CrawlRun[];
   top_domains: { domain: string; count: number }[];
-  success_rate: number;
 };
 
 export type ReviewPayload = {
@@ -134,7 +132,6 @@ export type SelectorRecord = {
   xpath?: string | null;
   regex?: string | null;
   status: string;
-  confidence?: number | null;
   sample_value?: string | null;
   source: string;
   source_run_id?: number | null;
@@ -154,7 +151,6 @@ export type SelectorCreatePayload = {
   xpath?: string | null;
   regex?: string | null;
   status?: string | null;
-  confidence?: number | null;
   sample_value?: string | null;
   source?: string | null;
   source_run_id?: number | null;

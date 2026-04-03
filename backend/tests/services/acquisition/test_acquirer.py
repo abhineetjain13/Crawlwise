@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 
 from app.services.acquisition.acquirer import ProxyRotator, _artifact_path, _network_payload_path, acquire_html
+from app.services.acquisition.http_client import HttpFetchResult
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host, reset_host_memory
 
 
@@ -41,7 +42,7 @@ async def test_acquire_html_curl_success():
     html = "<html><body><h1>Product</h1><p>Long enough content to pass threshold check" + "x" * 500 + "</p></body></html>"
     with (
         patch("app.services.acquisition.acquirer._fetch_with_content_type",
-              new_callable=AsyncMock, return_value=(html, "html", None)),
+              new_callable=AsyncMock, return_value=HttpFetchResult(text=html, status_code=200, content_type="html")),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         from pathlib import Path
@@ -64,7 +65,7 @@ async def test_acquire_html_falls_back_to_playwright():
 
     with (
         patch("app.services.acquisition.acquirer._fetch_with_content_type",
-              new_callable=AsyncMock, return_value=(short_html, "html", None)),
+              new_callable=AsyncMock, return_value=HttpFetchResult(text=short_html, status_code=200, content_type="html")),
         patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, return_value=BrowserResult(html=full_html, network_payloads=[{"url": "https://api.example.com", "body": {}}])),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
@@ -84,7 +85,6 @@ async def test_acquire_html_advanced_mode_tries_curl_then_playwright():
     playwright_html = "<html><body>" + "y" * 600 + "</body></html>"
 
     from app.services.acquisition.browser_client import BrowserResult
-    from app.services.acquisition.http_client import HttpFetchResult
 
     with (
         patch("app.services.acquisition.acquirer._fetch_with_content_type",
@@ -133,7 +133,7 @@ async def test_acquire_with_proxy():
     html = "<html><body>" + "x" * 600 + "</body></html>"
     with (
         patch("app.services.acquisition.acquirer._fetch_with_content_type",
-              new_callable=AsyncMock, return_value=(html, "html", None)) as mock_fetch,
+              new_callable=AsyncMock, return_value=HttpFetchResult(text=html, status_code=200, content_type="html")) as mock_fetch,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         from pathlib import Path
@@ -153,7 +153,7 @@ async def test_acquire_json_content_type():
     json_data = {"jobs": [{"title": "Engineer"}]}
     with (
         patch("app.services.acquisition.acquirer._fetch_with_content_type",
-              new_callable=AsyncMock, return_value=(json_text, "json", json_data)),
+              new_callable=AsyncMock, return_value=HttpFetchResult(text=json_text, status_code=200, content_type="json", json_data=json_data)),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         from pathlib import Path

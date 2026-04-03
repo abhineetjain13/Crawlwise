@@ -34,7 +34,6 @@ class RemotiveAdapter(BaseAdapter):
         return AdapterResult(
             records=records,
             source_type="remotive_adapter",
-            confidence=0.90,
             adapter_name=self.name,
         )
 

@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Trash2 } from "lucide-react";
 
 import { Badge, Button, Card, Input } from "../../components/ui/primitives";
 import { EmptyPanel, PageHeader } from "../../components/ui/patterns";
@@ -13,10 +14,13 @@ import { cn } from "../../lib/utils";
 type StatusFilter = "" | RunStatus;
 
 export default function RunsPage() {
+  const queryClient = useQueryClient();
   const [domainFilter, setDomainFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
   const [appliedDomainFilter, setAppliedDomainFilter] = useState("");
   const [appliedStatusFilter, setAppliedStatusFilter] = useState<StatusFilter>("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState("");
 
   const query = useQuery({
     queryKey: ["runs", appliedDomainFilter, appliedStatusFilter],
@@ -26,6 +30,20 @@ export default function RunsPage() {
         status: appliedStatusFilter || undefined,
         url_search: appliedDomainFilter || undefined,
       }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (runId: number) => api.deleteCrawl(runId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["runs"] });
+      await queryClient.invalidateQueries({ queryKey: ["memory-runs"] });
+      setActionError("");
+    },
+    onError: (error) => {
+      setActionError(error instanceof Error ? error.message : "Unable to delete run.");
+    },
+    onSettled: () => {
+      setPendingDeleteId(null);
+    },
   });
 
   const visibleRuns = query.data?.items?.slice(0, 50) ?? [];
@@ -47,6 +65,11 @@ export default function RunsPage() {
       <PageHeader title="Run History" description="Review saved runs, outputs, and statuses." />
 
       <Card className="space-y-4">
+        {actionError ? (
+          <div className="rounded-md border border-danger/20 bg-danger/5 px-4 py-4 text-[13px] text-danger">
+            {actionError}
+          </div>
+        ) : null}
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
           <div className="flex-1">
             <Input
@@ -98,11 +121,24 @@ export default function RunsPage() {
                   <th>Status</th>
                   <th>Records</th>
                   <th>Date</th>
+                  <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {visibleRuns.map((run, index) => (
-                  <RunRow key={run.id} run={run} index={index} />
+                  <RunRow
+                    key={run.id}
+                    run={run}
+                    index={index}
+                    pendingDelete={pendingDeleteId === run.id}
+                    onDelete={() => {
+                      if (!window.confirm(`Delete run ${run.id}? This cannot be undone.`)) {
+                        return;
+                      }
+                      setPendingDeleteId(run.id);
+                      deleteMutation.mutate(run.id);
+                    }}
+                  />
                 ))}
               </tbody>
             </table>
@@ -115,8 +151,14 @@ export default function RunsPage() {
   );
 }
 
-function RunRow({ run, index }: Readonly<{ run: CrawlRun; index: number }>) {
+function RunRow({
+  run,
+  index,
+  pendingDelete,
+  onDelete,
+}: Readonly<{ run: CrawlRun; index: number; pendingDelete: boolean; onDelete: () => void }>) {
   const recordCount = typeof run.result_summary?.record_count === "number" ? run.result_summary.record_count : 0;
+  const canDelete = !["pending", "running", "paused"].includes(run.status);
 
   return (
     <tr
@@ -143,6 +185,14 @@ function RunRow({ run, index }: Readonly<{ run: CrawlRun; index: number }>) {
       <td><StatusBadge status={run.status} /></td>
       <td className={cn("tabular-nums", recordCount > 0 ? "text-foreground" : "text-muted")}>{recordCount}</td>
       <td className="text-muted">{formatDate(run.created_at)}</td>
+      <td>
+        <div className="flex justify-end">
+          <Button type="button" variant="danger" onClick={onDelete} disabled={!canDelete || pendingDelete}>
+            <Trash2 className="size-3.5" />
+            {pendingDelete ? "Deleting..." : "Delete"}
+          </Button>
+        </div>
+      </td>
     </tr>
   );
 }

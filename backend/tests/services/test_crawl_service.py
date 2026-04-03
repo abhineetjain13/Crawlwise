@@ -14,6 +14,7 @@ from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
     active_jobs,
     create_crawl_run,
+    delete_run,
     get_run,
     kill_run,
     list_runs,
@@ -76,6 +77,31 @@ async def test_create_crawl_run(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_create_crawl_run_rejects_private_ip_targets(db_session: AsyncSession, test_user):
+    with pytest.raises(ValueError, match="non-public IP address"):
+        await create_crawl_run(db_session, test_user.id, {
+            "run_type": "crawl",
+            "url": "http://127.0.0.1/admin",
+            "surface": "ecommerce_detail",
+        })
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_rejects_hostnames_that_resolve_private(db_session: AsyncSession, test_user, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "app.services.url_safety._resolve_host_ips",
+        lambda _hostname, _port: ["10.0.0.8"],
+    )
+
+    with pytest.raises(ValueError, match="non-public IP address"):
+        await create_crawl_run(db_session, test_user.id, {
+            "run_type": "crawl",
+            "url": "https://internal-proxy.example",
+            "surface": "ecommerce_detail",
+        })
+
+
+@pytest.mark.asyncio
 async def test_list_runs_with_filters(db_session: AsyncSession, test_user):
     await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl", "url": "https://a.com", "surface": "ecommerce_detail",
@@ -106,6 +132,29 @@ async def test_pause_resume_and_kill_run(db_session: AsyncSession, test_user):
     killed = await kill_run(db_session, resumed)
     assert killed.status == "running"
     assert killed.result_summary["control_requested"] == "kill"
+
+
+@pytest.mark.asyncio
+async def test_delete_run_removes_terminal_runs(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl", "url": "https://example.com", "surface": "ecommerce_detail",
+    })
+    run.status = "completed"
+    await db_session.commit()
+
+    await delete_run(db_session, run)
+
+    assert await get_run(db_session, run.id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_run_rejects_active_runs(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl", "url": "https://example.com", "surface": "ecommerce_detail",
+    })
+
+    with pytest.raises(ValueError, match="Cannot delete run"):
+        await delete_run(db_session, run)
 
 
 # --- Pipeline ---
@@ -312,7 +361,6 @@ async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(
             }
         ],
         source_type="shopify_adapter_recovery",
-        confidence=0.95,
         adapter_name="shopify",
     )
 

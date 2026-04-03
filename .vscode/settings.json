@@ -10,5 +10,7 @@
   "python.autoComplete.extraPaths": [
     "./backend"
   ],
-  "python.envFile": "${workspaceFolder}/.env"
+  "python.envFile": "${workspaceFolder}/.env",
+  "snyk.advanced.autoSelectOrganization": true,
+  "snyk.advanced.authenticationMethod": "Personal Access Token"
 }

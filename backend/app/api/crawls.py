@@ -11,6 +11,7 @@ from app.schemas.crawl import CrawlCreate, CrawlRunResponse, LLMCommitRequest, L
 from app.services.crawl_service import (
     commit_llm_suggestions,
     create_crawl_run,
+    delete_run,
     get_run,
     get_run_logs,
     kill_run,
@@ -108,6 +109,21 @@ async def crawls_detail(
     if run is None or (user.role != "admin" and run.user_id != user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return CrawlRunResponse.model_validate(run, from_attributes=True)
+
+
+@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def crawls_delete(
+    run_id: int,
+    session: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    run = await get_run(session, run_id)
+    if run is None or (user.role != "admin" and run.user_id != user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    try:
+        await delete_run(session, run)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/{run_id}/pause", response_model=dict)
