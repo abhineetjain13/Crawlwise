@@ -47,7 +47,8 @@ class ShopifyAdapter(BaseAdapter):
     async def _try_products_json(self, url: str, surface: str) -> list[dict]:
         """Fetch Shopify product endpoint data.
 
-        Listing pages use `/products.json`.
+        Listing pages use `/collections/<handle>/products.json` when possible so
+        records stay scoped to the requested collection instead of the entire catalog.
         Detail pages use `/products/<handle>.js` to avoid returning unrelated products.
         """
         if curl_requests is None:
@@ -59,7 +60,14 @@ class ShopifyAdapter(BaseAdapter):
                 return []
             api_url = f"{parsed.scheme}://{parsed.netloc}/products/{handle}.js"
         else:
-            api_url = f"{parsed.scheme}://{parsed.netloc}/products.json?limit=50"
+            collection_handle = self._extract_collection_handle(parsed.path)
+            if collection_handle:
+                api_url = (
+                    f"{parsed.scheme}://{parsed.netloc}/collections/"
+                    f"{collection_handle}/products.json?limit=250"
+                )
+            else:
+                api_url = f"{parsed.scheme}://{parsed.netloc}/products.json?limit=250"
         try:
             resp = curl_requests.get(api_url, impersonate="chrome110", timeout=10)
             if resp.status_code != 200:
@@ -72,7 +80,11 @@ class ShopifyAdapter(BaseAdapter):
         records = []
         for p in products:
             variant = p.get("variants", [{}])[0] if p.get("variants") else {}
-            images = [img.get("src", "") for img in p.get("images", [])]
+            images = [
+                image_url
+                for img in p.get("images", [])
+                if (image_url := self._normalize_url(self._image_src(img), parsed.scheme))
+            ]
             record = {
                 "title": p.get("title"),
                 "brand": p.get("vendor"),
@@ -80,7 +92,7 @@ class ShopifyAdapter(BaseAdapter):
                 "url": urljoin(url, f"/products/{p.get('handle', '')}"),
                 "image_url": images[0] if images else None,
                 "image_urls": images,
-                "price": variant.get("price"),
+                "price": self._normalize_price(variant.get("price")),
                 "sku": variant.get("sku"),
                 "availability": "in_stock" if variant.get("available") else "out_of_stock",
                 "category": p.get("product_type"),
@@ -91,6 +103,10 @@ class ShopifyAdapter(BaseAdapter):
 
     def _extract_product_handle(self, path: str) -> str | None:
         match = re.search(r"/products/([^/?#]+)", path)
+        return match.group(1) if match else None
+
+    def _extract_collection_handle(self, path: str) -> str | None:
+        match = re.search(r"/collections/([^/?#]+)", path)
         return match.group(1) if match else None
 
     def _extract_embedded_product(self, html: str, url: str) -> list[dict]:
@@ -107,9 +123,28 @@ class ShopifyAdapter(BaseAdapter):
                     records.append({
                         "title": product.get("title"),
                         "brand": product.get("vendor"),
-                        "price": product.get("price", 0) / 100 if product.get("price") else None,
+                        "price": self._normalize_price(product.get("price")),
                         "category": product.get("type"),
                     })
             except (json.JSONDecodeError, TypeError):
                 pass
         return records
+
+    def _image_src(self, image: object) -> str | None:
+        if isinstance(image, str):
+            return image or None
+        if isinstance(image, dict):
+            return image.get("src") or image.get("url") or None
+        return None
+
+    def _normalize_url(self, value: str | None, scheme: str) -> str | None:
+        if not value:
+            return None
+        if value.startswith("//"):
+            return f"{scheme}:{value}"
+        return value
+
+    def _normalize_price(self, value: object) -> str | int | float | None:
+        if isinstance(value, int):
+            return f"{value / 100:.2f}"
+        return value

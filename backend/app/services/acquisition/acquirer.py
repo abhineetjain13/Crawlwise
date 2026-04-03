@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 from pathlib import Path
 
@@ -79,10 +80,24 @@ async def acquire_html(
     path = _artifact_path(run_id, url)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(html, encoding="utf-8")
+    _write_network_payloads(run_id, url, network_payloads)
 
     return html, method, str(path), network_payloads
 
 
 def _artifact_path(run_id: int, url: str) -> Path:
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    return settings.artifacts_dir / str(run_id) / f"{digest}.html"
+    return settings.artifacts_dir / "html" / str(run_id) / f"{digest}.html"
+
+
+def _network_payload_path(run_id: int, url: str) -> Path:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return settings.artifacts_dir / "network" / str(run_id) / f"{digest}.json"
+
+
+def _write_network_payloads(run_id: int, url: str, payloads: list[dict]) -> None:
+    if not payloads:
+        return
+    path = _network_payload_path(run_id, url)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payloads, indent=2), encoding="utf-8")

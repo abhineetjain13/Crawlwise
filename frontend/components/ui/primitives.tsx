@@ -8,7 +8,7 @@ export function Card({
   children,
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
-  return <section className={cn("rounded-[1.75rem] border border-border/70 bg-panel/90 p-5 shadow-card backdrop-blur sm:p-6", className)}>{children}</section>;
+  return <section className={cn("rounded-xl border border-border/70 bg-panel/92 p-4 shadow-card backdrop-blur sm:p-5", className)}>{children}</section>;
 }
 
 export function Title({
@@ -47,7 +47,7 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
     <input
       {...props}
       className={cn(
-        "h-11 w-full rounded-2xl border border-border bg-transparent px-4 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/20",
+        "h-10 w-full rounded-lg border border-border bg-transparent px-3 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/20",
         props.className,
       )}
     />
@@ -59,7 +59,7 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
     <textarea
       {...props}
       className={cn(
-        "min-h-24 w-full rounded-2xl border border-border bg-transparent px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/20",
+        "min-h-24 w-full rounded-lg border border-border bg-transparent px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/20",
         props.className,
       )}
     />
@@ -80,7 +80,7 @@ export function Button({
     <button
       {...props}
       className={cn(
-        "inline-flex h-10 items-center justify-center rounded-2xl px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60",
+        "inline-flex h-9 items-center justify-center rounded-lg px-3.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60",
         variants[variant],
         className,
       )}
@@ -97,7 +97,7 @@ export function Badge({
     success: "bg-emerald-500/12 text-emerald-600 dark:text-emerald-300",
     warning: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
   };
-  return <span className={cn("inline-flex rounded-full px-3 py-1 text-xs font-semibold", tones[tone])}>{children}</span>;
+  return <span className={cn("inline-flex rounded-lg px-3 py-1 text-xs font-semibold", tones[tone])}>{children}</span>;
 }
 
 export function Metric({
@@ -132,7 +132,7 @@ export function CodeBlock({
   className,
 }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
-    <pre className={cn("max-h-[28rem] overflow-auto rounded-2xl border border-border bg-panel-strong/70 p-4 font-mono text-[11px] leading-6 text-foreground", className)}>
+    <pre className={cn("max-h-[28rem] overflow-auto rounded-xl border border-border bg-panel-strong/70 p-4 font-mono text-[11px] leading-6 text-foreground", className)}>
       {children}
     </pre>
   );

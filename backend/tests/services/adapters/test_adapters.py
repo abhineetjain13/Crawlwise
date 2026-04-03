@@ -62,7 +62,85 @@ async def test_shopify_detail_uses_handle_specific_endpoint():
         )
     assert len(result.records) == 1
     assert result.records[0]["title"] == "Scoped Shirt"
+    assert result.records[0]["price"] == "29.99"
     assert mock_get.call_args.args[0] == "https://store.com/products/shirt.js"
+
+
+@pytest.mark.asyncio
+async def test_shopify_detail_accepts_string_image_array():
+    adapter = ShopifyAdapter()
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "title": "String Image Shirt",
+        "vendor": "BrandX",
+        "handle": "shirt",
+        "variants": [{"price": "29.99", "sku": "SKU-1", "available": True}],
+        "images": ["https://cdn.example.com/shirt.jpg"],
+        "product_type": "Apparel",
+        "tags": [],
+    }
+    with patch("app.services.adapters.shopify.curl_requests.get", return_value=response):
+        result = await adapter.extract(
+            "https://store.com/products/shirt",
+            '<script>Shopify.theme = {}</script>',
+            "ecommerce_detail",
+        )
+    assert len(result.records) == 1
+    assert result.records[0]["image_url"] == "https://cdn.example.com/shirt.jpg"
+
+
+@pytest.mark.asyncio
+async def test_shopify_listing_uses_collection_specific_endpoint():
+    adapter = ShopifyAdapter()
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "products": [
+            {
+                "title": "Collection Item",
+                "vendor": "BrandX",
+                "handle": "collection-item",
+                "variants": [{"price": "19.99", "sku": "SKU-9", "available": True}],
+                "images": [{"src": "https://cdn.example.com/item.jpg"}],
+                "product_type": "Apparel",
+                "tags": "featured, summer",
+            }
+        ]
+    }
+    with patch("app.services.adapters.shopify.curl_requests.get", return_value=response) as mock_get:
+        result = await adapter.extract(
+            "https://store.com/collections/summer-shirts",
+            '<script>Shopify.theme = {}</script>',
+            "ecommerce_listing",
+        )
+    assert len(result.records) == 1
+    assert result.records[0]["title"] == "Collection Item"
+    assert mock_get.call_args.args[0] == "https://store.com/collections/summer-shirts/products.json?limit=250"
+
+
+@pytest.mark.asyncio
+async def test_shopify_normalizes_protocol_relative_image_urls():
+    adapter = ShopifyAdapter()
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "title": "Protocol Image Shirt",
+        "vendor": "BrandX",
+        "handle": "shirt",
+        "variants": [{"price": "29.99", "sku": "SKU-1", "available": True}],
+        "images": ["//cdn.example.com/shirt.jpg"],
+        "product_type": "Apparel",
+        "tags": [],
+    }
+    with patch("app.services.adapters.shopify.curl_requests.get", return_value=response):
+        result = await adapter.extract(
+            "https://store.com/products/shirt",
+            '<script>Shopify.theme = {}</script>',
+            "ecommerce_detail",
+        )
+    assert len(result.records) == 1
+    assert result.records[0]["image_url"] == "https://cdn.example.com/shirt.jpg"
 
 
 # --- Amazon ---

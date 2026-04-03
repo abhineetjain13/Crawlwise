@@ -1,12 +1,16 @@
 # Dashboard aggregation service.
 from __future__ import annotations
 
+import shutil
 from urllib.parse import urlparse
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.crawl import CrawlRecord, CrawlRun
+from app.core.config import settings
+from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
+from app.models.selector import Selector
+from app.services.knowledge_base.store import reset_learned_state
 
 
 async def build_dashboard(session: AsyncSession) -> dict:
@@ -45,3 +49,46 @@ async def build_dashboard(session: AsyncSession) -> dict:
         "top_domains": top_domains,
         "success_rate": round((success_count / total_runs) * 100, 2) if total_runs else 0.0,
     }
+
+
+async def reset_application_data(session: AsyncSession) -> dict:
+    try:
+        crawl_logs_deleted = await session.execute(delete(CrawlLog))
+        crawl_records_deleted = await session.execute(delete(CrawlRecord))
+        promotions_deleted = await session.execute(delete(ReviewPromotion))
+        selectors_deleted = await session.execute(delete(Selector))
+        crawl_runs_deleted = await session.execute(delete(CrawlRun))
+
+        artifacts_removed = _reset_directory(settings.artifacts_dir)
+        cookies_removed = _reset_directory(settings.cookie_store_dir)
+        reset_learned_state()
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+
+    return {
+        "crawl_runs_deleted": crawl_runs_deleted.rowcount or 0,
+        "crawl_records_deleted": crawl_records_deleted.rowcount or 0,
+        "crawl_logs_deleted": crawl_logs_deleted.rowcount or 0,
+        "review_promotions_deleted": promotions_deleted.rowcount or 0,
+        "selectors_deleted": selectors_deleted.rowcount or 0,
+        "artifacts_removed": artifacts_removed,
+        "cookies_removed": cookies_removed,
+        "knowledge_base_reset": True,
+    }
+
+
+def _reset_directory(path) -> int:
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+        return 0
+    removed = 0
+    for child in path.iterdir():
+        removed += 1
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    path.mkdir(parents=True, exist_ok=True)
+    return removed

@@ -1,20 +1,19 @@
 "use client";
 
 import { Moon, SunMedium } from "lucide-react";
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 
 import { cn } from "../../lib/utils";
 
 type ThemeMode = "light" | "dark";
+const THEME_STORAGE_KEY = "crawlerai-theme";
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<ThemeMode>(() => readTheme());
+  const theme = useSyncExternalStore(subscribeTheme, readTheme, () => "light");
 
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    window.localStorage.setItem("crawlerai-theme", next);
-    setTheme(next);
+    applyTheme(next);
   }
 
   return (
@@ -22,7 +21,7 @@ export function ThemeToggle() {
       type="button"
       onClick={toggleTheme}
       className={cn(
-        "inline-flex size-10 items-center justify-center rounded-2xl border border-border bg-panel text-foreground transition hover:bg-panel-strong",
+        "inline-flex size-10 items-center justify-center rounded-xl border border-border bg-panel text-foreground transition hover:bg-panel-strong",
       )}
       aria-label="Toggle color theme"
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
@@ -38,4 +37,36 @@ function readTheme(): ThemeMode {
     return "light";
   }
   return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+function applyTheme(value: string | null | undefined) {
+  const nextTheme: ThemeMode = value === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = nextTheme;
+  window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+}
+
+function subscribeTheme(onStoreChange: () => void) {
+  if (typeof window === "undefined") {
+    return () => undefined;
+  }
+
+  const observer = new MutationObserver(onStoreChange);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
+
+  const storageHandler = (event: StorageEvent) => {
+    if (event.key !== THEME_STORAGE_KEY) {
+      return;
+    }
+    applyTheme(event.newValue ?? window.localStorage.getItem(THEME_STORAGE_KEY));
+    onStoreChange();
+  };
+
+  window.addEventListener("storage", storageHandler);
+  return () => {
+    observer.disconnect();
+    window.removeEventListener("storage", storageHandler);
+  };
 }

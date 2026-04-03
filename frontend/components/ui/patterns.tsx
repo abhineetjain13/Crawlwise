@@ -15,10 +15,10 @@ export function PageHeader({
   actions?: ReactNode;
 }>) {
   return (
-    <div className="flex flex-col gap-3 rounded-[1.75rem] border border-border/70 bg-panel/80 px-5 py-4 shadow-card backdrop-blur sm:flex-row sm:items-end sm:justify-between">
+    <div className="flex flex-col gap-2.5 rounded-xl border border-border/70 bg-panel/80 px-4 py-3 shadow-card backdrop-blur sm:flex-row sm:items-end sm:justify-between">
       <div className="min-w-0 space-y-1.5">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-[2rem]">{title}</h1>
-        {description ? <p className="max-w-2xl text-sm leading-6 text-muted">{description}</p> : null}
+        <h1 className="text-xl font-semibold tracking-tight text-foreground sm:text-[1.7rem]">{title}</h1>
+        {description ? <p className="max-w-2xl text-sm leading-5 text-muted">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </div>

@@ -10,7 +10,7 @@ class CrawlCreate(BaseModel):
     run_type: str  # "crawl", "batch", "csv"
     url: str | None = None
     urls: list[str] = Field(default_factory=list)
-    surface: str  # "ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail", "tabular"
+    surface: str  # "ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail", "automobile_listing", "automobile_detail", "tabular"
     settings: dict = Field(default_factory=dict)
     # settings can include: page_type, proxy_list, advanced_mode, max_pages, max_records, sleep_ms, csv_content
     additional_fields: list[str] = Field(default_factory=list)
@@ -59,12 +59,15 @@ class DashboardResponse(BaseModel):
 class ReviewFieldChoice(BaseModel):
     source_field: str
     output_field: str
+    selected: bool = True
 
 
 class ReviewResponse(BaseModel):
     run: CrawlRunResponse
     normalized_fields: list[str]
     discovered_fields: list[str]
+    canonical_fields: list[str]
+    domain_mapping: dict[str, str]
     suggested_mapping: dict[str, str]
     selector_memory: list[dict]
     records: list[CrawlRecordResponse]
@@ -72,6 +75,7 @@ class ReviewResponse(BaseModel):
 
 class ReviewSaveRequest(BaseModel):
     selections: list[ReviewFieldChoice]
+    extra_fields: list[str] = Field(default_factory=list)
 
 
 class ReviewSaveResponse(BaseModel):
@@ -79,4 +83,5 @@ class ReviewSaveResponse(BaseModel):
     domain: str
     surface: str
     selected_fields: list[str]
+    canonical_fields: list[str]
     field_mapping: dict[str, str]

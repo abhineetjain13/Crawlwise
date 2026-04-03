@@ -30,6 +30,22 @@ def get_canonical_fields(surface: str) -> list[str]:
     return load_canonical_schemas().get(surface, [])
 
 
+def save_canonical_fields(surface: str, fields: list[str]) -> list[str]:
+    schemas = load_canonical_schemas()
+    existing = schemas.setdefault(surface, [])
+    merged: list[str] = []
+    seen: set[str] = set()
+    for field in [*existing, *fields]:
+        value = str(field or "").strip()
+        if not value or value in seen:
+            continue
+        merged.append(value)
+        seen.add(value)
+    schemas[surface] = merged
+    _write_json(SCHEMA_FILE, schemas)
+    return merged
+
+
 def load_field_mappings() -> dict[str, dict[str, dict[str, str]]]:
     return dict(_load_json(MAPPING_FILE, {}))
 
@@ -60,3 +76,8 @@ def save_selector_defaults(domain: str, field_name: str, values: list[dict]) -> 
     payload = load_selector_defaults()
     payload.setdefault(domain, {})[field_name] = values
     _write_json(SELECTOR_FILE, payload)
+
+
+def reset_learned_state() -> None:
+    _write_json(MAPPING_FILE, {})
+    _write_json(SELECTOR_FILE, {})

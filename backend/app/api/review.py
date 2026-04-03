@@ -32,6 +32,8 @@ async def review_detail(
         run=CrawlRunResponse.model_validate(payload["run"], from_attributes=True),
         normalized_fields=payload["normalized_fields"],
         discovered_fields=payload["discovered_fields"],
+        canonical_fields=payload["canonical_fields"],
+        domain_mapping=payload["domain_mapping"],
         suggested_mapping=payload["suggested_mapping"],
         selector_memory=payload["selector_memory"],
         records=[CrawlRecordResponse.model_validate(row, from_attributes=True) for row in payload["records"]],
@@ -48,5 +50,15 @@ async def review_save(
     run = await get_run(session, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-    result = await save_review(session, run, [row.model_dump() for row in payload.selections])
+    selections = [row.model_dump() for row in payload.selections]
+    for extra_field in payload.extra_fields:
+        name = str(extra_field or "").strip()
+        if not name:
+            continue
+        selections.append({
+            "source_field": name,
+            "output_field": name,
+            "selected": True,
+        })
+    result = await save_review(session, run, selections)
     return ReviewSaveResponse.model_validate(result)

@@ -22,6 +22,12 @@ export type CrawlRun = {
   completed_at: string | null;
 };
 
+export type ReviewSelection = {
+  source_field: string;
+  output_field: string;
+  selected: boolean;
+};
+
 export type CrawlRecord = {
   id: number;
   run_id: number;
@@ -31,6 +37,13 @@ export type CrawlRecord = {
   discovered_data: Record<string, unknown>;
   source_trace: Record<string, unknown>;
   raw_html_path: string | null;
+  created_at: string;
+};
+
+export type CrawlLog = {
+  id: number;
+  level: string;
+  message: string;
   created_at: string;
 };
 
@@ -52,6 +65,8 @@ export type ReviewPayload = {
   run: CrawlRun;
   normalized_fields: string[];
   discovered_fields: string[];
+  canonical_fields: string[];
+  domain_mapping: Record<string, string>;
   suggested_mapping: Record<string, string>;
   selector_memory: Array<Record<string, unknown>>;
   records: CrawlRecord[];

@@ -12,8 +12,8 @@
   --color-muted: var(--muted);
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
-  --shadow-card: 0 16px 40px rgba(15, 23, 42, 0.06);
-  --font-sans: var(--font-manrope);
+  --shadow-card: 0 10px 24px rgba(15, 23, 42, 0.06);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-mono);
 }
 
@@ -64,7 +64,42 @@ body {
     radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--background-alt) 90%, white 10%), transparent 18%),
     linear-gradient(180deg, var(--background-alt) 0%, var(--background) 100%);
   color: var(--foreground);
-  font-family: var(--font-manrope), sans-serif;
+  font-family: var(--font-sans), sans-serif;
+}
+
+.compact-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.compact-data-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
+}
+
+.compact-data-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.compact-data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  vertical-align: top;
+}
+
+.compact-data-table tbody tr:hover {
+  background: color-mix(in srgb, var(--brand) 5%, transparent);
 }
 
 a {
