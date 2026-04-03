@@ -1,718 +1,1458 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Trash2, Plus } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useSearchParams } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowRightCircle,
+  ChevronDown,
+  ChevronsDown,
+  CheckCircle2,
+  CircleAlert,
+  Copy,
+  Download,
+  GripVertical,
+  Plus,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
+import type { Route } from "next";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
 
-import { Button, Card, Input, Textarea } from "../../components/ui/primitives";
-import { PageHeader } from "../../components/ui/patterns";
+import { PageHeader, SectionHeader } from "../../components/ui/patterns";
+import { Badge, Button, Card, Input, Textarea } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
+import type { CrawlConfig, CrawlPhase, CrawlRecord, CrawlRun } from "../../lib/api/types";
 import { cn } from "../../lib/utils";
 
-type SubmissionTab = "crawl" | "batch" | "csv";
-type Vertical = "ecommerce" | "jobs" | "automobile";
-type PageType = "category" | "pdp";
-type AdvancedMode = "auto" | "paginate" | "scroll" | "load_more";
-
-type ContractRow = {
-  id: number;
-  field_name: string;
+type CrawlTab = "category" | "pdp";
+type CategoryMode = "single" | "sitemap" | "bulk";
+type PdpMode = "single" | "batch" | "csv";
+type ValidationState = "idle" | "valid" | "invalid";
+type LogLevel = "INFO" | "WARN" | "ERROR" | "PROXY";
+type FieldRow = {
+  id: string;
+  fieldName: string;
   xpath: string;
   regex: string;
+  xpathState: ValidationState;
+  regexState: ValidationState;
 };
-
-type CrawlPrefill = {
-  urls?: string[];
-  tab?: SubmissionTab;
-  vertical?: Vertical;
-  pageType?: PageType;
-  additional_fields?: string[];
-  selectors?: Array<{
-    field_name?: string;
-    xpath?: string | null;
-    regex?: string | null;
-  }>;
-};
-
-const PAGE_CONFIG: Record<Vertical, Record<PageType, {
-  urlLabel: string;
-  urlPlaceholder: string;
+type PendingDispatch = {
+  runType: "crawl" | "batch" | "csv";
   surface: string;
-  defaultFields: string[];
-  maxRecords: number;
-}>> = {
-  ecommerce: {
-    category: {
-      urlLabel: "Category URL",
-      urlPlaceholder: "https://example.com/collections/chairs",
-      surface: "ecommerce_listing",
-      defaultFields: ["title", "price", "url", "image_url", "brand", "availability"],
-      maxRecords: 100,
-    },
-    pdp: {
-      urlLabel: "PDP URL",
-      urlPlaceholder: "https://example.com/products/oak-chair",
-      surface: "ecommerce_detail",
-      defaultFields: ["title", "brand", "sku", "price", "sale_price", "currency", "availability", "image_url", "description"],
-      maxRecords: 1,
-    },
-  },
-  jobs: {
-    category: {
-      urlLabel: "Jobs Listing URL",
-      urlPlaceholder: "https://example.com/jobs/search",
-      surface: "job_listing",
-      defaultFields: ["title", "company", "location", "apply_url"],
-      maxRecords: 100,
-    },
-    pdp: {
-      urlLabel: "Job Detail URL",
-      urlPlaceholder: "https://example.com/jobs/view/123",
-      surface: "job_detail",
-      defaultFields: ["title", "company", "location", "salary", "job_type", "posted_date", "apply_url", "description"],
-      maxRecords: 1,
-    },
-  },
-  automobile: {
-    category: {
-      urlLabel: "Inventory URL",
-      urlPlaceholder: "https://example.com/cars-for-sale",
-      surface: "automobile_listing",
-      defaultFields: ["title", "price", "url", "image_url", "make", "model", "year", "mileage", "location", "dealer_name"],
-      maxRecords: 100,
-    },
-    pdp: {
-      urlLabel: "Vehicle Detail URL",
-      urlPlaceholder: "https://example.com/vehicle/stock-123",
-      surface: "automobile_detail",
-      defaultFields: ["title", "price", "make", "model", "year", "trim", "mileage", "vin", "condition", "body_style", "fuel_type", "transmission", "location", "dealer_name", "image_url", "description"],
-      maxRecords: 1,
-    },
-  },
+  url?: string;
+  urls?: string[];
+  settings: Record<string, unknown>;
+  additionalFields: string[];
+  csvFile: File | null;
+};
+type OutputTabKey = "table" | "json" | "intelligence" | "logs";
+type SuggestionState = "pending" | "accepted" | "rejected" | "committed";
+type IntelligenceSuggestion = {
+  key: string;
+  recordId: number;
+  fieldName: string;
+  value: string;
+  source: string;
+  state: SuggestionState;
 };
 
-const ADVANCED_OPTIONS: AdvancedMode[] = ["auto", "paginate", "scroll", "load_more"];
-const VERTICAL_OPTIONS: Array<{ value: Vertical; label: string }> = [
-  { value: "ecommerce", label: "Ecommerce" },
-  { value: "jobs", label: "Jobs" },
-  { value: "automobile", label: "Automobile" },
-];
+const TERMINAL_STATUSES = new Set<CrawlRun["status"]>(["completed", "killed", "failed", "proxy_exhausted"]);
+const ACTIVE_STATUSES = new Set<CrawlRun["status"]>(["pending", "running", "paused"]);
+const LOG_FILTERS: LogLevel[] = ["INFO", "WARN", "ERROR", "PROXY"];
+const DEFAULT_REQUEST_DELAY = 500;
+const DEFAULT_MAX_RECORDS = 100;
+const DEFAULT_MAX_PAGES = 10;
+const BULK_PREFILL_KEY = "bulk-crawl-prefill-v1";
 
-export default function CrawlStudioPage() {
+export default function CrawlPage() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const initializedFromQuery = useRef(false);
-  const [tab, setTab] = useState<SubmissionTab>("crawl");
-  const [vertical, setVertical] = useState<Vertical>("ecommerce");
-  const [pageType, setPageType] = useState<PageType>("category");
-  const [url, setUrl] = useState("");
-  const [batchUrls, setBatchUrls] = useState("");
+  const [crawlPhase, setCrawlPhase] = useState<CrawlPhase>("config");
+  const [crawlTab, setCrawlTab] = useState<CrawlTab>("pdp");
+  const [categoryMode, setCategoryMode] = useState<CategoryMode>("single");
+  const [pdpMode, setPdpMode] = useState<PdpMode>("single");
+  const [targetUrl, setTargetUrl] = useState("");
+  const [bulkUrls, setBulkUrls] = useState("");
   const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [smartExtraction, setSmartExtraction] = useState(false);
   const [advancedEnabled, setAdvancedEnabled] = useState(false);
-  const [advancedMode, setAdvancedMode] = useState<AdvancedMode>("auto");
-  const [maxPages, setMaxPages] = useState("10");
-  const [maxRecords, setMaxRecords] = useState(String(PAGE_CONFIG.ecommerce.category.maxRecords));
-  const [sleepMs, setSleepMs] = useState("500");
+  const [requestDelay, setRequestDelay] = useState(String(DEFAULT_REQUEST_DELAY));
+  const [maxRecords, setMaxRecords] = useState(String(DEFAULT_MAX_RECORDS));
+  const [maxPages, setMaxPages] = useState(String(DEFAULT_MAX_PAGES));
   const [proxyEnabled, setProxyEnabled] = useState(false);
-  const [proxyListInput, setProxyListInput] = useState("");
-  const [llmEnabled, setLlmEnabled] = useState(false);
-  const [additionalFieldInput, setAdditionalFieldInput] = useState("");
+  const [proxyInput, setProxyInput] = useState("");
+  const [additionalDraft, setAdditionalDraft] = useState("");
   const [additionalFields, setAdditionalFields] = useState<string[]>([]);
-  const [contractRows, setContractRows] = useState<ContractRow[]>([]);
-  const [nextRowId, setNextRowId] = useState(1);
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
+  const [fieldPanelOpen, setFieldPanelOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [pendingDispatch, setPendingDispatch] = useState<PendingDispatch | null>(null);
+  const [configError, setConfigError] = useState("");
+  const [launchError, setLaunchError] = useState("");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [jsonCompact, setJsonCompact] = useState(false);
+  const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
+  const [logSearch, setLogSearch] = useState("");
+  const [logFilters, setLogFilters] = useState<Record<LogLevel, boolean>>({
+    INFO: true,
+    WARN: true,
+    ERROR: true,
+    PROXY: true,
+  });
+  const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
+  const [bulkBanner, setBulkBanner] = useState("");
+  const [runActionPending, setRunActionPending] = useState<"pause" | "resume" | "kill" | null>(null);
+  const [suggestionState, setSuggestionState] = useState<Record<string, SuggestionState>>({});
+  const [commitPending, setCommitPending] = useState(false);
+  const [commitError, setCommitError] = useState("");
+  const logViewportRef = useRef<HTMLDivElement | null>(null);
+  const runId = Number(searchParams.get("runId") || 0) || null;
+  const queryClient = useQueryClient();
 
-  const pageConfig = PAGE_CONFIG[vertical][pageType];
+  const runQuery = useQuery({
+    queryKey: ["crawl-run", runId],
+    queryFn: () => api.getCrawl(runId as number),
+    enabled: runId !== null,
+    refetchInterval: (query) => (query.state.data && ACTIVE_STATUSES.has(query.state.data.status) ? 2000 : false),
+  });
+  const run = runQuery.data;
 
-  const applyPrefill = useCallback((prefill: CrawlPrefill) => {
-    if (prefill.tab) {
-      setTab(prefill.tab);
-    }
-    if (prefill.vertical) {
-      setVertical(prefill.vertical);
-    }
-    if (prefill.pageType) {
-      setPageType(prefill.pageType);
-      const configVertical = prefill.vertical ?? vertical;
-      setMaxRecords(String(PAGE_CONFIG[configVertical][prefill.pageType].maxRecords));
-    }
-    if (Array.isArray(prefill.urls) && prefill.urls.length) {
-      setBatchUrls(prefill.urls.join("\n"));
-      if ((prefill.tab ?? requestedSubmissionTab(prefill.urls.length)) === "crawl") {
-        setUrl(prefill.urls[0] ?? "");
-      }
-    }
-    if (Array.isArray(prefill.additional_fields) && prefill.additional_fields.length) {
-      setAdditionalFields(Array.from(new Set(prefill.additional_fields.map(normalizeFieldName).filter(Boolean))));
-    }
-    if (Array.isArray(prefill.selectors) && prefill.selectors.length) {
-      const rows = prefill.selectors
-        .map((row, index) => ({
-          id: index + 1,
-          field_name: normalizeFieldName(String(row.field_name ?? "")),
-          xpath: String(row.xpath ?? "").trim(),
-          regex: String(row.regex ?? "").trim(),
-        }))
-        .filter((row) => row.field_name && (row.xpath || row.regex));
-      setContractRows(rows);
-      setNextRowId(rows.length + 1);
-    }
-  }, [vertical]);
+  const recordsQuery = useQuery({
+    queryKey: ["crawl-records", runId],
+    queryFn: () => api.getRecords(runId as number, { limit: 1000 }),
+    enabled: runId !== null && Boolean(run),
+    refetchInterval: () => {
+      const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
+      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? 2000 : false;
+    },
+  });
+  const logsQuery = useQuery({
+    queryKey: ["crawl-logs", runId],
+    queryFn: () => api.getCrawlLogs(runId as number),
+    enabled: runId !== null,
+    refetchInterval: () => {
+      const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
+      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? 2000 : false;
+    },
+  });
+  const reviewQuery = useQuery({
+    queryKey: ["crawl-review", runId],
+    queryFn: () => api.getReview(runId as number),
+    enabled: runId !== null && Boolean(run && TERMINAL_STATUSES.has(run.status)),
+  });
+
+  const records = useMemo(() => recordsQuery.data?.items ?? [], [recordsQuery.data?.items]);
+  const logs = useMemo(() => logsQuery.data ?? [], [logsQuery.data]);
+  const review = reviewQuery.data;
+  const terminal = run ? TERMINAL_STATUSES.has(run.status) : false;
+  const live = Boolean(run && ACTIVE_STATUSES.has(run.status));
 
   useEffect(() => {
-    if (initializedFromQuery.current) return;
-    initializedFromQuery.current = true;
-
-    const requestedTab = searchParams.get("tab");
-    if (requestedTab === "batch" || requestedTab === "csv" || requestedTab === "crawl") {
-      setTab(requestedTab);
-    }
-
-    const pastedUrls = searchParams.get("urls");
-    if (pastedUrls && requestedTab === "batch") {
-      setBatchUrls(pastedUrls);
-    } else if (typeof window !== "undefined") {
-      const stored = window.sessionStorage.getItem("bulk-crawl-prefill-v1");
-      if (stored) {
-        try {
-          applyPrefill(JSON.parse(stored) as CrawlPrefill);
-        } catch {
-          // Ignore malformed prefill data.
-        } finally {
-          window.sessionStorage.removeItem("bulk-crawl-prefill-v1");
-        }
-      }
-    }
-  }, [applyPrefill, searchParams]);
-
-  function updatePageType(next: PageType) {
-    setPageType(next);
-    setMaxRecords(String(PAGE_CONFIG[vertical][next].maxRecords));
-    setContractRows([]);
-    setNextRowId(1);
-    setAdditionalFields([]);
-    setAdditionalFieldInput("");
-  }
-
-  function updateVertical(next: Vertical) {
-    setVertical(next);
-    setPageType("category");
-    setMaxRecords(String(PAGE_CONFIG[next].category.maxRecords));
-    setContractRows([]);
-    setNextRowId(1);
-    setAdditionalFields([]);
-    setAdditionalFieldInput("");
-  }
-
-  function addContractRow() {
-    setContractRows((current) => [
-      ...current,
-      { id: nextRowId, field_name: "", xpath: "", regex: "" },
-    ]);
-    setNextRowId((current) => current + 1);
-  }
-
-  function addAdditionalFields(rawValue: string) {
-    const nextFields = rawValue
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    if (!nextFields.length) {
+    if (!run) {
       return;
     }
-    setAdditionalFields((current) => {
-      const merged = new Set(current);
-      for (const field of nextFields) {
-        merged.add(field);
-      }
-      return Array.from(merged);
-    });
-    setAdditionalFieldInput("");
-  }
-
-  function removeAdditionalField(fieldName: string) {
-    setAdditionalFields((current) => current.filter((field) => field !== fieldName));
-  }
-
-  function updateContractRow(id: number, key: "field_name" | "xpath" | "regex", value: string) {
-    setContractRows((current) =>
-      current.map((row) => (row.id === id ? { ...row, [key]: value } : row)),
-    );
-  }
-
-  function removeContractRow(id: number) {
-    setContractRows((current) => current.filter((row) => row.id !== id));
-  }
-
-  function getExtractionContract() {
-    return contractRows
-      .map((row) => ({
-        field_name: row.field_name.trim(),
-        xpath: row.xpath.trim(),
-        regex: row.regex.trim(),
-      }))
-      .filter((row) => row.field_name);
-  }
-
-  function getAdditionalFields() {
-    return Array.from(
-      new Set([
-        ...additionalFields,
-        ...getExtractionContract().map((row) => row.field_name),
-      ]),
-    );
-  }
-
-  function getSettings() {
-    return {
-      page_type: pageType,
-      advanced_mode: advancedEnabled ? advancedMode : null,
-      max_pages: Number.parseInt(maxPages, 10) || 10,
-      max_records: Number.parseInt(maxRecords, 10) || pageConfig.maxRecords,
-      sleep_ms: Number.parseInt(sleepMs, 10) || 0,
-      proxy_list: proxyEnabled ? splitLines(proxyListInput) : [],
-      llm_enabled: llmEnabled,
-      extraction_contract: getExtractionContract(),
-    };
-  }
-
-  async function submitCrawl(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    setIsSubmitting(true);
-    try {
-      const settings = getSettings();
-      const additionalFields = getAdditionalFields();
-
-      if (tab === "crawl") {
-        if (!url.trim()) {
-          throw new Error("Enter a URL to start the crawl.");
-        }
-        const response = await api.createCrawl({
-          run_type: "crawl",
-          url: url.trim(),
-          surface: pageConfig.surface,
-          settings,
-          additional_fields: additionalFields,
-        });
-        router.push(`/runs/${response.run_id}`);
-        return;
-      }
-
-      if (tab === "batch") {
-        const urls = splitLines(batchUrls);
-        if (!urls.length) {
-          throw new Error("Paste one or more URLs for the batch crawl.");
-        }
-        const response = await api.createCrawl({
-          run_type: "batch",
-          url: urls[0],
-          urls,
-          surface: pageConfig.surface,
-          settings: { ...settings, urls },
-          additional_fields: additionalFields,
-        });
-        router.push(`/runs/${response.run_id}`);
-        return;
-      }
-
-      if (!csvFile) {
-        throw new Error("Select a CSV file with URLs in the first column.");
-      }
-      const response = await api.createCsvCrawl({
-        file: csvFile,
-        surface: pageConfig.surface,
-        additionalFields,
-        settings,
-      });
-      router.push(`/runs/${response.run_id}`);
-    } catch (submissionError) {
-      setError(submissionError instanceof Error ? submissionError.message : "Unable to submit crawl.");
-    } finally {
-      setIsSubmitting(false);
+    if (terminal) {
+      const timer = window.setTimeout(() => setCrawlPhase("complete"), 1500);
+      return () => window.clearTimeout(timer);
     }
+    setCrawlPhase("running");
+  }, [run, terminal]);
+
+  useEffect(() => {
+    const stored = window.sessionStorage.getItem(BULK_PREFILL_KEY);
+    if (!stored) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(stored) as { urls: string[]; additional_fields?: string[] };
+      if (Array.isArray(parsed.urls) && parsed.urls.length) {
+        setCrawlTab("category");
+        setCategoryMode("bulk");
+        setBulkUrls(parsed.urls.join("\n"));
+        if (Array.isArray(parsed.additional_fields)) {
+          setAdditionalFields(uniqueFields(parsed.additional_fields));
+        }
+        setBulkBanner(`${parsed.urls.length} URLs loaded from previous crawl results.`);
+      }
+    } catch {
+      // Ignore malformed prefill data.
+    } finally {
+      window.sessionStorage.removeItem(BULK_PREFILL_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!live || !logViewportRef.current) {
+      return;
+    }
+    const node = logViewportRef.current;
+    const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 50;
+    if (atBottom) {
+      node.scrollTop = node.scrollHeight;
+    } else {
+      setLiveJumpAvailable(true);
+    }
+  }, [logs, live]);
+
+  useEffect(() => {
+    if (!bulkBanner) {
+      return;
+    }
+    const timer = window.setTimeout(() => setBulkBanner(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [bulkBanner]);
+
+  useEffect(() => {
+    if (review && !additionalFields.length) {
+      setAdditionalFields(uniqueFields(review.canonical_fields.length ? review.canonical_fields : review.normalized_fields));
+    }
+  }, [additionalFields.length, review]);
+
+  const intelligenceSuggestions = useMemo<IntelligenceSuggestion[]>(() => {
+    return records.flatMap((record) => {
+      const suggestions = record.source_trace?.llm_cleanup_suggestions;
+      if (!suggestions || typeof suggestions !== "object") {
+        return [];
+      }
+      return Object.entries(suggestions as Record<string, unknown>).flatMap(([fieldName, raw]) => {
+        if (!raw || typeof raw !== "object") {
+          return [];
+        }
+        const value = stringifyCell((raw as Record<string, unknown>).suggested_value).trim();
+        if (!value) {
+          return [];
+        }
+        const key = `${record.id}:${fieldName}`;
+        const backendStatus = String((raw as Record<string, unknown>).status ?? "pending_review");
+        return [{
+          key,
+          recordId: record.id,
+          fieldName,
+          value,
+          source: String((raw as Record<string, unknown>).source ?? "llm"),
+          state: suggestionState[key]
+            ?? (backendStatus === "accepted" ? "committed" : "pending"),
+        }];
+      });
+    });
+  }, [records, suggestionState]);
+
+  const config = useMemo<CrawlConfig>(
+    () => ({
+      module: crawlTab,
+      mode: crawlTab === "category" ? categoryMode : pdpMode,
+      target_url: targetUrl,
+      bulk_urls: bulkUrls,
+      csv_file: csvFile,
+      smart_extraction: smartExtraction,
+      advanced_enabled: advancedEnabled,
+      request_delay_ms: clampNumber(requestDelay, 0, 5000, DEFAULT_REQUEST_DELAY),
+      max_records: clampNumber(maxRecords, 1, 10000, DEFAULT_MAX_RECORDS),
+      max_pages: clampNumber(maxPages, 1, 500, DEFAULT_MAX_PAGES),
+      proxy_enabled: proxyEnabled,
+      proxy_lines: proxyEnabled ? parseLines(proxyInput) : [],
+      additional_fields: additionalFields,
+    }),
+    [additionalFields, advancedEnabled, bulkUrls, categoryMode, crawlTab, csvFile, maxPages, maxRecords, proxyEnabled, proxyInput, requestDelay, smartExtraction, targetUrl, pdpMode],
+  );
+
+  const visibleColumns = useMemo(() => {
+    const columns = new Set<string>();
+    for (const record of records) {
+      Object.keys(record.data ?? {}).forEach((key) => {
+        if (!key.startsWith("_")) {
+          columns.add(key);
+        }
+      });
+    }
+    return Array.from(columns);
+  }, [records]);
+
+  const selectedRecords = useMemo(
+    () => records.filter((record) => selectedIds.includes(record.id)),
+    [records, selectedIds],
+  );
+
+  const filteredLogs = useMemo(() => {
+    const search = logSearch.trim().toLowerCase();
+    return logs.filter((log) => {
+      if (!logFilters[normalizeLogLevel(log.level)]) {
+        return false;
+      }
+      return !search || `${log.level} ${log.message}`.toLowerCase().includes(search);
+    });
+  }, [logFilters, logSearch, logs]);
+
+  const summary = {
+    records: records.length,
+    pages: Number(run?.result_summary?.processed_urls ?? run?.result_summary?.completed_urls ?? 0) || 0,
+    fields: visibleColumns.length,
+    duration: formatDuration(run?.created_at, run?.completed_at),
+  };
+
+  async function runControl(action: "pause" | "resume" | "kill") {
+    if (!runId) {
+      return;
+    }
+    setRunActionPending(action);
+    setLaunchError("");
+    try {
+      if (action === "pause") {
+        await api.pauseCrawl(runId);
+      } else if (action === "resume") {
+        await api.resumeCrawl(runId);
+      } else {
+        await api.killCrawl(runId);
+      }
+      await Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch()]);
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : `Unable to ${action} crawl.`);
+    } finally {
+      setRunActionPending(null);
+    }
+  }
+
+  async function commitAcceptedSuggestions() {
+    if (!runId) {
+      return;
+    }
+    const acceptedItems = intelligenceSuggestions
+      .filter((item) => item.state === "accepted")
+      .map((item) => ({
+        record_id: item.recordId,
+        field_name: item.fieldName,
+        value: item.value,
+      }));
+    if (!acceptedItems.length) {
+      return;
+    }
+    setCommitPending(true);
+    setCommitError("");
+    try {
+      await api.commitLlmSuggestions(runId, acceptedItems);
+      setSuggestionState((current) => {
+        const next = { ...current };
+        for (const item of intelligenceSuggestions) {
+          if (item.state === "accepted") {
+            next[item.key] = "committed";
+          }
+        }
+        return next;
+      });
+      await Promise.all([recordsQuery.refetch(), logsQuery.refetch()]);
+    } catch (error) {
+      setCommitError(error instanceof Error ? error.message : "Unable to commit accepted suggestions.");
+    } finally {
+      setCommitPending(false);
+    }
+  }
+
+  function resetToConfig() {
+    setCrawlPhase("config");
+    setPreviewOpen(false);
+    setPendingDispatch(null);
+    setSelectedIds([]);
+    router.replace("/crawl");
+  }
+
+  function startPreview(event: FormEvent) {
+    event.preventDefault();
+    setConfigError("");
+    try {
+      const dispatch = buildDispatch(config);
+      setPendingDispatch(dispatch);
+      setPreviewOpen(true);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
+    }
+  }
+
+  async function launchPending() {
+    if (!pendingDispatch) {
+      return;
+    }
+    setLaunchError("");
+    try {
+      let response: { run_id: number };
+      if (pendingDispatch.runType === "csv") {
+        if (!pendingDispatch.csvFile) {
+          throw new Error("CSV file is missing.");
+        }
+        response = await api.createCsvCrawl({
+          file: pendingDispatch.csvFile,
+          surface: pendingDispatch.surface,
+          additionalFields: pendingDispatch.additionalFields,
+          settings: pendingDispatch.settings,
+        });
+      } else {
+        response = await api.createCrawl({
+          run_type: pendingDispatch.runType,
+          url: pendingDispatch.url,
+          urls: pendingDispatch.urls,
+          surface: pendingDispatch.surface,
+          settings: pendingDispatch.settings,
+          additional_fields: pendingDispatch.additionalFields,
+        });
+      }
+      setPreviewOpen(false);
+      setPendingDispatch(null);
+      setCrawlPhase("running");
+      router.replace((`/crawl?runId=${response.run_id}`) as Route);
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : "Unable to launch crawl.");
+    }
+  }
+
+  function triggerBulkCrawlSelected() {
+    const urls = selectedRecords
+      .map((record) => extractRecordUrl(record))
+      .filter((value): value is string => Boolean(value));
+    if (!urls.length) {
+      return;
+    }
+    window.sessionStorage.setItem(
+      BULK_PREFILL_KEY,
+      JSON.stringify({
+        urls,
+        additional_fields: additionalFields,
+      }),
+    );
+    setCrawlTab("category");
+    setCategoryMode("bulk");
+    setBulkUrls(urls.join("\n"));
+    setBulkBanner(`${urls.length} URLs loaded from previous crawl results.`);
+    setCrawlPhase("config");
+    router.replace("/crawl");
+  }
+
+  function addManualField() {
+    setFieldRows((current) => [
+      ...current,
+      {
+        id: `${Date.now()}-${current.length}`,
+        fieldName: "",
+        xpath: "",
+        regex: "",
+        xpathState: "idle",
+        regexState: "idle",
+      },
+    ]);
   }
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Crawl Studio" description="Run single, batch, or CSV crawls." />
-
-      <form className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_320px]" onSubmit={submitCrawl}>
-        <div className="stagger-children space-y-4">
-          {/* Submission card */}
-          <Card className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <TabGroup>
-                <TabButton active={tab === "crawl"} onClick={() => setTab("crawl")}>
-                  Crawl
-                </TabButton>
-                <TabButton active={tab === "batch"} onClick={() => setTab("batch")}>
-                  Batch
-                </TabButton>
-                <TabButton active={tab === "csv"} onClick={() => setTab("csv")}>
-                  CSV
-                </TabButton>
-              </TabGroup>
-              <Button type="submit" variant="accent" disabled={isSubmitting}>
-                {isSubmitting ? "Submitting..." : "Start crawl"}
+      <PageHeader
+        title="Crawlers"
+        description={
+          crawlPhase === "config"
+            ? "Configure Category or PDP crawls."
+            : crawlPhase === "running"
+              ? "Live crawl execution."
+              : "Crawl output workspace."
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {crawlPhase !== "config" ? (
+              <Button variant="secondary" type="button" onClick={resetToConfig}>
+                New Crawl
               </Button>
-            </div>
+            ) : null}
+            {crawlPhase === "config" ? (
+              <Button
+                variant="accent"
+                type="button"
+                onClick={() => {
+                  try {
+                    setPendingDispatch(buildDispatch(config));
+                    setPreviewOpen(true);
+                    setConfigError("");
+                  } catch (error) {
+                    setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
+                  }
+                }}
+                disabled={!canPreview(config)}
+              >
+                Review Before Running
+              </Button>
+            ) : null}
+            {crawlPhase === "complete" && crawlTab === "category" && selectedRecords.length ? (
+              <Button variant="secondary" type="button" onClick={triggerBulkCrawlSelected}>
+                <ArrowRightCircle className="size-3.5" />
+                Bulk Crawl Selected
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
 
-            {tab === "crawl" ? (
-              <div className="grid gap-1.5">
-                <label className="text-[13px] font-medium text-foreground">{pageConfig.urlLabel}</label>
-                <Input
-                  value={url}
-                  onChange={(event) => setUrl(event.target.value)}
-                  placeholder={pageConfig.urlPlaceholder}
+      {bulkBanner ? (
+        <div className="surface-banner flex items-center justify-between px-4 py-3 text-sm">
+          <div>{bulkBanner}</div>
+          <button
+            type="button"
+            onClick={() => setBulkBanner("")}
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted transition hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      ) : null}
+
+      {crawlPhase === "config" ? (
+        <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]" onSubmit={startPreview}>
+          <div className="space-y-4">
+            <Card className="space-y-4">
+              <SectionHeader
+                title="Crawl Type"
+                description="The crawler page runs as a single state machine: configure, run, then review output."
+              />
+              <TabBar
+                value={crawlTab}
+                onChange={(value) => setCrawlTab(value as CrawlTab)}
+                options={[
+                  { value: "category", label: "Category Crawl" },
+                  { value: "pdp", label: "PDP Crawl" },
+                ]}
+              />
+
+              {crawlTab === "category" ? (
+                <SegmentedMode
+                  label="Category Mode"
+                  value={categoryMode}
+                  onChange={(value) => setCategoryMode(value as CategoryMode)}
+                  options={[
+                    { value: "single", label: "Single Page" },
+                    { value: "sitemap", label: "Sitemap" },
+                    { value: "bulk", label: "Bulk" },
+                  ]}
                 />
+              ) : (
+                <SegmentedMode
+                  label="PDP Mode"
+                  value={pdpMode}
+                  onChange={(value) => setPdpMode(value as PdpMode)}
+                  options={[
+                    { value: "single", label: "Single" },
+                    { value: "batch", label: "Batch" },
+                    { value: "csv", label: "CSV Upload" },
+                  ]}
+                />
+              )}
+            </Card>
+
+            <Card className="space-y-4">
+              <SectionHeader title="Target" description="Provide the source URL or input list for this run." />
+              {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
+                <label className="grid gap-1.5">
+                  <span className="label-caps">URL List</span>
+                  <Textarea
+                    value={bulkUrls}
+                    onChange={(event) => setBulkUrls(event.target.value)}
+                    placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
+                    className="min-h-[220px] font-mono text-sm"
+                  />
+                </label>
+              ) : crawlTab === "pdp" && pdpMode === "csv" ? (
+                <label className="grid gap-1.5">
+                  <span className="label-caps">CSV Upload</span>
+                  <Input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
+                    className="h-auto py-3"
+                  />
+                </label>
+              ) : (
+                <label className="grid gap-1.5">
+                  <span className="label-caps">Target URL</span>
+                  <Input
+                    value={targetUrl}
+                    onChange={(event) => setTargetUrl(event.target.value)}
+                    placeholder={crawlTab === "category" ? "https://example.com/collections/chairs" : "https://example.com/products/oak-chair"}
+                    className="font-mono text-sm"
+                  />
+                </label>
+              )}
+
+              <AdditionalFieldInput
+                value={additionalDraft}
+                fields={additionalFields}
+                onChange={setAdditionalDraft}
+                onCommit={(value) =>
+                  setAdditionalFields((current) => uniqueFields([...current, value]))
+                }
+                onRemove={(value) =>
+                  setAdditionalFields((current) => current.filter((field) => field !== value))
+                }
+              />
+            </Card>
+
+            <Card className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <SectionHeader
+                  title="Field Configuration"
+                  description="Manual XPath and regex selectors are validated on blur before dispatch."
+                />
+                <div className="flex items-center gap-2">
+                  <Button variant="secondary" type="button" onClick={() => setFieldPanelOpen((current) => !current)}>
+                    <ChevronDown className={cn("size-3.5 transition-transform", fieldPanelOpen && "rotate-180")} />
+                    {fieldPanelOpen ? "Hide Fields" : "Configure Fields"}
+                  </Button>
+                  <Button variant="ghost" type="button" onClick={addManualField}>
+                    <Plus className="size-3.5" />
+                    New Field
+                  </Button>
+                </div>
+              </div>
+
+              {fieldPanelOpen ? (
+                <div className="space-y-3">
+                  {fieldRows.length ? (
+                    fieldRows.map((row) => (
+                      <ManualFieldEditor
+                        key={row.id}
+                        row={row}
+                        onChange={(patch) =>
+                          setFieldRows((current) =>
+                            current.map((entry) => (entry.id === row.id ? { ...entry, ...patch } : entry)),
+                          )
+                        }
+                        onDelete={() =>
+                          setFieldRows((current) => current.filter((entry) => entry.id !== row.id))
+                        }
+                      />
+                    ))
+                  ) : (
+                    <div className="rounded-[var(--radius-lg)] border border-dashed border-border bg-panel px-4 py-6 text-sm text-muted">
+                      No manual fields defined yet.
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </Card>
+
+            {configError ? (
+              <div className="rounded-[var(--radius-lg)] border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
+                {configError}
               </div>
             ) : null}
+          </div>
 
-            {tab === "batch" ? (
-              <div className="grid gap-1.5">
-                <label className="text-[13px] font-medium text-foreground">Batch URLs</label>
+          <div className="space-y-4 xl:sticky xl:top-[68px] xl:self-start">
+            <Card className="space-y-4">
+              <SectionHeader title="Smart Extraction" description="Off by default. Uses LLM discovery before crawl start." />
+              <SettingBlock title="Smart Extraction" description={smartExtraction ? "Adds ~10–30s before crawl starts." : "Uses saved Site Memory and manual fields only."}>
+                <Toggle checked={smartExtraction} onChange={setSmartExtraction} />
+              </SettingBlock>
+            </Card>
+
+            <Card className="space-y-4">
+              <SectionHeader title="Advanced Crawl" description="Request delay, max records, and max pages live in the dispatch payload." />
+              <SettingBlock title="Advanced Crawl" description={advancedEnabled ? "Custom limits enabled." : "Defaults: 500ms, 100 records, 10 pages."}>
+                <Toggle checked={advancedEnabled} onChange={setAdvancedEnabled} />
+              </SettingBlock>
+              {advancedEnabled ? (
+                <div className="space-y-4 rounded-[var(--radius-lg)] border border-border bg-panel px-4 py-4">
+                  <SliderRow label="Request Delay" value={requestDelay} min={0} max={5000} step={100} suffix=" ms" onChange={setRequestDelay} onReset={() => setRequestDelay(String(DEFAULT_REQUEST_DELAY))} />
+                  <SliderRow label="Max Records" value={maxRecords} min={1} max={10000} step={1} onChange={setMaxRecords} onReset={() => setMaxRecords(String(DEFAULT_MAX_RECORDS))} />
+                  <SliderRow label="Max Pages" value={maxPages} min={1} max={500} step={1} onChange={setMaxPages} onReset={() => setMaxPages(String(DEFAULT_MAX_PAGES))} />
+                </div>
+              ) : null}
+            </Card>
+
+            <Card className="space-y-4">
+              <SectionHeader title="Proxy" description="When enabled, requests are dispatched through the configured proxy pool." />
+              <SettingBlock title="Use Proxy Pool" description={proxyEnabled ? "One proxy per line." : "Direct crawl path disabled only when proxy is off."}>
+                <Toggle checked={proxyEnabled} onChange={setProxyEnabled} />
+              </SettingBlock>
+              {proxyEnabled ? (
                 <Textarea
-                  value={batchUrls}
-                  onChange={(event) => setBatchUrls(event.target.value)}
-                  placeholder={"https://example.com/products/a\nhttps://example.com/products/b"}
-                  className="min-h-36"
+                  value={proxyInput}
+                  onChange={(event) => setProxyInput(event.target.value)}
+                  placeholder={"host:port\nhost:port:user:pass"}
+                  className="min-h-[140px] font-mono text-sm"
                 />
-              </div>
-            ) : null}
+              ) : null}
+            </Card>
 
-            {tab === "csv" ? (
-              <div className="grid gap-1.5">
-                <label className="text-[13px] font-medium text-foreground">CSV Upload</label>
-                <Input
-                  type="file"
-                  accept=".csv,text/csv"
-                  onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
-                  className="h-auto py-2.5"
-                />
-              </div>
-            ) : null}
+            <Card className="space-y-3">
+              <SectionHeader title="Run" description="Open the review modal before dispatching the job." />
+              <Button variant="accent" type="submit" className="w-full" disabled={!canPreview(config)}>
+                Review Before Running
+              </Button>
+            </Card>
+          </div>
+        </form>
+      ) : null}
 
-            {/* Additional fields */}
-            <div className="grid gap-2">
-              <label className="text-[13px] font-medium text-foreground">Additional Fields</label>
-              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
-                <Input
-                  value={additionalFieldInput}
-                  onChange={(event) => setAdditionalFieldInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addAdditionalFields(additionalFieldInput);
-                    }
-                  }}
-                  placeholder="material, finish, warranty"
-                />
-                <Button type="button" variant="secondary" onClick={() => addAdditionalFields(additionalFieldInput)}>
-                  Add
-                </Button>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {additionalFields.length ? additionalFields.map((field) => (
-                  <button
-                    key={field}
-                    type="button"
-                    onClick={() => removeAdditionalField(field)}
-                    aria-label={`Remove ${field}`}
-                    className="group inline-flex items-center gap-1 rounded-md border border-border bg-panel-strong px-2 py-1 text-[12px] font-medium text-foreground transition hover:border-danger/40 hover:text-danger"
-                  >
-                    <span>{field}</span>
-                    <span aria-hidden="true" className="text-muted transition group-hover:text-danger">
-                      &times;
-                    </span>
-                  </button>
-                )) : null}
-              </div>
+      {crawlPhase === "running" ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.32fr)_minmax(0,0.68fr)]">
+          <Card className="space-y-4">
+            <SectionHeader title="Progress" description={run ? `Run ${run.id} is ${run.status.replace(/_/g, " ")}.` : "Loading run state..."} />
+            <PreviewRow label="Run ID" value={run ? `#${run.id}` : "--"} mono />
+            <PreviewRow label="Crawl Type" value={run?.run_type ?? "--"} />
+            <PreviewRow label="Target" value={run?.url ?? "--"} mono />
+            <PreviewRow label="Records" value={String(summary.records)} />
+            <PreviewRow label="Pages" value={String(summary.pages)} />
+            <PreviewRow label="Elapsed" value={summary.duration} />
+            <ProgressBar percent={progressPercent(run)} />
+            {run?.status === "paused" ? <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-foreground">Job paused. Output so far is preserved.</div> : null}
+            {launchError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{launchError}</div> : null}
+            <div className="flex flex-wrap gap-2">
+              <ActionButton
+                label={runActionPending === "pause" ? "Pausing..." : "Pause"}
+                onClick={() => void runControl("pause")}
+                disabled={!run || run.status !== "running" || runActionPending !== null}
+              />
+              <ActionButton
+                label={runActionPending === "resume" ? "Resuming..." : "Resume"}
+                onClick={() => void runControl("resume")}
+                disabled={!run || run.status !== "paused" || runActionPending !== null}
+              />
+              <ActionButton
+                label={runActionPending === "kill" ? "Killing..." : "Hard Kill"}
+                onClick={() => void runControl("kill")}
+                disabled={!run || !ACTIVE_STATUSES.has(run.status) || runActionPending !== null}
+                danger
+              />
             </div>
           </Card>
 
-          {/* Extraction contract */}
-          <Card className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-1">
-                <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">Additional Field Selectors</h2>
-                <p className="text-[12px] text-muted">Use XPath or regex to add extra fields for single, bulk, or CSV crawls.</p>
+          <Card className="space-y-4">
+            <SectionHeader
+              title="Live Log Stream"
+              description="Auto-scrolls while you stay at the bottom. Logs fall back to polling every 2 seconds."
+              action={
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" type="button" onClick={() => setLogSearch("")}>
+                    Clear Display
+                  </Button>
+                  {liveJumpAvailable ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (logViewportRef.current) {
+                          logViewportRef.current.scrollTop = logViewportRef.current.scrollHeight;
+                        }
+                        setLiveJumpAvailable(false);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs"
+                    >
+                      <ChevronsDown className="size-3.5" />
+                      Jump to Latest
+                    </button>
+                  ) : null}
+                </div>
+              }
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {LOG_FILTERS.map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => setLogFilters((current) => ({ ...current, [level]: !current[level] }))}
+                  className={cn(
+                    "rounded-md border px-2.5 py-1 text-xs font-medium transition",
+                    logFilters[level] ? "border-accent bg-accent-subtle" : "border-border bg-panel text-muted",
+                  )}
+                >
+                  {level}
+                </button>
+              ))}
+              <Input value={logSearch} onChange={(event) => setLogSearch(event.target.value)} placeholder="Search logs" className="h-8 max-w-56 text-xs" />
+            </div>
+            <LogTerminal logs={filteredLogs} live viewportRef={logViewportRef} />
+          </Card>
+        </div>
+      ) : null}
+
+      {crawlPhase === "complete" ? (
+        <Card className="space-y-4">
+          <SectionHeader
+            title="Output Workspace"
+            description={run ? `Run ${run.id} is complete.` : "Waiting for completed run data."}
+            action={
+              <div className="flex flex-wrap items-center gap-2">
+                {crawlTab === "category" && selectedRecords.length ? (
+                  <Button variant="secondary" type="button" onClick={triggerBulkCrawlSelected}>
+                    <ArrowRightCircle className="size-3.5" />
+                    Bulk Crawl ({selectedRecords.length})
+                  </Button>
+                ) : null}
+                <a href={api.exportCsv(runId as number)} target="_blank" rel="noreferrer">
+                  <Button variant="secondary" type="button">
+                    <Download className="size-3.5" />
+                    CSV
+                  </Button>
+                </a>
+                <a href={api.exportJson(runId as number)} target="_blank" rel="noreferrer">
+                  <Button variant="secondary" type="button">
+                    <Download className="size-3.5" />
+                    JSON
+                  </Button>
+                </a>
               </div>
-              <Button type="button" variant="secondary" onClick={addContractRow}>
-                <Plus className="size-3.5" />
-                Add row
-              </Button>
+            }
+          />
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <Metric label="Records" value={summary.records} />
+            <Metric label="Duration" value={summary.duration} />
+            <Metric label="Pages" value={summary.pages} />
+            <Metric label="Fields" value={summary.fields} />
+            <Metric label="Status" value={run?.status.replace(/_/g, " ") ?? "--"} />
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center gap-0 border-b border-border">
+              <OutputTab active={outputTab === "table"} onClick={() => setOutputTab("table")}>Table</OutputTab>
+              <OutputTab active={outputTab === "json"} onClick={() => setOutputTab("json")}>JSON</OutputTab>
+              <OutputTab active={outputTab === "intelligence"} onClick={() => setOutputTab("intelligence")}>Intelligence</OutputTab>
+              <OutputTab active={outputTab === "logs"} onClick={() => setOutputTab("logs")}>Logs</OutputTab>
             </div>
 
-            {contractRows.length ? (
-              <div className="overflow-hidden rounded-md border border-border">
-                <div className="grid grid-cols-[160px_minmax(0,1fr)_180px_40px] gap-2 border-b border-border bg-panel-strong px-3 py-2 text-[11px] font-medium uppercase tracking-[0.04em] text-muted">
-                  <span>Field</span>
-                  <span>XPath</span>
-                  <span>Regex</span>
-                  <span />
+            {outputTab === "table" ? (
+              <div className="space-y-3">
+                {records.length ? (
+                  <div className="overflow-auto rounded-[10px] border border-border">
+                    <table className="compact-data-table min-w-[960px]">
+                      <thead>
+                        <tr>
+                          <th className="w-10">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.length === records.length && records.length > 0}
+                              onChange={(event) => setSelectedIds(event.target.checked ? records.map((record) => record.id) : [])}
+                            />
+                          </th>
+                          {visibleColumns.map((column) => (
+                            <th key={column}>{column}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {records.map((record) => (
+                          <tr key={record.id}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.includes(record.id)}
+                                onChange={(event) =>
+                                  setSelectedIds((current) =>
+                                    event.target.checked ? uniqueNumbers([...current, record.id]) : current.filter((value) => value !== record.id),
+                                  )
+                                }
+                              />
+                            </td>
+                            {visibleColumns.map((column) => (
+                              <td key={column} title={stringifyCell(readRecordValue(record, column))}>
+                                <span className="block max-w-[260px] truncate">{stringifyCell(readRecordValue(record, column)) || <span className="text-muted/50">--</span>}</span>
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="grid min-h-40 place-items-center rounded-[10px] border border-dashed border-border bg-panel/60 text-sm text-muted">No records captured yet.</div>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="secondary" type="button" disabled={!selectedRecords.length} onClick={triggerBulkCrawlSelected}>
+                    <ArrowRightCircle className="size-3.5" />
+                    Bulk Crawl Selected
+                  </Button>
+                  <Badge tone="neutral">{selectedRecords.length} selected</Badge>
                 </div>
-                <div className="divide-y divide-border">
-                  {contractRows.map((row) => (
-                    <div
-                      key={row.id}
-                      className="grid grid-cols-[160px_minmax(0,1fr)_180px_40px] gap-2 px-3 py-2 animate-fade-in"
+              </div>
+            ) : null}
+
+            {outputTab === "json" ? (
+              <Card className="space-y-3 p-4">
+                <div className="label-caps">JSON</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-muted">Pretty-printed by default.</div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" type="button" onClick={() => void copyJson(records)}>
+                      <Copy className="size-3.5" />
+                      Copy
+                    </Button>
+                    <Button variant="secondary" type="button" onClick={() => setJsonCompact((value) => !value)}>
+                      {jsonCompact ? "Pretty" : "Compact"}
+                    </Button>
+                  </div>
+                </div>
+                <pre className="crawl-terminal max-h-[480px] overflow-auto text-[12px]">
+                  {jsonCompact ? JSON.stringify(records.map(cleanRecord)) : JSON.stringify(records.map(cleanRecord), null, 2)}
+                </pre>
+              </Card>
+            ) : null}
+
+            {outputTab === "intelligence" ? (
+              <Card className="space-y-4 p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="label-caps">LLM Cleanup</div>
+                    <div className="text-sm text-muted">Accepted suggestions are only committed after explicit confirmation.</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      onClick={() => setSuggestionState((current) => Object.fromEntries(intelligenceSuggestions.map((item) => [item.key, item.state === "committed" ? "committed" : "accepted"])) as Record<string, SuggestionState>)}
+                      disabled={!intelligenceSuggestions.length}
                     >
-                      <Input
-                        value={row.field_name}
-                        onChange={(event) => updateContractRow(row.id, "field_name", event.target.value)}
-                        placeholder="field_name"
-                      />
-                      <Input
-                        value={row.xpath}
-                        onChange={(event) => updateContractRow(row.id, "xpath", event.target.value)}
-                        placeholder="//h1 | //*[@itemprop='name']"
-                      />
-                      <Input
-                        value={row.regex}
-                        onChange={(event) => updateContractRow(row.id, "regex", event.target.value)}
-                        placeholder="price:\s*([\d.]+)"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeContractRow(row.id)}
-                        className="inline-flex h-9 items-center justify-center rounded-md text-muted transition hover:bg-danger/10 hover:text-danger"
-                        aria-label="Delete row"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </div>
+                      Accept All
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      onClick={() => setSuggestionState((current) => Object.fromEntries(intelligenceSuggestions.map((item) => [item.key, item.state === "committed" ? "committed" : "rejected"])) as Record<string, SuggestionState>)}
+                      disabled={!intelligenceSuggestions.length}
+                    >
+                      Reject All
+                    </Button>
+                  </div>
+                </div>
+                {commitError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{commitError}</div> : null}
+                {intelligenceSuggestions.length ? (
+                  <div className="space-y-2">
+                    {intelligenceSuggestions.map((item) => (
+                      <div key={item.key} className="grid gap-3 rounded-md border border-border bg-background p-3 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)_auto]">
+                        <div className="space-y-1">
+                          <div className="text-sm font-medium text-foreground">{item.fieldName}</div>
+                          <div className="text-xs text-muted">Record #{item.recordId} · {item.source}</div>
+                        </div>
+                        <div className="font-mono text-sm text-foreground">{item.value}</div>
+                        <div className="flex items-center gap-2">
+                          <Button variant="secondary" type="button" onClick={() => setSuggestionState((current) => ({ ...current, [item.key]: "accepted" }))} disabled={item.state === "committed"}>
+                            Accept
+                          </Button>
+                          <Button variant="ghost" type="button" onClick={() => setSuggestionState((current) => ({ ...current, [item.key]: "rejected" }))} disabled={item.state === "committed"}>
+                            Reject
+                          </Button>
+                          <Badge tone={item.state === "committed" ? "success" : item.state === "accepted" ? "success" : item.state === "rejected" ? "danger" : "neutral"}>
+                            {item.state}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : review ? (
+                  <div className="space-y-2 text-sm text-muted">
+                    <div>{review.normalized_fields.length} normalized fields</div>
+                    <div>{review.discovered_fields.length} discovered fields</div>
+                    <div>{Object.keys(review.selector_suggestions ?? {}).length} selector groups</div>
+                    <div className="rounded-md border border-border bg-background p-3 text-foreground">No pending LLM cleanup suggestions were stored for this run.</div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted">No intelligence payload available for this run.</div>
+                )}
+                <div className="flex justify-end">
+                  <Button
+                    variant="accent"
+                    type="button"
+                    onClick={() => void commitAcceptedSuggestions()}
+                    disabled={!intelligenceSuggestions.some((item) => item.state === "accepted") || commitPending}
+                  >
+                    {commitPending ? "Committing..." : "Commit Accepted Fields"}
+                  </Button>
+                </div>
+              </Card>
+            ) : null}
+
+            {outputTab === "logs" ? (
+              <Card className="space-y-3 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="label-caps">Logs</div>
+                  <Input value={logSearch} onChange={(event) => setLogSearch(event.target.value)} placeholder="Search" className="h-8 max-w-40 text-xs" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {LOG_FILTERS.map((level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      onClick={() => setLogFilters((current) => ({ ...current, [level]: !current[level] }))}
+                      className={cn("rounded-md border px-2.5 py-1 text-xs font-medium transition", logFilters[level] ? "border-accent bg-accent-subtle" : "border-border bg-panel text-muted")}
+                    >
+                      {level}
+                    </button>
                   ))}
                 </div>
-              </div>
+                <LogTerminal logs={filteredLogs} viewportRef={logViewportRef} />
+              </Card>
             ) : null}
-          </Card>
+          </div>
+        </Card>
+      ) : null}
 
-          {error ? (
-            <div className="animate-fade-in rounded-md border border-danger/20 bg-danger/5 px-3 py-2.5 text-[13px] text-danger">
-              {error}
-            </div>
-          ) : null}
-        </div>
-
-        {/* Settings rail */}
-        <div className="xl:sticky xl:top-4 xl:self-start">
-          <Card className="space-y-1">
-            <h2 className="pb-2 text-[15px] font-semibold tracking-[-0.01em] text-foreground">Settings</h2>
-
-            <SettingRow label="Page Type">
-              <TabGroup compact>
-                <TabButton active={pageType === "category"} onClick={() => updatePageType("category")} compact>
-                  Category
-                </TabButton>
-                <TabButton active={pageType === "pdp"} onClick={() => updatePageType("pdp")} compact>
-                  PDP
-                </TabButton>
-              </TabGroup>
-            </SettingRow>
-
-            <SettingRow label="Vertical">
-              <select
-                value={vertical}
-                onChange={(event) => updateVertical(event.target.value as Vertical)}
-                className="focus-ring h-7 rounded-md border border-border bg-background px-2 text-[12px] text-foreground transition hover:border-border-strong"
-                aria-label="Vertical"
-              >
-                {VERTICAL_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </SettingRow>
-
-            <SettingRow label="Advanced">
-              <MiniToggle enabled={advancedEnabled} onToggle={() => setAdvancedEnabled((current) => !current)} />
-            </SettingRow>
-
-            {advancedEnabled ? (
-              <div className="animate-fade-in space-y-2.5 rounded-md border border-border bg-panel-strong/50 px-3 py-3">
-                <label className="grid gap-1">
-                  <span className="text-[11px] font-medium text-muted">Mode</span>
-                  <select
-                    value={advancedMode}
-                    onChange={(event) => setAdvancedMode(event.target.value as AdvancedMode)}
-                    className="focus-ring h-7 rounded-md border border-border bg-background px-2 text-[12px] text-foreground"
-                  >
-                    {ADVANCED_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {formatAdvancedMode(option)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <SliderControl label="Pages" value={maxPages} min={1} max={50} step={1} onChange={setMaxPages} />
-                <SliderControl label="Records" value={maxRecords} min={1} max={pageType === "pdp" ? 10 : 500} step={pageType === "pdp" ? 1 : 10} onChange={setMaxRecords} />
-                <SliderControl label="Wait Time" value={sleepMs} min={0} max={5000} step={100} suffix=" ms" onChange={setSleepMs} />
-              </div>
-            ) : null}
-
-            <SettingRow label="Proxy">
-              <MiniToggle enabled={proxyEnabled} onToggle={() => setProxyEnabled((current) => !current)} />
-            </SettingRow>
-
-            {proxyEnabled ? (
-              <Textarea
-                value={proxyListInput}
-                onChange={(event) => setProxyListInput(event.target.value)}
-                placeholder={"http://user:pass@host:port\nhttp://user:pass@host-2:port"}
-                className="min-h-20 animate-fade-in"
-              />
-            ) : null}
-
-            <SettingRow label="LLM">
-              <MiniToggle enabled={llmEnabled} onToggle={() => setLlmEnabled((current) => !current)} />
-            </SettingRow>
-          </Card>
-        </div>
-      </form>
+      {previewOpen && pendingDispatch ? (
+        <PreviewModal dispatch={pendingDispatch} onCancel={() => { setPreviewOpen(false); setPendingDispatch(null); }} onLaunch={() => void launchPending()} launchError={launchError} />
+      ) : null}
     </div>
   );
 }
 
-/* --- Local components --- */
+function buildDispatch(config: CrawlConfig): PendingDispatch {
+  const additionalFields = uniqueFields(config.additional_fields);
+  const commonSettings = {
+    llm_enabled: config.smart_extraction,
+    advanced_enabled: config.advanced_enabled,
+    sleep_ms: config.request_delay_ms,
+    max_records: config.max_records,
+    max_pages: config.max_pages,
+    proxy_enabled: config.proxy_enabled,
+    proxy_list: config.proxy_enabled ? config.proxy_lines : [],
+    additional_fields: additionalFields,
+    crawl_module: config.module,
+    crawl_mode: config.mode,
+  };
+  if (config.module === "category") {
+    if (config.mode === "bulk") {
+      const urls = parseLines(config.bulk_urls);
+      if (!urls.length) throw new Error("Bulk crawl needs at least one URL.");
+      return { runType: "batch", surface: "ecommerce_listing", url: urls[0], urls, settings: { ...commonSettings, urls }, additionalFields, csvFile: null };
+    }
+    if (!config.target_url.trim()) throw new Error("Enter a target URL.");
+    return { runType: "crawl", surface: "ecommerce_listing", url: config.target_url.trim(), settings: commonSettings, additionalFields, csvFile: null };
+  }
+  if (config.mode === "csv") {
+    if (!config.csv_file) throw new Error("Select a CSV file.");
+    return { runType: "csv", surface: "ecommerce_detail", url: config.target_url.trim(), settings: commonSettings, additionalFields, csvFile: config.csv_file };
+  }
+  if (config.mode === "batch") {
+    const urls = parseLines(config.bulk_urls);
+    if (!urls.length) throw new Error("Batch crawl needs at least one URL.");
+    return { runType: "batch", surface: "ecommerce_detail", url: urls[0], urls, settings: { ...commonSettings, urls }, additionalFields, csvFile: null };
+  }
+  if (!config.target_url.trim()) throw new Error("Enter a target URL.");
+  return { runType: "crawl", surface: "ecommerce_detail", url: config.target_url.trim(), settings: commonSettings, additionalFields, csvFile: null };
+}
 
-function TabGroup({ children, compact }: Readonly<{ children: React.ReactNode; compact?: boolean }>) {
+function canPreview(config: CrawlConfig) {
+  try {
+    buildDispatch(config);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function uniqueFields(values: string[]) {
+  return Array.from(new Set(values.map(normalizeField).filter(Boolean)));
+}
+
+function uniqueNumbers(values: number[]) {
+  return Array.from(new Set(values));
+}
+
+function normalizeField(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function parseLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function clampNumber(value: string, min: number, max: number, fallback: number) {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function extractRecordUrl(record: CrawlRecord) {
+  return stringifyCell(record.data?.url ?? record.raw_data?.url ?? record.source_url).trim();
+}
+
+function stringifyCell(value: unknown) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+function readRecordValue(record: CrawlRecord, field: string) {
+  const data = record.data && typeof record.data === "object" ? record.data : {};
+  const raw = record.raw_data && typeof record.raw_data === "object" ? record.raw_data : {};
+  if (field in data) return data[field];
+  if (field in raw) return raw[field];
+  if (field === "source_url") return record.source_url;
+  return "";
+}
+
+function formatDuration(start?: string | null, end?: string | null) {
+  if (!start) return "--";
+  const started = new Date(start).getTime();
+  const finished = end ? new Date(end).getTime() : Date.now();
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return "--";
+  const seconds = Math.max(0, Math.floor((finished - started) / 1000));
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function progressPercent(run: CrawlRun | undefined) {
+  const value = typeof run?.result_summary?.progress === "number" ? run.result_summary.progress : 0;
+  return Math.min(100, Math.max(0, value));
+}
+
+function ProgressBar({ percent }: Readonly<{ percent: number }>) {
   return (
-    <div className={cn(
-      "inline-flex items-center rounded-md border border-border bg-panel-strong",
-      compact ? "gap-0 p-0.5" : "gap-0 p-0.5",
-    )}>
-      {children}
+    <div className="space-y-1">
+      <div className="h-1.5 rounded-full bg-border">
+        <div className={cn("h-1.5 rounded-full bg-accent transition-all", percent > 90 && "bg-danger")} style={{ width: `${percent}%` }} />
+      </div>
+      <div className="text-xs text-muted">{percent}% complete</div>
     </div>
   );
 }
 
-function TabButton({
-  active,
-  children,
-  onClick,
-  compact,
-}: Readonly<{ active: boolean; children: React.ReactNode; onClick: () => void; compact?: boolean }>) {
+function validateXPath(value: string): ValidationState {
+  if (!value.trim()) return "idle";
+  try {
+    document.evaluate(value, document, null, XPathResult.ANY_TYPE, null);
+    return "valid";
+  } catch {
+    return "invalid";
+  }
+}
+
+function validateRegex(value: string): ValidationState {
+  if (!value.trim()) return "idle";
+  try {
+    new RegExp(value);
+    return "valid";
+  } catch {
+    return "invalid";
+  }
+}
+
+function copyJson(records: CrawlRecord[]) {
+  void navigator.clipboard.writeText(JSON.stringify(records.map(cleanRecord), null, 2));
+}
+
+function cleanRecord(record: CrawlRecord) {
+  return Object.fromEntries(
+    Object.entries(record.data ?? {}).filter(([key, value]) => !key.startsWith("_") && value !== null && value !== "" && !(Array.isArray(value) && value.length === 0)),
+  );
+}
+
+function logTone(level: string) {
+  const normalized = normalizeLogLevel(level);
+  if (normalized === "WARN") return "text-warning";
+  if (normalized === "ERROR") return "text-danger";
+  if (normalized === "PROXY") return "text-accent";
+  return "text-muted";
+}
+
+function normalizeLogLevel(level: string) {
+  return String(level || "").trim().toUpperCase() as LogLevel;
+}
+
+function useLogViewport(logsLength: number, ref?: RefObject<HTMLDivElement | null>) {
+  const internalRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = ref ?? internalRef;
+  useEffect(() => {
+    if (viewportRef.current) {
+      viewportRef.current.scrollTop = viewportRef.current.scrollHeight;
+    }
+  }, [logsLength, viewportRef]);
+  return viewportRef;
+}
+
+function PreviewModal({
+  dispatch,
+  onCancel,
+  onLaunch,
+  launchError,
+}: Readonly<{
+  dispatch: PendingDispatch;
+  onCancel: () => void;
+  onLaunch: () => void;
+  launchError: string;
+}>) {
+  const urls = dispatch.urls ?? (dispatch.url ? [dispatch.url] : []);
+  const proxyCount = Array.isArray(dispatch.settings.proxy_list) ? dispatch.settings.proxy_list.length : 0;
+  const smartExtraction = Boolean(dispatch.settings.llm_enabled);
+  const proxyEnabled = Boolean(dispatch.settings.proxy_enabled);
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center justify-center rounded-[5px] font-medium transition-all",
-        compact ? "h-6 px-2.5 text-[11px]" : "h-7 px-3 text-[13px]",
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted hover:text-foreground",
-      )}
-    >
-      {children}
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-[540px] rounded-[var(--radius-xl)] border border-border bg-background-elevated p-5 shadow-[var(--shadow-modal)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-base font-semibold tracking-[-0.02em]">Review Before Running</div>
+            <div className="text-sm text-muted">Confirm the payload before the job is dispatched.</div>
+          </div>
+          <button type="button" onClick={onCancel} className="inline-flex size-8 items-center justify-center rounded-md border border-border text-muted transition hover:text-foreground">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="mt-4 space-y-2">
+          <PreviewRow label="Target URL" value={dispatch.url ?? urls[0] ?? "--"} mono />
+          <PreviewRow label="Mode" value={dispatch.runType} />
+          <PreviewRow label="Proxy" value={proxyEnabled ? `${proxyCount} configured` : "Inactive"} />
+          <PreviewRow label="Smart Extraction" value={smartExtraction ? "On" : "Off"} />
+          <PreviewRow label="Max Records" value={String(dispatch.settings.max_records)} />
+          <PreviewRow label="Max Pages" value={String(dispatch.settings.max_pages)} />
+        </div>
+        <div className="mt-4">
+          <div className="label-caps mb-2">Additional Fields</div>
+          <div className="flex flex-wrap gap-1.5">
+            {dispatch.additionalFields.length ? dispatch.additionalFields.map((field) => <Badge key={field} tone="neutral">{field}</Badge>) : <span className="text-sm text-muted">None</span>}
+          </div>
+        </div>
+        {launchError ? <div className="mt-4 rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{launchError}</div> : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" type="button" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button variant="accent" type="button" onClick={onLaunch}>
+            Launch Job
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LogTerminal({
+  logs,
+  live = false,
+  viewportRef,
+}: Readonly<{
+  logs: Array<{ id: number; level: string; message: string; created_at: string }>;
+  live?: boolean;
+  viewportRef?: RefObject<HTMLDivElement | null>;
+}>) {
+  const ref = useLogViewport(logs.length, viewportRef);
+  return (
+    <div ref={ref} className="crawl-terminal max-h-[320px] min-h-[260px] space-y-1.5">
+      {logs.length ? logs.map((log) => (
+        <div key={log.id} className="font-mono text-[12px] leading-6">
+          <span className="text-muted">[{formatTimestamp(log.created_at)}]</span>{" "}
+          <span className={logTone(log.level)}>[{normalizeLogLevel(log.level)}]</span>{" "}
+          <span>{log.message}</span>
+        </div>
+      )) : <div className="text-sm text-muted">{live ? "Waiting for log output..." : "No logs captured for this run."}</div>}
+    </div>
+  );
+}
+
+function TabBar({
+  value,
+  onChange,
+  options,
+}: Readonly<{
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}>) {
+  return (
+    <div className="inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-border bg-panel p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={cn("rounded-[4px] px-3 py-1 text-sm font-medium", value === option.value ? "bg-background-elevated text-foreground shadow-[var(--shadow-sm)]" : "text-muted")}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SegmentedMode({
+  label,
+  value,
+  onChange,
+  options,
+}: Readonly<{
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}>) {
+  return (
+    <div className="space-y-1.5">
+      <div className="label-caps">{label}</div>
+      <div className="inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-border bg-panel p-0.5">
+        {options.map((option) => (
+          <button key={option.value} type="button" onClick={() => onChange(option.value)} className={cn("rounded-[4px] px-3 py-1 text-sm font-medium", value === option.value ? "bg-background-elevated text-foreground shadow-[var(--shadow-sm)]" : "text-muted")}>
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingBlock({ title, description, children }: Readonly<{ title: string; description: string; children: ReactNode }>) {
+  return (
+    <div className="flex items-center justify-between rounded-[var(--radius-lg)] border border-border bg-panel p-4">
+      <div>
+        <div className="label-caps">{title}</div>
+        <div className="text-sm text-muted">{description}</div>
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function Toggle({ checked, onChange }: Readonly<{ checked: boolean; onChange: (value: boolean) => void }>) {
+  return (
+    <button type="button" onClick={() => onChange(!checked)} className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition-colors", checked ? "bg-accent" : "bg-border")}>
+      <span className={cn("inline-block size-4 rounded-full bg-white shadow-sm transition-transform", checked ? "translate-x-4" : "translate-x-0.5")} />
     </button>
   );
 }
 
-function SettingRow({
-  label,
-  children,
-}: Readonly<{ label: string; children: React.ReactNode }>) {
-  return (
-    <div className="flex min-h-8 items-center justify-between gap-3 py-1">
-      <span className="text-[13px] text-muted">{label}</span>
-      <div className="flex items-center gap-2">{children}</div>
-    </div>
-  );
-}
-
-function SliderControl({
+function SliderRow({
   label,
   value,
   min,
   max,
   step,
-  suffix,
   onChange,
-}: Readonly<{
-  label: string;
-  value: string;
-  min: number;
-  max: number;
-  step: number;
-  suffix?: string;
-  onChange: (value: string) => void;
-}>) {
+  onReset,
+  suffix,
+}: Readonly<{ label: string; value: string; min: number; max: number; step: number; onChange: (value: string) => void; onReset: () => void; suffix?: string }>) {
   return (
-    <label className="grid gap-1">
+    <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[12px] text-foreground">{label}</span>
-        <span className="font-mono text-[11px] text-muted">
-          {value}{suffix ?? ""}
-        </span>
+        <div className="text-sm">{label}</div>
+        <button type="button" onClick={onReset} className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"><RotateCcw className="size-3.5" />Reset</button>
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={clampSliderValue(value, min, max)}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-border accent-accent"
-      />
+      <div className="flex items-center gap-3">
+        <input type="range" min={min} max={max} step={step} value={clampNumber(value, min, max, min)} onChange={(event) => onChange(event.target.value)} className="h-1.5 w-full rounded-full bg-border" />
+        <Input value={suffix ? `${value}${suffix}` : value} onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))} onBlur={() => onChange(String(clampNumber(value, min, max, min)))} className="h-8 w-24 text-right font-mono text-xs" />
+      </div>
+    </div>
+  );
+}
+
+function AdditionalFieldInput({
+  value,
+  fields,
+  onChange,
+  onCommit,
+  onRemove,
+}: Readonly<{ value: string; fields: string[]; onChange: (value: string) => void; onCommit: (value: string) => void; onRemove: (value: string) => void }>) {
+  const chips = uniqueFields([...fields, ...parseLines(value.replace(/,/g, "\n"))]);
+  function handleChange(next: string) {
+    const parts = next.split(",");
+    parts
+      .slice(0, -1)
+      .map((part) => normalizeField(part))
+      .filter(Boolean)
+      .forEach(onCommit);
+    onChange(parts.at(-1) ?? "");
+  }
+  function handleBlur() {
+    parseLines(value).map(normalizeField).filter(Boolean).forEach(onCommit);
+    onChange("");
+  }
+  return (
+    <label className="grid gap-1.5">
+      <span className="label-caps">Additional Fields</span>
+      <div className="text-xs text-muted">Comma-separated field names the crawler will look for during extraction.</div>
+      <Input value={value} onChange={(event) => handleChange(event.target.value)} onBlur={handleBlur} placeholder="price, sku, availability, brand" className="font-mono text-sm" />
+      <div className="flex flex-wrap gap-1.5">
+        {chips.length ? chips.map((field) => <button key={field} type="button" onClick={() => onRemove(field)} className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs"><span>{field}</span><X className="size-3.5" /></button>) : <span className="text-sm text-muted">No additional fields added yet.</span>}
+      </div>
     </label>
   );
 }
 
-function MiniToggle({
-  enabled,
-  onToggle,
-}: Readonly<{ enabled: boolean; onToggle: () => void }>) {
+function ManualFieldEditor({ row, onChange, onDelete }: Readonly<{ row: FieldRow; onChange: (patch: Partial<FieldRow>) => void; onDelete: () => void }>) {
+  return (
+    <div className="grid gap-2 rounded-md border border-border bg-background p-3 xl:grid-cols-[24px_minmax(160px,0.8fr)_minmax(240px,1fr)_minmax(200px,1fr)_auto]">
+      <div className="flex items-center justify-center text-muted"><GripVertical className="size-4" /></div>
+      <label className="grid gap-1">
+        <span className="label-caps">Field</span>
+        <Input value={row.fieldName} onChange={(event) => onChange({ fieldName: event.target.value })} placeholder="price" className="font-mono text-sm" />
+      </label>
+      <ValidatedField label="XPath" value={row.xpath} state={row.xpathState} placeholder="//span[@class='price']" onChange={(value) => onChange({ xpath: value })} onBlur={(value) => onChange({ xpathState: validateXPath(value) })} />
+      <ValidatedField label="Regex" value={row.regex} state={row.regexState} placeholder="\\$[\\d,.]+" onChange={(value) => onChange({ regex: value })} onBlur={(value) => onChange({ regexState: validateRegex(value) })} />
+      <div className="flex items-end justify-end"><button type="button" onClick={onDelete} className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-danger hover:bg-danger/10"><Trash2 className="size-3.5" /></button></div>
+    </div>
+  );
+}
+
+function ValidatedField({
+  label,
+  value,
+  state,
+  placeholder,
+  onChange,
+  onBlur,
+}: Readonly<{ label: string; value: string; state: ValidationState; placeholder: string; onChange: (value: string) => void; onBlur: (value: string) => void }>) {
+  return (
+    <label className="grid gap-1">
+      <span className="label-caps">{label}</span>
+      <div className="relative">
+        <Input value={value} onChange={(event) => onChange(event.target.value)} onBlur={(event) => onBlur(event.target.value)} placeholder={placeholder} className="pr-10 font-mono text-sm" />
+        <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+          {state === "valid" ? <CheckCircle2 className="size-4 text-success" /> : state === "invalid" ? <CircleAlert className="size-4 text-danger" /> : null}
+        </div>
+      </div>
+    </label>
+  );
+}
+
+function ActionButton({
+  label,
+  danger,
+  disabled,
+  onClick,
+}: Readonly<{ label: string; danger?: boolean; disabled?: boolean; onClick?: () => void }>) {
+  return (
+    <Button
+      type="button"
+      variant={danger ? "danger" : "secondary"}
+      disabled={disabled}
+      onClick={onClick}
+      className="h-8 px-3 text-xs"
+    >
+      {label}
+    </Button>
+  );
+}
+
+function OutputTab({
+  active = false,
+  children,
+  onClick,
+}: Readonly<{ active?: boolean; children: ReactNode; onClick: () => void }>) {
   return (
     <button
       type="button"
-      onClick={onToggle}
-      className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
-        enabled ? "bg-accent" : "bg-border-strong",
-      )}
+      onClick={onClick}
+      className={cn("relative px-4 py-2 text-sm font-medium", active ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent" : "text-muted")}
     >
-      <span
-        className={cn(
-          "inline-block size-3.5 rounded-full bg-white shadow-sm transition-transform",
-          enabled ? "translate-x-[18px]" : "translate-x-[3px]",
-        )}
-      />
+      {children}
     </button>
   );
 }
 
-function clampSliderValue(value: string, min: number, max: number) {
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed)) {
-    return min;
+function Metric({ label, value }: Readonly<{ label: string; value: string | number }>) {
+  return <div className="rounded-[var(--radius-lg)] border border-border bg-panel p-4 shadow-[var(--shadow-sm)]"><div className="label-caps">{label}</div><div className="mt-1 text-[24px] font-bold tracking-[var(--tracking-tight)]">{value}</div></div>;
+}
+
+function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: string; mono?: boolean }>) {
+  return <div className="flex items-start justify-between gap-4 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2"><div className="label-caps">{label}</div><div className={cn("max-w-[60%] text-right text-sm", mono && "font-mono text-xs")}>{value || "--"}</div></div>;
+}
+
+function formatTimestamp(value: string) {
+  try {
+    return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return value;
   }
-  return Math.min(max, Math.max(min, parsed));
-}
-
-function formatAdvancedMode(mode: AdvancedMode) {
-  if (mode === "load_more") {
-    return "Load More";
-  }
-  return mode.charAt(0).toUpperCase() + mode.slice(1);
-}
-
-function splitLines(value: string) {
-  return value
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function normalizeFieldName(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, "_");
-}
-
-function requestedSubmissionTab(urlCount: number): SubmissionTab {
-  return urlCount > 1 ? "batch" : "crawl";
 }

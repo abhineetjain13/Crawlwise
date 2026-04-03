@@ -1,5 +1,6 @@
 import { apiClient, getApiBaseUrl } from "./client";
 import type {
+  ActiveJob,
   CrawlCreatePayload,
   CrawlLog,
   CrawlRecord,
@@ -50,6 +51,13 @@ export const api = {
     return apiClient.get<Paginated<CrawlRun>>(`/api/crawls${query.size ? `?${query.toString()}` : ""}`);
   },
   getCrawl: (runId: number) => apiClient.get<CrawlRun>(`/api/crawls/${runId}`),
+  pauseCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/pause`, {}),
+  resumeCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/resume`, {}),
+  killCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/kill`, {}),
+  commitLlmSuggestions: (
+    runId: number,
+    items: Array<{ record_id: number; field_name: string; value: string }>,
+  ) => apiClient.post<{ run_id: number; updated_records: number; updated_fields: number }>(`/api/crawls/${runId}/llm-commit`, { items }),
   getRecords: (runId: number, params?: { page?: number; limit?: number }) => {
     const query = new URLSearchParams();
     if (params?.page !== undefined) query.set("page", String(params.page));
@@ -65,7 +73,14 @@ export const api = {
     apiClient.post(`/api/review/${runId}/save`, payload),
   previewSelectors: (runId: number, payload: { selectors: SelectorCreatePayload[] }) =>
     apiClient.post<ReviewSelectorPreview>(`/api/review/${runId}/selector-preview`, payload),
-  listUsers: () => apiClient.get<Paginated<User>>("/api/users"),
+  listUsers: (params?: { search?: string; is_active?: boolean }) => {
+    const query = new URLSearchParams();
+    if (params?.search) query.set("search", params.search);
+    if (params?.is_active !== undefined) query.set("is_active", String(params.is_active));
+    return apiClient.get<Paginated<User>>(`/api/users${query.size ? `?${query.toString()}` : ""}`);
+  },
+  updateUser: (userId: number, payload: Partial<Pick<User, "role" | "is_active">>) =>
+    apiClient.patch<User>(`/api/users/${userId}`, payload),
   listSelectors: (params?: { domain?: string }) => {
     const query = new URLSearchParams();
     if (params?.domain) query.set("domain", params.domain);
@@ -77,7 +92,7 @@ export const api = {
   deleteSelector: (selectorId: number) => apiClient.delete<void>(`/api/selectors/${selectorId}`),
   testSelector: (payload: { url: string; css_selector?: string | null; xpath?: string | null; regex?: string | null }) =>
     apiClient.post<SelectorTestResponse>("/api/selectors/test", payload),
-  listJobs: () => apiClient.get<Array<Record<string, unknown>>>("/api/jobs/active"),
+  listJobs: () => apiClient.get<ActiveJob[]>("/api/jobs/active"),
   listLlmConfigs: () => apiClient.get<LlmConfigRecord[]>("/api/llm/config"),
   listLlmCostLog: (params?: { page?: number; limit?: number }) => {
     const query = new URLSearchParams();

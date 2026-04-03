@@ -1,13 +1,26 @@
 export type User = {
   id: number;
   email: string;
-  role: string;
+  role: "user" | "admin";
   is_active: boolean;
   created_at: string;
   updated_at: string;
 };
 
-export type RunStatus = "completed" | "failed" | "cancelled" | "running" | "pending" | "degraded";
+export type RunStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "completed"
+  | "killed"
+  | "failed"
+  | "proxy_exhausted";
+
+export type CrawlPhase = "config" | "running" | "complete";
+
+export type CrawlModule = "category" | "pdp";
+
+export type CrawlMode = "single" | "sitemap" | "bulk" | "batch" | "csv";
 
 export type ResultSummary = {
   extraction_verdict?: string;
@@ -34,6 +47,19 @@ export type CrawlRun = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+};
+
+export type ActiveJob = {
+  run_id: number;
+  status: RunStatus;
+  progress: number;
+  started_at: string;
+  url: string;
+  type: string;
+  user_id?: number;
+  elapsed_seconds?: number;
+  records_collected?: number;
+  max_records?: number;
 };
 
 export type ReviewSelection = {
@@ -169,10 +195,26 @@ export type LlmCostLogRecord = {
 };
 
 export type CrawlCreatePayload = {
-  run_type: "crawl" | "batch";
+  run_type: "crawl" | "batch" | "csv";
   url?: string;
   urls?: string[];
   surface: string;
   settings?: Record<string, unknown>;
   additional_fields?: string[];
+};
+
+export type CrawlConfig = {
+  module: CrawlModule;
+  mode: CrawlMode;
+  target_url: string;
+  bulk_urls: string;
+  csv_file: File | null;
+  smart_extraction: boolean;
+  advanced_enabled: boolean;
+  request_delay_ms: number;
+  max_records: number;
+  max_pages: number;
+  proxy_enabled: boolean;
+  proxy_lines: string[];
+  additional_fields: string[];
 };

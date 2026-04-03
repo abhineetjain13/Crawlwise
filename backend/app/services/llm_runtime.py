@@ -10,6 +10,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.crawl import CrawlRun
 from app.core.security import decrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
 from app.services.knowledge_base.store import get_prompt_task, load_prompt_file
@@ -25,6 +26,7 @@ class LLMTaskResult:
     output_tokens: int = 0
     provider: str = ""
     model: str = ""
+    error_message: str = ""
 
 
 async def resolve_active_config(session: AsyncSession, task_type: str) -> LLMConfig | None:
@@ -41,6 +43,39 @@ async def resolve_active_config(session: AsyncSession, task_type: str) -> LLMCon
     return None
 
 
+async def snapshot_active_configs(
+    session: AsyncSession,
+    task_types: list[str] | None = None,
+) -> dict[str, dict]:
+    snapshot: dict[str, dict] = {}
+    for task_type in task_types or ["general", "xpath_discovery", "missing_field_extraction"]:
+        config = await resolve_active_config(session, task_type)
+        if config is not None:
+            snapshot[task_type] = _serialize_config_snapshot(config)
+    return snapshot
+
+
+async def resolve_run_config(
+    session: AsyncSession,
+    *,
+    run_id: int | None,
+    task_type: str,
+) -> dict | None:
+    if run_id is not None:
+        run = await session.get(CrawlRun, run_id)
+        if run is not None:
+            snapshot = (run.settings or {}).get("llm_config_snapshot")
+            if isinstance(snapshot, dict):
+                for candidate in [task_type, "general"]:
+                    config_snapshot = snapshot.get(candidate)
+                    if isinstance(config_snapshot, dict):
+                        return config_snapshot
+    config = await resolve_active_config(session, task_type)
+    if config is None:
+        return None
+    return _serialize_config_snapshot(config)
+
+
 async def run_prompt_task(
     session: AsyncSession,
     *,
@@ -49,23 +84,25 @@ async def run_prompt_task(
     domain: str,
     variables: dict[str, Any],
 ) -> LLMTaskResult:
-    config = await resolve_active_config(session, task_type)
+    config = await resolve_run_config(session, run_id=run_id, task_type=task_type)
     task = get_prompt_task(task_type)
-    if config is None or task is None:
-        return LLMTaskResult(payload=None)
+    if config is None:
+        return LLMTaskResult(payload=None, error_message=f"No LLM config available for task {task_type}")
+    if task is None:
+        return LLMTaskResult(payload=None, error_message=f"No prompt registered for task {task_type}")
 
     system_prompt = load_prompt_file(str(task.get("system_file") or ""))
     user_template = load_prompt_file(str(task.get("user_file") or ""))
     if not system_prompt.strip() or not user_template.strip():
-        return LLMTaskResult(payload=None)
+        return LLMTaskResult(payload=None, error_message=f"Prompt files missing for task {task_type}")
 
     rendered_user_prompt = Template(user_template).safe_substitute({
         key: _stringify_prompt_value(value) for key, value in variables.items()
     })
     raw, input_tokens, output_tokens = await _call_provider(
-        provider=config.provider,
-        model=config.model,
-        api_key=decrypt_secret(config.api_key_encrypted),
+        provider=str(config.get("provider") or ""),
+        model=str(config.get("model") or ""),
+        api_key=decrypt_secret(str(config.get("api_key_encrypted") or "")),
         system_prompt=system_prompt,
         user_prompt=rendered_user_prompt,
     )
@@ -74,12 +111,22 @@ async def run_prompt_task(
             payload=None,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            provider=config.provider,
-            model=config.model,
+            provider=str(config.get("provider") or ""),
+            model=str(config.get("model") or ""),
+            error_message=raw,
         )
 
     response_type = str(task.get("response_type") or "object")
     payload = _parse_payload(raw, response_type=response_type)
+    if payload is None:
+        return LLMTaskResult(
+            payload=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            provider=str(config.get("provider") or ""),
+            model=str(config.get("model") or ""),
+            error_message="Error: Provider response could not be parsed as structured JSON.",
+        )
     if isinstance(payload, dict) and task.get("data_key"):
         inner = payload.get(str(task["data_key"]))
         if isinstance(inner, (dict, list)):
@@ -88,12 +135,17 @@ async def run_prompt_task(
     session.add(
         LLMCostLog(
             run_id=run_id,
-            provider=config.provider,
-            model=config.model,
+            provider=str(config.get("provider") or ""),
+            model=str(config.get("model") or ""),
             task_type=task_type,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cost_usd=_estimate_cost_usd(config.provider, config.model, input_tokens, output_tokens),
+            cost_usd=_estimate_cost_usd(
+                str(config.get("provider") or ""),
+                str(config.get("model") or ""),
+                input_tokens,
+                output_tokens,
+            ),
             domain=domain,
         )
     )
@@ -102,9 +154,19 @@ async def run_prompt_task(
         payload=payload,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        provider=config.provider,
-        model=config.model,
+        provider=str(config.get("provider") or ""),
+        model=str(config.get("model") or ""),
     )
+
+
+def _serialize_config_snapshot(config: LLMConfig) -> dict:
+    return {
+        "id": config.id,
+        "provider": config.provider,
+        "model": config.model,
+        "api_key_encrypted": config.api_key_encrypted,
+        "task_type": config.task_type,
+    }
 
 
 async def discover_xpath_candidates(
@@ -116,7 +178,7 @@ async def discover_xpath_candidates(
     html_text: str,
     missing_fields: list[str],
     existing_values: dict[str, object],
-) -> list[dict]:
+) -> tuple[list[dict], str | None]:
     result = await run_prompt_task(
         session,
         task_type="xpath_discovery",
@@ -130,7 +192,7 @@ async def discover_xpath_candidates(
         },
     )
     payload = result.payload
-    return payload if isinstance(payload, list) else []
+    return (payload if isinstance(payload, list) else []), (result.error_message or None)
 
 
 async def extract_missing_fields(
@@ -142,7 +204,7 @@ async def extract_missing_fields(
     html_text: str,
     missing_fields: list[str],
     existing_values: dict[str, object],
-) -> dict[str, object]:
+) -> tuple[dict[str, object], str | None]:
     result = await run_prompt_task(
         session,
         task_type="missing_field_extraction",
@@ -156,7 +218,7 @@ async def extract_missing_fields(
         },
     )
     payload = result.payload
-    return payload if isinstance(payload, dict) else {}
+    return (payload if isinstance(payload, dict) else {}), (result.error_message or None)
 
 
 async def _call_provider(

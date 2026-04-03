@@ -14,6 +14,6 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 @router.get("/active", response_model=list[dict])
 async def jobs_active(
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> list[dict]:
-    return await active_jobs(session)
+    return await active_jobs(session, user_id=None if user.role == "admin" else user.id)

@@ -1,7 +1,7 @@
 # User administration service.
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
@@ -35,8 +35,17 @@ async def get_user(session: AsyncSession, user_id: int) -> User | None:
 
 
 async def update_user(session: AsyncSession, user: User, payload: dict) -> User:
+    should_revoke_sessions = False
     for key, value in payload.items():
+        if key in {"is_active", "role"} and getattr(user, key) != value:
+            should_revoke_sessions = True
         setattr(user, key, value)
+    if should_revoke_sessions:
+        await session.execute(
+            update(User)
+            .where(User.id == user.id)
+            .values(token_version=func.coalesce(User.token_version, 0) + 1)
+        )
     await session.commit()
     await session.refresh(user)
     return user

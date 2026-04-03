@@ -46,7 +46,13 @@ class ShopifyAdapter(BaseAdapter):
             adapter_name=self.name,
         )
 
-    async def try_public_endpoint(self, url: str, surface: str) -> list[dict]:
+    async def try_public_endpoint(
+        self,
+        url: str,
+        surface: str,
+        *,
+        proxy: str | None = None,
+    ) -> list[dict]:
         """Fetch Shopify product endpoint data.
 
         Listing pages use `/collections/<handle>/products.json` when possible so
@@ -71,8 +77,13 @@ class ShopifyAdapter(BaseAdapter):
             else:
                 api_url = f"{parsed.scheme}://{parsed.netloc}/products.json?limit=250"
         try:
+            request_kwargs = {"impersonate": "chrome110", "timeout": 6}
+            if proxy:
+                request_kwargs["proxies"] = {"http": proxy, "https": proxy}
             resp = await asyncio.to_thread(
-                curl_requests.get, api_url, impersonate="chrome110", timeout=6,
+                curl_requests.get,
+                api_url,
+                **request_kwargs,
             )
             if resp.status_code != 200:
                 return []

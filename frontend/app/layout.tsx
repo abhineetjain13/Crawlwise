@@ -1,34 +1,34 @@
-import { Geist, Geist_Mono } from "next/font/google";
-
 import "./globals.css";
 import { AppShell } from "../components/layout/app-shell";
 import { QueryProvider } from "../components/ui/query-provider";
+import { Inter, JetBrains_Mono } from "next/font/google";
 
-const geistSans = Geist({
+const inter = Inter({
   subsets: ["latin"],
-  variable: "--font-geist-sans",
+  variable: "--font-inter",
+  weight: ["400", "500", "600", "700"],
 });
 
-const geistMono = Geist_Mono({
+const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
-  variable: "--font-geist-mono",
+  variable: "--font-jetbrains-mono",
+  weight: ["400", "500", "600"],
 });
 
 const themeScript = `
   (() => {
     const stored = window.localStorage.getItem("crawlerai-theme");
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.dataset.theme = stored === "dark" || stored === "light" ? stored : prefersDark ? "dark" : "light";
+    document.documentElement.dataset.theme = stored === "dark" ? "dark" : "light";
   })();
 `;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className={`${inter.variable} ${jetbrainsMono.variable}`}>
         <QueryProvider>
           <AppShell>{children}</AppShell>
         </QueryProvider>

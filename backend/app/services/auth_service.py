@@ -19,6 +19,6 @@ async def create_user(session: AsyncSession, email: str, password: str, role: st
 async def authenticate_user(session: AsyncSession, email: str, password: str) -> tuple[str, User] | None:
     result = await session.execute(select(User).where(User.email == email.lower()))
     user = result.scalar_one_or_none()
-    if user is None or not verify_password(password, user.hashed_password):
+    if user is None or not user.is_active or not verify_password(password, user.hashed_password):
         return None
-    return create_access_token(str(user.id)), user
+    return create_access_token(str(user.id), token_version=user.token_version), user

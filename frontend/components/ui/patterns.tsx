@@ -1,7 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useEffect } from "react";
 
+import { useTopBarStore } from "../layout/top-bar-context";
 import { cn } from "../../lib/utils";
 import { Card } from "./primitives";
 
@@ -14,21 +16,14 @@ export function PageHeader({
   description?: string;
   actions?: ReactNode;
 }>) {
-  return (
-    <div className="animate-fade-in flex flex-col gap-2 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
-      <div className="min-w-0 space-y-1">
-        <h1 className="text-lg font-semibold tracking-[-0.02em] text-foreground">
-          {title}
-        </h1>
-        {description ? (
-          <p className="max-w-xl text-[13px] text-muted">{description}</p>
-        ) : null}
-      </div>
-      {actions ? (
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
-      ) : null}
-    </div>
-  );
+  const { setHeader } = useTopBarStore();
+
+  useEffect(() => {
+    setHeader({ title, description, actions });
+    return () => setHeader(null);
+  }, [actions, description, setHeader, title]);
+
+  return null;
 }
 
 export function SectionHeader({
@@ -43,7 +38,7 @@ export function SectionHeader({
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="space-y-0.5">
-        <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
+        <h2 className="text-[16px] font-semibold tracking-[var(--tracking-tight)] text-foreground">
           {title}
         </h2>
         {description ? (
@@ -57,7 +52,7 @@ export function SectionHeader({
 
 export function MetricGrid({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <div className="stagger-children grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div className="stagger-children grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       {children}
     </div>
   );
@@ -71,7 +66,7 @@ export function EmptyPanel({
   description: string;
 }>) {
   return (
-    <Card className="grid min-h-32 place-items-center border-dashed text-center">
+    <Card className="grid min-h-36 place-items-center border-dashed text-center">
       <div className="space-y-1">
         <p className="text-[13px] font-medium text-foreground">{title}</p>
         <p className="text-[13px] text-muted">{description}</p>
@@ -92,7 +87,7 @@ export function JsonPanel({
   className?: string;
 }>) {
   return (
-    <Card className={cn("space-y-3", className)}>
+    <Card className={cn("space-y-4", className)}>
       <SectionHeader title={title} description={subtitle} />
       {children}
     </Card>

@@ -1,6 +1,7 @@
 # Adapter registry — resolves URL/HTML to the right platform adapter.
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlparse
 
 from app.services.adapters.amazon import AmazonAdapter
@@ -25,6 +26,8 @@ _ADAPTERS: list[BaseAdapter] = [
     ShopifyAdapter(),  # last — uses HTML signals, not domain matching
 ]
 
+logger = logging.getLogger(__name__)
+
 
 async def resolve_adapter(url: str, html: str) -> BaseAdapter | None:
     """Return the first adapter that can handle this URL/HTML, or None."""
@@ -42,7 +45,12 @@ async def run_adapter(url: str, html: str, surface: str) -> AdapterResult | None
     return await adapter.extract(url, html, surface)
 
 
-async def try_blocked_adapter_recovery(url: str, surface: str) -> AdapterResult | None:
+async def try_blocked_adapter_recovery(
+    url: str,
+    surface: str,
+    *,
+    proxy_list: list[str] | None = None,
+) -> AdapterResult | None:
     """Attempt limited recovery for blocked pages using public platform endpoints.
 
     This is intentionally narrow. It does not try to defeat anti-bot pages in
@@ -53,12 +61,19 @@ async def try_blocked_adapter_recovery(url: str, surface: str) -> AdapterResult 
         return None
 
     shopify = ShopifyAdapter()
-    records = await shopify.try_public_endpoint(url, surface)
-    if not records:
-        return None
-    return AdapterResult(
-        records=records,
-        source_type="shopify_adapter_recovery",
-        confidence=0.95,
-        adapter_name=shopify.name,
-    )
+    proxies = [proxy.strip() for proxy in (proxy_list or []) if proxy and proxy.strip()] or [None]
+    for proxy in proxies:
+        try:
+            records = await shopify.try_public_endpoint(url, surface, proxy=proxy)
+        except Exception as exc:
+            logger.debug("Shopify recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
+            continue
+        if not records:
+            continue
+        return AdapterResult(
+            records=records,
+            source_type="shopify_adapter_recovery",
+            confidence=0.95,
+            adapter_name=shopify.name,
+        )
+    return None

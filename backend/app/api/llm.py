@@ -4,8 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user, get_db
-from app.models.user import User
+from app.core.dependencies import get_db, require_admin
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.llm import LLMConfigCreate, LLMConfigResponse, LLMConfigUpdate, LLMCostLogResponse
 from app.services.llm_service import (
@@ -25,7 +24,7 @@ router = APIRouter(prefix="/api/llm", tags=["llm"])
 @router.get("/config", response_model=list[LLMConfigResponse])
 async def llm_configs(
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: object = Depends(require_admin),
 ) -> list[LLMConfigResponse]:
     return [LLMConfigResponse.model_validate(serialize_config(row)) for row in await list_configs(session)]
 
@@ -34,7 +33,7 @@ async def llm_configs(
 async def llm_config_create(
     payload: LLMConfigCreate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: object = Depends(require_admin),
 ) -> LLMConfigResponse:
     config = await create_config(session, prepare_config_create(payload.model_dump()))
     return LLMConfigResponse.model_validate(serialize_config(config))
@@ -45,7 +44,7 @@ async def llm_config_update(
     config_id: int,
     payload: LLMConfigUpdate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: object = Depends(require_admin),
 ) -> LLMConfigResponse:
     config = await get_config(session, config_id)
     if config is None:
@@ -61,7 +60,7 @@ async def llm_cost_log(
     provider: str = "",
     task_type: str = "",
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: object = Depends(require_admin),
 ) -> PaginatedResponse[LLMCostLogResponse]:
     rows, total = await list_cost_logs(session, page, limit, provider, task_type)
     return PaginatedResponse(

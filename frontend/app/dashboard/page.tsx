@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { Badge, Card, Metric } from "../../components/ui/primitives";
+import { Badge, Button, Card, Metric } from "../../components/ui/primitives";
 import { EmptyPanel, JsonPanel, MetricGrid, PageHeader, SectionHeader } from "../../components/ui/patterns";
 import { api } from "../../lib/api";
 
@@ -39,14 +39,14 @@ export default function DashboardPage() {
         title="Dashboard"
         description="Runs, records, and live activity."
         actions={
-          <button
+          <Button
             type="button"
             onClick={() => void handleResetData()}
             disabled={isResetting}
-            className="inline-flex h-9 items-center justify-center rounded-lg border border-red-500/30 bg-red-500/10 px-3.5 text-sm font-semibold text-red-700 transition hover:bg-red-500/15 disabled:opacity-60 dark:text-red-300"
+            variant="danger"
           >
             {isResetting ? "Resetting..." : "Reset Data"}
-          </button>
+          </Button>
         }
       />
 
@@ -58,7 +58,7 @@ export default function DashboardPage() {
       </MetricGrid>
 
       {resetError ? (
-        <Card className="border-red-500/30 bg-red-500/10 text-sm text-red-700 dark:text-red-300">
+        <Card className="border-danger/20 bg-danger/10 text-sm text-danger">
           {resetError}
         </Card>
       ) : null}
@@ -69,11 +69,11 @@ export default function DashboardPage() {
           {data?.recent_runs?.length ? (
             <div className="grid gap-3">
               {data.recent_runs.map((run) => (
-                <div key={run.id} className="rounded-2xl border border-border bg-panel-strong/60 p-4">
+                <div key={run.id} className="rounded-[var(--radius-lg)] border border-border bg-background-elevated p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 space-y-1">
                       <p className="truncate text-sm font-semibold text-foreground">{run.url || `Run ${run.id}`}</p>
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted">{run.surface}</p>
+                      <p className="label-caps">{run.surface}</p>
                     </div>
                     <Badge tone={getStatusTone(run.status)}>{run.status}</Badge>
                   </div>
@@ -85,7 +85,7 @@ export default function DashboardPage() {
           )}
         </Card>
         <JsonPanel title="Domains">
-          <div className="rounded-2xl border border-border bg-panel-strong/60 p-4">
+          <div className="rounded-[var(--radius-lg)] border border-border bg-background-elevated p-4">
             {data?.top_domains?.length ? (
               <div className="grid gap-3">
                 {data.top_domains.map((item) => (
@@ -107,7 +107,8 @@ export default function DashboardPage() {
 
 function getStatusTone(status: string) {
   if (status === "completed") return "success" as const;
-  if (status === "degraded") return "warning" as const;
-  if (status === "failed" || status === "cancelled") return "danger" as const;
+  if (status === "running") return "success" as const;
+  if (status === "paused") return "warning" as const;
+  if (status === "failed" || status === "killed" || status === "proxy_exhausted") return "danger" as const;
   return "neutral" as const;
 }

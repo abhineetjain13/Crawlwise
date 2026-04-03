@@ -620,7 +620,7 @@ function pickSelectorCandidate(entry: Record<string, unknown> | undefined): { ki
   if (regex) return { kind: "regex", value: regex };
   const selector = readString(entry.selector_used) ?? "";
   if (selector) {
-    return { kind: selector.startsWith("//") || selector.startsWith("(.") ? "xpath" : "css_selector", value: selector };
+    return { kind: selector.startsWith("//") || selector.startsWith("(") ? "xpath" : "css_selector", value: selector };
   }
   return { kind: "xpath", value: "" };
 }

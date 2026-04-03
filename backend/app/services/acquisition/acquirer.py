@@ -1,35 +1,44 @@
 # Acquisition waterfall service with optional proxy rotation.
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
+from bs4 import BeautifulSoup
 
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
-from app.services.acquisition.browser_client import BrowserResult, fetch_rendered_html
+from app.services.acquisition.browser_client import fetch_rendered_html
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
 from app.services.pipeline_config import BROWSER_FALLBACK_VISIBLE_TEXT_MIN, JS_GATE_PHRASES
 
 
-class ProxyRotator:
-    """Simple round-robin proxy rotator.
+class ProxyPoolExhausted(RuntimeError):
+    pass
 
-    Users provide a list of proxy URLs in crawl settings.  If empty,
-    no proxy is used.
-    """
+
+class ProxyRotator:
+    """Round-robin proxy rotator."""
 
     def __init__(self, proxies: list[str] | None = None):
-        self._proxies = [p.strip() for p in (proxies or []) if p.strip()]
+        self._proxies = [proxy.strip() for proxy in (proxies or []) if proxy and proxy.strip()]
+        self._index = 0
 
     def next(self) -> str | None:
         if not self._proxies:
             return None
-        return random.choice(self._proxies)
+        proxy = self._proxies[self._index % len(self._proxies)]
+        self._index += 1
+        return proxy
+
+    def cycle_once(self) -> list[str]:
+        if not self._proxies:
+            return []
+        return [self.next() for _ in range(len(self._proxies))]
 
 
 @dataclass
@@ -38,7 +47,7 @@ class AcquisitionResult:
 
     html: str = ""
     json_data: dict | list | None = None
-    content_type: str = "html"          # "html" | "json" | "binary"
+    content_type: str = "html"  # "html" | "json" | "binary"
     method: str = "curl_cffi"
     artifact_path: str = ""
     network_payloads: list[dict] = field(default_factory=list)
@@ -51,14 +60,9 @@ async def acquire_html(
     advanced_mode: str | None = None,
     max_pages: int = 5,
     max_scrolls: int = 10,
+    sleep_ms: int = 0,
 ) -> tuple[str, str, str, list[dict]]:
-    """Acquire HTML for a URL using the waterfall strategy.
-
-    Returns:
-        (html, method, artifact_path, network_payloads)
-
-    Kept for backward compatibility. New code should use ``acquire()``.
-    """
+    """Acquire HTML for a URL using the waterfall strategy."""
     result = await acquire(
         run_id=run_id,
         url=url,
@@ -66,6 +70,7 @@ async def acquire_html(
         advanced_mode=advanced_mode,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
+        sleep_ms=sleep_ms,
     )
     return result.html, result.method, result.artifact_path, result.network_payloads
 
@@ -77,21 +82,64 @@ async def acquire(
     advanced_mode: str | None = None,
     max_pages: int = 5,
     max_scrolls: int = 10,
+    sleep_ms: int = 0,
 ) -> AcquisitionResult:
-    """Acquire content for a URL using the waterfall strategy.
-
-    Returns an ``AcquisitionResult`` with typed content (HTML, JSON, or binary).
-    JSON responses are detected via Content-Type header and parsed automatically.
-    """
-    rotator = ProxyRotator(proxy_list)
-    proxy = rotator.next()
-    network_payloads: list[dict] = []
-    content_type = "html"
-    json_data = None
+    """Acquire content for a URL using the waterfall strategy."""
     prefer_stealth = host_prefers_stealth(url)
+    rotator = ProxyRotator(proxy_list)
+    proxy_candidates = rotator.cycle_once()
+    if proxy_list and not proxy_candidates:
+        raise ProxyPoolExhausted(f"No valid proxies configured for {url}")
+    if not proxy_candidates:
+        proxy_candidates = [None]
 
-    # If advanced mode is requested, go straight to Playwright
+    result: AcquisitionResult | None = None
+    for proxy in proxy_candidates:
+        result = await _acquire_once(
+            run_id=run_id,
+            url=url,
+            proxy=proxy,
+            advanced_mode=advanced_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            prefer_stealth=prefer_stealth,
+            sleep_ms=sleep_ms,
+        )
+        if result is not None:
+            break
+
+    if result is None:
+        if proxy_list:
+            raise ProxyPoolExhausted(f"All configured proxies failed for {url}")
+        raise RuntimeError(f"Unable to acquire content for {url}")
+
+    path = _artifact_path(run_id, url)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if result.content_type == "json" and result.json_data is not None:
+        path = path.with_suffix(".json")
+        path.write_text(json.dumps(result.json_data, indent=2, default=str), encoding="utf-8")
+    else:
+        path.write_text(result.html, encoding="utf-8")
+    _write_network_payloads(run_id, url, result.network_payloads)
+
+    result.artifact_path = str(path)
+    return result
+
+
+async def _acquire_once(
+    *,
+    run_id: int,
+    url: str,
+    proxy: str | None,
+    advanced_mode: str | None,
+    max_pages: int,
+    max_scrolls: int,
+    prefer_stealth: bool,
+    sleep_ms: int,
+) -> AcquisitionResult | None:
     if advanced_mode:
+        if sleep_ms > 0:
+            await asyncio.sleep(sleep_ms / 1000)
         browser_result = await fetch_rendered_html(
             url,
             proxy=proxy,
@@ -99,71 +147,77 @@ async def acquire(
             max_pages=max_pages,
             max_scrolls=max_scrolls,
             prefer_stealth=prefer_stealth,
+            request_delay_ms=sleep_ms,
         )
-        html = browser_result.html
-        network_payloads = browser_result.network_payloads
-        method = "playwright"
-    else:
-        fetch_result = await _fetch_with_content_type(url, proxy)
-        normalized = _normalize_fetch_result(fetch_result)
-        html = normalized.text
-        content_type = normalized.content_type
-        json_data = normalized.json_data
-        method = "curl_cffi"
+        if not browser_result.html or detect_blocked_page(browser_result.html).is_blocked:
+            return None
+        return AcquisitionResult(
+            html=browser_result.html,
+            content_type="html",
+            method="playwright",
+            artifact_path=str(_artifact_path(run_id, url)),
+            network_payloads=browser_result.network_payloads,
+        )
 
-        if content_type != "json":
-            blocked = detect_blocked_page(html)
-            visible = " ".join(html.lower().split())
-            gate_phrases = any(phrase in visible for phrase in JS_GATE_PHRASES)
-            needs_browser = bool(
-                blocked.is_blocked
-                or normalized.status_code in {403, 429, 503}
-                or len(visible) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
-                or gate_phrases
-                or normalized.error
-            )
-            if blocked.is_blocked:
-                remember_stealth_host(url)
-                prefer_stealth = True
-            if needs_browser:
-                proxy = rotator.next()
-                browser_result = await fetch_rendered_html(
-                    url,
-                    proxy=proxy,
-                    prefer_stealth=prefer_stealth,
-                    advanced_mode=advanced_mode,
-                    max_pages=max_pages,
-                    max_scrolls=max_scrolls,
-                )
-                html = browser_result.html
-                network_payloads = browser_result.network_payloads
-                method = "playwright"
+    if sleep_ms > 0:
+        await asyncio.sleep(sleep_ms / 1000)
+    fetch_result = await _fetch_with_content_type(url, proxy)
+    normalized = _normalize_fetch_result(fetch_result)
+    html = normalized.text
+    if normalized.content_type == "json":
+        return AcquisitionResult(
+            html=html,
+            json_data=normalized.json_data,
+            content_type="json",
+            method="curl_cffi",
+            artifact_path=str(_artifact_path(run_id, url)),
+        )
 
-    path = _artifact_path(run_id, url)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    blocked = detect_blocked_page(html)
+    visible_text = " ".join(BeautifulSoup(html, "html.parser").get_text(" ", strip=True).lower().split())
+    gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
+    needs_browser = bool(
+        blocked.is_blocked
+        or normalized.status_code in {403, 429, 503}
+        or len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
+        or gate_phrases
+        or normalized.error
+    )
+    if blocked.is_blocked:
+        remember_stealth_host(url)
+        prefer_stealth = True
+    if not needs_browser:
+        return AcquisitionResult(
+            html=html,
+            json_data=normalized.json_data,
+            content_type=normalized.content_type,
+            method="curl_cffi",
+            artifact_path=str(_artifact_path(run_id, url)),
+        )
 
-    # Persist artifact based on content type
-    if content_type == "json" and json_data is not None:
-        path = path.with_suffix(".json")
-        path.write_text(json.dumps(json_data, indent=2, default=str), encoding="utf-8")
-    else:
-        path.write_text(html, encoding="utf-8")
-
-    _write_network_payloads(run_id, url, network_payloads)
-
+    if sleep_ms > 0:
+        await asyncio.sleep(sleep_ms / 1000)
+    browser_result = await fetch_rendered_html(
+        url,
+        proxy=proxy,
+        prefer_stealth=prefer_stealth,
+        advanced_mode=advanced_mode,
+        max_pages=max_pages,
+        max_scrolls=max_scrolls,
+        request_delay_ms=sleep_ms,
+    )
+    if not browser_result.html or detect_blocked_page(browser_result.html).is_blocked:
+        return None
     return AcquisitionResult(
-        html=html,
-        json_data=json_data,
-        content_type=content_type,
-        method=method,
-        artifact_path=str(path),
-        network_payloads=network_payloads,
+        html=browser_result.html,
+        content_type="html",
+        method="playwright",
+        artifact_path=str(_artifact_path(run_id, url)),
+        network_payloads=browser_result.network_payloads,
     )
 
 
-async def _fetch_with_content_type(
-    url: str, proxy: str | None
-) -> HttpFetchResult:
+async def _fetch_with_content_type(url: str, proxy: str | None) -> HttpFetchResult:
     """Fetch URL and detect content type from response headers."""
     return await fetch_html_result(url, proxy=proxy)
 

@@ -64,13 +64,14 @@ export default function RunsPage() {
             aria-label="Filter by status"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-            className="focus-ring h-9 min-w-40 rounded-md border border-border bg-background px-3 text-[13px] text-foreground transition hover:border-border-strong"
+            className="control-select focus-ring min-w-40"
           >
             <option value="">All statuses</option>
             <option value="completed">Completed</option>
-            <option value="degraded">Degraded</option>
             <option value="failed">Failed</option>
-            <option value="cancelled">Cancelled</option>
+            <option value="killed">Killed</option>
+            <option value="paused">Paused</option>
+            <option value="proxy_exhausted">Proxy Exhausted</option>
             <option value="running">Running</option>
             <option value="pending">Pending</option>
           </select>
@@ -153,8 +154,9 @@ function StatusBadge({ status }: Readonly<{ status: string }>) {
 
 function getStatusTone(status: string) {
   if (status === "completed") return "success" as const;
-  if (status === "degraded") return "warning" as const;
-  if (status === "failed" || status === "cancelled") return "danger" as const;
+  if (status === "running") return "success" as const;
+  if (status === "paused") return "warning" as const;
+  if (status === "failed" || status === "killed" || status === "proxy_exhausted") return "danger" as const;
   return "neutral" as const;
 }
 

@@ -1,6 +1,8 @@
 # Playwright browser acquisition client with optional proxy and network interception.
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import json
 import re
@@ -19,6 +21,8 @@ from app.services.pipeline_config import (
     COOKIE_CONSENT_SELECTORS,
     ORIGIN_WARM_PAUSE_MS,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -53,6 +57,7 @@ async def fetch_rendered_html(
     max_pages: int = 5,
     max_scrolls: int = 10,
     prefer_stealth: bool = False,
+    request_delay_ms: int = 0,
 ) -> BrowserResult:
     """Render a page with Playwright and intercept XHR/fetch responses.
 
@@ -88,7 +93,7 @@ async def fetch_rendered_html(
                         "body": body,
                     })
                 except Exception:
-                    pass
+                    logger.debug("Failed to parse intercepted JSON response from %s", response.url, exc_info=True)
 
         page.on("response", _on_response)
 
@@ -103,13 +108,16 @@ async def fetch_rendered_html(
         result.challenge_state = challenge_state
         result.diagnostics["challenge_reasons"] = reasons
         result.diagnostics["challenge_ok"] = challenge_ok
-        await asyncio.sleep(0.25)
+        if request_delay_ms > 0:
+            await asyncio.sleep(request_delay_ms / 1000)
+        else:
+            await asyncio.sleep(0.25)
 
         # Advanced crawl modes
         if advanced_mode == "scroll":
-            await _scroll_to_bottom(page, max_scrolls)
+            await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
         elif advanced_mode == "load_more":
-            await _click_load_more(page, max_scrolls)
+            await _click_load_more(page, max_scrolls, request_delay_ms=request_delay_ms)
         elif advanced_mode == "paginate":
             result.html = await page.content()
             result.network_payloads = intercepted
@@ -118,7 +126,7 @@ async def fetch_rendered_html(
             return result
         elif advanced_mode == "auto":
             # Try scroll first, it's the most common SPA pattern
-            await _scroll_to_bottom(page, max_scrolls)
+            await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
 
         result.html = await page.content()
         result.network_payloads = intercepted
@@ -165,12 +173,13 @@ async def _warm_origin(page, origin_url: str) -> None:
             await page.mouse.move(240, 180)
             await page.evaluate("window.scrollBy(0, 120)")
         except Exception:
-            pass
+            logger.debug("Origin warm mouse/scroll interaction failed", exc_info=True)
     except Exception:
+        logger.debug("Origin warm navigation failed for %s", origin_url, exc_info=True)
         return
 
 
-async def _scroll_to_bottom(page, max_scrolls: int) -> None:
+async def _scroll_to_bottom(page, max_scrolls: int, *, request_delay_ms: int) -> None:
     """Scroll to bottom repeatedly until no new content appears."""
     prev_height = 0
     for _ in range(max_scrolls):
@@ -179,10 +188,10 @@ async def _scroll_to_bottom(page, max_scrolls: int) -> None:
             break
         prev_height = current_height
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(max(request_delay_ms, 1500) / 1000)
 
 
-async def _click_load_more(page, max_clicks: int) -> None:
+async def _click_load_more(page, max_clicks: int, *, request_delay_ms: int) -> None:
     """Click load-more/show-all buttons until exhausted."""
     selectors = [
         "button:has-text('Load More')",
@@ -199,10 +208,11 @@ async def _click_load_more(page, max_clicks: int) -> None:
                 btn = page.locator(sel).first
                 if await btn.is_visible():
                     await btn.click()
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(max(request_delay_ms, 2000) / 1000)
                     clicked = True
                     break
             except Exception:
+                logger.debug("Load-more click failed for selector %s", sel, exc_info=True)
                 continue
         if not clicked:
             break
@@ -212,6 +222,7 @@ async def _dismiss_cookie_consent(page) -> None:
     try:
         await page.wait_for_timeout(400)
     except Exception:
+        logger.debug("Cookie consent pre-wait failed", exc_info=True)
         return
     for selector in COOKIE_CONSENT_SELECTORS:
         try:
@@ -221,11 +232,12 @@ async def _dismiss_cookie_consent(page) -> None:
                 await page.wait_for_timeout(600)
                 return
         except Exception:
+            logger.debug("Cookie consent click failed for selector %s", selector, exc_info=True)
             continue
     try:
         await page.keyboard.press("Escape")
     except Exception:
-        pass
+        logger.debug("Escape key press failed during cookie consent dismissal", exc_info=True)
 
 
 async def _wait_for_challenge_resolution(
@@ -236,6 +248,7 @@ async def _wait_for_challenge_resolution(
     try:
         html = await page.content()
     except Exception:
+        logger.debug("Failed to read page content for challenge detection", exc_info=True)
         return True, "none", []
 
     assessment = _assess_challenge_signals(html)
@@ -251,6 +264,7 @@ async def _wait_for_challenge_resolution(
         try:
             html = await page.content()
         except Exception:
+            logger.debug("Failed to read page content during challenge polling", exc_info=True)
             break
         assessment = _assess_challenge_signals(html)
         if assessment.state == "blocked_signal":
@@ -338,6 +352,7 @@ async def _load_cookies(context, domain: str) -> bool:
     try:
         payload = json.loads(cookie_path.read_text(encoding="utf-8"))
     except Exception:
+        logger.debug("Failed to parse cookie file for domain %s", domain, exc_info=True)
         return False
     if not isinstance(payload, list):
         return False
@@ -353,6 +368,7 @@ async def _load_cookies(context, domain: str) -> bool:
     try:
         await context.add_cookies(cookies)
     except Exception:
+        logger.debug("Failed to add cookies to context for domain %s", domain, exc_info=True)
         return False
     return True
 
@@ -364,6 +380,7 @@ async def _save_cookies(context, domain: str) -> None:
     try:
         cookies = await context.cookies()
     except Exception:
+        logger.debug("Failed to read cookies from context for domain %s", domain, exc_info=True)
         return
     filtered = [
         cookie

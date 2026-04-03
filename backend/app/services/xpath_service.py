@@ -53,6 +53,30 @@ def extract_selector_value(
     return None, 0, None
 
 
+def validate_xpath_syntax(xpath: str) -> tuple[bool, str | None]:
+    candidate = str(xpath or "").strip()
+    if not candidate:
+        return False, "XPath is empty"
+    try:
+        etree.XPath(candidate)
+    except etree.XPathSyntaxError as exc:
+        return False, f"Invalid XPath syntax: {exc}"
+    except etree.XPathError as exc:
+        return False, f"Invalid XPath syntax: {exc}"
+    return True, None
+
+
+def validate_regex_syntax(pattern: str) -> tuple[bool, str | None]:
+    candidate = str(pattern or "").strip()
+    if not candidate:
+        return False, "Regex is empty"
+    try:
+        regex_lib.compile(candidate)
+    except regex_lib.error as exc:
+        return False, f"Invalid regex syntax: {exc}"
+    return True, None
+
+
 def validate_xpath_candidate(
     html_text: str,
     xpath: str,

@@ -26,8 +26,11 @@ router = APIRouter(prefix="/api/review", tags=["review"])
 async def review_detail(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> ReviewResponse:
+    run = await get_run(session, run_id)
+    if run is None or (user.role != "admin" and run.user_id != user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     payload = await build_review_payload(session, run_id)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
@@ -48,8 +51,11 @@ async def review_detail(
 async def review_artifact_html(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> HTMLResponse:
+    run = await get_run(session, run_id)
+    if run is None or (user.role != "admin" and run.user_id != user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     html_text = await load_review_html(session, run_id)
     if not html_text:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No HTML artifact found")
@@ -61,10 +67,10 @@ async def review_save(
     run_id: int,
     payload: ReviewSaveRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> ReviewSaveResponse:
     run = await get_run(session, run_id)
-    if run is None:
+    if run is None or (user.role != "admin" and run.user_id != user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     selections = [row.model_dump() for row in payload.selections]
     for extra_field in payload.extra_fields:
@@ -85,8 +91,11 @@ async def review_selector_preview(
     run_id: int,
     payload: ReviewSelectorPreviewRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> ReviewSelectorPreviewResponse:
+    run = await get_run(session, run_id)
+    if run is None or (user.role != "admin" and run.user_id != user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     preview = await preview_selectors(session, run_id, [row.model_dump() for row in payload.selectors])
     if preview is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")

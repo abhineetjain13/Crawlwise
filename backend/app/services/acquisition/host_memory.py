@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.services.pipeline_config import STEALTH_PREFER_TTL_HOURS
+
+logger = logging.getLogger(__name__)
 
 
 _CACHE: dict[str, dict[str, object]] = {}
@@ -53,7 +56,7 @@ def reset_host_memory() -> None:
     try:
         path.unlink(missing_ok=True)
     except Exception:
-        pass
+        logger.debug("Failed to remove host memory file at %s", path, exc_info=True)
 
 
 def snapshot_host_memory() -> dict[str, dict[str, object]]:
@@ -77,6 +80,7 @@ def _load() -> dict[str, dict[str, object]]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
+        logger.debug("Failed to parse host memory file at %s", path, exc_info=True)
         return _CACHE
     if isinstance(payload, dict):
         for key, value in payload.items():
@@ -93,10 +97,11 @@ def _save() -> None:
         tmp_path.write_text(json.dumps(_CACHE, indent=2, sort_keys=True), encoding="utf-8")
         tmp_path.replace(path)
     except Exception:
+        logger.debug("Failed to save host memory to %s", path, exc_info=True)
         try:
             tmp_path.unlink(missing_ok=True)
         except Exception:
-            pass
+            logger.debug("Failed to clean up temp file %s", tmp_path, exc_info=True)
 
 
 def _as_float(value: object) -> float:

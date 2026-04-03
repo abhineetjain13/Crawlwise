@@ -18,6 +18,7 @@ from app.services.knowledge_base.store import (
 )
 from app.services.normalizers.field_normalizers import normalize_value
 from app.services.pipeline_config import REVIEW_CONTAINER_KEYS
+from app.services.domain_utils import normalize_domain
 from app.services.xpath_service import extract_selector_value
 from app.services.xpath_service import build_deterministic_selector_suggestions
 
@@ -130,7 +131,7 @@ async def preview_selectors(session: AsyncSession, run_id: int, selectors: list[
     records = list(records_result.scalars().all())
     normalized_rules = _normalize_selector_rules(selectors)
     if not normalized_rules:
-        return {"records": records}
+        return {"records": [_serialize_record(record) for record in records]}
 
     preview_records: list[dict] = []
     for record in records:
@@ -180,9 +181,8 @@ async def preview_selectors(session: AsyncSession, run_id: int, selectors: list[
     return {"records": preview_records}
 
 
-def _domain(url: str) -> str:
-    parsed = urlparse(url)
-    return parsed.netloc.lower() or parsed.path.lower()
+# Domain normalisation delegated to app.services.domain_utils.normalize_domain
+_domain = normalize_domain
 
 
 def _safe_dict(value: object) -> dict:

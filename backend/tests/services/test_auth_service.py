@@ -23,3 +23,15 @@ async def test_authenticate_user_accepts_valid_password(db_session: AsyncSession
     token, authenticated_user = authenticated
     assert token
     assert authenticated_user.id == user.id
+    assert authenticated_user.token_version == 0
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_rejects_inactive_user(db_session: AsyncSession):
+    user = await create_user(db_session, "inactive@example.com", "password123")
+    user.is_active = False
+    await db_session.commit()
+
+    authenticated = await authenticate_user(db_session, user.email, "password123")
+
+    assert authenticated is None

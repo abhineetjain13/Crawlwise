@@ -24,12 +24,16 @@ async def get_current_user(
     try:
         payload = decode_access_token(access_token)
         user_id = int(payload["sub"])
+        token_version = int(payload.get("ver", 0))
     except (JWTError, KeyError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive user")
+    user_token_version = user.token_version if user.token_version is not None else 0
+    if user_token_version != token_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
     return user
 
 

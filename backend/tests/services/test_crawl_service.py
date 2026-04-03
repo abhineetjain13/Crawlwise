@@ -13,12 +13,14 @@ from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
     active_jobs,
-    cancel_run,
     create_crawl_run,
     get_run,
+    kill_run,
     list_runs,
     parse_csv_urls,
+    pause_run,
     process_run,
+    resume_run,
 )
 
 
@@ -88,12 +90,22 @@ async def test_list_runs_with_filters(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
-async def test_cancel_run(db_session: AsyncSession, test_user):
+async def test_pause_resume_and_kill_run(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl", "url": "https://example.com", "surface": "ecommerce_detail",
     })
-    updated = await cancel_run(db_session, run)
-    assert updated.status == "cancelled"
+    run.status = "running"
+    await db_session.commit()
+
+    paused = await pause_run(db_session, run)
+    assert paused.status == "paused"
+
+    resumed = await resume_run(db_session, paused)
+    assert resumed.status == "running"
+
+    killed = await kill_run(db_session, resumed)
+    assert killed.status == "running"
+    assert killed.result_summary["control_requested"] == "kill"
 
 
 # --- Pipeline ---
@@ -359,7 +371,7 @@ async def test_process_run_json_api(db_session: AsyncSession, test_user):
 
 @pytest.mark.asyncio
 async def test_process_run_listing_no_records_fails(db_session: AsyncSession, test_user):
-    """Listing page with no extractable records should be marked degraded, not completed."""
+    """Listing page with no extractable records should be marked failed, not completed."""
     empty_listing_html = """
     <html><body>
     <h1>Products</h1>
@@ -381,7 +393,7 @@ async def test_process_run_listing_no_records_fails(db_session: AsyncSession, te
 
     await db_session.refresh(run)
     # Should NOT be "completed" — listing extraction failed
-    assert run.status == "degraded"
+    assert run.status == "failed"
     assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
 
 

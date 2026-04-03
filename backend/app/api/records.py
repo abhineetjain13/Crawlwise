@@ -4,8 +4,10 @@ from __future__ import annotations
 import csv
 import json
 from io import StringIO
+from functools import lru_cache
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,8 +30,13 @@ async def records_list(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=MAX_RECORD_PAGE_SIZE),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PaginatedResponse[CrawlRecordResponse]:
+    from app.services.crawl_service import get_run
+    run = await get_run(session, run_id)
+    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+        raise HTTPException(status_code=404, detail="Run not found")
+        
     rows, total = await get_run_records(session, run_id, page, limit)
     return PaginatedResponse(
         items=[CrawlRecordResponse.model_validate(row, from_attributes=True) for row in rows],
@@ -41,8 +48,12 @@ async def records_list(
 async def export_json(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    from app.services.crawl_service import get_run
+    run = await get_run(session, run_id)
+    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+        raise HTTPException(status_code=404, detail="Run not found")
     rows, metadata = await _collect_export_rows(session, run_id)
     payload = json.dumps([_clean_export_data(row.data) for row in rows], indent=2)
     return StreamingResponse(
@@ -59,8 +70,12 @@ async def export_json(
 async def export_csv(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    from app.services.crawl_service import get_run
+    run = await get_run(session, run_id)
+    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+        raise HTTPException(status_code=404, detail="Run not found")
     rows, metadata = await _collect_export_rows(session, run_id)
     clean_rows = [_clean_export_data(row.data) for row in rows]
     fieldnames = sorted({key for r in clean_rows for key in r.keys()})
@@ -83,14 +98,22 @@ async def export_csv(
 async def export_discoverist(
     run_id: int,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    from app.services.crawl_service import get_run
+    run = await get_run(session, run_id)
+    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+        raise HTTPException(status_code=404, detail="Run not found")
     rows, metadata = await _collect_export_rows(session, run_id)
     buffer = StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["source_url", "title", "description"])
+    fieldnames = _discoverist_schema()
+    writer.writerow(fieldnames)
     for row in rows:
-        writer.writerow([row.source_url, row.data.get("title", ""), row.data.get("description", "")])
+        writer.writerow([
+            row.source_url if field_name == "source_url" else (row.data or {}).get(field_name, "")
+            for field_name in fieldnames
+        ])
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
@@ -135,3 +158,10 @@ def _export_headers(metadata: dict[str, int | bool]) -> dict[str, str]:
         EXPORT_TOTAL_HEADER: str(metadata["total"]),
         EXPORT_PARTIAL_HEADER: "true" if metadata["truncated"] else "false",
     }
+
+
+@lru_cache(maxsize=1)
+def _discoverist_schema() -> tuple[str, ...]:
+    schema_path = Path(__file__).resolve().parent.parent / "data" / "knowledge_base" / "discoverist_schema.json"
+    payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    return tuple(str(field_name) for field_name in payload if str(field_name).strip())

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import shutil
-from urllib.parse import urlparse
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,34 +10,63 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.selector import Selector
+from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import reset_learned_state
 
 logger = logging.getLogger(__name__)
 
 
-async def build_dashboard(session: AsyncSession) -> dict:
-    total_runs = int((await session.execute(select(func.count()).select_from(CrawlRun))).scalar() or 0)
-    active_runs = int(
+async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) -> dict:
+    run_scope = select(CrawlRun)
+    if user_id is not None:
+        run_scope = run_scope.where(CrawlRun.user_id == user_id)
+
+    total_runs = int(
         (
             await session.execute(
-                select(func.count()).select_from(CrawlRun).where(CrawlRun.status.in_(["pending", "running"]))
+                select(func.count()).select_from(run_scope.subquery())
             )
         ).scalar()
         or 0
     )
-    total_records = int((await session.execute(select(func.count()).select_from(CrawlRecord))).scalar() or 0)
-    recent_result = await session.execute(select(CrawlRun).order_by(CrawlRun.created_at.desc()).limit(5))
-    recent_runs = list(recent_result.scalars().all())
-    success_count = int(
+    active_runs = int(
         (
-            await session.execute(select(func.count()).select_from(CrawlRun).where(CrawlRun.status == "completed"))
+            await session.execute(
+                select(func.count()).select_from(
+                    run_scope.where(CrawlRun.status.in_(["pending", "running", "paused"])).subquery()
+                )
+            )
         ).scalar()
         or 0
     )
-    domain_rows = await session.execute(select(CrawlRun.url))
+    if user_id is None:
+        total_records = int((await session.execute(select(func.count()).select_from(CrawlRecord))).scalar() or 0)
+    else:
+        total_records = int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(CrawlRecord)
+                    .join(CrawlRun, CrawlRun.id == CrawlRecord.run_id)
+                    .where(CrawlRun.user_id == user_id)
+                )
+            ).scalar()
+            or 0
+        )
+    recent_result = await session.execute(run_scope.order_by(CrawlRun.created_at.desc()).limit(10))
+    recent_runs = list(recent_result.scalars().all())
+    success_count = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(run_scope.where(CrawlRun.status == "completed").subquery())
+            )
+        ).scalar()
+        or 0
+    )
+    domain_rows = await session.execute(select(CrawlRun.url) if user_id is None else select(CrawlRun.url).where(CrawlRun.user_id == user_id))
     counts: dict[str, int] = {}
     for url in domain_rows.scalars().all():
-        domain = urlparse(url or "").netloc or "unknown"
+        domain = normalize_domain(url or "") or "unknown"
         counts[domain] = counts.get(domain, 0) + 1
     top_domains = [
         {"domain": key, "count": value}

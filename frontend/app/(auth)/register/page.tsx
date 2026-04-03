@@ -4,7 +4,7 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { Button, Card, Field, Input, Title } from "../../../components/ui/primitives";
+import { Button, Field, Input, Subtitle, Title } from "../../../components/ui/primitives";
 import { api } from "../../../lib/api";
 
 export default function RegisterPage() {
@@ -25,28 +25,32 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <Card className="space-y-6">
-        <div className="space-y-3">
-          <Title kicker="Auth">Register</Title>
-          <p className="text-sm text-muted">Create a workspace account.</p>
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <Title kicker="Auth">Register</Title>
+        <Subtitle>Create a workspace account.</Subtitle>
+      </div>
+      <form className="grid gap-5" onSubmit={onSubmit}>
+        <Field label="Email">
+          <Input
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="name@company.com"
+          />
+        </Field>
+        <Field label="Password">
+          <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Choose a secure password" />
+        </Field>
+        {error ? <p className="rounded-2xl bg-danger/10 px-4 py-3 text-[13px] text-danger">{error}</p> : null}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit">Create account</Button>
+          <Link className="text-[13px] font-medium text-accent" href="/login">
+            Back to login
+          </Link>
         </div>
-        <form className="grid gap-5" onSubmit={onSubmit}>
-          <Field label="Email">
-            <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@company.com" />
-          </Field>
-          <Field label="Password">
-            <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Choose a secure password" />
-          </Field>
-          {error ? <p className="rounded-2xl bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-300">{error}</p> : null}
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit">Create account</Button>
-            <Link className="text-sm font-medium text-brand" href="/login">
-              Back to login
-            </Link>
-          </div>
-        </form>
-      </Card>
+      </form>
     </div>
   );
 }

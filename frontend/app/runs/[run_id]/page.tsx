@@ -12,7 +12,7 @@ import type { CrawlLog, CrawlRecord, CrawlRun, ReviewPayload, ReviewSelection, S
 import { cn } from "../../../lib/utils";
 import { SelectorWorkspace } from "../../../components/crawl/selector-workspace";
 
-const TERMINAL_STATUSES = new Set(["completed", "degraded", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["completed", "killed", "failed", "proxy_exhausted"]);
 const STAGES = ["ACQUIRE", "DISCOVER", "EXTRACT", "UNIFY", "PUBLISH"] as const;
 const RECORDS_PAGE_LIMIT = 1000;
 
@@ -88,10 +88,11 @@ export default function RunDetailPage() {
   }, [runId, recordsQuery.data?.items]);
 
   useEffect(() => {
-    setBulkPrefillPayload({
+    setBulkPrefillPayload((prev) => ({
+      ...prev,
       additional_fields: extraFields,
-      selectors: [],
-    });
+      selectors: prev.selectors ?? [],
+    }));
   }, [extraFields]);
 
   const fieldSelections = useMemo(() => {
@@ -486,9 +487,9 @@ function deriveStages(logs: CrawlLog[], status: string | undefined, currentStage
 
   return STAGES.map((stage, index) => {
     let state: StageState = "idle";
-    if (status === "completed" || status === "degraded") {
+    if (status === "completed") {
       state = "done";
-    } else if (status === "failed" || status === "cancelled") {
+    } else if (status === "failed" || status === "killed" || status === "proxy_exhausted") {
       if (index < activeIndex) {
         state = "done";
       } else if (index === activeIndex) {
@@ -559,15 +560,17 @@ function readRecordValue(record: CrawlRecord, field: string) {
 function getRunTitle(run: CrawlRun | undefined, live: boolean, runId: number) {
   if (live) return "Extraction Running";
   if (run?.status === "completed") return "Extraction Complete";
-  if (run?.status === "degraded") return "Extraction Degraded";
+  if (run?.status === "killed") return "Extraction Killed";
+  if (run?.status === "proxy_exhausted") return "Proxy Exhausted";
   if (run?.status === "failed") return "Extraction Failed";
   return `Run #${runId}`;
 }
 
 function getStatusTone(status: string) {
   if (status === "completed") return "success" as const;
-  if (status === "degraded") return "warning" as const;
-  if (status === "failed" || status === "cancelled") return "danger" as const;
+  if (status === "running") return "success" as const;
+  if (status === "paused") return "warning" as const;
+  if (status === "failed" || status === "killed" || status === "proxy_exhausted") return "danger" as const;
   return "neutral" as const;
 }
 
@@ -640,15 +643,26 @@ function normalizeStageLog(message: string) {
 
 function extractBulkUrls(records: CrawlRecord[], columns: string[]) {
   const preferred = ["product_url", "job_url", "detail_url", "listing_url", "url", "source_url"];
-  const available = new Set(columns.map((column) => column.toLowerCase()));
-  const urlField = preferred.find((field) => available.has(field));
+  const columnMap = new Map<string, string>();
+  for (const column of columns) {
+    const normalized = column.toLowerCase();
+    if (!columnMap.has(normalized)) {
+      columnMap.set(normalized, column);
+    }
+  }
+  const available = [...columnMap.keys()];
+  const urlField = preferred.find((field) => columnMap.has(field));
   const urls: string[] = [];
   const seen = new Set<string>();
 
   for (const record of records) {
-    const candidateFields = urlField ? [urlField] : [...available];
+    const candidateFields = urlField
+      ? [columnMap.get(urlField) ?? urlField]
+      : available.map((field) => columnMap.get(field) ?? field);
     for (const field of candidateFields) {
-      const value = readString(record.data?.[field]) ?? readString(record.raw_data?.[field]) ?? readString(record.source_trace?.[field]);
+      const value = readCaseInsensitiveRecordValue(record.data, field)
+        ?? readCaseInsensitiveRecordValue(record.raw_data, field)
+        ?? readCaseInsensitiveRecordValue(record.source_trace, field);
       if (!value || !value.startsWith("http")) continue;
       if (seen.has(value)) continue;
       seen.add(value);
@@ -657,6 +671,23 @@ function extractBulkUrls(records: CrawlRecord[], columns: string[]) {
   }
 
   return urls;
+}
+
+function readCaseInsensitiveRecordValue(source: unknown, field: string) {
+  if (!source || typeof source !== "object") {
+    return undefined;
+  }
+  const directValue = readString((source as Record<string, unknown>)[field]);
+  if (directValue) {
+    return directValue;
+  }
+  const normalizedField = field.toLowerCase();
+  for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+    if (key.toLowerCase() === normalizedField) {
+      return readString(value);
+    }
+  }
+  return undefined;
 }
 
 function inferVertical(surface: string | undefined) {

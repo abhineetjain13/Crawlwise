@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from lxml import etree
+import regex as regex_lib
 
 from app.models.selector import Selector
 from app.services.acquisition.http_client import fetch_html
@@ -126,4 +128,14 @@ def _normalize_selector_payload(payload: dict) -> dict:
         raise ValueError("field_name is required")
     if not any([normalized["css_selector"], normalized["xpath"], normalized["regex"]]):
         raise ValueError("At least one of css_selector, xpath, or regex is required")
+    if normalized["xpath"]:
+        try:
+            etree.XPath(normalized["xpath"])
+        except etree.XPathError as exc:
+            raise ValueError(f"Invalid XPath: {exc}") from exc
+    if normalized["regex"]:
+        try:
+            regex_lib.compile(normalized["regex"])
+        except regex_lib.error as exc:
+            raise ValueError(f"Invalid regex: {exc}") from exc
     return normalized

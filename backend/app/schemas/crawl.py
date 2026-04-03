@@ -131,3 +131,19 @@ class ReviewSaveResponse(BaseModel):
 
 class ReviewSelectorPreviewResponse(BaseModel):
     records: list[CrawlRecordResponse]
+
+
+class LLMCommitItem(BaseModel):
+    record_id: int
+    field_name: str
+    value: str
+
+
+class LLMCommitRequest(BaseModel):
+    items: list[LLMCommitItem] = Field(default_factory=list)
+
+
+class LLMCommitResponse(BaseModel):
+    run_id: int
+    updated_records: int
+    updated_fields: int

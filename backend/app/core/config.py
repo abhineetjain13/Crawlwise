@@ -36,6 +36,39 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+# ---------------------------------------------------------------------------
+# Security guard: reject default secrets in non-dev environments
+# ---------------------------------------------------------------------------
+_INSECURE_DEFAULTS = {"change-me", "change-me-32-bytes-minimum-change-me"}
+
+
+def _check_secret_defaults() -> None:
+    """Warn loudly (or crash in production) if default secrets are still set."""
+    import logging
+    import os
+    logger = logging.getLogger("app.core.config")
+    env = os.getenv("APP_ENV", "development").lower()
+    issues: list[str] = []
+    if settings.jwt_secret_key in _INSECURE_DEFAULTS:
+        issues.append("jwt_secret_key is set to a default value")
+    if settings.encryption_key in _INSECURE_DEFAULTS:
+        issues.append("encryption_key is set to a default value")
+    if not issues:
+        return
+    msg = (
+        "SECURITY WARNING — insecure default secrets detected:\n  • "
+        + "\n  • ".join(issues)
+        + "\nGenerate secure values: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+    )
+    if env == "production":
+        raise RuntimeError(msg)
+    logger.warning(msg)
+
+
+_check_secret_defaults()
+
+
+
 def get_frontend_origins() -> list[str]:
     if settings.frontend_origins.strip():
         return [origin.strip() for origin in settings.frontend_origins.split(",") if origin.strip()]

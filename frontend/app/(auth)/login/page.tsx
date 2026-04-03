@@ -4,7 +4,7 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { Button, Field, Input } from "../../../components/ui/primitives";
+import { Button, Field, Input, Subtitle, Title } from "../../../components/ui/primitives";
 import { api } from "../../../lib/api";
 
 export default function LoginPage() {
@@ -25,13 +25,9 @@ export default function LoginPage() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-1.5">
-        <h1 className="text-xl font-semibold tracking-[-0.02em] text-foreground">
-          Sign in
-        </h1>
-        <p className="text-[13px] text-muted">
-          Enter your credentials to continue.
-        </p>
+      <div className="space-y-2">
+        <Title kicker="Auth">Sign in</Title>
+        <Subtitle>Enter your credentials to continue.</Subtitle>
       </div>
       <form className="grid gap-4" onSubmit={onSubmit}>
         <Field label="Email">
@@ -51,7 +47,7 @@ export default function LoginPage() {
           />
         </Field>
         {error ? (
-          <p className="rounded-md bg-danger/10 px-3 py-2 text-[13px] text-danger">
+          <p role="alert" className="rounded-2xl bg-danger/10 px-4 py-3 text-[13px] text-danger">
             {error}
           </p>
         ) : null}
