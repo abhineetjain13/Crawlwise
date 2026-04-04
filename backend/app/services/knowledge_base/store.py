@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,9 +34,20 @@ def _load_json(path: Path, fallback: dict | list) -> dict | list:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _write_json(path: Path, payload: dict | list) -> None:
+def _stage_json_temp(path: Path, payload: dict | list) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return temp_path
+
+
+def _write_json(path: Path, payload: dict | list) -> None:
+    temp_path = _stage_json_temp(path, payload)
+    os.replace(temp_path, path)
 
 
 def _load_prompt_files() -> dict[str, str]:
@@ -164,8 +176,30 @@ async def reset_learned_state() -> None:
     async with _CACHE_LOCK:
         empty_mappings: dict[str, dict[str, dict[str, str]]] = {}
         empty_defaults: dict[str, dict[str, list[dict]]] = {}
-        await _persist_json(MAPPING_FILE, empty_mappings)
-        await _persist_json(SELECTOR_FILE, empty_defaults)
+        mapping_tmp = await asyncio.to_thread(_stage_json_temp, MAPPING_FILE, empty_mappings)
+        selector_tmp = await asyncio.to_thread(_stage_json_temp, SELECTOR_FILE, empty_defaults)
+        mapping_backup = MAPPING_FILE.with_suffix(f"{MAPPING_FILE.suffix}.bak")
+        selector_backup = SELECTOR_FILE.with_suffix(f"{SELECTOR_FILE.suffix}.bak")
+        try:
+            for backup in (mapping_backup, selector_backup):
+                backup.unlink(missing_ok=True)
+            if MAPPING_FILE.exists():
+                await asyncio.to_thread(os.replace, MAPPING_FILE, mapping_backup)
+            if SELECTOR_FILE.exists():
+                await asyncio.to_thread(os.replace, SELECTOR_FILE, selector_backup)
+            await asyncio.to_thread(os.replace, mapping_tmp, MAPPING_FILE)
+            await asyncio.to_thread(os.replace, selector_tmp, SELECTOR_FILE)
+            mapping_backup.unlink(missing_ok=True)
+            selector_backup.unlink(missing_ok=True)
+        except Exception:
+            logger.exception("Failed to reset learned knowledge-base state atomically")
+            mapping_tmp.unlink(missing_ok=True)
+            selector_tmp.unlink(missing_ok=True)
+            if mapping_backup.exists():
+                await asyncio.to_thread(os.replace, mapping_backup, MAPPING_FILE)
+            if selector_backup.exists():
+                await asyncio.to_thread(os.replace, selector_backup, SELECTOR_FILE)
+            raise
         _CACHE.field_mappings = empty_mappings
         _CACHE.selector_defaults = empty_defaults
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 
 
 class LLMConfigCreate(BaseModel):
@@ -15,6 +17,14 @@ class LLMConfigCreate(BaseModel):
     per_domain_daily_budget_usd: Decimal
     global_session_budget_usd: Decimal
 
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in SUPPORTED_LLM_PROVIDERS:
+            raise ValueError(f"Unsupported provider: {value}")
+        return normalized
+
 
 class LLMConfigUpdate(BaseModel):
     provider: str | None = None
@@ -24,6 +34,16 @@ class LLMConfigUpdate(BaseModel):
     per_domain_daily_budget_usd: Decimal | None = None
     global_session_budget_usd: Decimal | None = None
     is_active: bool | None = None
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_optional_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip().lower()
+        if normalized not in SUPPORTED_LLM_PROVIDERS:
+            raise ValueError(f"Unsupported provider: {value}")
+        return normalized
 
 
 class LLMConfigResponse(BaseModel):
@@ -67,6 +87,14 @@ class LLMConnectionTestRequest(BaseModel):
     provider: str
     model: str
     api_key: str | None = None
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_connection_provider(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in SUPPORTED_LLM_PROVIDERS:
+            raise ValueError(f"Unsupported provider: {value}")
+        return normalized
 
 
 class LLMConnectionTestResponse(BaseModel):

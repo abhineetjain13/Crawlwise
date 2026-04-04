@@ -11,12 +11,14 @@ Goal:
 Rules:
 - Use concise, stable field names in snake_case.
 - Each key must map to an object with:
-  - "suggested_value": the cleaned value to review
-  - "source": the strongest supporting source
-  - "supporting_sources": optional array of supporting source labels
-  - "note": optional short explanation
+  - "suggested_value": the cleaned value to review; it may be a string, number, boolean, object, or array. Use a string for normal text fields, a number for true numeric values, a boolean for clear yes/no states, an object for structured grouped values, and an array for ordered multi-value fields.
+  - "source": the strongest supporting source; this must be a string label.
+  - "supporting_sources": an optional array of string source labels; omit this key when there are no additional supporting sources.
+  - "note": an optional short explanation; omit this key when it is not needed and never use "" or null.
 - Keep meaningful specs, descriptions, dimensions, compatibility, feature lists, and other legible product/job details when clearly supported.
 - Do not invent values.
 - Do not drop a value only because it looks verbose; preserve useful detail.
 - Ignore obvious site chrome, navigation, upsells, contact widgets, breadcrumbs, shipping promos, cookie notices, and support boilerplate.
-- Do not output null placeholders or explanations outside the JSON object.
+- Example JSON object: {"title":{"suggested_value":"Widget Pro","source":"json_ld","supporting_sources":["dom","network_payload"]},"price":{"suggested_value":19.99,"source":"network_payload"},"in_stock":{"suggested_value":true,"source":"dom","note":"Availability text says In Stock."},"dimensions":{"suggested_value":{"width":"10 cm","height":"20 cm"},"source":"spec_table"},"image_gallery":{"suggested_value":["https://img.example.com/a.jpg","https://img.example.com/b.jpg"],"source":"embedded_json","supporting_sources":["dom"]}}
+- Example with omitted supporting_sources: {"sku":{"suggested_value":"ABC-123","source":"dom"}}
+- Omit any key that has no meaningful value; do not emit nulls, placeholder strings, or explanations outside the JSON object, and only use empty arrays or empty objects when they are themselves the meaningful value.

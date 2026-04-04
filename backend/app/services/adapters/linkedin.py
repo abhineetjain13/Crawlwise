@@ -1,8 +1,6 @@
 # LinkedIn Jobs adapter.
 from __future__ import annotations
 
-import json
-import re
 
 from bs4 import BeautifulSoup
 
@@ -38,7 +36,6 @@ class LinkedInAdapter(BaseAdapter):
         desc_el = soup.select_one(".description__text, .show-more-less-html__markup")
         criteria = soup.select(".description__job-criteria-item")
         job_type = None
-        seniority = None
         for item in criteria:
             header = item.select_one(".description__job-criteria-subheader")
             value = item.select_one(".description__job-criteria-text")
@@ -47,8 +44,6 @@ class LinkedInAdapter(BaseAdapter):
                 v = value.get_text(strip=True)
                 if "employment type" in h:
                     job_type = v
-                elif "seniority" in h:
-                    seniority = v
         if not title_el:
             return None
         return {

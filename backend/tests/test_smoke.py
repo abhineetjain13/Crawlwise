@@ -24,7 +24,7 @@ def test_crawl_run_response_masks_sensitive_settings() -> None:
                 "proxy": "http://alice:token@proxy2.example:8181",
                 "llm_config_snapshot": {
                     "general": {
-                        "provider": "openai",
+                        "provider": "groq",
                         "api_key_encrypted": "secret-ciphertext",
                     }
                 },
@@ -39,5 +39,5 @@ def test_crawl_run_response_masks_sensitive_settings() -> None:
 
     assert payload.settings["proxy_list"] == ["http://***:***@proxy.example:8080"]
     assert payload.settings["proxy"] == "http://***:***@proxy2.example:8181"
-    assert payload.settings["llm_config_snapshot"]["general"]["provider"] == "openai"
+    assert payload.settings["llm_config_snapshot"]["general"]["provider"] == "groq"
     assert "api_key_encrypted" not in payload.settings["llm_config_snapshot"]["general"]

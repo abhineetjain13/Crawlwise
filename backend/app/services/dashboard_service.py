@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import PROJECT_ROOT, settings
 from app.core.database import is_sqlite
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
+from app.models.llm import LLMCostLog
 from app.models.selector import Selector
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import reset_learned_state
@@ -80,6 +81,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
         crawl_logs_deleted = await session.execute(delete(CrawlLog))
         crawl_records_deleted = await session.execute(delete(CrawlRecord))
         promotions_deleted = await session.execute(delete(ReviewPromotion))
+        llm_cost_deleted = await session.execute(delete(LLMCostLog))
         selectors_deleted = await session.execute(delete(Selector))
         crawl_runs_deleted = await session.execute(delete(CrawlRun))
         if is_sqlite:
@@ -99,6 +101,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
         "crawl_records_deleted": crawl_records_deleted.rowcount or 0,
         "crawl_logs_deleted": crawl_logs_deleted.rowcount or 0,
         "review_promotions_deleted": promotions_deleted.rowcount or 0,
+        "llm_cost_logs_deleted": llm_cost_deleted.rowcount or 0,
         "selectors_deleted": selectors_deleted.rowcount or 0,
         "artifacts_removed": artifacts_removed,
         "legacy_artifacts_removed": legacy_artifacts_removed,
@@ -140,7 +143,7 @@ async def _reset_sqlite_sequences(session: AsyncSession) -> None:
         text(
             """
             DELETE FROM sqlite_sequence
-            WHERE name IN ('crawl_runs', 'crawl_records', 'crawl_logs', 'review_promotions', 'selectors')
+            WHERE name IN ('crawl_runs', 'crawl_records', 'crawl_logs', 'review_promotions', 'selectors', 'llm_cost_log')
             """
         )
     )

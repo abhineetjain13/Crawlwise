@@ -16,7 +16,6 @@ import os
 import secrets
 import sys
 import time
-from datetime import UTC, datetime
 
 from sqlalchemy import inspect, select
 from sqlalchemy.exc import MissingGreenlet
@@ -243,11 +242,18 @@ async def run_site(site: dict, user_id: int) -> dict:
             logs = list((await s.execute(
                 select(CrawlLog).where(CrawlLog.run_id == run_id).order_by(CrawlLog.created_at.asc())
             )).scalars())
-            report["key_logs"] = [
-                f"[{l.level.upper()}] {l.message}"
-                for l in logs
-                if l.level in ("warning", "error") or any(k in l.message for k in ("[ACQUIRE]", "[BLOCKED]", "[EXTRACT]", "[PUBLISH]", "verdict"))
-            ][:15]
+            key_logs: list[str] = []
+            for log in logs:
+                safe_level = str(log.level or "").strip().lower()
+                safe_message = str(log.message or "")
+                if not safe_level and not safe_message:
+                    continue
+                if safe_level in ("warning", "error") or any(
+                    marker in safe_message
+                    for marker in ("[ACQUIRE]", "[BLOCKED]", "[EXTRACT]", "[PUBLISH]", "verdict")
+                ):
+                    key_logs.append(f"[{safe_level.upper() or 'INFO'}] {safe_message}")
+            report["key_logs"] = key_logs[:15]
 
     except Exception as exc:
         import traceback

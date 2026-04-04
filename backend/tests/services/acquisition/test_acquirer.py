@@ -5,7 +5,6 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 
 from app.services.acquisition.acquirer import (
     ProxyRotator,

@@ -137,20 +137,32 @@ class ReviewSelectorPreviewResponse(BaseModel):
     records: list[CrawlRecordResponse]
 
 
-class LLMCommitItem(BaseModel):
+class FieldCommitItem(BaseModel):
     record_id: int
     field_name: str
-    value: str
+    value: object
 
 
-class LLMCommitRequest(BaseModel):
-    items: list[LLMCommitItem] = Field(default_factory=list)
+class FieldCommitRequest(BaseModel):
+    items: list[FieldCommitItem] = Field(default_factory=list)
 
 
-class LLMCommitResponse(BaseModel):
+class FieldCommitResponse(BaseModel):
     run_id: int
     updated_records: int
     updated_fields: int
+
+
+class LLMCommitItem(FieldCommitItem):
+    pass
+
+
+class LLMCommitRequest(FieldCommitRequest):
+    pass
+
+
+class LLMCommitResponse(FieldCommitResponse):
+    pass
 
 
 _SENSITIVE_SETTING_KEYS = {
@@ -158,6 +170,13 @@ _SENSITIVE_SETTING_KEYS = {
     "api_key_encrypted",
     "authorization",
     "proxy_password",
+}
+_SENSITIVE_PROXY_KEYS = {
+    "api_key",
+    "apikey",
+    "password",
+    "secret",
+    "token",
 }
 
 
@@ -167,9 +186,10 @@ def _sanitize_crawl_settings(value: object) -> dict:
     sanitized: dict[str, object] = {}
     for key, raw_value in value.items():
         normalized_key = str(key or "").strip()
-        if normalized_key in _SENSITIVE_SETTING_KEYS:
+        normalized_lookup = normalized_key.lower()
+        if normalized_lookup in _SENSITIVE_SETTING_KEYS:
             continue
-        sanitized[normalized_key] = _sanitize_setting_value(normalized_key, raw_value)
+        sanitized[normalized_key] = _sanitize_setting_value(normalized_lookup, raw_value)
     return sanitized
 
 
@@ -189,12 +209,15 @@ def _sanitize_proxy_item(value: object) -> object:
     if isinstance(value, str):
         return _mask_proxy_url(value)
     if isinstance(value, dict):
-        sanitized = dict(value)
-        for key in ("url", "proxy", "proxy_url", "server"):
-            raw_url = sanitized.get(key)
-            if isinstance(raw_url, str):
-                sanitized[key] = _mask_proxy_url(raw_url)
-                break
+        sanitized: dict[str, object] = {}
+        for key, raw_value in value.items():
+            normalized_key = str(key or "").strip()
+            if normalized_key.lower() in _SENSITIVE_PROXY_KEYS:
+                continue
+            sanitized[normalized_key] = raw_value
+        for key in list(sanitized.keys()):
+            if key.lower() in {"url", "proxy", "proxy_url", "server"} and isinstance(sanitized[key], str):
+                sanitized[key] = _mask_proxy_url(sanitized[key])
         return sanitized
     return value
 

@@ -101,7 +101,7 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
   4. Network payloads (XHR/fetch intercepted JSON)
   5. DOM card detection (CSS selectors + auto-detect heuristic)
   - All structured sources are collected and ranked by field richness — sparse JSON-LD no longer short-circuits richer hydrated state data
-  - `_extract_items_from_json` recurses up to depth 4 to find deeply nested product arrays
+  - `_extract_items_from_json` reads `max_json_recursion_depth` from `pipeline_tuning.json` (default `4`) to find deeply nested product arrays
 - `json_extractor.py`: First-class JSON API extraction — finds data arrays in nested JSON (supports `products`, `jobs`, `items`, `data`, `results`, GraphQL edges/node patterns)
 - `service.py`: Detail page candidate extraction with priority: contract > adapter > network > __NEXT_DATA__ > JSON-LD > microdata > selectors > DOM patterns
 - `semantic_detail_extractor.py`: Extracts sections, specifications, label/value patterns from detail pages
@@ -125,11 +125,11 @@ Runs now carry `extraction_verdict` in `result_summary`:
 - `empty`: no content extracted
 - `error`: pipeline exception
 
-Run status reflects verdict: `completed` (success), `degraded` (partial/listing_detection_failed/schema_miss), `failed` (blocked/empty/error).
+Run status currently reflects verdict as: `completed` (`success`) and `failed` (all other verdicts, including `partial`, `listing_detection_failed`, `schema_miss`, `blocked`, `empty`, and `error`). Legacy `degraded` status is normalized to `failed`; the backend does not currently emit a separate `degraded` run status.
 
 #### Listing fallback guard
 
-Listing pages that produce 0 real item-level records are never downgraded into a single detail-style fallback record. They get `listing_detection_failed` verdict and `degraded` status.
+Listing pages that produce 0 real item-level records are never downgraded into a single detail-style fallback record. They get `listing_detection_failed` verdict and a failed run status.
 
 #### Selector memory
 
@@ -144,6 +144,7 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - `record.data`: Only populated logical fields shown to users. Empty/null fields and `_`-prefixed internal fields are stripped in the API response.
 - `record.discovered_data`: Raw manifest containers (adapter_data, json_ld, network_payloads, etc.) are stripped from API responses. Only logical metadata (content_type, source, requested_field_coverage) is exposed.
 - `record.raw_data`: Full raw extraction data, available for review/promote resolution but not shown in default views.
+- `record.source_trace.field_discovery`: Deterministic field-level discovery summary for requested/additional fields. This is the primary backend contract for intelligence/review display: chosen value, contributing sources, candidate counts, and missing fields.
 - Requested field coverage is tracked in `discovered_data.requested_field_coverage` — it does NOT affect the extraction verdict.
 - Review/LLM-oriented workflows should consume cleaned logical candidates plus preserved raw source evidence; do not throw away source-specific data during acquisition/discovery just because it is hidden from the default API view.
 
@@ -151,6 +152,7 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 
 - `discovered_fields` filters out structural container keys (`adapter_data`, `network_payloads`, `json_ld`, etc.) and empty-valued fields
 - Only business-level fields with actual values from `record.data` and `record.raw_data` appear as review candidates
+- Reviewed values can be persisted through `POST /api/crawls/{run_id}/commit-fields`; the old LLM commit path now delegates to the same backend write flow
 
 ### Recent fixes
 
@@ -175,9 +177,13 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - Kasada challenge detection (KPSDK script + short page)
 - Playwright `_goto_with_fallback` catches all exceptions, not just TimeoutError
 - Listing extractor ranks structured sources by field richness instead of short-circuiting on first source with >=2 records
-- `_extract_items_from_json` recurses up to depth 4 for deeply nested product arrays (e.g. Myntra `searchData.results.products`)
+- `_extract_items_from_json` now uses `pipeline_tuning.json:max_json_recursion_depth` (default `4`) for deeply nested product arrays (e.g. Myntra `searchData.results.products`)
 - Hydrated state patterns expanded: `__myx`, `__STORE__`, `__APP_STATE__`
 - Field aliases expanded: `landingPageUrl`, `searchImage`, `discountedPrice`, `mrp`
+- Discovery now preserves more usable source evidence for detail pages: embedded JSON blobs, hydrated state assignments, semantic sections, and structured table/spec rows all feed field-level candidate generation
+- Detail runs now persist deterministic `field_discovery` summaries for requested fields so intelligence/review UIs can show discovered values and source provenance instead of raw manifest blobs alone
+- Manual reviewed-field commits now use a generic `commit-fields` API route rather than LLM-only naming
+- API auth now accepts either the session cookie or `Authorization: Bearer <token>` for the same protected endpoints
 
 ## Tests
 
@@ -227,15 +233,15 @@ These MUST be preserved across all changes:
 
 - LLM integration is configuration-only today. The pipeline still behaves deterministically.
 - XPath and regex rules are currently first-pass extraction helpers; there is no full selector authoring validation UI yet.
-- Frontend run detail page does not yet surface `extraction_verdict` or `degraded` status.
+- The backend does not currently emit a first-class `degraded` run status; clients should read `result_summary.extraction_verdict` for partial/listing/schema-miss distinctions.
 - `try_blocked_adapter_recovery()` currently only supports Shopify — other platform recovery paths not yet implemented.
-- Intelligence tab currently presents raw discovered data as a single blob — needs deterministic noise cleanup + structured field-level review (see `docs/PENDING_IMPROVEMENTS.md`).
+- Typed reviewed values are not yet committed end-to-end: LLM cleanup suggestions and field-commit payloads still coerce values to strings, which can flatten arrays/objects/numbers discovered during cleanup.
 - `build_absolute_xpath` generates brittle absolute paths that pollute selector memory.
 
 ## Preferred Next Steps
 
-1. Implement deterministic intelligence/review flow: clean up noise from all sources (DOM, JSON, JSON-LD, network), organize into field-level candidates, optional LLM final-pass for presentation, user decides which fields to keep — promoted as canonical for future runs.
-2. Surface extraction verdict and degraded/failed states in frontend run detail page.
+1. Finish the typed review/commit path so arrays, objects, booleans, and numeric cleanup suggestions survive from LLM review through manual commit and persisted record data.
+2. Surface extraction verdict and partial/listing/schema-miss distinctions from `result_summary.extraction_verdict` in the run detail UI instead of depending on a separate `degraded` status.
 3. Add Lever ATS adapter.
 4. Expand `try_blocked_adapter_recovery()` to additional platforms.
 5. Switch `build_absolute_xpath` to semantic relative XPaths.

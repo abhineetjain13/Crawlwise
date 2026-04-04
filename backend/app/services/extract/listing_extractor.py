@@ -13,7 +13,13 @@ from urllib.parse import parse_qsl, urljoin, urlparse
 from bs4 import BeautifulSoup, Tag
 
 from app.services.discover.service import DiscoveryManifest
-from app.services.pipeline_config import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS, COLLECTION_KEYS, FIELD_ALIASES
+from app.services.pipeline_config import (
+    CARD_SELECTORS_COMMERCE,
+    CARD_SELECTORS_JOBS,
+    COLLECTION_KEYS,
+    FIELD_ALIASES,
+    MAX_JSON_RECURSION_DEPTH,
+)
 
 
 def extract_listing_records(
@@ -294,13 +300,20 @@ def _extract_from_next_data(next_data: dict, surface: str, page_url: str) -> lis
     return best
 
 
-def _extract_items_from_json(data: dict | list, surface: str, page_url: str, _depth: int = 0) -> list[dict]:
+def _extract_items_from_json(
+    data: dict | list,
+    surface: str,
+    page_url: str,
+    _depth: int = 0,
+    *,
+    max_depth: int = MAX_JSON_RECURSION_DEPTH,
+) -> list[dict]:
     """Extract items from an arbitrary JSON structure.
 
-    Recursively searches up to 4 levels deep for arrays of objects that
-    look like product/job collections.
+    Recursively searches up to ``max_depth`` levels deep for arrays of
+    objects that look like product/job collections.
     """
-    if _depth > 4:
+    if _depth > max_depth:
         return []
 
     if isinstance(data, list):
@@ -328,7 +341,13 @@ def _extract_items_from_json(data: dict | list, surface: str, page_url: str, _de
 
     for value in data.values():
         if isinstance(value, dict):
-            result = _extract_items_from_json(value, surface, page_url, _depth + 1)
+            result = _extract_items_from_json(
+                value,
+                surface,
+                page_url,
+                _depth + 1,
+                max_depth=max_depth,
+            )
             if result:
                 return result
 

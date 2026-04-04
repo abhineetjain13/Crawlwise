@@ -120,3 +120,11 @@ def test_retry_backoff_seconds_is_bounded(monkeypatch):
     assert _retry_backoff_seconds(1) == 0.4
     assert _retry_backoff_seconds(2) == 0.8
     assert _retry_backoff_seconds(3) == 1.0
+
+
+def test_retry_backoff_seconds_rejects_invalid_bounds(monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_BASE_MS", 400)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_MAX_MS", 200)
+
+    with pytest.raises(ValueError, match="HTTP_RETRY_BACKOFF_MAX_MS"):
+        _retry_backoff_seconds(1)

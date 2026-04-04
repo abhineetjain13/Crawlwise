@@ -1,17 +1,22 @@
 "use client";
 
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-
 import { cn } from "../../lib/utils";
 
+/* ─── Card ───────────────────────────────────────────────────────────────── */
 export function Card({
   children,
   className,
-}: Readonly<{ children: ReactNode; className?: string }>) {
+  animate = false,
+  ...props
+}: Readonly<ComponentPropsWithoutRef<"section"> & { children: ReactNode; animate?: boolean }>) {
   return (
     <section
+      {...props}
       className={cn(
-        "surface-card animate-fade-in rounded-[var(--radius-lg)] border border-border/90 p-5 shadow-card",
+        "rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] shadow-[var(--shadow-card-value)]",
+        "p-5",
+        animate && "animate-fade-in",
         className,
       )}
     >
@@ -20,19 +25,20 @@ export function Card({
   );
 }
 
+/* ─── Title / Subtitle ───────────────────────────────────────────────────── */
 export function Title({
   children,
   kicker,
   className,
 }: Readonly<{ children: ReactNode; kicker?: string; className?: string }>) {
   return (
-    <div className={cn("space-y-1.5", className)}>
+    <div className={cn("space-y-1", className)}>
       {kicker ? (
-        <p className="label-caps text-accent">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--accent)]">
           {kicker}
         </p>
       ) : null}
-      <h1 className="text-[18px] font-semibold tracking-[var(--tracking-tight)] text-foreground sm:text-[20px]">
+      <h1 className="text-[18px] font-semibold tracking-[var(--tracking-tight)] text-[var(--text-primary)] sm:text-[20px]">
         {children}
       </h1>
     </div>
@@ -40,9 +46,10 @@ export function Title({
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="max-w-2xl text-[13px] leading-5 text-muted">{children}</p>;
+  return <p className="max-w-2xl text-[13px] leading-5 text-[var(--text-muted)]">{children}</p>;
 }
 
+/* ─── Field ──────────────────────────────────────────────────────────────── */
 export function Field({
   label,
   hint,
@@ -52,11 +59,12 @@ export function Field({
     <label className="grid gap-1.5">
       <span className="label-caps">{label}</span>
       {children}
-      {hint ? <span className="text-[12px] text-muted">{hint}</span> : null}
+      {hint ? <span className="text-[11px] text-[var(--text-muted)]">{hint}</span> : null}
     </label>
   );
 }
 
+/* ─── Input ──────────────────────────────────────────────────────────────── */
 export function Input(props: ComponentPropsWithoutRef<"input">) {
   const normalizedProps =
     props.type === "file"
@@ -69,14 +77,18 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
     <input
       {...normalizedProps}
       className={cn(
-        "focus-ring h-8 w-full rounded-[var(--radius-md)] border border-border bg-panel px-[10px] text-[13px] text-foreground transition placeholder:text-[var(--text-muted)]",
-        "hover:border-border-strong focus:border-[var(--border-focus)]",
+        "focus-ring h-8 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
+        "bg-[var(--bg-panel)] px-3 text-[13px] text-[var(--text-primary)]",
+        "placeholder:text-[var(--text-muted)]",
+        "hover:border-[var(--border-strong)]",
+        "transition-[border-color,box-shadow]",
         normalizedProps.className,
       )}
     />
   );
 }
 
+/* ─── Textarea ───────────────────────────────────────────────────────────── */
 export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
   const normalizedProps =
     "value" in props
@@ -87,87 +99,189 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
     <textarea
       {...normalizedProps}
       className={cn(
-        "focus-ring min-h-20 w-full rounded-[var(--radius-md)] border border-border bg-panel px-[10px] py-2 text-[13px] text-foreground transition placeholder:text-[var(--text-muted)]",
-        "hover:border-border-strong focus:border-[var(--border-focus)]",
+        "focus-ring min-h-20 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
+        "bg-[var(--bg-panel)] px-3 py-2 text-[13px] text-[var(--text-primary)]",
+        "placeholder:text-[var(--text-muted)]",
+        "hover:border-[var(--border-strong)]",
+        "transition-[border-color,box-shadow]",
         normalizedProps.className,
       )}
     />
   );
 }
 
+/* ─── Button ─────────────────────────────────────────────────────────────── */
 export function Button({
   className,
   variant = "primary",
+  size = "md",
   ...props
 }: Readonly<
   ComponentPropsWithoutRef<"button"> & {
     variant?: "primary" | "secondary" | "ghost" | "accent" | "danger";
+    size?: "sm" | "md" | "lg" | "icon";
   }
 >) {
-  const variants = {
-    primary: "bg-brand text-brand-foreground shadow-sm hover:bg-accent-hover",
-    secondary:
-      "border border-border bg-transparent text-foreground hover:bg-background-elevated",
-    ghost: "border border-transparent bg-transparent text-muted hover:bg-accent-subtle hover:text-accent",
-    accent: "bg-accent text-white shadow-sm hover:bg-accent-hover",
-    danger: "border border-danger/30 bg-transparent text-danger hover:bg-danger/10",
+  const variants: Record<string, string> = {
+    primary:   "bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] shadow-[var(--shadow-xs)]",
+    secondary: "border border-[var(--border)] bg-[var(--bg-panel)] text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] hover:border-[var(--border-strong)]",
+    ghost:     "border border-transparent bg-transparent text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]",
+    accent:    "bg-[var(--accent)] text-[var(--accent-fg)] shadow-[var(--shadow-xs)] hover:bg-[var(--accent-hover)]",
+    danger:    "border border-[var(--danger-bg)] bg-transparent text-[var(--danger)] hover:bg-[var(--danger-bg)]",
+  };
+  const sizes: Record<string, string> = {
+    sm:   "h-7 px-2.5 text-[12px]",
+    md:   "h-8 px-3.5 text-[13px]",
+    lg:   "h-9 px-4 text-[14px]",
+    icon: "h-8 w-8 p-0",
   };
   return (
     <button
       {...props}
       className={cn(
-        "focus-ring inline-flex h-8 items-center justify-center gap-2 rounded-[var(--radius-md)] px-[14px] text-[13px] font-medium transition-all disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40",
+        "focus-ring inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-md)] font-medium",
+        "transition-all disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40",
         variants[variant],
+        sizes[size],
         className,
       )}
     />
   );
 }
 
+/* ─── Badge ──────────────────────────────────────────────────────────────── */
 export function Badge({
   children,
   tone = "neutral",
+  className,
 }: Readonly<{
   children: ReactNode;
-  tone?: "neutral" | "success" | "warning" | "danger";
+  tone?: "neutral" | "success" | "warning" | "danger" | "accent" | "info";
+  className?: string;
 }>) {
-  const tones = {
-    neutral: "bg-[var(--status-inactive-bg)] text-[var(--text-secondary)]",
-    success: "bg-[var(--status-active-bg)] text-success",
-    warning: "bg-[var(--status-paused-bg)] text-warning",
-    danger: "bg-[var(--status-killed-bg)] text-danger",
+  const tones: Record<string, string> = {
+    neutral: "bg-[var(--status-neutral-bg)] text-[var(--text-secondary)]",
+    success: "bg-[var(--success-bg)] text-[var(--success)]",
+    warning: "bg-[var(--warning-bg)] text-[var(--warning)]",
+    danger:  "bg-[var(--danger-bg)]  text-[var(--danger)]",
+    accent:  "bg-[var(--accent-subtle)] text-[var(--accent)]",
+    info:    "bg-[var(--info-bg)] text-[var(--info)]",
   };
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[var(--tracking-wide)]",
-        tones[tone],
+        "inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5",
+        "text-[10px] font-semibold uppercase tracking-[0.05em]",
+        tones[tone] ?? tones.neutral,
+        className,
       )}
     >
-      <span className="size-1.5 rounded-full bg-current" aria-hidden />
+      <span
+        className={cn("size-1 rounded-full bg-current", tone === "accent" && "animate-pulse")}
+        aria-hidden
+      />
       {children}
     </span>
   );
 }
 
+/* ─── Toggle ─────────────────────────────────────────────────────────────── */
+export function Toggle({
+  checked,
+  onChange,
+  ariaLabel,
+}: Readonly<{ checked: boolean; onChange: (v: boolean) => void; ariaLabel?: string }>) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={ariaLabel}
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors",
+        checked ? "bg-[var(--accent)]" : "bg-[var(--border-strong)]",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-[var(--shadow-xs)] transition-transform",
+          checked ? "translate-x-[14px]" : "translate-x-0.5",
+        )}
+      />
+    </button>
+  );
+}
+
+/* ─── Metric (simple inline, used in crawl page) ─────────────────────────── */
 export function Metric({
   label,
   value,
   hint,
-}: Readonly<{ label: string; value: ReactNode; hint?: ReactNode }>) {
+  loading = false,
+}: Readonly<{ label: string; value: ReactNode; hint?: ReactNode; loading?: boolean }>) {
   return (
-    <Card className="space-y-2 p-5">
-      <p className="label-caps">
-        {label}
-      </p>
-      <div className="text-[24px] font-bold tracking-[var(--tracking-tight)] text-foreground">
-        {value}
-      </div>
-      {hint ? <div className="text-[12px] text-muted">{hint}</div> : null}
-    </Card>
+    <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] p-4 space-y-1.5 shadow-[var(--shadow-card-value)]">
+      <p className="label-caps">{label}</p>
+      {loading ? (
+        <div className="skeleton h-7 w-20" aria-hidden />
+      ) : (
+        <div className="text-[22px] font-bold tracking-[var(--tracking-tighter)] text-[var(--text-primary)]">
+          {value}
+        </div>
+      )}
+      {hint ? <div className="text-[11px] text-[var(--text-muted)]">{hint}</div> : null}
+    </div>
   );
 }
 
+/* ─── StatCard  — Dashboard KPI tile with colored top stripe ─────────────── */
+export function StatCard({
+  label,
+  value,
+  icon,
+  iconColor,
+  stripeColor,
+  sub,
+  loading = false,
+}: Readonly<{
+  label: string;
+  value: ReactNode;
+  icon?: ReactNode;
+  iconColor?: string;
+  stripeColor?: string;
+  sub?: ReactNode;
+  loading?: boolean;
+}>) {
+  return (
+    <div
+      className="stat-card"
+      style={{ "--stat-accent": stripeColor } as React.CSSProperties}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <p className="label-caps">{label}</p>
+        {icon && (
+          <div
+            className="flex size-7 items-center justify-center rounded-[var(--radius-md)]"
+            style={{ background: stripeColor ? `${stripeColor}18` : "var(--accent-subtle)", color: iconColor ?? stripeColor ?? "var(--accent)" }}
+          >
+            {icon}
+          </div>
+        )}
+      </div>
+      {loading ? (
+        <div className="mt-2.5 skeleton h-9 w-28" aria-hidden />
+      ) : (
+        <div className="mt-2 text-[28px] font-bold tracking-[var(--tracking-tighter)] text-[var(--text-primary)]">
+          {value}
+        </div>
+      )}
+      {sub ? <p className="mt-1.5 text-[12px] text-[var(--text-muted)]">{sub}</p> : null}
+    </div>
+  );
+}
+
+/* ─── DataList ───────────────────────────────────────────────────────────── */
 export function DataList({
   title,
   items,
@@ -175,18 +289,19 @@ export function DataList({
 }: Readonly<{ title: string; items: ReactNode[]; empty: string }>) {
   return (
     <Card className="space-y-3">
-      <h2 className="text-[16px] font-semibold tracking-[var(--tracking-tight)] text-foreground">
+      <h2 className="text-[15px] font-semibold tracking-[var(--tracking-tight)] text-[var(--text-primary)]">
         {title}
       </h2>
       {items.length ? (
         <div className="grid gap-2">{items}</div>
       ) : (
-        <p className="text-[13px] text-muted">{empty}</p>
+        <p className="text-[13px] text-[var(--text-muted)]">{empty}</p>
       )}
     </Card>
   );
 }
 
+/* ─── CodeBlock ──────────────────────────────────────────────────────────── */
 export function CodeBlock({
   children,
   className,
@@ -194,11 +309,97 @@ export function CodeBlock({
   return (
     <pre
       className={cn(
-        "max-h-[28rem] overflow-auto rounded-[var(--radius-lg)] border border-border bg-background-elevated p-4 font-mono text-[12px] leading-[1.6] text-foreground",
+        "max-h-[28rem] overflow-auto rounded-[var(--radius-lg)] border border-[var(--border)]",
+        "bg-[var(--bg-elevated)] p-4 font-mono text-[12px] leading-[1.6] text-[var(--text-primary)]",
         className,
       )}
     >
       {children}
     </pre>
+  );
+}
+
+/* ─── Table primitives ───────────────────────────────────────────────────── */
+export function Table({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
+  return (
+    <div className="relative w-full overflow-auto">
+      <table className={cn("w-full caption-bottom text-sm", className)}>{children}</table>
+    </div>
+  );
+}
+
+export function TableHeader({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
+  return <thead className={cn("[&_tr]:border-b", className)}>{children}</thead>;
+}
+
+export function TableBody({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
+  return <tbody className={cn("[&_tr:last-child]:border-0", className)}>{children}</tbody>;
+}
+
+export function TableRow({
+  children,
+  className,
+  ...props
+}: Readonly<{ children: ReactNode; className?: string } & React.HTMLAttributes<HTMLTableRowElement>>) {
+  return (
+    <tr
+      {...props}
+      className={cn(
+        "border-b border-[var(--border)] transition-colors hover:bg-[var(--bg-elevated)]",
+        className,
+      )}
+    >
+      {children}
+    </tr>
+  );
+}
+
+export function TableHead({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
+  return (
+    <th
+      className={cn(
+        "h-9 px-4 text-left align-middle text-[11px] font-semibold uppercase tracking-[0.05em] text-[var(--text-muted)]",
+        className,
+      )}
+    >
+      {children}
+    </th>
+  );
+}
+
+export function TableCell({
+  children,
+  className,
+  colSpan,
+}: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
+  return (
+    <td className={cn("p-4 align-middle text-[var(--text-secondary)]", className)} colSpan={colSpan}>
+      {children}
+    </td>
+  );
+}
+
+/* ─── Skeleton ───────────────────────────────────────────────────────────── */
+export function Skeleton({ className }: Readonly<{ className?: string }>) {
+  return <div className={cn("skeleton", className)} aria-hidden="true" />;
+}
+
+/* ─── Spinner ────────────────────────────────────────────────────────────── */
+export function Spinner({ className }: Readonly<{ className?: string }>) {
+  return (
+    <svg
+      className={cn("animate-spin-slow", className)}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+      />
+    </svg>
   );
 }

@@ -320,6 +320,53 @@ def test_extract_semantic_specifications_from_inline_list_pairs():
     assert semantic["specifications"]["polyphony"] == "16 Voice"
 
 
+def test_extract_semantic_specifications_are_exposed_as_candidate_rows_without_requesting_them():
+    html = """
+    <html><body>
+    <ul>
+      <li>Wire Gauge: 26 AWG</li>
+      <li>Impedance: 50 Ohms</li>
+    </ul>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert "wire_gauge" in candidates
+    assert candidates["wire_gauge"][0]["value"] == "26 AWG"
+    assert "impedance" in candidates
+    assert candidates["impedance"][0]["value"] == "50 Ohms"
+    assert "specifications" in candidates
+    assert "wire_gauge: 26 AWG" in candidates["specifications"][0]["value"]
+
+
+def test_extract_semantic_specifications_allow_additional_colons_in_value():
+    html = """
+    <html><body>
+    <ul>
+      <li>Office Hours: 09:00 to 17:30 UTC+05:30</li>
+    </ul>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        _, trace = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    semantic = trace["semantic"]
+    assert semantic["specifications"]["office_hours"] == "09:00 to 17:30 UTC+05:30"
+
+
 def test_extract_semantic_specifications_filters_obvious_noise_rows():
     html = """
     <html><body>
@@ -382,8 +429,49 @@ def test_extract_specifications_from_structured_specification_groups():
         )
     assert "specifications" in candidates
     assert candidates["specifications"][0]["source"] == "next_data"
-    assert "Technical Specifications: Depth: 9-21/32 in; Height: 15 in" in candidates["specifications"][0]["value"]
-    assert candidates["specifications"][0]["value"].startswith("General Specifications: Prop 65: CA")
+    assert "prop_65: CA" in candidates["specifications"][0]["value"]
+    assert "depth: 9-21/32 in" in candidates["specifications"][0]["value"]
+    assert "height: 15 in" in candidates["specifications"][0]["value"]
+    assert "depth" in candidates
+    assert candidates["depth"][0]["value"] == "9-21/32 in"
+    assert "height" in candidates
+    assert candidates["height"][0]["value"] == "15 in"
+
+
+def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholders():
+    html = """
+    <html><body>
+      <h2>Documents & Media</h2>
+      <table>
+        <tr><th>Resource Type</th><th>Link</th></tr>
+        <tr><td>Datasheets</td><td><a href="https://example.com/c1156.pdf">C1156</a></td></tr>
+      </table>
+      <h2>Environmental & Export Classifications</h2>
+      <table>
+        <tr><th>Attribute</th><th>Description</th></tr>
+        <tr><td>Operating Temperature</td><td>-</td></tr>
+        <tr><td>ECCN</td><td>EAR99</td></tr>
+      </table>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, trace = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    semantic = trace["semantic"]
+    assert semantic["table_groups"][0]["title"] == "Documents & Media"
+    assert semantic["table_groups"][0]["rows"][0]["href"] == "https://example.com/c1156.pdf"
+    assert semantic["table_groups"][1]["title"] == "Environmental & Export Classifications"
+    assert semantic["specifications"]["operating_temperature"] == "-"
+    assert candidates["operating_temperature"][0]["value"] == "-"
+    assert candidates["operating_temperature"][0]["display_label"] == "Operating Temperature"
+    assert candidates["operating_temperature"][0]["group_label"] == "Environmental & Export Classifications"
 
 
 def test_extract_network_payloads():

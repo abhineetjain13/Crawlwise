@@ -17,8 +17,8 @@ from app.services.llm_runtime import _call_groq, _call_provider, resolve_active_
 async def test_resolve_active_config_prefers_task_specific(db_session: AsyncSession):
     db_session.add_all([
         LLMConfig(
-            provider="openai",
-            model="gpt-general",
+            provider="groq",
+            model="llama-general",
             api_key_encrypted=encrypt_secret("general-key"),
             task_type="general",
             per_domain_daily_budget_usd=Decimal("1.00"),
@@ -26,8 +26,8 @@ async def test_resolve_active_config_prefers_task_specific(db_session: AsyncSess
             is_active=True,
         ),
         LLMConfig(
-            provider="openai",
-            model="gpt-xpath",
+            provider="groq",
+            model="llama-xpath",
             api_key_encrypted=encrypt_secret("xpath-key"),
             task_type="xpath_discovery",
             per_domain_daily_budget_usd=Decimal("1.00"),
@@ -40,15 +40,15 @@ async def test_resolve_active_config_prefers_task_specific(db_session: AsyncSess
     config = await resolve_active_config(db_session, "xpath_discovery")
 
     assert config is not None
-    assert config.model == "gpt-xpath"
+    assert config.model == "llama-xpath"
 
 
 @pytest.mark.asyncio
 async def test_run_prompt_task_logs_cost_usage(db_session: AsyncSession):
     db_session.add(
         LLMConfig(
-            provider="openai",
-            model="gpt-xpath",
+            provider="groq",
+            model="llama-xpath",
             api_key_encrypted=encrypt_secret("xpath-key"),
             task_type="xpath_discovery",
             per_domain_daily_budget_usd=Decimal("1.00"),
@@ -126,13 +126,13 @@ async def test_call_groq_sets_max_tokens():
 @pytest.mark.asyncio
 async def test_call_provider_returns_error_string_on_httpx_failure():
     with patch(
-        "app.services.llm_runtime._call_openai",
+        "app.services.llm_runtime._call_groq",
         new_callable=AsyncMock,
         side_effect=httpx.ConnectError("[Errno 11001] getaddrinfo failed"),
     ):
         raw, input_tokens, output_tokens = await _call_provider(
-            provider="openai",
-            model="gpt-test",
+            provider="groq",
+            model="llama-test",
             api_key="secret",
             system_prompt="system",
             user_prompt="user",
@@ -146,8 +146,8 @@ async def test_call_provider_returns_error_string_on_httpx_failure():
 @pytest.mark.asyncio
 async def test_run_prompt_task_gracefully_returns_provider_connection_error(db_session: AsyncSession):
     config = LLMConfig(
-        provider="openai",
-        model="gpt-test",
+        provider="groq",
+        model="llama-test",
         api_key_encrypted=encrypt_secret("secret"),
         task_type="general",
         per_domain_daily_budget_usd=Decimal("5.00"),

@@ -94,10 +94,10 @@ async def _run_one(run_id: int, name: str, url: str, timeout_seconds: int) -> di
         }
 
 
-async def _run_batch(batch_name: str, timeout_seconds: int) -> list[dict]:
+async def _run_batch(batch_name: str, timeout_seconds: int, *, start_run_id: int) -> list[dict]:
     results: list[dict] = []
     for offset, (name, url) in enumerate(BATCHES[batch_name], start=1):
-        results.append(await _run_one(40000 + offset, name, url, timeout_seconds))
+        results.append(await _run_one(start_run_id + offset - 1, name, url, timeout_seconds))
     return results
 
 
@@ -138,8 +138,10 @@ async def main(argv: list[str]) -> int:
 
     selected = args.batches or ["api", "commerce"]
     overall: dict[str, list[dict]] = {}
+    run_id_base = 40000
     for batch_name in selected:
-        overall[batch_name] = await _run_batch(batch_name, args.timeout)
+        overall[batch_name] = await _run_batch(batch_name, args.timeout, start_run_id=run_id_base)
+        run_id_base += len(BATCHES[batch_name])
 
     report_path = _write_report(overall, selected, args.timeout)
     print(json.dumps({"summary": _build_summary(overall), "report_path": str(report_path), "results": overall}, indent=2))

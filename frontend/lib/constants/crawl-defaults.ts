@@ -3,6 +3,8 @@ export const CRAWL_DEFAULTS = {
   MAX_RECORDS: 100,
   MAX_PAGES: 10,
   SCROLL_THRESHOLD_PX: 50,
+  TABLE_PAGE_SIZE: 25,
+  MAX_LIVE_LOGS: 500,
 } as const;
 
 export const CRAWL_LIMITS = {

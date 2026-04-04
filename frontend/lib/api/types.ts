@@ -144,6 +144,18 @@ export type ReviewSelectorPreview = {
   records: CrawlRecord[];
 };
 
+export type FieldCommitPayload = {
+  record_id: number;
+  field_name: string;
+  value: unknown;
+};
+
+export type FieldCommitResponse = {
+  run_id: number;
+  updated_records: number;
+  updated_fields: number;
+};
+
 export type SelectorCreatePayload = {
   domain: string;
   field_name: string;

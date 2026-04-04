@@ -1,7 +1,7 @@
 # Tests for the discovery service.
 from __future__ import annotations
 
-from app.services.discover.service import DiscoveryManifest, discover_sources
+from app.services.discover.service import discover_sources
 
 
 def test_discover_json_ld():
@@ -121,7 +121,13 @@ def test_discover_tables():
     """
     manifest = discover_sources(html)
     assert len(manifest.tables) == 1
-    assert len(manifest.tables[0]) == 3  # header + 2 data rows
+    assert manifest.tables[0]["headers"] == [
+        {"text": "Name", "href": None},
+        {"text": "Price", "href": None},
+    ]
+    assert len(manifest.tables[0]["rows"]) == 2
+    assert manifest.tables[0]["rows"][0]["cells"][0]["text"] == "Widget A"
+    assert manifest.tables[0]["rows"][1]["cells"][1]["text"] == "$20"
 
 
 def test_discover_adapter_data_passthrough():
@@ -199,4 +205,23 @@ def test_discover_deduplicates_application_json_between_hydrated_and_embedded():
 
     assert len(manifest._hydrated_states) == 1
     assert manifest._hydrated_states[0]["product"]["title"] == "Embedded Widget"
+    assert manifest.embedded_json == []
+
+
+def test_discover_deduplicates_application_json_without_script_id():
+    html = """
+    <html><body>
+    <script type="application/json">
+    {
+      "product": {
+        "title": "Embedded Widget",
+        "price": "19.99"
+      }
+    }
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+
+    assert len(manifest._hydrated_states) == 1
     assert manifest.embedded_json == []

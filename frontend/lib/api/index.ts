@@ -1,4 +1,4 @@
-import { apiClient, getApiBaseUrl } from "./client";
+import { apiClient, getApiBaseUrl, storeAccessToken } from "./client";
 import type {
   ActiveJob,
   CrawlCreatePayload,
@@ -6,6 +6,8 @@ import type {
   CrawlRecord,
   CrawlRun,
   Dashboard,
+  FieldCommitPayload,
+  FieldCommitResponse,
   LlmConfigRecord,
   LlmConnectionTestResponse,
   LlmCostLogRecord,
@@ -30,8 +32,11 @@ function withQuery(path: string, query: URLSearchParams) {
 export const api = {
   register: (email: string, password: string) =>
     apiClient.post<User>("/api/auth/register", { email, password }),
-  login: (email: string, password: string) =>
-    apiClient.post<{ access_token: string; user: User }>("/api/auth/login", { email, password }),
+  login: async (email: string, password: string) => {
+    const response = await apiClient.post<{ access_token: string; user: User }>("/api/auth/login", { email, password });
+    storeAccessToken(response.access_token);
+    return response;
+  },
   me: () => apiClient.get<User>("/api/auth/me"),
   dashboard: () => apiClient.get<Dashboard>("/api/dashboard"),
   resetApplicationData: () => apiClient.post<Record<string, number | boolean>>("/api/dashboard/reset-data", {}),
@@ -63,9 +68,23 @@ export const api = {
   pauseCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/pause`, {}),
   resumeCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/resume`, {}),
   killCrawl: (runId: number) => apiClient.post<{ run_id: number; status: CrawlRun["status"] }>(`/api/crawls/${runId}/kill`, {}),
+  commitSelectedFields: async (
+    runId: number,
+    items: FieldCommitPayload[],
+  ) => {
+    try {
+      return await apiClient.post<FieldCommitResponse>(`/api/crawls/${runId}/commit-fields`, { items });
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
+      if (!message.includes("not found")) {
+        throw error;
+      }
+      return await apiClient.post<FieldCommitResponse>(`/api/crawls/${runId}/llm-commit`, { items });
+    }
+  },
   commitLlmSuggestions: (
     runId: number,
-    items: Array<{ record_id: number; field_name: string; value: string }>,
+    items: Array<{ record_id: number; field_name: string; value: unknown }>,
   ) => apiClient.post<{ run_id: number; updated_records: number; updated_fields: number }>(`/api/crawls/${runId}/llm-commit`, { items }),
   getRecords: (runId: number, params?: { page?: number; limit?: number }) => {
     const query = new URLSearchParams();
@@ -138,3 +157,15 @@ export const api = {
     return apiClient.get<Paginated<LlmCostLogRecord>>(withQuery("/api/llm/cost-log", query));
   },
 };
+
+// Named exports for easier consumption in components
+export const fetchCrawlRun = api.getCrawl;
+export const fetchCrawlRecords = (runId: number) => api.getRecords(runId).then(res => res.items);
+export const fetchCrawlRecordMetadata = (runId: number) => api.getRecords(runId, { limit: 1 }).then(res => res.items[0]);
+export const fetchCrawlLogs = api.getCrawlLogs;
+export const createCrawl = api.createCrawl;
+export const pauseCrawlRun = api.pauseCrawl;
+export const resumeCrawlRun = api.resumeCrawl;
+export const killCrawlRun = api.killCrawl;
+export const commitFieldSuggestion = (runId: number, item: { record_id: number; field_name: string; value: unknown }) => 
+  api.commitSelectedFields(runId, [item]);

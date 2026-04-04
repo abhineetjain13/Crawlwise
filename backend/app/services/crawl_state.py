@@ -10,6 +10,7 @@ class CrawlStatus(StrEnum):
     PAUSED = "paused"
     COMPLETED = "completed"
     KILLED = "killed"
+    CLAIMED = "claimed"
     FAILED = "failed"
     PROXY_EXHAUSTED = "proxy_exhausted"
 
@@ -22,11 +23,13 @@ TERMINAL_STATUSES = {
 }
 ACTIVE_STATUSES = {
     CrawlStatus.PENDING,
+    CrawlStatus.CLAIMED,
     CrawlStatus.RUNNING,
     CrawlStatus.PAUSED,
 }
 WORKER_PICKUP_STATUSES = {
     CrawlStatus.PENDING,
+    CrawlStatus.CLAIMED,
     CrawlStatus.RUNNING,
 }
 CONTROL_REQUEST_KEY = "control_requested"
@@ -38,7 +41,8 @@ _LEGACY_STATUS_MAP = {
     "degraded": CrawlStatus.FAILED,
 }
 _ALLOWED_TRANSITIONS = {
-    CrawlStatus.PENDING: {CrawlStatus.RUNNING, CrawlStatus.KILLED},
+    CrawlStatus.PENDING: {CrawlStatus.CLAIMED, CrawlStatus.RUNNING, CrawlStatus.KILLED},
+    CrawlStatus.CLAIMED: {CrawlStatus.RUNNING, CrawlStatus.KILLED, CrawlStatus.FAILED},
     CrawlStatus.RUNNING: {CrawlStatus.PAUSED, CrawlStatus.COMPLETED, CrawlStatus.KILLED, CrawlStatus.FAILED, CrawlStatus.PROXY_EXHAUSTED},
     CrawlStatus.PAUSED: {CrawlStatus.RUNNING, CrawlStatus.KILLED},
     CrawlStatus.COMPLETED: set(),

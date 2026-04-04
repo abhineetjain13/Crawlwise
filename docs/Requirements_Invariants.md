@@ -143,6 +143,8 @@
 | Sleep Time | Integer (ms) | Delay between page requests |
 | Proxy | Toggle + list | Use rotating proxy pool for this run |
 
+**Pre-run Preview**
+
 - Show: detected/configured output columns, their data source (HTML XPath, JSON-LD, API, Regex), and a sample value if a preview fetch is available
 - User can add, remove, or reorder columns before confirming
 
@@ -334,6 +336,7 @@ Invariants are conditions that must hold true at all times, regardless of applic
 - **INV-PROXY-02:** Proxy credentials (user:pass) are stored server-side only and are never returned to the frontend.
 - **INV-PROXY-03:** A proxy failure on a single request does not fail the job. The request is retried through the next proxy in the pool. Only full pool exhaustion triggers a `PROXY_EXHAUSTED` status.
 
+<a id="data-integrity"></a>
 ### 4.6 Data Integrity
 
 - **INV-DATA-01:** Every output record is linked to exactly one Run ID. Orphaned records (records with no associated run) are invalid and must not appear in any output view.
@@ -347,7 +350,7 @@ Invariants are conditions that must hold true at all times, regardless of applic
 - **INV-CRAWL-02:** The hybrid crawler selects the engine (HTTP or browser automation) per page, not per job. Static pages always use the lightweight HTTP path unless the page is detected as JS-rendered.
 - **INV-CRAWL-03:** XPath and Regex expressions provided by the user are validated for syntactic correctness before a job is dispatched. A job with an invalid expression is rejected with a descriptive error; it never starts.
 - **INV-CRAWL-04:** Acquisition hardening must remain generic. No production code that runs against external or customer-facing target sites may contain per-domain hacks, allowlists, or special-case bypasses to make one production target pass. Internal test fixtures, local mocks, and deterministic adapter fixtures used only under test are allowed, provided they remain isolated from production acquisition paths and exercise the same acquisition hardening controls (retries, browser fallback, challenge detection, error handling) validated in production.
-- **INV-CRAWL-05:** Every successful acquisition attempt at the page-fetch level, regardless of whether downstream extraction later yields zero records, persists both the fetched artifact and a machine-readable diagnostics record so transport regressions can be investigated without depending on ephemeral logs. At minimum, the fetched artifact set must preserve raw HTML for HTTP/browser fetches, the HTTP response envelope when available (final URL, status, headers), and a screenshot for browser-engine acquisitions when one was captured. The diagnostics record must be stored in a machine-readable JSON payload and/or a dedicated SQLite table under the existing persistence model in §3.4 Data Persistence, extending the SQLite guarantees in [§4.6 Data Integrity](#46-data-integrity) and retaining records according to [OI-01](#5-open-items). Minimum diagnostics fields are: `timestamp`, `url`, `final_url`, `http_status`, `response_time_ms`, `proxy`, `engine_type`, `error_code`, `error_detail`, `blocked_verdict`, and references to the persisted fetched artifacts.
+- **INV-CRAWL-05:** Every successful acquisition attempt at the page-fetch level, regardless of whether downstream extraction later yields zero records, persists both the fetched artifact and a machine-readable diagnostics record so transport regressions can be investigated without depending on ephemeral logs. At minimum, the fetched artifact set must preserve raw HTML for HTTP/browser fetches, the HTTP response envelope when available (final URL, status, headers), and a screenshot for browser-engine acquisitions when one was captured. The diagnostics record must be stored in a machine-readable JSON payload and/or a dedicated SQLite table under the existing persistence model in §3.4 Data Persistence, extending the SQLite guarantees in [§4.6 Data Integrity](#data-integrity) and retaining records according to [OI-01](#oi-01). Minimum diagnostics fields are: `timestamp`, `url`, `final_url`, `http_status`, `response_time_ms`, `proxy`, `engine_type`, `error_code`, `error_detail`, `blocked_verdict`, and references to the persisted fetched artifacts.
 
 ---
 
@@ -355,7 +358,7 @@ Invariants are conditions that must hold true at all times, regardless of applic
 
 | # | Item | Owner | Notes |
 |---|---|---|---|
-| OI-01 | Data retention policy | To be decided | Until resolved, retention is indefinite; manual clear is the only mechanism |
+| <span id="oi-01">OI-01</span> | Data retention policy | To be decided | Until resolved, retention is indefinite; manual clear is the only mechanism |
 | OI-02 | Discoverist CSV column schema | Client / stakeholder | Must be formally documented before the Download button is implemented |
 | OI-03 | Concurrency limit per user | Engineering | Multiple concurrent jobs per user are permitted; a sensible cap (e.g. 5) should be agreed before load testing |
 | OI-04 | Browser automation engine | Engineering | Playwright vs Puppeteer decision pending; either satisfies the hybrid invariant |

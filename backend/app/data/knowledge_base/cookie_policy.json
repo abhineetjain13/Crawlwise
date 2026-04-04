@@ -23,12 +23,14 @@
     "bot"
   ],
   "domain_overrides": {
-    "example.com": {
+    "your-domain.com": {
       "allowed_cookie_names": [
         "consent_state",
         "locale",
         "currency"
       ]
     }
-  }
+  },
+  "template": true,
+  "note": "Replace your-domain.com with the real production domain(s) before enabling domain-specific cookie overrides."
 }

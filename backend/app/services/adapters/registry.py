@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import urlparse
 
 from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.base import AdapterResult, BaseAdapter

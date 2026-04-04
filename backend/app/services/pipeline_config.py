@@ -46,6 +46,7 @@ def canonical_fields(surface: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 _TUNING: dict = _load("pipeline_tuning.json", {})  # type: ignore[assignment]
+_EXTRACTION_RULES: dict = _load("extraction_rules.json", {})  # type: ignore[assignment]
 
 # Acquisition
 HTTP_TIMEOUT_SECONDS: int = _TUNING.get("http_timeout_seconds", 20)
@@ -57,6 +58,7 @@ JS_GATE_PHRASES: list[str] = _TUNING.get("js_gate_phrases", [
 ])
 DEFAULT_MAX_RECORDS: int = _TUNING.get("default_max_records", 100)
 DEFAULT_SLEEP_MS: int = _TUNING.get("default_sleep_ms", 0)
+MIN_REQUEST_DELAY_MS: int = _TUNING.get("min_request_delay_ms", 100)
 
 # Blocked-page detection
 BLOCK_MIN_HTML_LENGTH: int = _TUNING.get("block_min_html_length", 100)
@@ -70,6 +72,7 @@ CARD_AUTODETECT_MIN_SIBLINGS: int = _TUNING.get("card_autodetect_min_siblings", 
 
 # JSON extraction
 JSON_MAX_SEARCH_DEPTH: int = _TUNING.get("json_max_search_depth", 5)
+MAX_JSON_RECURSION_DEPTH: int = _TUNING.get("max_json_recursion_depth", 4)
 
 # HTTP provider (Phase 1 hardening)
 HTTP_RETRY_STATUS_CODES: list[int] = _TUNING.get("http_retry_status_codes", [403, 429, 503])
@@ -79,6 +82,8 @@ HTTP_RETRY_BACKOFF_MAX_MS: int = _TUNING.get("http_retry_backoff_max_ms", 3000)
 DNS_RESOLUTION_RETRIES: int = _TUNING.get("dns_resolution_retries", 1)
 DNS_RESOLUTION_RETRY_DELAY_MS: int = _TUNING.get("dns_resolution_retry_delay_ms", 250)
 ACQUIRE_HOST_MIN_INTERVAL_MS: int = _TUNING.get("acquire_host_min_interval_ms", 250)
+PACING_HOST_CACHE_MAX_ENTRIES: int = _TUNING.get("pacing_host_cache_max_entries", 1024)
+PACING_HOST_CACHE_TTL_SECONDS: int = _TUNING.get("pacing_host_cache_ttl_seconds", 3600)
 STEALTH_PREFER_TTL_HOURS: int = _TUNING.get("stealth_prefer_ttl_hours", 24)
 
 # Browser runtime (Phase 2 hardening)
@@ -88,6 +93,13 @@ ORIGIN_WARM_PAUSE_MS: int = _TUNING.get("origin_warm_pause_ms", 2000)
 BROWSER_ERROR_RETRY_ATTEMPTS: int = _TUNING.get("browser_error_retry_attempts", 1)
 BROWSER_ERROR_RETRY_DELAY_MS: int = _TUNING.get("browser_error_retry_delay_ms", 1000)
 
+if HTTP_RETRY_BACKOFF_BASE_MS < 0:
+    raise ValueError("pipeline_tuning.json:http_retry_backoff_base_ms must be >= 0")
+if HTTP_RETRY_BACKOFF_MAX_MS < HTTP_RETRY_BACKOFF_BASE_MS:
+    raise ValueError(
+        "pipeline_tuning.json:http_retry_backoff_max_ms must be >= http_retry_backoff_base_ms"
+    )
+
 # ---------------------------------------------------------------------------
 # 3. Field aliases — loaded from field_aliases.json
 #    Maps canonical field names to known API/JSON key aliases.
@@ -95,7 +107,7 @@ BROWSER_ERROR_RETRY_DELAY_MS: int = _TUNING.get("browser_error_retry_delay_ms", 
 #    Users can add aliases for new APIs without touching code.
 # ---------------------------------------------------------------------------
 
-FIELD_ALIASES: dict[str, list[str]] = _load("field_aliases.json", {})  # type: ignore[assignment]
+FIELD_ALIASES: dict[str, list[str]] = _EXTRACTION_RULES.get("field_aliases", _load("field_aliases.json", {}))  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +125,7 @@ COLLECTION_KEYS: list[str] = _load("collection_keys.json", [])  # type: ignore[a
 #    Adapters have their own selectors; these are the generic fallbacks.
 # ---------------------------------------------------------------------------
 
-DOM_PATTERNS: dict[str, str] = _load("dom_patterns.json", {})  # type: ignore[assignment]
+DOM_PATTERNS: dict[str, str] = _EXTRACTION_RULES.get("dom_patterns", _load("dom_patterns.json", {}))  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +168,22 @@ VERDICT_CORE_FIELDS_LISTING: set[str] = set(_VERDICT_RULES.get("listing_core_fie
 #     Maps semantic detail fields to synonymous labels and section headings.
 # ---------------------------------------------------------------------------
 
-REQUESTED_FIELD_ALIASES: dict[str, list[str]] = _load("requested_field_aliases.json", {})  # type: ignore[assignment]
+REQUESTED_FIELD_ALIASES: dict[str, list[str]] = _EXTRACTION_RULES.get("requested_field_aliases", _load("requested_field_aliases.json", {}))  # type: ignore[assignment]
+
+_CANDIDATE_CLEANUP: dict = _EXTRACTION_RULES.get("candidate_cleanup", {})  # type: ignore[assignment]
+CANDIDATE_PLACEHOLDER_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("placeholder_values", ["-", "—", "--", "n/a", "na", "none", "null", "undefined"]))
+CANDIDATE_GENERIC_CATEGORY_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("generic_category_values", ["detail-page", "detail_page", "product", "page", "pdp"]))
+CANDIDATE_GENERIC_TITLE_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("generic_title_values", ["chrome", "firefox", "safari", "edge", "home"]))
+
+_SEMANTIC_DETAIL_RULES: dict = _EXTRACTION_RULES.get("semantic_detail", {})  # type: ignore[assignment]
+SECTION_SKIP_PATTERNS: tuple[str, ...] = tuple(_SEMANTIC_DETAIL_RULES.get("section_skip_patterns", ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe"]))
+SECTION_ANCESTOR_STOP_TAGS: set[str] = set(_SEMANTIC_DETAIL_RULES.get("section_ancestor_stop_tags", ["footer", "header", "nav", "aside", "form"]))
+SECTION_ANCESTOR_STOP_TOKENS: set[str] = set(_SEMANTIC_DETAIL_RULES.get("section_ancestor_stop_tokens", ["footer", "header", "nav", "menu", "newsletter", "breadcrumbs", "breadcrumb", "cookie", "consent"]))
+SPEC_LABEL_BLOCK_PATTERNS: tuple[str, ...] = tuple(_SEMANTIC_DETAIL_RULES.get("spec_label_block_patterns", ["play video", "watch video", "video", "learn more", "add to cart", "buy now", "primary guide", "guide", "discount"]))
+SPEC_DROP_LABELS: set[str] = set(_SEMANTIC_DETAIL_RULES.get("spec_drop_labels", ["qty", "quantity", "details"]))
+FEATURE_SECTION_ALIASES: set[str] = set(_SEMANTIC_DETAIL_RULES.get("feature_section_aliases", ["features", "feature", "highlights", "key_features", "key features"]))
+DIMENSION_KEYWORDS: tuple[str, ...] = tuple(_SEMANTIC_DETAIL_RULES.get("dimension_keywords", ["width", "height", "depth", "length", "diameter", "weight", "dimensions", "size", "measurement", "measurements"]))
+SEMANTIC_AGGREGATE_SEPARATOR: str = str(_SEMANTIC_DETAIL_RULES.get("aggregate_separator", " | "))
 
 
 # ---------------------------------------------------------------------------

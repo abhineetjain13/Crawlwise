@@ -143,7 +143,7 @@ async def test_save_cookies_removes_stale_cookie_file_when_no_persistable_cookie
 
 
 def test_cookie_policy_domain_override_matches_subdomain():
-    policy = _cookie_policy_for_domain("www.example.com")
+    policy = _cookie_policy_for_domain("www.your-domain.com")
 
     assert "consent_state" in policy["allowed_cookie_names"]
 
@@ -175,3 +175,16 @@ async def test_goto_with_fallback_retries_transient_browser_dns_error(monkeypatc
 
     assert len(page.goto_calls) == 2
     assert page.wait_calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_retryable_browser_error_reason_normalizes_curly_apostrophes():
+    page = FakeGotoPage([
+        {
+            "page_url": "https://example.com",
+            "html": "<html><body>This site can’t be reached</body></html>",
+        },
+    ])
+    await page.goto("https://example.com", wait_until="load", timeout=1000)
+
+    assert await _retryable_browser_error_reason(page) == "site_cannot_be_reached"

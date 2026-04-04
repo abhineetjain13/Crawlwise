@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
+from app.models.llm import LLMCostLog
 from app.models.user import User
 from app.services import dashboard_service
 
@@ -45,6 +46,18 @@ async def test_reset_application_data_clears_rows_and_artifacts(
 
     db_session.add(CrawlRecord(run_id=run.id, source_url="https://example.com", data={}, raw_data={}, discovered_data={}, source_trace={}))
     db_session.add(CrawlLog(run_id=run.id, level="INFO", message="done"))
+    db_session.add(
+        LLMCostLog(
+            run_id=run.id,
+            provider="groq",
+            model="llama-3.3-70b-versatile",
+            task_type="cleanup",
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd="0.0001",
+            domain="example.com",
+        )
+    )
     await db_session.commit()
 
     monkeypatch.setattr("app.services.dashboard_service.settings.artifacts_dir", artifacts_dir)
@@ -61,10 +74,12 @@ async def test_reset_application_data_clears_rows_and_artifacts(
     remaining_runs = await db_session.scalar(select(func.count()).select_from(CrawlRun))
     remaining_records = await db_session.scalar(select(func.count()).select_from(CrawlRecord))
     remaining_logs = await db_session.scalar(select(func.count()).select_from(CrawlLog))
+    remaining_llm_logs = await db_session.scalar(select(func.count()).select_from(LLMCostLog))
 
     assert remaining_runs == 0
     assert remaining_records == 0
     assert remaining_logs == 0
+    assert remaining_llm_logs == 0
     assert result["artifacts_removed"] == 1
     assert result["legacy_artifacts_removed"] == 1
     assert result["cookies_removed"] == 1

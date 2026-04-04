@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     cookie_store_dir: Path = Field(default=BASE_DIR / "cookie_store")
     playwright_headless: bool = True
     worker_poll_interval_seconds: float = 1.0
-    openai_api_key: str = ""
     anthropic_api_key: str = ""
     groq_api_key: str = ""
     nvidia_api_key: str = ""

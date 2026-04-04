@@ -234,13 +234,12 @@ async def _retryable_browser_error_reason(page) -> str | None:
     except Exception:
         logger.debug("Failed to inspect page content for browser error markers", exc_info=True)
         return None
-    text = (html or "")[:20_000].lower()
+    text = (html or "")[:20_000].lower().replace("’", "'")
     markers = {
         "err_name_not_resolved": "dns_name_not_resolved",
         "dns_probe_finished_nxdomain": "dns_probe_finished_nxdomain",
         "dns_probe_finished_no_internet": "dns_probe_finished_no_internet",
         "this site can't be reached": "site_cannot_be_reached",
-        "this site can’t be reached": "site_cannot_be_reached",
         "server ip address could not be found": "server_ip_not_found",
         "err_network_changed": "network_changed",
         "err_connection_reset": "connection_reset",

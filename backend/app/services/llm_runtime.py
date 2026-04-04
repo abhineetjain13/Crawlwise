@@ -19,6 +19,7 @@ from app.services.knowledge_base.store import get_prompt_task, load_prompt_file
 
 _ERROR_PREFIX = "Error:"
 JSON_CONTENT_TYPE = "application/json"
+SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 
 
 @dataclass
@@ -40,7 +41,7 @@ async def resolve_active_config(session: AsyncSession, task_type: str) -> LLMCon
             .limit(1)
         )
         config = result.scalar_one_or_none()
-        if config is not None:
+        if config is not None and str(config.provider or "").strip().lower() in SUPPORTED_LLM_PROVIDERS:
             return config
     return None
 
@@ -101,6 +102,11 @@ async def run_prompt_task(
     rendered_user_prompt = Template(user_template).safe_substitute({
         key: _stringify_prompt_value(value) for key, value in variables.items()
     })
+    # Guard: prevent 413 Payload Too Large by truncating user prompt if it exceeds safety limits.
+    # We use a conservative character-to-token ratio (4 chars = 1 token).
+    # Groq's 8b/70b models often have a 6k-8k limit on some tiers.
+    safe_user_prompt = _enforce_token_limit(rendered_user_prompt, limit=5600)
+    
     raw, input_tokens, output_tokens = await _call_provider(
         provider=str(config.get("provider") or ""),
         model=str(config.get("model") or ""),
@@ -109,7 +115,7 @@ async def run_prompt_task(
             encrypted_value=str(config.get("api_key_encrypted") or ""),
         ),
         system_prompt=system_prompt,
-        user_prompt=rendered_user_prompt,
+        user_prompt=safe_user_prompt,
     )
     if raw.startswith(_ERROR_PREFIX):
         return LLMTaskResult(
@@ -247,9 +253,9 @@ async def review_field_candidates(
             "url": url,
             "target_fields_json": json.dumps(target_fields),
             "existing_values_json": _truncate_json_literal({field: existing_values.get(field) for field in target_fields}, 2400),
-            "candidate_evidence_json": _truncate_json_literal(candidate_evidence, 4800),
-            "discovered_sources_json": _truncate_json_literal(discovered_sources, 3200),
-            "html_snippet": _truncate_html(html_text, 4000),
+            "candidate_evidence_json": _truncate_json_literal(candidate_evidence, 16000),
+            "discovered_sources_json": _truncate_json_literal(discovered_sources, 48000),
+            "html_snippet": _truncate_html(html_text, 12000),
         },
     )
     payload = result.payload
@@ -267,62 +273,19 @@ async def _call_provider(
     normalized_provider = str(provider or "").strip().lower()
     if not api_key:
         return f"{_ERROR_PREFIX} Missing API key", 0, 0
+    if normalized_provider not in SUPPORTED_LLM_PROVIDERS:
+        return f"{_ERROR_PREFIX} Unsupported provider: {provider}", 0, 0
     try:
-        if normalized_provider == "openai":
-            return await _call_openai(api_key, model, system_prompt, user_prompt)
         if normalized_provider == "groq":
             return await _call_groq(api_key, model, system_prompt, user_prompt)
         if normalized_provider == "anthropic":
             return await _call_anthropic(api_key, model, system_prompt, user_prompt)
         if normalized_provider == "nvidia":
             return await _call_nvidia(api_key, model, system_prompt, user_prompt)
-        return f"{_ERROR_PREFIX} Unsupported provider: {provider}", 0, 0
     except httpx.HTTPError as exc:
         return f"{_ERROR_PREFIX} {type(exc).__name__}: {exc}", 0, 0
 
 
-async def _call_openai(
-    api_key: str,
-    model: str,
-    system_prompt: str,
-    user_prompt: str,
-) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/responses",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": JSON_CONTENT_TYPE,
-            },
-            json={
-                "model": model,
-                "input": [
-                    {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
-                    {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
-                ],
-                "max_output_tokens": 1200,
-            },
-        )
-    if response.status_code != 200:
-        return f"{_ERROR_PREFIX} HTTP {response.status_code}: {response.text[:300]}", 0, 0
-    data = response.json()
-    text = str(data.get("output_text") or "").strip()
-    if not text:
-        output = data.get("output")
-        if isinstance(output, list):
-            fragments: list[str] = []
-            for item in output:
-                if not isinstance(item, dict):
-                    continue
-                content = item.get("content")
-                if not isinstance(content, list):
-                    continue
-                for part in content:
-                    if isinstance(part, dict) and isinstance(part.get("text"), str):
-                        fragments.append(part["text"])
-            text = "\n".join(fragments).strip()
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    return text, int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
 
 
 async def _call_groq(
@@ -370,7 +333,7 @@ async def _call_anthropic(
             },
             json={
                 "model": model,
-                "max_tokens": 1200,
+                "max_tokens": 3000,
                 "temperature": 0.1,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_prompt}],
@@ -491,6 +454,15 @@ def _truncate_json_literal(value: Any, limit: int) -> str:
     return json.dumps(str(compact)[: max(0, limit - 2)], default=str)
 
 
+def _enforce_token_limit(text: str, limit: int = 5600) -> str:
+    """Aggressively truncate text if it exceeds a character-based token estimate."""
+    # Rough estimate: 4 chars per token. 5600 tokens ~ 22400 chars.
+    char_limit = limit * 4
+    if len(text) <= char_limit:
+        return text
+    return text[:char_limit] + "\n... [TRUNCATED DUE TO TOKEN LIMIT]"
+
+
 def _compact_json_value(value: Any, *, depth: int = 0, max_depth: int = 3) -> Any:
     if value in (None, "", [], {}):
         return value
@@ -537,8 +509,6 @@ def _resolve_provider_api_key(*, provider: str, encrypted_value: str) -> str:
 
 def _provider_env_key(provider: str) -> str:
     normalized = str(provider or "").strip().lower()
-    if normalized == "openai":
-        return settings.openai_api_key
     if normalized == "groq":
         return settings.groq_api_key
     if normalized == "anthropic":
@@ -555,8 +525,8 @@ def llm_provider_catalog() -> list[dict[str, Any]]:
             "label": "Groq",
             "api_key_set": bool(settings.groq_api_key),
             "recommended_models": [
-                "llama-3.1-8b-instant",
                 "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
             ],
         },
         {
@@ -575,15 +545,6 @@ def llm_provider_catalog() -> list[dict[str, Any]]:
             "recommended_models": [
                 "claude-3-5-haiku-latest",
                 "claude-sonnet-4-20250514",
-            ],
-        },
-        {
-            "provider": "openai",
-            "label": "OpenAI",
-            "api_key_set": bool(settings.openai_api_key),
-            "recommended_models": [
-                "gpt-5.4-mini",
-                "gpt-5.4",
             ],
         },
     ]

@@ -21,7 +21,7 @@ class DiscoveryManifest:
     embedded_json: list[dict | list] = field(default_factory=list)
     json_ld: list[dict] = field(default_factory=list)            # rank 4: JSON-LD
     microdata: list[dict] = field(default_factory=list)          # rank 5: Microdata/RDFa
-    tables: list[list[list[str]]] = field(default_factory=list)  # rank 8: HTML tables
+    tables: list[dict] = field(default_factory=list)  # rank 8: HTML tables with preserved structure
 
     def as_dict(self) -> dict:
         return {
@@ -163,11 +163,12 @@ def _extract_embedded_json(soup: BeautifulSoup, seen_script_ids: set[str] | None
         text = node.string or node.get_text(" ", strip=True) or ""
         if not text or script_type == "application/ld+json":
             continue
-        if _normalized_script_identifier(node, text) in seen_script_ids:
-            continue
         if script_type == "application/json" or any(token in script_id for token in ("state", "data", "props", "product")):
             parsed = _parse_json_blob(text)
             if parsed is not None:
+                fingerprint = json.dumps(parsed, sort_keys=True, default=str)
+                if _normalized_script_identifier(node, text, fingerprint) in seen_script_ids:
+                    continue
                 _append_unique_blob(blobs, seen, parsed)
 
     data_attr_tokens = ("json", "state", "props", "product", "config", "schema", "payload")
@@ -317,14 +318,88 @@ def _extract_microdata(soup: BeautifulSoup) -> list[dict]:
     return items
 
 
-def _extract_tables(soup: BeautifulSoup) -> list[list[list[str]]]:
-    table_rows = []
-    for table in soup.select("table"):
-        rows = []
-        for row in table.select("tr"):
-            values = [cell.get_text(" ", strip=True) for cell in row.select("th,td")]
-            if values:
-                rows.append(values)
-        if rows:
-            table_rows.append(rows)
-    return table_rows
+def _extract_tables(soup: BeautifulSoup) -> list[dict]:
+    tables: list[dict] = []
+    for index, table in enumerate(soup.select("table"), start=1):
+        caption = _clean_text(table.find("caption").get_text(" ", strip=True)) if table.find("caption") else ""
+        section_title = _nearest_table_heading(table)
+        rows: list[dict] = []
+        headers: list[dict] = []
+
+        for row_index, row in enumerate(table.find_all("tr"), start=1):
+            cells = row.find_all(["th", "td"], recursive=False)
+            if not cells:
+                continue
+            cell_payloads = [_table_cell_payload(cell) for cell in cells]
+            if not any(cell.get("text") for cell in cell_payloads):
+                continue
+            is_header = all(cell.name == "th" for cell in cells)
+            if is_header and not headers:
+                headers = cell_payloads
+                continue
+            rows.append({
+                "row_index": row_index,
+                "cells": cell_payloads,
+            })
+
+        if not headers and rows:
+            first_row = rows[0]
+            first_cells = first_row.get("cells") or []
+            if len(first_cells) >= 2 and all((cell.get("text") or "") for cell in first_cells):
+                headers = [{"text": ""} for _ in first_cells]
+
+        if headers or rows:
+            tables.append({
+                "table_index": index,
+                "section_title": section_title or None,
+                "caption": caption or None,
+                "headers": headers or None,
+                "rows": rows,
+            })
+    return tables
+
+
+def _table_cell_payload(cell: Tag) -> dict:
+    text = _clean_text(cell.get_text(" ", strip=True))
+    link = cell.find("a", href=True)
+    return {
+        "text": text,
+        "href": str(link.get("href") or "").strip() or None if link else None,
+    }
+
+
+def _nearest_table_heading(table: Tag) -> str:
+    for sibling in table.previous_siblings:
+        if not isinstance(sibling, Tag):
+            continue
+        heading = _heading_text_from_node(sibling)
+        if heading:
+            return heading
+        nested_heading = sibling.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+        for node in reversed(nested_heading):
+            heading = _clean_text(node.get_text(" ", strip=True))
+            if heading:
+                return heading
+
+    parent = table.parent if isinstance(table.parent, Tag) else None
+    steps = 0
+    while isinstance(parent, Tag) and steps < 4:
+        for sibling in parent.previous_siblings:
+            if not isinstance(sibling, Tag):
+                continue
+            heading = _heading_text_from_node(sibling)
+            if heading:
+                return heading
+        parent = parent.parent if isinstance(parent.parent, Tag) else None
+        steps += 1
+    return ""
+
+
+def _heading_text_from_node(node: Tag) -> str:
+    if node.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return _clean_text(node.get_text(" ", strip=True))
+    return ""
+
+
+def _clean_text(value: str | None) -> str:
+    return " ".join(str(value or "").split()).strip()

@@ -7,10 +7,9 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import json
 import logging
 import re
-import traceback
-from datetime import UTC, datetime
 from html import unescape
 
 from sqlalchemy import func, select
@@ -35,10 +34,11 @@ from app.services.discover.service import DiscoveryManifest, discover_sources
 from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import extract_candidates
+from app.services.extract.spa_pruner import prune_spa_state
 from app.services.knowledge_base.store import get_canonical_fields
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
 from app.services.normalizers.field_normalizers import normalize_value
-from app.services.pipeline_config import VERDICT_CORE_FIELDS_DETAIL, VERDICT_CORE_FIELDS_LISTING
+from app.services.pipeline_config import MIN_REQUEST_DELAY_MS, VERDICT_CORE_FIELDS_DETAIL, VERDICT_CORE_FIELDS_LISTING
 from app.services.domain_utils import normalize_domain
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.url_safety import ensure_public_crawl_targets
@@ -67,7 +67,10 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
     await ensure_public_crawl_targets(_collect_target_urls(payload, settings))
     _validate_extraction_contract(settings.get("extraction_contract") or [])
     settings["max_records"] = max(1, int(settings.get("max_records", 100) or 100))
-    settings["sleep_ms"] = max(0, int(settings.get("sleep_ms", 0) or 0))
+    settings["sleep_ms"] = max(
+        MIN_REQUEST_DELAY_MS,
+        int(settings.get("sleep_ms", MIN_REQUEST_DELAY_MS) or MIN_REQUEST_DELAY_MS),
+    )
     domain_requested_fields = await _load_domain_requested_fields(session, url=primary_url, surface=payload["surface"])
     requested_fields = expand_requested_fields([*domain_requested_fields, *(payload.get("additional_fields") or [])])
     if settings.get("llm_enabled"):
@@ -160,7 +163,7 @@ async def get_run_logs(session: AsyncSession, run_id: int) -> list[CrawlLog]:
     return list(result.scalars().all())
 
 
-async def commit_llm_suggestions(
+async def commit_selected_fields(
     session: AsyncSession,
     *,
     run: CrawlRun,
@@ -205,6 +208,7 @@ async def commit_llm_suggestions(
         data = dict(record.data or {})
         data[field_name] = normalized_value
         record.data = data
+        _refresh_record_commit_metadata(record, run=run, field_name=field_name, value=normalized_value)
 
         source_trace = dict(record.source_trace or {})
         llm_suggestions = dict(source_trace.get("llm_cleanup_suggestions") or {})
@@ -221,9 +225,18 @@ async def commit_llm_suggestions(
 
     if updated_fields:
         updated_records = len(updated_record_ids)
-        await _log(session, run.id, "info", f"[LLM] Committed {updated_fields} accepted suggestion(s)")
+        await _log(session, run.id, "info", f"[FIELDS] Committed {updated_fields} selected field value(s)")
         await session.commit()
     return updated_records, updated_fields
+
+
+async def commit_llm_suggestions(
+    session: AsyncSession,
+    *,
+    run: CrawlRun,
+    items: list[dict],
+) -> tuple[int, int]:
+    return await commit_selected_fields(session=session, run=run, items=items)
 
 
 async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
@@ -328,7 +341,10 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
     current_status = normalize_status(run.status)
     if current_status in TERMINAL_STATUSES or current_status == CrawlStatus.PAUSED:
         return
-    if current_status == CrawlStatus.PENDING:
+
+    # If the job was PENDING or just CLAIMED by a worker, we treat it as a fresh start.
+    # RUNNING implies it was already in progress and we are resuming (e.g. after a worker restart).
+    if current_status in (CrawlStatus.PENDING, CrawlStatus.CLAIMED):
         update_run_status(run, CrawlStatus.RUNNING)
         await _log(session, run.id, "info", "Pipeline started")
         await session.commit()
@@ -751,12 +767,20 @@ async def _extract_detail(
     candidates, source_trace = extract_candidates(
         url, surface, html, manifest, additional_fields, extraction_contract,
     )
+    persisted_field_names = set(get_canonical_fields(surface)) | set(additional_fields)
     candidate_values = {
         field: rows[0]["value"]
         for field, rows in candidates.items()
-        if rows
+        if rows and field in persisted_field_names
     }
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
+
+    # Build deterministic field discovery summary — always, regardless of LLM.
+    # This powers the intelligence tab's field-level view for all detail runs.
+    if additional_fields:
+        source_trace = _build_field_discovery_summary(
+            source_trace, candidates, candidate_values, additional_fields, surface,
+        )
 
     if adapter_records:
         extracted_records = adapter_records
@@ -1269,34 +1293,34 @@ def _build_llm_discovered_sources(
     semantic_specs = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
     semantic_promoted = semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else {}
     manifest_snapshot = _compact_dict({
-        "next_data": _snapshot_for_llm(manifest.next_data, max_items=10, text_limit=180),
-        "hydrated_states": _snapshot_for_llm(manifest._hydrated_states, max_items=6, text_limit=180),
-        "embedded_json": _snapshot_for_llm(manifest.embedded_json, max_items=6, text_limit=180),
-        "json_ld": _snapshot_for_llm(manifest.json_ld),
-        "microdata": _snapshot_for_llm(manifest.microdata),
+        "next_data": _snapshot_for_llm(prune_spa_state(manifest.next_data), max_items=150, text_limit=2000),
+        "hydrated_states": _snapshot_for_llm(prune_spa_state(manifest._hydrated_states), max_items=150, text_limit=2000),
+        "embedded_json": _snapshot_for_llm(prune_spa_state(manifest.embedded_json), max_items=150, text_limit=2000),
+        "json_ld": _snapshot_for_llm(manifest.json_ld, max_items=150, text_limit=2000),
+        "microdata": _snapshot_for_llm(manifest.microdata, max_items=150, text_limit=2000),
         "network_payloads": _snapshot_for_llm([
             _compact_dict({
                 "url": payload.get("url"),
                 "status": payload.get("status"),
-                "body": payload.get("body"),
+                "body": prune_spa_state(payload.get("body")),
             })
             for payload in manifest.network_payloads[:2]
             if isinstance(payload, dict)
-        ], max_items=4, text_limit=180),
-        "tables": _snapshot_for_llm(manifest.tables),
+        ], max_items=150, text_limit=2000),
+        "tables": _snapshot_for_llm(manifest.tables, max_items=150, text_limit=2000),
     })
     semantic_snapshot = _compact_dict({
         "sections": _snapshot_for_llm(
             {key: value for key, value in semantic_sections.items() if not relevant_fields or key in relevant_fields},
-            text_limit=220,
+            text_limit=2000,
         ),
         "specifications": _snapshot_for_llm(
             {key: value for key, value in semantic_specs.items() if not relevant_fields or key in relevant_fields},
-            text_limit=220,
+            text_limit=2000,
         ),
         "promoted_fields": _snapshot_for_llm(
             {key: value for key, value in semantic_promoted.items() if not relevant_fields or key in relevant_fields},
-            text_limit=220,
+            text_limit=2000,
         ),
     })
     return _compact_dict({
@@ -1309,9 +1333,9 @@ def _snapshot_for_llm(
     value: object,
     *,
     depth: int = 0,
-    max_depth: int = 3,
-    max_items: int = 12,
-    text_limit: int = 280,
+    max_depth: int = 8,
+    max_items: int = 150,
+    text_limit: int = 2000,
 ) -> object:
     if value in (None, "", [], {}):
         return None
@@ -1364,12 +1388,56 @@ def _clean_candidate_text(value: object, *, limit: int | None = 1200) -> str:
     return text
 
 
+def _normalize_review_value(value: object) -> object | None:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, str):
+        cleaned = _clean_candidate_text(value, limit=None)
+        return cleaned or None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, list):
+        rows = []
+        for item in value:
+            normalized = _normalize_review_value(item)
+            if normalized is not None:
+                rows.append(normalized)
+        return rows or None
+    if isinstance(value, dict):
+        normalized_dict: dict[str, object] = {}
+        for key, item in value.items():
+            normalized_key = str(key or "").strip()
+            if not normalized_key:
+                continue
+            normalized_item = _normalize_review_value(item)
+            if normalized_item is not None:
+                normalized_dict[normalized_key] = normalized_item
+        return normalized_dict or None
+    cleaned = _clean_candidate_text(value, limit=None)
+    return cleaned or None
+
+
+def _review_values_equal(left: object, right: object) -> bool:
+    normalized_left = _normalize_review_value(left)
+    normalized_right = _normalize_review_value(right)
+    if normalized_left is None or normalized_right is None:
+        return normalized_left == normalized_right
+    if isinstance(normalized_left, str) or isinstance(normalized_right, str):
+        return _clean_candidate_text(normalized_left, limit=None) == _clean_candidate_text(normalized_right, limit=None)
+    try:
+        return json.dumps(normalized_left, sort_keys=True, default=str) == json.dumps(normalized_right, sort_keys=True, default=str)
+    except TypeError:
+        return normalized_left == normalized_right
+
+
 def _normalize_llm_cleanup_review(field_name: object, raw_review: object, *, current_value: object) -> dict | None:
     normalized_field = str(field_name or "").strip()
     if not normalized_field or normalized_field.startswith("_"):
         return None
     if isinstance(raw_review, dict):
-        suggested_value = _clean_candidate_text(
+        suggested_value = _normalize_review_value(
             raw_review.get("suggested_value")
             if raw_review.get("suggested_value") not in (None, "", [], {})
             else raw_review.get("value"),
@@ -1382,13 +1450,13 @@ def _normalize_llm_cleanup_review(field_name: object, raw_review: object, *, cur
             if str(item).strip()
         ]
     else:
-        suggested_value = _clean_candidate_text(raw_review)
+        suggested_value = _normalize_review_value(raw_review)
         source = "llm_cleanup"
         note = ""
         supporting_sources = []
     if not suggested_value:
         return None
-    if _clean_candidate_text(current_value) == suggested_value:
+    if _review_values_equal(current_value, suggested_value):
         return None
     return _compact_dict({
         "field_name": normalized_field,
@@ -1439,6 +1507,89 @@ def _select_llm_review_candidates(
         if not current_value or len(distinct_values) > 1 or "llm_xpath" in source_labels:
             selected[field_name] = rows[:6]
     return selected
+
+
+def _build_field_discovery_summary(
+    source_trace: dict,
+    candidates: dict[str, list[dict]],
+    candidate_values: dict,
+    additional_fields: list[str],
+    surface: str,
+) -> dict:
+    """Build a deterministic field discovery summary for additional_fields.
+
+    Populates ``field_discovery`` in source_trace with per-field info:
+    which sources contributed, what value was chosen, and which fields
+    were not found.  This powers the intelligence tab regardless of
+    whether LLM is enabled.
+    """
+    canonical = set(get_canonical_fields(surface))
+    discovery: dict[str, dict] = {}
+    missing: list[str] = []
+
+    for field_name in additional_fields:
+        rows = candidates.get(field_name, [])
+        chosen = candidate_values.get(field_name)
+        if not rows and chosen in (None, "", [], {}):
+            missing.append(field_name)
+            discovery[field_name] = _compact_dict({
+                "status": "not_found",
+                "sources": None,
+            })
+            continue
+        sources = sorted({str(row.get("source") or "").strip() for row in rows if row.get("source")})
+        discovery[field_name] = _compact_dict({
+            "status": "found",
+            "value": _clean_candidate_text(chosen) if chosen not in (None, "", [], {}) else None,
+            "sources": sources or None,
+            "candidate_count": len(rows) if len(rows) > 1 else None,
+            "is_canonical": field_name in canonical or None,
+        })
+
+    source_trace["field_discovery"] = discovery
+    if missing:
+        source_trace["field_discovery_missing"] = missing
+    return source_trace
+
+
+def _refresh_record_commit_metadata(record: CrawlRecord, *, run: CrawlRun, field_name: str, value: object) -> None:
+    source_trace = dict(record.source_trace or {})
+    field_discovery = dict(source_trace.get("field_discovery") or {})
+    existing_entry = dict(field_discovery.get(field_name) or {})
+    existing_sources = existing_entry.get("sources") or []
+    sources = {
+        str(source).strip()
+        for source in existing_sources
+        if str(source).strip()
+    }
+    sources.add("user_commit")
+    canonical_fields = set(get_canonical_fields(run.surface))
+    field_discovery[field_name] = _compact_dict({
+        **existing_entry,
+        "status": "found",
+        "value": _clean_candidate_text(value) if value not in (None, "", [], {}) else None,
+        "sources": sorted(sources),
+        "candidate_count": existing_entry.get("candidate_count"),
+        "is_canonical": existing_entry.get("is_canonical", field_name in canonical_fields) or None,
+    })
+    missing_fields = [
+        str(item).strip()
+        for item in (source_trace.get("field_discovery_missing") or [])
+        if str(item).strip() and str(item).strip() != field_name
+    ]
+    source_trace["field_discovery"] = field_discovery
+    source_trace["field_discovery_missing"] = missing_fields
+
+    committed_fields = dict(source_trace.get("committed_fields") or {})
+    committed_fields[field_name] = {"value": value, "source": "user_commit"}
+    source_trace["committed_fields"] = committed_fields
+    record.source_trace = source_trace
+
+    discovered_data = dict(record.discovered_data or {})
+    requested_fields = list(run.requested_fields or [])
+    if requested_fields:
+        discovered_data["requested_field_coverage"] = _requested_field_coverage(record.data or {}, requested_fields)
+    record.discovered_data = _compact_dict(discovered_data)
 
 
 # Domain normalisation delegated to app.services.domain_utils.normalize_domain

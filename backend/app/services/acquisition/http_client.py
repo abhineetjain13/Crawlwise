@@ -24,6 +24,15 @@ from app.services.url_safety import ValidatedTarget, validate_public_target
 STEALTH_IMPERSONATE = "chrome131"
 
 
+def _validate_retry_backoff_config() -> None:
+    if HTTP_RETRY_BACKOFF_BASE_MS < 0:
+        raise ValueError("HTTP_RETRY_BACKOFF_BASE_MS must be >= 0")
+    if HTTP_RETRY_BACKOFF_MAX_MS < HTTP_RETRY_BACKOFF_BASE_MS:
+        raise ValueError(
+            "HTTP_RETRY_BACKOFF_MAX_MS must be >= HTTP_RETRY_BACKOFF_BASE_MS"
+        )
+
+
 @dataclass
 class HttpFetchResult:
     text: str = ""
@@ -114,8 +123,9 @@ async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) ->
 
 
 def _retry_backoff_seconds(attempt: int) -> float:
+    _validate_retry_backoff_config()
     delay_ms = HTTP_RETRY_BACKOFF_BASE_MS * max(1, 2 ** (attempt - 1))
-    bounded_ms = min(delay_ms, max(HTTP_RETRY_BACKOFF_MAX_MS, HTTP_RETRY_BACKOFF_BASE_MS))
+    bounded_ms = min(delay_ms, HTTP_RETRY_BACKOFF_MAX_MS)
     return bounded_ms / 1000
 
 
@@ -210,3 +220,6 @@ def _should_retry_with_stealth(result: HttpFetchResult) -> bool:
     if result.content_type != "json" and detect_blocked_page(result.text).is_blocked:
         return True
     return False
+
+
+_validate_retry_backoff_config()

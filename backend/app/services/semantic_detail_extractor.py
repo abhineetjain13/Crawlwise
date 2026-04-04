@@ -5,41 +5,19 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
-from app.services.pipeline_config import REQUESTED_FIELD_ALIASES
+from app.services.pipeline_config import (
+    DIMENSION_KEYWORDS,
+    FEATURE_SECTION_ALIASES,
+    REQUESTED_FIELD_ALIASES,
+    SECTION_ANCESTOR_STOP_TAGS,
+    SECTION_ANCESTOR_STOP_TOKENS,
+    SECTION_SKIP_PATTERNS,
+    SEMANTIC_AGGREGATE_SEPARATOR,
+    SPEC_DROP_LABELS,
+    SPEC_LABEL_BLOCK_PATTERNS,
+)
 from app.services.requested_field_policy import normalize_requested_field
 
-
-_SECTION_SKIP_PATTERNS = (
-    "add to cart",
-    "buy now",
-    "checkout",
-    "login",
-    "sign in",
-    "subscribe",
-)
-_SECTION_ANCESTOR_STOP_TAGS = {"footer", "header", "nav", "aside", "form"}
-_SECTION_ANCESTOR_STOP_TOKENS = {
-    "footer",
-    "header",
-    "nav",
-    "menu",
-    "newsletter",
-    "breadcrumbs",
-    "breadcrumb",
-    "cookie",
-    "consent",
-}
-_SPEC_LABEL_BLOCK_PATTERNS = (
-    "play video",
-    "watch video",
-    "video",
-    "learn more",
-    "add to cart",
-    "buy now",
-    "primary guide",
-    "guide",
-    "discount",
-)
 _CANONICAL_TO_ALIASES: dict[str, set[str]] = {}
 for canonical, aliases in REQUESTED_FIELD_ALIASES.items():
     canonical_key = normalize_requested_field(canonical)
@@ -62,18 +40,22 @@ def extract_semantic_detail_data(
     candidate extractor rather than replace it.
     """
     if not html:
-        return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}}
+        return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}, "table_groups": []}
 
     soup = BeautifulSoup(html, "html.parser")
     sections = _extract_sections(soup)
-    specifications = _extract_specifications(soup)
+    table_groups = _extract_table_groups(soup)
+    specifications = _extract_specifications(soup, table_groups)
     promoted = _promote_semantic_fields(sections, specifications, requested_fields or [])
     coverage = _build_coverage(requested_fields or [], sections, specifications, promoted)
+    aggregates = _build_semantic_aggregates(sections, specifications)
     return {
         "sections": sections,
         "specifications": specifications,
         "promoted_fields": promoted,
         "coverage": coverage,
+        "aggregates": aggregates,
+        "table_groups": table_groups,
     }
 
 
@@ -160,6 +142,31 @@ def _build_coverage(
     return {"requested": len(normalized_fields), "found": found}
 
 
+def _build_semantic_aggregates(
+    sections: dict[str, str],
+    specifications: dict[str, str],
+) -> dict[str, str]:
+    aggregates: dict[str, str] = {}
+    spec_lines = [f"{label}: {value}" for label, value in specifications.items() if label and value]
+    if spec_lines:
+        aggregates["specifications"] = SEMANTIC_AGGREGATE_SEPARATOR.join(spec_lines)
+    dimension_lines = [
+        f"{label}: {value}"
+        for label, value in specifications.items()
+        if label and value and any(token in label.lower() for token in DIMENSION_KEYWORDS)
+    ]
+    if dimension_lines:
+        aggregates["dimensions"] = SEMANTIC_AGGREGATE_SEPARATOR.join(dimension_lines)
+    feature_values = [
+        body
+        for key, body in sections.items()
+        if key in FEATURE_SECTION_ALIASES and body not in (None, "", [], {})
+    ]
+    if feature_values:
+        aggregates["features"] = SEMANTIC_AGGREGATE_SEPARATOR.join(feature_values)
+    return aggregates
+
+
 def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
     sections: dict[str, str] = {}
 
@@ -211,7 +218,7 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
     return sections
 
 
-def _extract_specifications(soup: BeautifulSoup) -> dict[str, str]:
+def _extract_specifications(soup: BeautifulSoup, table_groups: list[dict]) -> dict[str, str]:
     specs: dict[str, str] = {}
 
     for dl in soup.find_all("dl"):
@@ -224,14 +231,11 @@ def _extract_specifications(soup: BeautifulSoup) -> dict[str, str]:
             value = _clean_text(dd.get_text(" ", strip=True))
             _store_specification(specs, label, value)
 
-    for table in soup.find_all("table"):
-        for row in table.find_all("tr"):
-            cells = row.find_all(["th", "td"])
-            if len(cells) < 2:
-                continue
-            label = _clean_text(cells[0].get_text(" ", strip=True))
-            value = _clean_text(cells[1].get_text(" ", strip=True))
-            _store_specification(specs, label, value)
+    for group in table_groups:
+        for row in group.get("rows") or []:
+            label = _clean_text(row.get("label"))
+            value = _clean_text(row.get("value"))
+            _store_specification(specs, label, value, preserve_visible=bool(row.get("preserve_visible")))
 
     for node in soup.select("[data-label], [data-spec], [data-specification]"):
         label = _clean_text(node.get("data-label") or node.get("data-spec") or node.get("data-specification"))
@@ -252,13 +256,62 @@ def _extract_specifications(soup: BeautifulSoup) -> dict[str, str]:
     return specs
 
 
+def _extract_table_groups(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for table_index, table in enumerate(soup.find_all("table"), start=1):
+        rows = table.find_all("tr")
+        if not rows:
+            continue
+        section_title = _nearest_table_heading(table)
+        caption = _clean_text(table.find("caption").get_text(" ", strip=True)) if table.find("caption") else ""
+        header_cells: list[str] = []
+        group_rows: list[dict[str, Any]] = []
+
+        for row_index, row in enumerate(rows, start=1):
+            cells = row.find_all(["th", "td"], recursive=False)
+            if len(cells) < 2:
+                continue
+            cell_values = [_table_cell_payload(cell) for cell in cells]
+            if not any(cell.get("text") for cell in cell_values):
+                continue
+            if not header_cells and all(cell.name == "th" for cell in cells):
+                header_cells = [_clean_text(cell.get("text")) for cell in cell_values]
+                continue
+
+            label = _clean_text(cell_values[0].get("text"))
+            value_cell = cell_values[1]
+            value = _clean_text(value_cell.get("text"))
+            if not label:
+                continue
+            normalized_key = normalize_requested_field(label)
+            group_rows.append({
+                "row_index": row_index,
+                "label": label,
+                "normalized_key": normalized_key,
+                "value": value,
+                "href": value_cell.get("href"),
+                "cells": cell_values,
+                "preserve_visible": value in {"-", "—", "–"},
+            })
+
+        if group_rows:
+            groups.append({
+                "table_index": table_index,
+                "title": section_title or caption or None,
+                "caption": caption or None,
+                "headers": header_cells or None,
+                "rows": group_rows,
+            })
+    return groups
+
+
 def _extract_inline_spec_pair(node: Tag) -> tuple[str, str] | None:
     text = _clean_text(node.get_text(" ", strip=True))
     if not text or len(text) < 4:
         return None
     if len(text) > 240:
         return None
-    if text.count(":") != 1:
+    if ":" not in text:
         return None
     label, value = [_clean_text(part) for part in text.split(":", 1)]
     if not label or not value:
@@ -267,34 +320,78 @@ def _extract_inline_spec_pair(node: Tag) -> tuple[str, str] | None:
         return None
     if label.lower() in {"details", "description", "features", "specifications", "tech specs"}:
         return None
-    if any(token in label.lower() for token in _SECTION_SKIP_PATTERNS):
+    if any(token in label.lower() for token in SECTION_SKIP_PATTERNS):
         return None
     return label, value
 
 
-def _store_specification(specs: dict[str, str], label: str, value: str) -> None:
+def _store_specification(specs: dict[str, str], label: str, value: str, *, preserve_visible: bool = False) -> None:
     key = normalize_requested_field(label)
     if not key or key in specs:
         return
-    if not _should_keep_specification(key, value):
+    if not _should_keep_specification(key, value, preserve_visible=preserve_visible):
         return
     specs[key] = value
 
 
-def _should_keep_specification(key: str, value: str) -> bool:
+def _should_keep_specification(key: str, value: str, *, preserve_visible: bool = False) -> bool:
     lowered_key = key.lower()
     lowered_value = value.lower()
-    if not lowered_key or not value:
+    if not lowered_key or (not value and not preserve_visible):
         return False
-    if lowered_key in {"qty", "quantity", "details"}:
+    if lowered_key in SPEC_DROP_LABELS:
         return False
     if re.fullmatch(r"\d+(?:[_-]\d+)*", lowered_key):
         return False
-    if any(token in lowered_key for token in _SPEC_LABEL_BLOCK_PATTERNS):
+    if any(token in lowered_key for token in SPEC_LABEL_BLOCK_PATTERNS):
         return False
-    if any(token in lowered_value for token in _SECTION_SKIP_PATTERNS):
+    if any(token in lowered_value for token in SECTION_SKIP_PATTERNS):
         return False
     return True
+
+
+def _table_cell_payload(cell: Tag) -> dict[str, str | None]:
+    text = _clean_text(cell.get_text(" ", strip=True))
+    link = cell.find("a", href=True)
+    href = ""
+    if isinstance(link, Tag):
+        href = _clean_text(link.get("href"))
+    return {
+        "text": text or None,
+        "href": href or None,
+    }
+
+
+def _nearest_table_heading(table: Tag) -> str:
+    for sibling in table.previous_siblings:
+        if not isinstance(sibling, Tag):
+            continue
+        heading = _heading_text_from_node(sibling)
+        if heading:
+            return heading
+        nested_headings = sibling.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+        for node in reversed(nested_headings):
+            heading = _clean_text(node.get_text(" ", strip=True))
+            if heading:
+                return heading
+    parent = table.parent if isinstance(table.parent, Tag) else None
+    steps = 0
+    while isinstance(parent, Tag) and steps < 4:
+        for sibling in parent.previous_siblings:
+            if not isinstance(sibling, Tag):
+                continue
+            heading = _heading_text_from_node(sibling)
+            if heading:
+                return heading
+        parent = parent.parent if isinstance(parent.parent, Tag) else None
+        steps += 1
+    return ""
+
+
+def _heading_text_from_node(node: Tag) -> str:
+    if node.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+        return _clean_text(node.get_text(" ", strip=True))
+    return ""
 
 
 def _collect_section_body(heading: Tag) -> str:
@@ -404,7 +501,7 @@ def _lookup_semantic_value(field: str, source: dict[str, str]) -> str | None:
 
 def _is_section_label_blocked(text: str) -> bool:
     lowered = text.lower()
-    return not lowered or any(token in lowered for token in _SECTION_SKIP_PATTERNS)
+    return not lowered or any(token in lowered for token in SECTION_SKIP_PATTERNS)
 
 
 def _label_text(node: Tag) -> str:
@@ -421,7 +518,7 @@ def _is_section_label(text: str) -> bool:
         return False
     if not re.search(r"[a-z]", lowered):
         return False
-    if any(token in lowered for token in _SECTION_SKIP_PATTERNS):
+    if any(token in lowered for token in SECTION_SKIP_PATTERNS):
         return False
     return True
 
@@ -430,7 +527,7 @@ def _is_ignored_section_node(node: Tag) -> bool:
     current: Tag | None = node
     steps = 0
     while isinstance(current, Tag) and steps < 8:
-        if current.name in _SECTION_ANCESTOR_STOP_TAGS:
+        if current.name in SECTION_ANCESTOR_STOP_TAGS:
             return True
         attrs = " ".join(
             filter(
@@ -442,7 +539,7 @@ def _is_ignored_section_node(node: Tag) -> bool:
                 ],
             ),
         ).lower()
-        if any(token in attrs for token in _SECTION_ANCESTOR_STOP_TOKENS):
+        if any(token in attrs for token in SECTION_ANCESTOR_STOP_TOKENS):
             return True
         parent = current.parent
         current = parent if isinstance(parent, Tag) else None

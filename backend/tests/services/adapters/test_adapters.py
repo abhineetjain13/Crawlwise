@@ -12,7 +12,6 @@ from app.services.adapters.indeed import IndeedAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.registry import resolve_adapter
 from app.services.adapters.shopify import ShopifyAdapter
-from app.services.adapters.walmart import WalmartAdapter
 
 
 # --- Shopify ---

@@ -1,7 +1,7 @@
 # FastAPI dependency helpers.
 from __future__ import annotations
 
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, status
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,12 +17,18 @@ async def get_db(session: AsyncSession = Depends(get_session)) -> AsyncSession:
 
 async def get_current_user(
     access_token: str | None = Cookie(default=None),
+    authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_db),
 ) -> User:
-    if not access_token:
+    token = access_token
+    if not token and authorization:
+        scheme, _, credentials = authorization.partition(" ")
+        if scheme.lower() == "bearer" and credentials.strip():
+            token = credentials.strip()
+    if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
-        payload = decode_access_token(access_token)
+        payload = decode_access_token(token)
         user_id = int(payload["sub"])
         token_version = int(payload.get("ver", 0))
     except (JWTError, KeyError, ValueError) as exc:

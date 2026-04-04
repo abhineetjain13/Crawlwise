@@ -83,7 +83,6 @@ async def validate_public_target(url: str) -> ValidatedTarget:
 
 
 def _resolve_host_ips(hostname: str, port: int) -> list[str]:
-    last_error: socket.gaierror | None = None
     attempts = max(1, int(DNS_RESOLUTION_RETRIES) + 1)
     for attempt in range(1, attempts + 1):
         try:
@@ -95,7 +94,6 @@ def _resolve_host_ips(hostname: str, port: int) -> list[str]:
             )
             break
         except socket.gaierror as exc:
-            last_error = exc
             if attempt < attempts:
                 time.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
                 continue

@@ -117,6 +117,7 @@ def _normalize_item(item: dict, page_url: str) -> dict:
         "materials",
         "care",
         "dimensions",
+        "additional_images",
     }
 
     for canonical, aliases in FIELD_ALIASES.items():

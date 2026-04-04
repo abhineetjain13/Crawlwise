@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 
 from app.core.config import _normalize_sqlite_database_url, _resolve_project_path
 

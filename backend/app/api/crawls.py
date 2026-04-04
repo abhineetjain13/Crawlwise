@@ -9,9 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.common import LogEntryResponse, PaginatedResponse, PaginationMeta
-from app.schemas.crawl import CrawlCreate, CrawlRunResponse, LLMCommitRequest, LLMCommitResponse
+from app.schemas.crawl import (
+    CrawlCreate,
+    CrawlRunResponse,
+    FieldCommitRequest,
+    FieldCommitResponse,
+    LLMCommitRequest,
+    LLMCommitResponse,
+)
 from app.services.crawl_service import (
     commit_llm_suggestions,
+    commit_selected_fields,
     create_crawl_run,
     delete_run,
     get_run,
@@ -26,8 +34,13 @@ from app.services.crawl_service import (
 router = APIRouter(prefix="/api/crawls", tags=["crawls"])
 
 RUN_NOT_FOUND_DETAIL = "Run not found"
+RUN_CONFLICT_DETAIL = "Run cannot be cancelled in its current state"
 RUN_NOT_FOUND_RESPONSE = {
     status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
+}
+RUN_CONFLICT_RESPONSE = {
+    **RUN_NOT_FOUND_RESPONSE,
+    status.HTTP_409_CONFLICT: {"description": RUN_CONFLICT_DETAIL},
 }
 
 
@@ -127,7 +140,7 @@ async def crawls_detail(
     return CrawlRunResponse.model_validate(run, from_attributes=True)
 
 
-@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT, responses=RUN_NOT_FOUND_RESPONSE)
+@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT, responses=RUN_CONFLICT_RESPONSE)
 async def crawls_delete(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -142,7 +155,7 @@ async def crawls_delete(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-@router.post("/{run_id}/pause", responses=RUN_NOT_FOUND_RESPONSE)
+@router.post("/{run_id}/pause", responses=RUN_CONFLICT_RESPONSE)
 async def crawls_pause(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -176,7 +189,25 @@ async def crawls_llm_commit(
     return LLMCommitResponse(run_id=run.id, updated_records=updated_records, updated_fields=updated_fields)
 
 
-@router.post("/{run_id}/resume", responses=RUN_NOT_FOUND_RESPONSE)
+@router.post("/{run_id}/commit-fields", responses=RUN_NOT_FOUND_RESPONSE)
+async def crawls_commit_fields(
+    run_id: int,
+    payload: FieldCommitRequest,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> FieldCommitResponse:
+    run = await get_run(session, run_id)
+    if run is None or (user.role != "admin" and run.user_id != user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+    updated_records, updated_fields = await commit_selected_fields(
+        session,
+        run=run,
+        items=[item.model_dump() for item in payload.items],
+    )
+    return FieldCommitResponse(run_id=run.id, updated_records=updated_records, updated_fields=updated_fields)
+
+
+@router.post("/{run_id}/resume", responses=RUN_CONFLICT_RESPONSE)
 async def crawls_resume(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -192,7 +223,13 @@ async def crawls_resume(
     return {"run_id": updated.id, "status": updated.status}
 
 
-@router.post("/{run_id}/kill", responses=RUN_NOT_FOUND_RESPONSE)
+@router.post(
+    "/{run_id}/kill",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
+        status.HTTP_409_CONFLICT: {"description": "Run cannot be killed in its current state"},
+    },
+)
 async def crawls_kill(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -208,7 +245,13 @@ async def crawls_kill(
     return {"run_id": updated.id, "status": updated.status}
 
 
-@router.post("/{run_id}/cancel")
+@router.post(
+    "/{run_id}/cancel",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
+        status.HTTP_409_CONFLICT: {"description": RUN_CONFLICT_DETAIL},
+    },
+)
 async def crawls_cancel(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],

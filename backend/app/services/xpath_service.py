@@ -337,7 +337,9 @@ def _xpath_literal(value: str) -> str:
 
 
 def _loose_text_match(actual: str, expected: str) -> bool:
-    normalize = lambda value: " ".join(str(value or "").split()).strip().lower()
+    def normalize(value: object) -> str:
+        return " ".join(str(value or "").split()).strip().lower()
+
     actual_text = normalize(actual)
     expected_text = normalize(expected)
     return bool(

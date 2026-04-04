@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from urllib.parse import parse_qs, urljoin, urlparse
 

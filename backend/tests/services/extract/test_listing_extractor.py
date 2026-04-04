@@ -1,6 +1,8 @@
 # Tests for listing page extraction.
 from __future__ import annotations
 
+import app.services.extract.listing_extractor as listing_extractor
+
 from app.services.extract.listing_extractor import extract_listing_records
 
 
@@ -123,3 +125,20 @@ def test_extract_hydrated_state_listing_records():
     assert len(records) == 2
     assert records[0]["title"] == "Hydrated A"
     assert records[1]["url"] == "https://example.com/p/b"
+
+
+def test_extract_items_from_json_uses_configured_max_depth(monkeypatch):
+    monkeypatch.setattr(listing_extractor, "MAX_JSON_RECURSION_DEPTH", 5)
+    payload = {"level1": {"level2": {"level3": {"level4": {"products": [
+        {"title": "Deep A", "url": "/a"},
+        {"title": "Deep B", "url": "/b"},
+    ]}}}}}
+
+    records = listing_extractor._extract_items_from_json(
+        payload,
+        "ecommerce_listing",
+        "https://example.com",
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Deep A"

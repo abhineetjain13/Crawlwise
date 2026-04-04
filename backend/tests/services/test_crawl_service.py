@@ -4,16 +4,16 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
+from app.models.crawl import CrawlLog, CrawlRecord, ReviewPromotion
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
     _build_llm_candidate_evidence,
     active_jobs,
+    commit_selected_fields,
     create_crawl_run,
     delete_run,
     get_run,
@@ -94,6 +94,18 @@ async def test_create_crawl_run(db_session: AsyncSession, test_user):
     assert run.id is not None
     assert run.status == "pending"
     assert run.url == "https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_clamps_sleep_ms_to_minimum_floor(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com",
+        "surface": "ecommerce_detail",
+        "settings": {"sleep_ms": 0},
+    })
+
+    assert run.settings["sleep_ms"] == 100
 
 
 @pytest.mark.asyncio
@@ -568,8 +580,60 @@ async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting
     assert suggestions["description"]["suggested_value"] == "Sequential Prophet Rev2 with lush analog tone."
     assert suggestions["description"]["supporting_sources"] == ["dom", "semantic_section"]
     assert suggestions["polyphony"]["suggested_value"] == "16 Voice"
+    assert suggestions["number_of_keys"]["suggested_value"] == "61"
     assert "polyphony" not in records[0].data
     assert "number_of_keys" not in records[0].data
+
+
+@pytest.mark.asyncio
+async def test_commit_selected_fields_preserves_typed_values_and_refreshes_metadata(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/rev2",
+        "surface": "ecommerce_detail",
+        "additional_fields": ["dimensions", "number_of_keys"],
+    })
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url=run.url,
+        data={"title": "Sequential Prophet Rev2"},
+        raw_data={"title": "Sequential Prophet Rev2"},
+        discovered_data={"requested_field_coverage": {"requested": 2, "found": 0, "missing": ["dimensions", "number_of_keys"]}},
+        source_trace={
+            "field_discovery": {
+                "dimensions": {"status": "not_found"},
+                "number_of_keys": {"status": "not_found"},
+            },
+            "field_discovery_missing": ["dimensions", "number_of_keys"],
+            "llm_cleanup_suggestions": {
+                "dimensions": {"suggested_value": {"width": "10 cm", "height": "20 cm"}, "source": "llm_cleanup", "status": "pending_review"},
+            },
+        },
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+
+    updated_records, updated_fields = await commit_selected_fields(
+        db_session,
+        run=run,
+        items=[
+            {"record_id": record.id, "field_name": "dimensions", "value": {"width": "10 cm", "height": "20 cm"}},
+            {"record_id": record.id, "field_name": "number_of_keys", "value": 61},
+        ],
+    )
+
+    await db_session.refresh(record)
+    assert updated_records == 1
+    assert updated_fields == 2
+    assert record.data["dimensions"] == {"width": "10 cm", "height": "20 cm"}
+    assert record.data["number_of_keys"] == 61
+    assert record.source_trace["field_discovery"]["dimensions"]["status"] == "found"
+    assert record.source_trace["field_discovery"]["dimensions"]["sources"] == ["user_commit"]
+    assert record.source_trace["field_discovery"]["number_of_keys"]["value"] == "61"
+    assert record.source_trace["field_discovery_missing"] == []
+    assert record.discovered_data["requested_field_coverage"] == {"requested": 2, "found": 2, "missing": []}
+    assert record.source_trace["llm_cleanup_suggestions"]["dimensions"]["status"] == "accepted"
 
 
 @pytest.mark.asyncio
@@ -637,7 +701,7 @@ async def test_process_run_skips_cleanup_llm_when_deterministic_fields_are_unamb
 
 @pytest.mark.asyncio
 async def test_active_jobs(db_session: AsyncSession, test_user):
-    run = await create_crawl_run(db_session, test_user.id, {
+    await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl", "url": "https://example.com", "surface": "ecommerce_detail",
     })
     jobs = await active_jobs(db_session)

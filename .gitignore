@@ -19,6 +19,7 @@ frontend/coverage/
 frontend/tsconfig.tsbuildinfo
 
 backend/cookie_store/
+backend/prune_test_out.txt
 
 *.pyc
 *.pyo

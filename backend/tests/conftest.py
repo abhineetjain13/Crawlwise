@@ -9,9 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.security import hash_password
 from app.core.database import Base
-from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
-from app.models.llm import LLMConfig, LLMCostLog
-from app.models.selector import Selector
 from app.models.user import User
 
 

@@ -17,7 +17,6 @@ import secrets
 import re
 import sys
 import time
-from datetime import UTC, datetime
 
 # Patch SQLAlchemy for Windows event loop
 import sqlalchemy.util._concurrency_py3k as _sa_conc
@@ -34,7 +33,7 @@ if not hasattr(_sa_conc, "_orig_await_only"):
             raise
     _sa_conc.await_only = _patched_await_only
 
-from sqlalchemy import select, func, text
+from sqlalchemy import select
 from app.core.database import SessionLocal, engine, Base
 from app.models.crawl import CrawlRun, CrawlRecord, CrawlLog
 from app.services.crawl_service import create_crawl_run, process_run
