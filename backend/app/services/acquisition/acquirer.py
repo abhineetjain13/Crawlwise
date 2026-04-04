@@ -109,6 +109,17 @@ async def acquire(
             prefer_stealth=prefer_stealth,
             sleep_ms=sleep_ms,
         )
+        if result is None and not prefer_stealth and host_prefers_stealth(url):
+            result = await _acquire_once(
+                run_id=run_id,
+                url=url,
+                proxy=proxy,
+                advanced_mode=advanced_mode,
+                max_pages=max_pages,
+                max_scrolls=max_scrolls,
+                prefer_stealth=True,
+                sleep_ms=sleep_ms,
+            )
         if result is not None:
             break
 

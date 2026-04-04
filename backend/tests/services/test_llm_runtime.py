@@ -144,6 +144,22 @@ async def test_call_provider_returns_error_string_on_httpx_failure():
 
 
 @pytest.mark.asyncio
+async def test_call_provider_returns_explicit_error_for_supported_but_undispatched_provider():
+    with patch("app.services.llm_runtime.SUPPORTED_LLM_PROVIDERS", {"groq", "future_provider"}):
+        raw, input_tokens, output_tokens = await _call_provider(
+            provider="future_provider",
+            model="test-model",
+            api_key="secret",
+            system_prompt="system",
+            user_prompt="user",
+        )
+
+    assert raw == "Error: Unsupported provider: future_provider"
+    assert input_tokens == 0
+    assert output_tokens == 0
+
+
+@pytest.mark.asyncio
 async def test_run_prompt_task_gracefully_returns_provider_connection_error(db_session: AsyncSession):
     config = LLMConfig(
         provider="groq",

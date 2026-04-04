@@ -3,12 +3,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Activity, ArrowUpRight, Globe, Hash, LayoutDashboard, RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge, Button, StatCard } from "../../components/ui/primitives";
 import { EmptyPanel, MetricGrid, MetricSkeleton, PageHeader, SectionHeader, SkeletonRows } from "../../components/ui/patterns";
 import { api } from "../../lib/api";
+import { ApiError } from "../../lib/api/client";
 import type { CrawlRun } from "../../lib/api/types";
 
 /* ─── Status helpers ─────────────────────────────────────────────────────── */
@@ -121,16 +123,21 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const { data, isLoading, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard });
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: api.me, retry: false });
   const [isResetting, setIsResetting] = useState(false);
   const [resetError, setResetError] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   async function handleRefresh() {
     setIsRefreshing(true);
-    await refetch();
-    setIsRefreshing(false);
+    try {
+      await refetch();
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   async function handleResetData() {
@@ -145,7 +152,20 @@ export default function DashboardPage() {
       await queryClient.invalidateQueries();
       await refetch();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to reset application data.";
+      if (error instanceof ApiError && error.status === 401) {
+        const message = "Your session expired. Sign in again to continue.";
+        setResetError(message);
+        globalThis.alert(message);
+        router.replace("/login");
+        return;
+      }
+
+      const message =
+        error instanceof ApiError && error.status === 403
+            ? "Reset Demo is admin-only."
+            : error instanceof Error
+              ? error.message
+              : "Failed to reset application data.";
       setResetError(message);
       globalThis.alert(message);
     } finally {
@@ -180,16 +200,18 @@ export default function DashboardPage() {
               <RefreshCw className={`size-3.5 ${isRefreshing ? "animate-spin-slow" : ""}`} />
               {isRefreshing ? "Refreshing…" : "Refresh"}
             </Button>
-            <Button
-              type="button"
-              onClick={() => void handleResetData()}
-              disabled={isResetting}
-              variant="danger"
-              size="sm"
-            >
-              <Trash2 className="size-3.5" />
-              {isResetting ? "Resetting…" : "Reset Demo"}
-            </Button>
+            {meQuery.data?.role === "admin" ? (
+              <Button
+                type="button"
+                onClick={() => void handleResetData()}
+                disabled={isResetting || meQuery.isLoading}
+                variant="danger"
+                size="sm"
+              >
+                <Trash2 className="size-3.5" />
+                {isResetting ? "Resetting…" : "Reset Demo"}
+              </Button>
+            ) : null}
           </div>
         }
       />

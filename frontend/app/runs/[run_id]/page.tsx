@@ -12,6 +12,9 @@ export default function RunDetailRedirect() {
   const router = useRouter();
 
   useEffect(() => {
+    if (!params.run_id) {
+      return;
+    }
     router.replace(`/crawl?run_id=${params.run_id}`);
   }, [params.run_id, router]);
 

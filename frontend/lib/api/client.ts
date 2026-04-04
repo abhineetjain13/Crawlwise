@@ -72,6 +72,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let lastError: ApiError | null = null;
   let lastFetchError: Error | null = null;
   const candidateBaseUrls = getApiBaseUrlCandidates();
+  const hasConfiguredBaseUrl = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || candidateBaseUrls.length === 1;
   const accessToken = readAccessToken();
 
   for (const baseUrl of candidateBaseUrls) {
@@ -84,14 +85,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
           credentials: "include",
           headers: isFormData
             ? {
-                ...(init?.headers ?? {}),
                 ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+                ...(init?.headers ?? {}),
               }
             : {
-              "Content-Type": "application/json",
-              ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-              ...(init?.headers ?? {}),
-            },
+                "Content-Type": "application/json",
+                ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+                ...(init?.headers ?? {}),
+              },
         });
       } catch (error) {
         lastFetchError = error instanceof Error ? error : new Error("Failed to reach API.");
@@ -113,8 +114,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = await readErrorBody(response);
       const message = body || response.statusText || "Request failed";
       const error = new ApiError(message, response.status, body);
+      if (response.status === 401) {
+        storeAccessToken(null);
+      }
       lastError = error;
 
+      if (response.status === 404 && hasConfiguredBaseUrl) {
+        throw error;
+      }
       if (!error.isRetryable || attempt === maxAttempts) {
         if (response.status !== 404) {
           throw error;

@@ -480,6 +480,13 @@ select:focus-visible {
   background: var(--bg-elevated);
 }
 
+.run-row:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-subtle) 85%, transparent);
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    SIDEBAR
    ════════════════════════════════════════════════════════════════════════════ */

@@ -141,3 +141,33 @@ def test_graphql_edges_pattern():
     }
     records = extract_json_listing(data)
     assert len(records) == 3
+
+
+def test_extract_json_listing_preserves_original_raw_item_when_additional_images_is_a_list():
+    data = {
+        "products": [
+            {
+                "title": "Cool Shirt",
+                "additional_images": [
+                    {"src": "https://cdn.example.com/a.jpg"},
+                    {"src": "https://cdn.example.com/b.jpg"},
+                ],
+                "price": "29.99",
+            },
+            {
+                "title": "Nice Pants",
+                "additional_images": [
+                    {"src": "https://cdn.example.com/c.jpg"},
+                ],
+                "price": "49.99",
+            },
+        ]
+    }
+
+    records = extract_json_listing(data, "https://store.com")
+
+    assert len(records) == 2
+    assert records[0]["_raw_item"] is data["products"][0]
+    assert records[0]["_raw_item"]["title"] == "Cool Shirt"
+    assert isinstance(records[0]["_raw_item"]["additional_images"], list)
+    assert records[0]["_raw_item"]["additional_images"][0]["src"] == "https://cdn.example.com/a.jpg"

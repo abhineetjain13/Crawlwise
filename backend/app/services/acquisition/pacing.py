@@ -68,17 +68,21 @@ async def wait_for_host_slot(host: str, minimum_interval_ms: int) -> float:
     normalized_host = str(host or "").strip().lower()
     if not normalized_host or minimum_interval_ms <= 0:
         return 0.0
-    now = time.monotonic()
-    lock = _get_lock(normalized_host, now)
-    async with lock:
+    while True:
         now = time.monotonic()
-        next_allowed = _get_next_allowed_at(normalized_host, now)
-        delay = max(0.0, next_allowed - now)
-        if delay > 0:
-            await asyncio.sleep(delay)
-        current_time = time.monotonic()
-        _set_next_allowed_at(normalized_host, current_time + (minimum_interval_ms / 1000), current_time)
-        return delay
+        lock = _get_lock(normalized_host, now)
+        async with lock:
+            current_lock = _get_lock(normalized_host, time.monotonic())
+            if current_lock is not lock:
+                continue
+            now = time.monotonic()
+            next_allowed = _get_next_allowed_at(normalized_host, now)
+            delay = max(0.0, next_allowed - now)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            current_time = time.monotonic()
+            _set_next_allowed_at(normalized_host, current_time + (minimum_interval_ms / 1000), current_time)
+            return delay
 
 
 def reset_pacing_state() -> None:

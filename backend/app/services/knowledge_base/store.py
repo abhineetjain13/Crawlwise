@@ -47,7 +47,14 @@ def _stage_json_temp(path: Path, payload: dict | list) -> Path:
 
 def _write_json(path: Path, payload: dict | list) -> None:
     temp_path = _stage_json_temp(path, payload)
-    os.replace(temp_path, path)
+    try:
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _load_prompt_files() -> dict[str, str]:
@@ -176,11 +183,13 @@ async def reset_learned_state() -> None:
     async with _CACHE_LOCK:
         empty_mappings: dict[str, dict[str, dict[str, str]]] = {}
         empty_defaults: dict[str, dict[str, list[dict]]] = {}
-        mapping_tmp = await asyncio.to_thread(_stage_json_temp, MAPPING_FILE, empty_mappings)
-        selector_tmp = await asyncio.to_thread(_stage_json_temp, SELECTOR_FILE, empty_defaults)
+        mapping_tmp: Path | None = None
+        selector_tmp: Path | None = None
         mapping_backup = MAPPING_FILE.with_suffix(f"{MAPPING_FILE.suffix}.bak")
         selector_backup = SELECTOR_FILE.with_suffix(f"{SELECTOR_FILE.suffix}.bak")
         try:
+            mapping_tmp = await asyncio.to_thread(_stage_json_temp, MAPPING_FILE, empty_mappings)
+            selector_tmp = await asyncio.to_thread(_stage_json_temp, SELECTOR_FILE, empty_defaults)
             for backup in (mapping_backup, selector_backup):
                 backup.unlink(missing_ok=True)
             if MAPPING_FILE.exists():
@@ -193,8 +202,10 @@ async def reset_learned_state() -> None:
             selector_backup.unlink(missing_ok=True)
         except Exception:
             logger.exception("Failed to reset learned knowledge-base state atomically")
-            mapping_tmp.unlink(missing_ok=True)
-            selector_tmp.unlink(missing_ok=True)
+            if mapping_tmp is not None:
+                mapping_tmp.unlink(missing_ok=True)
+            if selector_tmp is not None:
+                selector_tmp.unlink(missing_ok=True)
             if mapping_backup.exists():
                 await asyncio.to_thread(os.replace, mapping_backup, MAPPING_FILE)
             if selector_backup.exists():

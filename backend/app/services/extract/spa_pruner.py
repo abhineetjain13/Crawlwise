@@ -61,7 +61,8 @@ def prune_spa_state(data: Any, max_string_len: int = 2000) -> Any:
     elif isinstance(data, str):
         # Drop likely base64 or massive raw HTML chunks injected into state
         if len(data) > max_string_len:
-            if data.startswith("data:image") or "<html" in data.lower() or "<div" in data.lower() or "base64" in data.lower():
+            lowered = data.lower()
+            if lowered.startswith("data:image") or "<html" in lowered or "<div" in lowered or "base64" in lowered:
                 return None
             return data[:max_string_len] + "... [TRUNCATED]"
         return data

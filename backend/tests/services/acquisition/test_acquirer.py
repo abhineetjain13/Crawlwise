@@ -231,3 +231,35 @@ def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
     assert html_path.stem == network_path.stem
     assert html_path.stem == diagnostics_path.stem
     assert html_path.stem.startswith("www-example-com__run-42__products-fancy-chair-color-oak-size-large__")
+
+
+@pytest.mark.asyncio
+async def test_acquire_retries_same_host_after_learning_stealth_preference(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    calls: list[bool] = []
+
+    async def _fake_acquire_once(**kwargs):
+        calls.append(bool(kwargs.get("prefer_stealth")))
+        if len(calls) == 1:
+            monkeypatch.setattr("app.services.acquisition.acquirer.host_prefers_stealth", lambda _url: True)
+            return None
+        return type("Result", (), {
+            "html": "<html>ok</html>",
+            "json_data": None,
+            "content_type": "html",
+            "method": "curl_cffi",
+            "artifact_path": "",
+            "diagnostics_path": "",
+            "network_payloads": [],
+            "diagnostics": {},
+        })()
+
+    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
+    monkeypatch.setattr("app.services.acquisition.acquirer.host_prefers_stealth", lambda _url: False)
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    result = await acquire(42, "https://www.wayfair.com/example")
+
+    assert result.html == "<html>ok</html>"
+    assert calls == [False, True]

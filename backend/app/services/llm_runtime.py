@@ -160,7 +160,7 @@ async def run_prompt_task(
             domain=domain,
         )
     )
-    await session.commit()
+    await session.flush()
     return LLMTaskResult(
         payload=payload,
         input_tokens=input_tokens,
@@ -284,6 +284,7 @@ async def _call_provider(
             return await _call_nvidia(api_key, model, system_prompt, user_prompt)
     except httpx.HTTPError as exc:
         return f"{_ERROR_PREFIX} {type(exc).__name__}: {exc}", 0, 0
+    return f"{_ERROR_PREFIX} Unsupported provider: {normalized_provider}", 0, 0
 
 
 

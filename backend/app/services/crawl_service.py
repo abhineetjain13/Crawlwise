@@ -12,6 +12,7 @@ import logging
 import re
 from html import unescape
 
+import regex as regex_lib
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from lxml import etree
@@ -22,6 +23,7 @@ from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
 from app.services.crawl_state import (
     ACTIVE_STATUSES,
+    CONTROL_REQUEST_PAUSE,
     CONTROL_REQUEST_KILL,
     CrawlStatus,
     TERMINAL_STATUSES,
@@ -33,7 +35,7 @@ from app.services.crawl_state import (
 from app.services.discover.service import DiscoveryManifest, discover_sources
 from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
 from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.service import extract_candidates
+from app.services.extract.service import coerce_field_candidate_value, extract_candidates
 from app.services.extract.spa_pruner import prune_spa_state
 from app.services.knowledge_base.store import get_canonical_fields
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
@@ -200,7 +202,7 @@ async def commit_selected_fields(
         record = records.get(record_id)
         if record is None:
             continue
-        field_name = str(item.get("field_name") or "").strip()
+        field_name = _normalize_committed_field_name(item.get("field_name"))
         if not field_name:
             continue
         value = item.get("value")
@@ -243,9 +245,8 @@ async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
     current = normalize_status(run.status)
     if current != CrawlStatus.RUNNING:
         raise ValueError(f"Cannot pause run in state: {run.status}")
-    update_run_status(run, CrawlStatus.PAUSED)
-    set_control_request(run, None)
-    await _log(session, run.id, "warning", "Pause requested")
+    set_control_request(run, CONTROL_REQUEST_PAUSE)
+    await _log(session, run.id, "warning", "Pause requested; worker will stop at the next checkpoint")
     await session.commit()
     await session.refresh(run)
     return run
@@ -383,10 +384,14 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             url = url_list[idx]
             await session.refresh(run)
             current_status = normalize_status(run.status)
-            if current_status == CrawlStatus.PAUSED:
+            control_request = get_control_request(run)
+            if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
+                update_run_status(run, CrawlStatus.PAUSED)
+                set_control_request(run, None)
                 await _log(session, run.id, "warning", "Run paused by user")
+                await session.commit()
                 return
-            if current_status == CrawlStatus.KILLED or get_control_request(run) == CONTROL_REQUEST_KILL:
+            if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
                 update_run_status(run, CrawlStatus.KILLED)
                 set_control_request(run, None)
                 await _log(session, run.id, "warning", "Run killed by user")
@@ -436,10 +441,14 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             await session.commit()
             await session.refresh(run)
             current_status = normalize_status(run.status)
-            if current_status == CrawlStatus.PAUSED:
+            control_request = get_control_request(run)
+            if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
+                update_run_status(run, CrawlStatus.PAUSED)
+                set_control_request(run, None)
                 await _log(session, run.id, "warning", "Run paused after checkpoint; partial output preserved")
+                await session.commit()
                 return
-            if current_status == CrawlStatus.KILLED or get_control_request(run) == CONTROL_REQUEST_KILL:
+            if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
                 update_run_status(run, CrawlStatus.KILLED)
                 set_control_request(run, None)
                 await _log(session, run.id, "warning", "Run killed after checkpoint; partial output preserved")
@@ -457,9 +466,9 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         aggregate_verdict = _aggregate_verdict(url_verdicts)
 
         if normalize_status(run.status) == CrawlStatus.RUNNING:
-            if aggregate_verdict == VERDICT_SUCCESS:
+            if aggregate_verdict in {VERDICT_SUCCESS, VERDICT_PARTIAL}:
                 update_run_status(run, CrawlStatus.COMPLETED)
-            else:
+            elif aggregate_verdict in {VERDICT_EMPTY, VERDICT_BLOCKED, VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED}:
                 update_run_status(run, CrawlStatus.FAILED)
         run.result_summary = {
             **(run.result_summary or {}),
@@ -773,14 +782,15 @@ async def _extract_detail(
         for field, rows in candidates.items()
         if rows and field in persisted_field_names
     }
+    candidate_values = _normalize_detail_candidate_values(candidate_values, url=url)
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
 
-    # Build deterministic field discovery summary — always, regardless of LLM.
-    # This powers the intelligence tab's field-level view for all detail runs.
-    if additional_fields:
-        source_trace = _build_field_discovery_summary(
-            source_trace, candidates, candidate_values, additional_fields, surface,
-        )
+    # Build deterministic field discovery summary for all detail fields before any
+    # optional LLM suggestion pass. Canonical output still comes strictly from the
+    # first candidate row in source order.
+    source_trace = _build_field_discovery_summary(
+        source_trace, candidates, candidate_values, additional_fields, surface,
+    )
 
     if adapter_records:
         extracted_records = adapter_records
@@ -1029,6 +1039,15 @@ def _public_record_fields(record: dict) -> dict:
     }
 
 
+def _normalize_committed_field_name(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    normalized = re.sub(r"\s+", "_", text)
+    normalized = re.sub(r"[^a-z0-9_]+", "_", normalized)
+    return normalized.strip("_")
+
+
 def _raw_record_payload(record: dict) -> dict:
     raw_item = record.get("_raw_item")
     if isinstance(raw_item, dict):
@@ -1085,7 +1104,7 @@ def _validate_extraction_contract(contract_rows: list[dict]) -> None:
                 errors.append(f"Row {index} ({field_name or 'unnamed'}): invalid XPath ({exc})")
         if regex:
             try:
-                re.compile(regex)
+                regex_lib.compile(regex)
             except re.error as exc:
                 errors.append(f"Row {index} ({field_name or 'unnamed'}): invalid regex ({exc})")
     if errors:
@@ -1155,6 +1174,9 @@ async def _collect_detail_llm_suggestions(
         if not validation.get("valid"):
             continue
         matched_value = validation.get("matched_value")
+        matched_value = coerce_field_candidate_value(field_name, matched_value, base_url=url)
+        if matched_value in (None, "", [], {}):
+            continue
         suggestion = _compact_dict({
             "field_name": field_name,
             "xpath": xpath,
@@ -1388,6 +1410,37 @@ def _clean_candidate_text(value: object, *, limit: int | None = 1200) -> str:
     return text
 
 
+def _normalize_detail_candidate_values(candidate_values: dict[str, object], *, url: str) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    for field_name, value in candidate_values.items():
+        coerced = coerce_field_candidate_value(field_name, value, base_url=url)
+        if coerced in (None, "", [], {}):
+            continue
+        normalized[field_name] = coerced
+
+    primary_image = str(normalized.get("image_url") or "").strip()
+    additional_images = str(normalized.get("additional_images") or "").strip()
+    if additional_images:
+        image_parts = [
+            part.strip()
+            for part in additional_images.split(",")
+            if part.strip()
+        ]
+        deduped_parts: list[str] = []
+        seen: set[str] = set()
+        for part in image_parts:
+            if part == primary_image or part in seen:
+                continue
+            seen.add(part)
+            deduped_parts.append(part)
+        if deduped_parts:
+            normalized["additional_images"] = ", ".join(deduped_parts)
+        else:
+            normalized.pop("additional_images", None)
+
+    return normalized
+
+
 def _normalize_review_value(value: object) -> object | None:
     if value in (None, "", [], {}):
         return None
@@ -1524,31 +1577,37 @@ def _build_field_discovery_summary(
     whether LLM is enabled.
     """
     canonical = set(get_canonical_fields(surface))
+    requested = {field for field in additional_fields if field}
+    target_fields = canonical | requested
     discovery: dict[str, dict] = {}
     missing: list[str] = []
 
-    for field_name in additional_fields:
+    for field_name in sorted(set(candidates.keys()) | set(candidate_values.keys()) | target_fields):
         rows = candidates.get(field_name, [])
-        chosen = candidate_values.get(field_name)
-        if not rows and chosen in (None, "", [], {}):
+        chosen = candidate_values.get(field_name, rows[0]["value"] if rows else None)
+        tier = "canonical" if field_name in target_fields else "intelligence"
+        if not rows and field_name in target_fields and chosen in (None, "", [], {}):
             missing.append(field_name)
             discovery[field_name] = _compact_dict({
                 "status": "not_found",
+                "tier": tier,
                 "sources": None,
+                "candidate_count": 0,
+                "is_canonical": field_name in canonical or None,
             })
             continue
         sources = sorted({str(row.get("source") or "").strip() for row in rows if row.get("source")})
         discovery[field_name] = _compact_dict({
             "status": "found",
             "value": _clean_candidate_text(chosen) if chosen not in (None, "", [], {}) else None,
+            "tier": tier,
             "sources": sources or None,
-            "candidate_count": len(rows) if len(rows) > 1 else None,
+            "candidate_count": len(rows),
             "is_canonical": field_name in canonical or None,
         })
 
     source_trace["field_discovery"] = discovery
-    if missing:
-        source_trace["field_discovery_missing"] = missing
+    source_trace["field_discovery_missing"] = missing
     return source_trace
 
 

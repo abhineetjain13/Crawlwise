@@ -40,3 +40,12 @@ def test_normalize_placeholder_and_generic_noise_values():
     assert normalize_value("features", "-") == ""
     assert normalize_value("category", "detail-page") == ""
     assert normalize_value("title", "Chrome") == ""
+
+
+def test_normalize_currency_uses_iso_code_whitelist():
+    assert normalize_value("currency", "The color RED is popular") == "The color RED is popular"
+    assert normalize_value("currency", "Price: 19.99 usd") == "USD"
+
+
+def test_normalize_currency_prefers_code_adjacent_to_amount():
+    assert normalize_value("currency", "CAD was mentioned, final price 12.50 USD today") == "USD"

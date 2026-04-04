@@ -13,6 +13,7 @@ from app.core.database import is_sqlite
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.llm import LLMCostLog
 from app.models.selector import Selector
+from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import reset_learned_state
 
@@ -36,7 +37,7 @@ async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) 
         (
             await session.execute(
                 select(func.count()).select_from(
-                    run_scope.where(CrawlRun.status.in_(["pending", "running", "paused"])).subquery()
+                    run_scope.where(CrawlRun.status.in_([status.value for status in ACTIVE_STATUSES])).subquery()
                 )
             )
         ).scalar()

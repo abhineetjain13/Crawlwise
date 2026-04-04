@@ -4,7 +4,8 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from app.services.discover.service import DiscoveryManifest
-from app.services.extract.service import extract_candidates
+from app.services.discover.service import discover_sources
+from app.services.extract.service import _extract_image_urls, _resolve_candidate_url, extract_candidates
 
 
 def _manifest(**kwargs) -> DiscoveryManifest:
@@ -29,7 +30,7 @@ def test_extract_from_json_ld():
     assert json_ld_sources[0]["value"] == "JSON-LD Title"
 
 
-def test_extract_title_ignores_breadcrumb_home_when_product_name_exists():
+def test_extract_title_drops_generic_breadcrumb_candidates_and_keeps_product_name():
     html = "<html><body><h1>Sequential Prophet Rev2 16-voice Analog Synthesizer</h1></body></html>"
     manifest = _manifest(json_ld=[
         {
@@ -51,7 +52,35 @@ def test_extract_title_ignores_breadcrumb_home_when_product_name_exists():
             manifest,
             [],
         )
-    assert candidates["title"][0]["value"] == "Sequential Prophet Rev2 16-voice Analog Synthesizer"
+    values = [candidate["value"] for candidate in candidates["title"]]
+    assert "Sequential Prophet Rev2 16-voice Analog Synthesizer" in values
+    assert "Home" not in values
+    assert 1 not in values
+
+
+def test_extract_prefers_specific_product_title_over_website_and_nav_titles():
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="39''H Metal Wavy Wall Mirror" />
+      </head>
+      <body></body>
+    </html>
+    """
+    manifest = _manifest(
+        json_ld=[{"@type": "WebSite", "name": "Wayfair"}],
+        microdata=[{"name": "Department Navigation"}],
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert candidates["title"][0]["source"] == "dom"
+    assert candidates["title"][0]["value"] == "39''H Metal Wavy Wall Mirror"
 
 
 def test_extract_from_microdata():
@@ -75,6 +104,30 @@ def test_extract_from_microdata():
     assert "price" in candidates
     micro_sources = [c for c in candidates["price"] if c["source"] == "microdata"]
     assert len(micro_sources) >= 1
+
+
+def test_extract_recovers_nested_offer_fields_from_json_ld_with_trailing_semicolon():
+    html = """
+    <html><body>
+      <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"Product","name":"Lib Tech Skate Banana BTX Snowboard 2026","brand":{"name":"Lib Tech"},"offers":[{"price":405.99,"priceCurrency":"USD","sku":"EB-268000-1001","availability":"InStock"}]};
+      </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.evo.com/snowboards/lib-tech-skate-banana-btx-snowboard",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert candidates["brand"][0]["value"] == "Lib Tech"
+    assert candidates["price"][0]["value"] == 405.99
+    assert candidates["currency"][0]["value"] == "USD"
+    assert candidates["sku"][0]["value"] == "EB-268000-1001"
+    assert candidates["availability"][0]["value"] == "InStock"
 
 
 def test_extract_from_adapter_data():
@@ -166,7 +219,7 @@ def test_extract_does_not_use_broad_section_for_specifications_dom_fallback():
     assert "specifications" not in candidates
 
 
-def test_extract_rejects_hidden_state_brand_for_strict_brand_field():
+def test_extract_preserves_hidden_state_brand_candidates_without_dropping_dom_brand():
     html = "<html><body><span itemprop='brand'>Alpha Wire</span></body></html>"
     manifest = _manifest(_hydrated_states=[{"browser": {"manufacturer": "Apple"}}])
     with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
@@ -178,11 +231,12 @@ def test_extract_rejects_hidden_state_brand_for_strict_brand_field():
             [],
         )
     assert "brand" in candidates
-    assert candidates["brand"][0]["value"] == "Alpha Wire"
-    assert all(candidate["value"] != "Apple" for candidate in candidates["brand"])
+    brand_values = [candidate["value"] for candidate in candidates["brand"]]
+    assert "Alpha Wire" in brand_values
+    assert "Apple" in brand_values
 
 
-def test_extract_rejects_generic_hidden_category_value():
+def test_extract_drops_generic_hidden_category_candidates_but_preserves_dom_category():
     html = "<html><body><div itemprop='category'>Audio Cables</div></body></html>"
     manifest = _manifest(_hydrated_states=[{"page": {"type": "detail-page"}}])
     with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
@@ -194,7 +248,32 @@ def test_extract_rejects_generic_hidden_category_value():
             [],
         )
     assert "category" in candidates
-    assert candidates["category"][0]["value"] == "Audio Cables"
+    category_values = [candidate["value"] for candidate in candidates["category"]]
+    assert "Audio Cables" in category_values
+    assert "detail-page" not in category_values
+
+
+def test_extract_filters_non_image_additional_images_and_resolves_relative_image_paths():
+    html = "<html><body></body></html>"
+    manifest = _manifest(
+        _hydrated_states=[{
+            "media": "Photo is meant to be representative of packaging you will receive if ordered."
+        }],
+        json_ld=[{
+            "@type": "Product",
+            "image": "/deepweb/assets/example/product/main-image.jpg",
+        }],
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.sigmaaldrich.com/IN/en/product/avanti/793074c",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert candidates["image_url"][0]["value"] == "https://www.sigmaaldrich.com/deepweb/assets/example/product/main-image.jpg"
+    assert candidates["additional_images"][0]["value"] == "https://www.sigmaaldrich.com/deepweb/assets/example/product/main-image.jpg"
 
 
 def test_extract_additional_fields():
@@ -214,6 +293,21 @@ def test_extract_additional_fields():
         )
     assert "custom_field" in candidates
     assert candidates["custom_field"][0]["value"] == "custom_value"
+
+
+def test_extract_requested_unknown_image_field_uses_pattern_cleanup():
+    html = "<html><body></body></html>"
+    manifest = _manifest(embedded_json=[{"hero_image_url": "/media/catalog/product/main.jpg"}])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product/123",
+            "ecommerce_detail",
+            html,
+            manifest,
+            ["hero_image_url"],
+        )
+    assert "hero_image_url" in candidates
+    assert candidates["hero_image_url"][0]["value"] == "https://example.com/media/catalog/product/main.jpg"
 
 
 def test_extract_semantic_requested_field_responsibilities():
@@ -469,9 +563,12 @@ def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholder
     assert semantic["table_groups"][0]["rows"][0]["href"] == "https://example.com/c1156.pdf"
     assert semantic["table_groups"][1]["title"] == "Environmental & Export Classifications"
     assert semantic["specifications"]["operating_temperature"] == "-"
-    assert candidates["operating_temperature"][0]["value"] == "-"
-    assert candidates["operating_temperature"][0]["display_label"] == "Operating Temperature"
-    assert candidates["operating_temperature"][0]["group_label"] == "Environmental & Export Classifications"
+    operating_temperature_row = next(
+        row for row in candidates["operating_temperature"]
+        if row.get("display_label") == "Operating Temperature"
+    )
+    assert operating_temperature_row["value"] == "-"
+    assert operating_temperature_row["group_label"] == "Environmental & Export Classifications"
 
 
 def test_extract_network_payloads():
@@ -510,6 +607,72 @@ def test_extract_network_payload_coerces_nested_dict_to_scalar():
         )
     assert "dimensions" in candidates
     assert candidates["dimensions"][0]["value"] == "Runs true to size"
+
+
+def test_extract_preserves_all_values_found_at_different_depths():
+    html = "<html><body>test</body></html>"
+    manifest = _manifest(json_ld=[{
+        "title": "Top Level Title",
+        "offers": {
+            "title": "Offer Title",
+            "details": [{"title": "Nested Offer Title"}],
+        },
+    }])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    json_ld_values = [row["value"] for row in candidates["title"] if row["source"] == "json_ld"]
+    assert json_ld_values == ["Top Level Title", "Offer Title", "Nested Offer Title"]
+
+
+def test_extract_preserves_all_matches_from_multiple_hydrated_states_and_embedded_json_payloads():
+    html = "<html><body>test</body></html>"
+    manifest = _manifest(
+        _hydrated_states=[
+            {"product": {"title": "Hydrated Title A"}},
+            {"page": {"title": "Hydrated Title B"}},
+        ],
+        embedded_json=[
+            {"product": {"title": "Embedded Title A"}},
+            {"product": {"title": "Embedded Title B"}},
+        ],
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    hydrated_values = [row["value"] for row in candidates["title"] if row["source"] == "hydrated_state"]
+    embedded_values = [row["value"] for row in candidates["title"] if row["source"] == "embedded_json"]
+    assert hydrated_values == ["Hydrated Title A", "Hydrated Title B"]
+    assert embedded_values == ["Embedded Title A", "Embedded Title B"]
+
+
+def test_extract_dedupes_exact_duplicate_rows_but_preserves_distinct_same_source_values():
+    html = "<html><body>test</body></html>"
+    manifest = _manifest(json_ld=[
+        {"title": "Repeated Title"},
+        {"title": "Repeated Title"},
+        {"title": "Different Title"},
+    ])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    json_ld_values = [row["value"] for row in candidates["title"] if row["source"] == "json_ld"]
+    assert json_ld_values == ["Repeated Title", "Different Title"]
 
 
 def test_extract_priority_order():
@@ -582,3 +745,17 @@ def test_extract_prefers_saved_xpath_selector_defaults():
     assert selector_rows
     assert selector_rows[0]["value"] == "Saved XPath Title"
     assert selector_rows[0]["xpath"] == "//h1/text()"
+
+
+def test_resolve_candidate_url_joins_relative_path_against_base_url():
+    assert (
+        _resolve_candidate_url("products/shoe-123", "https://example.com/category")
+        == "https://example.com/products/shoe-123"
+    )
+
+
+def test_extract_image_urls_keeps_cdn_images_with_query_strings():
+    assert _extract_image_urls(
+        "https://cdn.example.com/product.jpg?v=1234&width=800",
+        base_url="https://example.com/product",
+    ) == ["https://cdn.example.com/product.jpg?v=1234&width=800"]

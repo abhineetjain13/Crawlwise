@@ -3,6 +3,14 @@
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
+function colorWithAlpha(color: string | undefined, alphaPercent: number) {
+  const normalized = String(color ?? "").trim();
+  if (!normalized) {
+    return "var(--accent-subtle)";
+  }
+  return `color-mix(in srgb, ${normalized} ${alphaPercent}%, transparent)`;
+}
+
 /* ─── Card ───────────────────────────────────────────────────────────────── */
 export function Card({
   children,
@@ -199,7 +207,7 @@ export function Toggle({
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors",
+        "focus-ring relative inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors",
         checked ? "bg-[var(--accent)]" : "bg-[var(--border-strong)]",
       )}
     >
@@ -263,7 +271,7 @@ export function StatCard({
         {icon && (
           <div
             className="flex size-7 items-center justify-center rounded-[var(--radius-md)]"
-            style={{ background: stripeColor ? `${stripeColor}18` : "var(--accent-subtle)", color: iconColor ?? stripeColor ?? "var(--accent)" }}
+            style={{ background: colorWithAlpha(stripeColor, 10), color: iconColor ?? stripeColor ?? "var(--accent)" }}
           >
             {icon}
           </div>

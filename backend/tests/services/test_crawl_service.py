@@ -11,7 +11,9 @@ from app.models.crawl import CrawlLog, CrawlRecord, ReviewPromotion
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
+    _build_field_discovery_summary,
     _build_llm_candidate_evidence,
+    _normalize_detail_candidate_values,
     active_jobs,
     commit_selected_fields,
     create_crawl_run,
@@ -80,6 +82,43 @@ def test_build_llm_candidate_evidence_preserves_legible_multi_source_values():
     assert evidence["title"][0]["source"] == "current_output"
     assert evidence["description"][0]["value"] == "Sequential analog polysynth"
     assert any(row["source"] == "semantic_section" for row in evidence["polyphony"])
+
+
+def test_build_field_discovery_summary_includes_canonical_and_intelligence_fields():
+    source_trace = _build_field_discovery_summary(
+        {},
+        {
+            "title": [{"value": "Canonical Title", "source": "adapter"}],
+            "wire_gauge": [{"value": "26 AWG", "source": "semantic_spec"}],
+        },
+        {"title": "Canonical Title"},
+        [],
+        "ecommerce_detail",
+    )
+
+    field_discovery = source_trace["field_discovery"]
+    assert field_discovery["title"]["tier"] == "canonical"
+    assert field_discovery["title"]["candidate_count"] == 1
+    assert field_discovery["title"]["value"] == "Canonical Title"
+    assert field_discovery["wire_gauge"]["tier"] == "intelligence"
+    assert field_discovery["wire_gauge"]["candidate_count"] == 1
+    assert field_discovery["wire_gauge"]["value"] == "26 AWG"
+    assert "title" not in source_trace["field_discovery_missing"]
+    assert "wire_gauge" not in source_trace["field_discovery_missing"]
+    assert "price" in source_trace["field_discovery_missing"]
+
+
+def test_normalize_detail_candidate_values_dedupes_primary_image_from_additional_images():
+    normalized = _normalize_detail_candidate_values(
+        {
+            "image_url": "https://example.com/images/main.jpg",
+            "additional_images": "https://example.com/images/main.jpg, https://example.com/images/alt.jpg",
+        },
+        url="https://example.com/product",
+    )
+
+    assert normalized["image_url"] == "https://example.com/images/main.jpg"
+    assert normalized["additional_images"] == "https://example.com/images/alt.jpg"
 
 
 # --- CRUD ---
@@ -171,7 +210,15 @@ async def test_pause_resume_and_kill_run(db_session: AsyncSession, test_user):
     await db_session.commit()
 
     paused = await pause_run(db_session, run)
-    assert paused.status == "paused"
+    assert paused.status == "running"
+    assert paused.result_summary["control_requested"] == "pause"
+
+    paused.status = "paused"
+    paused.result_summary = {
+        **(paused.result_summary or {}),
+        "control_requested": None,
+    }
+    await db_session.commit()
 
     resumed = await resume_run(db_session, paused)
     assert resumed.status == "running"
@@ -202,6 +249,39 @@ async def test_delete_run_rejects_active_runs(db_session: AsyncSession, test_use
 
     with pytest.raises(ValueError, match="Cannot delete run"):
         await delete_run(db_session, run)
+
+
+@pytest.mark.asyncio
+async def test_commit_selected_fields_normalizes_display_style_field_names(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product",
+        "surface": "ecommerce_detail",
+    })
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url=run.url,
+        data={"title": "Widget"},
+        raw_data={},
+        discovered_data={},
+        source_trace={},
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+
+    updated_records, updated_fields = await commit_selected_fields(
+        db_session,
+        run=run,
+        items=[{"record_id": record.id, "field_name": "Description", "value": "Clean text"}],
+    )
+
+    refreshed = await db_session.get(CrawlRecord, record.id)
+    assert updated_records == 1
+    assert updated_fields == 1
+    assert refreshed is not None
+    assert refreshed.data["description"] == "Clean text"
+    assert "Description" not in refreshed.data
 
 
 # --- Pipeline ---

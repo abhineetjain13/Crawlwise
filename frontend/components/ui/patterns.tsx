@@ -90,6 +90,7 @@ export function TabBar({
         <button
           key={option.value}
           type="button"
+          aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
             "relative z-10 flex-1 whitespace-nowrap rounded-[4px] px-3 py-1 text-[12px] font-medium transition-colors duration-100",

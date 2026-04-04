@@ -19,6 +19,7 @@ _BLOCKED_HOSTNAMES = {
     "metadata.google.internal",
 }
 _BLOCKED_SUFFIXES = (".local",)
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,14 @@ def _raise_if_non_public_ip(
     ip_value: ipaddress.IPv4Address | ipaddress.IPv6Address,
     host_label: str,
 ) -> None:
+    if (
+        ip_value.is_private
+        or ip_value.is_loopback
+        or ip_value.is_link_local
+        or ip_value.is_reserved
+        or _CGNAT_NETWORK.supernet_of(ipaddress.ip_network(f"{ip_value}/{ip_value.max_prefixlen}"))
+    ):
+        raise ValueError(f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}")
     if ip_value.is_global:
         return
     raise ValueError(f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}")

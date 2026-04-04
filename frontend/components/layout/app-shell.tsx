@@ -59,6 +59,8 @@ const navGroups = [
   }>;
 }>;
 
+const navItemCount = navGroups.reduce((total, group) => total + group.items.length, 0);
+
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
   const router = useRouter();
@@ -108,7 +110,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
             <div className="skeleton h-3 w-24" />
           </div>
           <div className="flex-1 px-3 py-3 space-y-1">
-            {Array.from({ length: 7 }, (_, i) => (
+            {Array.from({ length: navItemCount }, (_, i) => (
               <div key={i} className="skeleton h-8 w-full rounded-[var(--radius-md)]" />
             ))}
           </div>

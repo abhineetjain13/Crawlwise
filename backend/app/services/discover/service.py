@@ -87,14 +87,11 @@ def discover_sources(
 def _extract_json_ld(soup: BeautifulSoup) -> list[dict]:
     results = []
     for node in soup.select("script[type='application/ld+json']"):
-        try:
-            data = json.loads(node.string or "{}")
-            if isinstance(data, list):
-                results.extend(data)
-            else:
-                results.append(data)
-        except json.JSONDecodeError:
-            continue
+        data = _parse_json_blob(node.string or node.get_text(" ", strip=True) or "")
+        if isinstance(data, list):
+            results.extend(item for item in data if isinstance(item, dict))
+        elif isinstance(data, dict):
+            results.append(data)
     return results
 
 
@@ -128,18 +125,22 @@ def _extract_hydrated_states(soup: BeautifulSoup) -> tuple[list[dict | list], se
         if not text:
             continue
 
-        parsed = _parse_json_blob(text) if script_type == "application/json" else None
-        if parsed is None:
-            parsed = _parse_hydrated_assignment(text)
-        if parsed is None:
-            continue
+        parsed_blobs: list[dict | list] = []
+        candidate_texts = [text, *_extract_next_bootstrap_children(text)]
+        for candidate_text in candidate_texts:
+            parsed = _parse_json_blob(candidate_text) if script_type == "application/json" else None
+            if parsed is None:
+                parsed = _parse_hydrated_assignment(candidate_text)
+            if parsed is not None:
+                parsed_blobs.append(parsed)
 
-        fingerprint = json.dumps(parsed, sort_keys=True, default=str)
-        if fingerprint in seen:
-            continue
-        seen.add(fingerprint)
-        blobs.append(parsed)
-        seen_script_ids.add(_normalized_script_identifier(node, text, fingerprint))
+        for parsed in parsed_blobs:
+            fingerprint = json.dumps(parsed, sort_keys=True, default=str)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            blobs.append(parsed)
+            seen_script_ids.add(_normalized_script_identifier(node, text, fingerprint))
 
     return blobs, seen_script_ids
 
@@ -164,12 +165,13 @@ def _extract_embedded_json(soup: BeautifulSoup, seen_script_ids: set[str] | None
         if not text or script_type == "application/ld+json":
             continue
         if script_type == "application/json" or any(token in script_id for token in ("state", "data", "props", "product")):
-            parsed = _parse_json_blob(text)
-            if parsed is not None:
-                fingerprint = json.dumps(parsed, sort_keys=True, default=str)
-                if _normalized_script_identifier(node, text, fingerprint) in seen_script_ids:
-                    continue
-                _append_unique_blob(blobs, seen, parsed)
+            for candidate_text in [text, *_extract_next_bootstrap_children(text)]:
+                parsed = _parse_json_blob(candidate_text)
+                if parsed is not None:
+                    fingerprint = json.dumps(parsed, sort_keys=True, default=str)
+                    if _normalized_script_identifier(node, text, fingerprint) in seen_script_ids:
+                        continue
+                    _append_unique_blob(blobs, seen, parsed)
 
     data_attr_tokens = ("json", "state", "props", "product", "config", "schema", "payload")
     for node in soup.find_all(True):
@@ -214,13 +216,47 @@ def _append_unique_blob(blobs: list[dict | list], seen: set[str], parsed: dict |
 
 def _parse_json_blob(text: str) -> dict | list | None:
     stripped = text.strip()
-    if not stripped or stripped[0] not in "[{":
+    if stripped.endswith(";"):
+        stripped = stripped[:-1].rstrip()
+    if not stripped:
         return None
+    if stripped[0] not in "[{":
+        extracted = _extract_first_json_literal(stripped)
+        if extracted:
+            stripped = extracted
+        else:
+            return None
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, (dict, list)) else None
+
+
+def _extract_first_json_literal(text: str) -> str | None:
+    for opener in ("{", "["):
+        start = text.find(opener)
+        if start == -1:
+            continue
+        candidate = _extract_assigned_json(text, start)
+        if candidate:
+            return candidate
+    return None
+
+
+def _extract_next_bootstrap_children(text: str) -> list[str]:
+    results: list[str] = []
+    if "__next_s" not in text:
+        return results
+    for match in re.finditer(r'"children":"((?:\\.|[^"\\])*)"', text):
+        try:
+            decoded = json.loads(f'"{match.group(1)}"')
+        except json.JSONDecodeError:
+            continue
+        cleaned = str(decoded or "").strip()
+        if cleaned:
+            results.append(cleaned)
+    return results
 
 
 def _parse_hydrated_assignment(text: str) -> dict | list | None:
@@ -346,7 +382,7 @@ def _extract_tables(soup: BeautifulSoup) -> list[dict]:
             first_row = rows[0]
             first_cells = first_row.get("cells") or []
             if len(first_cells) >= 2 and all((cell.get("text") or "") for cell in first_cells):
-                headers = [{"text": ""} for _ in first_cells]
+                headers = [{"text": "", "href": None} for _ in first_cells]
 
         if headers or rows:
             tables.append({

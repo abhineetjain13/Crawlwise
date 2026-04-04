@@ -132,6 +132,21 @@ def _normalize_item(item: dict, page_url: str) -> dict:
                         value = value[0]
                         if isinstance(value, dict):
                             value = value.get("src") or value.get("url") or ""
+                    elif canonical == "additional_images" and isinstance(value, list):
+                        scalar_values = []
+                        for image_item in value:
+                            if isinstance(image_item, dict):
+                                candidate = image_item.get("src") or image_item.get("url") or image_item.get("contentUrl") or ""
+                            elif not isinstance(image_item, list):
+                                candidate = str(image_item).strip()
+                            else:
+                                candidate = ""
+                            if candidate:
+                                scalar_values.append(str(candidate).strip())
+                        if scalar_values:
+                            value = ", ".join(dict.fromkeys(scalar_values))
+                        else:
+                            continue
                     elif isinstance(value, list) and canonical in list_join_fields:
                         scalar_values = [str(item).strip() for item in value if not isinstance(item, (dict, list)) and str(item).strip()]
                         if scalar_values:

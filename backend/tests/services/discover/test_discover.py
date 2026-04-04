@@ -29,6 +29,19 @@ def test_discover_json_ld_array():
     assert len(manifest.json_ld) == 2
 
 
+def test_discover_json_ld_with_trailing_semicolon():
+    html = """
+    <html><body>
+    <script type="application/ld+json">
+    {"@type": "Product", "name": "Widget", "offers": {"price": "19.99"}};
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest.json_ld) == 1
+    assert manifest.json_ld[0]["name"] == "Widget"
+
+
 def test_discover_json_ld_invalid_json():
     html = """
     <html><body>
@@ -128,6 +141,22 @@ def test_discover_tables():
     assert len(manifest.tables[0]["rows"]) == 2
     assert manifest.tables[0]["rows"][0]["cells"][0]["text"] == "Widget A"
     assert manifest.tables[0]["rows"][1]["cells"][1]["text"] == "$20"
+
+
+def test_discover_headerless_tables_use_header_payload_shape():
+    html = """
+    <html><body>
+    <table>
+        <tr><td>Name</td><td>Price</td></tr>
+        <tr><td>Widget A</td><td>$10</td></tr>
+    </table>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert manifest.tables[0]["headers"] == [
+        {"text": "", "href": None},
+        {"text": "", "href": None},
+    ]
 
 
 def test_discover_adapter_data_passthrough():

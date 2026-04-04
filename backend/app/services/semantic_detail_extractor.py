@@ -40,7 +40,7 @@ def extract_semantic_detail_data(
     candidate extractor rather than replace it.
     """
     if not html:
-        return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}, "table_groups": []}
+        return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}, "aggregates": {}, "table_groups": []}
 
     soup = BeautifulSoup(html, "html.parser")
     sections = _extract_sections(soup)

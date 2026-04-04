@@ -75,8 +75,8 @@ export const api = {
     try {
       return await apiClient.post<FieldCommitResponse>(`/api/crawls/${runId}/commit-fields`, { items });
     } catch (error) {
-      const message = error instanceof Error ? error.message.toLowerCase() : "";
-      if (!message.includes("not found")) {
+      const status = error instanceof Error && "status" in error ? Number((error as { status?: unknown }).status) : undefined;
+      if (status !== 404) {
         throw error;
       }
       return await apiClient.post<FieldCommitResponse>(`/api/crawls/${runId}/llm-commit`, { items });

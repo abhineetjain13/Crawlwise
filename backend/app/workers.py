@@ -81,7 +81,7 @@ async def work_forever() -> None:
                     logger.exception("Unhandled error processing run %d", run_id)
                     async with SessionLocal() as error_session:
                         failed_run = await error_session.get(CrawlRun, run_id)
-                        if failed_run is not None and str(failed_run.status) in {
+                        if failed_run is not None and failed_run.status in {
                             CrawlStatus.CLAIMED.value,
                             CrawlStatus.RUNNING.value,
                         }:

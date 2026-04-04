@@ -149,6 +149,13 @@ _NORM_RULES: dict = _load("normalization_rules.json", {})  # type: ignore[assign
 
 PRICE_FIELDS: set[str] = set(_NORM_RULES.get("price_fields", ["price", "sale_price"]))
 PRICE_REGEX: str = _NORM_RULES.get("price_regex", r"\d[\d,.]*")
+_NESTED_OBJECT_KEYS: dict = _NORM_RULES.get("nested_object_keys", {})  # type: ignore[assignment]
+NESTED_TEXT_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("text_fields", ["name", "label", "title", "text", "value", "content", "description", "alt"]))
+NESTED_URL_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("url_fields", ["href", "url", "link", "canonical_url"]))
+NESTED_PRICE_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("price_fields", ["specialValue", "currentValue", "special", "current", "price", "amount", "value", "lowPrice", "minPrice", "displayPrice", "formattedPrice"]))
+NESTED_ORIGINAL_PRICE_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("original_price_fields", ["compareAtPrice", "compare_at_price", "listPrice", "regularPrice", "wasPrice", "originalPrice", "maxPrice", "currentValue", "price"]))
+NESTED_CURRENCY_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("currency_fields", ["currency", "currencyCode", "priceCurrency", "currency_code"]))
+NESTED_CATEGORY_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("category_fields", ["name", "path", "pathEn", "breadcrumb", "categoryPath"]))
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +181,28 @@ _CANDIDATE_CLEANUP: dict = _EXTRACTION_RULES.get("candidate_cleanup", {})  # typ
 CANDIDATE_PLACEHOLDER_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("placeholder_values", ["-", "—", "--", "n/a", "na", "none", "null", "undefined"]))
 CANDIDATE_GENERIC_CATEGORY_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("generic_category_values", ["detail-page", "detail_page", "product", "page", "pdp"]))
 CANDIDATE_GENERIC_TITLE_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("generic_title_values", ["chrome", "firefox", "safari", "edge", "home"]))
+_CANDIDATE_FIELD_GROUPS: dict = _CANDIDATE_CLEANUP.get("field_groups", {})  # type: ignore[assignment]
+CANDIDATE_FIELD_GROUPS: dict[str, set[str]] = {
+    str(group): {str(field) for field in fields}
+    for group, fields in _CANDIDATE_FIELD_GROUPS.items()
+    if isinstance(fields, list)
+}
+_CANDIDATE_FIELD_NAME_PATTERNS: dict = _CANDIDATE_CLEANUP.get("field_name_patterns", {})  # type: ignore[assignment]
+CANDIDATE_URL_SUFFIXES: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("url_suffixes", ["_url", "url", "_link", "link", "_href", "href"]))
+CANDIDATE_IMAGE_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("image_tokens", ["image", "images", "gallery", "photo", "thumbnail", "hero"]))
+CANDIDATE_CURRENCY_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("currency_tokens", ["currency"]))
+CANDIDATE_PRICE_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("price_tokens", ["price", "amount", "cost", "salary", "pay", "rate"]))
+CANDIDATE_RATING_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("rating_tokens", ["rating", "score"]))
+CANDIDATE_REVIEW_COUNT_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("review_count_tokens", ["review_count", "reviews", "rating_count"]))
+CANDIDATE_AVAILABILITY_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("availability_tokens", ["availability", "stock"]))
+CANDIDATE_CATEGORY_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("category_tokens", ["category", "department", "breadcrumb"]))
+CANDIDATE_DESCRIPTION_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("description_tokens", ["description", "summary", "overview", "details"]))
+CANDIDATE_IDENTIFIER_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("identifier_tokens", ["sku", "id", "code", "vin", "mpn"]))
+CANDIDATE_UI_NOISE_PHRASES: tuple[str, ...] = tuple(_CANDIDATE_CLEANUP.get("ui_noise_phrases", []))
+CANDIDATE_UI_NOISE_TOKEN_PATTERN: str = str(_CANDIDATE_CLEANUP.get("ui_noise_token_pattern", r"\b[a-z]+_[a-z0-9_]+\b"))
+CANDIDATE_UI_ICON_TOKEN_PATTERN: str = str(_CANDIDATE_CLEANUP.get("ui_icon_token_pattern", r"(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work)(?=[A-Z]|\b)|place(?=[A-Z])"))
+CANDIDATE_SCRIPT_NOISE_PATTERN: str = str(_CANDIDATE_CLEANUP.get("script_noise_pattern", r"\b(?:imageloader|document\.getelementbyid|fallback-image)\b"))
+CANDIDATE_PROMO_ONLY_TITLE_PATTERN: str = str(_CANDIDATE_CLEANUP.get("promo_only_title_pattern", r"^(?:[-–—]?\s*)?(?:\d{1,3}%\s*(?:off)?|sale|new(?:\s+in)?|view\s*\d+|best seller|top seller)\s*$"))
 
 _SEMANTIC_DETAIL_RULES: dict = _EXTRACTION_RULES.get("semantic_detail", {})  # type: ignore[assignment]
 SECTION_SKIP_PATTERNS: tuple[str, ...] = tuple(_SEMANTIC_DETAIL_RULES.get("section_skip_patterns", ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe"]))

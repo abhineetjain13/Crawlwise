@@ -54,12 +54,12 @@ class CrawlRecordResponse(BaseModel):
 
     @model_validator(mode="after")
     def _clean_for_display(self) -> "CrawlRecordResponse":
-        """Strip empty/null fields from data and raw noise from discovered_data.
+        """Strip empty/null fields from data and manifest noise from discovered_data.
 
         The ``data`` dict should only expose populated logical fields.
-        ``discovered_data`` strips raw manifest containers that are useful
-        internally but are noise for the JSON/CSS view — review/promote is
-        where users resolve field mismatches.
+        ``source_trace`` remains the authoritative source-preserving contract
+        for candidates, field discovery, and later review/intelligence flows.
+        ``discovered_data`` only drops bulky raw manifest containers.
         """
         self.data = {
             k: v for k, v in self.data.items()

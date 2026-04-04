@@ -1,4 +1,12 @@
 {
   "price_fields": ["price", "sale_price", "original_price"],
-  "price_regex": "\\d[\\d,.]*"
+  "price_regex": "\\d[\\d,.]*",
+  "nested_object_keys": {
+    "text_fields": ["name", "label", "title", "text", "value", "content", "description", "alt"],
+    "url_fields": ["href", "url", "link", "canonical_url"],
+    "price_fields": ["specialValue", "currentValue", "special", "current", "price", "amount", "value", "lowPrice", "minPrice", "displayPrice", "formattedPrice"],
+    "original_price_fields": ["compareAtPrice", "compare_at_price", "listPrice", "regularPrice", "wasPrice", "originalPrice", "maxPrice", "currentValue", "price"],
+    "currency_fields": ["currency", "currencyCode", "priceCurrency", "currency_code"],
+    "category_fields": ["name", "path", "pathEn", "breadcrumb", "categoryPath"]
+  }
 }

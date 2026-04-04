@@ -1,17 +1,33 @@
 # Candidate extraction service — produces field candidates from all sources.
 from __future__ import annotations
 
+import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from lxml import etree, html as lxml_html
 
 from app.services.discover.service import DiscoveryManifest
 from app.services.pipeline_config import (
+    CANDIDATE_AVAILABILITY_TOKENS,
+    CANDIDATE_CATEGORY_TOKENS,
+    CANDIDATE_CURRENCY_TOKENS,
+    CANDIDATE_DESCRIPTION_TOKENS,
+    CANDIDATE_FIELD_GROUPS,
     CANDIDATE_GENERIC_CATEGORY_VALUES,
     CANDIDATE_GENERIC_TITLE_VALUES,
-    CANDIDATE_PLACEHOLDER_VALUES,
+    CANDIDATE_IDENTIFIER_TOKENS,
+    CANDIDATE_IMAGE_TOKENS,
+    CANDIDATE_PRICE_TOKENS,
+    CANDIDATE_PROMO_ONLY_TITLE_PATTERN,
+    CANDIDATE_RATING_TOKENS,
+    CANDIDATE_REVIEW_COUNT_TOKENS,
+    CANDIDATE_SCRIPT_NOISE_PATTERN,
+    CANDIDATE_UI_ICON_TOKEN_PATTERN,
+    CANDIDATE_UI_NOISE_PHRASES,
+    CANDIDATE_UI_NOISE_TOKEN_PATTERN,
+    CANDIDATE_URL_SUFFIXES,
     DIMENSION_KEYWORDS,
     DOM_PATTERNS,
     FEATURE_SECTION_ALIASES,
@@ -23,37 +39,10 @@ from app.services.semantic_detail_extractor import extract_semantic_detail_data,
 from app.services.knowledge_base.store import get_canonical_fields, get_domain_mapping, get_selector_defaults
 from app.services.xpath_service import build_absolute_xpath, extract_selector_value
 
-GENERIC_ALIAS_KEYS = {"name", "type", "label", "id"}
-TRUSTED_BRAND_SOURCES = {
-    "contract_xpath",
-    "contract_regex",
-    "adapter",
-    "json_ld",
-    "microdata",
-    "selector",
-    "dom",
-    "semantic_spec",
-    "semantic_section",
-}
-PRODUCT_CONTEXT_KEYS = {
-    "product",
-    "productdata",
-    "product_data",
-    "productdetails",
-    "product_details",
-    "item",
-    "variant",
-    "offer",
-    "offers",
-    "sku",
-    "brand",
-    "manufacturer",
-    "title",
-    "name",
-    "description",
-    "price",
-    "image",
-}
+_UI_NOISE_TOKEN_RE = re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_NOISE_TOKEN_PATTERN else None
+_UI_ICON_TOKEN_RE = re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_ICON_TOKEN_PATTERN else None
+_SCRIPT_NOISE_RE = re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE) if CANDIDATE_SCRIPT_NOISE_PATTERN else None
+_PROMO_ONLY_TITLE_RE = re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE) if CANDIDATE_PROMO_ONLY_TITLE_PATTERN else None
 
 
 def extract_candidates(
@@ -66,7 +55,8 @@ def extract_candidates(
 ) -> tuple[dict, dict]:
     """Extract candidate values for each target field.
 
-    Sources are checked in priority order (adapter > network > JSON-LD > microdata > selectors > DOM).
+    Sources are checked in deterministic priority order and every discovered
+    value is preserved as its own candidate row.
 
     Returns:
         (candidates, source_trace) — candidates maps field -> list of {value, source}
@@ -75,7 +65,7 @@ def extract_candidates(
     tree = _build_xpath_tree(html)
     candidates: dict[str, list[dict]] = {}
     source_trace: dict[str, list[dict]] = {}
-    target_fields = set(get_canonical_fields(surface)) | set(expand_requested_fields(additional_fields))
+    target_fields = sorted(set(get_canonical_fields(surface)) | set(expand_requested_fields(additional_fields)))
     domain = _domain(url)
     contract_by_field = _index_extraction_contract(extraction_contract or [])
     semantic = extract_semantic_detail_data(html, requested_fields=sorted(target_fields))
@@ -114,45 +104,28 @@ def extract_candidates(
 
         # 2. Network payloads (rank 2)
         for payload in manifest.network_payloads:
-            body = payload.get("body", {})
+            body = payload.get("body", {}) if isinstance(payload, dict) else {}
             if isinstance(body, (dict, list)):
-                val = _coerce_candidate_value(_deep_get_aliases(body, field_name), field_name=field_name)
-                if val is not None:
-                    rows.append({"value": val, "source": "network_intercept"})
+                _append_source_candidates(rows, field_name, body, "network_intercept", base_url=url)
 
         # 3. Hydrated app state / __NEXT_DATA__ (rank 3)
         for state in manifest._hydrated_states:
-            val = _coerce_candidate_value(_deep_get_aliases(state, field_name), field_name=field_name)
-            if val is not None:
-                rows.append({"value": val, "source": "hydrated_state"})
-                break
+            _append_source_candidates(rows, field_name, state, "hydrated_state", base_url=url)
         for payload in manifest.embedded_json:
-            val = _coerce_candidate_value(_deep_get_aliases(payload, field_name), field_name=field_name)
-            if val is not None:
-                rows.append({"value": val, "source": "embedded_json"})
-                break
+            _append_source_candidates(rows, field_name, payload, "embedded_json", base_url=url)
         if manifest.next_data:
-            val = _coerce_candidate_value(_deep_get_aliases(manifest.next_data, field_name), field_name=field_name)
-            if val is not None:
-                rows.append({"value": val, "source": "next_data"})
-
-        structured_manifest_row = _structured_manifest_candidate(manifest, field_name)
-        if structured_manifest_row:
-            rows.append(structured_manifest_row)
+            _append_source_candidates(rows, field_name, manifest.next_data, "next_data", base_url=url)
+        rows.extend(_structured_manifest_candidates(manifest, field_name))
 
         # 4. JSON-LD (rank 4)
         for payload in manifest.json_ld:
             if isinstance(payload, dict):
-                val = _coerce_candidate_value(_deep_get_aliases(payload, field_name), field_name=field_name)
-                if val is not None:
-                    rows.append({"value": val, "source": "json_ld"})
+                _append_source_candidates(rows, field_name, payload, "json_ld", base_url=url)
 
         # 5. Microdata/RDFa (rank 5)
         for item in manifest.microdata:
             if isinstance(item, dict):
-                val = _coerce_candidate_value(_deep_get_aliases(item, field_name), field_name=field_name)
-                if val is not None:
-                    rows.append({"value": val, "source": "microdata"})
+                _append_source_candidates(rows, field_name, item, "microdata", base_url=url)
 
         # 6. Semantic sections/specifications extracted from page-local HTML
         semantic_rows = resolve_requested_field_values(
@@ -192,7 +165,7 @@ def extract_candidates(
             rows.append(dom_row)
 
         if rows:
-            filtered_rows = _finalize_candidate_rows(field_name, rows)
+            filtered_rows = _finalize_candidate_rows(field_name, rows, base_url=url)
             if filtered_rows:
                 candidates[field_name] = filtered_rows
                 source_trace[field_name] = filtered_rows
@@ -207,7 +180,7 @@ def extract_candidates(
     for field_name, rows in merged_dynamic_rows.items():
         existing_rows = candidates.get(field_name, [])
         merged_rows = [*existing_rows, *rows]
-        filtered_rows = _finalize_candidate_rows(field_name, merged_rows)
+        filtered_rows = _finalize_candidate_rows(field_name, merged_rows, base_url=url)
         if filtered_rows:
             candidates[field_name] = filtered_rows
             source_trace[field_name] = filtered_rows
@@ -256,201 +229,504 @@ def _extract_dom_node_value(node, field_name: str) -> str | None:
     return cleaned or None
 
 
-def _finalize_candidate_rows(field_name: str, rows: list[dict]) -> list[dict]:
+def _finalize_candidate_rows(field_name: str, rows: list[dict], *, base_url: str = "") -> list[dict]:
     filtered: list[dict] = []
+    filtered_index: dict[tuple[str, str], int] = {}
     seen: set[tuple[str, str]] = set()
     for row in rows:
-        if not _candidate_allowed(field_name, row):
+        value = coerce_field_candidate_value(field_name, row.get("value"), base_url=base_url)
+        if value in (None, "", [], {}):
+            value = _normalized_candidate_value(row.get("value"))
+        if value in (None, "", [], {}):
             continue
-        value = _normalized_candidate_text(row.get("value"))
         source = str(row.get("source") or "").strip() or "candidate"
-        key = (source, value)
+        normalized = _normalized_candidate_text(value)
+        key = (source, normalized)
         if key in seen:
+            existing = filtered[filtered_index[key]]
+            for metadata_key, metadata_value in row.items():
+                if metadata_key == "value":
+                    continue
+                if existing.get(metadata_key) in (None, "", [], {}) and metadata_value not in (None, "", [], {}):
+                    existing[metadata_key] = metadata_value
             continue
         seen.add(key)
-        filtered.append(row)
+        filtered_index[key] = len(filtered)
+        filtered.append({**row, "value": value})
+    filtered.sort(key=lambda row: _candidate_sort_key(field_name, row), reverse=True)
     return filtered
-
-
-def _candidate_allowed(field_name: str, row: dict) -> bool:
-    source = str(row.get("source") or "").strip()
-    value = _normalized_candidate_text(row.get("value"))
-    if not value:
-        return False
-    lowered = value.lower()
-    if lowered in CANDIDATE_PLACEHOLDER_VALUES and not row.get("preserve_visible"):
-        return False
-    if field_name == "title":
-        if lowered in CANDIDATE_GENERIC_TITLE_VALUES:
-            return False
-        if len(value) < 4 or not re.search(r"[A-Za-z]", value):
-            return False
-    if field_name == "brand" and source not in TRUSTED_BRAND_SOURCES:
-        return False
-    if field_name == "category" and lowered in CANDIDATE_GENERIC_CATEGORY_VALUES:
-        return False
-    if field_name == "specifications" and ":" not in value:
-        if lowered.startswith("check the details") or "general specifications" in lowered or "technical specifications" in lowered:
-            return False
-    return True
 
 
 def _normalized_candidate_text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
-def _deep_get(data: object, key: str, max_depth: int = 5) -> object | None:
-    """Recursively search a nested dict for a key.
+def _normalized_candidate_value(value: object) -> object | None:
+    if isinstance(value, str):
+        cleaned = _normalized_candidate_text(value)
+        return cleaned or None
+    return value if value not in (None, "", [], {}) else None
 
-    When the same key appears at multiple depths, the longest string value wins.
-    This prevents a short top-level description from shadowing a richer nested
-    one (e.g. JSON-LD top-level description vs offers.description).
-    """
-    if max_depth <= 0:
-        return None
-    best: object | None = None
+
+def _deep_get_all(data: object, key: str, max_depth: int = 5) -> list[object]:
+    if max_depth <= 0 or data in (None, "", [], {}):
+        return []
+    matches: list[object] = []
 
     def _collect(node: object, depth: int) -> None:
-        nonlocal best
         if depth <= 0:
             return
         if isinstance(node, dict):
-            if key in node:
-                candidate = node[key]
-                if candidate not in (None, "", [], {}):
-                    # Prefer longer strings; fall back to first non-null for non-strings
-                    if best is None:
-                        best = candidate
-                    elif isinstance(candidate, str) and isinstance(best, str):
-                        if len(candidate) > len(best):
-                            best = candidate
-            for v in node.values():
-                _collect(v, depth - 1)
+            if key in node and node[key] not in (None, "", [], {}):
+                matches.append(node[key])
+            for value in node.values():
+                _collect(value, depth - 1)
         elif isinstance(node, list):
             for item in node:
                 _collect(item, depth - 1)
 
     _collect(data, max_depth)
-    return best
+    return matches
 
 
-def _deep_get_aliases(data: object, field_name: str, max_depth: int = 5) -> object | None:
-    aliases = [field_name, *FIELD_ALIASES.get(field_name, [])]
-    seen: set[str] = set()
-    for alias in aliases:
-        key = str(alias or "").strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        if key in GENERIC_ALIAS_KEYS and key != field_name:
-            result = _deep_get_generic_alias(data, field_name, key, max_depth)
-        else:
-            result = _deep_get(data, key, max_depth)
-        if result not in (None, "", [], {}):
-            return result
-    return None
+def _deep_get_all_aliases(data: object, field_name: str, max_depth: int = 5) -> list[object]:
+    matches: list[object] = []
+    alias_tokens = _field_alias_tokens(field_name)
+    if not alias_tokens or max_depth <= 0:
+        return matches
+
+    def _collect(node: object, depth: int) -> None:
+        if depth <= 0 or node in (None, "", [], {}):
+            return
+        if isinstance(node, dict):
+            for current_key, value in node.items():
+                if _normalized_field_token(current_key) in alias_tokens and value not in (None, "", [], {}):
+                    matches.append(value)
+                _collect(value, depth - 1)
+        elif isinstance(node, list):
+            for item in node[:40]:
+                _collect(item, depth - 1)
+
+    _collect(data, max_depth)
+    return matches
 
 
-def _deep_get_generic_alias(
-    data: object,
+def _append_source_candidates(
+    rows: list[dict],
     field_name: str,
-    alias: str,
-    max_depth: int = 5,
+    payload: object,
+    source: str,
     *,
-    parent_key: str = "",
-) -> object | None:
-    if max_depth <= 0:
-        return None
-    if isinstance(data, dict):
-        if alias in data and _looks_like_entity_context(data, field_name, parent_key):
-            return data[alias]
-        for key, value in data.items():
-            result = _deep_get_generic_alias(
-                value,
-                field_name,
-                alias,
-                max_depth - 1,
-                parent_key=str(key or ""),
-            )
-            if result not in (None, "", [], {}):
-                return result
-    elif isinstance(data, list):
-        for item in data:
-            result = _deep_get_generic_alias(item, field_name, alias, max_depth - 1, parent_key=parent_key)
-            if result not in (None, "", [], {}):
-                return result
-    return None
+    base_url: str = "",
+) -> None:
+    for match in _deep_get_all_aliases(payload, field_name):
+        value = coerce_field_candidate_value(field_name, match, base_url=base_url)
+        if value is not None:
+            rows.append({"value": value, "source": source})
 
 
-def _looks_like_entity_context(data: dict, field_name: str, parent_key: str) -> bool:
-    parent = str(parent_key or "").strip().lower()
-    if parent in PRODUCT_CONTEXT_KEYS:
-        return True
-    lowered_keys = {str(key or "").strip().lower() for key in data.keys()}
-    contextual_keys = lowered_keys - GENERIC_ALIAS_KEYS
-    if contextual_keys & PRODUCT_CONTEXT_KEYS:
-        return True
-    if field_name == "title":
-        return bool(contextual_keys & {"sku", "brand", "price", "description", "offers", "image", "url"})
-    if field_name == "category":
-        return bool(contextual_keys & {"title", "sku", "brand", "price"})
-    if field_name == "sku":
-        return bool(contextual_keys & {"title", "brand", "price"})
-    return False
-
-
-def _coerce_candidate_value(value: object, *, field_name: str = "") -> object | None:
-    """Coerce an extracted value to a scalar or pipe-joined string.
-
-    For ``image_url``, a list collapses to the *first* URL (primary image).
-    For ``additional_images``, the full list is pipe-joined so all URLs are
-    preserved and visible in the intelligence tab.
-    All other list fields are also pipe-joined (deduped, order-preserving).
-    """
+def coerce_field_candidate_value(field_name: str, value: object, *, base_url: str = "") -> object | None:
     if value in (None, "", [], {}):
+        return None
+    if isinstance(value, str):
+        cleaned = _normalized_candidate_text(value)
+        parsed = _parse_json_like_value(cleaned)
+        if parsed is not None:
+            parsed_value = coerce_field_candidate_value(field_name, parsed, base_url=base_url)
+            if parsed_value not in (None, "", [], {}):
+                return parsed_value
+        if _is_image_primary_field(field_name):
+            images = _extract_image_urls(cleaned, base_url=base_url)
+            return images[0] if images else None
+        if _is_image_collection_field(field_name):
+            images = _extract_image_urls(cleaned, base_url=base_url)
+            return ", ".join(images) if images else None
+        if _is_url_field(field_name):
+            resolved = _resolve_candidate_url(cleaned, base_url)
+            return resolved or None
+        if _is_currency_field(field_name):
+            match = re.search(r"\b[A-Z]{3}\b", cleaned.upper())
+            return match.group(0) if match else None
+        if _is_category_field(field_name):
+            lowered = cleaned.lower()
+            if lowered in CANDIDATE_GENERIC_CATEGORY_VALUES | {
+                "guest",
+                "max_discount",
+                "brand",
+                "offer",
+                "website",
+                "web site",
+                "breadcrumblist",
+                "listitem",
+            } or "schema.org" in lowered:
+                return None
+            return cleaned
+        if _is_numeric_field(field_name):
+            numeric = re.search(r"\d[\d,.]*", cleaned)
+            return cleaned if numeric else None
+        if _is_availability_field(field_name):
+            return cleaned if cleaned.lower() != "availability" else None
+        if _is_title_field(field_name):
+            cleaned = _strip_ui_noise(cleaned)
+            if not cleaned or cleaned.lower() in CANDIDATE_GENERIC_TITLE_VALUES:
+                return None
+            if _PROMO_ONLY_TITLE_RE and _PROMO_ONLY_TITLE_RE.match(cleaned):
+                return None
+            if not re.search(r"[A-Za-z]", cleaned):
+                return None
+            return cleaned
+        if _is_description_field(field_name) or _is_entity_name_field(field_name):
+            cleaned = _strip_ui_noise(cleaned)
+        return cleaned or None
+    if isinstance(value, (int, float)) and _is_title_field(field_name):
         return None
     if isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, list):
-        scalars: list[str] = []
-        for item in value:
-            coerced = _coerce_candidate_value(item)
-            if isinstance(coerced, (str, int, float, bool)):
-                text = str(coerced).strip()
-                if text:
-                    scalars.append(text)
-        if not scalars:
-            return None
-        # Primary image: collapse to first URL only
-        if field_name == "image_url":
-            return scalars[0]
-        return " | ".join(dict.fromkeys(scalars))
+        if _is_image_primary_field(field_name) or _is_image_collection_field(field_name):
+            images = _extract_image_urls(value, base_url=base_url)
+            if not images:
+                return None
+            return images[0] if _is_image_primary_field(field_name) else ", ".join(images)
+        coerced_values = [
+            coerce_field_candidate_value(field_name, item, base_url=base_url)
+            for item in value
+        ]
+        return _pick_best_nested_candidate(field_name, coerced_values)
     if isinstance(value, dict):
-        for key in ("value", "text", "content", "description", "sentence", "summary", "title", "name", "label"):
+        nested_matches = [
+            match
+            for match in _deep_get_all_aliases(value, field_name, max_depth=4)
+            if match is not value
+        ]
+        if nested_matches:
+            coerced_nested = [
+                coerce_field_candidate_value(field_name, match, base_url=base_url)
+                for match in nested_matches
+            ]
+            nested_value = _pick_best_nested_candidate(field_name, coerced_nested)
+            if nested_value not in (None, "", [], {}):
+                return nested_value
+        if _is_image_primary_field(field_name) or _is_image_collection_field(field_name):
+            images = _extract_image_urls(value, base_url=base_url)
+            if not images:
+                return None
+            return images[0] if _is_image_primary_field(field_name) else ", ".join(images)
+        for key in ("value", "amount", "code", "text", "content", "description", "sentence", "summary", "title", "name", "label"):
             candidate = value.get(key)
-            coerced = _coerce_candidate_value(candidate)
+            coerced = coerce_field_candidate_value(field_name, candidate, base_url=base_url)
             if coerced is not None:
                 return coerced
         return None
     return None
 
 
-def _structured_manifest_candidate(manifest: DiscoveryManifest, field_name: str) -> dict | None:
-    if field_name not in {"specifications", "dimensions"}:
+def _pick_best_nested_candidate(field_name: str, values: list[object]) -> object | None:
+    rows = [{"value": value, "source": "nested"} for value in values if value not in (None, "", [], {})]
+    if not rows:
         return None
-    sources: list[tuple[str, object]] = [("next_data", manifest.next_data)]
-    sources.extend(("hydrated_state", payload) for payload in manifest._hydrated_states)
-    sources.extend(("embedded_json", payload) for payload in manifest.embedded_json)
-    sources.extend(
-        ("network_intercept", payload.get("body"))
-        for payload in manifest.network_payloads
-        if isinstance(payload, dict)
+    rows.sort(key=lambda row: _candidate_sort_key(field_name, row), reverse=True)
+    return rows[0]["value"]
+
+
+def _field_alias_tokens(field_name: str) -> set[str]:
+    aliases = [field_name, *FIELD_ALIASES.get(field_name, [])]
+    return {
+        token
+        for alias in aliases
+        if (token := _normalized_field_token(alias))
+    }
+
+
+def _normalized_field_token(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _parse_json_like_value(value: str) -> dict | list | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    if candidate.endswith(";"):
+        candidate = candidate[:-1].rstrip()
+    if candidate[:1] not in "{[":
+        return None
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, (dict, list)) else None
+
+
+def _resolve_candidate_url(value: str, base_url: str) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("//"):
+        return f"https:{candidate}"
+    if candidate.startswith(("http://", "https://")):
+        return candidate
+    if candidate.startswith("/"):
+        return urljoin(base_url, candidate) if base_url else candidate
+    return urljoin(base_url, candidate) if re.search(r"^[A-Za-z0-9][^ ]*/[^ ]+$", candidate) and base_url else ""
+
+
+def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def _append(candidate: str) -> None:
+        resolved = _resolve_candidate_url(candidate, base_url)
+        if not resolved:
+            return
+        lowered = resolved.lower()
+        path = urlparse(resolved).path.lower()
+        if any(token in lowered for token in ("logo", "sprite", "icon", "badge", "favicon")):
+            return
+        if not (
+            path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg"))
+            or any(token in lowered for token in ("/image", "/images/", "/img", "image=", "im/"))
+        ):
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        urls.append(resolved)
+
+    def _collect(node: object) -> None:
+        if node in (None, "", [], {}):
+            return
+        if isinstance(node, str):
+            for part in re.split(r"\s*\|\s*|\s*,\s*(?=https?://|//|/)", node):
+                cleaned = _normalized_candidate_text(part)
+                if cleaned:
+                    _append(cleaned)
+            return
+        if isinstance(node, dict):
+            for key in ("url", "contentUrl", "src", "image", "thumbnail", "href"):
+                candidate = node.get(key)
+                if isinstance(candidate, str):
+                    _append(candidate)
+            for item in list(node.values())[:20]:
+                _collect(item)
+            return
+        if isinstance(node, list):
+            for item in node[:20]:
+                _collect(item)
+
+    _collect(value)
+    return urls
+
+
+_SOURCE_RANK = {
+    "contract_xpath": 11,
+    "contract_regex": 10,
+    "adapter": 9,
+    "network_intercept": 8,
+    "hydrated_state": 7,
+    "embedded_json": 7,
+    "next_data": 7,
+    "json_ld": 6,
+    "microdata": 5,
+    "semantic_section": 4,
+    "semantic_spec": 4,
+    "selector": 3,
+    "dom": 2,
+    "llm_xpath": 1,
+}
+
+
+def _candidate_sort_key(field_name: str, row: dict) -> tuple[int, int]:
+    value = row.get("value")
+    source = str(row.get("source") or "").strip()
+    return (_field_quality_score(field_name, value), _SOURCE_RANK.get(source, 0))
+
+
+def _field_quality_score(field_name: str, value: object) -> int:
+    text = _normalized_candidate_text(value)
+    if not text:
+        return 0
+
+    if _is_title_field(field_name):
+        score = 10
+        lowered = text.lower()
+        if len(text) < 10:
+            score -= 8
+        if 4 <= len(text) <= 120:
+            score += 8
+        if re.search(r"[A-Za-z]", text):
+            score += 6
+        if len(text) <= 80:
+            score += 4
+        if any(token in lowered for token in ("discover this", "purchase", "shop ", "buy now", "sigma-aldrich.com")):
+            score -= 12
+        if text.count(".") >= 2 or len(text.split()) > 18:
+            score -= 8
+        if lowered in {"wayfair", "home", "department navigation"}:
+            score -= 15
+        return score
+
+    if _is_description_field(field_name):
+        score = 10
+        if len(text) >= 60:
+            score += 10
+        if len(text) >= 180:
+            score += 4
+        if "<" in text or ">" in text:
+            score -= 2
+        if len(text.split()) <= 6:
+            score -= 10
+        return score
+
+    if _is_entity_name_field(field_name):
+        score = 10
+        if 2 <= len(text) <= 50:
+            score += 8
+        if len(text.split()) <= 5:
+            score += 4
+        if re.search(r"\.(com|net|org)\b", text.lower()):
+            score -= 8
+        return score
+
+    if _is_numeric_field(field_name):
+        return 20 if re.search(r"\d", text) else 0
+
+    if _is_currency_field(field_name):
+        return 25 if re.fullmatch(r"[A-Z]{3}", text.upper()) else 0
+
+    if _is_image_primary_field(field_name) or _is_image_collection_field(field_name) or _is_url_field(field_name):
+        return 25 if text.startswith(("http://", "https://")) else 0
+
+    if _is_availability_field(field_name):
+        return 0 if text.lower() == "availability" else (16 if len(text) <= 48 else 6)
+
+    if _is_identifier_field(field_name):
+        score = 12
+        if 2 <= len(text) <= 64:
+            score += 8
+        if " " in text and len(text.split()) > 4:
+            score -= 8
+        return score
+
+    if _is_category_field(field_name):
+        lowered = text.lower()
+        if lowered in CANDIDATE_GENERIC_CATEGORY_VALUES | {
+            "guest",
+            "max_discount",
+            "brand",
+            "website",
+            "web site",
+            "offer",
+            "breadcrumblist",
+            "listitem",
+        }:
+            return 0
+        return 12
+
+    return 10 + min(len(text), 80) // 16
+
+
+def _field_in_group(field_name: str, group_name: str) -> bool:
+    return field_name in CANDIDATE_FIELD_GROUPS.get(group_name, set())
+
+
+def _field_token(field_name: str) -> str:
+    return _normalized_field_token(field_name)
+
+
+def _field_has_any_token(field_name: str, tokens: tuple[str, ...]) -> bool:
+    normalized = _field_token(field_name)
+    return any(_normalized_field_token(token) in normalized for token in tokens if token)
+
+
+def _is_image_collection_field(field_name: str) -> bool:
+    normalized = _field_token(field_name)
+    return _field_in_group(field_name, "image_collection") or any(token in normalized for token in ("images", "gallery", "photos", "media"))
+
+
+def _is_image_primary_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "image_primary") or (
+        _field_has_any_token(field_name, CANDIDATE_IMAGE_TOKENS) and not _is_image_collection_field(field_name)
     )
+
+
+def _is_url_field(field_name: str) -> bool:
+    normalized = _field_token(field_name)
+    if _is_image_primary_field(field_name) or _is_image_collection_field(field_name):
+        return False
+    return _field_in_group(field_name, "url") or any(normalized.endswith(_normalized_field_token(suffix)) for suffix in CANDIDATE_URL_SUFFIXES)
+
+
+def _is_currency_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "currency") or _field_has_any_token(field_name, CANDIDATE_CURRENCY_TOKENS)
+
+
+def _is_numeric_field(field_name: str) -> bool:
+    return (
+        _field_in_group(field_name, "numeric")
+        or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS)
+        or _field_has_any_token(field_name, CANDIDATE_RATING_TOKENS)
+        or _field_has_any_token(field_name, CANDIDATE_REVIEW_COUNT_TOKENS)
+    )
+
+
+def _is_availability_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "availability") or _field_has_any_token(field_name, CANDIDATE_AVAILABILITY_TOKENS)
+
+
+def _is_category_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "category") or _field_has_any_token(field_name, CANDIDATE_CATEGORY_TOKENS)
+
+
+def _is_title_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "title")
+
+
+def _is_description_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "description") or _field_has_any_token(field_name, CANDIDATE_DESCRIPTION_TOKENS)
+
+
+def _is_entity_name_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "entity_name")
+
+
+def _is_identifier_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "identifier") or _field_has_any_token(field_name, CANDIDATE_IDENTIFIER_TOKENS)
+
+
+def _strip_ui_noise(value: str) -> str:
+    text = _normalized_candidate_text(value)
+    if not text:
+        return ""
+    if _UI_ICON_TOKEN_RE:
+        text = _UI_ICON_TOKEN_RE.sub(" ", text)
+    if _UI_NOISE_TOKEN_RE:
+        text = _UI_NOISE_TOKEN_RE.sub(" ", text)
+    if _SCRIPT_NOISE_RE:
+        text = _SCRIPT_NOISE_RE.sub(" ", text)
+    for phrase in CANDIDATE_UI_NOISE_PHRASES:
+        if phrase:
+            text = re.sub(rf"\b{re.escape(phrase)}\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" -|,:;/")
+    return text
+
+
+def _structured_manifest_candidates(manifest: DiscoveryManifest, field_name: str) -> list[dict]:
+    if field_name not in {"specifications", "dimensions"}:
+        return []
+    rows: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    sources: list[tuple[str, object]] = _structured_manifest_sources(manifest)
     for source, payload in sources:
         value = _extract_structured_field_value(payload, field_name)
-        if value:
-            return {"value": value, "source": source}
-    return None
+        normalized = _normalized_candidate_text(value)
+        if not normalized:
+            continue
+        key = (source, normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({"value": value, "source": source})
+    return rows
 
 
 def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
@@ -462,7 +738,7 @@ def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
 
     for field_name, value in specifications.items():
         normalized = normalize_requested_field(field_name)
-        if not normalized or value in (None, "", [], {}):
+        if not normalized or value in (None, "", [], {}) or re.fullmatch(r"\d+(?:[_-]\d+)*", normalized):
             continue
         rows.setdefault(normalized, []).append({"value": value, "source": "semantic_spec"})
 
@@ -475,7 +751,7 @@ def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
                 continue
             normalized = normalize_requested_field(row.get("normalized_key") or row.get("label"))
             value = row.get("value")
-            if not normalized or value in (None, "", [], {}):
+            if not normalized or value in (None, "", [], {}) or re.fullmatch(r"\d+(?:[_-]\d+)*", normalized):
                 continue
             rows.setdefault(normalized, []).append({
                 "value": value,
@@ -530,7 +806,7 @@ def _build_dynamic_structured_rows(manifest: DiscoveryManifest) -> dict[str, lis
             })
         for field_name, value in spec_map.items():
             normalized = normalize_requested_field(field_name)
-            if not normalized:
+            if not normalized or re.fullmatch(r"\d+(?:[_-]\d+)*", normalized):
                 continue
             rows.setdefault(normalized, []).append({"value": value, "source": source})
     return rows

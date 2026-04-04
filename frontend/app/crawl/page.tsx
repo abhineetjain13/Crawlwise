@@ -58,12 +58,21 @@ type OutputTabKey = "table" | "json" | "intelligence" | "logs";
 type IntelligenceCandidate = {
   key: string;
   recordId: number;
+  recordUrl: string;
+  recordTitle: string;
   fieldName: string;
   displayLabel: string;
   groupLabel: string;
   value: unknown;
   href?: string;
   sortOrder: number;
+};
+type IntelligenceRecordGroup = {
+  key: string;
+  recordId: number;
+  recordUrl: string;
+  recordTitle: string;
+  items: IntelligenceCandidate[];
 };
 
 export default function CrawlPage() {
@@ -99,10 +108,13 @@ export default function CrawlPage() {
   const [runActionPending, setRunActionPending] = useState<"pause" | "resume" | "kill" | null>(null);
   const [selectedCandidateKeys, setSelectedCandidateKeys] = useState<Record<string, boolean>>({});
   const [candidateEdits, setCandidateEdits] = useState<Record<string, { fieldName: string; value?: string }>>({});
+  const [expandedIntelligenceGroups, setExpandedIntelligenceGroups] = useState<Record<string, boolean>>({});
   const [commitPending, setCommitPending] = useState(false);
   const [commitError, setCommitError] = useState("");
   const logViewportRef = useRef<HTMLDivElement | null>(null);
+  const previousRunIdRef = useRef<number | null>(runId);
   const previousRunStatusRef = useRef<CrawlRun["status"] | null>(null);
+  const terminalSyncRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
 
   const runQuery = useQuery({
@@ -171,6 +183,57 @@ export default function CrawlPage() {
   }, [run, runId]);
 
   useEffect(() => {
+    if (previousRunIdRef.current === runId) {
+      return;
+    }
+
+    setSelectedIds([]);
+    setJsonCompact(false);
+    setOutputTab("table");
+    setBulkBanner("");
+    setRunActionPending(null);
+    setSelectedCandidateKeys({});
+    setCandidateEdits({});
+    setExpandedIntelligenceGroups({});
+    setCommitPending(false);
+    setCommitError("");
+    setLaunchError("");
+    setPreviewOpen(false);
+    setPendingDispatch(null);
+    previousRunStatusRef.current = null;
+    terminalSyncRef.current = null;
+
+    if (runId === null) {
+      clearConfigState();
+      setCrawlPhase("config");
+    } else {
+      setCrawlPhase("running");
+    }
+
+    previousRunIdRef.current = runId;
+  }, [runId]);
+
+  useEffect(() => {
+    if (!runId || !run || !terminal) {
+      terminalSyncRef.current = null;
+      return;
+    }
+
+    const syncKey = `${run.id}:${run.status}:${run.completed_at ?? ""}:${run.updated_at}`;
+    if (terminalSyncRef.current === syncKey) {
+      return;
+    }
+    terminalSyncRef.current = syncKey;
+
+    void Promise.allSettled([
+      runQuery.refetch(),
+      recordsQuery.refetch(),
+      logsQuery.refetch(),
+      reviewQuery.refetch(),
+    ]);
+  }, [logsQuery, recordsQuery, reviewQuery, run, runId, runQuery, terminal]);
+
+  useEffect(() => {
     const stored = window.sessionStorage.getItem(STORAGE_KEYS.BULK_PREFILL);
     if (!stored) {
       return;
@@ -178,13 +241,13 @@ export default function CrawlPage() {
     try {
       const parsed = JSON.parse(stored) as { urls: string[]; additional_fields?: string[] };
       if (Array.isArray(parsed.urls) && parsed.urls.length) {
-        setCrawlTab("category");
-        setCategoryMode("bulk");
+        setCrawlTab("pdp");
+        setPdpMode("batch");
         setBulkUrls(parsed.urls.join("\n"));
         if (Array.isArray(parsed.additional_fields)) {
           setAdditionalFields(uniqueFields(parsed.additional_fields));
         }
-        setBulkBanner(`${parsed.urls.length} URLs loaded from previous crawl results.`);
+        setBulkBanner(`${parsed.urls.length} URLs loaded into PDP batch crawl.`);
       }
     } catch {
       // Ignore malformed prefill data.
@@ -226,6 +289,8 @@ export default function CrawlPage() {
     const grouped = new Map<string, IntelligenceCandidate>();
 
     for (const record of records) {
+      const recordUrl = extractRecordUrl(record) || record.source_url;
+      const recordTitle = stringifyCell(record.data?.title).trim() || recordUrl || `Record ${record.id}`;
       const candidateMap = record.source_trace?.candidates;
       if (candidateMap && typeof candidateMap === "object" && !Array.isArray(candidateMap)) {
         for (const [fieldName, rawRows] of Object.entries(candidateMap as Record<string, unknown>)) {
@@ -256,6 +321,8 @@ export default function CrawlPage() {
             grouped.set(key, {
               key,
               recordId: record.id,
+              recordUrl,
+              recordTitle,
               fieldName,
               displayLabel,
               groupLabel,
@@ -287,6 +354,8 @@ export default function CrawlPage() {
           grouped.set(key, {
             key,
             recordId: record.id,
+            recordUrl,
+            recordTitle,
             fieldName,
             displayLabel: humanizeFieldName(fieldName),
             groupLabel: "Suggested",
@@ -299,24 +368,54 @@ export default function CrawlPage() {
 
     return Array.from(grouped.values())
       .sort((left, right) => {
+        if (left.recordId !== right.recordId) return left.recordId - right.recordId;
         if (left.groupLabel !== right.groupLabel) return left.groupLabel.localeCompare(right.groupLabel);
         if (left.sortOrder !== right.sortOrder) return left.sortOrder - right.sortOrder;
-        if (left.recordId !== right.recordId) return left.recordId - right.recordId;
         if (left.displayLabel !== right.displayLabel) return left.displayLabel.localeCompare(right.displayLabel);
-        return left.value.localeCompare(right.value);
+        return String(left.value ?? "").localeCompare(String(right.value ?? ""));
       });
   }, [records]);
 
-  const intelligenceGroups = useMemo(() => {
-    const groups = new Map<string, IntelligenceCandidate[]>();
+  const intelligenceRecordGroups = useMemo<IntelligenceRecordGroup[]>(() => {
+    const groups = new Map<string, IntelligenceRecordGroup>();
     for (const item of intelligenceCandidates) {
-      const key = item.groupLabel || "General";
-      const existing = groups.get(key) ?? [];
-      existing.push(item);
-      groups.set(key, existing);
+      const key = `${item.recordId}:${item.recordUrl}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.items.push(item);
+        continue;
+      }
+      groups.set(key, {
+        key,
+        recordId: item.recordId,
+        recordUrl: item.recordUrl,
+        recordTitle: item.recordTitle,
+        items: [item],
+      });
     }
-    return Array.from(groups.entries());
+    return Array.from(groups.values()).sort((left, right) => left.recordId - right.recordId);
   }, [intelligenceCandidates]);
+
+  useEffect(() => {
+    if (!intelligenceRecordGroups.length) {
+      setExpandedIntelligenceGroups({});
+      return;
+    }
+    setExpandedIntelligenceGroups((current) => {
+      const next: Record<string, boolean> = {};
+      let hasExpanded = false;
+      for (const group of intelligenceRecordGroups) {
+        if (current[group.key]) {
+          next[group.key] = true;
+          hasExpanded = true;
+        }
+      }
+      if (!hasExpanded) {
+        next[intelligenceRecordGroups[0].key] = true;
+      }
+      return next;
+    });
+  }, [intelligenceRecordGroups]);
 
   const config = useMemo<CrawlConfig>(
     () => ({
@@ -358,6 +457,19 @@ export default function CrawlPage() {
     () => records.filter((record) => selectedIds.includes(record.id)),
     [records, selectedIds],
   );
+  const resultUrls = useMemo(
+    () => uniqueStrings(records.map((record) => extractRecordUrl(record))),
+    [records],
+  );
+  const selectedResultUrls = useMemo(
+    () => uniqueStrings(selectedRecords.map((record) => extractRecordUrl(record))),
+    [selectedRecords],
+  );
+  const listingRun = useMemo(() => isListingRun(run), [run]);
+  const batchFromResultsUrls = selectedResultUrls.length ? selectedResultUrls : resultUrls;
+  const batchFromResultsLabel = selectedResultUrls.length
+    ? `Batch Crawl Selected (${selectedResultUrls.length})`
+    : `Batch Crawl Results (${resultUrls.length})`;
 
   const summary = {
     records: Number(run?.result_summary?.record_count ?? records.length) || 0,
@@ -416,12 +528,13 @@ export default function CrawlPage() {
     }
   }
 
-  async function commitSelectedCandidates() {
+  async function commitSelectedCandidates(candidateKeys?: string[]) {
     if (!runId) {
       return;
     }
+    const allowedKeys = candidateKeys ? new Set(candidateKeys) : null;
     const selectedItems = intelligenceCandidates
-      .filter((item) => selectedCandidateKeys[item.key])
+      .filter((item) => (allowedKeys ? allowedKeys.has(item.key) : selectedCandidateKeys[item.key]))
       .map((item) => ({
         record_id: item.recordId,
         field_name: (candidateEdits[item.key]?.fieldName ?? item.displayLabel).trim(),
@@ -442,6 +555,30 @@ export default function CrawlPage() {
     } finally {
       setCommitPending(false);
     }
+  }
+
+  function setGroupCandidateSelection(group: IntelligenceRecordGroup, checked: boolean) {
+    setSelectedCandidateKeys((current) => {
+      const next = { ...current };
+      for (const item of group.items) {
+        if (checked) {
+          next[item.key] = true;
+        } else {
+          delete next[item.key];
+        }
+      }
+      return next;
+    });
+  }
+
+  async function commitRecordGroup(group: IntelligenceRecordGroup) {
+    const selectedKeys = group.items.filter((item) => selectedCandidateKeys[item.key]).map((item) => item.key);
+    if (selectedKeys.length) {
+      await commitSelectedCandidates(selectedKeys);
+      return;
+    }
+    setSelectedCandidateKeys((current) => ({ ...current, ...Object.fromEntries(group.items.map((item) => [item.key, true])) }));
+    await commitSelectedCandidates(group.items.map((item) => item.key));
   }
 
   function resetToConfig() {
@@ -500,10 +637,8 @@ export default function CrawlPage() {
     }
   }
 
-  function triggerBulkCrawlSelected() {
-    const urls = selectedRecords
-      .map((record) => extractRecordUrl(record))
-      .filter((value): value is string => Boolean(value));
+  function triggerBatchCrawlFromResults() {
+    const urls = batchFromResultsUrls;
     if (!urls.length) {
       return;
     }
@@ -514,10 +649,10 @@ export default function CrawlPage() {
         additional_fields: additionalFields,
       }),
     );
-    setCrawlTab("category");
-    setCategoryMode("bulk");
+    setCrawlTab("pdp");
+    setPdpMode("batch");
     setBulkUrls(urls.join("\n"));
-    setBulkBanner(`${urls.length} URLs loaded from previous crawl results.`);
+    setBulkBanner(`${urls.length} URLs loaded into PDP batch crawl.`);
     setCrawlPhase("config");
     router.replace("/crawl");
   }
@@ -545,12 +680,6 @@ export default function CrawlPage() {
             {crawlPhase !== "config" ? (
               <Button variant="accent" type="button" onClick={resetToConfig}>
                 New Crawl
-              </Button>
-            ) : null}
-            {crawlPhase === "complete" && crawlTab === "category" && selectedRecords.length ? (
-              <Button variant="secondary" type="button" onClick={triggerBulkCrawlSelected}>
-                <ArrowRightCircle className="size-3.5" />
-                Bulk Crawl Selected
               </Button>
             ) : null}
           </div>
@@ -851,10 +980,10 @@ export default function CrawlPage() {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {crawlTab === "category" && selectedRecords.length ? (
-                <Button variant="accent" type="button" onClick={triggerBulkCrawlSelected}>
+              {listingRun && batchFromResultsUrls.length ? (
+                <Button variant="accent" type="button" onClick={triggerBatchCrawlFromResults}>
                   <ArrowRightCircle className="size-3.5" />
-                  Bulk Crawl ({selectedRecords.length})
+                  {batchFromResultsLabel}
                 </Button>
               ) : null}
               <a href={api.exportCsv(runId as number)} target="_blank" rel="noreferrer">
@@ -872,20 +1001,19 @@ export default function CrawlPage() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-[var(--radius-lg)] border border-border bg-panel px-4 py-3">
-            <Metric label="Records" value={summary.records} />
-            <Metric label="Duration" value={summary.duration} />
-            <Metric label="Pages" value={summary.pages} />
-            <Metric label="Fields" value={summary.fields} />
-            <Metric label="Status" value={run?.status.replace(/_/g, " ") ?? "--"} />
-          </div>
-
           <div className="space-y-4">
-            <div className="flex items-center gap-0 border-b border-border">
-              <OutputTab active={outputTab === "table"} onClick={() => setOutputTab("table")}>Table</OutputTab>
-              <OutputTab active={outputTab === "json"} onClick={() => setOutputTab("json")}>JSON</OutputTab>
-              <OutputTab active={outputTab === "intelligence"} onClick={() => setOutputTab("intelligence")}>Intelligence</OutputTab>
-              <OutputTab active={outputTab === "logs"} onClick={() => setOutputTab("logs")}>Logs</OutputTab>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border">
+              <div className="flex items-center gap-0">
+                <OutputTab active={outputTab === "table"} onClick={() => setOutputTab("table")}>
+                  {`Table (${summary.fields})`}
+                </OutputTab>
+                <OutputTab active={outputTab === "json"} onClick={() => setOutputTab("json")}>JSON</OutputTab>
+                <OutputTab active={outputTab === "intelligence"} onClick={() => setOutputTab("intelligence")}>Intelligence</OutputTab>
+                <OutputTab active={outputTab === "logs"} onClick={() => setOutputTab("logs")}>Logs</OutputTab>
+              </div>
+              <div className="pb-2 text-sm text-muted">
+                Time Taken: <span className="font-semibold text-foreground">{summary.duration}</span>
+              </div>
             </div>
 
             {outputTab === "table" ? (
@@ -911,13 +1039,6 @@ export default function CrawlPage() {
                 ) : (
                   <div className="grid min-h-40 place-items-center rounded-[10px] border border-dashed border-border bg-panel/60 text-sm text-muted">No records captured yet.</div>
                 )}
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="secondary" type="button" disabled={!selectedRecords.length} onClick={triggerBulkCrawlSelected}>
-                    <ArrowRightCircle className="size-3.5" />
-                    Bulk Crawl Selected
-                  </Button>
-                  <Badge tone="neutral">{selectedRecords.length} selected</Badge>
-                </div>
               </div>
             ) : null}
 
@@ -976,96 +1097,143 @@ export default function CrawlPage() {
                 {commitError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{commitError}</div> : null}
                 {intelligenceCandidates.length ? (
                   <div className="space-y-4">
-                    <div className="overflow-auto rounded-md border border-border">
-                      <table className="compact-data-table min-w-[920px]">
-                        <thead>
-                          <tr>
-                            <th className="w-10">
-                              <input
-                                type="checkbox"
-                                checked={intelligenceCandidates.length > 0 && intelligenceCandidates.every((item) => selectedCandidateKeys[item.key])}
-                                onChange={(event) => {
-                                  if (event.target.checked) {
-                                    setSelectedCandidateKeys(Object.fromEntries(intelligenceCandidates.map((item) => [item.key, true])));
-                                    return;
-                                  }
-                                  setSelectedCandidateKeys({});
-                                }}
-                              />
-                            </th>
-                            <th className="w-[240px]">Field</th>
-                            <th>Value</th>
-                          </tr>
-                        </thead>
-                      </table>
+                    <div className="flex items-center gap-2 rounded-md border border-border bg-panel px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={intelligenceCandidates.length > 0 && intelligenceCandidates.every((item) => selectedCandidateKeys[item.key])}
+                        onChange={(event) => {
+                          if (event.target.checked) {
+                            setSelectedCandidateKeys(Object.fromEntries(intelligenceCandidates.map((item) => [item.key, true])));
+                            return;
+                          }
+                          setSelectedCandidateKeys({});
+                        }}
+                      />
+                      <span className="text-sm text-muted">Select all visible rows</span>
                     </div>
-                    {intelligenceGroups.map(([groupLabel, items]) => (
-                      <div key={groupLabel} className="overflow-hidden rounded-md border border-border">
-                        <div className="border-b border-border bg-panel px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted">
-                          {groupLabel}
+                    {intelligenceRecordGroups.map((group) => {
+                      const selectedCount = group.items.filter((item) => selectedCandidateKeys[item.key]).length;
+                      const expanded = Boolean(expandedIntelligenceGroups[group.key]);
+                      return (
+                        <div key={group.key} className="overflow-hidden rounded-md border border-border">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedIntelligenceGroups((current) => ({ ...current, [group.key]: !expanded }))}
+                            className="flex w-full items-start justify-between gap-3 bg-panel px-4 py-3 text-left"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm font-semibold text-foreground">{group.recordTitle}</div>
+                              <div className="truncate text-xs text-muted">{group.recordUrl}</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Badge tone="neutral">{group.items.length} rows</Badge>
+                              <Badge tone="neutral">{selectedCount} selected</Badge>
+                              <ChevronDown className={cn("size-4 shrink-0 transition-transform", expanded ? "rotate-180" : "")} />
+                            </div>
+                          </button>
+                          {expanded ? (
+                            <div className="space-y-3 border-t border-border bg-[var(--bg-elevated)] p-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  variant="ghost"
+                                  type="button"
+                                  onClick={() => setGroupCandidateSelection(group, selectedCount !== group.items.length)}
+                                >
+                                  {selectedCount === group.items.length ? "Unselect Link" : "Select Link"}
+                                </Button>
+                                <Button
+                                  variant="accent"
+                                  type="button"
+                                  onClick={() => void commitRecordGroup(group)}
+                                  disabled={commitPending}
+                                >
+                                  {commitPending ? "Saving..." : "Save Link"}
+                                </Button>
+                              </div>
+                              <div className="overflow-auto rounded-md border border-border">
+                                <table className="compact-data-table min-w-[1080px]">
+                                  <thead>
+                                    <tr>
+                                      <th className="w-10" />
+                                      <th className="w-[220px]">Field</th>
+                                      <th className="w-[160px]">Section</th>
+                                      <th>Value</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {group.items.map((item) => {
+                                      const editedFieldName = candidateEdits[item.key]?.fieldName ?? item.displayLabel;
+                                      const editedValue = candidateEdits[item.key]?.value ?? presentCandidateValue(item.value);
+                                      return (
+                                        <tr key={item.key}>
+                                          <td className="w-10">
+                                            <input
+                                              type="checkbox"
+                                              checked={Boolean(selectedCandidateKeys[item.key])}
+                                              onChange={(event) => {
+                                                const checked = event.target.checked;
+                                                setSelectedCandidateKeys((current) => {
+                                                  if (checked) {
+                                                    return { ...current, [item.key]: true };
+                                                  }
+                                                  const next = { ...current };
+                                                  delete next[item.key];
+                                                  return next;
+                                                });
+                                              }}
+                                            />
+                                          </td>
+                                          <td className="w-[220px]" title={editedFieldName}>
+                                            <Input
+                                              value={editedFieldName}
+                                              onChange={(event) => setCandidateEdits((current) => ({
+                                                ...current,
+                                                [item.key]: {
+                                                  fieldName: event.target.value,
+                                                  value: current[item.key]?.value,
+                                                },
+                                              }))}
+                                              className="h-8 border-0 bg-transparent px-0 text-sm shadow-none"
+                                            />
+                                          </td>
+                                          <td className="text-xs text-muted">{item.groupLabel || "General"}</td>
+                                          <td title={editedValue}>
+                                            <div className="flex items-center gap-2">
+                                              <Input
+                                                value={editedValue}
+                                                onChange={(event) => setCandidateEdits((current) => ({
+                                                  ...current,
+                                                  [item.key]: {
+                                                    fieldName: current[item.key]?.fieldName ?? item.displayLabel,
+                                                    value: event.target.value,
+                                                  },
+                                                }))}
+                                                className="h-8 border-0 bg-transparent px-0 font-mono text-sm shadow-none"
+                                              />
+                                              {item.href ? (
+                                                <a
+                                                  href={item.href}
+                                                  target="_blank"
+                                                  rel="noreferrer"
+                                                  className="shrink-0 text-xs text-accent underline-offset-2 hover:underline"
+                                                  title={item.href}
+                                                >
+                                                  Open
+                                                </a>
+                                              ) : null}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
-                        <div className="overflow-auto">
-                          <table className="compact-data-table min-w-[920px]">
-                            <tbody>
-                              {items.map((item) => {
-                                const editedFieldName = candidateEdits[item.key]?.fieldName ?? item.displayLabel;
-                                const editedValue = candidateEdits[item.key]?.value ?? presentCandidateValue(item.value);
-                                return (
-                                  <tr key={item.key}>
-                                    <td className="w-10">
-                                      <input
-                                        type="checkbox"
-                                        checked={Boolean(selectedCandidateKeys[item.key])}
-                                        onChange={(event) => setSelectedCandidateKeys((current) => ({ ...current, [item.key]: event.target.checked }))}
-                                      />
-                                    </td>
-                                    <td className="w-[240px]" title={editedFieldName}>
-                                      <Input
-                                        value={editedFieldName}
-                                        onChange={(event) => setCandidateEdits((current) => ({
-                                          ...current,
-                                          [item.key]: {
-                                            fieldName: event.target.value,
-                                            value: current[item.key]?.value,
-                                          },
-                                        }))}
-                                        className="h-8 border-0 bg-transparent px-0 text-sm shadow-none"
-                                      />
-                                    </td>
-                                    <td title={editedValue}>
-                                      <div className="flex items-center gap-2">
-                                        <Input
-                                          value={editedValue}
-                                          onChange={(event) => setCandidateEdits((current) => ({
-                                            ...current,
-                                            [item.key]: {
-                                              fieldName: current[item.key]?.fieldName ?? item.displayLabel,
-                                              value: event.target.value,
-                                            },
-                                          }))}
-                                          className="h-8 border-0 bg-transparent px-0 font-mono text-sm shadow-none"
-                                        />
-                                        {item.href ? (
-                                          <a
-                                            href={item.href}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="shrink-0 text-xs text-accent underline-offset-2 hover:underline"
-                                            title={item.href}
-                                          >
-                                            Open
-                                          </a>
-                                        ) : null}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-sm text-muted">No field candidates are available for this run.</div>
@@ -1142,6 +1310,10 @@ function uniqueNumbers(values: number[]) {
   return Array.from(new Set(values));
 }
 
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
 function normalizeField(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "_");
 }
@@ -1161,6 +1333,39 @@ function clampNumber(value: string, min: number, max: number, fallback: number) 
 
 function extractRecordUrl(record: CrawlRecord) {
   return stringifyCell(record.data?.url ?? record.raw_data?.url ?? record.source_url).trim();
+}
+
+function isListingRun(run?: CrawlRun) {
+  return inferRunModule(run) === "category";
+}
+
+function inferRunModule(run?: CrawlRun): CrawlTab | null {
+  if (!run) {
+    return null;
+  }
+  const settings = run.settings && typeof run.settings === "object" ? run.settings : {};
+  const configuredModule = typeof settings.crawl_module === "string" ? settings.crawl_module : "";
+  if (configuredModule === "category" || configuredModule === "pdp") {
+    return configuredModule;
+  }
+
+  const configuredMode = typeof settings.crawl_mode === "string" ? settings.crawl_mode : "";
+  if (configuredMode === "bulk" || configuredMode === "sitemap") {
+    return "category";
+  }
+  if (configuredMode === "batch" || configuredMode === "csv") {
+    return "pdp";
+  }
+
+  const surface = String(run.surface || "").toLowerCase();
+  if (surface.includes("listing")) {
+    return "category";
+  }
+  if (surface.includes("detail")) {
+    return "pdp";
+  }
+
+  return null;
 }
 
 function stringifyCell(value: unknown) {
@@ -1261,10 +1466,10 @@ function cleanRecord(record: CrawlRecord) {
 
 function logTone(level: string) {
   const normalized = normalizeLogLevel(level);
-  if (normalized === "WARN") return "border-warning/30 bg-warning/12 text-warning";
-  if (normalized === "ERROR") return "border-danger/30 bg-danger/12 text-danger";
-  if (normalized === "PROXY") return "border-accent/30 bg-accent/10 text-accent";
-  return "border-border bg-[var(--bg-elevated)] text-[var(--text-secondary)]";
+  if (normalized === "WARN") return "border-transparent bg-transparent text-warning";
+  if (normalized === "ERROR") return "border-transparent bg-transparent text-danger";
+  if (normalized === "PROXY") return "border-transparent bg-transparent text-accent";
+  return "border-transparent bg-transparent text-[var(--text-secondary)]";
 }
 
 function normalizeLogLevel(level: string) {
@@ -1403,7 +1608,7 @@ const LogTerminal = memo(function LogTerminal({
       {logs.length ? logs.map((log) => (
         <div key={log.id} className="font-mono text-[12px] leading-6">
           <span className="text-muted">[{formatTimestamp(log.created_at)}]</span>{" "}
-          <span className={cn("inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.08em]", logTone(log.level))}>
+          <span className={cn("inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.08em]", logTone(log.level))}>
             {normalizeLogLevel(log.level)}
           </span>{" "}
           <span>{log.message}</span>
@@ -1489,8 +1694,8 @@ function SettingSection({
             {icon}
           </div>
           <div className="min-w-0">
-            <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)]">{label}</div>
-            <div className="text-sm text-[var(--text-primary)]">{description}</div>
+            <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--text-primary)]">{label}</div>
+            <div className="text-sm text-[var(--text-secondary)]">{description}</div>
           </div>
         </div>
         <Toggle checked={checked} onChange={onChange} ariaLabel={label} />
@@ -1542,7 +1747,7 @@ function SliderRow({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm">{label}</div>
+        <div className="text-sm text-[var(--text-secondary)]">{label}</div>
         <button type="button" onClick={onReset} className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"><RotateCcw className="size-3.5" />Reset</button>
       </div>
       <div className="flex items-center gap-3">
@@ -1719,15 +1924,6 @@ function OutputTab({
     >
       {children}
     </button>
-  );
-}
-
-function Metric({ label, value }: Readonly<{ label: string; value: string | number }>) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--text-secondary)]">{label}</div>
-      <div className="text-[20px] font-bold tracking-[var(--tracking-tight)] text-[var(--text-primary)]">{value}</div>
-    </div>
   );
 }
 
