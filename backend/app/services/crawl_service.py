@@ -39,7 +39,7 @@ from app.services.extract.service import coerce_field_candidate_value, extract_c
 from app.services.extract.spa_pruner import prune_spa_state
 from app.services.knowledge_base.store import get_canonical_fields
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
-from app.services.normalizers.field_normalizers import normalize_value
+from app.services.normalizers.field_normalizers import extract_currency_hint, normalize_value
 from app.services.pipeline_config import MIN_REQUEST_DELAY_MS, VERDICT_CORE_FIELDS_DETAIL, VERDICT_CORE_FIELDS_LISTING
 from app.services.domain_utils import normalize_domain
 from app.services.requested_field_policy import expand_requested_fields
@@ -375,10 +375,11 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         sleep_ms = settings.get("sleep_ms", 0)
 
         total_urls = len(url_list)
-        start_index = min(int((run.result_summary or {}).get("processed_urls", 0) or 0), total_urls)
+        persisted_summary = dict(run.result_summary or {})
+        start_index = min(int(persisted_summary.get("completed_urls", 0) or 0), total_urls)
         persisted_record_count = await _count_run_records(session, run.id)
-        url_verdicts: list[str] = []
-        verdict_counts: dict[str, int] = dict((run.result_summary or {}).get("verdict_counts") or {})
+        url_verdicts: list[str] = list(persisted_summary.get("url_verdicts") or [])[:start_index]
+        verdict_counts: dict[str, int] = dict(persisted_summary.get("verdict_counts") or {})
 
         for idx in range(start_index, total_urls):
             url = url_list[idx]
@@ -422,7 +423,10 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 sleep_ms=sleep_ms,
             )
             persisted_record_count += len(records)
-            url_verdicts.append(verdict)
+            if idx < len(url_verdicts):
+                url_verdicts[idx] = verdict
+            else:
+                url_verdicts.append(verdict)
             verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
 
             # Update progress
@@ -436,6 +440,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 "processed_urls": idx + 1,
                 "completed_urls": idx + 1,
                 "remaining_urls": max(total_urls - (idx + 1), 0),
+                "url_verdicts": url_verdicts,
                 "verdict_counts": verdict_counts,
             }
             await session.commit()
@@ -644,9 +649,9 @@ async def _process_json_response(
         if len(saved) >= max_records:
             break
         public_fields = _public_record_fields(raw_record)
-        normalized = {k: normalize_value(k, v) for k, v in public_fields.items()}
+        normalized = _normalize_record_fields(public_fields)
         raw_data = _raw_record_payload(raw_record)
-        requested_coverage = _requested_field_coverage(public_fields, requested_fields)
+        requested_coverage = _requested_field_coverage(normalized, requested_fields)
         db_record = CrawlRecord(
             run_id=run.id,
             source_url=raw_record.get("url", url),
@@ -726,10 +731,7 @@ async def _extract_listing(
     for raw_record in extracted_records:
         if len(saved) >= max_records:
             break
-        normalized = {
-            k: normalize_value(k, v)
-            for k, v in _public_record_fields(raw_record).items()
-        }
+        normalized = _normalize_record_fields(_public_record_fields(raw_record))
         raw_data = _raw_record_payload(raw_record)
         db_record = CrawlRecord(
             run_id=run.id,
@@ -782,7 +784,6 @@ async def _extract_detail(
         for field, rows in candidates.items()
         if rows and field in persisted_field_names
     }
-    candidate_values = _normalize_detail_candidate_values(candidate_values, url=url)
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
 
     # Build deterministic field discovery summary for all detail fields before any
@@ -820,9 +821,9 @@ async def _extract_detail(
         for raw_record in extracted_records[:1]:
             merged_record = _merge_record_fields(raw_record, candidate_values)
             public_fields = _public_record_fields(merged_record)
-            normalized = {k: normalize_value(k, v) for k, v in public_fields.items()}
+            normalized = _normalize_record_fields(public_fields)
             raw_data = _raw_record_payload(merged_record)
-            requested_coverage = _requested_field_coverage(public_fields, additional_fields)
+            requested_coverage = _requested_field_coverage(normalized, additional_fields)
             db_record = CrawlRecord(
                 run_id=run.id,
                 source_url=url,
@@ -847,16 +848,19 @@ async def _extract_detail(
     elif candidate_values or source_trace.get("llm_cleanup_suggestions"):
         # Build record from candidates (detail page, no adapter)
         normalized = {
-            field: normalize_value(field, value)
-            for field, value in candidate_values.items()
+            field: value
+            for field, value in _normalize_record_fields(candidate_values).items()
         }
         raw_data = candidate_values
-        requested_coverage = _requested_field_coverage(candidate_values, additional_fields)
+        requested_coverage = _requested_field_coverage(normalized, additional_fields)
         discovered_data = _compact_dict({
+            "open_graph": manifest.open_graph or None,
             "json_ld": manifest.json_ld or None,
             "next_data": manifest.next_data,
             "_hydrated_states": manifest._hydrated_states or None,
+            "embedded_json": manifest.embedded_json or None,
             "microdata": manifest.microdata or None,
+            "hidden_dom": manifest.hidden_dom or None,
             "tables": manifest.tables or None,
             "semantic": semantic or None,
             "requested_field_coverage": requested_coverage or None,
@@ -982,7 +986,18 @@ async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -
     from app.core.database import SessionLocal
 
     async with SessionLocal() as recovery:
-        await _persist_failure_state(recovery, run_id, error_msg)
+        run = await recovery.get(CrawlRun, run_id)
+        if run is None:
+            return
+        result_summary = dict(run.result_summary or {})
+        result_summary["error"] = error_msg
+        result_summary["progress"] = result_summary.get("progress", 0)
+        result_summary["extraction_verdict"] = "error"
+        if normalize_status(run.status) not in TERMINAL_STATUSES:
+            update_run_status(run, CrawlStatus.FAILED)
+        run.result_summary = result_summary
+        recovery.add(CrawlLog(run_id=run.id, level="error", message=f"Pipeline failed: {error_msg}"))
+        await recovery.commit()
 
 
 async def _persist_failure_state(session: AsyncSession, run_id: int, error_msg: str) -> None:
@@ -1037,6 +1052,20 @@ def _public_record_fields(record: dict) -> dict:
         for key, value in record.items()
         if not str(key).startswith("_")
     }
+
+
+def _normalize_record_fields(record: dict[str, object]) -> dict[str, object]:
+    normalized = _compact_dict({
+        key: normalize_value(key, value)
+        for key, value in record.items()
+    })
+    if not str(normalized.get("currency") or "").strip():
+        for field_name in ("price", "sale_price", "original_price", "salary"):
+            currency_hint = extract_currency_hint(normalized.get(field_name))
+            if currency_hint:
+                normalized["currency"] = currency_hint
+                break
+    return normalized
 
 
 def _normalize_committed_field_name(value: object) -> str:
@@ -1584,7 +1613,8 @@ def _build_field_discovery_summary(
 
     for field_name in sorted(set(candidates.keys()) | set(candidate_values.keys()) | target_fields):
         rows = candidates.get(field_name, [])
-        chosen = candidate_values.get(field_name, rows[0]["value"] if rows else None)
+        first_row_value = rows[0].get("value") if rows and isinstance(rows[0], dict) else None
+        chosen = candidate_values.get(field_name, first_row_value)
         tier = "canonical" if field_name in target_fields else "intelligence"
         if not rows and field_name in target_fields and chosen in (None, "", [], {}):
             missing.append(field_name)

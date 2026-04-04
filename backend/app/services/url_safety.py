@@ -4,7 +4,6 @@ import asyncio
 import ipaddress
 import re
 import socket
-import subprocess
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -65,7 +64,7 @@ async def validate_public_target(url: str) -> ValidatedTarget:
         )
 
     port = _target_port(parsed)
-    resolved_ips = await asyncio.to_thread(_resolve_host_ips, hostname, port)
+    resolved_ips = await _resolve_host_ips(hostname, port)
     validated_ips: list[str] = []
     for ip_text in resolved_ips:
         ip_value = _parse_ip(ip_text)
@@ -83,22 +82,23 @@ async def validate_public_target(url: str) -> ValidatedTarget:
     )
 
 
-def _resolve_host_ips(hostname: str, port: int) -> list[str]:
+async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
     attempts = max(1, int(DNS_RESOLUTION_RETRIES) + 1)
     for attempt in range(1, attempts + 1):
         try:
-            records = socket.getaddrinfo(
+            records = await asyncio.to_thread(
+                socket.getaddrinfo,
                 hostname,
                 port,
-                family=socket.AF_UNSPEC,
-                type=socket.SOCK_STREAM,
+                socket.AF_UNSPEC,
+                socket.SOCK_STREAM,
             )
             break
         except socket.gaierror as exc:
             if attempt < attempts:
-                time.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
+                await asyncio.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
                 continue
-            fallback = _resolve_host_ips_via_nslookup(hostname)
+            fallback = await _resolve_host_ips_via_nslookup(hostname)
             if fallback:
                 return fallback
             raise ValueError(f"Target host could not be resolved: {hostname}") from exc
@@ -115,23 +115,37 @@ def _resolve_host_ips(hostname: str, port: int) -> list[str]:
     return resolved
 
 
-def _resolve_host_ips_via_nslookup(hostname: str) -> list[str]:
+async def _resolve_host_ips_via_nslookup(hostname: str) -> list[str]:
     if hostname and hostname[0] == "-":
         raise ValueError(f"Target host is not allowed: {hostname}")
     resolved: list[str] = []
     seen: set[str] = set()
     for record_type in ("A", "AAAA"):
+        process = None
         try:
-            completed = subprocess.run(
-                ["nslookup", f"-type={record_type}", hostname],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
+            process = await asyncio.create_subprocess_exec(
+                "nslookup",
+                f"-type={record_type}",
+                hostname,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except (OSError, subprocess.SubprocessError):
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            if process is not None:
+                process.kill()
+                await process.wait()
             continue
-        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        except OSError:
+            continue
+        output = "\n".join(
+            part
+            for part in (
+                stdout.decode(errors="ignore") if stdout else "",
+                stderr.decode(errors="ignore") if stderr else "",
+            )
+            if part
+        )
         for ip_text in _parse_nslookup_addresses(output):
             if ip_text in seen:
                 continue
@@ -181,7 +195,7 @@ def _raise_if_non_public_ip(
         or ip_value.is_loopback
         or ip_value.is_link_local
         or ip_value.is_reserved
-        or _CGNAT_NETWORK.supernet_of(ipaddress.ip_network(f"{ip_value}/{ip_value.max_prefixlen}"))
+        or (isinstance(ip_value, ipaddress.IPv4Address) and ip_value in _CGNAT_NETWORK)
     ):
         raise ValueError(f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}")
     if ip_value.is_global:

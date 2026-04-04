@@ -467,6 +467,8 @@ def test_extract_semantic_specifications_filters_obvious_noise_rows():
     <table>
       <tr><th>Qty</th><td>Discount</td></tr>
       <tr><th>Play Video</th><td>Watch the demo</td></tr>
+      <tr><th>Total</th><td>$9.99</td></tr>
+      <tr><th>Pack 1</th><td>1.00 kg</td></tr>
       <tr><th>Product Weight</th><td>2.2g</td></tr>
     </table>
     </body></html>
@@ -483,6 +485,8 @@ def test_extract_semantic_specifications_filters_obvious_noise_rows():
     semantic = trace["semantic"]
     assert "qty" not in semantic["specifications"]
     assert "play_video" not in semantic["specifications"]
+    assert "total" not in semantic["specifications"]
+    assert "pack_1" not in semantic["specifications"]
     assert semantic["specifications"]["product_weight"] == "2.2g"
 
 
@@ -675,6 +679,38 @@ def test_extract_dedupes_exact_duplicate_rows_but_preserves_distinct_same_source
     assert json_ld_values == ["Repeated Title", "Different Title"]
 
 
+def test_extract_dedupes_same_value_across_sources_and_preserves_supporting_sources():
+    html = "<html><body>test</body></html>"
+    manifest = _manifest(
+        adapter_data=[{"title": "Shared Title"}],
+        json_ld=[{"title": "Shared Title"}],
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert len(candidates["title"]) == 1
+    assert candidates["title"][0]["value"] == "Shared Title"
+    assert candidates["title"][0]["source"] == "adapter, json_ld"
+    assert candidates["title"][0]["sources"] == ["adapter", "json_ld"]
+
+
+def test_extract_returns_empty_candidates_for_listing_surfaces():
+    candidates, trace = extract_candidates(
+        "https://example.com/category",
+        "ecommerce_listing",
+        "<html></html>",
+        _manifest(),
+        [],
+    )
+    assert candidates == {}
+    assert trace["surface_gate"] == "listing"
+
+
 def test_extract_priority_order():
     """Adapter data should appear before JSON-LD in candidate list."""
     html = "<html><body><h1>DOM</h1></body></html>"
@@ -707,7 +743,7 @@ def test_extract_respects_xpath_contract():
             [],
             [{"field_name": "title", "xpath": "//h1/text()", "regex": ""}],
         )
-    assert candidates["title"][0]["source"] == "contract_xpath"
+    assert "contract_xpath" in candidates["title"][0]["sources"]
     assert candidates["title"][0]["value"] == "XPath Title"
 
 
@@ -741,7 +777,7 @@ def test_extract_prefers_saved_xpath_selector_defaults():
             manifest,
             [],
         )
-    selector_rows = [row for row in candidates["title"] if row["source"] == "selector"]
+    selector_rows = [row for row in candidates["title"] if "selector" in row.get("sources", [])]
     assert selector_rows
     assert selector_rows[0]["value"] == "Saved XPath Title"
     assert selector_rows[0]["xpath"] == "//h1/text()"

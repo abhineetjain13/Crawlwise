@@ -1,4 +1,5 @@
 from typing import Any
+import re
 
 # Keys that typically contain boilerplate framework structure, tracking, or UI state
 # rather than product or listing data.
@@ -18,6 +19,8 @@ KNOWN_NOISE_KEYS = {
     # Specific DigiKey/E-commerce noise
     "_links", "_actions", "omniture", "adobe", "everest", "ensighten", "marketing", "promotion", "banner", "popup"
 }
+_ZERO_VECTOR_RE = re.compile(r"^\[?\s*(?:0\s*,\s*){6,}0\s*\]?$")
+_FUNCTION_BODY_RE = re.compile(r"\bfunction\s*\([^)]*\)\s*\{", re.IGNORECASE)
 
 
 def prune_spa_state(data: Any, max_string_len: int = 2000) -> Any:
@@ -51,6 +54,8 @@ def prune_spa_state(data: Any, max_string_len: int = 2000) -> Any:
         return pruned_dict
 
     elif isinstance(data, list):
+        if data and all(item == 0 for item in data):
+            return None
         pruned_list = []
         for item in data:
             child_pruned = prune_spa_state(item, max_string_len)
@@ -59,6 +64,10 @@ def prune_spa_state(data: Any, max_string_len: int = 2000) -> Any:
         return pruned_list
 
     elif isinstance(data, str):
+        if _FUNCTION_BODY_RE.search(data):
+            return None
+        if _ZERO_VECTOR_RE.fullmatch(data.strip()):
+            return None
         # Drop likely base64 or massive raw HTML chunks injected into state
         if len(data) > max_string_len:
             lowered = data.lower()

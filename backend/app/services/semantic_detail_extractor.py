@@ -341,6 +341,8 @@ def _should_keep_specification(key: str, value: str, *, preserve_visible: bool =
         return False
     if lowered_key in SPEC_DROP_LABELS:
         return False
+    if re.fullmatch(r"pack[_-]?\d+", lowered_key):
+        return False
     if re.fullmatch(r"\d+(?:[_-]\d+)*", lowered_key):
         return False
     if any(token in lowered_key for token in SPEC_LABEL_BLOCK_PATTERNS):

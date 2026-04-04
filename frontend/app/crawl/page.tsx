@@ -101,7 +101,6 @@ export default function CrawlPage() {
   const [configError, setConfigError] = useState("");
   const [launchError, setLaunchError] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [jsonCompact, setJsonCompact] = useState(false);
   const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
   const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
   const [bulkBanner, setBulkBanner] = useState("");
@@ -188,7 +187,6 @@ export default function CrawlPage() {
     }
 
     setSelectedIds([]);
-    setJsonCompact(false);
     setOutputTab("table");
     setBulkBanner("");
     setRunActionPending(null);
@@ -503,7 +501,6 @@ export default function CrawlPage() {
     setCommitPending(false);
     setSelectedIds([]);
     setOutputTab("table");
-    setJsonCompact(false);
   }
 
   async function runControl(action: "pause" | "resume" | "kill") {
@@ -1043,118 +1040,79 @@ export default function CrawlPage() {
             ) : null}
 
             {outputTab === "json" ? (
-              <Card className="space-y-3 p-4">
-                <div className="label-caps">JSON</div>
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted">Pretty-printed by default.</div>
-                  <div className="flex items-center gap-2">
-                    <Button variant="ghost" type="button" onClick={() => void copyJson(records)}>
+              <div>
+                <div className="relative">
+                  <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      onClick={() => void copyJson(records)}
+                    >
                       <Copy className="size-3.5" />
                       Copy
                     </Button>
-                    <Button variant="secondary" type="button" onClick={() => setJsonCompact((value) => !value)}>
-                      {jsonCompact ? "Pretty" : "Compact"}
-                    </Button>
                   </div>
+                  <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto px-4 pb-4 pt-14 text-[12px]">
+                    {JSON.stringify(records.map(cleanRecord), null, 2)}
+                  </pre>
                 </div>
-                <pre className="crawl-terminal max-h-[480px] overflow-auto text-[12px]">
-                  {jsonCompact ? JSON.stringify(records.map(cleanRecord)) : JSON.stringify(records.map(cleanRecord), null, 2)}
-                </pre>
-              </Card>
+              </div>
             ) : null}
 
             {outputTab === "intelligence" ? (
               <Card className="space-y-4 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone="neutral">
-                      {intelligenceCandidates.length} rows
-                    </Badge>
-                    <Badge tone="neutral">
-                      {Object.values(selectedCandidateKeys).filter(Boolean).length} selected
-                    </Badge>
-                    <Button
-                      variant="ghost"
-                      type="button"
-                      onClick={() => {
-                        setSelectedCandidateKeys({});
-                        setCandidateEdits({});
-                      }}
-                      disabled={!Object.keys(selectedCandidateKeys).length && !Object.keys(candidateEdits).length}
-                    >
-                      Clear
-                    </Button>
-                    <Button
-                      variant="accent"
-                      type="button"
-                      onClick={() => void commitSelectedCandidates()}
-                      disabled={!intelligenceCandidates.some((item) => selectedCandidateKeys[item.key]) || commitPending}
-                    >
-                      {commitPending ? "Saving..." : "Save Selected"}
-                    </Button>
-                  </div>
-                </div>
                 {commitError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{commitError}</div> : null}
                 {intelligenceCandidates.length ? (
                   <div className="space-y-4">
-                    <div className="flex items-center gap-2 rounded-md border border-border bg-panel px-3 py-2">
-                      <input
-                        type="checkbox"
-                        checked={intelligenceCandidates.length > 0 && intelligenceCandidates.every((item) => selectedCandidateKeys[item.key])}
-                        onChange={(event) => {
-                          if (event.target.checked) {
-                            setSelectedCandidateKeys(Object.fromEntries(intelligenceCandidates.map((item) => [item.key, true])));
-                            return;
-                          }
-                          setSelectedCandidateKeys({});
-                        }}
-                      />
-                      <span className="text-sm text-muted">Select all visible rows</span>
-                    </div>
                     {intelligenceRecordGroups.map((group) => {
                       const selectedCount = group.items.filter((item) => selectedCandidateKeys[item.key]).length;
                       const expanded = Boolean(expandedIntelligenceGroups[group.key]);
                       return (
-                        <div key={group.key} className="overflow-hidden rounded-md border border-border">
-                          <button
-                            type="button"
-                            onClick={() => setExpandedIntelligenceGroups((current) => ({ ...current, [group.key]: !expanded }))}
-                            className="flex w-full items-start justify-between gap-3 bg-panel px-4 py-3 text-left"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm font-semibold text-foreground">{group.recordTitle}</div>
-                              <div className="truncate text-xs text-muted">{group.recordUrl}</div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge tone="neutral">{group.items.length} rows</Badge>
-                              <Badge tone="neutral">{selectedCount} selected</Badge>
-                              <ChevronDown className={cn("size-4 shrink-0 transition-transform", expanded ? "rotate-180" : "")} />
-                            </div>
-                          </button>
-                          {expanded ? (
-                            <div className="space-y-3 border-t border-border bg-[var(--bg-elevated)] p-3">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Button
-                                  variant="ghost"
-                                  type="button"
-                                  onClick={() => setGroupCandidateSelection(group, selectedCount !== group.items.length)}
-                                >
-                                  {selectedCount === group.items.length ? "Unselect Link" : "Select Link"}
-                                </Button>
-                                <Button
-                                  variant="accent"
-                                  type="button"
-                                  onClick={() => void commitRecordGroup(group)}
-                                  disabled={commitPending}
-                                >
-                                  {commitPending ? "Saving..." : "Save Link"}
-                                </Button>
+                        <div key={group.key} className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              aria-expanded={expanded}
+                              onClick={() => setExpandedIntelligenceGroups((current) => ({ ...current, [group.key]: !expanded }))}
+                              className="min-w-0 flex flex-1 items-center gap-3 text-left"
+                            >
+                              <div className="min-w-0 flex flex-1 items-center gap-3 overflow-hidden">
+                                <span className="truncate text-sm font-semibold text-foreground">{group.recordTitle}</span>
+                                <span className="truncate text-xs text-muted">{group.recordUrl}</span>
                               </div>
-                              <div className="overflow-auto rounded-md border border-border">
+                              <ChevronDown className={cn("size-4 shrink-0 transition-transform", expanded ? "rotate-180" : "")} />
+                            </button>
+                            <Badge tone="neutral">{group.items.length} rows</Badge>
+                            <Badge tone="neutral">{selectedCount} selected</Badge>
+                            <Button
+                              variant="ghost"
+                              type="button"
+                              onClick={() => setGroupCandidateSelection(group, selectedCount !== group.items.length)}
+                            >
+                              {selectedCount === group.items.length ? "Unselect Link" : "Select Link"}
+                            </Button>
+                            <Button
+                              variant="accent"
+                              type="button"
+                              onClick={() => void commitRecordGroup(group)}
+                              disabled={commitPending}
+                            >
+                              {commitPending ? "Saving..." : "Save Link"}
+                            </Button>
+                          </div>
+                          {expanded ? (
+                            <div className="overflow-auto">
                                 <table className="compact-data-table min-w-[1080px]">
                                   <thead>
                                     <tr>
-                                      <th className="w-10" />
+                                      <th className="w-10">
+                                        <input
+                                          type="checkbox"
+                                          aria-label={`Select all rows for ${group.recordTitle}`}
+                                          checked={group.items.length > 0 && selectedCount === group.items.length}
+                                          onChange={(event) => setGroupCandidateSelection(group, event.target.checked)}
+                                        />
+                                      </th>
                                       <th className="w-[220px]">Field</th>
                                       <th className="w-[160px]">Section</th>
                                       <th>Value</th>
@@ -1228,7 +1186,6 @@ export default function CrawlPage() {
                                     })}
                                   </tbody>
                                 </table>
-                              </div>
                             </div>
                           ) : null}
                         </div>
@@ -1242,9 +1199,9 @@ export default function CrawlPage() {
             ) : null}
 
             {outputTab === "logs" ? (
-              <Card className="space-y-3 p-4">
+              <div>
                 <LogTerminal logs={logs} viewportRef={logViewportRef} />
-              </Card>
+              </div>
             ) : null}
           </div>
         </Card>
@@ -1604,7 +1561,7 @@ const LogTerminal = memo(function LogTerminal({
 }>) {
   const ref = useLogViewport(logs.length, viewportRef);
   return (
-    <div ref={ref} className="crawl-terminal max-h-[320px] min-h-[260px] space-y-1.5" role="log" aria-live={live ? "polite" : "off"} aria-atomic="false">
+    <div ref={ref} className="crawl-terminal min-h-[50vh] max-h-[72vh] space-y-1.5 overflow-y-auto" role="log" aria-live={live ? "polite" : "off"} aria-atomic="false">
       {logs.length ? logs.map((log) => (
         <div key={log.id} className="font-mono text-[12px] leading-6">
           <span className="text-muted">[{formatTimestamp(log.created_at)}]</span>{" "}

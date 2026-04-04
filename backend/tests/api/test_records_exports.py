@@ -11,6 +11,7 @@ from app.api.records import (
     EXPORT_TOTAL_HEADER,
     MAX_RECORD_PAGE_SIZE,
     _collect_export_rows,
+    _stream_export_csv,
     export_csv,
     export_json,
 )
@@ -138,3 +139,34 @@ async def test_export_csv_includes_all_rows_and_paging_headers(db_session, test_
     assert response.headers[EXPORT_PAGING_HEADER] == "2"
     assert response.headers[EXPORT_TOTAL_HEADER] == str(total_records)
     assert response.headers[EXPORT_PARTIAL_HEADER] == "false"
+
+
+@pytest.mark.asyncio
+async def test_stream_export_csv_consumes_row_stream_once(monkeypatch):
+    class DummyRow:
+        def __init__(self, data):
+            self.data = data
+
+    monkeypatch.setattr("app.api.records.MAX_RECORD_PAGE_SIZE", 1)
+    page_calls: list[int] = []
+
+    async def _fake_get_run_records(_session, _run_id, page, limit):
+        assert limit == 1
+        page_calls.append(page)
+        if page == 1:
+            return ([DummyRow({"title": "Item 1"})], 2)
+        if page == 2:
+            return ([DummyRow({"title": "Item 2", "description": "Desc 2"})], 2)
+        return ([], 2)
+
+    monkeypatch.setattr("app.api.records.get_run_records", _fake_get_run_records)
+
+    chunks: list[str] = []
+    async for chunk in _stream_export_csv(session=None, run_id=123):
+        chunks.append(chunk)
+
+    payload = "".join(chunks)
+    assert "title" in payload
+    assert "Item 1" in payload
+    assert "Item 2" in payload
+    assert page_calls == [1, 2]

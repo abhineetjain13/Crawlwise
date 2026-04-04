@@ -55,6 +55,13 @@ CURRENCY_CODES = {
 _CURRENCY_TOKEN_RE = re.compile(r"\b[A-Z]{3}\b")
 _CURRENCY_AFTER_AMOUNT_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*([A-Z]{3})\b")
 _CURRENCY_BEFORE_AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*\d[\d,]*(?:\.\d+)?\b")
+_CURRENCY_SYMBOL_MAP = {
+    "$": "USD",
+    "€": "EUR",
+    "£": "GBP",
+    "¥": "JPY",
+    "₹": "INR",
+}
 
 
 def normalize_value(field_name: str, value: object) -> object:
@@ -99,6 +106,28 @@ def normalize_value(field_name: str, value: object) -> object:
             return ""
         return text
     return value
+
+
+def extract_currency_hint(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    upper_text = text.upper()
+    adjacent_matches = [
+        match.group(1)
+        for match in (
+            _CURRENCY_AFTER_AMOUNT_RE.search(upper_text),
+            _CURRENCY_BEFORE_AMOUNT_RE.search(upper_text),
+        )
+        if match and match.group(1) in CURRENCY_CODES
+    ]
+    if adjacent_matches:
+        return adjacent_matches[0]
+    for symbol, currency in _CURRENCY_SYMBOL_MAP.items():
+        if symbol in text:
+            return currency
+    valid_tokens = [token for token in _CURRENCY_TOKEN_RE.findall(upper_text) if token in CURRENCY_CODES]
+    return valid_tokens[0] if valid_tokens else ""
 
 
 def _normalize_image_url(value: str) -> str:

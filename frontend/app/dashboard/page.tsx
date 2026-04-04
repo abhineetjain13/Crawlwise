@@ -153,7 +153,20 @@ export default function DashboardPage() {
       await refetch();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        const message = "Your session expired. Sign in again to continue.";
+        const detail =
+          typeof error.body === "string"
+            ? error.body.trim()
+            : error.body
+              ? JSON.stringify(error.body)
+              : "";
+        const message =
+          detail === "Not authenticated"
+            ? "You are signed out. Sign in as an admin to reset data."
+            : detail === "Invalid token" || detail === "Session expired"
+              ? "Your session expired. Sign in again to continue."
+              : detail
+                ? `Reset failed: ${detail}`
+                : "Your session expired. Sign in again to continue.";
         setResetError(message);
         globalThis.alert(message);
         router.replace("/login");

@@ -254,7 +254,7 @@ async def review_field_candidates(
             "target_fields_json": json.dumps(target_fields),
             "existing_values_json": _truncate_json_literal({field: existing_values.get(field) for field in target_fields}, 2400),
             "candidate_evidence_json": _truncate_json_literal(candidate_evidence, 16000),
-            "discovered_sources_json": _truncate_json_literal(discovered_sources, 48000),
+            "discovered_sources_json": _truncate_json_literal(discovered_sources, 15000),
             "html_snippet": _truncate_html(html_text, 12000),
         },
     )
@@ -457,8 +457,8 @@ def _truncate_json_literal(value: Any, limit: int) -> str:
 
 def _enforce_token_limit(text: str, limit: int = 5600) -> str:
     """Aggressively truncate text if it exceeds a character-based token estimate."""
-    # Rough estimate: 4 chars per token. 5600 tokens ~ 22400 chars.
-    char_limit = limit * 4
+    # Rough estimate for JSON/HTML-heavy prompts: 3 chars per token.
+    char_limit = limit * 3
     if len(text) <= char_limit:
         return text
     return text[:char_limit] + "\n... [TRUNCATED DUE TO TOKEN LIMIT]"

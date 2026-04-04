@@ -56,6 +56,47 @@ def test_extract_products_from_shopify_shape():
     assert records[1]["url"] == "https://store.com/products/nice-pants"
 
 
+def test_extract_products_from_nested_shopify_shape():
+    data = {
+        "products": [
+            {
+                "title": "Cool Shirt",
+                "vendor": "BrandX",
+                "handle": "cool-shirt",
+                "variants": [{"price": "29.99"}],
+                "images": [
+                    {"src": "https://cdn.store.com/a.jpg"},
+                    {"src": "https://cdn.store.com/b.jpg"},
+                ],
+            }
+        ]
+    }
+
+    records = extract_json_listing(data, "https://store.com/products.json")
+
+    assert len(records) == 1
+    assert records[0]["price"] == "29.99"
+    assert records[0]["image_url"] == "https://cdn.store.com/a.jpg"
+    assert records[0]["url"] == "https://store.com/products/cool-shirt"
+
+
+def test_extract_products_derives_url_from_slug_without_treating_slug_as_url_alias():
+    data = {
+        "products": [
+            {
+                "title": "Gloss",
+                "slug": "nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112",
+            }
+        ]
+    }
+
+    records = extract_json_listing(data, "https://www.nykaa.com/makeup/c/12")
+
+    assert len(records) == 1
+    assert records[0]["slug"] == "nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
+    assert records[0]["url"] == "https://www.nykaa.com/nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
+
+
 def test_extract_from_top_level_array():
     """RemoteOK-style top-level array."""
     data = [

@@ -70,6 +70,8 @@ async def wait_for_host_slot(host: str, minimum_interval_ms: int) -> float:
         return 0.0
     while True:
         now = time.monotonic()
+        if normalized_host in _LOCKS:
+            _touch_host(normalized_host, now)
         lock = _get_lock(normalized_host, now)
         async with lock:
             current_lock = _get_lock(normalized_host, time.monotonic())

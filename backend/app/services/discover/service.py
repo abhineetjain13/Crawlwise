@@ -19,8 +19,10 @@ class DiscoveryManifest:
     next_data: dict | None = None                                # rank 3: __NEXT_DATA__
     _hydrated_states: list[dict | list] = field(default_factory=list)
     embedded_json: list[dict | list] = field(default_factory=list)
+    open_graph: dict[str, object] = field(default_factory=dict)
     json_ld: list[dict] = field(default_factory=list)            # rank 4: JSON-LD
     microdata: list[dict] = field(default_factory=list)          # rank 5: Microdata/RDFa
+    hidden_dom: list[dict] = field(default_factory=list)
     tables: list[dict] = field(default_factory=list)  # rank 8: HTML tables with preserved structure
 
     def as_dict(self) -> dict:
@@ -30,8 +32,10 @@ class DiscoveryManifest:
             "next_data": self.next_data,
             "_hydrated_states": self._hydrated_states,
             "embedded_json": self.embedded_json,
+            "open_graph": self.open_graph,
             "json_ld": self.json_ld,
             "microdata": self.microdata,
+            "hidden_dom": self.hidden_dom,
             "tables": self.tables,
         }
 
@@ -72,11 +76,17 @@ def discover_sources(
     # Rank 3c: explicit embedded JSON blobs in scripts/data-* attributes
     manifest.embedded_json = _extract_embedded_json(soup, seen_script_ids=hydrated_script_ids)
 
+    # Rank 3d: Open Graph metadata
+    manifest.open_graph = _extract_open_graph(soup)
+
     # Rank 4: JSON-LD
     manifest.json_ld = _extract_json_ld(soup)
 
     # Rank 5: Microdata / RDFa
     manifest.microdata = _extract_microdata(soup)
+
+    # Rank 6: hidden DOM and hidden structured data
+    manifest.hidden_dom = _extract_hidden_dom(soup)
 
     # Rank 8: HTML tables
     manifest.tables = _extract_tables(soup)
@@ -88,11 +98,27 @@ def _extract_json_ld(soup: BeautifulSoup) -> list[dict]:
     results = []
     for node in soup.select("script[type='application/ld+json']"):
         data = _parse_json_blob(node.string or node.get_text(" ", strip=True) or "")
-        if isinstance(data, list):
-            results.extend(item for item in data if isinstance(item, dict))
-        elif isinstance(data, dict):
-            results.append(data)
+        results.extend(_flatten_json_ld_payloads(data))
     return results
+
+
+def _flatten_json_ld_payloads(payload: dict | list | None) -> list[dict]:
+    flattened: list[dict] = []
+    if isinstance(payload, list):
+        for item in payload:
+            flattened.extend(_flatten_json_ld_payloads(item))
+        return flattened
+    if not isinstance(payload, dict):
+        return flattened
+
+    graph = payload.get("@graph")
+    if isinstance(graph, list):
+        flattened.extend(item for item in graph if isinstance(item, dict))
+        payload = {key: value for key, value in payload.items() if key != "@graph"}
+
+    if any(key != "@context" for key in payload):
+        flattened.append(payload)
+    return flattened
 
 
 def _extract_next_data(soup: BeautifulSoup) -> dict | None:
@@ -181,20 +207,78 @@ def _extract_embedded_json(soup: BeautifulSoup, seen_script_ids: set[str] | None
             if not str(attr_name or "").startswith("data-"):
                 continue
             lowered_name = str(attr_name).lower()
-            if not any(
+            if lowered_name in {"data-testid", "data-test-id"}:
+                continue
+            if isinstance(attr_value, list):
+                raw_value = " ".join(str(part) for part in attr_value)
+            else:
+                raw_value = str(attr_value or "")
+            if not raw_value.strip().startswith(("{", "[")) and not any(
                 lowered_name == f"data-{token}" or lowered_name.endswith(f"-{token}")
                 for token in data_attr_tokens
             ):
+                continue
+            parsed = _parse_json_blob(raw_value)
+            if parsed is not None:
+                _append_unique_blob(blobs, seen, parsed)
+
+    return blobs
+
+
+def _extract_open_graph(soup: BeautifulSoup) -> dict[str, object]:
+    graph: dict[str, object] = {}
+    for node in soup.select("meta[property^='og:'], meta[name^='og:']"):
+        key = str(node.get("property") or node.get("name") or "").strip().lower()
+        value = str(node.get("content") or "").strip()
+        if not key or not value:
+            continue
+        if key in graph:
+            existing = graph[key]
+            if isinstance(existing, list):
+                if value not in existing:
+                    existing.append(value)
+            elif existing != value:
+                graph[key] = [existing, value]
+            continue
+        graph[key] = value
+    return graph
+
+
+def _extract_hidden_dom(soup: BeautifulSoup) -> list[dict]:
+    hidden_nodes = soup.select("[aria-hidden='true'], [hidden], [style*='display:none' i], [style*='visibility:hidden' i]")
+    payloads: list[dict] = []
+    seen: set[str] = set()
+
+    for node in hidden_nodes:
+        text = _clean_text(node.get_text(" ", strip=True))
+        data_attrs: dict[str, object] = {}
+        for attr_name, attr_value in node.attrs.items():
+            if not str(attr_name or "").startswith("data-"):
                 continue
             if isinstance(attr_value, list):
                 raw_value = " ".join(str(part) for part in attr_value)
             else:
                 raw_value = str(attr_value or "")
             parsed = _parse_json_blob(raw_value)
-            if parsed is not None:
-                _append_unique_blob(blobs, seen, parsed)
+            data_attrs[str(attr_name)] = parsed if parsed is not None else raw_value.strip()
 
-    return blobs
+        payload = {
+            "tag": node.name,
+            "text": text or None,
+            "attrs": {
+                "aria-hidden": node.get("aria-hidden"),
+                "hidden": node.has_attr("hidden"),
+                "style": str(node.get("style") or "").strip() or None,
+            },
+            "data_attrs": data_attrs or None,
+        }
+        fingerprint = json.dumps(payload, sort_keys=True, default=str)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        payloads.append(payload)
+
+    return payloads
 
 
 def _normalized_script_identifier(node: Tag, text: str, fingerprint: str | None = None) -> str:
@@ -262,7 +346,7 @@ def _extract_next_bootstrap_children(text: str) -> list[str]:
 def _parse_hydrated_assignment(text: str) -> dict | list | None:
     for marker in HYDRATED_STATE_PATTERNS:
         marker_pattern = rf"(?:window\.|self\.|globalThis\.)?{re.escape(marker)}\s*="
-        match = re.search(marker_pattern, text)
+        match = re.search(marker_pattern, text, flags=re.IGNORECASE)
         if not match:
             continue
         candidate = _extract_assigned_json(text, match.end())

@@ -29,6 +29,25 @@ def test_discover_json_ld_array():
     assert len(manifest.json_ld) == 2
 
 
+def test_discover_json_ld_flattens_graph():
+    html = """
+    <html><body>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {"@type": "BreadcrumbList", "name": "Breadcrumbs"},
+        {"@type": "Product", "name": "Graph Widget"}
+      ]
+    }
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest.json_ld) == 2
+    assert any(item.get("name") == "Graph Widget" for item in manifest.json_ld)
+
+
 def test_discover_json_ld_with_trailing_semicolon():
     html = """
     <html><body>
@@ -90,6 +109,19 @@ def test_discover_hydrated_assignment_preserves_semicolon_in_string():
     assert manifest._hydrated_states[0]["props"]["message"] == "Hydrated;Widget"
 
 
+def test_discover_hydrated_assignment_is_case_insensitive():
+    html = """
+    <html><body>
+    <script>
+    window.__data__ = {"product":{"name":"Case Widget"}};
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest._hydrated_states) == 1
+    assert manifest._hydrated_states[0]["product"]["name"] == "Case Widget"
+
+
 def test_discover_microdata():
     html = """
     <html><body>
@@ -104,6 +136,18 @@ def test_discover_microdata():
     item = manifest.microdata[0]
     assert item["name"] == "Micro Product"
     assert item["price"] == "29.99"
+
+
+def test_discover_open_graph():
+    html = """
+    <html><body>
+    <meta property="og:title" content="OG Widget" />
+    <meta property="og:image" content="https://cdn.example.com/widget.jpg" />
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert manifest.open_graph["og:title"] == "OG Widget"
+    assert manifest.open_graph["og:image"] == "https://cdn.example.com/widget.jpg"
 
 
 def test_discover_rdfa():
@@ -206,6 +250,17 @@ def test_discover_embedded_json_from_data_attribute():
     assert manifest.embedded_json[0]["name"] == "Attr Widget"
 
 
+def test_discover_embedded_json_from_any_json_like_data_attribute():
+    html = """
+    <html><body>
+    <div data-state-json='{"name":"Attr Widget","price":"19.99"}'></div>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest.embedded_json) == 1
+    assert manifest.embedded_json[0]["name"] == "Attr Widget"
+
+
 def test_discover_embedded_json_ignores_unrelated_data_attributes():
     html = """
     <html><body>
@@ -254,3 +309,15 @@ def test_discover_deduplicates_application_json_without_script_id():
 
     assert len(manifest._hydrated_states) == 1
     assert manifest.embedded_json == []
+
+
+def test_discover_hidden_dom_preserves_text_and_data_attributes():
+    html = """
+    <html><body>
+    <div aria-hidden="true" data-state='{"sku":"ABC-123"}'>Hidden specification details</div>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest.hidden_dom) == 1
+    assert manifest.hidden_dom[0]["text"] == "Hidden specification details"
+    assert manifest.hidden_dom[0]["data_attrs"]["data-state"]["sku"] == "ABC-123"

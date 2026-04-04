@@ -89,6 +89,8 @@ async def acquire(
     sleep_ms: int = 0,
 ) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
+    diagnostics_path = _diagnostics_path(run_id, url)
+    _write_diagnostics_stub(run_id, url, diagnostics_path)
     prefer_stealth = host_prefers_stealth(url)
     rotator = ProxyRotator(proxy_list)
     proxy_candidates = rotator.cycle_once()
@@ -124,6 +126,12 @@ async def acquire(
             break
 
     if result is None:
+        _write_failed_diagnostics(
+            run_id,
+            url,
+            diagnostics_path,
+            error_detail="All acquisition attempts failed",
+        )
         if proxy_list:
             raise ProxyPoolExhausted(f"All configured proxies failed for {url}")
         raise RuntimeError(f"Unable to acquire content for {url}")
@@ -136,7 +144,6 @@ async def acquire(
     else:
         path.write_text(result.html, encoding="utf-8")
     _write_network_payloads(run_id, url, result.network_payloads)
-    diagnostics_path = _diagnostics_path(run_id, url)
     _write_diagnostics(run_id, url, result, path, diagnostics_path)
 
     result.artifact_path = str(path)
@@ -334,6 +341,51 @@ def _write_network_payloads(run_id: int, url: str, payloads: list[dict]) -> None
     path.write_text(json.dumps(payloads, indent=2), encoding="utf-8")
 
 
+def _write_diagnostics_stub(run_id: int, url: str, diagnostics_path: Path) -> None:
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "url": url,
+        "status": "started",
+        "artifact_path": None,
+        "network_payload_path": None,
+        "html_length": 0,
+        "json_kind": None,
+        "network_payloads": 0,
+        "blocked": None,
+        "diagnostics": {},
+    }
+    diagnostics_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
+def _write_failed_diagnostics(
+    run_id: int,
+    url: str,
+    diagnostics_path: Path,
+    *,
+    error_detail: str,
+) -> None:
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "url": url,
+        "status": "failed",
+        "artifact_path": None,
+        "network_payload_path": None,
+        "html_length": 0,
+        "json_kind": None,
+        "network_payloads": 0,
+        "blocked": None,
+        "diagnostics": {
+            "error_code": "acquisition_failed",
+            "error_detail": error_detail,
+        },
+    }
+    diagnostics_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
 def _write_diagnostics(
     run_id: int,
     url: str,
@@ -347,6 +399,7 @@ def _write_diagnostics(
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "run_id": run_id,
         "url": url,
+        "status": "completed",
         "method": result.method,
         "content_type": result.content_type,
         "artifact_path": str(artifact_path),

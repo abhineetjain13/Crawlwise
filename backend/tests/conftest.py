@@ -21,9 +21,12 @@ def event_loop():
 
 @pytest.fixture(autouse=True)
 def _stub_public_dns_resolution(monkeypatch: pytest.MonkeyPatch):
+    async def _resolve(_hostname, _port):
+        return ["93.184.216.34"]
+
     monkeypatch.setattr(
         "app.services.url_safety._resolve_host_ips",
-        lambda _hostname, _port: ["93.184.216.34"],
+        _resolve,
     )
 
 

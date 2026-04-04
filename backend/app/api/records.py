@@ -59,10 +59,9 @@ async def export_json(
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
-    rows, metadata = await _collect_export_rows(session, run_id)
-    payload = json.dumps([_clean_export_data(row.data) for row in rows], indent=2)
+    metadata = await _collect_export_metadata(session, run_id)
     return StreamingResponse(
-        iter([payload]),
+        _stream_export_json(session, run_id),
         media_type="application/json",
         headers={
             "Content-Disposition": f"attachment; filename=run-{run_id}.json",
@@ -81,16 +80,9 @@ async def export_csv(
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
-    rows, metadata = await _collect_export_rows(session, run_id)
-    clean_rows = [_clean_export_data(row.data) for row in rows]
-    fieldnames = sorted({key for r in clean_rows for key in r.keys()})
-    buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
-    writer.writeheader()
-    for r in clean_rows:
-        writer.writerow(r)
+    metadata = await _collect_export_metadata(session, run_id)
     return StreamingResponse(
-        iter([buffer.getvalue()]),
+        _stream_export_csv(session, run_id),
         media_type="text/csv",
         headers={
             "Content-Disposition": f"attachment; filename=run-{run_id}.csv",
@@ -109,18 +101,9 @@ async def export_discoverist(
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
-    rows, metadata = await _collect_export_rows(session, run_id)
-    buffer = StringIO()
-    writer = csv.writer(buffer)
-    fieldnames = _discoverist_schema()
-    writer.writerow(fieldnames)
-    for row in rows:
-        writer.writerow([
-            row.source_url if field_name == "source_url" else (row.data or {}).get(field_name, "")
-            for field_name in fieldnames
-        ])
+    metadata = await _collect_export_metadata(session, run_id)
     return StreamingResponse(
-        iter([buffer.getvalue()]),
+        _stream_export_discoverist(session, run_id),
         media_type="text/csv",
         headers={
             "Content-Disposition": f"attachment; filename=run-{run_id}-discoverist.csv",
@@ -147,6 +130,88 @@ async def _collect_export_rows(session: AsyncSession, run_id: int) -> tuple[list
         "returned": len(rows),
         "truncated": len(rows) < total,
     }
+
+
+async def _collect_export_metadata(session: AsyncSession, run_id: int) -> dict[str, int | bool]:
+    _, total = await get_run_records(session, run_id, 1, 1)
+    pages_used = max(1, (int(total) + MAX_RECORD_PAGE_SIZE - 1) // MAX_RECORD_PAGE_SIZE)
+    return {
+        "pages_used": pages_used,
+        "total": int(total),
+        "returned": int(total),
+        "truncated": False,
+    }
+
+
+async def _stream_export_rows(session: AsyncSession, run_id: int):
+    page = 1
+    while True:
+        page_rows, total = await get_run_records(session, run_id, page, MAX_RECORD_PAGE_SIZE)
+        if not page_rows:
+            return
+        for row in page_rows:
+            yield row
+        if page * MAX_RECORD_PAGE_SIZE >= int(total):
+            return
+        page += 1
+
+
+async def _stream_export_json(session: AsyncSession, run_id: int):
+    yield "[\n"
+    first = True
+    async for row in _stream_export_rows(session, run_id):
+        if not first:
+            yield ",\n"
+        yield json.dumps(_clean_export_data(row.data), indent=2)
+        first = False
+    yield "\n]"
+
+
+async def _stream_export_csv(session: AsyncSession, run_id: int):
+    row_stream = _stream_export_rows(session, run_id)
+    buffered_rows: list[tuple[object, dict]] = []
+    fieldnames: set[str] = set()
+    async for row in row_stream:
+        cleaned = _clean_export_data(row.data)
+        buffered_rows.append((row, cleaned))
+        fieldnames.update(cleaned.keys())
+        if len(buffered_rows) >= MAX_RECORD_PAGE_SIZE:
+            break
+    ordered_fieldnames = sorted(fieldnames)
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=ordered_fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    yield buffer.getvalue()
+    buffer.seek(0)
+    buffer.truncate(0)
+    for _row, cleaned in buffered_rows:
+        writer.writerow(cleaned)
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+    async for row in row_stream:
+        writer.writerow(_clean_export_data(row.data))
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+
+
+async def _stream_export_discoverist(session: AsyncSession, run_id: int):
+    fieldnames = _discoverist_schema()
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(fieldnames)
+    yield buffer.getvalue()
+    buffer.seek(0)
+    buffer.truncate(0)
+    async for row in _stream_export_rows(session, run_id):
+        writer.writerow([
+            row.source_url if field_name == "source_url" else (row.data or {}).get(field_name, "")
+            for field_name in fieldnames
+        ])
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
 
 
 def _clean_export_data(data: dict) -> dict:

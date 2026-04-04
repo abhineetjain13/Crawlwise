@@ -62,6 +62,16 @@ async def ensure_default_admin(session: AsyncSession) -> User:
     user = result.scalar_one_or_none()
     if user is None:
         return await create_user(session, email, password, role="admin")
+    changed = False
+    if user.role != "admin":
+        user.role = "admin"
+        changed = True
+    if not user.is_active:
+        user.is_active = True
+        changed = True
+    if changed:
+        await session.commit()
+        await session.refresh(user)
     return user
 
 

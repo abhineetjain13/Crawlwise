@@ -204,6 +204,25 @@ async def test_acquire_writes_diagnostics_artifact(tmp_path, monkeypatch):
     assert payload["diagnostics"]["curl_attempt_log"] == [
         {"attempt": 1, "impersonate": "chrome110", "status_code": 200, "content_type": "html", "blocked": False}
     ]
+    assert payload["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_acquire_writes_failure_diagnostics_when_all_attempts_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    async def _always_fail(**_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _always_fail)
+
+    with pytest.raises(RuntimeError, match="Unable to acquire content"):
+        await acquire(42, "https://example.com/unreachable")
+
+    diagnostics_path = _diagnostics_path(42, "https://example.com/unreachable")
+    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["diagnostics"]["error_code"] == "acquisition_failed"
 
 
 @pytest.fixture(autouse=True)

@@ -61,6 +61,9 @@ def extract_candidates(
     Returns:
         (candidates, source_trace) — candidates maps field -> list of {value, source}
     """
+    if "listing" in str(surface or "").lower():
+        return {}, {"candidates": {}, "mapping_hint": {}, "semantic": {}, "surface_gate": "listing"}
+
     soup = BeautifulSoup(html, "html.parser")
     tree = _build_xpath_tree(html)
     candidates: dict[str, list[dict]] = {}
@@ -113,8 +116,12 @@ def extract_candidates(
             _append_source_candidates(rows, field_name, state, "hydrated_state", base_url=url)
         for payload in manifest.embedded_json:
             _append_source_candidates(rows, field_name, payload, "embedded_json", base_url=url)
+        if manifest.open_graph:
+            _append_source_candidates(rows, field_name, manifest.open_graph, "open_graph", base_url=url)
         if manifest.next_data:
             _append_source_candidates(rows, field_name, manifest.next_data, "next_data", base_url=url)
+        for payload in manifest.hidden_dom:
+            _append_source_candidates(rows, field_name, payload, "hidden_dom", base_url=url)
         rows.extend(_structured_manifest_candidates(manifest, field_name))
 
         # 4. JSON-LD (rank 4)
@@ -127,18 +134,7 @@ def extract_candidates(
             if isinstance(item, dict):
                 _append_source_candidates(rows, field_name, item, "microdata", base_url=url)
 
-        # 6. Semantic sections/specifications extracted from page-local HTML
-        semantic_rows = resolve_requested_field_values(
-            [field_name],
-            sections=semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {},
-            specifications=semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {},
-            promoted_fields=semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else {},
-        )
-        semantic_value = semantic_rows.get(field_name)
-        if semantic_value not in (None, "", [], {}):
-            rows.append({"value": semantic_value, "source": "semantic_section"})
-
-        # 7. Saved domain selectors (rank 7)
+        # 6. Saved domain selectors ("site memory") outrank semantic heuristics.
         selectors = get_selector_defaults(domain, field_name)
         for selector in selectors:
             value, count, selector_used = extract_selector_value(
@@ -158,6 +154,17 @@ def extract_candidates(
                     "selector_used": selector_used,
                     "status": selector.get("status") or "validated",
                 })
+
+        # 7. Semantic sections/specifications extracted from page-local HTML
+        semantic_rows = resolve_requested_field_values(
+            [field_name],
+            sections=semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {},
+            specifications=semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {},
+            promoted_fields=semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else {},
+        )
+        semantic_value = semantic_rows.get(field_name)
+        if semantic_value not in (None, "", [], {}):
+            rows.append({"value": semantic_value, "source": "semantic_section"})
 
         # 8. Deterministic DOM patterns (rank 8)
         dom_row = _dom_pattern(soup, field_name)
@@ -231,8 +238,7 @@ def _extract_dom_node_value(node, field_name: str) -> str | None:
 
 def _finalize_candidate_rows(field_name: str, rows: list[dict], *, base_url: str = "") -> list[dict]:
     filtered: list[dict] = []
-    filtered_index: dict[tuple[str, str], int] = {}
-    seen: set[tuple[str, str]] = set()
+    filtered_index: dict[str, int] = {}
     for row in rows:
         value = coerce_field_candidate_value(field_name, row.get("value"), base_url=base_url)
         if value in (None, "", [], {}):
@@ -241,18 +247,22 @@ def _finalize_candidate_rows(field_name: str, rows: list[dict], *, base_url: str
             continue
         source = str(row.get("source") or "").strip() or "candidate"
         normalized = _normalized_candidate_text(value)
-        key = (source, normalized)
-        if key in seen:
-            existing = filtered[filtered_index[key]]
+        if normalized in filtered_index:
+            existing = filtered[filtered_index[normalized]]
+            sources = list(existing.get("sources") or [])
+            if source not in sources:
+                sources.append(source)
+            sources.sort(key=lambda item: _SOURCE_RANK.get(item, 0), reverse=True)
+            existing["sources"] = sources
+            existing["source"] = ", ".join(sources)
             for metadata_key, metadata_value in row.items():
-                if metadata_key == "value":
+                if metadata_key in {"value", "source", "sources"}:
                     continue
                 if existing.get(metadata_key) in (None, "", [], {}) and metadata_value not in (None, "", [], {}):
                     existing[metadata_key] = metadata_value
             continue
-        seen.add(key)
-        filtered_index[key] = len(filtered)
-        filtered.append({**row, "value": value})
+        filtered_index[normalized] = len(filtered)
+        filtered.append({**row, "value": value, "source": source, "sources": [source]})
     filtered.sort(key=lambda row: _candidate_sort_key(field_name, row), reverse=True)
     return filtered
 
@@ -524,12 +534,14 @@ _SOURCE_RANK = {
     "network_intercept": 8,
     "hydrated_state": 7,
     "embedded_json": 7,
+    "open_graph": 7,
     "next_data": 7,
     "json_ld": 6,
     "microdata": 5,
-    "semantic_section": 4,
-    "semantic_spec": 4,
-    "selector": 3,
+    "hidden_dom": 4,
+    "selector": 4,
+    "semantic_section": 3,
+    "semantic_spec": 3,
     "dom": 2,
     "llm_xpath": 1,
 }
@@ -537,8 +549,13 @@ _SOURCE_RANK = {
 
 def _candidate_sort_key(field_name: str, row: dict) -> tuple[int, int]:
     value = row.get("value")
-    source = str(row.get("source") or "").strip()
-    return (_field_quality_score(field_name, value), _SOURCE_RANK.get(source, 0))
+    sources = row.get("sources") if isinstance(row.get("sources"), list) else None
+    if sources:
+        source_rank = max(_SOURCE_RANK.get(str(source).strip(), 0) for source in sources)
+    else:
+        source = str(row.get("source") or "").strip()
+        source_rank = max(_SOURCE_RANK.get(part.strip(), 0) for part in source.split(",") if part.strip()) if source else 0
+    return (_field_quality_score(field_name, value), source_rank)
 
 
 def _field_quality_score(field_name: str, value: object) -> int:

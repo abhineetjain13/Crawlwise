@@ -141,20 +141,20 @@ def _extract_from_structured_sources(
                 record["_source"] = "json_ld"
                 ld_records.append(record)
 
-    if len(ld_records) >= 2:
+    if ld_records:
         candidates.append(ld_records)
 
     # __NEXT_DATA__: search for product/job arrays in page props
     if manifest.next_data:
         next_records = _extract_from_next_data(manifest.next_data, surface, page_url)
-        if len(next_records) >= 2:
+        if next_records:
             candidates.append(next_records)
 
     # Additional hydrated state blobs discovered from inline scripts
     if manifest._hydrated_states:
         for state in manifest._hydrated_states:
             state_records = _extract_items_from_json(state, surface, page_url)
-            if len(state_records) >= 2:
+            if state_records:
                 for r in state_records:
                     r["_source"] = "hydrated_state"
                 candidates.append(state_records)
@@ -165,7 +165,7 @@ def _extract_from_structured_sources(
         if not isinstance(body, (dict, list)):
             continue
         net_records = _extract_items_from_json(body, surface, page_url)
-        if len(net_records) >= 2:
+        if net_records:
             for r in net_records:
                 r["_source"] = "network_payload"
             candidates.append(net_records)
@@ -173,8 +173,55 @@ def _extract_from_structured_sources(
     if not candidates:
         return ld_records  # may be 0-1 records
 
-    # Pick the source with the strongest listing signal, not just the first/longest array.
+    merged = _merge_structured_record_sets(candidates)
+    if merged:
+        return merged
     return max(candidates, key=_listing_record_set_sort_key)
+
+
+def _merge_structured_record_sets(record_sets: list[list[dict]]) -> list[dict]:
+    merged_by_key: dict[str, dict] = {}
+    ordered_keys: list[str] = []
+    for records in record_sets:
+        for record in records:
+            key = _structured_join_key(record)
+            if not key:
+                continue
+            existing = merged_by_key.get(key)
+            if existing is None:
+                merged_by_key[key] = {**record, "_sources": [str(record.get("_source") or "structured")]}
+                ordered_keys.append(key)
+                continue
+            for field_name, value in record.items():
+                if field_name == "_source":
+                    continue
+                if existing.get(field_name) in (None, "", [], {}) and value not in (None, "", [], {}):
+                    existing[field_name] = value
+            source_label = str(record.get("_source") or "structured")
+            existing_sources = existing.setdefault("_sources", [])
+            if source_label not in existing_sources:
+                existing_sources.append(source_label)
+
+    merged_records: list[dict] = []
+    for key in ordered_keys:
+        record = merged_by_key[key]
+        sources = list(record.pop("_sources", []))
+        if sources:
+            record["_source"] = ", ".join(sources)
+        merged_records.append(record)
+    return merged_records
+
+
+def _structured_join_key(record: dict) -> str:
+    for field_name in ("sku", "url"):
+        value = str(record.get(field_name) or "").strip().lower()
+        if value:
+            return f"{field_name}:{value}"
+    title = str(record.get("title") or "").strip().lower()
+    price = str(record.get("price") or "").strip().lower()
+    if title and price:
+        return f"title_price:{title}|{price}"
+    return ""
 
 
 def _avg_public_field_count(records: list[dict]) -> float:
@@ -563,6 +610,11 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
             record[canonical] = normalized
             break
 
+    if record.get("url") in (None, "", [], {}) and record.get("slug") not in (None, "", [], {}):
+        slug_url = _resolve_slug_url(str(record["slug"]), page_url=page_url)
+        if slug_url:
+            record["url"] = slug_url
+
     if "ecommerce" in _surface and record.get("url") in (None, "", [], {}) and record.get("price") in (None, "", [], {}):
         return None
 
@@ -588,9 +640,7 @@ def _is_meaningful_listing_record(record: dict) -> bool:
     if meaningful_keys:
         return True
 
-    if not url_value:
-        return False
-    return not _looks_like_facet_or_filter_url(url_value)
+    return False
 
 
 def _looks_like_facet_or_filter_url(url_value: str) -> bool:
@@ -701,7 +751,7 @@ def _extract_from_card(card: Tag, _target_fields: set[str], surface: str, page_u
     if "ecommerce" in surface:
         price_el = card.select_one(
             "[itemprop='price'], .price, .product-price, .a-price .a-offscreen, "
-            ".s-item__price, span[data-price], .amount"
+            ".s-item__price, span[data-price], .amount, [class*='price']"
         )
         if price_el:
             record["price"] = price_el.get("content") or price_el.get_text(" ", strip=True)
@@ -758,7 +808,7 @@ def _normalize_listing_value(canonical: str, value: object, *, page_url: str) ->
     if canonical == "url":
         resolved = _coerce_nested_text(value, keys=NESTED_URL_KEYS) if isinstance(value, dict) else value
         text = str(resolved or "").strip()
-        if text and page_url and not text.startswith(("http://", "https://", "/")) and ("/p/" in text or text.startswith("p/")):
+        if text and page_url and not text.startswith(("http://", "https://", "/")) and _looks_like_product_short_path(text):
             parsed = urlparse(page_url)
             origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else page_url
             return urljoin(origin, text)
@@ -865,6 +915,23 @@ def _normalized_field_token(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
 
+def _looks_like_product_short_path(value: str) -> bool:
+    return bool(re.match(r"^p(?:/|[.-])[A-Za-z0-9][A-Za-z0-9._/-]*$", str(value or "").strip(), re.I))
+
+
+def _resolve_slug_url(slug: str, *, page_url: str) -> str:
+    text = str(slug or "").strip()
+    if not text or not page_url:
+        return ""
+    parsed = urlparse(page_url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    if text.startswith(("http://", "https://", "/")):
+        return urljoin(page_url, text)
+    origin = f"{parsed.scheme}://{parsed.netloc}/"
+    return urljoin(origin, text)
+
+
 def _coerce_nested_text(value: object, *, keys: tuple[str, ...]) -> object | None:
     if not isinstance(value, dict):
         return value
@@ -944,9 +1011,10 @@ def _match_line(lines: list[str], pattern: str) -> str:
 
 def _match_dimensions_line(lines: list[str]) -> str:
     measurement_regex = re.compile(r"\b\d+(?:\.\d+)?\s*(?:\"|in|cm|mm|ft)\b", re.I)
+    dimension_token_regex = re.compile(r"\b(?:h\s*x|w\s*x|d\s*x|height|width|depth|diameter)\b", re.I)
     for line in lines:
         lowered = line.lower()
-        if any(token in lowered for token in (" h x ", " w x ", " d", "height", "width", "depth", "diameter")):
+        if dimension_token_regex.search(lowered):
             return line
         if measurement_regex.search(line):
             return line

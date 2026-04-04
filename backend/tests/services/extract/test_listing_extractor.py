@@ -256,9 +256,35 @@ def test_extract_listing_prefers_rich_product_array_over_category_links():
 
     assert len(records) == 2
     assert records[0]["title"] == "Nykaa Cosmetics X Naagin Hot Sauce Plumping Lip Gloss"
+    assert records[0]["slug"] == "nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
     assert records[0]["url"] == "https://www.nykaa.com/nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
     assert records[0]["price"] == 509
     assert records[0]["brand"] == "Nykaa Cosmetics"
+
+
+def test_match_dimensions_line_does_not_treat_random_d_suffix_as_dimension_signal():
+    lines = ["Handcrafted", "Solid wood finish", "12 in wide"]
+
+    assert listing_extractor._match_dimensions_line(lines) == "12 in wide"
+
+
+def test_normalize_listing_value_only_promotes_true_product_short_paths():
+    assert (
+        listing_extractor._normalize_listing_value(
+            "url",
+            "p/22062112",
+            page_url="https://www.nykaa.com/makeup/c/12",
+        )
+        == "https://www.nykaa.com/p/22062112"
+    )
+    assert (
+        listing_extractor._normalize_listing_value(
+            "url",
+            "page/item",
+            page_url="https://example.com/category/list",
+        )
+        == "https://example.com/category/page/item"
+    )
 
 
 def test_extract_listing_from_query_state_product_cards_and_drops_content_cards():
@@ -353,3 +379,50 @@ def test_lookup_next_flight_window_index_returns_none_when_url_cannot_be_found()
     )
 
     assert lookup_index is None
+
+
+def test_extract_structured_sources_merges_records_from_multiple_sources():
+    html = "<html><body></body></html>"
+    manifest = type("Manifest", (), {
+        "json_ld": [
+            {
+                "@type": "ItemList",
+                "itemListElement": [
+                    {"item": {"@type": "Product", "name": "Mirror", "url": "/p/mirror", "sku": "SKU-1"}},
+                ],
+            }
+        ],
+        "next_data": {
+            "products": [
+                {"title": "Mirror", "url": "/p/mirror", "sku": "SKU-1", "price": "99.00", "brand": "Acme"},
+                {"title": "Lamp", "url": "/p/lamp", "sku": "SKU-2", "price": "49.00", "brand": "Glow"},
+            ]
+        },
+        "_hydrated_states": [],
+        "network_payloads": [],
+    })()
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    mirror = next(record for record in records if record["url"] == "https://example.com/p/mirror")
+    assert mirror["sku"] == "SKU-1"
+    assert mirror["price"] == "99.00"
+    assert mirror["brand"] == "Acme"
+    assert "json_ld_item_list" in mirror["_source"]
+    assert "next_data" in mirror["_source"]
+
+
+def test_structured_join_key_does_not_merge_title_only_records():
+    first = {"title": "Accent Mirror", "brand": "Acme"}
+    second = {"title": "Accent Mirror", "brand": "Other"}
+
+    merged = listing_extractor._merge_structured_record_sets([[first], [second]])
+
+    assert merged == []

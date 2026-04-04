@@ -68,7 +68,8 @@ class CrawlRecordResponse(BaseModel):
         # Strip raw manifest noise from discovered_data — keep only logical metadata
         _noise_keys = {
             "adapter_data", "network_payloads", "json_ld", "microdata",
-            "next_data", "tables", "_hydrated_states", "full_json_response",
+            "next_data", "tables", "_hydrated_states", "embedded_json",
+            "open_graph", "hidden_dom", "full_json_response",
         }
         self.discovered_data = {
             k: v for k, v in self.discovered_data.items()

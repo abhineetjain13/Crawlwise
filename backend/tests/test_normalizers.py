@@ -1,7 +1,7 @@
 # Tests for field normalizers.
 from __future__ import annotations
 
-from app.services.normalizers.field_normalizers import normalize_value
+from app.services.normalizers.field_normalizers import extract_currency_hint, normalize_value
 
 
 def test_normalize_price():
@@ -49,3 +49,7 @@ def test_normalize_currency_uses_iso_code_whitelist():
 
 def test_normalize_currency_prefers_code_adjacent_to_amount():
     assert normalize_value("currency", "CAD was mentioned, final price 12.50 USD today") == "USD"
+
+
+def test_extract_currency_hint_prefers_adjacent_code_over_symbol():
+    assert extract_currency_hint("100 CAD $") == "CAD"

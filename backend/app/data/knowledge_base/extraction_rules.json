@@ -1,7 +1,8 @@
 {
   "field_aliases": {
     "title": ["title", "name", "job_title", "position", "headline", "productName", "product_name"],
-    "url": ["url", "link", "href", "apply_url", "canonical_url", "product_url", "landingPageUrl", "detailPageLink", "detail_page_link", "slug"],
+    "url": ["url", "link", "href", "apply_url", "canonical_url", "product_url", "landingPageUrl", "detailPageLink", "detail_page_link"],
+    "slug": ["slug"],
     "price": ["price", "amount", "cost", "sale_price", "current_price"],
     "sale_price": ["sale_price", "saleprice", "sellingprice", "newprice", "discount_price", "discountedPrice"],
     "original_price": ["compare_at_price", "list_price", "regular_price", "was_price", "original_price", "mrp"],
@@ -94,7 +95,7 @@
   },
   "candidate_cleanup": {
     "placeholder_values": ["-", "—", "--", "n/a", "na", "none", "null", "undefined"],
-    "generic_category_values": ["detail-page", "detail_page", "product", "page", "pdp", "simple", "configurable", "image", "listitem", "itemlist", "collectionpage", "productcard", "contentcard"],
+    "generic_category_values": ["detail-page", "detail_page", "product", "page", "pdp", "simple", "configurable", "image", "listitem", "itemlist", "collectionpage", "productcard", "contentcard", "aggregateoffer"],
     "generic_title_values": ["chrome", "firefox", "safari", "edge", "home"],
     "field_groups": {
       "url": ["url", "apply_url"],
@@ -146,7 +147,7 @@
     "section_ancestor_stop_tags": ["footer", "header", "nav", "aside", "form"],
     "section_ancestor_stop_tokens": ["footer", "header", "nav", "menu", "newsletter", "breadcrumbs", "breadcrumb", "cookie", "consent"],
     "spec_label_block_patterns": ["play video", "watch video", "video", "learn more", "add to cart", "buy now", "primary guide", "guide", "discount"],
-    "spec_drop_labels": ["qty", "quantity", "details"],
+    "spec_drop_labels": ["qty", "quantity", "details", "total", "subtotal", "delivery", "shipping"],
     "feature_section_aliases": ["features", "feature", "highlights", "key_features", "key features"],
     "dimension_keywords": ["width", "height", "depth", "length", "diameter", "weight", "dimensions", "size", "measurement", "measurements"],
     "aggregate_separator": " | "

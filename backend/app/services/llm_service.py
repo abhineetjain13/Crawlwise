@@ -8,7 +8,9 @@ from app.core.security import decrypt_secret, encrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
 
 
-def mask_key(value: str) -> str:
+def mask_key(value: str | None) -> str:
+    if not value:
+        return "Not configured"
     tail = value[-4:] if len(value) >= 4 else value
     return f"sk-****{tail}"
 

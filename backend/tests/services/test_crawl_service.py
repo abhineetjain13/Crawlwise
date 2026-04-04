@@ -108,6 +108,21 @@ def test_build_field_discovery_summary_includes_canonical_and_intelligence_field
     assert "price" in source_trace["field_discovery_missing"]
 
 
+def test_build_field_discovery_summary_tolerates_candidate_rows_without_value_key():
+    source_trace = _build_field_discovery_summary(
+        {},
+        {
+            "title": [{"source": "adapter"}],
+        },
+        {},
+        [],
+        "ecommerce_detail",
+    )
+
+    assert source_trace["field_discovery"]["title"]["status"] == "found"
+    assert source_trace["field_discovery"]["title"].get("value") is None
+
+
 def test_normalize_detail_candidate_values_dedupes_primary_image_from_additional_images():
     normalized = _normalize_detail_candidate_values(
         {
@@ -159,9 +174,12 @@ async def test_create_crawl_run_rejects_private_ip_targets(db_session: AsyncSess
 
 @pytest.mark.asyncio
 async def test_create_crawl_run_rejects_hostnames_that_resolve_private(db_session: AsyncSession, test_user, monkeypatch: pytest.MonkeyPatch):
+    async def _resolve_private(_hostname: str, _port: int) -> list[str]:
+        return ["10.0.0.8"]
+
     monkeypatch.setattr(
         "app.services.url_safety._resolve_host_ips",
-        lambda _hostname, _port: ["10.0.0.8"],
+        _resolve_private,
     )
 
     with pytest.raises(ValueError, match="non-public IP address"):
@@ -174,7 +192,7 @@ async def test_create_crawl_run_rejects_hostnames_that_resolve_private(db_sessio
 
 @pytest.mark.asyncio
 async def test_create_crawl_run_rejects_unresolved_targets(db_session: AsyncSession, test_user, monkeypatch: pytest.MonkeyPatch):
-    def _raise_unresolved(_hostname: str, _port: int) -> list[str]:
+    async def _raise_unresolved(_hostname: str, _port: int) -> list[str]:
         raise ValueError("Target host could not be resolved: broken.example")
 
     monkeypatch.setattr("app.services.url_safety._resolve_host_ips", _raise_unresolved)
@@ -373,6 +391,36 @@ async def test_process_run_batch(db_session: AsyncSession, test_user):
     assert run.result_summary["processed_urls"] == 2
     assert run.result_summary["completed_urls"] == 2
     assert run.result_summary["remaining_urls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "batch",
+        "url": "https://example.com/1",
+        "surface": "ecommerce_detail",
+        "settings": {"urls": ["https://example.com/1", "https://example.com/2", "https://example.com/3"]},
+    })
+    run.status = "running"
+    run.result_summary = {
+        **(run.result_summary or {}),
+        "processed_urls": 2,
+        "completed_urls": 1,
+        "url_verdicts": ["success"],
+        "verdict_counts": {"success": 1},
+    }
+    await db_session.commit()
+
+    seen_urls: list[str] = []
+
+    async def _fake_process_single_url(**kwargs):
+        seen_urls.append(kwargs["url"])
+        return ([{"title": kwargs["url"]}], "success")
+
+    with patch("app.services.crawl_service._process_single_url", side_effect=_fake_process_single_url):
+        await process_run(db_session, run.id)
+
+    assert seen_urls == ["https://example.com/2", "https://example.com/3"]
 
 
 @pytest.mark.asyncio
