@@ -30,3 +30,13 @@ def test_normalize_empty_string():
 
 def test_normalize_description_strips_html():
     assert normalize_value("description", "<p>Hello <strong>World</strong></p>") == "Hello World"
+
+
+def test_normalize_availability_schema_url():
+    assert normalize_value("availability", "https://schema.org/InStock") == "in_stock"
+
+
+def test_normalize_placeholder_and_generic_noise_values():
+    assert normalize_value("features", "-") == ""
+    assert normalize_value("category", "detail-page") == ""
+    assert normalize_value("title", "Chrome") == ""

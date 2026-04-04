@@ -5,6 +5,8 @@ backend/.pytest_cache/
 backend/.mypy_cache/
 backend/.ruff_cache/
 backend/alembic.ini
+crawlerai.db
+crawlerai.db-*
 backend/crawlerai.db
 backend/crawlerai.db-*
 backend/artifacts/

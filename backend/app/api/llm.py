@@ -1,6 +1,8 @@
 # LLM configuration route handlers.
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,37 +32,37 @@ from app.services.llm_service import (
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
 
-@router.get("/catalog", response_model=list[LLMProviderCatalogItem])
+@router.get("/catalog")
 async def llm_catalog(
-    _: object = Depends(require_admin),
+    _: Annotated[object, Depends(require_admin)],
 ) -> list[LLMProviderCatalogItem]:
     return [LLMProviderCatalogItem.model_validate(item) for item in llm_provider_catalog()]
 
 
-@router.get("/config", response_model=list[LLMConfigResponse])
+@router.get("/config")
 async def llm_configs(
-    session: AsyncSession = Depends(get_db),
-    _: object = Depends(require_admin),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[object, Depends(require_admin)],
 ) -> list[LLMConfigResponse]:
     return [LLMConfigResponse.model_validate(serialize_config(row)) for row in await list_configs(session)]
 
 
-@router.post("/config", response_model=LLMConfigResponse)
+@router.post("/config")
 async def llm_config_create(
     payload: LLMConfigCreate,
-    session: AsyncSession = Depends(get_db),
-    _: object = Depends(require_admin),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[object, Depends(require_admin)],
 ) -> LLMConfigResponse:
     config = await create_config(session, prepare_config_create(payload.model_dump()))
     return LLMConfigResponse.model_validate(serialize_config(config))
 
 
-@router.put("/config/{config_id}", response_model=LLMConfigResponse)
+@router.put("/config/{config_id}")
 async def llm_config_update(
     config_id: int,
     payload: LLMConfigUpdate,
-    session: AsyncSession = Depends(get_db),
-    _: object = Depends(require_admin),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[object, Depends(require_admin)],
 ) -> LLMConfigResponse:
     config = await get_config(session, config_id)
     if config is None:
@@ -69,10 +71,10 @@ async def llm_config_update(
     return LLMConfigResponse.model_validate(serialize_config(updated))
 
 
-@router.post("/test", response_model=LLMConnectionTestResponse)
+@router.post("/test")
 async def llm_test_connection(
     payload: LLMConnectionTestRequest,
-    _: object = Depends(require_admin),
+    _: Annotated[object, Depends(require_admin)],
 ) -> LLMConnectionTestResponse:
     ok, message = await test_provider_connection(
         provider=payload.provider,
@@ -82,14 +84,14 @@ async def llm_test_connection(
     return LLMConnectionTestResponse(ok=ok, message=message)
 
 
-@router.get("/cost-log", response_model=PaginatedResponse[LLMCostLogResponse])
+@router.get("/cost-log")
 async def llm_cost_log(
-    page: int = Query(default=1, ge=1),
-    limit: int = Query(default=20, ge=1, le=100),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[object, Depends(require_admin)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
     provider: str = "",
     task_type: str = "",
-    session: AsyncSession = Depends(get_db),
-    _: object = Depends(require_admin),
 ) -> PaginatedResponse[LLMCostLogResponse]:
     rows, total = await list_cost_logs(session, page, limit, provider, task_type)
     return PaginatedResponse(

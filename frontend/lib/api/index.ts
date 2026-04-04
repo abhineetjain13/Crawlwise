@@ -22,6 +22,11 @@ import type {
   User,
 } from "./types";
 
+function withQuery(path: string, query: URLSearchParams) {
+  const queryString = query.toString();
+  return queryString ? `${path}?${queryString}` : path;
+}
+
 export const api = {
   register: (email: string, password: string) =>
     apiClient.post<User>("/api/auth/register", { email, password }),
@@ -51,7 +56,7 @@ export const api = {
     if (params?.url_search) query.set("url_search", params.url_search);
     if (params?.page !== undefined) query.set("page", String(params.page));
     if (params?.limit !== undefined) query.set("limit", String(params.limit));
-    return apiClient.get<Paginated<CrawlRun>>(`/api/crawls${query.size ? `?${query.toString()}` : ""}`);
+    return apiClient.get<Paginated<CrawlRun>>(withQuery("/api/crawls", query));
   },
   getCrawl: (runId: number) => apiClient.get<CrawlRun>(`/api/crawls/${runId}`),
   deleteCrawl: (runId: number) => apiClient.delete<void>(`/api/crawls/${runId}`),
@@ -66,7 +71,7 @@ export const api = {
     const query = new URLSearchParams();
     if (params?.page !== undefined) query.set("page", String(params.page));
     if (params?.limit !== undefined) query.set("limit", String(params.limit));
-    return apiClient.get<Paginated<CrawlRecord>>(`/api/crawls/${runId}/records${query.size ? `?${query.toString()}` : ""}`);
+    return apiClient.get<Paginated<CrawlRecord>>(withQuery(`/api/crawls/${runId}/records`, query));
   },
   getCrawlLogs: (runId: number) => apiClient.get<CrawlLog[]>(`/api/crawls/${runId}/logs`),
   exportCsv: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/csv`,
@@ -81,14 +86,14 @@ export const api = {
     const query = new URLSearchParams();
     if (params?.search) query.set("search", params.search);
     if (params?.is_active !== undefined) query.set("is_active", String(params.is_active));
-    return apiClient.get<Paginated<User>>(`/api/users${query.size ? `?${query.toString()}` : ""}`);
+    return apiClient.get<Paginated<User>>(withQuery("/api/users", query));
   },
   updateUser: (userId: number, payload: Partial<Pick<User, "role" | "is_active">>) =>
     apiClient.patch<User>(`/api/users/${userId}`, payload),
   listSelectors: (params?: { domain?: string }) => {
     const query = new URLSearchParams();
     if (params?.domain) query.set("domain", params.domain);
-    return apiClient.get<SelectorRecord[]>(`/api/selectors${query.size ? `?${query.toString()}` : ""}`);
+    return apiClient.get<SelectorRecord[]>(withQuery("/api/selectors", query));
   },
   suggestSelectors: (payload: { url: string; expected_columns: string[] }) =>
     apiClient.post<SelectorSuggestResponse>("/api/selectors/suggest", payload),
@@ -130,6 +135,6 @@ export const api = {
     const query = new URLSearchParams();
     if (params?.page !== undefined) query.set("page", String(params.page));
     if (params?.limit !== undefined) query.set("limit", String(params.limit));
-    return apiClient.get<Paginated<LlmCostLogRecord>>(`/api/llm/cost-log${query.size ? `?${query.toString()}` : ""}`);
+    return apiClient.get<Paginated<LlmCostLogRecord>>(withQuery("/api/llm/cost-log", query));
   },
 };

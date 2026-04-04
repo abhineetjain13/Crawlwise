@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlparse
 from bs4 import BeautifulSoup
 
@@ -13,8 +14,9 @@ from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import fetch_rendered_html
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host
+from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
-from app.services.pipeline_config import BROWSER_FALLBACK_VISIBLE_TEXT_MIN, JS_GATE_PHRASES
+from app.services.pipeline_config import ACQUIRE_HOST_MIN_INTERVAL_MS, BROWSER_FALLBACK_VISIBLE_TEXT_MIN, JS_GATE_PHRASES
 
 
 class ProxyPoolExhausted(RuntimeError):
@@ -50,7 +52,9 @@ class AcquisitionResult:
     content_type: str = "html"  # "html" | "json" | "binary"
     method: str = "curl_cffi"
     artifact_path: str = ""
+    diagnostics_path: str = ""
     network_payloads: list[dict] = field(default_factory=list)
+    diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 async def acquire_html(
@@ -121,8 +125,11 @@ async def acquire(
     else:
         path.write_text(result.html, encoding="utf-8")
     _write_network_payloads(run_id, url, result.network_payloads)
+    diagnostics_path = _diagnostics_path(run_id, url)
+    _write_diagnostics(run_id, url, result, path, diagnostics_path)
 
     result.artifact_path = str(path)
+    result.diagnostics_path = str(diagnostics_path)
     return result
 
 
@@ -139,6 +146,7 @@ async def _acquire_once(
 ) -> AcquisitionResult | None:
     import logging as _logging
     _log = _logging.getLogger(__name__)
+    host_wait_seconds = await wait_for_host_slot(urlparse(url).netloc.lower(), ACQUIRE_HOST_MIN_INTERVAL_MS)
 
     # Always try curl_cffi first — it's faster and more resilient to HTTP/2 issues.
     if sleep_ms > 0:
@@ -155,6 +163,17 @@ async def _acquire_once(
             content_type="json",
             method="curl_cffi",
             artifact_path=str(_artifact_path(run_id, url)),
+            diagnostics=_build_curl_diagnostics(
+                normalized=normalized,
+                blocked=None,
+                visible_text="",
+                gate_phrases=False,
+                needs_browser=False,
+                proxy=proxy,
+                prefer_stealth=prefer_stealth,
+                advanced_mode=advanced_mode,
+                host_wait_seconds=host_wait_seconds,
+            ),
         )
 
     blocked = detect_blocked_page(html)
@@ -171,6 +190,18 @@ async def _acquire_once(
         remember_stealth_host(url)
         prefer_stealth = True
 
+    curl_diagnostics = _build_curl_diagnostics(
+        normalized=normalized,
+        blocked=blocked,
+        visible_text=visible_text,
+        gate_phrases=gate_phrases,
+        needs_browser=needs_browser,
+        proxy=proxy,
+        prefer_stealth=prefer_stealth,
+        advanced_mode=advanced_mode,
+        host_wait_seconds=host_wait_seconds,
+    )
+
     # Keep the curl_cffi result as a fallback even if we escalate to browser,
     # but only when the content is substantive enough to be useful for extraction.
     has_useful_content = (
@@ -186,6 +217,7 @@ async def _acquire_once(
             content_type=normalized.content_type,
             method="curl_cffi",
             artifact_path=str(_artifact_path(run_id, url)),
+            diagnostics=curl_diagnostics,
         )
 
     if not needs_browser and not advanced_mode:
@@ -195,6 +227,7 @@ async def _acquire_once(
             content_type=normalized.content_type,
             method="curl_cffi",
             artifact_path=str(_artifact_path(run_id, url)),
+            diagnostics=curl_diagnostics,
         )
 
     # Escalate to Playwright for JS rendering or advanced crawl modes.
@@ -206,25 +239,46 @@ async def _acquire_once(
             proxy=proxy,
             prefer_stealth=prefer_stealth,
             advanced_mode=advanced_mode,
-            max_pages=max_pages,
             max_scrolls=max_scrolls,
             request_delay_ms=sleep_ms,
         )
     except Exception as exc:
         _log.warning("Playwright failed for %s: %s — falling back to curl_cffi result", url, exc)
+        if curl_result is not None:
+            curl_result.diagnostics["browser_exception"] = f"{type(exc).__name__}: {exc}"
+            curl_result.diagnostics["browser_attempted"] = True
         return curl_result
 
     if browser_result.html and not detect_blocked_page(browser_result.html).is_blocked:
+        browser_diagnostics = dict(curl_diagnostics)
+        browser_diagnostics.update(
+            {
+                "browser_attempted": True,
+                "browser_challenge_state": browser_result.challenge_state,
+                "browser_origin_warmed": browser_result.origin_warmed,
+                "browser_network_payloads": len(browser_result.network_payloads or []),
+                "browser_diagnostics": browser_result.diagnostics,
+            }
+        )
         return AcquisitionResult(
             html=browser_result.html,
             content_type="html",
             method="playwright",
             artifact_path=str(_artifact_path(run_id, url)),
             network_payloads=browser_result.network_payloads,
+            diagnostics=browser_diagnostics,
         )
 
     # Playwright returned empty or blocked — prefer curl_cffi result if available.
     if curl_result:
+        curl_result.diagnostics["browser_attempted"] = True
+        curl_result.diagnostics["browser_challenge_state"] = browser_result.challenge_state
+        curl_result.diagnostics["browser_origin_warmed"] = browser_result.origin_warmed
+        curl_result.diagnostics["browser_network_payloads"] = len(browser_result.network_payloads or [])
+        curl_result.diagnostics["browser_diagnostics"] = browser_result.diagnostics
+        curl_result.diagnostics["browser_blocked"] = bool(
+            browser_result.html and detect_blocked_page(browser_result.html).is_blocked
+        )
         _log.info("Playwright returned blocked/empty for %s — using curl_cffi fallback", url)
         return curl_result
 
@@ -257,12 +311,73 @@ def _network_payload_path(run_id: int, url: str) -> Path:
     return settings.artifacts_dir / "network" / str(run_id) / f"{_artifact_basename(run_id, url)}.json"
 
 
+def _diagnostics_path(run_id: int, url: str) -> Path:
+    return settings.artifacts_dir / "diagnostics" / str(run_id) / f"{_artifact_basename(run_id, url)}.json"
+
+
 def _write_network_payloads(run_id: int, url: str, payloads: list[dict]) -> None:
     if not payloads:
         return
     path = _network_payload_path(run_id, url)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payloads, indent=2), encoding="utf-8")
+
+
+def _write_diagnostics(
+    run_id: int,
+    url: str,
+    result: AcquisitionResult,
+    artifact_path: Path,
+    diagnostics_path: Path,
+) -> None:
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    blocked = detect_blocked_page(result.html).as_dict() if result.content_type == "html" else None
+    payload = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "url": url,
+        "method": result.method,
+        "content_type": result.content_type,
+        "artifact_path": str(artifact_path),
+        "network_payload_path": str(_network_payload_path(run_id, url)) if result.network_payloads else None,
+        "html_length": len(result.html or ""),
+        "json_kind": type(result.json_data).__name__ if result.json_data is not None else None,
+        "network_payloads": len(result.network_payloads or []),
+        "blocked": blocked,
+        "diagnostics": result.diagnostics,
+    }
+    diagnostics_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
+def _build_curl_diagnostics(
+    *,
+    normalized: HttpFetchResult,
+    blocked,
+    visible_text: str,
+    gate_phrases: bool,
+    needs_browser: bool,
+    proxy: str | None,
+    prefer_stealth: bool,
+    advanced_mode: str | None,
+    host_wait_seconds: float,
+) -> dict[str, object]:
+    payload = {
+        "curl_status_code": normalized.status_code,
+        "curl_content_type": normalized.content_type,
+        "curl_error": normalized.error or None,
+        "curl_visible_text_length": len(visible_text),
+        "curl_blocked": blocked.is_blocked if blocked is not None else False,
+        "curl_block_provider": blocked.provider if blocked is not None else None,
+        "curl_gate_phrases": gate_phrases,
+        "curl_needs_browser": needs_browser,
+        "advanced_mode": advanced_mode,
+        "proxy_used": bool(proxy),
+        "prefer_stealth": prefer_stealth,
+        "curl_attempts": normalized.attempts or None,
+        "curl_attempt_log": normalized.attempt_log or None,
+        "host_wait_seconds": round(host_wait_seconds, 3) if host_wait_seconds > 0 else None,
+    }
+    return {key: value for key, value in payload.items() if value is not None}
 
 
 def _artifact_basename(run_id: int, url: str) -> str:

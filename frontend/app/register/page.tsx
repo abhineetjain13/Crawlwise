@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { FormEvent, useState } from "react";
 
-import { Button, Field, Input, Subtitle, Title } from "../../../components/ui/primitives";
-import { api } from "../../../lib/api";
+import { Button, Field, Input, Subtitle, Title } from "../../components/ui/primitives";
+import { api } from "../../lib/api";
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,23 +16,25 @@ export default function LoginPage() {
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     try {
+      await api.register(email, password);
       await api.login(email, password);
-      router.push("/dashboard");
+      router.replace("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Register failed");
     }
   }
 
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <Title kicker="Auth">Sign in</Title>
-        <Subtitle>Enter your credentials to continue.</Subtitle>
+        <Title kicker="Auth">Register</Title>
+        <Subtitle>Create a workspace account.</Subtitle>
       </div>
-      <form className="grid gap-4" onSubmit={onSubmit}>
+      <form className="grid gap-5" onSubmit={onSubmit}>
         <Field label="Email">
           <Input
             type="email"
+            autoComplete="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="name@company.com"
@@ -43,18 +45,14 @@ export default function LoginPage() {
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            placeholder="••••••••"
+            placeholder="Choose a secure password"
           />
         </Field>
-        {error ? (
-          <p role="alert" className="rounded-2xl bg-danger/10 px-4 py-3 text-[13px] text-danger">
-            {error}
-          </p>
-        ) : null}
-        <div className="flex items-center gap-3 pt-1">
-          <Button type="submit">Sign in</Button>
-          <Link className="text-[13px] font-medium text-accent" href="/register">
-            Create account
+        {error ? <p className="rounded-2xl bg-danger/10 px-4 py-3 text-[13px] text-danger">{error}</p> : null}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit">Create account</Button>
+          <Link className="text-[13px] font-medium text-accent" href="/login">
+            Back to login
           </Link>
         </div>
       </form>

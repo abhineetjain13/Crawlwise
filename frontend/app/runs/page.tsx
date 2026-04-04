@@ -19,7 +19,7 @@ export default function RunsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
   const [appliedDomainFilter, setAppliedDomainFilter] = useState("");
   const [appliedStatusFilter, setAppliedStatusFilter] = useState<StatusFilter>("");
-  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<number>>(() => new Set());
   const [actionError, setActionError] = useState("");
 
   const query = useQuery({
@@ -33,6 +33,14 @@ export default function RunsPage() {
   });
   const deleteMutation = useMutation({
     mutationFn: (runId: number) => api.deleteCrawl(runId),
+    onMutate: (runId) => {
+      setPendingDeleteIds((current) => {
+        const next = new Set(current);
+        next.add(runId);
+        return next;
+      });
+      setActionError("");
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["runs"] });
       await queryClient.invalidateQueries({ queryKey: ["memory-runs"] });
@@ -41,8 +49,12 @@ export default function RunsPage() {
     onError: (error) => {
       setActionError(error instanceof Error ? error.message : "Unable to delete run.");
     },
-    onSettled: () => {
-      setPendingDeleteId(null);
+    onSettled: (_data, _error, runId) => {
+      setPendingDeleteIds((current) => {
+        const next = new Set(current);
+        next.delete(runId);
+        return next;
+      });
     },
   });
 
@@ -130,12 +142,11 @@ export default function RunsPage() {
                     key={run.id}
                     run={run}
                     index={index}
-                    pendingDelete={pendingDeleteId === run.id}
+                    pendingDelete={pendingDeleteIds.has(run.id)}
                     onDelete={() => {
                       if (!window.confirm(`Delete run ${run.id}? This cannot be undone.`)) {
                         return;
                       }
-                      setPendingDeleteId(run.id);
                       deleteMutation.mutate(run.id);
                     }}
                   />
@@ -166,7 +177,7 @@ function RunRow({
       style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
     >
       <td>
-        <Link href={`/runs/${run.id}`} className="block font-medium text-foreground hover:text-accent transition-colors">
+        <Link href={`/runs/${run.id}`} className="block font-medium text-foreground transition-colors hover:text-accent">
           {getDomain(run.url)}
         </Link>
       </td>
@@ -186,7 +197,13 @@ function RunRow({
       <td className={cn("tabular-nums", recordCount > 0 ? "text-foreground" : "text-muted")}>{recordCount}</td>
       <td className="text-muted">{formatDate(run.created_at)}</td>
       <td>
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Link
+            href={`/runs/${run.id}`}
+            className="focus-ring inline-flex h-8 items-center justify-center rounded-[var(--radius-md)] border border-border px-[14px] text-[13px] font-medium text-foreground transition-all hover:bg-background-elevated"
+          >
+            Open
+          </Link>
           <Button type="button" variant="danger" onClick={onDelete} disabled={!canDelete || pendingDelete}>
             <Trash2 className="size-3.5" />
             {pendingDelete ? "Deleting..." : "Delete"}

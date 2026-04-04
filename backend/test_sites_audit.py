@@ -48,40 +48,63 @@ logger = logging.getLogger("site_audit")
 
 # ── Test sites ──
 TEST_SITES = [
+    # -- Rich data PDPs with specs/tables --
     {
-        "name": "Dyson Airwrap PDP",
-        "url": "https://www.dyson.in/hair-care/hair-stylers/airwrap-id-multi-styler-dryer-ceramic-pink",
+        "name": "Open Food Facts - Coca Cola (data tables)",
+        "url": "https://world.openfoodfacts.org/product/5449000000996/coca-cola-original-taste",
         "surface": "ecommerce_detail",
         "run_type": "crawl",
-        "expected_fields": ["title", "price", "brand", "description", "image"],
+        "expected_fields": ["title", "brand", "description", "category", "image_url"],
     },
     {
-        "name": "Arc'teryx Shoe PDP",
-        "url": "https://arcteryx.com/us/en/shop/mens/sylan-2-shoe-0155",
+        "name": "Adafruit Product (electronics specs)",
+        "url": "https://www.adafruit.com/product/5700",
         "surface": "ecommerce_detail",
         "run_type": "crawl",
-        "expected_fields": ["title", "price", "brand", "description", "image"],
+        "expected_fields": ["title", "price", "description", "image_url", "sku"],
     },
     {
-        "name": "Puma Men's Listing",
-        "url": "https://us.puma.com/us/en/men/shop-all-mens",
+        "name": "SparkFun Product (electronics specs)",
+        "url": "https://www.sparkfun.com/products/19030",
+        "surface": "ecommerce_detail",
+        "run_type": "crawl",
+        "expected_fields": ["title", "price", "description", "image_url", "sku"],
+    },
+    {
+        "name": "REI Osprey Backpack (outdoor gear specs)",
+        "url": "https://www.rei.com/product/216223/osprey-atmos-ag-65-pack-mens",
+        "surface": "ecommerce_detail",
+        "run_type": "crawl",
+        "expected_fields": ["title", "price", "brand", "description", "image_url", "rating"],
+    },
+    {
+        "name": "B&H Photo Sony Camera (deep specs)",
+        "url": "https://www.bhphotovideo.com/c/product/1730114-REG/sony_ilce_7rm5_b_alpha_a7r_v_mirrorless.html",
+        "surface": "ecommerce_detail",
+        "run_type": "crawl",
+        "expected_fields": ["title", "price", "brand", "description", "image_url", "sku"],
+    },
+    # -- Listing pages --
+    {
+        "name": "Allbirds Men's Collection (Shopify listing)",
+        "url": "https://www.allbirds.com/collections/mens",
         "surface": "ecommerce_listing",
         "run_type": "crawl",
-        "expected_fields": ["title", "price", "url", "image"],
+        "expected_fields": ["title", "price", "url", "image_url"],
     },
     {
-        "name": "Sigma-Aldrich PDP (JS-rendered)",
-        "url": "https://www.sigmaaldrich.com/IN/en/product/supelco/26274",
-        "surface": "ecommerce_detail",
-        "run_type": "crawl",
-        "expected_fields": ["title", "price", "description", "availability"],
-    },
-    {
-        "name": "Myntra Listing (pagination)",
-        "url": "https://www.myntra.com/women-kurtas-kurtis-suits",
+        "name": "Gymshark All Products (Shopify listing)",
+        "url": "https://www.gymshark.com/collections/all-products",
         "surface": "ecommerce_listing",
         "run_type": "crawl",
-        "expected_fields": ["title", "price", "url", "image", "brand"],
+        "expected_fields": ["title", "price", "url", "image_url"],
+    },
+    {
+        "name": "Open Food Facts Sodas JSON API",
+        "url": "https://world.openfoodfacts.org/category/sodas.json",
+        "surface": "ecommerce_listing",
+        "run_type": "crawl",
+        "expected_fields": ["title", "url", "brand", "category"],
     },
 ]
 

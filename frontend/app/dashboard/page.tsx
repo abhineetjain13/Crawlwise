@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
 import Link from "next/link";
 import { useState } from "react";
@@ -10,6 +10,7 @@ import { EmptyPanel, JsonPanel, MetricGrid, PageHeader, SectionHeader } from "..
 import { api } from "../../lib/api";
 
 export default function DashboardPage() {
+  const queryClient = useQueryClient();
   const { data, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard });
   const [isResetting, setIsResetting] = useState(false);
   const [resetError, setResetError] = useState("");
@@ -25,6 +26,7 @@ export default function DashboardPage() {
     setResetError("");
     try {
       await api.resetApplicationData();
+      await queryClient.invalidateQueries();
       await refetch();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to reset application data.";
@@ -47,7 +49,7 @@ export default function DashboardPage() {
             disabled={isResetting}
             variant="danger"
           >
-            {isResetting ? "Resetting..." : "Reset Data"}
+            {isResetting ? "Resetting..." : "Reset Demo"}
           </Button>
         }
       />

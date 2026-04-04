@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = BASE_DIR.parent
 
 
 class Settings(BaseSettings):
@@ -35,6 +35,33 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _resolve_project_path(value: str | Path, *, anchor: Path = PROJECT_ROOT) -> Path:
+    raw_path = Path(value)
+    return raw_path if raw_path.is_absolute() else (anchor / raw_path).resolve()
+
+
+def _normalize_sqlite_database_url(url: str, *, sqlite_anchor: Path = BASE_DIR) -> str:
+    prefixes = ("sqlite+aiosqlite:///", "sqlite:///")
+    prefix = next((item for item in prefixes if url.startswith(item)), "")
+    if not prefix:
+        return url
+    database_path = url[len(prefix):]
+    if not database_path or database_path == ":memory:":
+        return url
+    if database_path.startswith("/") or (len(database_path) > 1 and database_path[1] == ":"):
+        return url
+    if Path(database_path).is_absolute():
+        return url
+    normalized_path = (sqlite_anchor / database_path).resolve().as_posix()
+    return f"{prefix}{normalized_path}"
+
+
+settings.database_url = _normalize_sqlite_database_url(settings.database_url)
+settings.artifacts_dir = _resolve_project_path(settings.artifacts_dir, anchor=PROJECT_ROOT)
+settings.acquisition_cache_dir = _resolve_project_path(settings.acquisition_cache_dir, anchor=PROJECT_ROOT)
+settings.cookie_store_dir = _resolve_project_path(settings.cookie_store_dir, anchor=PROJECT_ROOT)
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,17 @@ _SECTION_ANCESTOR_STOP_TOKENS = {
     "cookie",
     "consent",
 }
+_SPEC_LABEL_BLOCK_PATTERNS = (
+    "play video",
+    "watch video",
+    "video",
+    "learn more",
+    "add to cart",
+    "buy now",
+    "primary guide",
+    "guide",
+    "discount",
+)
 _CANONICAL_TO_ALIASES: dict[str, set[str]] = {}
 for canonical, aliases in REQUESTED_FIELD_ALIASES.items():
     canonical_key = normalize_requested_field(canonical)
@@ -211,9 +222,7 @@ def _extract_specifications(soup: BeautifulSoup) -> dict[str, str]:
             if not dd:
                 continue
             value = _clean_text(dd.get_text(" ", strip=True))
-            key = normalize_requested_field(label)
-            if key and value and key not in specs:
-                specs[key] = value
+            _store_specification(specs, label, value)
 
     for table in soup.find_all("table"):
         for row in table.find_all("tr"):
@@ -222,20 +231,70 @@ def _extract_specifications(soup: BeautifulSoup) -> dict[str, str]:
                 continue
             label = _clean_text(cells[0].get_text(" ", strip=True))
             value = _clean_text(cells[1].get_text(" ", strip=True))
-            key = normalize_requested_field(label)
-            if key and value and key not in specs:
-                specs[key] = value
+            _store_specification(specs, label, value)
 
     for node in soup.select("[data-label], [data-spec], [data-specification]"):
         label = _clean_text(node.get("data-label") or node.get("data-spec") or node.get("data-specification"))
         if not label:
             continue
-        key = normalize_requested_field(label)
         value = _clean_text(node.get_text(" ", strip=True))
-        if key and value and key not in specs:
-            specs[key] = value
+        _store_specification(specs, label, value)
+
+    for node in soup.find_all(["li", "p", "div"]):
+        if not isinstance(node, Tag) or _is_ignored_section_node(node):
+            continue
+        pair = _extract_inline_spec_pair(node)
+        if pair is None:
+            continue
+        label, value = pair
+        _store_specification(specs, label, value)
 
     return specs
+
+
+def _extract_inline_spec_pair(node: Tag) -> tuple[str, str] | None:
+    text = _clean_text(node.get_text(" ", strip=True))
+    if not text or len(text) < 4:
+        return None
+    if len(text) > 240:
+        return None
+    if text.count(":") != 1:
+        return None
+    label, value = [_clean_text(part) for part in text.split(":", 1)]
+    if not label or not value:
+        return None
+    if len(label) > 80 or len(value) > 180:
+        return None
+    if label.lower() in {"details", "description", "features", "specifications", "tech specs"}:
+        return None
+    if any(token in label.lower() for token in _SECTION_SKIP_PATTERNS):
+        return None
+    return label, value
+
+
+def _store_specification(specs: dict[str, str], label: str, value: str) -> None:
+    key = normalize_requested_field(label)
+    if not key or key in specs:
+        return
+    if not _should_keep_specification(key, value):
+        return
+    specs[key] = value
+
+
+def _should_keep_specification(key: str, value: str) -> bool:
+    lowered_key = key.lower()
+    lowered_value = value.lower()
+    if not lowered_key or not value:
+        return False
+    if lowered_key in {"qty", "quantity", "details"}:
+        return False
+    if re.fullmatch(r"\d+(?:[_-]\d+)*", lowered_key):
+        return False
+    if any(token in lowered_key for token in _SPEC_LABEL_BLOCK_PATTERNS):
+        return False
+    if any(token in lowered_value for token in _SECTION_SKIP_PATTERNS):
+        return False
+    return True
 
 
 def _collect_section_body(heading: Tag) -> str:

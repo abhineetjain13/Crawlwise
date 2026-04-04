@@ -8,10 +8,11 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
+from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
+    _build_llm_candidate_evidence,
     active_jobs,
     create_crawl_run,
     delete_run,
@@ -62,6 +63,25 @@ def test_parse_csv_urls_empty():
     assert parse_csv_urls("header\nnot-a-url\n") == []
 
 
+def test_build_llm_candidate_evidence_preserves_legible_multi_source_values():
+    evidence = _build_llm_candidate_evidence(
+        {
+            "description": [
+                {"value": "<p>Sequential <strong>analog</strong> polysynth</p>", "source": "dom"},
+                {"value": "Sequential analog polysynth", "source": "json_ld"},
+            ],
+            "polyphony": [
+                {"value": "16 Voice", "source": "semantic_section"},
+            ],
+        },
+        {"title": "Prophet Rev2", "description": "Sequential analog polysynth"},
+    )
+
+    assert evidence["title"][0]["source"] == "current_output"
+    assert evidence["description"][0]["value"] == "Sequential analog polysynth"
+    assert any(row["source"] == "semantic_section" for row in evidence["polyphony"])
+
+
 # --- CRUD ---
 
 @pytest.mark.asyncio
@@ -97,6 +117,21 @@ async def test_create_crawl_run_rejects_hostnames_that_resolve_private(db_sessio
         await create_crawl_run(db_session, test_user.id, {
             "run_type": "crawl",
             "url": "https://internal-proxy.example",
+            "surface": "ecommerce_detail",
+        })
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_rejects_unresolved_targets(db_session: AsyncSession, test_user, monkeypatch: pytest.MonkeyPatch):
+    def _raise_unresolved(_hostname: str, _port: int) -> list[str]:
+        raise ValueError("Target host could not be resolved: broken.example")
+
+    monkeypatch.setattr("app.services.url_safety._resolve_host_ips", _raise_unresolved)
+
+    with pytest.raises(ValueError, match="could not be resolved"):
+        await create_crawl_run(db_session, test_user.id, {
+            "run_type": "crawl",
+            "url": "https://broken.example",
             "surface": "ecommerce_detail",
         })
 
@@ -464,6 +499,140 @@ async def test_extraction_verdict_in_summary(db_session: AsyncSession, test_user
     await db_session.refresh(run)
     assert "extraction_verdict" in run.result_summary
     assert run.result_summary["extraction_verdict"] in ("success", "partial")
+
+
+@pytest.mark.asyncio
+async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting_fields(db_session: AsyncSession, test_user):
+    detail_html = """
+    <html><head>
+    <meta name="description" content="Marketing description for the Prophet Rev2.">
+    </head><body>
+    <h1>Sequential Prophet Rev2</h1>
+    <div class="description"><p>Sequential <strong>Prophet Rev2</strong> with lush analog tone.</p></div>
+    <h2>Tech Specs</h2>
+    <ul>
+      <li>Type: Keyboard Synthesizer with Sequencer</li>
+      <li>Number of Keys: 61</li>
+      <li>Polyphony: 16 Voice</li>
+    </ul>
+    <script type="application/ld+json">
+    {"@type": "Product", "name": "Sequential Prophet Rev2", "brand": "Sequential", "sku": "REV2-16", "description": "Structured description for the Prophet Rev2."}
+    </script>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/rev2",
+        "surface": "ecommerce_detail",
+        "settings": {"llm_enabled": True},
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.crawl_service.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
+        patch(
+            "app.services.crawl_service.review_field_candidates",
+            new_callable=AsyncMock,
+            return_value=(
+                {
+                    "description": {
+                        "suggested_value": "Sequential Prophet Rev2 with lush analog tone.",
+                        "source": "semantic_section",
+                        "supporting_sources": ["dom", "semantic_section"],
+                        "note": "Removed markup and preserved the descriptive sentence.",
+                    },
+                    "polyphony": {
+                        "suggested_value": "16 Voice",
+                        "source": "semantic_section",
+                        "supporting_sources": ["semantic_section"],
+                    },
+                    "number_of_keys": {
+                        "suggested_value": "61",
+                        "source": "semantic_section",
+                        "supporting_sources": ["semantic_section"],
+                    },
+                },
+                None,
+            ),
+        ),
+    ):
+        await process_run(db_session, run.id)
+
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().all()
+    assert len(records) == 1
+    source_trace = records[0].source_trace or {}
+    suggestions = source_trace.get("llm_cleanup_suggestions") or {}
+    assert suggestions["description"]["suggested_value"] == "Sequential Prophet Rev2 with lush analog tone."
+    assert suggestions["description"]["supporting_sources"] == ["dom", "semantic_section"]
+    assert suggestions["polyphony"]["suggested_value"] == "16 Voice"
+    assert "polyphony" not in records[0].data
+    assert "number_of_keys" not in records[0].data
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_reuses_domain_approved_fields(db_session: AsyncSession, test_user):
+    seed_run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product/seed",
+        "surface": "ecommerce_detail",
+    })
+    db_session.add(
+        ReviewPromotion(
+            run_id=seed_run.id,
+            domain="example.com",
+            surface="ecommerce_detail",
+            approved_schema={"fields": ["polyphony", "number_of_keys"]},
+            field_mapping={"polyphony": "polyphony", "number_of_keys": "number_of_keys"},
+            selector_memory={},
+        )
+    )
+    await db_session.commit()
+
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product/rev2",
+        "surface": "ecommerce_detail",
+        "additional_fields": ["finish"],
+    })
+
+    assert run.requested_fields == ["polyphony", "number_of_keys", "finish"]
+    assert run.settings["domain_requested_fields"] == ["polyphony", "number_of_keys"]
+
+
+@pytest.mark.asyncio
+async def test_process_run_skips_cleanup_llm_when_deterministic_fields_are_unambiguous(db_session: AsyncSession, test_user):
+    detail_html = """
+    <html><body>
+    <h1>Deterministic Product Title</h1>
+    <meta name="description" content="Structured detail description">
+    <script type="application/ld+json">
+    {"@type": "Product", "name": "Deterministic Product Title", "brand": "TestBrand", "sku": "SKU-1"}
+    </script>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/deterministic",
+        "surface": "ecommerce_detail",
+        "settings": {"llm_enabled": True},
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.crawl_service.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
+        patch("app.services.crawl_service.review_field_candidates", new_callable=AsyncMock) as review_mock,
+    ):
+        await process_run(db_session, run.id)
+
+    review_mock.assert_not_awaited()
+    record = (
+        await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))
+    ).scalar_one()
+    assert record.source_trace["llm_cleanup_status"]["status"] == "skipped"
 
 
 @pytest.mark.asyncio

@@ -56,7 +56,6 @@ export default function RunDetailPage() {
     [logs, run?.status, run?.result_summary?.current_stage],
   );
 
-  /* Build CSV columns from record.data keys only — no raw_data/discovered_data/source_trace noise */
   const logicalColumns = useMemo(() => {
     const cols = new Set<string>();
     for (const record of displayedRecords) {
@@ -127,7 +126,6 @@ export default function RunDetailPage() {
         }
       />
 
-      {/* Meta row */}
       <div className="stagger-children grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetaCard label="Mode" value={formatRunType(run?.run_type)} />
         <MetaCard label="Page Type" value={formatPageType(readString(run?.settings?.page_type) ?? "-")} />
@@ -136,7 +134,6 @@ export default function RunDetailPage() {
       </div>
 
       {live ? (
-        /* Pipeline progress */
         <Card className="space-y-3">
           <SectionHeader title="Pipeline Progress" description="Current crawl stages for this run." />
           {run?.run_type === "batch" || run?.run_type === "csv" ? (
@@ -184,68 +181,64 @@ export default function RunDetailPage() {
           </div>
         </Card>
       ) : (
-        /* Results view */
         <Card className="space-y-4">
-            {/* Tab bar */}
-            <div className="flex items-center gap-0.5 border-b border-border pb-2">
-              <ResultTabButton active={resultTab === "csv"} onClick={() => setResultTab("csv")}>Data</ResultTabButton>
-              <ResultTabButton active={resultTab === "json"} onClick={() => setResultTab("json")}>JSON</ResultTabButton>
-              <ResultTabButton active={resultTab === "logs"} onClick={() => setResultTab("logs")}>Logs</ResultTabButton>
+          <div className="flex items-center gap-0.5 border-b border-border pb-2">
+            <ResultTabButton active={resultTab === "csv"} onClick={() => setResultTab("csv")}>Data</ResultTabButton>
+            <ResultTabButton active={resultTab === "json"} onClick={() => setResultTab("json")}>JSON</ResultTabButton>
+            <ResultTabButton active={resultTab === "logs"} onClick={() => setResultTab("logs")}>Logs</ResultTabButton>
+          </div>
+
+          {runError ? (
+            <div className="rounded-md border border-warning/20 bg-warning/5 px-3 py-2.5 text-[13px] text-foreground">
+              {runError}
             </div>
+          ) : null}
 
-            {runError ? (
-              <div className="rounded-md border border-warning/20 bg-warning/5 px-3 py-2.5 text-[13px] text-foreground">
-                {runError}
-              </div>
-            ) : null}
-
-            {resultTab === "csv" ? (
-              csvColumns.length ? (
-                <div className="overflow-auto rounded-md border border-border">
-                  <table className="compact-data-table">
-                    <thead>
-                      <tr>
-                        <th>#</th>
+          {resultTab === "csv" ? (
+            csvColumns.length ? (
+              <div className="overflow-auto rounded-md border border-border">
+                <table className="compact-data-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      {csvColumns.map((column) => (
+                        <th key={column}>{column}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {csvRows.map((row, index) => (
+                      <tr key={index}>
+                        <td className="text-muted tabular-nums">{index + 1}</td>
                         {csvColumns.map((column) => (
-                          <th key={column}>{column}</th>
+                          <td key={column} title={stringifyCell(row[column])}>
+                            <span className="block max-w-[260px] truncate">
+                              {stringifyCell(row[column]) || <span className="text-muted/40">--</span>}
+                            </span>
+                          </td>
                         ))}
                       </tr>
-                    </thead>
-                    <tbody>
-                      {csvRows.map((row, index) => (
-                        <tr key={index}>
-                          <td className="text-muted tabular-nums">{index + 1}</td>
-                          {csvColumns.map((column) => (
-                            <td key={column} title={stringifyCell(row[column])}>
-                              <span className="block max-w-[260px] truncate">
-                                {stringifyCell(row[column]) || <span className="text-muted/40">--</span>}
-                              </span>
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="text-[13px] text-muted">No fields extracted yet.</p>
-              )
-            ) : null}
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-[13px] text-muted">No fields extracted yet.</p>
+            )
+          ) : null}
 
-            {resultTab === "json" ? (
-              <pre className="max-h-[40rem] overflow-auto rounded-md border border-border bg-panel-strong p-4 font-mono text-[12px] leading-[1.6] text-foreground">
-                {JSON.stringify(displayedRecords.map((record) => cleanRecordForDisplay(record)), null, 2)}
-              </pre>
-            ) : null}
+          {resultTab === "json" ? (
+            <pre className="max-h-[40rem] overflow-auto rounded-md border border-border bg-panel-strong p-4 font-mono text-[12px] leading-[1.6] text-foreground">
+              {JSON.stringify(displayedRecords.map((record) => cleanRecordForDisplay(record)), null, 2)}
+            </pre>
+          ) : null}
 
-            {resultTab === "logs" ? <MessagesOnlyLogs logs={logs} /> : null}
+          {resultTab === "logs" ? <MessagesOnlyLogs logs={logs} /> : null}
         </Card>
       )}
     </div>
   );
 }
-
-/* --- Sub-components --- */
 
 function MetaCard({ label, value }: Readonly<{ label: string; value: string }>) {
   return (
@@ -320,9 +313,6 @@ function renderStageIcon(state: StageState) {
   return <Circle className="size-4 text-muted/40" />;
 }
 
-/* --- Helpers --- */
-
-/** Show only populated logical fields in JSON view — no empty values, no _internal keys */
 function cleanRecordForDisplay(record: CrawlRecord): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record.data ?? {})) {

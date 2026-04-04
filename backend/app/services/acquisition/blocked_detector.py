@@ -120,8 +120,6 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
             active_reason = f"active_block_marker:{marker}"
             provider = marker_provider
             break
-    if active_reason:
-        return BlockedPageResult(is_blocked=True, reason=active_reason, provider=provider)
 
     provider_marker = ""
     for marker, marker_provider in _CDN_PROVIDER_MARKERS:
@@ -134,9 +132,13 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
     script_count = html_lower.count("<script")
     link_count = html_lower.count("<a ")
     structural_signal = text_len < 500 and script_count > 3 and link_count < 3
+    rich_content_signal = text_len >= 2000 and link_count >= 5
 
     if "kpsdk" in html_lower and text_len < 200:
         return BlockedPageResult(is_blocked=True, reason="kasada_challenge_script", provider="kasada")
+
+    if active_reason and (title_reason or phrase_reason or structural_signal or not rich_content_signal):
+        return BlockedPageResult(is_blocked=True, reason=active_reason, provider=provider)
 
     if title_reason and phrase_reason:
         return BlockedPageResult(is_blocked=True, reason=title_reason, provider=provider)

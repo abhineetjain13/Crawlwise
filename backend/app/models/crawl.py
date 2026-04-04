@@ -8,6 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
+CRAWL_RUN_FK = "crawl_runs.id"
+
 
 class CrawlRun(Base):
     __tablename__ = "crawl_runs"
@@ -34,7 +36,7 @@ class CrawlRecord(Base):
     __tablename__ = "crawl_records"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("crawl_runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True)
     source_url: Mapped[str] = mapped_column(Text)
     data: Mapped[dict] = mapped_column(JSON, default=dict)
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -48,7 +50,7 @@ class CrawlLog(Base):
     __tablename__ = "crawl_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("crawl_runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True)
     level: Mapped[str] = mapped_column(String(20), default="info")
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
@@ -58,7 +60,7 @@ class ReviewPromotion(Base):
     __tablename__ = "review_promotions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("crawl_runs.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True)
     domain: Mapped[str] = mapped_column(String(255), index=True)
     surface: Mapped[str] = mapped_column(String(40))
     approved_schema: Mapped[dict] = mapped_column(JSON, default=dict)

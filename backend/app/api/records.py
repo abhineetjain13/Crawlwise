@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+from typing import Annotated
 from io import StringIO
 from functools import lru_cache
 from pathlib import Path
@@ -22,21 +23,25 @@ MAX_RECORD_PAGE_SIZE = 1000
 EXPORT_PAGING_HEADER = "X-Export-Paging"
 EXPORT_TOTAL_HEADER = "X-Export-Total"
 EXPORT_PARTIAL_HEADER = "X-Export-Partial"
+RUN_NOT_FOUND_DETAIL = "Run not found"
+RUN_NOT_FOUND_RESPONSE = {
+    404: {"description": RUN_NOT_FOUND_DETAIL},
+}
 
 
-@router.get("/{run_id}/records", response_model=PaginatedResponse[CrawlRecordResponse])
+@router.get("/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
 async def records_list(
     run_id: int,
-    page: int = Query(default=1, ge=1),
-    limit: int = Query(default=20, ge=1, le=MAX_RECORD_PAGE_SIZE),
-    session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    limit: Annotated[int, Query(ge=1, le=MAX_RECORD_PAGE_SIZE)] = 20,
 ) -> PaginatedResponse[CrawlRecordResponse]:
     from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
-        raise HTTPException(status_code=404, detail="Run not found")
-        
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+
     rows, total = await get_run_records(session, run_id, page, limit)
     return PaginatedResponse(
         items=[CrawlRecordResponse.model_validate(row, from_attributes=True) for row in rows],
@@ -44,16 +49,16 @@ async def records_list(
     )
 
 
-@router.get("/{run_id}/export/json")
+@router.get("/{run_id}/export/json", responses=RUN_NOT_FOUND_RESPONSE)
 async def export_json(
     run_id: int,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
     from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
     rows, metadata = await _collect_export_rows(session, run_id)
     payload = json.dumps([_clean_export_data(row.data) for row in rows], indent=2)
     return StreamingResponse(
@@ -66,16 +71,16 @@ async def export_json(
     )
 
 
-@router.get("/{run_id}/export/csv")
+@router.get("/{run_id}/export/csv", responses=RUN_NOT_FOUND_RESPONSE)
 async def export_csv(
     run_id: int,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
     from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
     rows, metadata = await _collect_export_rows(session, run_id)
     clean_rows = [_clean_export_data(row.data) for row in rows]
     fieldnames = sorted({key for r in clean_rows for key in r.keys()})
@@ -94,16 +99,16 @@ async def export_csv(
     )
 
 
-@router.get("/{run_id}/export/discoverist")
+@router.get("/{run_id}/export/discoverist", responses=RUN_NOT_FOUND_RESPONSE)
 async def export_discoverist(
     run_id: int,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
     from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
     rows, metadata = await _collect_export_rows(session, run_id)
     buffer = StringIO()
     writer = csv.writer(buffer)

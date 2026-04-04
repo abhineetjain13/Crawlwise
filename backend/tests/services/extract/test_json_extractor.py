@@ -24,7 +24,7 @@ def test_extract_jobs_from_remotive_shape():
             },
         ]
     }
-    records = extract_json_listing(data, "job_listing", "https://remotive.com/api")
+    records = extract_json_listing(data, "https://remotive.com/api")
     assert len(records) == 2
     assert records[0]["title"] == "Backend Engineer"
     assert records[0]["company"] == "Acme"
@@ -49,7 +49,7 @@ def test_extract_products_from_shopify_shape():
             },
         ]
     }
-    records = extract_json_listing(data, "ecommerce_listing", "https://store.com")
+    records = extract_json_listing(data, "https://store.com")
     assert len(records) == 2
     assert records[0]["title"] == "Cool Shirt"
     assert records[0]["brand"] == "BrandX"
@@ -63,7 +63,7 @@ def test_extract_from_top_level_array():
         {"position": "Designer", "company": "Y", "url": "/jobs/2"},
         {"position": "PM", "company": "Z", "url": "/jobs/3"},
     ]
-    records = extract_json_listing(data, "job_listing", "https://remoteok.com")
+    records = extract_json_listing(data, "https://remoteok.com")
     assert len(records) == 3
     assert records[0]["title"] == "Engineer"
 
@@ -80,7 +80,7 @@ def test_extract_nested_data_array():
             ]
         }
     }
-    records = extract_json_listing(data, "ecommerce_listing")
+    records = extract_json_listing(data)
     assert len(records) == 3
     assert records[0]["title"] == "Product A"
 
@@ -94,7 +94,7 @@ def test_extract_json_detail():
         "description": "The best widget ever made.",
         "url": "/products/widget-pro",
     }
-    records = extract_json_detail(data, "ecommerce_detail", "https://store.com")
+    records = extract_json_detail(data, "https://store.com")
     assert len(records) == 1
     assert records[0]["title"] == "Widget Pro"
     assert records[0]["price"] == "99.99"
@@ -107,7 +107,7 @@ def test_extract_json_detail_expands_job_sections():
         "responsibilities": ["Build services", "Operate systems"],
         "qualifications": "5+ years Python",
     }
-    records = extract_json_detail(data, "job_detail", "https://example.com/jobs/1")
+    records = extract_json_detail(data, "https://example.com/jobs/1")
     assert len(records) == 1
     assert records[0]["company"] == "Acme"
     assert "responsibilities" in records[0]
@@ -115,14 +115,14 @@ def test_extract_json_detail_expands_job_sections():
 
 
 def test_empty_json_returns_empty():
-    assert extract_json_listing({}, "job_listing") == []
-    assert extract_json_listing([], "job_listing") == []
-    assert extract_json_detail({}, "ecommerce_detail") == []
+    assert extract_json_listing({}) == []
+    assert extract_json_listing([]) == []
+    assert extract_json_detail({}) == []
 
 
 def test_max_records_respected():
     data = [{"name": f"Item {i}", "price": i} for i in range(50)]
-    records = extract_json_listing(data, "ecommerce_listing", max_records=5)
+    records = extract_json_listing(data, max_records=5)
     assert len(records) == 5
 
 
@@ -139,5 +139,5 @@ def test_graphql_edges_pattern():
             }
         }
     }
-    records = extract_json_listing(data, "ecommerce_listing")
+    records = extract_json_listing(data)
     assert len(records) == 3

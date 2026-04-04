@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
 import socket
+import subprocess
+import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from app.services.pipeline_config import DNS_RESOLUTION_RETRIES, DNS_RESOLUTION_RETRY_DELAY_MS
 
 _ALLOWED_SCHEMES = {"http", "https"}
 _BLOCKED_HOSTNAMES = {
@@ -14,6 +19,15 @@ _BLOCKED_HOSTNAMES = {
     "metadata.google.internal",
 }
 _BLOCKED_SUFFIXES = (".local",)
+
+
+@dataclass(frozen=True)
+class ValidatedTarget:
+    hostname: str
+    scheme: str
+    port: int
+    resolved_ips: tuple[str, ...]
+    dns_resolved: bool = True
 
 
 async def ensure_public_crawl_targets(urls: Iterable[str]) -> None:
@@ -26,7 +40,7 @@ async def ensure_public_crawl_targets(urls: Iterable[str]) -> None:
         await validate_public_target(candidate)
 
 
-async def validate_public_target(url: str) -> None:
+async def validate_public_target(url: str) -> ValidatedTarget:
     parsed = urlparse(str(url or "").strip())
     scheme = str(parsed.scheme or "").lower()
     if scheme not in _ALLOWED_SCHEMES:
@@ -41,28 +55,54 @@ async def validate_public_target(url: str) -> None:
     literal_ip = _parse_ip(hostname)
     if literal_ip is not None:
         _raise_if_non_public_ip(literal_ip, hostname)
-        return
+        return ValidatedTarget(
+            hostname=hostname,
+            scheme=scheme,
+            port=_target_port(parsed),
+            resolved_ips=(hostname,),
+            dns_resolved=False,
+        )
 
-    resolved_ips = await asyncio.to_thread(_resolve_host_ips, hostname, _default_port(parsed.scheme))
-    if not resolved_ips:
-        raise ValueError(f"Target host could not be resolved: {hostname}")
+    port = _target_port(parsed)
+    resolved_ips = await asyncio.to_thread(_resolve_host_ips, hostname, port)
+    validated_ips: list[str] = []
     for ip_text in resolved_ips:
         ip_value = _parse_ip(ip_text)
         if ip_value is None:
             continue
         _raise_if_non_public_ip(ip_value, hostname)
+        validated_ips.append(ip_text)
+    if not validated_ips:
+        raise ValueError(f"Target host could not be resolved to a valid IP address: {hostname}")
+    return ValidatedTarget(
+        hostname=hostname,
+        scheme=scheme,
+        port=port,
+        resolved_ips=tuple(validated_ips),
+    )
 
 
 def _resolve_host_ips(hostname: str, port: int) -> list[str]:
-    try:
-        records = socket.getaddrinfo(
-            hostname,
-            port,
-            family=socket.AF_UNSPEC,
-            type=socket.SOCK_STREAM,
-        )
-    except socket.gaierror as exc:
-        raise ValueError(f"Target host could not be resolved: {hostname}") from exc
+    last_error: socket.gaierror | None = None
+    attempts = max(1, int(DNS_RESOLUTION_RETRIES) + 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            records = socket.getaddrinfo(
+                hostname,
+                port,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
+            )
+            break
+        except socket.gaierror as exc:
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
+                continue
+            fallback = _resolve_host_ips_via_nslookup(hostname)
+            if fallback:
+                return fallback
+            raise ValueError(f"Target host could not be resolved: {hostname}") from exc
 
     resolved: list[str] = []
     seen: set[str] = set()
@@ -73,6 +113,56 @@ def _resolve_host_ips(hostname: str, port: int) -> list[str]:
             continue
         seen.add(ip_text)
         resolved.append(ip_text)
+    return resolved
+
+
+def _resolve_host_ips_via_nslookup(hostname: str) -> list[str]:
+    if hostname and hostname[0] == "-":
+        raise ValueError(f"Target host is not allowed: {hostname}")
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for record_type in ("A", "AAAA"):
+        try:
+            completed = subprocess.run(
+                ["nslookup", f"-type={record_type}", hostname],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        for ip_text in _parse_nslookup_addresses(output):
+            if ip_text in seen:
+                continue
+            seen.add(ip_text)
+            resolved.append(ip_text)
+    return resolved
+
+
+def _parse_nslookup_addresses(output: str) -> list[str]:
+    resolved: list[str] = []
+    seen: set[str] = set()
+    capture = False
+    for raw_line in str(output or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if lowered.startswith(("name:", "aliases:", "canonical name", "non-authoritative answer")):
+            capture = True
+        if not capture:
+            continue
+        for token in re.split(r"[\s,;]+", stripped):
+            ip_value = _parse_ip(token.strip("[]"))
+            if ip_value is None:
+                continue
+            normalized = ip_value.compressed
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            resolved.append(normalized)
     return resolved
 
 
@@ -90,6 +180,10 @@ def _raise_if_non_public_ip(
     if ip_value.is_global:
         return
     raise ValueError(f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}")
+
+
+def _target_port(parsed) -> int:
+    return int(parsed.port or _default_port(parsed.scheme))
 
 
 def _default_port(scheme: str) -> int:

@@ -31,7 +31,7 @@ class CrawlRunResponse(BaseModel):
     result_summary: dict
     created_at: datetime
     updated_at: datetime
-    completed_at: datetime | None
+    completed_at: datetime | None = None
 
     @model_validator(mode="after")
     def _sanitize_settings(self) -> "CrawlRunResponse":
@@ -49,7 +49,7 @@ class CrawlRecordResponse(BaseModel):
     raw_data: dict
     discovered_data: dict
     source_trace: dict
-    raw_html_path: str | None
+    raw_html_path: str | None = None
     created_at: datetime
 
     @model_validator(mode="after")
@@ -169,23 +169,34 @@ def _sanitize_crawl_settings(value: object) -> dict:
         normalized_key = str(key or "").strip()
         if normalized_key in _SENSITIVE_SETTING_KEYS:
             continue
-        if normalized_key in {"proxy_list", "proxies"} and isinstance(raw_value, list):
-            sanitized[normalized_key] = [_mask_proxy_url(item) for item in raw_value]
-            continue
-        if normalized_key == "proxy" and isinstance(raw_value, str):
-            sanitized[normalized_key] = _mask_proxy_url(raw_value)
-            continue
-        if isinstance(raw_value, dict):
-            sanitized[normalized_key] = _sanitize_crawl_settings(raw_value)
-            continue
-        if isinstance(raw_value, list):
-            sanitized[normalized_key] = [
-                _sanitize_crawl_settings(item) if isinstance(item, dict) else item
-                for item in raw_value
-            ]
-            continue
-        sanitized[normalized_key] = raw_value
+        sanitized[normalized_key] = _sanitize_setting_value(normalized_key, raw_value)
     return sanitized
+
+
+def _sanitize_setting_value(key: str, value: object) -> object:
+    if key in {"proxy_list", "proxies"} and isinstance(value, list):
+        return [_sanitize_proxy_item(item) for item in value]
+    if key == "proxy" and isinstance(value, str):
+        return _mask_proxy_url(value)
+    if isinstance(value, dict):
+        return _sanitize_crawl_settings(value)
+    if isinstance(value, list):
+        return [_sanitize_crawl_settings(item) if isinstance(item, dict) else item for item in value]
+    return value
+
+
+def _sanitize_proxy_item(value: object) -> object:
+    if isinstance(value, str):
+        return _mask_proxy_url(value)
+    if isinstance(value, dict):
+        sanitized = dict(value)
+        for key in ("url", "proxy", "proxy_url", "server"):
+            raw_url = sanitized.get(key)
+            if isinstance(raw_url, str):
+                sanitized[key] = _mask_proxy_url(raw_url)
+                break
+        return sanitized
+    return value
 
 
 def _mask_proxy_url(value: object) -> str:

@@ -7,7 +7,7 @@ export default function BulkCrawlPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace("/crawl?tab=batch");
+    router.replace("/crawl?module=pdp&mode=batch");
   }, [router]);
 
   return (

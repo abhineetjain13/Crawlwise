@@ -85,16 +85,21 @@ def extract_listing_records(
 def _extract_from_structured_sources(
     manifest: DiscoveryManifest, surface: str, page_url: str,
 ) -> list[dict]:
-    """Try JSON-LD, __NEXT_DATA__, and network payloads for listing items."""
-    records: list[dict] = []
+    """Try JSON-LD, __NEXT_DATA__, hydrated states, and network payloads.
+
+    All sources are collected and the richest result (highest average
+    public-field count per record) is returned.  This prevents sparse
+    JSON-LD ItemLists from short-circuiting richer hydrated-state data.
+    """
+    candidates: list[list[dict]] = []
 
     # JSON-LD: look for ItemList or arrays of Product/JobPosting
+    ld_records: list[dict] = []
     for payload in manifest.json_ld:
         if not isinstance(payload, dict):
             continue
         ld_type = payload.get("@type", "")
 
-        # ItemList with itemListElement
         if ld_type == "ItemList" or "itemListElement" in payload:
             elements = payload.get("itemListElement", [])
             for el in elements:
@@ -104,23 +109,22 @@ def _extract_from_structured_sources(
                         record = _normalize_ld_item(item, surface, page_url)
                         if record:
                             record["_source"] = "json_ld_item_list"
-                            records.append(record)
+                            ld_records.append(record)
 
-        # Array of Product / JobPosting at top level
         elif ld_type in ("Product", "JobPosting"):
             record = _normalize_ld_item(payload, surface, page_url)
             if record:
                 record["_source"] = "json_ld"
-                records.append(record)
+                ld_records.append(record)
 
-    if len(records) >= 2:
-        return records
+    if len(ld_records) >= 2:
+        candidates.append(ld_records)
 
     # __NEXT_DATA__: search for product/job arrays in page props
     if manifest.next_data:
         next_records = _extract_from_next_data(manifest.next_data, surface, page_url)
         if len(next_records) >= 2:
-            return next_records
+            candidates.append(next_records)
 
     # Additional hydrated state blobs discovered from inline scripts
     if manifest._hydrated_states:
@@ -129,7 +133,7 @@ def _extract_from_structured_sources(
             if len(state_records) >= 2:
                 for r in state_records:
                     r["_source"] = "hydrated_state"
-                return state_records
+                candidates.append(state_records)
 
     # Network payloads: look for JSON arrays of items
     for payload in manifest.network_payloads:
@@ -140,9 +144,24 @@ def _extract_from_structured_sources(
         if len(net_records) >= 2:
             for r in net_records:
                 r["_source"] = "network_payload"
-            return net_records
+            candidates.append(net_records)
 
-    return records
+    if not candidates:
+        return ld_records  # may be 0-1 records
+
+    # Pick the source with the highest average field richness
+    return max(candidates, key=_avg_public_field_count)
+
+
+def _avg_public_field_count(records: list[dict]) -> float:
+    """Average number of non-internal, non-empty fields per record."""
+    if not records:
+        return 0.0
+    total = sum(
+        sum(1 for k, v in r.items() if not str(k).startswith("_") and v not in (None, "", [], {}))
+        for r in records
+    )
+    return total / len(records)
 
 
 def _extract_from_json_ld(soup: BeautifulSoup, surface: str, page_url: str) -> list[dict]:
@@ -275,8 +294,15 @@ def _extract_from_next_data(next_data: dict, surface: str, page_url: str) -> lis
     return best
 
 
-def _extract_items_from_json(data: dict | list, surface: str, page_url: str) -> list[dict]:
-    """Extract items from an arbitrary JSON structure."""
+def _extract_items_from_json(data: dict | list, surface: str, page_url: str, _depth: int = 0) -> list[dict]:
+    """Extract items from an arbitrary JSON structure.
+
+    Recursively searches up to 4 levels deep for arrays of objects that
+    look like product/job collections.
+    """
+    if _depth > 4:
+        return []
+
     if isinstance(data, list):
         objects = [item for item in data if isinstance(item, dict)]
         if len(objects) >= 2:
@@ -286,19 +312,25 @@ def _extract_items_from_json(data: dict | list, surface: str, page_url: str) -> 
     if not isinstance(data, dict):
         return []
 
-    # Check known collection keys
+    # Check known collection keys at this level
     for key in COLLECTION_KEYS:
         if key in data and isinstance(data[key], list):
             objects = [item for item in data[key] if isinstance(item, dict)]
             if len(objects) >= 2:
                 return _try_normalize_array(objects, surface, page_url)
 
-    # Recurse one level
+    # Check all values: arrays first, then recurse into dicts
     for value in data.values():
         if isinstance(value, list):
             objects = [item for item in value if isinstance(item, dict)]
             if len(objects) >= 2:
                 return _try_normalize_array(objects, surface, page_url)
+
+    for value in data.values():
+        if isinstance(value, dict):
+            result = _extract_items_from_json(value, surface, page_url, _depth + 1)
+            if result:
+                return result
 
     return []
 

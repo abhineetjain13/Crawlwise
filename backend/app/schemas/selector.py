@@ -52,14 +52,14 @@ class SelectorResponse(BaseModel):
     id: int
     domain: str
     field_name: str
-    css_selector: str | None
-    xpath: str | None
-    regex: str | None
+    css_selector: str | None = None
+    xpath: str | None = None
+    regex: str | None = None
     status: str
-    sample_value: str | None
+    sample_value: str | None = None
     source: str
-    source_run_id: int | None
-    last_validated_at: datetime | None
+    source_run_id: int | None = None
+    last_validated_at: datetime | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -83,6 +83,6 @@ class SelectorTestRequest(BaseModel):
 
 
 class SelectorTestResponse(BaseModel):
-    matched_value: str | None
+    matched_value: str | None = None
     count: int
     selector_used: str | None = None

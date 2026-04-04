@@ -144,3 +144,59 @@ def test_discover_empty_html():
     assert manifest.next_data is None
     assert manifest.microdata == []
     assert manifest.tables == []
+
+
+def test_discover_embedded_json_from_application_json_script():
+    html = """
+    <html><body>
+    <script type="application/json" id="product-data">
+    {"product":{"name":"Embedded Widget","brand":"EmbedCo","sku":"EW-1"}}
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest._hydrated_states) == 1
+    assert manifest._hydrated_states[0]["product"]["name"] == "Embedded Widget"
+    assert manifest.embedded_json == []
+
+
+def test_discover_embedded_json_from_data_attribute():
+    html = """
+    <html><body>
+    <div data-product='{"name":"Attr Widget","price":"19.99"}'></div>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest.embedded_json) == 1
+    assert manifest.embedded_json[0]["name"] == "Attr Widget"
+
+
+def test_discover_embedded_json_ignores_unrelated_data_attributes():
+    html = """
+    <html><body>
+    <div
+      data-product='{"name":"Attr Widget","price":"19.99"}'
+      data-testid='{"unexpected":true}'
+      data-track-state='{"step":"details"}'
+    ></div>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+    assert len(manifest.embedded_json) == 2
+    assert manifest.embedded_json[0]["name"] == "Attr Widget"
+    assert manifest.embedded_json[1]["step"] == "details"
+
+
+def test_discover_deduplicates_application_json_between_hydrated_and_embedded():
+    html = """
+    <html><body>
+    <script id="state" type="application/json">
+    {"product":{"title":"Embedded Widget"}}
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+
+    assert len(manifest._hydrated_states) == 1
+    assert manifest._hydrated_states[0]["product"]["title"] == "Embedded Widget"
+    assert manifest.embedded_json == []

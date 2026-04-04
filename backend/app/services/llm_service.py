@@ -19,6 +19,8 @@ async def list_configs(session: AsyncSession) -> list[LLMConfig]:
 
 
 async def create_config(session: AsyncSession, payload: dict) -> LLMConfig:
+    if payload.get("is_active", True):
+        await _deactivate_task_configs(session, str(payload.get("task_type") or ""))
     config = LLMConfig(**payload)
     session.add(config)
     await session.commit()
@@ -27,6 +29,10 @@ async def create_config(session: AsyncSession, payload: dict) -> LLMConfig:
 
 
 async def update_config(session: AsyncSession, config: LLMConfig, payload: dict) -> LLMConfig:
+    next_task_type = str(payload.get("task_type") or config.task_type)
+    next_is_active = bool(payload.get("is_active", config.is_active))
+    if next_is_active:
+        await _deactivate_task_configs(session, next_task_type, keep_id=config.id)
     for key, value in payload.items():
         setattr(config, key, value)
     await session.commit()
@@ -86,3 +92,13 @@ def prepare_config_update(payload: dict) -> dict:
     if payload.get("api_key"):
         update["api_key_encrypted"] = encrypt_secret(payload["api_key"])
     return update
+
+
+async def _deactivate_task_configs(session: AsyncSession, task_type: str, *, keep_id: int | None = None) -> None:
+    if not task_type:
+        return
+    result = await session.execute(select(LLMConfig).where(LLMConfig.task_type == task_type, LLMConfig.is_active.is_(True)))
+    for row in result.scalars().all():
+        if keep_id is not None and row.id == keep_id:
+            continue
+        row.is_active = False

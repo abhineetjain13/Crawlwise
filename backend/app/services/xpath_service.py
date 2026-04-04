@@ -250,7 +250,8 @@ def _unique_anchor_xpath(node: Tag, root: BeautifulSoup | Tag, *, allow_class: b
 
     class_value = _stable_class_value(node.get("class"))
     if allow_class and class_value:
-        selector = f"//{node.name}[contains(concat(' ', normalize-space(@class), ' '), ' {class_value} ')]"
+        class_literal = _xpath_literal(f" {class_value} ")
+        selector = f"//{node.name}[contains(concat(' ', normalize-space(@class), ' '), {class_literal})]"
         if _is_unique_xpath(root, selector):
             return selector
     return None
@@ -259,7 +260,8 @@ def _unique_anchor_xpath(node: Tag, root: BeautifulSoup | Tag, *, allow_class: b
 def _relative_segment(node: Tag) -> str:
     class_value = _stable_class_value(node.get("class"))
     if class_value and _is_unique_class_among_siblings(node, class_value):
-        selector = f"{node.name}[contains(concat(' ', normalize-space(@class), ' '), ' {class_value} ')]"
+        class_literal = _xpath_literal(f" {class_value} ")
+        selector = f"{node.name}[contains(concat(' ', normalize-space(@class), ' '), {class_literal})]"
         return selector
     siblings = [
         sibling

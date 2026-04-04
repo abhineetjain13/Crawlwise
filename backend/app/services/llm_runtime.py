@@ -18,6 +18,7 @@ from app.services.knowledge_base.store import get_prompt_task, load_prompt_file
 
 
 _ERROR_PREFIX = "Error:"
+JSON_CONTENT_TYPE = "application/json"
 
 
 @dataclass
@@ -49,7 +50,7 @@ async def snapshot_active_configs(
     task_types: list[str] | None = None,
 ) -> dict[str, dict]:
     snapshot: dict[str, dict] = {}
-    for task_type in task_types or ["general", "xpath_discovery", "missing_field_extraction"]:
+    for task_type in task_types or ["general", "xpath_discovery", "missing_field_extraction", "field_cleanup_review"]:
         config = await resolve_active_config(session, task_type)
         if config is not None:
             snapshot[task_type] = _serialize_config_snapshot(config)
@@ -191,8 +192,8 @@ async def discover_xpath_candidates(
         variables={
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
-            "existing_values_json": json.dumps(existing_values, default=str),
-            "html_snippet": _truncate_html(html_text, 18000),
+            "existing_values_json": _truncate_json_literal(existing_values, 2400),
+            "html_snippet": _truncate_html(html_text, 12000),
         },
     )
     payload = result.payload
@@ -217,8 +218,38 @@ async def extract_missing_fields(
         variables={
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
-            "existing_values_json": json.dumps(existing_values, default=str),
-            "html_snippet": _truncate_html(html_text, 18000),
+            "existing_values_json": _truncate_json_literal(existing_values, 2400),
+            "html_snippet": _truncate_html(html_text, 12000),
+        },
+    )
+    payload = result.payload
+    return (payload if isinstance(payload, dict) else {}), (result.error_message or None)
+
+
+async def review_field_candidates(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    domain: str,
+    url: str,
+    html_text: str,
+    target_fields: list[str],
+    existing_values: dict[str, object],
+    candidate_evidence: dict[str, list[dict]],
+    discovered_sources: dict[str, object],
+) -> tuple[dict[str, dict], str | None]:
+    result = await run_prompt_task(
+        session,
+        task_type="field_cleanup_review",
+        run_id=run_id,
+        domain=domain,
+        variables={
+            "url": url,
+            "target_fields_json": json.dumps(target_fields),
+            "existing_values_json": _truncate_json_literal({field: existing_values.get(field) for field in target_fields}, 2400),
+            "candidate_evidence_json": _truncate_json_literal(candidate_evidence, 4800),
+            "discovered_sources_json": _truncate_json_literal(discovered_sources, 3200),
+            "html_snippet": _truncate_html(html_text, 4000),
         },
     )
     payload = result.payload
@@ -236,15 +267,18 @@ async def _call_provider(
     normalized_provider = str(provider or "").strip().lower()
     if not api_key:
         return f"{_ERROR_PREFIX} Missing API key", 0, 0
-    if normalized_provider == "openai":
-        return await _call_openai(api_key, model, system_prompt, user_prompt)
-    if normalized_provider == "groq":
-        return await _call_groq(api_key, model, system_prompt, user_prompt)
-    if normalized_provider == "anthropic":
-        return await _call_anthropic(api_key, model, system_prompt, user_prompt)
-    if normalized_provider == "nvidia":
-        return await _call_nvidia(api_key, model, system_prompt, user_prompt)
-    return f"{_ERROR_PREFIX} Unsupported provider: {provider}", 0, 0
+    try:
+        if normalized_provider == "openai":
+            return await _call_openai(api_key, model, system_prompt, user_prompt)
+        if normalized_provider == "groq":
+            return await _call_groq(api_key, model, system_prompt, user_prompt)
+        if normalized_provider == "anthropic":
+            return await _call_anthropic(api_key, model, system_prompt, user_prompt)
+        if normalized_provider == "nvidia":
+            return await _call_nvidia(api_key, model, system_prompt, user_prompt)
+        return f"{_ERROR_PREFIX} Unsupported provider: {provider}", 0, 0
+    except httpx.HTTPError as exc:
+        return f"{_ERROR_PREFIX} {type(exc).__name__}: {exc}", 0, 0
 
 
 async def _call_openai(
@@ -258,7 +292,7 @@ async def _call_openai(
             "https://api.openai.com/v1/responses",
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
             },
             json={
                 "model": model,
@@ -302,7 +336,7 @@ async def _call_groq(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
             },
             json={
                 "model": model,
@@ -332,7 +366,7 @@ async def _call_anthropic(
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
+                "content-type": JSON_CONTENT_TYPE,
             },
             json={
                 "model": model,
@@ -368,7 +402,7 @@ async def _call_nvidia(
             "https://integrate.api.nvidia.com/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
+                "Content-Type": JSON_CONTENT_TYPE,
             },
             json={
                 "model": model,
@@ -429,6 +463,56 @@ def _parse_json_array(raw_text: str) -> list | None:
 
 def _truncate_html(html_text: str, limit: int) -> str:
     return html_text.strip()[:limit]
+
+
+def _truncate_json_literal(value: Any, limit: int) -> str:
+    compact = _compact_json_value(value)
+    rendered = json.dumps(compact, default=str)
+    if len(rendered) <= limit:
+        return rendered
+    if isinstance(compact, dict):
+        trimmed: dict[str, Any] = {}
+        for key, item in compact.items():
+            candidate = {**trimmed, key: item}
+            candidate_rendered = json.dumps(candidate, default=str)
+            if len(candidate_rendered) > limit:
+                break
+            trimmed[key] = item
+        return json.dumps(trimmed, default=str)
+    if isinstance(compact, list):
+        trimmed_list: list[Any] = []
+        for item in compact:
+            candidate = [*trimmed_list, item]
+            candidate_rendered = json.dumps(candidate, default=str)
+            if len(candidate_rendered) > limit:
+                break
+            trimmed_list.append(item)
+        return json.dumps(trimmed_list, default=str)
+    return json.dumps(str(compact)[: max(0, limit - 2)], default=str)
+
+
+def _compact_json_value(value: Any, *, depth: int = 0, max_depth: int = 3) -> Any:
+    if value in (None, "", [], {}):
+        return value
+    if depth >= max_depth:
+        return _compact_leaf_value(value)
+    if isinstance(value, dict):
+        compact: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 12:
+                break
+            compact[str(key)] = _compact_json_value(item, depth=depth + 1, max_depth=max_depth)
+        return compact
+    if isinstance(value, list):
+        return [_compact_json_value(item, depth=depth + 1, max_depth=max_depth) for item in value[:10]]
+    return _compact_leaf_value(value)
+
+
+def _compact_leaf_value(value: Any) -> Any:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped[:220] if len(stripped) > 220 else stripped
+    return value
 
 
 def _stringify_prompt_value(value: Any) -> str:

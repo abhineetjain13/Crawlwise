@@ -1,111 +1,144 @@
-# Tests for blocked/challenge page detection.
 from __future__ import annotations
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 
 
-def test_empty_page_is_blocked():
-    result = detect_blocked_page("")
-    assert result.is_blocked
-    assert result.reason == "empty_or_too_short"
+def test_detect_blocked_page_empty_html():
+    verdict = detect_blocked_page("")
+
+    assert verdict.is_blocked
+    assert verdict.reason == "empty_or_too_short"
 
 
-def test_short_page_is_blocked():
-    result = detect_blocked_page("<html><body>tiny</body></html>")
-    assert result.is_blocked
-    assert result.reason == "empty_or_too_short"
-
-
-def test_normal_page_is_not_blocked():
-    html = "<html><head><title>Product Page</title></head><body>" + "<p>content</p>" * 50 + "</body></html>"
-    result = detect_blocked_page(html)
-    assert not result.is_blocked
-
-
-def test_access_denied_title():
+def test_detect_blocked_page_blocks_perimeterx():
     html = """
-    <html><head><title>Access Denied</title></head>
-    <body><p>You do not have permission to access this resource.</p>
-    """ + "x" * 200 + "</body></html>"
-    result = detect_blocked_page(html)
-    assert result.is_blocked
-    assert "blocked_title" in result.reason
+    <html>
+      <head><title>Access Denied</title></head>
+      <body>
+        <div class="px-captcha">Please verify you are a human</div>
+      </body>
+    </html>
+    """
+
+    verdict = detect_blocked_page(html)
+
+    assert verdict.is_blocked
+    assert verdict.provider == "perimeterx"
 
 
-def test_robot_or_human_challenge():
+def test_detect_blocked_page_blocks_cloudflare():
     html = """
-    <html><head><title>Robot or human?</title></head>
-    <body><div>Please verify you are a human</div>
-    """ + "x" * 200 + "</body></html>"
-    result = detect_blocked_page(html)
-    assert result.is_blocked
+    <html>
+      <head><title>Just a moment</title></head>
+      <body>
+        <div id="cf-challenge">Checking your browser before accessing example.com.</div>
+      </body>
+    </html>
+    """
+
+    verdict = detect_blocked_page(html)
+
+    assert verdict.is_blocked
+    assert verdict.provider == "cloudflare"
 
 
-def test_perimeterx_detected():
+def test_detect_blocked_page_allows_rich_pages_with_dormant_antibot_markup():
     html = """
-    <html><head><title>Press & Hold</title></head>
-    <body><div class="px-captcha"></div>
-    <script src="https://client.perimeterx.net/main.js"></script>
-    """ + "x" * 200 + "</body></html>"
-    result = detect_blocked_page(html)
-    assert result.is_blocked
-    assert result.provider == "perimeterx"
+    <html>
+      <head><title>Product Page</title></head>
+      <body>
+        <div id="dd-modal" hidden></div>
+        <main>
+          <nav>
+            <a href="/one">One</a>
+            <a href="/two">Two</a>
+            <a href="/three">Three</a>
+            <a href="/four">Four</a>
+            <a href="/five">Five</a>
+          </nav>
+          <article>
+            <h1>Example Product</h1>
+            <p>{content}</p>
+          </article>
+        </main>
+      </body>
+    </html>
+    """.format(content="useful content " * 300)
+
+    verdict = detect_blocked_page(html)
+
+    assert not verdict.is_blocked
 
 
-def test_cloudflare_challenge():
+def test_detect_blocked_page_blocks_kasada():
     html = """
-    <html><head><title>Just a moment...</title></head>
-    <body><div>Checking if the site connection is secure</div>
-    <div class="cf-challenge"></div>
-    """ + "x" * 200 + "</body></html>"
-    result = detect_blocked_page(html)
-    assert result.is_blocked
-    assert result.provider in ("cloudflare", "cf-challenge", "cf-browser-verification")
+    <html>
+      <head><title>Access denied</title></head>
+      <body>
+        <script src="https://example.com/kpsdk.js"></script>
+      </body>
+    </html>
+    """
+
+    verdict = detect_blocked_page(html)
+
+    assert verdict.is_blocked
+    assert verdict.provider == "kasada"
 
 
-def test_walmart_robot_check():
+def test_detect_blocked_page_blocks_akamai():
     html = """
-    <html><head><title>Robot or human?</title></head>
-    <body><h1>Robot or human?</h1>
-    <p>Please complete the CAPTCHA to continue</p>
-    <script src="https://cdn.perimeterx.net/px.js"></script>
-    """ + "x" * 200 + "</body></html>"
-    result = detect_blocked_page(html)
-    assert result.is_blocked
-    assert result.reason
+    <html>
+      <head>
+        <title>Access Denied</title>
+        <script src="https://static.akamai.example/challenge.js"></script>
+      </head>
+      <body>
+        <p>Access denied.</p>
+      </body>
+    </html>
+    """
+
+    verdict = detect_blocked_page(html)
+
+    assert verdict.is_blocked
+    assert verdict.provider == "akamai"
 
 
-def test_kasada_challenge_detected():
-    html = (
-        '<html><head></head><body>'
-        '<script>window.KPSDK={};KPSDK.now=Date.now;</script>'
-        '<script src="/ips.js"></script>'
-        '</body></html>'
-    )
-    result = detect_blocked_page(html)
-    assert result.is_blocked
-    assert result.provider == "kasada"
+def test_detect_blocked_page_blocks_active_marker_on_low_content_page():
+    html = """
+    <html>
+      <head><title>Just a moment</title></head>
+      <body>
+        <div id="dd-modal">Verifying your browser</div>
+      </body>
+    </html>
+    """
+
+    verdict = detect_blocked_page(html)
+
+    assert verdict.is_blocked
+    assert verdict.provider == "datadome"
 
 
-def test_akamai_cdn_page_not_blocked():
-    """A normal page served via Akamai CDN should NOT be flagged as blocked."""
-    html = (
-        '<html><head><title>Product Page</title></head><body>'
-        + '<p>Real product content</p>' * 30
-        + '<script src="https://cdn.akamaized.net/bundle.js"></script>'
-        + '</body></html>'
-    )
-    result = detect_blocked_page(html)
-    assert not result.is_blocked
+def test_detect_blocked_page_allows_normal_page():
+    html = """
+    <html>
+      <head><title>Example Product</title></head>
+      <body>
+        <main>
+          <h1>Widget Pro</h1>
+          <p>{content}</p>
+          <a href="/related">Related products</a>
+          <a href="/shipping">Shipping</a>
+          <a href="/support">Support</a>
+          <a href="/faq">FAQ</a>
+          <a href="/reviews">Reviews</a>
+        </main>
+      </body>
+    </html>
+    """.format(content="normal product content " * 200)
 
+    verdict = detect_blocked_page(html)
 
-def test_provider_marker_still_blocks_with_structural_signals_present():
-    html = (
-        "<html><head><title>Welcome</title></head><body>"
-        + ("<script></script>" * 4)
-        + "<div class='dd-modal'>Please wait</div>"
-        + "</body></html>"
-    )
-    result = detect_blocked_page(html)
-    assert result.is_blocked
-    assert result.provider == "datadome"
+    assert not verdict.is_blocked

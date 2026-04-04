@@ -147,15 +147,15 @@ export default function JobsPage() {
 }
 
 function StatusPill({ status }: Readonly<{ status: ActiveJob["status"] }>) {
-  const tone =
-    status === "running"
-      ? "success"
-      : status === "paused"
-        ? "warning"
-        : status === "killed" || status === "failed" || status === "proxy_exhausted"
-          ? "danger"
-          : "neutral";
+  const tone = statusTone(status);
   return <Badge tone={tone}>{status.replace(/_/g, " ")}</Badge>;
+}
+
+function statusTone(status: ActiveJob["status"]) {
+  if (status === "running") return "success" as const;
+  if (status === "paused") return "warning" as const;
+  if (status === "killed" || status === "failed" || status === "proxy_exhausted") return "danger" as const;
+  return "neutral" as const;
 }
 
 function ActionButton({

@@ -17,8 +17,15 @@
   "json_max_search_depth": 5,
   "http_retry_status_codes": [403, 429, 503],
   "http_max_retries": 2,
+  "http_retry_backoff_base_ms": 400,
+  "http_retry_backoff_max_ms": 3000,
+  "dns_resolution_retries": 1,
+  "dns_resolution_retry_delay_ms": 250,
+  "acquire_host_min_interval_ms": 250,
   "stealth_prefer_ttl_hours": 24,
   "challenge_wait_max_seconds": 12,
   "challenge_poll_interval_ms": 2000,
-  "origin_warm_pause_ms": 2000
+  "origin_warm_pause_ms": 2000,
+  "browser_error_retry_attempts": 1,
+  "browser_error_retry_delay_ms": 1000
 }

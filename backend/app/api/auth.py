@@ -1,6 +1,8 @@
 # Authentication route handlers.
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,8 +15,11 @@ from app.services.auth_service import authenticate_user, create_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=UserResponse)
-async def register(payload: UserCreate, session: AsyncSession = Depends(get_db)) -> UserResponse:
+@router.post("/register")
+async def register(
+    payload: UserCreate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> UserResponse:
     existing = await session.execute(select(User).where(User.email == payload.email.lower()))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
@@ -22,8 +27,12 @@ async def register(payload: UserCreate, session: AsyncSession = Depends(get_db))
     return UserResponse.model_validate(user, from_attributes=True)
 
 
-@router.post("/login", response_model=AuthResponse)
-async def login(payload: UserCreate, response: Response, session: AsyncSession = Depends(get_db)) -> AuthResponse:
+@router.post("/login")
+async def login(
+    payload: UserCreate,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> AuthResponse:
     authenticated = await authenticate_user(session, payload.email, payload.password)
     if authenticated is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -35,6 +44,6 @@ async def login(payload: UserCreate, response: Response, session: AsyncSession =
     )
 
 
-@router.get("/me", response_model=UserResponse)
-async def me(user: User = Depends(get_current_user)) -> UserResponse:
+@router.get("/me")
+async def me(user: Annotated[User, Depends(get_current_user)]) -> UserResponse:
     return UserResponse.model_validate(user, from_attributes=True)

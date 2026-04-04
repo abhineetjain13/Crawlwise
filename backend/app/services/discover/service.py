@@ -18,6 +18,7 @@ class DiscoveryManifest:
     network_payloads: list[dict] = field(default_factory=list)   # rank 2: XHR/fetch
     next_data: dict | None = None                                # rank 3: __NEXT_DATA__
     _hydrated_states: list[dict | list] = field(default_factory=list)
+    embedded_json: list[dict | list] = field(default_factory=list)
     json_ld: list[dict] = field(default_factory=list)            # rank 4: JSON-LD
     microdata: list[dict] = field(default_factory=list)          # rank 5: Microdata/RDFa
     tables: list[list[list[str]]] = field(default_factory=list)  # rank 8: HTML tables
@@ -28,6 +29,7 @@ class DiscoveryManifest:
             "network_payloads": self.network_payloads,
             "next_data": self.next_data,
             "_hydrated_states": self._hydrated_states,
+            "embedded_json": self.embedded_json,
             "json_ld": self.json_ld,
             "microdata": self.microdata,
             "tables": self.tables,
@@ -59,13 +61,16 @@ def discover_sources(
     manifest.next_data = _extract_next_data(soup)
 
     # Rank 3b: additional hydrated state blobs found in inline scripts
-    manifest._hydrated_states = _extract_hydrated_states(soup)
+    manifest._hydrated_states, hydrated_script_ids = _extract_hydrated_states(soup)
     if manifest.next_data is None and manifest._hydrated_states:
         manifest.next_data = {"_hydrated_states": manifest._hydrated_states}
     elif manifest.next_data is not None and manifest._hydrated_states:
         next_data = dict(manifest.next_data)
         next_data["_hydrated_states"] = manifest._hydrated_states
         manifest.next_data = next_data
+
+    # Rank 3c: explicit embedded JSON blobs in scripts/data-* attributes
+    manifest.embedded_json = _extract_embedded_json(soup, seen_script_ids=hydrated_script_ids)
 
     # Rank 4: JSON-LD
     manifest.json_ld = _extract_json_ld(soup)
@@ -103,7 +108,7 @@ def _extract_next_data(soup: BeautifulSoup) -> dict | None:
     return None
 
 
-def _extract_hydrated_states(soup: BeautifulSoup) -> list[dict | list]:
+def _extract_hydrated_states(soup: BeautifulSoup) -> tuple[list[dict | list], set[str]]:
     """Extract app state blobs beyond __NEXT_DATA__.
 
     This is intentionally conservative: only JSON-like blobs and known state
@@ -111,6 +116,7 @@ def _extract_hydrated_states(soup: BeautifulSoup) -> list[dict | list]:
     """
     blobs: list[dict | list] = []
     seen: set[str] = set()
+    seen_script_ids: set[str] = set()
 
     for node in soup.find_all("script"):
         if node.get("src"):
@@ -133,8 +139,76 @@ def _extract_hydrated_states(soup: BeautifulSoup) -> list[dict | list]:
             continue
         seen.add(fingerprint)
         blobs.append(parsed)
+        seen_script_ids.add(_normalized_script_identifier(node, text, fingerprint))
+
+    return blobs, seen_script_ids
+
+
+def _extract_embedded_json(soup: BeautifulSoup, seen_script_ids: set[str] | None = None) -> list[dict | list]:
+    """Extract explicit JSON blobs from scripts and data-* attributes.
+
+    This complements hydrated-state parsing for sites that stash structured
+    product/app payloads in generic application/json scripts or element
+    attributes such as data-product / data-state / data-props.
+    """
+    blobs: list[dict | list] = []
+    seen: set[str] = set()
+    seen_script_ids = set(seen_script_ids or ())
+
+    for node in soup.find_all("script"):
+        if node.get("src"):
+            continue
+        script_type = str(node.get("type") or "").lower()
+        script_id = str(node.get("id") or "").lower()
+        text = node.string or node.get_text(" ", strip=True) or ""
+        if not text or script_type == "application/ld+json":
+            continue
+        if _normalized_script_identifier(node, text) in seen_script_ids:
+            continue
+        if script_type == "application/json" or any(token in script_id for token in ("state", "data", "props", "product")):
+            parsed = _parse_json_blob(text)
+            if parsed is not None:
+                _append_unique_blob(blobs, seen, parsed)
+
+    data_attr_tokens = ("json", "state", "props", "product", "config", "schema", "payload")
+    for node in soup.find_all(True):
+        if not isinstance(node, Tag):
+            continue
+        for attr_name, attr_value in node.attrs.items():
+            if not str(attr_name or "").startswith("data-"):
+                continue
+            lowered_name = str(attr_name).lower()
+            if not any(
+                lowered_name == f"data-{token}" or lowered_name.endswith(f"-{token}")
+                for token in data_attr_tokens
+            ):
+                continue
+            if isinstance(attr_value, list):
+                raw_value = " ".join(str(part) for part in attr_value)
+            else:
+                raw_value = str(attr_value or "")
+            parsed = _parse_json_blob(raw_value)
+            if parsed is not None:
+                _append_unique_blob(blobs, seen, parsed)
 
     return blobs
+
+
+def _normalized_script_identifier(node: Tag, text: str, fingerprint: str | None = None) -> str:
+    script_id = str(node.get("id") or "").strip().lower()
+    if script_id:
+        return f"id:{script_id}"
+    script_type = str(node.get("type") or "").strip().lower()
+    normalized_text = " ".join(str(text or "").split())
+    return f"type:{script_type}|fp:{fingerprint or normalized_text}"
+
+
+def _append_unique_blob(blobs: list[dict | list], seen: set[str], parsed: dict | list) -> None:
+    fingerprint = json.dumps(parsed, sort_keys=True, default=str)
+    if fingerprint in seen:
+        return
+    seen.add(fingerprint)
+    blobs.append(parsed)
 
 
 def _parse_json_blob(text: str) -> dict | list | None:

@@ -12,6 +12,7 @@ const TASK_OPTIONS = [
   { value: "general", label: "General" },
   { value: "xpath_discovery", label: "Selector Discovery" },
   { value: "missing_field_extraction", label: "Missing Field Extraction" },
+  { value: "field_cleanup_review", label: "Cleanup Review" },
 ] as const;
 
 export default function AdminLlmPage() {
@@ -22,12 +23,13 @@ export default function AdminLlmPage() {
 
   const catalog = catalogQuery.data;
   const configRows = configsQuery.data;
-  const configs = configRows ?? [];
+  const configs = useMemo(() => configRows ?? [], [configRows]);
   const costLogs = costQuery.data?.items ?? [];
 
   const [provider, setProvider] = useState("groq");
   const [taskType, setTaskType] = useState("general");
   const [model, setModel] = useState("");
+  const [customModelEnabled, setCustomModelEnabled] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [dailyBudget, setDailyBudget] = useState("2.00");
   const [sessionBudget, setSessionBudget] = useState("10.00");
@@ -42,10 +44,19 @@ export default function AdminLlmPage() {
     () => (configRows ?? []).find((item) => item.provider === provider && item.task_type === taskType && item.is_active),
     [configRows, provider, taskType],
   );
+  const activeTaskConfig = useMemo(
+    () => (configRows ?? []).find((item) => item.task_type === taskType && item.is_active),
+    [configRows, taskType],
+  );
   const hasSavedKey = Boolean(activeSavedConfig?.api_key_set);
   const hasEnvKey = Boolean(activeProvider?.api_key_set);
   const hasDraftKey = Boolean(apiKey.trim());
-  const effectiveModel = model || activeProvider?.recommended_models?.[0] || "";
+  const providerModels = useMemo(
+    () => uniqueStrings([...(activeProvider?.recommended_models ?? []), ...configs.filter((item) => item.provider === provider).map((item) => item.model)]),
+    [activeProvider?.recommended_models, configs, provider],
+  );
+  const effectiveModel = model || activeSavedConfig?.model || activeProvider?.recommended_models?.[0] || "";
+  const selectedModelValue = customModelEnabled ? "__custom__" : effectiveModel;
 
   const testMutation = useMutation({
     mutationFn: () => api.testLlmConnection({ provider, model: effectiveModel, api_key: apiKey || undefined }),
@@ -61,14 +72,24 @@ export default function AdminLlmPage() {
 
   const createMutation = useMutation({
     mutationFn: ({ dailyBudgetValue, sessionBudgetValue }: { dailyBudgetValue: number; sessionBudgetValue: number }) =>
-      api.createLlmConfig({
-        provider,
-        model: effectiveModel,
-        api_key: apiKey || undefined,
-        task_type: taskType,
-        per_domain_daily_budget_usd: dailyBudgetValue,
-        global_session_budget_usd: sessionBudgetValue,
-      }),
+      activeTaskConfig
+        ? api.updateLlmConfig(activeTaskConfig.id, {
+          provider,
+          model: effectiveModel,
+          api_key: apiKey || undefined,
+          task_type: taskType,
+          per_domain_daily_budget_usd: dailyBudgetValue,
+          global_session_budget_usd: sessionBudgetValue,
+          is_active: true,
+        })
+        : api.createLlmConfig({
+          provider,
+          model: effectiveModel,
+          api_key: apiKey || undefined,
+          task_type: taskType,
+          per_domain_daily_budget_usd: dailyBudgetValue,
+          global_session_budget_usd: sessionBudgetValue,
+        }),
     onSuccess: () => {
       setApiKey("");
       setTestOk(null);
@@ -123,6 +144,7 @@ export default function AdminLlmPage() {
                 setProvider(event.target.value);
                 const next = (catalog ?? []).find((item) => item.provider === event.target.value);
                 setModel(next?.recommended_models?.[0] ?? "");
+                setCustomModelEnabled(false);
                 setTestOk(null);
                 setTestMessage("");
               }}
@@ -149,31 +171,43 @@ export default function AdminLlmPage() {
 
           <label className="grid gap-1.5 md:col-span-2">
             <span className="label-caps">Model</span>
-            <Input
-              value={effectiveModel}
+            <select
+              value={selectedModelValue}
               onChange={(event) => {
-                setModel(event.target.value);
+                const nextValue = event.target.value;
+                if (nextValue === "__custom__") {
+                  setCustomModelEnabled(true);
+                  setModel("");
+                } else {
+                  setCustomModelEnabled(false);
+                  setModel(nextValue);
+                }
                 setTestOk(null);
                 setTestMessage("");
               }}
-              placeholder="llama-3.1-8b-instant"
-            />
-            {activeProvider?.recommended_models?.length ? (
-              <div className="flex flex-wrap gap-2">
-                {activeProvider.recommended_models.map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => {
-                      setModel(value);
-                      setTestOk(null);
-                      setTestMessage("");
-                    }}
-                    className="rounded-[var(--radius-sm)] border border-border px-2 py-1 text-[12px] text-muted transition hover:bg-background-elevated hover:text-foreground"
-                  >
-                    {value}
-                  </button>
-                ))}
+              className="control-select focus-ring"
+            >
+              {providerModels.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+              <option value="__custom__">Custom model</option>
+            </select>
+            {customModelEnabled ? (
+              <Input
+                value={model}
+                onChange={(event) => {
+                  setModel(event.target.value);
+                  setTestOk(null);
+                  setTestMessage("");
+                }}
+                placeholder="Enter custom model id"
+              />
+            ) : null}
+            {providerModels.length ? (
+              <div className="text-[12px] text-muted">
+                Choose a recommended or previously used model for this provider.
               </div>
             ) : null}
           </label>
@@ -188,7 +222,7 @@ export default function AdminLlmPage() {
                 setTestOk(null);
                 setTestMessage("");
               }}
-              placeholder={hasEnvKey ? "Env-backed key detected; leave blank to use it." : hasSavedKey ? "Saved key exists for this task; enter a new one to replace it." : "Paste API key"}
+              placeholder={apiKeyPlaceholder(hasEnvKey, hasSavedKey)}
             />
           </label>
 
@@ -208,8 +242,13 @@ export default function AdminLlmPage() {
             {hasEnvKey ? "env key ready" : "env key missing"}
           </Badge>
           <Badge tone={hasSavedKey || hasDraftKey ? "success" : "warning"}>
-            {hasDraftKey ? "new key entered" : hasSavedKey ? "saved key ready" : "no saved key"}
+            {savedKeyBadgeLabel(hasDraftKey, hasSavedKey)}
           </Badge>
+          {activeTaskConfig ? (
+            <Badge tone="success">
+              active {activeTaskConfig.provider}:{activeTaskConfig.model}
+            </Badge>
+          ) : null}
           {testMessage ? (
             <div className={testOk ? "text-[13px] text-success" : "text-[13px] text-danger"}>
               {testMessage}
@@ -248,6 +287,7 @@ export default function AdminLlmPage() {
                   <th>Daily Budget</th>
                   <th>Session Budget</th>
                   <th>Active</th>
+                  <th className="text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -260,6 +300,31 @@ export default function AdminLlmPage() {
                     <td>{config.per_domain_daily_budget_usd}</td>
                     <td>{config.global_session_budget_usd}</td>
                     <td>{config.is_active ? "yes" : "no"}</td>
+                    <td>
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => {
+                            const nextProviderModels = uniqueStrings([
+                              ...(catalog?.find((item) => item.provider === config.provider)?.recommended_models ?? []),
+                              ...configs.filter((item) => item.provider === config.provider).map((item) => item.model),
+                            ]);
+                            setTaskType(config.task_type);
+                            setProvider(config.provider);
+                            setModel(config.model);
+                            setCustomModelEnabled(!nextProviderModels.includes(config.model));
+                            setDailyBudget(String(config.per_domain_daily_budget_usd));
+                            setSessionBudget(String(config.global_session_budget_usd));
+                            setApiKey("");
+                            setTestOk(null);
+                            setTestMessage("");
+                          }}
+                        >
+                          Load
+                        </Button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -307,4 +372,20 @@ export default function AdminLlmPage() {
       </Card>
     </div>
   );
+}
+
+function apiKeyPlaceholder(hasEnvKey: boolean, hasSavedKey: boolean) {
+  if (hasEnvKey) return "Env-backed key detected; leave blank to use it.";
+  if (hasSavedKey) return "Saved key exists for this task; enter a new one to replace it.";
+  return "Paste API key";
+}
+
+function savedKeyBadgeLabel(hasDraftKey: boolean, hasSavedKey: boolean) {
+  if (hasDraftKey) return "new key entered";
+  if (hasSavedKey) return "saved key ready";
+  return "no saved key";
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
 }

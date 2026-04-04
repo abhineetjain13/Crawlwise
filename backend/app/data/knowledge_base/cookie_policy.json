@@ -1,0 +1,34 @@
+{
+  "persist_session_cookies": false,
+  "max_persisted_ttl_seconds": 2592000,
+  "blocked_name_prefixes": [
+    "cf_",
+    "__cf",
+    "ak_",
+    "bm_",
+    "dd_",
+    "datadome",
+    "px",
+    "_px",
+    "kpsdk",
+    "captcha"
+  ],
+  "blocked_name_contains": [
+    "challenge",
+    "captcha",
+    "datadome",
+    "perimeterx",
+    "incap",
+    "kasada",
+    "bot"
+  ],
+  "domain_overrides": {
+    "example.com": {
+      "allowed_cookie_names": [
+        "consent_state",
+        "locale",
+        "currency"
+      ]
+    }
+  }
+}

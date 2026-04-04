@@ -12,7 +12,6 @@ from app.services.pipeline_config import COLLECTION_KEYS, FIELD_ALIASES, JSON_MA
 
 def extract_json_listing(
     json_data: dict | list,
-    surface: str,
     page_url: str = "",
     max_records: int = 100,
 ) -> list[dict]:
@@ -29,7 +28,7 @@ def extract_json_listing(
     for item in items[:max_records]:
         if not isinstance(item, dict):
             continue
-        record = _normalize_item(item, surface, page_url)
+        record = _normalize_item(item, page_url)
         if record and any(v for k, v in record.items() if not k.startswith("_")):
             record["_source"] = "json_api"
             records.append(record)
@@ -39,7 +38,6 @@ def extract_json_listing(
 
 def extract_json_detail(
     json_data: dict | list,
-    surface: str,
     page_url: str = "",
 ) -> list[dict]:
     """Extract a single record from a JSON API response (detail page)."""
@@ -51,7 +49,7 @@ def extract_json_detail(
     if not isinstance(json_data, dict):
         return []
 
-    record = _normalize_item(json_data, surface, page_url)
+    record = _normalize_item(json_data, page_url)
     if record and any(v for k, v in record.items() if not k.startswith("_")):
         record["_source"] = "json_api"
         return [record]
@@ -102,7 +100,7 @@ def _find_items_array(data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH)
     return best
 
 
-def _normalize_item(item: dict, surface: str, page_url: str) -> dict:
+def _normalize_item(item: dict, page_url: str) -> dict:
     """Map an arbitrary JSON object to canonical fields."""
     record: dict = {}
     # Flatten one level of nesting for fields like {"company": {"name": "X"}}

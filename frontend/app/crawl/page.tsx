@@ -19,14 +19,14 @@ import {
   X,
 } from "lucide-react";
 import type { Route } from "next";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 
 import { PageHeader, SectionHeader } from "../../components/ui/patterns";
 import { Badge, Button, Card, Input, Textarea } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
-import type { CrawlConfig, CrawlPhase, CrawlRecord, CrawlRun } from "../../lib/api/types";
+import type { CrawlConfig, CrawlMode, CrawlPhase, CrawlRecord, CrawlRun } from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES, TERMINAL_STATUSES } from "../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
@@ -63,14 +63,29 @@ type IntelligenceSuggestion = {
   fieldName: string;
   value: string;
   source: string;
+  currentValue: string;
+  note: string;
+  supportingSources: string[];
   state: SuggestionState;
+};
+type LlmCleanupStatus = {
+  status: string;
+  message?: string;
+  count?: number;
+};
+type BulkPrefill = {
+  urls: string[];
+  additional_fields?: string[];
+  module?: CrawlTab;
+  mode?: CategoryMode | PdpMode;
+  sourceRunId?: number;
+  sourceUrl?: string;
 };
 
 const LOG_FILTERS: LogLevel[] = ["INFO", "WARN", "ERROR", "PROXY"];
 
 export default function CrawlPage() {
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
   const [crawlPhase, setCrawlPhase] = useState<CrawlPhase>("config");
   const [crawlTab, setCrawlTab] = useState<CrawlTab>("pdp");
@@ -109,14 +124,40 @@ export default function CrawlPage() {
   const [suggestionState, setSuggestionState] = useState<Record<string, SuggestionState>>({});
   const [commitPending, setCommitPending] = useState(false);
   const [commitError, setCommitError] = useState("");
+  const [savedOutputFields, setSavedOutputFields] = useState<string[]>([]);
+  const [saveOutputFieldsPending, setSaveOutputFieldsPending] = useState(false);
+  const [saveOutputFieldsMessage, setSaveOutputFieldsMessage] = useState("");
+  const [saveOutputFieldsError, setSaveOutputFieldsError] = useState("");
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const runId = Number(searchParams.get("runId") || 0) || null;
+  const legacyRunRedirect = runId !== null;
+  const requestedModule = readRequestedModule(searchParams);
+  const requestedMode = readRequestedMode(searchParams);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!runId) {
+      return;
+    }
+    router.replace((`/runs/${runId}`) as Route);
+  }, [router, runId]);
+
+  useEffect(() => {
+    if (requestedModule) {
+      setCrawlTab(requestedModule);
+    }
+    if (requestedMode && isCategoryMode(requestedMode)) {
+      setCategoryMode(requestedMode);
+    }
+    if (requestedMode && isPdpMode(requestedMode)) {
+      setPdpMode(requestedMode);
+    }
+  }, [requestedMode, requestedModule]);
 
   const runQuery = useQuery({
     queryKey: ["crawl-run", runId],
     queryFn: () => api.getCrawl(runId as number),
-    enabled: runId !== null,
+    enabled: runId !== null && !legacyRunRedirect,
     refetchInterval: (query) => (query.state.data && ACTIVE_STATUSES.has(query.state.data.status) ? POLLING_INTERVALS.ACTIVE_JOB_MS : false),
   });
   const run = runQuery.data;
@@ -124,7 +165,7 @@ export default function CrawlPage() {
   const recordsQuery = useQuery({
     queryKey: ["crawl-records", runId],
     queryFn: () => api.getRecords(runId as number, { limit: 1000 }),
-    enabled: runId !== null && Boolean(run),
+    enabled: runId !== null && Boolean(run) && !legacyRunRedirect,
     refetchInterval: () => {
       const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
       return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? POLLING_INTERVALS.RECORDS_MS : false;
@@ -133,7 +174,7 @@ export default function CrawlPage() {
   const logsQuery = useQuery({
     queryKey: ["crawl-logs", runId],
     queryFn: () => api.getCrawlLogs(runId as number),
-    enabled: runId !== null,
+    enabled: runId !== null && !legacyRunRedirect,
     refetchInterval: () => {
       const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
       return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? POLLING_INTERVALS.LOGS_MS : false;
@@ -142,7 +183,7 @@ export default function CrawlPage() {
   const reviewQuery = useQuery({
     queryKey: ["crawl-review", runId],
     queryFn: () => api.getReview(runId as number),
-    enabled: runId !== null && Boolean(run && TERMINAL_STATUSES.has(run.status)),
+    enabled: runId !== null && Boolean(run && TERMINAL_STATUSES.has(run.status)) && !legacyRunRedirect,
   });
 
   const records = useMemo(() => recordsQuery.data?.items ?? [], [recordsQuery.data?.items]);
@@ -150,6 +191,29 @@ export default function CrawlPage() {
   const review = reviewQuery.data;
   const terminal = run ? TERMINAL_STATUSES.has(run.status) : false;
   const live = Boolean(run && ACTIVE_STATUSES.has(run.status));
+  const llmCleanupStatus = useMemo<LlmCleanupStatus | null>(() => {
+    for (const record of records) {
+      const status = record.source_trace?.llm_cleanup_status;
+      if (status && typeof status === "object" && !Array.isArray(status)) {
+        return {
+          status: String((status as Record<string, unknown>).status ?? ""),
+          message: typeof (status as Record<string, unknown>).message === "string" ? String((status as Record<string, unknown>).message) : undefined,
+          count: typeof (status as Record<string, unknown>).count === "number" ? Number((status as Record<string, unknown>).count) : undefined,
+        };
+      }
+    }
+    return null;
+  }, [records]);
+
+  useEffect(() => {
+    if (runId === null) {
+      setCrawlPhase("config");
+      return;
+    }
+    setPreviewOpen(false);
+    setPendingDispatch(null);
+    setCrawlPhase("running");
+  }, [runId]);
 
   useEffect(() => {
     if (!run) {
@@ -168,10 +232,17 @@ export default function CrawlPage() {
       return;
     }
     try {
-      const parsed = JSON.parse(stored) as { urls: string[]; additional_fields?: string[] };
+      const parsed = JSON.parse(stored) as BulkPrefill;
       if (Array.isArray(parsed.urls) && parsed.urls.length) {
-        setCrawlTab("category");
-        setCategoryMode("bulk");
+        const requestedTab = parsed.module ?? "pdp";
+        const mode = parsed.mode ?? "batch";
+        setCrawlTab(requestedTab);
+        if (requestedTab === "category" && isCategoryMode(mode)) {
+          setCategoryMode(mode);
+        }
+        if (requestedTab === "pdp" && isPdpMode(mode)) {
+          setPdpMode(mode);
+        }
         setBulkUrls(parsed.urls.join("\n"));
         if (Array.isArray(parsed.additional_fields)) {
           setAdditionalFields(uniqueFields(parsed.additional_fields));
@@ -220,6 +291,36 @@ export default function CrawlPage() {
     }
   }, [additionalFields.length, review]);
 
+  useEffect(() => {
+    setSaveOutputFieldsMessage("");
+    setSaveOutputFieldsError("");
+    setSavedOutputFields([]);
+  }, [runId]);
+
+  const visibleColumns = useMemo(() => {
+    const columns = new Set<string>();
+    for (const record of records) {
+      Object.keys(record.data ?? {}).forEach((key) => {
+        if (!key.startsWith("_")) {
+          columns.add(key);
+        }
+      });
+    }
+    return Array.from(columns);
+  }, [records]);
+
+  useEffect(() => {
+    if (!review) {
+      return;
+    }
+    const preferredFields = uniqueFields([
+      ...Object.values(review.domain_mapping ?? {}).map((value) => String(value || "")),
+      ...(review.normalized_fields ?? []),
+      ...visibleColumns,
+    ]);
+    setSavedOutputFields((current) => (current.length ? current : preferredFields));
+  }, [review, visibleColumns]);
+
   const intelligenceSuggestions = useMemo<IntelligenceSuggestion[]>(() => {
     return records.flatMap((record) => {
       const suggestions = record.source_trace?.llm_cleanup_suggestions;
@@ -234,14 +335,24 @@ export default function CrawlPage() {
         if (!value) {
           return [];
         }
+        const rawRecord = raw as Record<string, unknown>;
         const key = `${record.id}:${fieldName}`;
-        const backendStatus = String((raw as Record<string, unknown>).status ?? "pending_review");
+        const backendStatus = String(rawRecord.status ?? "pending_review");
+        const note = stringifyCell(rawRecord.note).trim();
+        const supportingSources = Array.isArray(rawRecord.supporting_sources)
+          ? (rawRecord.supporting_sources as unknown[])
+            .map((item) => String(item || "").trim())
+            .filter(Boolean)
+          : [];
         return [{
           key,
           recordId: record.id,
           fieldName,
           value,
-          source: String((raw as Record<string, unknown>).source ?? "llm"),
+          source: String(rawRecord.source ?? "llm"),
+          currentValue: stringifyCell(record.data?.[fieldName]).trim(),
+          note,
+          supportingSources,
           state: suggestionState[key]
             ?? (backendStatus === "accepted" ? "committed" : "pending"),
         }];
@@ -272,18 +383,6 @@ export default function CrawlPage() {
     }),
     [additionalFields, advancedEnabled, bulkUrls, categoryMode, crawlTab, csvFile, maxPages, maxRecords, proxyEnabled, proxyInput, requestDelay, smartExtraction, targetUrl, pdpMode],
   );
-
-  const visibleColumns = useMemo(() => {
-    const columns = new Set<string>();
-    for (const record of records) {
-      Object.keys(record.data ?? {}).forEach((key) => {
-        if (!key.startsWith("_")) {
-          columns.add(key);
-        }
-      });
-    }
-    return Array.from(columns);
-  }, [records]);
 
   const selectedRecords = useMemo(
     () => records.filter((record) => selectedIds.includes(record.id)),
@@ -364,6 +463,37 @@ export default function CrawlPage() {
     }
   }
 
+  async function saveDomainOutputFields() {
+    if (!runId || !review) {
+      return;
+    }
+    const selectedFields = uniqueFields(savedOutputFields);
+    if (!selectedFields.length) {
+      setSaveOutputFieldsError("Select at least one field to reuse for this domain.");
+      setSaveOutputFieldsMessage("");
+      return;
+    }
+    setSaveOutputFieldsPending(true);
+    setSaveOutputFieldsError("");
+    setSaveOutputFieldsMessage("");
+    try {
+      await api.saveReview(runId, {
+        selections: selectedFields.map((field) => ({
+          source_field: field,
+          output_field: field,
+          selected: true,
+        })),
+        extra_fields: [],
+      });
+      setSaveOutputFieldsMessage(`Saved ${selectedFields.length} field${selectedFields.length === 1 ? "" : "s"} for future ${normalizeDomainFromUrl(run?.url ?? "") || "domain"} crawls.`);
+      await reviewQuery.refetch();
+    } catch (error) {
+      setSaveOutputFieldsError(error instanceof Error ? error.message : "Unable to save output fields.");
+    } finally {
+      setSaveOutputFieldsPending(false);
+    }
+  }
+
   function resetToConfig() {
     setCrawlPhase("config");
     setPreviewOpen(false);
@@ -414,10 +544,21 @@ export default function CrawlPage() {
       setPreviewOpen(false);
       setPendingDispatch(null);
       setCrawlPhase("running");
-      router.replace((`/crawl?runId=${response.run_id}`) as Route);
+      router.replace((`/runs/${response.run_id}`) as Route);
     } catch (error) {
       setLaunchError(error instanceof Error ? error.message : "Unable to launch crawl.");
     }
+  }
+
+  if (legacyRunRedirect && runId) {
+    return (
+      <div className="space-y-4">
+        <PageHeader title="Redirecting To Run" description={`Opening run #${runId}.`} />
+        <Card className="px-4 py-6 text-sm text-muted">
+          Loading the dedicated run details page.
+        </Card>
+      </div>
+    );
   }
 
   function triggerBulkCrawlSelected() {
@@ -431,15 +572,17 @@ export default function CrawlPage() {
       STORAGE_KEYS.BULK_PREFILL,
       JSON.stringify({
         urls,
+        module: "pdp",
+        mode: "batch",
         additional_fields: additionalFields,
       }),
     );
-    setCrawlTab("category");
-    setCategoryMode("bulk");
+    setCrawlTab("pdp");
+    setPdpMode("batch");
     setBulkUrls(urls.join("\n"));
     setBulkBanner(`${urls.length} URLs loaded from previous crawl results.`);
     setCrawlPhase("config");
-    router.replace("/crawl");
+    router.replace("/crawl?module=pdp&mode=batch");
   }
 
   function addManualField() {
@@ -477,6 +620,13 @@ export default function CrawlPage() {
         }
       />
 
+      {runId && !run ? (
+        <Card className="space-y-3 p-4">
+          <SectionHeader title="Opening Run" description="Loading the run workspace." />
+          <div className="text-sm text-muted">Loading run #{runId}...</div>
+        </Card>
+      ) : null}
+
       {bulkBanner ? (
         <div className="surface-banner flex items-center justify-between px-4 py-3 text-sm">
           <div>{bulkBanner}</div>
@@ -491,7 +641,7 @@ export default function CrawlPage() {
         </div>
       ) : null}
 
-      {crawlPhase === "config" ? (
+      {!runId && crawlPhase === "config" ? (
         <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]" onSubmit={startPreview}>
           <div className="space-y-4">
             <Card className="space-y-4">
@@ -517,7 +667,7 @@ export default function CrawlPage() {
                 }
               />
               {crawlTab === "category" ? (
-                <SegmentedMode
+                <TabBar
                   value={categoryMode}
                   onChange={(value) => setCategoryMode(value as CategoryMode)}
                   options={[
@@ -527,7 +677,7 @@ export default function CrawlPage() {
                   ]}
                 />
               ) : (
-                <SegmentedMode
+                <TabBar
                   value={pdpMode}
                   onChange={(value) => setPdpMode(value as PdpMode)}
                   options={[
@@ -690,12 +840,12 @@ export default function CrawlPage() {
         <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.32fr)_minmax(0,0.68fr)]">
           <Card className="space-y-4">
             <SectionHeader title="Progress" description={run ? `Run ${run.id} is ${run.status.replace(/_/g, " ")}.` : "Loading run state..."} />
-            <PreviewRow label="Run ID" value={run ? `#${run.id}` : "--"} mono />
-            <PreviewRow label="Crawl Type" value={run?.run_type ?? "--"} />
-            <PreviewRow label="Target" value={run?.url ?? "--"} mono />
-            <PreviewRow label="Records" value={String(summary.records)} />
-            <PreviewRow label="Pages" value={String(summary.pages)} />
-            <PreviewRow label="Elapsed" value={summary.duration} />
+            <PreviewRow label="Run ID" value={run ? `#${run.id}` : "--"} mono inline />
+            <PreviewRow label="Crawl Type" value={run?.run_type ?? "--"} inline />
+            <PreviewRow label="Target" value={run?.url ?? "--"} mono inline />
+            <PreviewRow label="Records" value={String(summary.records)} inline />
+            <PreviewRow label="Pages" value={String(summary.pages)} inline />
+            <PreviewRow label="Elapsed" value={summary.duration} inline />
             <ProgressBar percent={progressPercent(run)} />
             {run?.status === "paused" ? <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-foreground">Job paused. Output so far is preserved.</div> : null}
             {launchError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{launchError}</div> : null}
@@ -703,12 +853,12 @@ export default function CrawlPage() {
               <ActionButton
                 label={runActionPending === "pause" ? "Pausing..." : "Pause"}
                 onClick={() => void runControl("pause")}
-                disabled={!run || run.status !== "running" || runActionPending !== null}
+                disabled={run?.status !== "running" || runActionPending !== null}
               />
               <ActionButton
                 label={runActionPending === "resume" ? "Resuming..." : "Resume"}
                 onClick={() => void runControl("resume")}
-                disabled={!run || run.status !== "paused" || runActionPending !== null}
+                disabled={run?.status !== "paused" || runActionPending !== null}
               />
               <ActionButton
                 label={runActionPending === "kill" ? "Killing..." : "Hard Kill"}
@@ -872,7 +1022,13 @@ export default function CrawlPage() {
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-muted">Pretty-printed by default.</div>
                   <div className="flex items-center gap-2">
-                    <Button variant="ghost" type="button" onClick={() => void copyJson(records)}>
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      onClick={() => {
+                        copyJson(records).catch(() => {});
+                      }}
+                    >
                       <Copy className="size-3.5" />
                       Copy
                     </Button>
@@ -921,8 +1077,17 @@ export default function CrawlPage() {
                         <div className="space-y-1">
                           <div className="text-sm font-medium text-foreground">{item.fieldName}</div>
                           <div className="text-xs text-muted">Record #{item.recordId} · {item.source}</div>
+                          {item.supportingSources.length ? (
+                            <div className="text-xs text-muted">Evidence: {item.supportingSources.join(", ")}</div>
+                          ) : null}
                         </div>
-                        <div className="font-mono text-sm text-foreground">{item.value}</div>
+                        <div className="space-y-1">
+                          {item.currentValue ? (
+                            <div className="text-xs text-muted">Current: <span className="font-mono">{item.currentValue}</span></div>
+                          ) : null}
+                          <div className="font-mono text-sm text-foreground">{item.value}</div>
+                          {item.note ? <div className="text-xs text-muted">{item.note}</div> : null}
+                        </div>
                         <div className="flex items-center gap-2">
                           <Button variant="secondary" type="button" onClick={() => setSuggestionState((current) => ({ ...current, [item.key]: "accepted" }))} disabled={item.state === "committed"}>
                             Accept
@@ -930,7 +1095,7 @@ export default function CrawlPage() {
                           <Button variant="ghost" type="button" onClick={() => setSuggestionState((current) => ({ ...current, [item.key]: "rejected" }))} disabled={item.state === "committed"}>
                             Reject
                           </Button>
-                          <Badge tone={item.state === "committed" ? "success" : item.state === "accepted" ? "success" : item.state === "rejected" ? "danger" : "neutral"}>
+                          <Badge tone={suggestionBadgeTone(item.state)}>
                             {item.state}
                           </Badge>
                         </div>
@@ -942,7 +1107,9 @@ export default function CrawlPage() {
                     <div>{review.normalized_fields.length} normalized fields</div>
                     <div>{review.discovered_fields.length} discovered fields</div>
                     <div>{Object.keys(review.selector_suggestions ?? {}).length} selector groups</div>
-                    <div className="rounded-md border border-border bg-background p-3 text-foreground">No pending LLM cleanup suggestions were stored for this run.</div>
+                    <div className="rounded-md border border-border bg-background p-3 text-foreground">
+                      {formatLlmCleanupStatus(llmCleanupStatus)}
+                    </div>
                   </div>
                 ) : (
                   <div className="text-sm text-muted">No intelligence payload available for this run.</div>
@@ -957,6 +1124,79 @@ export default function CrawlPage() {
                     {commitPending ? "Committing..." : "Commit Accepted Fields"}
                   </Button>
                 </div>
+                {review ? (
+                  <div className="space-y-3 rounded-md border border-border bg-background p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="label-caps">Domain Output Fields</div>
+                        <div className="text-sm text-muted">
+                          Choose which fields should stay in the saved output schema for this domain. Future crawls for the same domain will request them automatically.
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="secondary"
+                          type="button"
+                          onClick={() => setSavedOutputFields(uniqueFields(visibleColumns))}
+                          disabled={!visibleColumns.length}
+                        >
+                          Use Current Output
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          type="button"
+                          onClick={() => setSavedOutputFields([])}
+                          disabled={!savedOutputFields.length}
+                        >
+                          Clear
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {uniqueFields([
+                        ...(review.discovered_fields ?? []),
+                        ...(review.normalized_fields ?? []),
+                        ...visibleColumns,
+                      ]).map((field) => {
+                        const selected = savedOutputFields.includes(field);
+                        return (
+                          <button
+                            key={field}
+                            type="button"
+                            onClick={() =>
+                              setSavedOutputFields((current) =>
+                                current.includes(field)
+                                  ? current.filter((value) => value !== field)
+                                  : uniqueFields([...current, field]),
+                              )
+                            }
+                            className={cn(
+                              "rounded-md border px-2.5 py-1.5 text-xs font-medium transition",
+                              selected
+                                ? "border-accent bg-accent-subtle text-foreground"
+                                : "border-border bg-panel text-muted",
+                            )}
+                          >
+                            {field}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {saveOutputFieldsError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{saveOutputFieldsError}</div> : null}
+                    {saveOutputFieldsMessage ? <div className="rounded-md border border-success/20 bg-success/10 px-3 py-2 text-sm text-success">{saveOutputFieldsMessage}</div> : null}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm text-muted">{savedOutputFields.length} field{savedOutputFields.length === 1 ? "" : "s"} selected</div>
+                      <Button
+                        variant="accent"
+                        type="button"
+                        onClick={() => void saveDomainOutputFields()}
+                        disabled={saveOutputFieldsPending || !savedOutputFields.length}
+                      >
+                        {saveOutputFieldsPending ? "Saving..." : "Save Domain Output Fields"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </Card>
             ) : null}
 
@@ -1127,7 +1367,7 @@ function validateRegex(value: string): ValidationState {
 }
 
 function copyJson(records: CrawlRecord[]) {
-  void navigator.clipboard.writeText(JSON.stringify(records.map(cleanRecord), null, 2));
+  return navigator.clipboard.writeText(JSON.stringify(records.map(cleanRecord), null, 2));
 }
 
 function cleanRecord(record: CrawlRecord) {
@@ -1174,12 +1414,17 @@ function PreviewModal({
   onLaunch: () => void;
   launchError: string;
 }>) {
-  const modalRef = useRef<HTMLDivElement | null>(null);
+  const modalRef = useRef<HTMLDialogElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const cancelCallbackRef = useRef(onCancel);
   const urls = dispatch.urls ?? (dispatch.url ? [dispatch.url] : []);
   const proxyCount = Array.isArray(dispatch.settings.proxy_list) ? dispatch.settings.proxy_list.length : 0;
   const smartExtraction = Boolean(dispatch.settings.llm_enabled);
   const proxyEnabled = Boolean(dispatch.settings.proxy_enabled);
+
+  useEffect(() => {
+    cancelCallbackRef.current = onCancel;
+  }, [onCancel]);
 
   useEffect(() => {
     previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1188,7 +1433,7 @@ function PreviewModal({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onCancel();
+        cancelCallbackRef.current();
         return;
       }
       if (event.key !== "Tab") {
@@ -1216,28 +1461,28 @@ function PreviewModal({
       document.removeEventListener("keydown", handleKeyDown);
       previouslyFocusedRef.current?.focus();
     };
-  }, [onCancel]);
+  }, []);
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" role="presentation">
-      <div
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <dialog
+        open
         ref={modalRef}
-        role="dialog"
-        aria-modal="true"
         aria-labelledby="crawl-preview-title"
         aria-describedby="crawl-preview-description"
-        className="w-full max-w-[540px] rounded-[var(--radius-xl)] border border-border bg-background-elevated p-5 shadow-[var(--shadow-modal)]"
+        aria-modal="true"
+        className="m-0 mx-auto w-full max-w-[560px] rounded-[var(--radius-xl)] border border-border bg-background-elevated p-6 shadow-[var(--shadow-modal)]"
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
+        <div className="relative">
+          <div className="max-w-[420px]">
             <div id="crawl-preview-title" className="text-base font-semibold tracking-[-0.02em]">Review Before Running</div>
-            <div id="crawl-preview-description" className="text-sm text-muted">Confirm the payload before the job is dispatched.</div>
+            <div id="crawl-preview-description" className="mt-1 text-sm text-muted">Confirm the payload before the job is dispatched.</div>
           </div>
-          <button type="button" onClick={onCancel} aria-label="Close preview" className="inline-flex size-8 items-center justify-center rounded-md border border-border text-muted transition hover:text-foreground">
+          <button type="button" onClick={onCancel} aria-label="Close preview" className="absolute right-0 top-0 inline-flex size-8 items-center justify-center rounded-md border border-border text-muted transition hover:text-foreground">
             <X className="size-4" aria-hidden="true" />
           </button>
         </div>
-        <div className="mt-4 space-y-2">
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
           <PreviewRow label="Target URL" value={dispatch.url ?? urls[0] ?? "--"} mono />
           <PreviewRow label="Mode" value={dispatch.runType} />
           <PreviewRow label="Proxy" value={proxyEnabled ? `${proxyCount} configured` : "Inactive"} />
@@ -1245,14 +1490,14 @@ function PreviewModal({
           <PreviewRow label="Max Records" value={String(dispatch.settings.max_records)} />
           <PreviewRow label="Max Pages" value={String(dispatch.settings.max_pages)} />
         </div>
-        <div className="mt-4">
+        <div className="mt-5">
           <div className="label-caps mb-2">Additional Fields</div>
           <div className="flex flex-wrap gap-1.5">
             {dispatch.additionalFields.length ? dispatch.additionalFields.map((field) => <Badge key={field} tone="neutral">{field}</Badge>) : <span className="text-sm text-muted">None</span>}
           </div>
         </div>
         {launchError ? <div className="mt-4 rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{launchError}</div> : null}
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-6 flex justify-end gap-2">
           <Button variant="ghost" type="button" onClick={onCancel}>
             Cancel
           </Button>
@@ -1260,7 +1505,7 @@ function PreviewModal({
             Launch Job
           </Button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }
@@ -1289,36 +1534,6 @@ const LogTerminal = memo(function LogTerminal({
 });
 
 function TabBar({
-  value,
-  onChange,
-  options,
-}: Readonly<{
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-}>) {
-  return (
-    <div className="inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-border bg-panel p-0.5">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "rounded-[4px] px-3 py-1 text-sm font-medium transition-colors",
-            value === option.value
-              ? "bg-accent text-white shadow-[var(--shadow-sm)]"
-              : "text-muted hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function SegmentedMode({
   value,
   onChange,
   options,
@@ -1477,7 +1692,7 @@ function ManualFieldEditor({ row, onChange, onDelete }: Readonly<{ row: FieldRow
   );
 }
 
-function getFocusableElements(container: HTMLDivElement | null) {
+function getFocusableElements(container: HTMLElement | null) {
   if (!container) {
     return [] as HTMLElement[];
   }
@@ -1502,11 +1717,23 @@ function ValidatedField({
       <div className="relative">
         <Input value={value} onChange={(event) => onChange(event.target.value)} onBlur={(event) => onBlur(event.target.value)} placeholder={placeholder} className="pr-10 font-mono text-sm" />
         <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
-          {state === "valid" ? <CheckCircle2 className="size-4 text-success" /> : state === "invalid" ? <CircleAlert className="size-4 text-danger" /> : null}
+          {validationStateIcon(state)}
         </div>
       </div>
     </label>
   );
+}
+
+function suggestionBadgeTone(state: SuggestionState) {
+  if (state === "committed" || state === "accepted") return "success" as const;
+  if (state === "rejected") return "danger" as const;
+  return "neutral" as const;
+}
+
+function validationStateIcon(state: ValidationState) {
+  if (state === "valid") return <CheckCircle2 className="size-4 text-success" />;
+  if (state === "invalid") return <CircleAlert className="size-4 text-danger" />;
+  return null;
 }
 
 function ActionButton({
@@ -1548,8 +1775,46 @@ function Metric({ label, value }: Readonly<{ label: string; value: string | numb
   return <div className="rounded-[var(--radius-lg)] border border-border bg-panel p-4 shadow-[var(--shadow-sm)]"><div className="label-caps">{label}</div><div className="mt-1 text-[24px] font-bold tracking-[var(--tracking-tight)]">{value}</div></div>;
 }
 
-function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: string; mono?: boolean }>) {
-  return <div className="flex items-start justify-between gap-4 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2"><div className="shrink-0 label-caps">{label}</div><div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-sm", mono && "font-mono text-xs")}>{value || "--"}</div></div>;
+function PreviewRow({
+  label,
+  value,
+  mono,
+  inline = false,
+}: Readonly<{ label: string; value: string; mono?: boolean; inline?: boolean }>) {
+  return (
+    <div className={cn("rounded-[var(--radius-md)] border border-border bg-panel px-3 py-3", inline && "flex items-start justify-between gap-4")}>
+      <div className="label-caps shrink-0">{label}</div>
+      <div className={cn("text-left text-sm text-foreground", !inline && "mt-1", inline && "min-w-0 text-right", mono && "break-all font-mono text-xs")}>{value || "--"}</div>
+    </div>
+  );
+}
+
+function formatLlmCleanupStatus(status: LlmCleanupStatus | null) {
+  if (!status) {
+    return "No pending LLM cleanup suggestions were stored for this run.";
+  }
+  if (status.message) {
+    return status.message;
+  }
+  if (status.status === "ready" && typeof status.count === "number") {
+    return `LLM cleanup generated ${status.count} suggestion${status.count === 1 ? "" : "s"}.`;
+  }
+  if (status.status === "empty") {
+    return "LLM cleanup review ran but returned no suggestions.";
+  }
+  if (status.status === "skipped") {
+    return status.message || "LLM cleanup was skipped because deterministic extraction already resolved the available fields.";
+  }
+  if (status.status === "no_evidence") {
+    return "No candidate evidence was available for cleanup review.";
+  }
+  if (status.status === "error") {
+    return "LLM cleanup review failed.";
+  }
+  if (status.status === "xpath_error") {
+    return "LLM XPath discovery failed before cleanup review.";
+  }
+  return "No pending LLM cleanup suggestions were stored for this run.";
 }
 
 function formatTimestamp(value: string) {
@@ -1558,4 +1823,51 @@ function formatTimestamp(value: string) {
   } catch {
     return value;
   }
+}
+
+function readRequestedModule(searchParams: ReturnType<typeof useSearchParams>): CrawlTab | null {
+  const moduleParam = searchParams.get("module");
+  if (moduleParam === "category" || moduleParam === "pdp") {
+    return moduleParam;
+  }
+  const legacyTab = searchParams.get("tab");
+  if (legacyTab === "category" || legacyTab === "pdp") {
+    return legacyTab;
+  }
+  if (legacyTab === "batch" || legacyTab === "csv") {
+    return "pdp";
+  }
+  return null;
+}
+
+function readRequestedMode(searchParams: ReturnType<typeof useSearchParams>): CrawlMode | null {
+  const explicitMode = searchParams.get("mode");
+  if (explicitMode && isCrawlMode(explicitMode)) {
+    return explicitMode;
+  }
+  const legacyTab = searchParams.get("tab");
+  if (legacyTab === "batch" || legacyTab === "csv") {
+    return legacyTab;
+  }
+  return null;
+}
+
+function normalizeDomainFromUrl(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isCrawlMode(value: string): value is CrawlMode {
+  return value === "single" || value === "sitemap" || value === "bulk" || value === "batch" || value === "csv";
+}
+
+function isCategoryMode(value: string): value is CategoryMode {
+  return value === "single" || value === "sitemap" || value === "bulk";
+}
+
+function isPdpMode(value: string): value is PdpMode {
+  return value === "single" || value === "batch" || value === "csv";
 }

@@ -74,12 +74,19 @@ JSON_MAX_SEARCH_DEPTH: int = _TUNING.get("json_max_search_depth", 5)
 # HTTP provider (Phase 1 hardening)
 HTTP_RETRY_STATUS_CODES: list[int] = _TUNING.get("http_retry_status_codes", [403, 429, 503])
 HTTP_MAX_RETRIES: int = _TUNING.get("http_max_retries", 2)
+HTTP_RETRY_BACKOFF_BASE_MS: int = _TUNING.get("http_retry_backoff_base_ms", 400)
+HTTP_RETRY_BACKOFF_MAX_MS: int = _TUNING.get("http_retry_backoff_max_ms", 3000)
+DNS_RESOLUTION_RETRIES: int = _TUNING.get("dns_resolution_retries", 1)
+DNS_RESOLUTION_RETRY_DELAY_MS: int = _TUNING.get("dns_resolution_retry_delay_ms", 250)
+ACQUIRE_HOST_MIN_INTERVAL_MS: int = _TUNING.get("acquire_host_min_interval_ms", 250)
 STEALTH_PREFER_TTL_HOURS: int = _TUNING.get("stealth_prefer_ttl_hours", 24)
 
 # Browser runtime (Phase 2 hardening)
 CHALLENGE_WAIT_MAX_SECONDS: int = _TUNING.get("challenge_wait_max_seconds", 12)
 CHALLENGE_POLL_INTERVAL_MS: int = _TUNING.get("challenge_poll_interval_ms", 2000)
 ORIGIN_WARM_PAUSE_MS: int = _TUNING.get("origin_warm_pause_ms", 2000)
+BROWSER_ERROR_RETRY_ATTEMPTS: int = _TUNING.get("browser_error_retry_attempts", 1)
+BROWSER_ERROR_RETRY_DELAY_MS: int = _TUNING.get("browser_error_retry_delay_ms", 1000)
 
 # ---------------------------------------------------------------------------
 # 3. Field aliases — loaded from field_aliases.json
@@ -252,7 +259,17 @@ if not COOKIE_CONSENT_SELECTORS:
 
 
 # ---------------------------------------------------------------------------
-# 11. Review container keys — structural metadata keys to filter from
+# 11. Cookie persistence policy — loaded from cookie_policy.json
+#     Controls which cookies may be reused between runs. Defaults are
+#     intentionally conservative: challenge/anti-bot cookies are never
+#     persisted and session cookies are runtime-only unless explicitly enabled.
+# ---------------------------------------------------------------------------
+
+COOKIE_POLICY: dict = _load("cookie_policy.json", {})  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# 12. Review container keys — structural metadata keys to filter from
 #     discovered_fields in the review UI.
 # ---------------------------------------------------------------------------
 

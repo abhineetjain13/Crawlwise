@@ -1,14 +1,23 @@
 # Tests for acquisition waterfall and proxy rotation.
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 
-from app.services.acquisition.acquirer import ProxyRotator, _artifact_path, _network_payload_path, acquire_html
+from app.services.acquisition.acquirer import (
+    ProxyRotator,
+    _artifact_path,
+    _diagnostics_path,
+    _network_payload_path,
+    acquire,
+    acquire_html,
+)
 from app.services.acquisition.http_client import HttpFetchResult
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host, reset_host_memory
+from app.services.acquisition.pacing import reset_pacing_state
 
 
 class TestProxyRotator:
@@ -167,11 +176,44 @@ async def test_acquire_json_content_type():
     assert result.method == "curl_cffi"
 
 
+@pytest.mark.asyncio
+async def test_acquire_writes_diagnostics_artifact(tmp_path, monkeypatch):
+    html = "<html><body><h1>Product</h1><p>" + ("x" * 600) + "</p></body></html>"
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    with patch(
+        "app.services.acquisition.acquirer._fetch_with_content_type",
+        new_callable=AsyncMock,
+        return_value=HttpFetchResult(
+            text=html,
+            status_code=200,
+            content_type="html",
+            attempt_log=[{"attempt": 1, "impersonate": "chrome110", "status_code": 200, "content_type": "html", "blocked": False}],
+        ),
+    ):
+        result = await acquire(42, "https://example.com/product")
+
+    diagnostics_path = _diagnostics_path(42, "https://example.com/product")
+    assert result.diagnostics_path == str(diagnostics_path)
+    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert payload["run_id"] == 42
+    assert payload["url"] == "https://example.com/product"
+    assert payload["method"] == "curl_cffi"
+    assert payload["artifact_path"] == result.artifact_path
+    assert payload["diagnostics"]["curl_status_code"] == 200
+    assert payload["diagnostics"]["curl_needs_browser"] is False
+    assert payload["diagnostics"]["curl_attempt_log"] == [
+        {"attempt": 1, "impersonate": "chrome110", "status_code": 200, "content_type": "html", "blocked": False}
+    ]
+
+
 @pytest.fixture(autouse=True)
 def _reset_host_memory():
     reset_host_memory()
+    reset_pacing_state()
     yield
     reset_host_memory()
+    reset_pacing_state()
 
 
 def test_host_memory_persists_preference(tmp_path, monkeypatch):
@@ -186,5 +228,7 @@ def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
     url = "https://www.example.com/products/fancy-chair?color=oak&size=large"
     html_path = _artifact_path(42, url)
     network_path = _network_payload_path(42, url)
+    diagnostics_path = _diagnostics_path(42, url)
     assert html_path.stem == network_path.stem
+    assert html_path.stem == diagnostics_path.stem
     assert html_path.stem.startswith("www-example-com__run-42__products-fancy-chair-color-oak-size-large__")

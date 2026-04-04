@@ -9,5 +9,10 @@
     "system_file": "missing_field_extraction.system.txt",
     "user_file": "missing_field_extraction.user.txt",
     "response_type": "object"
+  },
+  "field_cleanup_review": {
+    "system_file": "field_cleanup_review.system.txt",
+    "user_file": "field_cleanup_review.user.txt",
+    "response_type": "object"
   }
 }

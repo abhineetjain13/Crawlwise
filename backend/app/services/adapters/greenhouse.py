@@ -23,7 +23,8 @@ except ImportError:
 
 class GreenhouseAdapter(BaseAdapter):
     name = "greenhouse"
-    domains = ["boards.greenhouse.io", "boards-api.greenhouse.io"]
+    greenhouse_board_host = "boards.greenhouse.io"
+    domains = [greenhouse_board_host, "boards-api.greenhouse.io"]
 
     async def can_handle(self, url: str, html: str) -> bool:
         if any(d in url for d in self.domains):
@@ -58,13 +59,13 @@ class GreenhouseAdapter(BaseAdapter):
         parsed = urlparse(url)
 
         # boards.greenhouse.io/embed/job_board?for=<company>
-        if "boards.greenhouse.io" in parsed.netloc and parsed.path.startswith("/embed/job_board"):
+        if self.greenhouse_board_host in parsed.netloc and parsed.path.startswith("/embed/job_board"):
             company = parse_qs(parsed.query).get("for", [""])[0].strip()
             if company:
                 return company
 
         # boards.greenhouse.io/<company>
-        if "boards.greenhouse.io" in parsed.netloc:
+        if self.greenhouse_board_host in parsed.netloc:
             parts = parsed.path.strip("/").split("/")
             if parts and parts[0]:
                 return parts[0]
@@ -80,7 +81,7 @@ class GreenhouseAdapter(BaseAdapter):
         if match:
             return match.group(1)
 
-        match = re.search(r'boards\.greenhouse\.io/([a-zA-Z0-9_-]+)', html)
+        match = re.search(rf"{re.escape(self.greenhouse_board_host)}/([a-zA-Z0-9_-]+)", html)
         if match:
             return match.group(1)
 

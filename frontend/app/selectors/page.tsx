@@ -75,15 +75,9 @@ export default function SelectorsPage() {
     }
   }
 
-function updateRow(key: string, patch: Partial<SelectorRow>) {
-  setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
-}
-
-function nextEditedState(state: RowState): RowState {
-  if (state === "saved") return "accepted";
-  if (state === "idle") return "idle";
-  return state;
-}
+  function updateRow(key: string, patch: Partial<SelectorRow>) {
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  }
 
   function addFieldRow() {
     setRows((current) => [...current, createEmptyRow()]);
@@ -165,7 +159,7 @@ function nextEditedState(state: RowState): RowState {
         ...current,
         [row.key]: {
           tone: response.count > 0 ? "success" : "warning",
-          message: response.count > 0 ? `Matched ${response.count} result${response.count === 1 ? "" : "s"}.` : "No matches.",
+          message: formatSelectorMatchMessage(response.count),
         },
       }));
     } catch (error) {
@@ -196,7 +190,7 @@ function nextEditedState(state: RowState): RowState {
           css_selector: row.kind === "css_selector" ? row.selectorValue.trim() : undefined,
           regex: row.kind === "regex" ? row.selectorValue.trim() : undefined,
           sample_value: row.extractedValue.trim() || undefined,
-          source: row.source || (row.kind === "xpath" ? "llm_xpath" : row.kind === "css_selector" ? "llm_css" : "llm_regex"),
+          source: row.source || selectorSource(row.kind),
           status: "validated",
           is_active: true,
         };
@@ -295,6 +289,7 @@ function nextEditedState(state: RowState): RowState {
             <div className="space-y-3">
               {rows.map((row) => {
                 const message = rowMessages[row.key];
+                const selectorInputId = `selector-value-${row.key}`;
                 return (
                   <div key={row.key} className="rounded-[var(--radius-lg)] border border-border bg-background-elevated p-4">
                     <div className="grid gap-3">
@@ -321,13 +316,14 @@ function nextEditedState(state: RowState): RowState {
                           </select>
                         </label>
 
-                        <label className="grid gap-1">
+                        <label className="grid gap-1" htmlFor={selectorInputId}>
                           <span className="label-caps">XPath / CSS / Regex</span>
                           <div className="relative">
                             <Input
+                              id={selectorInputId}
                               value={row.selectorValue}
                               onChange={(event) => updateRow(row.key, { selectorValue: event.target.value, state: nextEditedState(row.state) })}
-                              placeholder={row.kind === "xpath" ? "//span[@class='price']" : row.kind === "css_selector" ? ".price" : "\\$[\\d,.]+"}
+                              placeholder={selectorPlaceholder(row.kind)}
                               className="pr-10 font-mono text-sm"
                             />
                             <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
@@ -370,13 +366,13 @@ function nextEditedState(state: RowState): RowState {
                         <Button
                           type="button"
                           variant={row.state === "accepted" || row.state === "saved" ? "secondary" : "ghost"}
-                          onClick={() => updateRow(row.key, { state: row.state === "accepted" ? "idle" : row.state === "saved" ? "saved" : "accepted" })}
+                          onClick={() => updateRow(row.key, { state: nextSelectorRowState(row.state) })}
                           disabled={row.state === "saved"}
                         >
                           <Check className="size-3.5" />
-                          {row.state === "saved" ? "Saved" : row.state === "accepted" ? "Accepted" : "Accept"}
+                          {selectorStateLabel(row.state)}
                         </Button>
-                        <Badge tone={row.state === "saved" ? "success" : row.state === "accepted" ? "warning" : "neutral"}>
+                        <Badge tone={selectorStateTone(row.state)}>
                           {row.state}
                         </Badge>
                       </div>
@@ -423,6 +419,50 @@ function parseExpectedColumns(value: string) {
         .filter(Boolean),
     ),
   );
+}
+
+function selectorPlaceholder(kind: SelectorKind) {
+  if (kind === "xpath") return "//span[@class='price']";
+  if (kind === "css_selector") return ".price";
+  return "\\$[\\d,.]+";
+}
+
+function selectorSource(kind: SelectorKind) {
+  if (kind === "xpath") return "llm_xpath";
+  if (kind === "css_selector") return "llm_css";
+  return "llm_regex";
+}
+
+function formatSelectorMatchMessage(count: number) {
+  if (count <= 0) {
+    return "No matches.";
+  }
+  const suffix = count === 1 ? "" : "s";
+  return `Matched ${count} result${suffix}.`;
+}
+
+function nextSelectorRowState(state: RowState): RowState {
+  if (state === "saved") return "saved";
+  if (state === "accepted") return "idle";
+  return "accepted";
+}
+
+function selectorStateLabel(state: RowState) {
+  if (state === "saved") return "Saved";
+  if (state === "accepted") return "Accepted";
+  return "Accept";
+}
+
+function selectorStateTone(state: RowState) {
+  if (state === "saved") return "success" as const;
+  if (state === "accepted") return "warning" as const;
+  return "neutral" as const;
+}
+
+function nextEditedState(state: RowState): RowState {
+  if (state === "saved") return "accepted";
+  if (state === "idle") return "idle";
+  return state;
 }
 
 function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggestion): SelectorRow {

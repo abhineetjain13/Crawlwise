@@ -1,6 +1,8 @@
 # Active jobs route handlers.
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,9 +13,9 @@ from app.services.crawl_service import active_jobs
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
-@router.get("/active", response_model=list[dict])
+@router.get("/active")
 async def jobs_active(
-    session: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> list[dict]:
     return await active_jobs(session, user_id=None if user.role == "admin" else user.id)

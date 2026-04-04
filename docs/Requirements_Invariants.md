@@ -19,6 +19,8 @@
 | **Discoverist CSV** | Customer-specific export schema; column definitions to be maintained separately |
 | **Run** | A single crawl job execution instance |
 | **Active Job** | A Run that is currently in `PENDING`, `RUNNING`, or `PAUSED` state |
+| **Acquisition hardening** | Generic transport-layer resilience controls such as retries, browser fallback, header normalization, challenge detection, proxy rotation, and diagnostics capture that apply consistently across production targets rather than being tailored to one site |
+| **Fetched artifact** | The persisted evidence captured for one acquisition attempt, consisting of raw response content and associated capture metadata; examples include raw HTML, the HTTP response envelope (status, headers, final URL), and browser artifacts such as screenshots when a browser engine was used |
 
 ---
 
@@ -141,7 +143,6 @@
 | Sleep Time | Integer (ms) | Delay between page requests |
 | Proxy | Toggle + list | Use rotating proxy pool for this run |
 
-**Pre-run Preview**
 - Show: detected/configured output columns, their data source (HTML XPath, JSON-LD, API, Regex), and a sample value if a preview fetch is available
 - User can add, remove, or reorder columns before confirming
 
@@ -345,6 +346,8 @@ Invariants are conditions that must hold true at all times, regardless of applic
 - **INV-CRAWL-01:** `sleep time` is applied between every consecutive outbound request within a job, without exception. A sleep time of 0ms is valid but must be explicitly set by the user.
 - **INV-CRAWL-02:** The hybrid crawler selects the engine (HTTP or browser automation) per page, not per job. Static pages always use the lightweight HTTP path unless the page is detected as JS-rendered.
 - **INV-CRAWL-03:** XPath and Regex expressions provided by the user are validated for syntactic correctness before a job is dispatched. A job with an invalid expression is rejected with a descriptive error; it never starts.
+- **INV-CRAWL-04:** Acquisition hardening must remain generic. No production code that runs against external or customer-facing target sites may contain per-domain hacks, allowlists, or special-case bypasses to make one production target pass. Internal test fixtures, local mocks, and deterministic adapter fixtures used only under test are allowed, provided they remain isolated from production acquisition paths and exercise the same acquisition hardening controls (retries, browser fallback, challenge detection, error handling) validated in production.
+- **INV-CRAWL-05:** Every successful acquisition attempt at the page-fetch level, regardless of whether downstream extraction later yields zero records, persists both the fetched artifact and a machine-readable diagnostics record so transport regressions can be investigated without depending on ephemeral logs. At minimum, the fetched artifact set must preserve raw HTML for HTTP/browser fetches, the HTTP response envelope when available (final URL, status, headers), and a screenshot for browser-engine acquisitions when one was captured. The diagnostics record must be stored in a machine-readable JSON payload and/or a dedicated SQLite table under the existing persistence model in §3.4 Data Persistence, extending the SQLite guarantees in [§4.6 Data Integrity](#46-data-integrity) and retaining records according to [OI-01](#5-open-items). Minimum diagnostics fields are: `timestamp`, `url`, `final_url`, `http_status`, `response_time_ms`, `proxy`, `engine_type`, `error_code`, `error_detail`, `blocked_verdict`, and references to the persisted fetched artifacts.
 
 ---
 

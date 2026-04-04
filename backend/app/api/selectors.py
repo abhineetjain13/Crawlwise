@@ -1,6 +1,8 @@
 # Selector tool route handlers.
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,19 +32,19 @@ from app.services.selector_service import (
 router = APIRouter(prefix="/api/selectors", tags=["selectors"])
 
 
-@router.post("/suggest", response_model=dict)
+@router.post("/suggest")
 async def selectors_suggest(
     payload: SelectorSuggestRequest,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     return {"suggestions": await suggest_selectors(session, payload.url, payload.expected_columns)}
 
 
-@router.post("/test", response_model=SelectorTestResponse)
+@router.post("/test")
 async def selectors_test(
     payload: SelectorTestRequest,
-    _: User = Depends(get_current_user),
+    _: Annotated[User, Depends(get_current_user)],
 ) -> SelectorTestResponse:
     matched_value, count, selector_used = await test_selector(
         payload.url,
@@ -53,21 +55,21 @@ async def selectors_test(
     return SelectorTestResponse(matched_value=matched_value, count=count, selector_used=selector_used)
 
 
-@router.get("", response_model=list[SelectorResponse])
+@router.get("")
 async def selectors_list(
-    domain: str = Query(default=""),
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+    domain: Annotated[str, Query()] = "",
 ) -> list[SelectorResponse]:
     rows = await list_selectors(session, domain)
     return [SelectorResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
-@router.post("", response_model=SelectorResponse)
+@router.post("")
 async def selectors_create(
     payload: SelectorCreate,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> SelectorResponse:
     try:
         selector = await create_selector(session, payload.model_dump())
@@ -76,21 +78,21 @@ async def selectors_create(
     return SelectorResponse.model_validate(selector, from_attributes=True)
 
 
-@router.delete("/clear-all", response_model=dict)
+@router.delete("/clear-all")
 async def selectors_clear_all(
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_admin),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_admin)],
 ) -> dict:
     deleted = await clear_all_selectors(session)
     return {"deleted": deleted}
 
 
-@router.put("/{selector_id}", response_model=SelectorResponse)
+@router.put("/{selector_id}")
 async def selectors_put(
     selector_id: int,
     payload: SelectorUpdate,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> SelectorResponse:
     result = await session.execute(select(Selector).where(Selector.id == selector_id))
     selector = result.scalar_one_or_none()
@@ -106,17 +108,17 @@ async def selectors_put(
 @router.delete("/{selector_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def selectors_delete(
     selector_id: int,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> None:
     await delete_selector(session, selector_id)
 
 
-@router.delete("/domain/{domain}", response_model=dict)
+@router.delete("/domain/{domain}")
 async def selectors_delete_domain(
     domain: str,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     deleted = await delete_selectors_for_domain(session, domain)
     return {"deleted": deleted}

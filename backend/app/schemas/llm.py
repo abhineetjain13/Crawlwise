@@ -45,7 +45,7 @@ class LLMCostLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    run_id: int | None
+    run_id: int | None = None
     provider: str
     model: str
     task_type: str

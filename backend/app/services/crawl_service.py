@@ -11,12 +11,13 @@ import logging
 import re
 import traceback
 from datetime import UTC, datetime
+from html import unescape
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 from lxml import etree
 
-from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
+from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.services.acquisition.acquirer import AcquisitionResult, ProxyPoolExhausted, acquire
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
@@ -35,7 +36,7 @@ from app.services.extract.json_extractor import extract_json_detail, extract_jso
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import extract_candidates
 from app.services.knowledge_base.store import get_canonical_fields
-from app.services.llm_runtime import discover_xpath_candidates, extract_missing_fields, snapshot_active_configs
+from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
 from app.services.normalizers.field_normalizers import normalize_value
 from app.services.pipeline_config import VERDICT_CORE_FIELDS_DETAIL, VERDICT_CORE_FIELDS_LISTING
 from app.services.domain_utils import normalize_domain
@@ -62,20 +63,25 @@ logger = logging.getLogger(__name__)
 async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -> CrawlRun:
     settings = dict(payload.get("settings", {}))
     urls = payload.get("urls") or []
+    primary_url = payload.get("url") or (urls[0] if urls else "")
     await ensure_public_crawl_targets(_collect_target_urls(payload, settings))
     _validate_extraction_contract(settings.get("extraction_contract") or [])
     settings["max_records"] = max(1, int(settings.get("max_records", 100) or 100))
     settings["sleep_ms"] = max(0, int(settings.get("sleep_ms", 0) or 0))
+    domain_requested_fields = await _load_domain_requested_fields(session, url=primary_url, surface=payload["surface"])
+    requested_fields = expand_requested_fields([*domain_requested_fields, *(payload.get("additional_fields") or [])])
     if settings.get("llm_enabled"):
         settings["llm_config_snapshot"] = await snapshot_active_configs(session)
+    if domain_requested_fields:
+        settings["domain_requested_fields"] = domain_requested_fields
     run = CrawlRun(
         user_id=user_id,
         run_type=payload["run_type"],
-        url=payload.get("url") or (urls[0] if urls else ""),
+        url=primary_url,
         surface=payload["surface"],
         status=CrawlStatus.PENDING.value,
         settings=settings,
-        requested_fields=payload.get("additional_fields", []),
+        requested_fields=requested_fields,
         result_summary={"url_count": max(1, len(urls) or 1), "progress": 0, "current_stage": "ACQUIRE"},
     )
     session.add(run)
@@ -349,7 +355,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         proxy_list = settings.get("proxy_list", [])
         advanced_mode = settings.get("advanced_mode")  # None, "scroll", "paginate", "load_more", "auto"
         max_records = settings.get("max_records", 100)
-        max_pages = settings.get("max_pages", 10)
         sleep_ms = settings.get("sleep_ms", 0)
 
         total_urls = len(url_list)
@@ -393,7 +398,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 proxy_list=proxy_list,
                 advanced_mode=advanced_mode,
                 max_records=remaining_records,
-                max_pages=max_pages,
                 sleep_ms=sleep_ms,
             )
             persisted_record_count += len(records)
@@ -482,7 +486,6 @@ async def _process_single_url(
     proxy_list: list[str],
     advanced_mode: str | None,
     max_records: int,
-    max_pages: int,
     sleep_ms: int,
 ) -> tuple[list[dict], str]:
     """Run the full 5-stage pipeline on a single URL.
@@ -502,7 +505,6 @@ async def _process_single_url(
         url=url,
         proxy_list=proxy_list or None,
         advanced_mode=advanced_mode,
-        max_pages=max_pages,
         sleep_ms=sleep_ms,
     )
 
@@ -527,7 +529,7 @@ async def _process_single_url(
                 if is_listing:
                     return await _extract_listing(
                         session, run, url, "", acq, manifest, recovered,
-                        recovered.records, additional_fields, extraction_contract,
+                        recovered.records, additional_fields,
                         surface, max_records,
                     )
                 return await _extract_detail(
@@ -554,7 +556,7 @@ async def _process_single_url(
     if acq.content_type == "json" and acq.json_data is not None:
         await _log(session, run.id, "info", "[EXTRACT] JSON-first path — API response detected")
         return await _process_json_response(
-            session, run, url, acq, is_listing, surface, max_records, additional_fields,
+            session, run, url, acq, is_listing, max_records, additional_fields,
         )
 
     html = acq.html
@@ -580,7 +582,7 @@ async def _process_single_url(
     if is_listing:
         return await _extract_listing(
             session, run, url, html, acq, manifest, adapter_result,
-            adapter_records, additional_fields, extraction_contract,
+            adapter_records, additional_fields,
             surface, max_records,
         )
     else:
@@ -597,15 +599,14 @@ async def _process_json_response(
     url: str,
     acq: AcquisitionResult,
     is_listing: bool,
-    surface: str,
     max_records: int,
     requested_fields: list[str],
 ) -> tuple[list[dict], str]:
     """Handle a JSON API response — extract directly without HTML parsing."""
     if is_listing:
-        extracted = extract_json_listing(acq.json_data, surface, url, max_records)
+        extracted = extract_json_listing(acq.json_data, url, max_records)
     else:
-        extracted = extract_json_detail(acq.json_data, surface, url)
+        extracted = extract_json_detail(acq.json_data, url)
 
     if not extracted:
         await _log(session, run.id, "warning", "[EXTRACT] JSON response parsed but no records found")
@@ -644,7 +645,7 @@ async def _process_json_response(
         saved.append(normalized)
 
     await _set_stage(session, run, "PUBLISH")
-    verdict = _compute_verdict(saved, is_listing, requested_fields=requested_fields)
+    verdict = _compute_verdict(saved, is_listing)
     await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} JSON records (verdict={verdict})")
     await session.flush()
     return saved, verdict
@@ -660,7 +661,6 @@ async def _extract_listing(
     adapter_result,
     adapter_records: list[dict],
     additional_fields: list[str],
-    extraction_contract: list[dict],
     surface: str,
     max_records: int,
 ) -> tuple[list[dict], str]:
@@ -770,6 +770,7 @@ async def _extract_detail(
             url=url,
             surface=surface,
             html=html,
+            manifest=manifest,
             additional_fields=additional_fields,
             adapter_records=extracted_records,
             candidate_values=candidate_values,
@@ -844,7 +845,7 @@ async def _extract_detail(
         saved.append(normalized)
 
     await _set_stage(session, run, "PUBLISH")
-    verdict = _compute_verdict(saved, is_listing=False, requested_fields=additional_fields)
+    verdict = _compute_verdict(saved, is_listing=False)
     await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} detail records (verdict={verdict})")
     await session.flush()
     return saved, verdict
@@ -857,7 +858,6 @@ async def _extract_detail(
 def _compute_verdict(
     records: list[dict],
     is_listing: bool,
-    requested_fields: list[str] | None = None,
 ) -> str:
     """Compute extraction quality verdict for a single URL.
 
@@ -927,37 +927,44 @@ async def _set_stage(
 
 
 async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -> None:
+    """Mark a run as failed.
+
+    First attempts recovery using the existing session (after a rollback).
+    If that fails, creates an isolated session via ``SessionLocal`` so a
+    poisoned transaction cannot block failure recording.
+    """
     try:
         await session.rollback()
     except Exception:
-        logger.exception("Rollback failed before failure recovery", extra={"run_id": run_id})
+        pass  # Original session may already be invalidated — that's fine.
 
-    bind = session.bind
-    if bind is None:
-        raise RuntimeError("Unable to recover crawl failure state without an active session bind")
+    # Try the original session first — works in tests and when the session is still usable.
+    try:
+        await _persist_failure_state(session, run_id, error_msg)
+        return
+    except Exception:
+        logger.debug("Original session unusable for failure recovery; falling back to SessionLocal", exc_info=True)
 
-    recovery_session_factory = async_sessionmaker(bind, expire_on_commit=False, class_=AsyncSession)
-    async with recovery_session_factory() as recovery_session:
-        run = await recovery_session.get(CrawlRun, run_id)
-        if run is None:
-            return
-        result_summary = dict(run.result_summary or {})
-        result_summary["error"] = error_msg
-        result_summary["progress"] = result_summary.get("progress", 0)
-        result_summary["extraction_verdict"] = "error"
-        if normalize_status(run.status) not in TERMINAL_STATUSES:
-            update_run_status(run, CrawlStatus.FAILED)
-        run.result_summary = result_summary
-        recovery_session.add(CrawlLog(run_id=run.id, level="error", message=f"Pipeline failed: {error_msg}"))
-        try:
-            await recovery_session.commit()
-        except Exception:
-            try:
-                await recovery_session.rollback()
-            except Exception:
-                logger.exception("Rollback failed during failure recovery", extra={"run_id": run_id})
-            logger.error("Failed to persist crawl failure state", extra={"run_id": run.id, "traceback": traceback.format_exc()})
-            raise
+    from app.core.database import SessionLocal
+
+    async with SessionLocal() as recovery:
+        await _persist_failure_state(recovery, run_id, error_msg)
+
+
+async def _persist_failure_state(session: AsyncSession, run_id: int, error_msg: str) -> None:
+    """Write failure state into the given session and commit."""
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return
+    result_summary = dict(run.result_summary or {})
+    result_summary["error"] = error_msg
+    result_summary["progress"] = result_summary.get("progress", 0)
+    result_summary["extraction_verdict"] = "error"
+    if normalize_status(run.status) not in TERMINAL_STATUSES:
+        update_run_status(run, CrawlStatus.FAILED)
+    run.result_summary = result_summary
+    session.add(CrawlLog(run_id=run.id, level="error", message=f"Pipeline failed: {error_msg}"))
+    await session.commit()
 
 
 def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
@@ -1067,6 +1074,7 @@ async def _collect_detail_llm_suggestions(
     url: str,
     surface: str,
     html: str,
+    manifest: DiscoveryManifest,
     additional_fields: list[str],
     adapter_records: list[dict],
     candidate_values: dict,
@@ -1074,6 +1082,7 @@ async def _collect_detail_llm_suggestions(
 ) -> dict:
     trace_candidates = source_trace.setdefault("candidates", {})
     llm_cleanup_suggestions: dict[str, dict] = source_trace.get("llm_cleanup_suggestions", {})
+    llm_cleanup_status: dict[str, object] = dict(source_trace.get("llm_cleanup_status") or {})
     preview_record = (
         _merge_record_fields(adapter_records[0], candidate_values)
         if adapter_records else dict(candidate_values)
@@ -1084,24 +1093,31 @@ async def _collect_detail_llm_suggestions(
         for field_name in target_fields
         if preview_record.get(field_name) in (None, "", [], {})
     ]
-    if not missing_fields:
-        return source_trace
 
     domain = _domain(url)
-    await _log(session, run.id, "info", f"[EXTRACT] LLM XPath discovery for {len(missing_fields)} missing detail fields")
-    xpath_rows, xpath_error = await discover_xpath_candidates(
-        session,
-        run_id=run.id,
-        domain=domain,
-        url=url,
-        html_text=html,
-        missing_fields=missing_fields,
-        existing_values=preview_record,
-    )
-    if xpath_error:
-        await _log(session, run.id, "warning", f"[LLM] XPath discovery failed: {xpath_error}")
-    elif not xpath_rows:
-        await _log(session, run.id, "warning", "[EXTRACT] LLM XPath discovery returned no usable suggestions")
+    if missing_fields:
+        await _log(session, run.id, "info", f"[EXTRACT] LLM XPath discovery for {len(missing_fields)} missing detail fields")
+        xpath_rows, xpath_error = await discover_xpath_candidates(
+            session,
+            run_id=run.id,
+            domain=domain,
+            url=url,
+            html_text=html,
+            missing_fields=missing_fields,
+            existing_values=preview_record,
+        )
+        if xpath_error:
+            await _log(session, run.id, "warning", f"[LLM] XPath discovery failed: {xpath_error}")
+            llm_cleanup_status = {
+                **llm_cleanup_status,
+                "status": "xpath_error",
+                "message": xpath_error,
+                "xpath_error": xpath_error,
+            }
+        elif not xpath_rows:
+            await _log(session, run.id, "warning", "[EXTRACT] LLM XPath discovery returned no usable suggestions")
+    else:
+        xpath_rows = []
     selector_suggestions: dict[str, list[dict]] = source_trace.get("selector_suggestions", {})
     for row in xpath_rows:
         if not isinstance(row, dict):
@@ -1145,48 +1161,284 @@ async def _collect_detail_llm_suggestions(
 
     source_trace["selector_suggestions"] = selector_suggestions
     source_trace["llm_cleanup_suggestions"] = llm_cleanup_suggestions
-    preview_record = (
-        _merge_record_fields(adapter_records[0], candidate_values)
-        if adapter_records else dict(candidate_values)
-    )
-    remaining_missing = [
-        field_name
-        for field_name in target_fields
-        if preview_record.get(field_name) in (None, "", [], {})
-    ]
-    if not remaining_missing:
+
+    candidate_evidence = _build_llm_candidate_evidence(trace_candidates, preview_record)
+    review_candidate_evidence = _select_llm_review_candidates(candidate_evidence, preview_record, target_fields)
+    discovered_sources = _build_llm_discovered_sources(source_trace, manifest, target_fields=list(review_candidate_evidence.keys()))
+    if not candidate_evidence and not discovered_sources and not preview_record:
+        source_trace["llm_cleanup_status"] = {"status": "no_evidence", "message": "No candidate evidence was available for cleanup review."}
+        return source_trace
+    if not review_candidate_evidence:
+        source_trace["llm_cleanup_status"] = {
+            "status": "skipped",
+            "message": "Deterministic extraction already resolved the available field groups. LLM cleanup runs only for ambiguous or missing values.",
+        }
         return source_trace
 
-    await _log(session, run.id, "info", f"[EXTRACT] LLM value extraction for {len(remaining_missing)} unresolved detail fields")
-    llm_values, llm_error = await extract_missing_fields(
+    await _log(session, run.id, "info", f"[EXTRACT] LLM cleanup review for {len(review_candidate_evidence)} candidate field groups")
+    llm_reviews, llm_error = await review_field_candidates(
         session,
         run_id=run.id,
         domain=domain,
         url=url,
         html_text=html,
-        missing_fields=remaining_missing,
+        target_fields=sorted(review_candidate_evidence.keys()),
         existing_values=preview_record,
+        candidate_evidence=review_candidate_evidence,
+        discovered_sources=discovered_sources,
     )
     if llm_error:
-        await _log(session, run.id, "warning", f"[LLM] Value extraction failed: {llm_error}")
-    elif not llm_values:
-        await _log(session, run.id, "warning", "[EXTRACT] LLM value extraction failed or returned no suggestions")
-    for field_name, value in llm_values.items():
-        if field_name not in remaining_missing or value in (None, "", [], {}):
+        await _log(session, run.id, "warning", f"[LLM] Cleanup review failed: {llm_error}")
+        source_trace["llm_cleanup_status"] = {"status": "error", "message": llm_error}
+        return source_trace
+    if not llm_reviews:
+        await _log(session, run.id, "warning", "[EXTRACT] LLM cleanup review returned no suggestions")
+        source_trace["llm_cleanup_status"] = {"status": "empty", "message": "LLM cleanup review returned no suggestions."}
+        return source_trace
+
+    for field_name, raw_review in llm_reviews.items():
+        normalized = _normalize_llm_cleanup_review(
+            field_name,
+            raw_review,
+            current_value=preview_record.get(str(field_name or "").strip()),
+        )
+        if normalized is None:
             continue
-        trace_candidates.setdefault(field_name, []).append(_compact_dict({
-            "value": value,
-            "source": "llm_value",
-            "sample_value": value,
-        }))
-        llm_cleanup_suggestions[field_name] = _compact_dict({
-            "field_name": field_name,
-            "suggested_value": value,
-            "source": "llm_value",
-            "status": "pending_review",
-        })
+        llm_cleanup_suggestions[normalized["field_name"]] = normalized
     source_trace["llm_cleanup_suggestions"] = llm_cleanup_suggestions
+    source_trace["llm_cleanup_status"] = {
+        **llm_cleanup_status,
+        "status": "ready",
+        "count": len(llm_cleanup_suggestions),
+    }
     return source_trace
+
+
+def _build_llm_candidate_evidence(trace_candidates: dict, preview_record: dict) -> dict[str, list[dict]]:
+    evidence: dict[str, list[dict]] = {}
+    field_names = sorted({
+        str(field_name or "").strip()
+        for field_name in [*trace_candidates.keys(), *preview_record.keys()]
+        if str(field_name or "").strip() and not str(field_name).startswith("_")
+    })
+    for field_name in field_names:
+        rows: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        current_value = _clean_candidate_text(preview_record.get(field_name))
+        if current_value:
+            rows.append({
+                "value": current_value,
+                "source": "current_output",
+            })
+            seen.add(("current_output", current_value))
+        for row in trace_candidates.get(field_name, []):
+            if not isinstance(row, dict):
+                continue
+            value = _clean_candidate_text(row.get("value") if row.get("value") not in (None, "", [], {}) else row.get("sample_value"))
+            if not value:
+                continue
+            source = str(row.get("source") or "candidate").strip() or "candidate"
+            key = (source, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(_compact_dict({
+                "value": value,
+                "source": source,
+                "xpath": str(row.get("xpath") or "").strip() or None,
+                "css_selector": str(row.get("css_selector") or "").strip() or None,
+                "regex": str(row.get("regex") or "").strip() or None,
+                "selector_used": str(row.get("selector_used") or "").strip() or None,
+            }))
+            if len(rows) >= 8:
+                break
+        if rows:
+            evidence[field_name] = rows
+    return evidence
+
+
+def _build_llm_discovered_sources(
+    source_trace: dict,
+    manifest: DiscoveryManifest,
+    *,
+    target_fields: list[str] | None = None,
+) -> dict[str, object]:
+    semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
+    relevant_fields = {field for field in (target_fields or []) if field}
+    semantic_sections = semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
+    semantic_specs = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
+    semantic_promoted = semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else {}
+    manifest_snapshot = _compact_dict({
+        "next_data": _snapshot_for_llm(manifest.next_data, max_items=10, text_limit=180),
+        "hydrated_states": _snapshot_for_llm(manifest._hydrated_states, max_items=6, text_limit=180),
+        "embedded_json": _snapshot_for_llm(manifest.embedded_json, max_items=6, text_limit=180),
+        "json_ld": _snapshot_for_llm(manifest.json_ld),
+        "microdata": _snapshot_for_llm(manifest.microdata),
+        "network_payloads": _snapshot_for_llm([
+            _compact_dict({
+                "url": payload.get("url"),
+                "status": payload.get("status"),
+                "body": payload.get("body"),
+            })
+            for payload in manifest.network_payloads[:2]
+            if isinstance(payload, dict)
+        ], max_items=4, text_limit=180),
+        "tables": _snapshot_for_llm(manifest.tables),
+    })
+    semantic_snapshot = _compact_dict({
+        "sections": _snapshot_for_llm(
+            {key: value for key, value in semantic_sections.items() if not relevant_fields or key in relevant_fields},
+            text_limit=220,
+        ),
+        "specifications": _snapshot_for_llm(
+            {key: value for key, value in semantic_specs.items() if not relevant_fields or key in relevant_fields},
+            text_limit=220,
+        ),
+        "promoted_fields": _snapshot_for_llm(
+            {key: value for key, value in semantic_promoted.items() if not relevant_fields or key in relevant_fields},
+            text_limit=220,
+        ),
+    })
+    return _compact_dict({
+        "semantic": semantic_snapshot,
+        "manifest": manifest_snapshot,
+    })
+
+
+def _snapshot_for_llm(
+    value: object,
+    *,
+    depth: int = 0,
+    max_depth: int = 3,
+    max_items: int = 12,
+    text_limit: int = 280,
+) -> object:
+    if value in (None, "", [], {}):
+        return None
+    if depth >= max_depth:
+        return _clean_candidate_text(value, limit=text_limit)
+    if isinstance(value, dict):
+        snapshot: dict[str, object] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                break
+            normalized_key = str(key or "").strip()
+            if not normalized_key:
+                continue
+            nested = _snapshot_for_llm(item, depth=depth + 1, max_depth=max_depth, max_items=max_items, text_limit=text_limit)
+            if nested not in (None, "", [], {}):
+                snapshot[normalized_key] = nested
+        return snapshot or None
+    if isinstance(value, list):
+        rows: list[object] = []
+        for item in value[:max_items]:
+            nested = _snapshot_for_llm(item, depth=depth + 1, max_depth=max_depth, max_items=max_items, text_limit=text_limit)
+            if nested not in (None, "", [], {}):
+                rows.append(nested)
+        return rows or None
+    return _clean_candidate_text(value, limit=text_limit)
+
+
+def _clean_candidate_text(value: object, *, limit: int | None = 1200) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, list):
+        joined = " | ".join(part for part in (_clean_candidate_text(item, limit=None) for item in value[:6]) if part)
+        return joined[:limit] if limit and len(joined) > limit else joined
+    if isinstance(value, dict):
+        parts = []
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 8:
+                break
+            cleaned = _clean_candidate_text(item, limit=None)
+            if cleaned:
+                parts.append(f"{key}: {cleaned}")
+        joined = " | ".join(parts)
+        return joined[:limit] if limit and len(joined) > limit else joined
+    text = unescape(str(value or ""))
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"[\u200b-\u200d\ufeff]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if limit and len(text) > limit:
+        return f"{text[:limit].rstrip()}..."
+    return text
+
+
+def _normalize_llm_cleanup_review(field_name: object, raw_review: object, *, current_value: object) -> dict | None:
+    normalized_field = str(field_name or "").strip()
+    if not normalized_field or normalized_field.startswith("_"):
+        return None
+    if isinstance(raw_review, dict):
+        suggested_value = _clean_candidate_text(
+            raw_review.get("suggested_value")
+            if raw_review.get("suggested_value") not in (None, "", [], {})
+            else raw_review.get("value"),
+        )
+        source = str(raw_review.get("source") or "llm_cleanup").strip() or "llm_cleanup"
+        note = _clean_candidate_text(raw_review.get("note") or raw_review.get("reason"), limit=280)
+        supporting_sources = [
+            str(item).strip()
+            for item in (raw_review.get("supporting_sources") or [])
+            if str(item).strip()
+        ]
+    else:
+        suggested_value = _clean_candidate_text(raw_review)
+        source = "llm_cleanup"
+        note = ""
+        supporting_sources = []
+    if not suggested_value:
+        return None
+    if _clean_candidate_text(current_value) == suggested_value:
+        return None
+    return _compact_dict({
+        "field_name": normalized_field,
+        "suggested_value": suggested_value,
+        "source": source,
+        "supporting_sources": supporting_sources or None,
+        "note": note or None,
+        "status": "pending_review",
+    })
+
+
+async def _load_domain_requested_fields(session: AsyncSession, *, url: str, surface: str) -> list[str]:
+    domain = normalize_domain(url)
+    if not domain:
+        return []
+    result = await session.execute(
+        select(ReviewPromotion)
+        .where(ReviewPromotion.domain == domain, ReviewPromotion.surface == surface)
+        .order_by(ReviewPromotion.updated_at.desc(), ReviewPromotion.created_at.desc())
+        .limit(1)
+    )
+    promotion = result.scalar_one_or_none()
+    if promotion is None or not isinstance(promotion.approved_schema, dict):
+        return []
+    fields = promotion.approved_schema.get("fields")
+    if not isinstance(fields, list):
+        return []
+    return expand_requested_fields([str(field or "") for field in fields])
+
+
+def _select_llm_review_candidates(
+    candidate_evidence: dict[str, list[dict]],
+    preview_record: dict,
+    target_fields: list[str],
+) -> dict[str, list[dict]]:
+    selected: dict[str, list[dict]] = {}
+    for field_name in target_fields:
+        rows = candidate_evidence.get(field_name) or []
+        if not rows:
+            continue
+        current_value = _clean_candidate_text(preview_record.get(field_name))
+        distinct_values = {
+            _clean_candidate_text(row.get("value"))
+            for row in rows
+            if _clean_candidate_text(row.get("value"))
+        }
+        source_labels = {str(row.get("source") or "").strip() for row in rows}
+        if not current_value or len(distinct_values) > 1 or "llm_xpath" in source_labels:
+            selected[field_name] = rows[:6]
+    return selected
 
 
 # Domain normalisation delegated to app.services.domain_utils.normalize_domain

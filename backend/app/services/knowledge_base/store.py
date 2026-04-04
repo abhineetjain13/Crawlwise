@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +14,8 @@ MAPPING_FILE = BASE_DIR / "field_mappings.json"
 SELECTOR_FILE = BASE_DIR / "selector_defaults.json"
 PROMPT_FILE = BASE_DIR / "prompt_registry.json"
 PROMPTS_DIR = BASE_DIR / "prompts"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,7 +76,11 @@ def _build_cache() -> _KnowledgeBaseCache:
 
 async def _persist_json(path: Path, payload: dict | list) -> None:
     snapshot = deepcopy(payload)
-    await asyncio.to_thread(_write_json, path, snapshot)
+    try:
+        await asyncio.to_thread(_write_json, path, snapshot)
+    except Exception:
+        logger.exception("Failed to persist knowledge-base payload", extra={"path": str(path)})
+        raise
 
 
 def load_canonical_schemas() -> dict[str, list[str]]:
@@ -85,18 +92,21 @@ def get_canonical_fields(surface: str) -> list[str]:
 
 
 async def save_canonical_fields(surface: str, fields: list[str]) -> list[str]:
-    existing = list(_CACHE.canonical_schemas.get(surface, []))
-    merged: list[str] = []
-    seen: set[str] = set()
-    for field in [*existing, *fields]:
-        value = str(field or "").strip()
-        if not value or value in seen:
-            continue
-        merged.append(value)
-        seen.add(value)
-    _CACHE.canonical_schemas[surface] = merged
-    await _persist_json(SCHEMA_FILE, _CACHE.canonical_schemas)
-    return merged
+    async with _CACHE_LOCK:
+        existing = list(_CACHE.canonical_schemas.get(surface, []))
+        merged: list[str] = []
+        seen: set[str] = set()
+        for field in [*existing, *fields]:
+            value = str(field or "").strip()
+            if not value or value in seen:
+                continue
+            merged.append(value)
+            seen.add(value)
+        next_schemas = deepcopy(_CACHE.canonical_schemas)
+        next_schemas[surface] = merged
+        await _persist_json(SCHEMA_FILE, next_schemas)
+        _CACHE.canonical_schemas = next_schemas
+        return merged
 
 
 def load_field_mappings() -> dict[str, dict[str, dict[str, str]]]:
@@ -108,10 +118,13 @@ def get_domain_mapping(domain: str, surface: str) -> dict[str, str]:
 
 
 async def save_domain_mapping(domain: str, surface: str, mapping: dict[str, str]) -> None:
-    domain_rows = _CACHE.field_mappings.setdefault(domain, {})
-    current = domain_rows.setdefault(surface, {})
-    current.update(mapping)
-    await _persist_json(MAPPING_FILE, _CACHE.field_mappings)
+    async with _CACHE_LOCK:
+        next_mappings = deepcopy(_CACHE.field_mappings)
+        domain_rows = next_mappings.setdefault(domain, {})
+        current = domain_rows.setdefault(surface, {})
+        current.update(mapping)
+        await _persist_json(MAPPING_FILE, next_mappings)
+        _CACHE.field_mappings = next_mappings
 
 
 def load_selector_defaults() -> dict[str, dict[str, list[dict]]]:
@@ -124,11 +137,14 @@ def get_selector_defaults(domain: str, field_name: str) -> list[dict]:
 
 
 async def save_selector_defaults(domain: str, field_name: str, values: list[dict]) -> None:
-    _CACHE.selector_defaults.setdefault(domain, {})[field_name] = [
-        row for row in (_normalize_selector_row(value) for value in values)
-        if row
-    ]
-    await _persist_json(SELECTOR_FILE, _CACHE.selector_defaults)
+    async with _CACHE_LOCK:
+        next_defaults = deepcopy(_CACHE.selector_defaults)
+        next_defaults.setdefault(domain, {})[field_name] = [
+            row for row in (_normalize_selector_row(value) for value in values)
+            if row
+        ]
+        await _persist_json(SELECTOR_FILE, next_defaults)
+        _CACHE.selector_defaults = next_defaults
 
 
 def load_prompt_registry() -> dict[str, dict]:
@@ -137,7 +153,7 @@ def load_prompt_registry() -> dict[str, dict]:
 
 def get_prompt_task(task_type: str) -> dict | None:
     task = _CACHE.prompt_registry.get(task_type)
-    return task if isinstance(task, dict) else None
+    return deepcopy(task) if isinstance(task, dict) else None
 
 
 def load_prompt_file(relative_path: str) -> str:
@@ -145,12 +161,13 @@ def load_prompt_file(relative_path: str) -> str:
 
 
 async def reset_learned_state() -> None:
-    _CACHE.field_mappings = {}
-    _CACHE.selector_defaults = {}
-    await asyncio.gather(
-        _persist_json(MAPPING_FILE, _CACHE.field_mappings),
-        _persist_json(SELECTOR_FILE, _CACHE.selector_defaults),
-    )
+    async with _CACHE_LOCK:
+        empty_mappings: dict[str, dict[str, dict[str, str]]] = {}
+        empty_defaults: dict[str, dict[str, list[dict]]] = {}
+        await _persist_json(MAPPING_FILE, empty_mappings)
+        await _persist_json(SELECTOR_FILE, empty_defaults)
+        _CACHE.field_mappings = empty_mappings
+        _CACHE.selector_defaults = empty_defaults
 
 
 def _normalize_selector_row(value: object) -> dict | None:
@@ -181,3 +198,4 @@ def _normalize_selector_row(value: object) -> dict | None:
 
 
 _CACHE = _build_cache()
+_CACHE_LOCK = asyncio.Lock()

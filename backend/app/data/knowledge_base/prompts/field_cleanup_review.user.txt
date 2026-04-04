@@ -1,0 +1,16 @@
+URL: $url
+
+Target fields:
+$target_fields_json
+
+Current extracted values:
+$existing_values_json
+
+Candidate evidence by field:
+$candidate_evidence_json
+
+Additional discovered sources:
+$discovered_sources_json
+
+HTML snippet:
+$html_snippet

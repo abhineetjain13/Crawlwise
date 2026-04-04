@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import logging
 import shutil
+from pathlib import Path
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.config import PROJECT_ROOT, settings
+from app.core.database import is_sqlite
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.selector import Selector
 from app.services.domain_utils import normalize_domain
@@ -80,6 +82,8 @@ async def reset_application_data(session: AsyncSession) -> dict:
         promotions_deleted = await session.execute(delete(ReviewPromotion))
         selectors_deleted = await session.execute(delete(Selector))
         crawl_runs_deleted = await session.execute(delete(CrawlRun))
+        if is_sqlite:
+            await _reset_sqlite_sequences(session)
         await session.commit()
     except Exception:
         await session.rollback()
@@ -87,6 +91,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
 
     artifacts_removed = _reset_directory(settings.artifacts_dir)
     cookies_removed = _reset_directory(settings.cookie_store_dir)
+    legacy_artifacts_removed = sum(_reset_directory(path) for path in _legacy_artifact_paths())
     await reset_learned_state()
 
     return {
@@ -96,6 +101,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
         "review_promotions_deleted": promotions_deleted.rowcount or 0,
         "selectors_deleted": selectors_deleted.rowcount or 0,
         "artifacts_removed": artifacts_removed,
+        "legacy_artifacts_removed": legacy_artifacts_removed,
         "cookies_removed": cookies_removed,
         "knowledge_base_reset": True,
     }
@@ -122,3 +128,34 @@ def _reset_directory(path) -> int:
             logger.exception("Failed to remove path during reset: %s", child)
     path.mkdir(parents=True, exist_ok=True)
     return removed
+
+
+async def _reset_sqlite_sequences(session: AsyncSession) -> None:
+    sequence_table = await session.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'")
+    )
+    if not sequence_table.scalar():
+        return
+    await session.execute(
+        text(
+            """
+            DELETE FROM sqlite_sequence
+            WHERE name IN ('crawl_runs', 'crawl_records', 'crawl_logs', 'review_promotions', 'selectors')
+            """
+        )
+    )
+
+
+def _legacy_artifact_paths() -> list[Path]:
+    candidates = [
+        PROJECT_ROOT / "backend" / "backend" / "artifacts",
+    ]
+    normalized_current = Path(settings.artifacts_dir).resolve()
+    results: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved == normalized_current:
+            continue
+        if resolved not in results:
+            results.append(resolved)
+    return results

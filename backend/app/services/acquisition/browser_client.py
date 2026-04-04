@@ -4,10 +4,12 @@ from __future__ import annotations
 import logging
 
 import asyncio
+import ipaddress
 import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+import time
 from urllib.parse import urlparse, urlunparse
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
@@ -16,11 +18,15 @@ from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.pipeline_config import (
     BLOCK_MIN_HTML_LENGTH,
+    BROWSER_ERROR_RETRY_ATTEMPTS,
+    BROWSER_ERROR_RETRY_DELAY_MS,
     CHALLENGE_POLL_INTERVAL_MS,
     CHALLENGE_WAIT_MAX_SECONDS,
+    COOKIE_POLICY,
     COOKIE_CONSENT_SELECTORS,
     ORIGIN_WARM_PAUSE_MS,
 )
+from app.services.url_safety import validate_public_target
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +60,6 @@ async def fetch_rendered_html(
     url: str,
     proxy: str | None = None,
     advanced_mode: str | None = None,
-    max_pages: int = 5,
     max_scrolls: int = 10,
     prefer_stealth: bool = False,
     request_delay_ms: int = 0,
@@ -65,16 +70,14 @@ async def fetch_rendered_html(
         url: Target URL.
         proxy: Optional proxy URL.
         advanced_mode: None, "paginate", "scroll", "load_more", or "auto".
-        max_pages: Max pagination clicks (for paginate mode).
         max_scrolls: Max scroll attempts (for scroll mode).
     """
     result = BrowserResult()
     intercepted: list[dict] = []
+    target = await validate_public_target(url)
 
     async with async_playwright() as pw:
-        launch_kwargs: dict = {"headless": settings.playwright_headless}
-        if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
+        launch_kwargs = _build_launch_kwargs(proxy, target)
         browser = await pw.chromium.launch(**launch_kwargs)
         context = await browser.new_context(**_context_kwargs(prefer_stealth))
         original_domain = _domain(url)
@@ -97,10 +100,7 @@ async def fetch_rendered_html(
 
         page.on("response", _on_response)
 
-        origin_url = _origin_url(url)
-        if origin_url and origin_url != url:
-            await _warm_origin(page, origin_url)
-            result.origin_warmed = True
+        result.origin_warmed = await _maybe_warm_origin(page, url)
 
         await _goto_with_fallback(page, url)
         await _dismiss_cookie_consent(page)
@@ -108,38 +108,72 @@ async def fetch_rendered_html(
         result.challenge_state = challenge_state
         result.diagnostics["challenge_reasons"] = reasons
         result.diagnostics["challenge_ok"] = challenge_ok
-        if request_delay_ms > 0:
-            await asyncio.sleep(request_delay_ms / 1000)
-        else:
-            await asyncio.sleep(0.25)
+        await _pause_after_navigation(request_delay_ms)
 
-        # Advanced crawl modes
-        if advanced_mode == "scroll":
-            await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
-        elif advanced_mode == "load_more":
-            await _click_load_more(page, max_scrolls, request_delay_ms=request_delay_ms)
-        elif advanced_mode == "paginate":
+        if advanced_mode == "paginate":
             result.html = await page.content()
             result.network_payloads = intercepted
             # For pagination we'd collect multi-page HTML; for POC return first page
             await browser.close()
             return result
-        elif advanced_mode == "auto":
-            # Try scroll first, it's the most common SPA pattern
-            await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
-
-        result.html = await page.content()
-        result.network_payloads = intercepted
-        if result.html:
-            result.diagnostics["html_length"] = len(result.html)
-            result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
-        final_domain = _domain(page.url or url)
-        await _save_cookies(context, final_domain)
-        if final_domain != original_domain:
-            await _save_cookies(context, original_domain)
+        await _apply_advanced_mode(page, advanced_mode, max_scrolls, request_delay_ms=request_delay_ms)
+        await _populate_result(result, page, intercepted)
+        await _persist_context_cookies(context, page.url or url, original_domain)
         await context.close()
         await browser.close()
     return result
+
+
+def _build_launch_kwargs(proxy: str | None, target) -> dict:
+    launch_kwargs: dict = {"headless": settings.playwright_headless}
+    if proxy:
+        launch_kwargs["proxy"] = {"server": proxy}
+    if target.dns_resolved and target.resolved_ips:
+        pinned_ip = target.resolved_ips[0]
+        launch_kwargs["args"] = [
+            f"--host-resolver-rules=MAP {target.hostname} {_chromium_host_rule_ip(pinned_ip)}",
+        ]
+    return launch_kwargs
+
+
+async def _maybe_warm_origin(page, url: str) -> bool:
+    origin_url = _origin_url(url)
+    if not origin_url or origin_url == url:
+        return False
+    await _warm_origin(page, origin_url)
+    return True
+
+
+async def _pause_after_navigation(request_delay_ms: int) -> None:
+    delay_seconds = request_delay_ms / 1000 if request_delay_ms > 0 else 0.25
+    await asyncio.sleep(delay_seconds)
+
+
+async def _apply_advanced_mode(page, advanced_mode: str | None, max_scrolls: int, *, request_delay_ms: int) -> None:
+    if advanced_mode == "scroll":
+        await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
+        return
+    if advanced_mode == "load_more":
+        await _click_load_more(page, max_scrolls, request_delay_ms=request_delay_ms)
+        return
+    if advanced_mode == "auto":
+        # Try scroll first, it's the most common SPA pattern.
+        await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
+
+
+async def _populate_result(result: BrowserResult, page, intercepted: list[dict]) -> None:
+    result.html = await page.content()
+    result.network_payloads = intercepted
+    if result.html:
+        result.diagnostics["html_length"] = len(result.html)
+        result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
+
+
+async def _persist_context_cookies(context, final_url: str, original_domain: str) -> None:
+    final_domain = _domain(final_url)
+    await _save_cookies(context, final_domain)
+    if final_domain != original_domain:
+        await _save_cookies(context, original_domain)
 
 
 async def _goto_with_fallback(page, url: str) -> None:
@@ -160,10 +194,24 @@ async def _goto_with_fallback(page, url: str) -> None:
     ]
     last_error = None
     last_timeout: PlaywrightTimeoutError | None = None
+    browser_error_retries = max(0, BROWSER_ERROR_RETRY_ATTEMPTS)
     for wait_until, timeout in strategies:
         try:
-            await page.goto(url, wait_until=wait_until, timeout=timeout)
-            return
+            for attempt in range(browser_error_retries + 1):
+                await page.goto(url, wait_until=wait_until, timeout=timeout)
+                browser_error_reason = await _retryable_browser_error_reason(page)
+                if browser_error_reason is None:
+                    return
+                if attempt >= browser_error_retries:
+                    last_error = RuntimeError(f"browser_navigation_error:{browser_error_reason}")
+                    break
+                logger.debug(
+                    "goto(%s, wait_until=%s) landed on transient browser error page (%s); retrying",
+                    url,
+                    wait_until,
+                    browser_error_reason,
+                )
+                await page.wait_for_timeout(BROWSER_ERROR_RETRY_DELAY_MS)
         except PlaywrightTimeoutError as exc:
             last_timeout = exc
             continue
@@ -175,6 +223,32 @@ async def _goto_with_fallback(page, url: str) -> None:
         raise last_error
     if last_timeout is not None:
         raise last_timeout
+
+
+async def _retryable_browser_error_reason(page) -> str | None:
+    page_url = str(getattr(page, "url", "") or "").strip().lower()
+    if page_url.startswith("chrome-error://"):
+        return "chrome_error_url"
+    try:
+        html = await page.content()
+    except Exception:
+        logger.debug("Failed to inspect page content for browser error markers", exc_info=True)
+        return None
+    text = (html or "")[:20_000].lower()
+    markers = {
+        "err_name_not_resolved": "dns_name_not_resolved",
+        "dns_probe_finished_nxdomain": "dns_probe_finished_nxdomain",
+        "dns_probe_finished_no_internet": "dns_probe_finished_no_internet",
+        "this site can't be reached": "site_cannot_be_reached",
+        "this site can’t be reached": "site_cannot_be_reached",
+        "server ip address could not be found": "server_ip_not_found",
+        "err_network_changed": "network_changed",
+        "err_connection_reset": "connection_reset",
+    }
+    for marker, reason in markers.items():
+        if marker in text:
+            return reason
+    return None
 
 
 async def _warm_origin(page, origin_url: str) -> None:
@@ -367,13 +441,7 @@ async def _load_cookies(context, domain: str) -> bool:
         return False
     if not isinstance(payload, list):
         return False
-    cookies = [
-        cookie
-        for cookie in payload
-        if isinstance(cookie, dict)
-        and cookie.get("name")
-        and (cookie.get("domain") or cookie.get("url"))
-    ]
+    cookies = _filter_persistable_cookies(payload, domain=domain)
     if not cookies:
         return False
     try:
@@ -393,14 +461,10 @@ async def _save_cookies(context, domain: str) -> None:
     except Exception:
         logger.debug("Failed to read cookies from context for domain %s", domain, exc_info=True)
         return
-    filtered = [
-        cookie
-        for cookie in cookies
-        if isinstance(cookie, dict)
-        and cookie.get("name")
-        and _cookie_domain_matches(str(cookie.get("domain") or ""), domain)
-    ]
+    filtered = _filter_persistable_cookies(cookies, domain=domain)
     if not filtered:
+        if cookie_path.exists():
+            cookie_path.unlink(missing_ok=True)
         return
     cookie_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = cookie_path.with_suffix(".tmp")
@@ -418,6 +482,101 @@ def _cookie_store_path(domain: str) -> Path | None:
     return Path(settings.cookie_store_dir) / f"{safe}.json"
 
 
+def _filter_persistable_cookies(payload: object, *, domain: str) -> list[dict]:
+    if not isinstance(payload, list):
+        return []
+    filtered: list[dict] = []
+    for cookie in payload:
+        if not isinstance(cookie, dict):
+            continue
+        if _is_persistable_cookie(cookie, domain=domain):
+            filtered.append(cookie)
+    return filtered
+
+
+def _is_persistable_cookie(cookie: dict, *, domain: str) -> bool:
+    policy = _cookie_policy_for_domain(domain)
+    name = str(cookie.get("name") or "").strip()
+    if not name:
+        return False
+    cookie_domain = str(cookie.get("domain") or "").strip()
+    cookie_url = str(cookie.get("url") or "").strip()
+    if not cookie_domain and not cookie_url:
+        return False
+    if cookie_domain and not _cookie_domain_matches(cookie_domain, domain):
+        return False
+    if not cookie_domain:
+        try:
+            extracted_domain = str(urlparse(cookie_url).hostname or "").strip().lower()
+        except ValueError:
+            extracted_domain = ""
+        if extracted_domain and not _cookie_domain_matches(extracted_domain, domain):
+            return False
+    name_allowed = _cookie_name_allowed(name, policy)
+    if not name_allowed and _cookie_name_blocked(name, policy):
+        return False
+    expires = _cookie_expiry(cookie)
+    now = time.time()
+    if expires is None:
+        return bool(policy.get("persist_session_cookies", False))
+    if expires <= now:
+        return False
+    max_ttl = int(policy.get("max_persisted_ttl_seconds", 0) or 0)
+    if max_ttl > 0 and expires - now > max_ttl:
+        return False
+    return True
+
+
+def _cookie_name_allowed(name: str, policy: dict[str, object]) -> bool:
+    normalized = str(name or "").strip().lower()
+    allowed_names = {
+        str(value).strip().lower()
+        for value in policy.get("allowed_cookie_names", [])
+        if str(value).strip()
+    }
+    return normalized in allowed_names
+
+
+def _cookie_name_blocked(name: str, policy: dict[str, object]) -> bool:
+    normalized = str(name or "").strip().lower()
+    if not normalized:
+        return True
+    blocked_prefixes = [str(value).strip().lower() for value in policy.get("blocked_name_prefixes", []) if str(value).strip()]
+    for prefix in blocked_prefixes:
+        if normalized.startswith(prefix):
+            return True
+    blocked_substrings = [str(value).strip().lower() for value in policy.get("blocked_name_contains", []) if str(value).strip()]
+    for fragment in blocked_substrings:
+        if fragment in normalized:
+            return True
+    return False
+
+
+def _cookie_policy_for_domain(domain: str) -> dict[str, object]:
+    normalized = str(domain or "").strip().lower().lstrip(".")
+    policy = dict(COOKIE_POLICY)
+    overrides = COOKIE_POLICY.get("domain_overrides", {})
+    if not isinstance(overrides, dict):
+        return policy
+    for override_domain, override_values in overrides.items():
+        candidate = str(override_domain or "").strip().lower().lstrip(".")
+        if not candidate or not isinstance(override_values, dict):
+            continue
+        if normalized == candidate or normalized.endswith(f".{candidate}"):
+            policy.update(override_values)
+    return policy
+
+
+def _cookie_expiry(cookie: dict) -> float | None:
+    raw_expires = cookie.get("expires")
+    if raw_expires in (None, "", -1):
+        return None
+    try:
+        return float(raw_expires)
+    except (TypeError, ValueError):
+        return None
+
+
 def _cookie_domain_matches(cookie_domain: str, requested_domain: str) -> bool:
     cookie_host = str(cookie_domain or "").strip().lower().lstrip(".")
     requested_host = str(requested_domain or "").strip().lower().lstrip(".")
@@ -431,3 +590,11 @@ def _cookie_domain_matches(cookie_domain: str, requested_domain: str) -> bool:
 
 def _domain(url: str) -> str:
     return urlparse(url).netloc.lower()
+
+
+def _chromium_host_rule_ip(ip_text: str) -> str:
+    try:
+        value = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return ip_text
+    return f"[{value.compressed}]" if value.version == 6 else value.compressed
