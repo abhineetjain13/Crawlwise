@@ -53,3 +53,9 @@ def test_normalize_currency_prefers_code_adjacent_to_amount():
 
 def test_extract_currency_hint_prefers_adjacent_code_over_symbol():
     assert extract_currency_hint("100 CAD $") == "CAD"
+
+
+def test_normalize_size_and_color_option_text():
+    assert normalize_value("size", "Choose an option XS S M L XL") == "XS, S, M, L, XL"
+    assert normalize_value("size", "(max-width: 416px) 100vw, 416px") == ""
+    assert normalize_value("color", "Choose an option Black Gray Orange Clear") == "Black Gray Orange"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import encrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
-from app.services.llm_runtime import _call_groq, _call_provider, resolve_active_config, run_prompt_task
+from app.services.llm_runtime import _call_groq, _call_provider, _enforce_token_limit, resolve_active_config, run_prompt_task
 
 
 @pytest.mark.asyncio
@@ -191,3 +192,23 @@ async def test_run_prompt_task_gracefully_returns_provider_connection_error(db_s
 
     assert result.payload is None
     assert result.error_message.startswith("Error: ConnectError:")
+
+
+def test_enforce_token_limit_preserves_json_section_validity():
+    evidence = {"items": [{"title": "A" * 500}, {"title": "B" * 500}]}
+    prompt = (
+        "URL: https://example.com\n\n"
+        "Candidate evidence by field:\n"
+        f"{json.dumps(evidence)}\n\n"
+        "HTML snippet:\n"
+        f"<div>{'X' * 800}</div>"
+    )
+
+    truncated = _enforce_token_limit(prompt, limit=120)
+    prefix = "Candidate evidence by field:\n"
+    start = truncated.index(prefix) + len(prefix)
+    end = truncated.index("\n\n[TRUNCATED DUE TO TOKEN LIMIT]")
+    rendered_json = truncated[start:end]
+
+    assert "[TRUNCATED DUE TO TOKEN LIMIT]" in truncated
+    assert isinstance(json.loads(rendered_json), dict)

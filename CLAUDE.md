@@ -102,7 +102,11 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
   5. DOM card detection (CSS selectors + auto-detect heuristic)
   - All structured sources are collected and ranked by field richness — sparse JSON-LD no longer short-circuits richer hydrated state data
   - `_extract_items_from_json` reads `max_json_recursion_depth` from `pipeline_tuning.json` (default `4`) to find deeply nested product arrays
-- `json_extractor.py`: First-class JSON API extraction — finds data arrays in nested JSON (supports `products`, `jobs`, `items`, `data`, `results`, GraphQL edges/node patterns)
+  - Card title extraction uses ordered selectors (`[itemprop='name']` → `.title` → headings) and skips price-like text to prevent price/title confusion
+  - Card auto-detect scores candidate groups by product signal density (link + image + price) instead of pure element count, preventing nav lists from winning over product tiles
+  - Price text is cleaned via regex to strip surrounding UI text (e.g. "In stock Add to basket")
+  - `card_selectors.json` includes 22 ecommerce and 12 job selectors, including microdata `[itemscope][itemtype*='Product']` and class-substring patterns
+- `json_extractor.py`: First-class JSON API extraction — finds data arrays in nested JSON using 37 collection keys (including `products`, `jobs`, `drinks`, `books`, `categories`, etc.) plus GraphQL edges/node patterns. Falls back to preserving scalar fields under original keys when no canonical alias matches.
 - `service.py`: Detail page candidate extraction with priority: contract > adapter > network > __NEXT_DATA__ > JSON-LD > microdata > selectors > DOM patterns
 - `semantic_detail_extractor.py`: Extracts sections, specifications, label/value patterns from detail pages
 
@@ -184,6 +188,13 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - Detail runs now persist deterministic `field_discovery` summaries for requested fields so intelligence/review UIs can show discovered values and source provenance instead of raw manifest blobs alone
 - Manual reviewed-field commits now use a generic `commit-fields` API route rather than LLM-only naming
 - API auth now accepts either the session cookie or `Authorization: Bearer <token>` for the same protected endpoints
+- Listing card title extraction now uses ordered selectors (`[itemprop='name']` → `.title` → headings) and skips price-like headings — fixes webscraper.io where price `<h4>` preceded title `<h4>`
+- Card auto-detect now scores candidate groups by product signal density (link + image + price presence) instead of pure element count — fixes nav lists being preferred over product tiles on ThriftBooks, iFixit, Under Armour
+- Card selectors expanded with new generic patterns including: `[itemscope][itemtype*='Product']`, `[class*='ProductCard']`, `[class*='SearchResultTile']`, `[class*='product-tile']`, etc.
+- Price text in card extraction now cleaned via regex to strip surrounding UI text ("£51.77 In stock Add to basket" → "£51.77")
+- `collection_keys.json` expanded from 15 to 37 keys (added `drinks`, `books`, `categories`, `collections`, `articles`, `content`, etc.)
+- JSON extractor now falls back to preserving scalar fields under original keys when no canonical alias matches — prevents empty records from APIs with non-standard naming (e.g. CocktailDB `strDrink`)
+- Card extraction now prefers `[itemprop='image']` for image_url before falling back to generic `<img>` selectors
 
 ## Tests
 
@@ -194,7 +205,7 @@ $env:PYTHONPATH='.'
 pytest tests -q
 ```
 
-184 tests covering: adapters, acquisition, blocked detection, JSON extraction, listing extraction, crawl service orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, discovery.
+259 tests covering: adapters, acquisition, blocked detection, JSON extraction, listing extraction (title/price separation, itemprop, auto-detect scoring, microdata cards, price cleanup), crawl service orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, discovery.
 
 Acquire-only smoke checks can be run without the full crawl pipeline:
 
@@ -237,11 +248,19 @@ These MUST be preserved across all changes:
 - `try_blocked_adapter_recovery()` currently only supports Shopify — other platform recovery paths not yet implemented.
 - Typed reviewed values are not yet committed end-to-end: LLM cleanup suggestions and field-commit payloads still coerce values to strings, which can flatten arrays/objects/numbers discovered during cleanup.
 - `build_absolute_xpath` generates brittle absolute paths that pollute selector memory.
+- **Schema pollution in `record.data`**: Detail page extraction surfaces spec-table labels (e.g. `price_excl._tax`, `pack_1`–`pack_5`, `category: "AggregateRating"`) as top-level fields alongside real business fields. `_build_dynamic_structured_rows()` and `_build_dynamic_semantic_rows()` in `extract/service.py` need a cleanup pass: spec-table fields should be namespaced (e.g. under a `specifications` dict) and JSON-LD type names (AggregateRating, BreadcrumbList) should not leak into category/brand fields.
+- **Advanced crawl modes incomplete**: `paginate` in `browser_client.py` is a POC stub (line 113 comment: "For pagination we'd collect multi-page HTML; for POC return first page"). `auto` mode only scrolls, never paginates. Multi-page listing crawls only capture page 1.
+- **Detail extraction pipeline shares the same candidate system as listing** — candidates from multiple sources (JSON-LD, embedded JSON, DOM, tables, semantic sections) are all flattened into a single candidates dict. When sources disagree (e.g. JSON-LD `@type` leaks as `category`), the highest-ranked source wins with no quality gate.
+- **SPA-rendered listing pages** (Oxylabs sandbox, practicesoftwaretesting.com): hydrated state arrays found in discovery but listing extractor can't parse arbitrary React/Angular state shapes into records. `_extract_items_from_json` only matches arrays with known collection keys or recurses for the largest array, missing component-level state.
+- **Listing card extraction has no fallback for content-only pages** (quotes, country lists) where repeating items don't match product card patterns (no price, no product URL). The `ecommerce_listing` surface assumption blocks extraction of non-commerce repeating data.
 
 ## Preferred Next Steps
 
-1. Finish the typed review/commit path so arrays, objects, booleans, and numeric cleanup suggestions survive from LLM review through manual commit and persisted record data.
-2. Surface extraction verdict and partial/listing/schema-miss distinctions from `result_summary.extraction_verdict` in the run detail UI instead of depending on a separate `degraded` status.
-3. Add Lever ATS adapter.
-4. Expand `try_blocked_adapter_recovery()` to additional platforms.
-5. Switch `build_absolute_xpath` to semantic relative XPaths.
+1. **Schema cleanup for detail pages**: Namespace spec-table fields under `specifications`, filter JSON-LD type names from business fields, establish a clear separation between canonical fields and discovered metadata in `record.data`.
+2. **Implement `paginate` advanced mode**: Collect multi-page HTML in `browser_client.py`, feed concatenated results through listing extraction with deduplication. Wire the existing `max_pages` setting.
+3. **Detail page multi-source reconciliation**: Add a quality gate between `extract_candidates()` and final record assembly so JSON-LD structural artifacts don't contaminate business fields.
+4. Surface extraction verdict distinctions in the run detail UI.
+5. Add Lever ATS adapter.
+6. Expand `try_blocked_adapter_recovery()` to additional platforms.
+7. Switch `build_absolute_xpath` to semantic relative XPaths.
+8. Finish the typed review/commit path for arrays, objects, booleans, and numeric values.

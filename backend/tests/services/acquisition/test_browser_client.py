@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import json
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.core.config import settings
 from app.services.acquisition.browser_client import (
+    _collect_paginated_html,
     _context_kwargs,
     _cookie_policy_for_domain,
+    _find_next_page_url,
     _goto_with_fallback,
     _load_cookies,
     _retryable_browser_error_reason,
@@ -85,6 +88,57 @@ class FakeGotoPage:
 
     async def wait_for_timeout(self, value: int):
         self.wait_calls.append(value)
+
+
+class FakeLocator:
+    def __init__(self, href: str = ""):
+        self._href = href
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return 1 if self._href else 0
+
+    async def get_attribute(self, name: str):
+        return self._href if name == "href" else None
+
+
+class FakePaginationPage:
+    def __init__(self):
+        self.url = "https://example.com/products?page=1"
+        self._pages = {
+            "https://example.com/products?page=1": {
+                "html": "<html><body><div>Page 1</div></body></html>",
+                "next": "/products?page=2",
+            },
+            "https://example.com/products?page=2": {
+                "html": "<html><body><div>Page 2</div></body></html>",
+                "next": "/products?page=3",
+            },
+            "https://example.com/products?page=3": {
+                "html": "<html><body><div>Page 3</div></body></html>",
+                "next": "",
+            },
+        }
+        self.goto_calls: list[str] = []
+        self.dismissed = 0
+
+    def locator(self, selector: str):
+        if selector in {"link[rel='next']", "a[rel='next']"}:
+            return FakeLocator(self._pages[self.url]["next"])
+        return FakeLocator("")
+
+    async def content(self):
+        return self._pages[self.url]["html"]
+
+    async def goto(self, url: str, *, wait_until: str, timeout: int):
+        self.goto_calls.append(url)
+        self.url = url
+
+    async def evaluate(self, _script: str):
+        return ""
 
 
 @pytest.mark.asyncio
@@ -188,3 +242,24 @@ async def test_retryable_browser_error_reason_normalizes_curly_apostrophes():
     await page.goto("https://example.com", wait_until="load", timeout=1000)
 
     assert await _retryable_browser_error_reason(page) == "site_cannot_be_reached"
+
+
+@pytest.mark.asyncio
+async def test_find_next_page_url_uses_rel_next_href():
+    page = FakePaginationPage()
+
+    assert await _find_next_page_url(page) == "https://example.com/products?page=2"
+
+
+@pytest.mark.asyncio
+async def test_collect_paginated_html_stops_at_max_pages(monkeypatch):
+    page = FakePaginationPage()
+    monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
+
+    html = await _collect_paginated_html(page, max_pages=2, request_delay_ms=0)
+
+    assert "Page 1" in html
+    assert "Page 2" in html
+    assert "Page 3" not in html
+    assert page.goto_calls == ["https://example.com/products?page=2"]

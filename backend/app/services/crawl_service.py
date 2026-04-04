@@ -35,7 +35,7 @@ from app.services.crawl_state import (
 from app.services.discover.service import DiscoveryManifest, discover_sources
 from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
 from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.service import coerce_field_candidate_value, extract_candidates
+from app.services.extract.service import _field_quality_score, coerce_field_candidate_value, extract_candidates
 from app.services.extract.spa_pruner import prune_spa_state
 from app.services.knowledge_base.store import get_canonical_fields
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
@@ -371,6 +371,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         # Extract crawl settings
         proxy_list = settings.get("proxy_list", [])
         advanced_mode = settings.get("advanced_mode")  # None, "scroll", "paginate", "load_more", "auto"
+        max_pages = settings.get("max_pages", 5)
         max_records = settings.get("max_records", 100)
         sleep_ms = settings.get("sleep_ms", 0)
 
@@ -419,6 +420,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 url=url,
                 proxy_list=proxy_list,
                 advanced_mode=advanced_mode,
+                max_pages=max_pages,
                 max_records=remaining_records,
                 sleep_ms=sleep_ms,
             )
@@ -515,6 +517,7 @@ async def _process_single_url(
     url: str,
     proxy_list: list[str],
     advanced_mode: str | None,
+    max_pages: int,
     max_records: int,
     sleep_ms: int,
 ) -> tuple[list[dict], str]:
@@ -535,6 +538,7 @@ async def _process_single_url(
         url=url,
         proxy_list=proxy_list or None,
         advanced_mode=advanced_mode,
+        max_pages=max_pages,
         sleep_ms=sleep_ms,
     )
 
@@ -779,11 +783,11 @@ async def _extract_detail(
         url, surface, html, manifest, additional_fields, extraction_contract,
     )
     persisted_field_names = set(get_canonical_fields(surface)) | set(additional_fields)
-    candidate_values = {
-        field: rows[0]["value"]
-        for field, rows in candidates.items()
-        if rows and field in persisted_field_names
-    }
+    candidate_values, reconciliation = _reconcile_detail_candidate_values(
+        candidates,
+        allowed_fields=persisted_field_names,
+        url=url,
+    )
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
 
     # Build deterministic field discovery summary for all detail fields before any
@@ -821,7 +825,7 @@ async def _extract_detail(
         for raw_record in extracted_records[:1]:
             merged_record = _merge_record_fields(raw_record, candidate_values)
             public_fields = _public_record_fields(merged_record)
-            normalized = _normalize_record_fields(public_fields)
+            normalized, discovered_fields = _split_detail_output_fields(public_fields, allowed_fields=persisted_field_names)
             raw_data = _raw_record_payload(merged_record)
             requested_coverage = _requested_field_coverage(normalized, additional_fields)
             db_record = CrawlRecord(
@@ -832,12 +836,16 @@ async def _extract_detail(
                 discovered_data=_compact_dict({
                     **manifest.as_dict(),
                     "semantic": semantic or None,
+                    "specifications": semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else None,
+                    "promoted_fields": semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else None,
+                    "discovered_fields": discovered_fields or None,
                     "requested_field_coverage": requested_coverage or None,
                 }),
                 source_trace=_compact_dict({
                     **source_trace,
                     "type": "detail",
                     "adapter": adapter_name,
+                    "reconciliation": reconciliation or None,
                     "requested_fields": additional_fields or None,
                     "requested_field_coverage": requested_coverage or None,
                 }),
@@ -847,10 +855,7 @@ async def _extract_detail(
             saved.append(normalized)
     elif candidate_values or source_trace.get("llm_cleanup_suggestions"):
         # Build record from candidates (detail page, no adapter)
-        normalized = {
-            field: value
-            for field, value in _normalize_record_fields(candidate_values).items()
-        }
+        normalized, discovered_fields = _split_detail_output_fields(candidate_values, allowed_fields=persisted_field_names)
         raw_data = candidate_values
         requested_coverage = _requested_field_coverage(normalized, additional_fields)
         discovered_data = _compact_dict({
@@ -863,6 +868,9 @@ async def _extract_detail(
             "hidden_dom": manifest.hidden_dom or None,
             "tables": manifest.tables or None,
             "semantic": semantic or None,
+            "specifications": semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else None,
+            "promoted_fields": semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else None,
+            "discovered_fields": discovered_fields or None,
             "requested_field_coverage": requested_coverage or None,
         })
         db_record = CrawlRecord(
@@ -874,6 +882,7 @@ async def _extract_detail(
             source_trace=_compact_dict({
                 **source_trace,
                 "type": "detail",
+                "reconciliation": reconciliation or None,
                 "requested_fields": additional_fields or None,
                 "requested_field_coverage": requested_coverage or None,
             }),
@@ -1066,6 +1075,87 @@ def _normalize_record_fields(record: dict[str, object]) -> dict[str, object]:
                 normalized["currency"] = currency_hint
                 break
     return normalized
+
+
+def _reconcile_detail_candidate_values(
+    candidates: dict[str, list[dict]],
+    *,
+    allowed_fields: set[str],
+    url: str,
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    reconciled: dict[str, object] = {}
+    reconciliation: dict[str, dict[str, object]] = {}
+
+    for field_name in sorted(allowed_fields):
+        rows = list(candidates.get(field_name) or [])
+        if not rows:
+            continue
+
+        accepted_row: dict | None = None
+        rejected_rows: list[dict[str, object]] = []
+        for row in rows:
+            value = row.get("value")
+            normalized_value = coerce_field_candidate_value(field_name, value, base_url=url)
+            if normalized_value in (None, "", [], {}):
+                rejected_rows.append({
+                    "value": value,
+                    "reason": "empty_after_normalization",
+                    "source": row.get("source"),
+                })
+                continue
+            score = _field_quality_score(field_name, normalized_value)
+            if not _passes_detail_quality_gate(field_name, normalized_value, score):
+                rejected_rows.append({
+                    "value": normalized_value,
+                    "reason": "quality_gate_rejected",
+                    "score": score,
+                    "source": row.get("source"),
+                })
+                continue
+            accepted_row = {**row, "value": normalized_value, "_score": score}
+            break
+
+        if accepted_row is None:
+            if rejected_rows:
+                reconciliation[field_name] = {"status": "rejected", "rejected": rejected_rows[:6]}
+            continue
+
+        reconciled[field_name] = accepted_row["value"]
+        if rejected_rows:
+            reconciliation[field_name] = _compact_dict({
+                "status": "accepted_with_rejections",
+                "accepted_source": accepted_row.get("source"),
+                "accepted_score": accepted_row.get("_score"),
+                "rejected": rejected_rows[:6],
+            })
+
+    return reconciled, reconciliation
+
+
+def _passes_detail_quality_gate(field_name: str, value: object, score: int) -> bool:
+    if value in (None, "", [], {}):
+        return False
+    if field_name in {"title", "brand", "category"}:
+        return score >= 10
+    if field_name in {"price", "sale_price", "original_price", "currency", "sku", "availability"}:
+        return score > 0
+    return score >= 1
+
+
+def _split_detail_output_fields(
+    record: dict[str, object],
+    *,
+    allowed_fields: set[str],
+) -> tuple[dict[str, object], dict[str, object]]:
+    normalized = _normalize_record_fields(record)
+    canonical: dict[str, object] = {}
+    discovered: dict[str, object] = {}
+    for key, value in normalized.items():
+        if key in allowed_fields:
+            canonical[key] = value
+        else:
+            discovered[key] = value
+    return canonical, discovered
 
 
 def _normalize_committed_field_name(value: object) -> str:
@@ -1586,6 +1676,8 @@ def _select_llm_review_candidates(
             if _clean_candidate_text(row.get("value"))
         }
         source_labels = {str(row.get("source") or "").strip() for row in rows}
+        if not current_value and len(distinct_values) <= 1 and "llm_xpath" not in source_labels:
+            continue
         if not current_value or len(distinct_values) > 1 or "llm_xpath" in source_labels:
             selected[field_name] = rows[:6]
     return selected

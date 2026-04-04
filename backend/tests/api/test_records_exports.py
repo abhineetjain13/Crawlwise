@@ -11,6 +11,7 @@ from app.api.records import (
     EXPORT_TOTAL_HEADER,
     MAX_RECORD_PAGE_SIZE,
     _collect_export_rows,
+    _clean_export_data,
     _stream_export_csv,
     export_csv,
     export_json,
@@ -167,6 +168,63 @@ async def test_stream_export_csv_consumes_row_stream_once(monkeypatch):
 
     payload = "".join(chunks)
     assert "title" in payload
+    assert "description" in payload
     assert "Item 1" in payload
     assert "Item 2" in payload
-    assert page_calls == [1, 2]
+    assert page_calls == [1, 2, 1, 2]
+
+
+def test_clean_export_data_preserves_duplicate_alias_fields():
+    cleaned = _clean_export_data({
+        "price": "50",
+        "50_price": "50",
+        "title": "HeatGear Elite",
+        "product_title": "HeatGear Elite",
+        "_private": "ignore",
+    })
+
+    assert cleaned == {
+        "price": "50",
+        "50_price": "50",
+        "title": "HeatGear Elite",
+        "product_title": "HeatGear Elite",
+    }
+
+
+@pytest.mark.asyncio
+async def test_export_csv_discovers_fields_beyond_first_page(db_session, test_user):
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com",
+        surface="ecommerce_detail",
+        status="completed",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    for idx in range(MAX_RECORD_PAGE_SIZE + 1):
+        payload = {"title": f"Item {idx}"}
+        if idx == MAX_RECORD_PAGE_SIZE:
+            payload["rare_field"] = "late value"
+        db_session.add(
+            CrawlRecord(
+                run_id=run.id,
+                source_url=f"https://example.com/{idx}",
+                data=payload,
+                raw_data={},
+                discovered_data={},
+                source_trace={},
+                raw_html_path=None,
+            )
+        )
+    await db_session.commit()
+
+    response = await export_csv(run.id, session=db_session, _=test_user)
+    payload = await _read_streaming_body(response)
+    header = payload.splitlines()[0]
+
+    assert "rare_field" in header

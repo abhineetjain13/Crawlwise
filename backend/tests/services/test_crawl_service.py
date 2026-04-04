@@ -642,6 +642,57 @@ async def test_extraction_verdict_in_summary(db_session: AsyncSession, test_user
 
 
 @pytest.mark.asyncio
+async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/listing",
+        "surface": "ecommerce_listing",
+        "settings": {"advanced_mode": "paginate", "max_pages": 3},
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item"}])),
+    ):
+        await process_run(db_session, run.id)
+
+    assert acquire_mock.await_args.kwargs["max_pages"] == 3
+
+
+@pytest.mark.asyncio
+async def test_process_run_filters_detail_data_to_canonical_fields_and_namespaces_discovered_fields(db_session: AsyncSession, test_user):
+    detail_html = """
+    <html><body>
+      <h1>Example Product</h1>
+      <table>
+        <tr><td>Wire Gauge</td><td>26 AWG</td></tr>
+      </table>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product",
+        "surface": "ecommerce_detail",
+    })
+
+    adapter = AdapterResult(
+        adapter_name="test",
+        records=[{"title": "Example Product", "price": "19.99", "wire_gauge": "26 AWG"}],
+    )
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    record = (await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))).scalars().one()
+    assert "wire_gauge" not in record.data
+    assert record.discovered_data["discovered_fields"]["wire_gauge"] == "26 AWG"
+    assert record.discovered_data["specifications"]["wire_gauge"] == "26 AWG"
+
+
+@pytest.mark.asyncio
 async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting_fields(db_session: AsyncSession, test_user):
     detail_html = """
     <html><head>

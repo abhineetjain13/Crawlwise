@@ -43,6 +43,37 @@ _UI_NOISE_TOKEN_RE = re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE)
 _UI_ICON_TOKEN_RE = re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_ICON_TOKEN_PATTERN else None
 _SCRIPT_NOISE_RE = re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE) if CANDIDATE_SCRIPT_NOISE_PATTERN else None
 _PROMO_ONLY_TITLE_RE = re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE) if CANDIDATE_PROMO_ONLY_TITLE_PATTERN else None
+_DYNAMIC_FIELD_NAME_DROP_TOKENS = {
+    "arrivals",
+    "bag",
+    "best",
+    "browse",
+    "buy",
+    "cart",
+    "featured",
+    "gifts",
+    "less",
+    "location",
+    "menu",
+    "more",
+    "new",
+    "now",
+    "recommended",
+    "review",
+    "reviews",
+    "save",
+    "sell",
+    "seller",
+    "shop",
+    "shopping",
+    "similar",
+    "sort",
+    "top",
+    "trending",
+    "vote",
+    "votes",
+}
+_DYNAMIC_FIELD_NAME_MAX_TOKENS = 7
 
 
 def extract_candidates(
@@ -192,6 +223,10 @@ def extract_candidates(
             candidates[field_name] = filtered_rows
             source_trace[field_name] = filtered_rows
 
+    target_fields = set(target_fields)
+    candidates = _clean_candidate_field_map(candidates, target_fields=target_fields)
+    source_trace = {field_name: candidates[field_name] for field_name in candidates}
+
     # Apply domain field mappings
     mappings = get_domain_mapping(domain, surface)
     return candidates, {"candidates": source_trace, "mapping_hint": mappings, "semantic": semantic}
@@ -278,6 +313,113 @@ def _normalized_candidate_value(value: object) -> object | None:
     return value if value not in (None, "", [], {}) else None
 
 
+def _clean_candidate_field_map(
+    candidate_map: dict[str, list[dict]],
+    *,
+    target_fields: set[str],
+) -> dict[str, list[dict]]:
+    filtered_map: dict[str, list[dict]] = {}
+    for field_name, rows in candidate_map.items():
+        filtered_rows = _filter_candidate_rows(field_name, rows, target_fields=target_fields)
+        if filtered_rows:
+            filtered_map[field_name] = filtered_rows
+
+    value_owners: dict[str, tuple[str, int]] = {}
+    for field_name, rows in filtered_map.items():
+        preference = _field_name_preference(field_name, target_fields=target_fields)
+        for row in rows:
+            comparable = _comparable_candidate_value(row.get("value"))
+            if not comparable:
+                continue
+            existing = value_owners.get(comparable)
+            if existing is None or preference > existing[1]:
+                value_owners[comparable] = (field_name, preference)
+
+    cleaned_map: dict[str, list[dict]] = {}
+    for field_name, rows in filtered_map.items():
+        if field_name in target_fields:
+            cleaned_map[field_name] = rows
+            continue
+        deduped_rows: list[dict] = []
+        for row in rows:
+            comparable = _comparable_candidate_value(row.get("value"))
+            owner = value_owners.get(comparable) if comparable else None
+            if owner and owner[0] != field_name:
+                continue
+            deduped_rows.append(row)
+        if deduped_rows:
+            cleaned_map[field_name] = deduped_rows
+    return cleaned_map
+
+
+def _filter_candidate_rows(field_name: str, rows: list[dict], *, target_fields: set[str]) -> list[dict]:
+    if field_name not in target_fields and _is_noisy_dynamic_field_name(field_name):
+        return []
+    if field_name == "category":
+        rows = [row for row in rows if _field_quality_score(field_name, row.get("value")) > 0]
+    if not rows:
+        return []
+    scored_rows = [
+        (row, _field_quality_score(field_name, row.get("value")))
+        for row in rows
+    ]
+    best_score = max(score for _, score in scored_rows)
+    if _is_title_field(field_name) and best_score > 0:
+        floor = max(best_score - 8, 16) if best_score >= 20 else max(best_score - 4, 8)
+        rows = [row for row, score in scored_rows if score >= floor][:6]
+    return rows
+
+
+def _comparable_candidate_value(value: object) -> str:
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, sort_keys=True, default=str)
+        except TypeError:
+            return _normalized_candidate_text(value)
+    text = _normalized_candidate_text(value)
+    if not text:
+        return ""
+    lowered = text.lower()
+    if re.fullmatch(r"[$€£₹]?\s*\d[\d,]*(?:\.\d+)?", lowered):
+        return re.sub(r"[^\d.]+", "", lowered)
+    return lowered
+
+
+def _field_name_preference(field_name: str, *, target_fields: set[str]) -> int:
+    tokens = [token for token in str(field_name or "").split("_") if token]
+    score = 100 if field_name in target_fields else 0
+    score += max(0, 20 - len(tokens))
+    if re.match(r"^\d", field_name):
+        score -= 30
+    if "price" in tokens and len(tokens) > 2:
+        score -= 20
+    if len(tokens) > _DYNAMIC_FIELD_NAME_MAX_TOKENS:
+        score -= 30
+    score -= sum(5 for token in tokens if token in _DYNAMIC_FIELD_NAME_DROP_TOKENS)
+    return score
+
+
+def _is_noisy_dynamic_field_name(field_name: str) -> bool:
+    normalized = str(field_name or "").strip().lower()
+    if not normalized:
+        return True
+    if re.match(r"^\d", normalized):
+        return True
+    tokens = [token for token in normalized.split("_") if token]
+    if not tokens:
+        return True
+    if len(tokens) > _DYNAMIC_FIELD_NAME_MAX_TOKENS:
+        return True
+    noise_hits = sum(1 for token in tokens if token in _DYNAMIC_FIELD_NAME_DROP_TOKENS)
+    if noise_hits >= 2:
+        return True
+    if "price" in tokens and len(tokens) > 2:
+        return True
+    if normalized in {"from", "location", "recommended", "reviews", "votes"}:
+        return True
+    return False
+
+
 def _deep_get_all(data: object, key: str, max_depth: int = 5) -> list[object]:
     if max_depth <= 0 or data in (None, "", [], {}):
         return []
@@ -345,6 +487,12 @@ def coerce_field_candidate_value(field_name: str, value: object, *, base_url: st
             parsed_value = coerce_field_candidate_value(field_name, parsed, base_url=base_url)
             if parsed_value not in (None, "", [], {}):
                 return parsed_value
+        if _is_color_field(field_name):
+            normalized_color = _normalize_color_candidate(cleaned)
+            return normalized_color or None
+        if _is_size_field(field_name):
+            normalized_size = _normalize_size_candidate(cleaned)
+            return normalized_size or None
         if _is_image_primary_field(field_name):
             images = _extract_image_urls(cleaned, base_url=base_url)
             return images[0] if images else None
@@ -566,6 +714,7 @@ def _field_quality_score(field_name: str, value: object) -> int:
     if _is_title_field(field_name):
         score = 10
         lowered = text.lower()
+        word_count = len(text.split())
         if len(text) < 10:
             score -= 8
         if 4 <= len(text) <= 120:
@@ -574,11 +723,17 @@ def _field_quality_score(field_name: str, value: object) -> int:
             score += 6
         if len(text) <= 80:
             score += 4
+        if word_count == 1:
+            score -= 12
         if any(token in lowered for token in ("discover this", "purchase", "shop ", "buy now", "sigma-aldrich.com")):
             score -= 12
+        if re.search(r"\.(?:jpg|jpeg|png|webp|gif|svg|avif)\b", lowered):
+            score -= 24
+        if "|" in text:
+            score -= 10
         if text.count(".") >= 2 or len(text.split()) > 18:
             score -= 8
-        if lowered in {"wayfair", "home", "department navigation"}:
+        if lowered in {"wayfair", "home", "department navigation", "collections", "clothing", "store", "parts", "phone"}:
             score -= 15
         return score
 
@@ -694,6 +849,14 @@ def _is_category_field(field_name: str) -> bool:
     return _field_in_group(field_name, "category") or _field_has_any_token(field_name, CANDIDATE_CATEGORY_TOKENS)
 
 
+def _is_color_field(field_name: str) -> bool:
+    return _normalized_field_token(field_name) in _field_alias_tokens("color")
+
+
+def _is_size_field(field_name: str) -> bool:
+    return _normalized_field_token(field_name) in _field_alias_tokens("size")
+
+
 def _is_title_field(field_name: str) -> bool:
     return _field_in_group(field_name, "title")
 
@@ -725,6 +888,30 @@ def _strip_ui_noise(value: str) -> str:
             text = re.sub(rf"\b{re.escape(phrase)}\b", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip(" -|,:;/")
     return text
+
+
+def _normalize_color_candidate(value: str) -> str | None:
+    cleaned = _strip_ui_noise(value)
+    if not cleaned:
+        return None
+    cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
+    cleaned = re.sub(r"(?i)\bclear\b$", "", cleaned).strip(" ,")
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned or None
+
+
+def _normalize_size_candidate(value: str) -> str | None:
+    cleaned = _strip_ui_noise(value)
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+    if any(token in lowered for token in ("max-width", "min-width", "vw", "vh", "sizes=", "srcset")):
+        return None
+    cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
+    tokens = [token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()]
+    if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):
+        return ", ".join(tokens)
+    return cleaned or None
 
 
 def _structured_manifest_candidates(manifest: DiscoveryManifest, field_name: str) -> list[dict]:

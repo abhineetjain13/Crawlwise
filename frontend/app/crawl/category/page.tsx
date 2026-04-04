@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function CategoryCrawlPage() {
-  redirect("/crawl");
+  redirect("/crawl?module=category&mode=single");
 }

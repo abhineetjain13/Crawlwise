@@ -212,3 +212,52 @@ def test_extract_json_listing_preserves_original_raw_item_when_additional_images
     assert records[0]["_raw_item"]["title"] == "Cool Shirt"
     assert isinstance(records[0]["_raw_item"]["additional_images"], list)
     assert records[0]["_raw_item"]["additional_images"][0]["src"] == "https://cdn.example.com/a.jpg"
+
+
+def test_extract_from_drinks_collection_key():
+    """API response with 'drinks' wrapper key and standard field names."""
+    data = {
+        "drinks": [
+            {
+                "name": "Margarita",
+                "category": "Ordinary Drink",
+                "description": "Rub rim of cocktail glass with lime...",
+                "image": "https://example.com/margarita.jpg",
+            },
+            {
+                "name": "Blue Margarita",
+                "category": "Ordinary Drink",
+                "description": "Rub rim of glass with lime...",
+                "image": "https://example.com/blue-margarita.jpg",
+            },
+        ]
+    }
+    records = extract_json_listing(data)
+    assert len(records) == 2
+    assert records[0]["title"] == "Margarita"
+
+
+def test_extract_from_nonstandard_field_names_fallback():
+    """APIs with non-standard field names (e.g. strDrink) should still produce records."""
+    data = {
+        "drinks": [
+            {"strDrink": "Margarita", "strCategory": "Ordinary Drink"},
+            {"strDrink": "Blue Margarita", "strCategory": "Ordinary Drink"},
+        ]
+    }
+    records = extract_json_listing(data)
+    assert len(records) == 2
+    assert records[0]["strDrink"] == "Margarita"
+
+
+def test_extract_from_books_collection_key():
+    """API response with 'books' wrapper key."""
+    data = {
+        "books": [
+            {"title": "Clean Code", "price": 29.99},
+            {"title": "Pragmatic Programmer", "price": 39.99},
+        ]
+    }
+    records = extract_json_listing(data)
+    assert len(records) == 2
+    assert records[0]["title"] == "Clean Code"

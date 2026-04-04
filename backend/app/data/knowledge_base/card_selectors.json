@@ -14,7 +14,14 @@
     ".plp-card",
     ".search-result-gridview-item",
     ".product",
-    "article.product"
+    "article.product",
+    "[itemscope][itemtype*='Product']",
+    ".thumbnail[itemscope]",
+    "[class*='ProductCard']",
+    "[class*='product-tile']",
+    "[class*='SearchResultTile']",
+    "[class*='AllEditionsItem-tile']",
+    "[class*='search-result-item']"
   ],
   "jobs": [
     ".job_seen_beacon",

@@ -257,6 +257,7 @@ async def _acquire_once(
             proxy=proxy,
             prefer_stealth=prefer_stealth,
             advanced_mode=advanced_mode,
+            max_pages=max_pages,
             max_scrolls=max_scrolls,
             request_delay_ms=sleep_ms,
         )

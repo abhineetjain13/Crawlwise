@@ -154,6 +154,14 @@ def _normalize_item(item: dict, page_url: str) -> dict:
     if record.get("company") and "brand" in record and record["company"] == record["brand"]:
         record.pop("brand", None)
 
+    # Fallback: when alias matching found nothing, preserve scalar fields under
+    # their original keys so records from APIs with non-standard naming (e.g.
+    # CocktailDB's strDrink, strCategory) are not silently dropped.
+    if not record:
+        for key, value in item.items():
+            if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value):
+                record[key] = value
+
     if record:
         record["_raw_item"] = item
     return record

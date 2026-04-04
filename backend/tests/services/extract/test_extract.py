@@ -575,6 +575,79 @@ def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholder
     assert operating_temperature_row["group_label"] == "Environmental & Export Classifications"
 
 
+def test_extract_filters_schema_type_category_noise_and_keeps_real_category():
+    html = "<html><body><h1>Widget</h1></body></html>"
+    manifest = _manifest(json_ld=[
+        {"@type": "ProductGroup", "category": "ProductGroup"},
+        {"@type": "Review", "category": "Review"},
+        {"category": "Men > Shirts & Tops"},
+    ])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert "category" in candidates
+    assert [row["value"] for row in candidates["category"]] == ["Men > Shirts & Tops"]
+
+
+def test_extract_filters_noisy_dynamic_semantic_field_names():
+    html = """
+    <html><body>
+      <h2>Specifications</h2>
+      <table>
+        <tr><td>5.0 Recommended</td><td>100% 5 Ratings</td></tr>
+        <tr><td>Compression</td><td>Ultra-tight, second-skin fit.</td></tr>
+        <tr><td>Featured New Arrivals Now Trending</td><td>Capris</td></tr>
+        <tr><td>HeatGear Elite Men's Compression Mock Short Sleeve 50 Price</td><td>$50</td></tr>
+      </table>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert "compression" in candidates
+    assert "5.0_recommended" not in candidates
+    assert "featured_new_arrivals_now_trending" not in candidates
+    assert "heatgear_elite_men_s_compression_mock_short_sleeve_50_price" not in candidates
+
+
+def test_extract_prefers_real_title_and_cleans_size_color_option_text():
+    html = """
+    <html><body>
+      <div class="summary"><h1 class="product_title">Chaz Kangeroo Hoodie</h1></div>
+      <table>
+        <tr><td>Size</td><td>Choose an option XS S M L XL</td></tr>
+        <tr><td>Color</td><td>Choose an option Black Gray Orange Clear</td></tr>
+      </table>
+    </body></html>
+    """
+    manifest = _manifest(
+        embedded_json=[{"title": "mh01- .jpg", "size": "(max-width: 416px) 100vw, 416px"}],
+        json_ld=[{"title": "Chaz Kangeroo Hoodie"}],
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert candidates["title"][0]["value"] == "Chaz Kangeroo Hoodie"
+    assert candidates["size"][0]["value"] == "XS, S, M, L, XL"
+    assert candidates["color"][0]["value"] == "Black Gray Orange"
+
+
 def test_extract_network_payloads():
     html = "<html><body>test</body></html>"
     manifest = _manifest(network_payloads=[

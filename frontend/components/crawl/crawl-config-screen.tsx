@@ -1,0 +1,551 @@
+"use client";
+
+import { Plus, Shield, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import type { Route } from "next";
+import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+
+import { PageHeader, SectionHeader } from "../ui/patterns";
+import { Button, Card, Input, Textarea } from "../ui/primitives";
+import { api } from "../../lib/api";
+import type { CrawlConfig } from "../../lib/api/types";
+import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
+import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
+import { UI_DELAYS } from "../../lib/constants/timing";
+import {
+  AdditionalFieldInput,
+  clampNumber,
+  type CategoryMode,
+  type CrawlTab,
+  type FieldRow,
+  ManualFieldEditor,
+  parseLines,
+  type PdpMode,
+  type PendingDispatch,
+  PreviewModal,
+  SegmentedMode,
+  SettingSection,
+  SliderRow,
+  TabBar,
+  uniqueFields,
+} from "./shared";
+
+type CrawlConfigScreenProps = {
+  requestedTab: CrawlTab | null;
+  requestedCategoryMode: CategoryMode | null;
+  requestedPdpMode: PdpMode | null;
+};
+
+export function CrawlConfigScreen({
+  requestedTab,
+  requestedCategoryMode,
+  requestedPdpMode,
+}: Readonly<CrawlConfigScreenProps>) {
+  const router = useRouter();
+  const [crawlTab, setCrawlTab] = useState<CrawlTab>(() => requestedTab ?? "pdp");
+  const [categoryMode, setCategoryMode] = useState<CategoryMode>(() => requestedCategoryMode ?? "single");
+  const [pdpMode, setPdpMode] = useState<PdpMode>(() => requestedPdpMode ?? "single");
+  const [targetUrl, setTargetUrl] = useState("");
+  const [bulkUrls, setBulkUrls] = useState("");
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [smartExtraction, setSmartExtraction] = useState(false);
+  const [advancedEnabled, setAdvancedEnabled] = useState(false);
+  const [requestDelay, setRequestDelay] = useState(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS));
+  const [maxRecords, setMaxRecords] = useState(String(CRAWL_DEFAULTS.MAX_RECORDS));
+  const [maxPages, setMaxPages] = useState(String(CRAWL_DEFAULTS.MAX_PAGES));
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyInput, setProxyInput] = useState("");
+  const [additionalDraft, setAdditionalDraft] = useState("");
+  const [additionalFields, setAdditionalFields] = useState<string[]>([]);
+  const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [pendingDispatch, setPendingDispatch] = useState<PendingDispatch | null>(null);
+  const [configError, setConfigError] = useState("");
+  const [launchError, setLaunchError] = useState("");
+  const [bulkBanner, setBulkBanner] = useState("");
+
+  const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
+
+  useEffect(() => {
+    const nextTab = requestedTab ?? "pdp";
+    const nextCategoryMode = requestedCategoryMode ?? "single";
+    const nextPdpMode = requestedPdpMode ?? "single";
+    setCrawlTab((current) => (current === nextTab ? current : nextTab));
+    setCategoryMode((current) => (current === nextCategoryMode ? current : nextCategoryMode));
+    setPdpMode((current) => (current === nextPdpMode ? current : nextPdpMode));
+  }, [requestedCategoryMode, requestedPdpMode, requestedTab]);
+
+  useEffect(() => {
+    const routeMode = crawlTab === "category" ? requestedCategoryMode : requestedPdpMode;
+    if (requestedTab === crawlTab && routeMode === activeMode) {
+      return;
+    }
+    router.replace((`/crawl?module=${crawlTab}&mode=${activeMode}`) as Route);
+  }, [activeMode, crawlTab, requestedCategoryMode, requestedPdpMode, requestedTab, router]);
+
+  useEffect(() => {
+    const stored = window.sessionStorage.getItem(STORAGE_KEYS.BULK_PREFILL);
+    if (!stored) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(stored) as { urls: string[]; additional_fields?: string[] };
+      if (Array.isArray(parsed.urls) && parsed.urls.length) {
+        setCrawlTab("pdp");
+        setPdpMode("batch");
+        setBulkUrls(parsed.urls.join("\n"));
+        if (Array.isArray(parsed.additional_fields)) {
+          setAdditionalFields(uniqueFields(parsed.additional_fields));
+        }
+        setBulkBanner(`${parsed.urls.length} URLs loaded into PDP batch crawl.`);
+      }
+    } catch {
+      // Ignore malformed prefill data.
+    } finally {
+      window.sessionStorage.removeItem(STORAGE_KEYS.BULK_PREFILL);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!bulkBanner) {
+      return;
+    }
+    const timer = window.setTimeout(() => setBulkBanner(""), UI_DELAYS.BANNER_AUTO_HIDE_MS);
+    return () => window.clearTimeout(timer);
+  }, [bulkBanner]);
+
+  const config = useMemo<CrawlConfig>(
+    () => ({
+      module: crawlTab,
+      mode: crawlTab === "category" ? categoryMode : pdpMode,
+      target_url: targetUrl,
+      bulk_urls: bulkUrls,
+      csv_file: csvFile,
+      smart_extraction: smartExtraction,
+      advanced_enabled: advancedEnabled,
+      request_delay_ms: clampNumber(
+        requestDelay,
+        CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
+        CRAWL_LIMITS.MAX_REQUEST_DELAY_MS,
+        CRAWL_DEFAULTS.REQUEST_DELAY_MS,
+      ),
+      max_records: clampNumber(maxRecords, CRAWL_LIMITS.MIN_RECORDS, CRAWL_LIMITS.MAX_RECORDS, CRAWL_DEFAULTS.MAX_RECORDS),
+      max_pages: clampNumber(maxPages, CRAWL_LIMITS.MIN_PAGES, CRAWL_LIMITS.MAX_PAGES, CRAWL_DEFAULTS.MAX_PAGES),
+      proxy_enabled: proxyEnabled,
+      proxy_lines: proxyEnabled ? parseLines(proxyInput) : [],
+      additional_fields: additionalFields,
+    }),
+    [
+      additionalFields,
+      advancedEnabled,
+      bulkUrls,
+      categoryMode,
+      crawlTab,
+      csvFile,
+      maxPages,
+      maxRecords,
+      pdpMode,
+      proxyEnabled,
+      proxyInput,
+      requestDelay,
+      smartExtraction,
+      targetUrl,
+    ],
+  );
+
+  function startPreview(event: FormEvent) {
+    event.preventDefault();
+    setConfigError("");
+    try {
+      const dispatch = buildDispatch(config);
+      setPendingDispatch(dispatch);
+      setPreviewOpen(true);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
+    }
+  }
+
+  async function launchPending() {
+    if (!pendingDispatch) {
+      return;
+    }
+    setLaunchError("");
+    try {
+      let response: { run_id: number };
+      if (pendingDispatch.runType === "csv") {
+        if (!pendingDispatch.csvFile) {
+          throw new Error("CSV file is missing.");
+        }
+        response = await api.createCsvCrawl({
+          file: pendingDispatch.csvFile,
+          surface: pendingDispatch.surface,
+          additionalFields: pendingDispatch.additionalFields,
+          settings: pendingDispatch.settings,
+        });
+      } else {
+        response = await api.createCrawl({
+          run_type: pendingDispatch.runType,
+          url: pendingDispatch.url,
+          urls: pendingDispatch.urls,
+          surface: pendingDispatch.surface,
+          settings: pendingDispatch.settings,
+          additional_fields: pendingDispatch.additionalFields,
+        });
+      }
+      setPreviewOpen(false);
+      setPendingDispatch(null);
+      router.replace((`/crawl?run_id=${response.run_id}`) as Route);
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : "Unable to launch crawl.");
+    }
+  }
+
+  function addManualField() {
+    setFieldRows((current) => [
+      ...current,
+      {
+        id: `${Date.now()}-${current.length}`,
+        fieldName: "",
+        xpath: "",
+        regex: "",
+        xpathState: "idle",
+        regexState: "idle",
+      },
+    ]);
+  }
+
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Crawl Studio" />
+
+      {bulkBanner ? (
+        <div className="surface-banner flex items-center justify-between px-4 py-3 text-sm">
+          <div>{bulkBanner}</div>
+          <button
+            type="button"
+            onClick={() => setBulkBanner("")}
+            aria-label="Close banner"
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted transition hover:text-foreground"
+          >
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+
+      <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]" onSubmit={startPreview}>
+        <div className="space-y-4">
+          <Card className="space-y-4">
+            <SectionHeader
+              title="Target URL"
+              action={
+                <Button
+                  variant="accent"
+                  type="button"
+                  disabled={!canPreview(config)}
+                  onClick={() => {
+                    try {
+                      setPendingDispatch(buildDispatch(config));
+                      setPreviewOpen(true);
+                      setConfigError("");
+                    } catch (error) {
+                      setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
+                    }
+                  }}
+                >
+                  Review Before Running
+                </Button>
+              }
+            />
+            {crawlTab === "category" ? (
+              <SegmentedMode
+                value={categoryMode}
+                onChange={(value) => setCategoryMode(value as CategoryMode)}
+                options={[
+                  { value: "single", label: "Single Page" },
+                  { value: "sitemap", label: "Sitemap" },
+                  { value: "bulk", label: "Bulk" },
+                ]}
+              />
+            ) : (
+              <SegmentedMode
+                value={pdpMode}
+                onChange={(value) => setPdpMode(value as PdpMode)}
+                options={[
+                  { value: "single", label: "Single" },
+                  { value: "batch", label: "Batch" },
+                  { value: "csv", label: "CSV Upload" },
+                ]}
+              />
+            )}
+
+            {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
+              <label className="grid gap-1.5">
+                <span className="label-caps">URLs (one per line)</span>
+                <Textarea
+                  value={bulkUrls}
+                  onChange={(event) => setBulkUrls(event.target.value)}
+                  placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
+                  className="min-h-[220px] font-mono text-sm"
+                  aria-label="Bulk URLs input"
+                />
+              </label>
+            ) : crawlTab === "pdp" && pdpMode === "csv" ? (
+              <label className="grid gap-1.5">
+                <span className="label-caps">CSV File</span>
+                <Input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
+                  className="h-auto py-3"
+                  aria-label="CSV file input"
+                />
+              </label>
+            ) : (
+              <label className="grid gap-1.5">
+                <span className="label-caps">Target URL</span>
+                <Input
+                  value={targetUrl}
+                  onChange={(event) => setTargetUrl(event.target.value)}
+                  placeholder={
+                    crawlTab === "category"
+                      ? "https://example.com/collections/chairs"
+                      : "https://example.com/products/oak-chair"
+                  }
+                  className="font-mono text-sm"
+                  aria-label="Target URL input"
+                />
+              </label>
+            )}
+
+            <AdditionalFieldInput
+              value={additionalDraft}
+              fields={additionalFields}
+              onChange={setAdditionalDraft}
+              onCommit={(value) => setAdditionalFields((current) => uniqueFields([...current, value]))}
+              onRemove={(value) => setAdditionalFields((current) => current.filter((field) => field !== value))}
+            />
+          </Card>
+
+          <Card className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <SectionHeader title="Field Configuration" />
+              <Button variant="ghost" type="button" onClick={addManualField}>
+                <Plus className="size-3.5" />
+                New Field
+              </Button>
+            </div>
+            <div className="space-y-3">
+              {fieldRows.length ? (
+                fieldRows.map((row) => (
+                  <ManualFieldEditor
+                    key={row.id}
+                    row={row}
+                    onChange={(patch) =>
+                      setFieldRows((current) =>
+                        current.map((entry) => (entry.id === row.id ? { ...entry, ...patch } : entry)),
+                      )
+                    }
+                    onDelete={() => setFieldRows((current) => current.filter((entry) => entry.id !== row.id))}
+                  />
+                ))
+              ) : (
+                <div className="rounded-[var(--radius-lg)] border border-dashed border-border bg-panel px-4 py-6 text-sm text-muted">
+                  No manual fields yet.
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {configError ? (
+            <div className="rounded-[var(--radius-lg)] border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
+              {configError}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="space-y-4 xl:sticky xl:top-[68px] xl:self-start">
+          <Card className="space-y-4">
+            <SectionHeader title="Run Settings" />
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <div className="label-caps">Crawl Surface</div>
+                <TabBar
+                  value={crawlTab}
+                  onChange={(value) => setCrawlTab(value as CrawlTab)}
+                  options={[
+                    { value: "category", label: "Category Crawl" },
+                    { value: "pdp", label: "PDP Crawl" },
+                  ]}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <SettingSection
+                  label="Smart Extraction"
+                  description="Enable LLM fallback when selectors miss."
+                  icon={<Sparkles className="size-4" />}
+                  checked={smartExtraction}
+                  onChange={setSmartExtraction}
+                />
+                <SettingSection
+                  label="Advanced Crawl"
+                  description="Request delay, records, and page limits."
+                  icon={<SlidersHorizontal className="size-4" />}
+                  checked={advancedEnabled}
+                  onChange={setAdvancedEnabled}
+                >
+                  <div className="space-y-4 rounded-[var(--radius-lg)] border border-border bg-background px-4 py-4">
+                    <SliderRow
+                      label="Request Delay"
+                      value={requestDelay}
+                      min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
+                      max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
+                      step={100}
+                      suffix=" ms"
+                      onChange={setRequestDelay}
+                      onReset={() => setRequestDelay(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS))}
+                    />
+                    <SliderRow
+                      label="Max Records"
+                      value={maxRecords}
+                      min={CRAWL_LIMITS.MIN_RECORDS}
+                      max={CRAWL_LIMITS.MAX_RECORDS}
+                      step={1}
+                      onChange={setMaxRecords}
+                      onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
+                    />
+                    <SliderRow
+                      label="Max Pages"
+                      value={maxPages}
+                      min={CRAWL_LIMITS.MIN_PAGES}
+                      max={CRAWL_LIMITS.MAX_PAGES}
+                      step={1}
+                      onChange={setMaxPages}
+                      onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))}
+                    />
+                  </div>
+                </SettingSection>
+                <SettingSection
+                  label="Proxy"
+                  description="Route requests through the proxy list."
+                  icon={<Shield className="size-4" />}
+                  checked={proxyEnabled}
+                  onChange={setProxyEnabled}
+                >
+                  <div className="space-y-3 rounded-[var(--radius-lg)] border border-border bg-background px-4 py-4">
+                    <div className="label-caps">Proxy Pool</div>
+                    <Textarea
+                      value={proxyInput}
+                      onChange={(event) => setProxyInput(event.target.value)}
+                      placeholder={"host:port\nhost:port:user:pass"}
+                      className="min-h-[140px] font-mono text-sm"
+                      aria-label="Proxy pool input"
+                    />
+                  </div>
+                </SettingSection>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </form>
+
+      {previewOpen && pendingDispatch ? (
+        <PreviewModal
+          dispatch={pendingDispatch}
+          onCancel={() => {
+            setPreviewOpen(false);
+            setPendingDispatch(null);
+          }}
+          onLaunch={() => void launchPending()}
+          launchError={launchError}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function buildDispatch(config: CrawlConfig): PendingDispatch {
+  const additionalFields = uniqueFields(config.additional_fields);
+  const commonSettings = {
+    llm_enabled: config.smart_extraction,
+    advanced_enabled: config.advanced_enabled,
+    sleep_ms: config.request_delay_ms,
+    max_records: config.max_records,
+    max_pages: config.max_pages,
+    proxy_enabled: config.proxy_enabled,
+    proxy_list: config.proxy_enabled ? config.proxy_lines : [],
+    additional_fields: additionalFields,
+    crawl_module: config.module,
+    crawl_mode: config.mode,
+  };
+
+  if (config.module === "category") {
+    if (config.mode === "bulk") {
+      const urls = parseLines(config.bulk_urls);
+      if (!urls.length) throw new Error("Bulk crawl needs at least one URL.");
+      return {
+        runType: "batch",
+        surface: "ecommerce_listing",
+        url: urls[0],
+        urls,
+        settings: { ...commonSettings, urls },
+        additionalFields,
+        csvFile: null,
+      };
+    }
+    if (!config.target_url.trim()) throw new Error("Enter a target URL.");
+    return {
+      runType: "crawl",
+      surface: "ecommerce_listing",
+      url: config.target_url.trim(),
+      settings: commonSettings,
+      additionalFields,
+      csvFile: null,
+    };
+  }
+
+  if (config.mode === "csv") {
+    if (!config.csv_file) throw new Error("Select a CSV file.");
+    return {
+      runType: "csv",
+      surface: "ecommerce_detail",
+      url: config.target_url.trim() || undefined,
+      settings: commonSettings,
+      additionalFields,
+      csvFile: config.csv_file,
+    };
+  }
+
+  if (config.mode === "batch") {
+    const urls = parseLines(config.bulk_urls);
+    if (!urls.length) throw new Error("Batch crawl needs at least one URL.");
+    return {
+      runType: "batch",
+      surface: "ecommerce_detail",
+      url: urls[0],
+      urls,
+      settings: { ...commonSettings, urls },
+      additionalFields,
+      csvFile: null,
+    };
+  }
+
+  if (!config.target_url.trim()) throw new Error("Enter a target URL.");
+  return {
+    runType: "crawl",
+    surface: "ecommerce_detail",
+    url: config.target_url.trim(),
+    settings: commonSettings,
+    additionalFields,
+    csvFile: null,
+  };
+}
+
+function canPreview(config: CrawlConfig) {
+  try {
+    buildDispatch(config);
+    return true;
+  } catch {
+    return false;
+  }
+}

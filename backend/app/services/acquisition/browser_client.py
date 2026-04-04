@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 
@@ -60,6 +60,7 @@ async def fetch_rendered_html(
     url: str,
     proxy: str | None = None,
     advanced_mode: str | None = None,
+    max_pages: int = 1,
     max_scrolls: int = 10,
     prefer_stealth: bool = False,
     request_delay_ms: int = 0,
@@ -110,13 +111,23 @@ async def fetch_rendered_html(
         result.diagnostics["challenge_ok"] = challenge_ok
         await _pause_after_navigation(request_delay_ms)
 
-        if advanced_mode == "paginate":
-            result.html = await page.content()
+        combined_html = await _apply_advanced_mode(
+            page,
+            advanced_mode,
+            max_scrolls,
+            max_pages=max_pages,
+            request_delay_ms=request_delay_ms,
+        )
+        if combined_html is not None:
+            result.html = combined_html
             result.network_payloads = intercepted
-            # For pagination we'd collect multi-page HTML; for POC return first page
+            result.diagnostics["pagination_mode"] = advanced_mode
+            result.diagnostics["max_pages"] = max_pages
+            result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") + 1 if combined_html else 0
+            await _persist_context_cookies(context, page.url or url, original_domain)
+            await context.close()
             await browser.close()
             return result
-        await _apply_advanced_mode(page, advanced_mode, max_scrolls, request_delay_ms=request_delay_ms)
         await _populate_result(result, page, intercepted)
         await _persist_context_cookies(context, page.url or url, original_domain)
         await context.close()
@@ -149,16 +160,93 @@ async def _pause_after_navigation(request_delay_ms: int) -> None:
     await asyncio.sleep(delay_seconds)
 
 
-async def _apply_advanced_mode(page, advanced_mode: str | None, max_scrolls: int, *, request_delay_ms: int) -> None:
+async def _apply_advanced_mode(
+    page,
+    advanced_mode: str | None,
+    max_scrolls: int,
+    *,
+    max_pages: int,
+    request_delay_ms: int,
+) -> str | None:
     if advanced_mode == "scroll":
         await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
-        return
+        return None
     if advanced_mode == "load_more":
         await _click_load_more(page, max_scrolls, request_delay_ms=request_delay_ms)
-        return
+        return None
+    if advanced_mode == "paginate":
+        return await _collect_paginated_html(page, max_pages=max_pages, request_delay_ms=request_delay_ms)
     if advanced_mode == "auto":
-        # Try scroll first, it's the most common SPA pattern.
+        # Scroll first, then collect pagination when present.
         await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
+        next_page_url = await _find_next_page_url(page)
+        if next_page_url:
+            return await _collect_paginated_html(page, max_pages=max_pages, request_delay_ms=request_delay_ms)
+    return None
+
+
+async def _collect_paginated_html(page, *, max_pages: int, request_delay_ms: int) -> str:
+    fragments: list[str] = []
+    visited_urls: set[str] = set()
+    current_url = str(page.url or "").strip()
+    if current_url:
+        visited_urls.add(current_url)
+
+    page_limit = max(1, int(max_pages or 1))
+    for page_index in range(page_limit):
+        fragments.append(f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{await page.content()}")
+        if page_index + 1 >= page_limit:
+            break
+        next_page_url = await _find_next_page_url(page)
+        if not next_page_url or next_page_url in visited_urls:
+            break
+        visited_urls.add(next_page_url)
+        await page.goto(next_page_url, wait_until="domcontentloaded", timeout=20_000)
+        await _dismiss_cookie_consent(page)
+        await _pause_after_navigation(request_delay_ms)
+    return "\n".join(fragments)
+
+
+async def _find_next_page_url(page) -> str:
+    selectors = [
+        "link[rel='next']",
+        "a[rel='next']",
+        "a[aria-label*='next' i]",
+        "a[title*='next' i]",
+        "a:has-text('Next')",
+        "button[aria-label*='next' i]",
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if not await locator.count():
+                continue
+            href = await locator.get_attribute("href")
+            if href:
+                return urljoin(page.url, href)
+        except Exception:
+            logger.debug("Failed to inspect pagination selector %s", selector, exc_info=True)
+            continue
+
+    try:
+        href = await page.evaluate(
+            """
+            () => {
+              const anchors = Array.from(document.querySelectorAll('a[href]'));
+              const match = anchors.find((anchor) => {
+                const text = (anchor.textContent || '').trim().toLowerCase();
+                const aria = (anchor.getAttribute('aria-label') || '').trim().toLowerCase();
+                const title = (anchor.getAttribute('title') || '').trim().toLowerCase();
+                return text === 'next' || text === 'next >' || text === '>' || aria.includes('next') || title.includes('next');
+              });
+              return match ? match.href : '';
+            }
+            """
+        )
+    except Exception:
+        logger.debug("Failed to evaluate DOM for next-page link", exc_info=True)
+        return ""
+    return str(href or "").strip()
 
 
 async def _populate_result(result: BrowserResult, page, intercepted: list[dict]) -> None:

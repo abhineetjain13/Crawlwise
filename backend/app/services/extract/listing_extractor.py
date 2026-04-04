@@ -703,36 +703,101 @@ def _find_object_arrays(data: object, max_depth: int = 5) -> list[list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _auto_detect_cards(soup: BeautifulSoup) -> tuple[list[Tag], str]:
-    """Heuristic: find the largest group of sibling elements with similar structure."""
+    """Heuristic: find the best group of sibling elements that look like product cards.
+
+    Scores candidate groups by product-like signals (link + image + price text)
+    rather than pure element count to avoid selecting navigation lists.
+    """
     best_cards: list[Tag] = []
     best_selector = ""
-    # Check common container patterns
-    containers = soup.select("ul, ol, div.grid, div.row, div[class*='results'], main, section")
+    best_score: tuple[float, int] = (0.0, 0)
+
+    containers = soup.select(
+        "ul, ol, div.grid, div.row, div[class*='results'], "
+        "div[class*='product'], div[class*='listing'], div[class*='search'], "
+        "div[class*='tile'], div[class*='card'], main, section"
+    )
     for container in containers:
         children = [c for c in container.children if isinstance(c, Tag)]
         if len(children) < 3:
             continue
-        # Check if children share a common tag + class pattern
         tag_classes: dict[tuple, list[Tag]] = {}
         for child in children:
             key = (child.name, tuple(sorted(child.get("class", []))))
             tag_classes.setdefault(key, []).append(child)
         for key, group in tag_classes.items():
-            if len(group) >= 3 and len(group) > len(best_cards):
+            if len(group) < 3:
+                continue
+            score = _card_group_score(group)
+            if score > best_score:
                 best_cards = group
+                best_score = score
                 classes = ".".join(key[1]) if key[1] else ""
                 best_selector = f"{key[0]}.{classes}" if classes else key[0]
     return best_cards, best_selector
+
+
+def _card_group_score(group: list[Tag]) -> tuple[float, int]:
+    """Score a candidate card group by product-like signals.
+
+    Returns (signal_ratio, count) so groups with higher signal density win,
+    with count as a tiebreaker.
+    """
+    signals = 0
+    for el in group[:30]:  # sample first 30
+        has_link = bool(el.select_one("a[href]"))
+        has_image = bool(el.select_one("img, picture, [style*='background-image']"))
+        has_price = bool(el.select_one(
+            "[itemprop='price'], .price, [class*='price'], .amount"
+        ))
+        text = el.get_text(" ", strip=True)
+        has_substantial_text = len(text) > 20
+        # A card should have at least a link + one of (image, price, substantial text)
+        if has_link and (has_image or has_price or has_substantial_text):
+            signals += 1
+    sample_size = min(len(group), 30)
+    ratio = signals / sample_size if sample_size > 0 else 0.0
+    return (ratio, len(group))
+
+
+_PRICE_LIKE_RE = re.compile(r"^[\s$£€¥₹]?\d[\d,.\s]*$")
 
 
 def _extract_from_card(card: Tag, _target_fields: set[str], surface: str, page_url: str) -> dict:
     """Extract field values from a single listing card element."""
     record: dict = {}
 
-    # Title: first heading or link text
-    title_el = card.select_one("h2, h3, h4, a[title], .product-title, .job-title, .card-title")
-    if title_el:
-        record["title"] = title_el.get_text(" ", strip=True)
+    # Price (extract early so we can exclude price-like headings from title)
+    if "ecommerce" in surface:
+        price_el = card.select_one(
+            "[itemprop='price'], .price, .product-price, .a-price .a-offscreen, "
+            ".s-item__price, span[data-price], .amount, [class*='price']"
+        )
+        if price_el:
+            raw_price = price_el.get("content") or price_el.get_text(" ", strip=True)
+            record["price"] = _clean_price_text(raw_price)
+        original_price_el = card.select_one(
+            ".original-price, .compare-price, .was-price, .strike, s, del, [data-original-price]"
+        )
+        if original_price_el:
+            raw_op = original_price_el.get("content") or original_price_el.get_text(" ", strip=True)
+            record["original_price"] = _clean_price_text(raw_op)
+
+    # Title: prefer itemprop, then class-based, then headings — skip price-like text
+    title_selectors = [
+        "[itemprop='name']",
+        ".product-title", ".job-title", ".card-title", "a.title", ".title",
+        "h2 a", "h3 a", "h4 a",
+        "h2", "h3", "h4",
+        "a[title]",
+    ]
+    for sel in title_selectors:
+        title_el = card.select_one(sel)
+        if title_el:
+            text = title_el.get_text(" ", strip=True)
+            if text and not _PRICE_LIKE_RE.match(text):
+                record["title"] = text
+                break
 
     # URL: first link
     link_el = card.select_one("a[href]")
@@ -740,26 +805,18 @@ def _extract_from_card(card: Tag, _target_fields: set[str], surface: str, page_u
         href = link_el.get("href", "")
         record["url"] = urljoin(page_url, href) if page_url else href
 
-    # Image
-    images = _extract_card_images(card, page_url)
-    if images:
-        record["image_url"] = images[0]
-        if len(images) > 1:
-            record["additional_images"] = ", ".join(images[1:])
-
-    # Price (commerce)
-    if "ecommerce" in surface:
-        price_el = card.select_one(
-            "[itemprop='price'], .price, .product-price, .a-price .a-offscreen, "
-            ".s-item__price, span[data-price], .amount, [class*='price']"
-        )
-        if price_el:
-            record["price"] = price_el.get("content") or price_el.get_text(" ", strip=True)
-        original_price_el = card.select_one(
-            ".original-price, .compare-price, .was-price, .strike, s, del, [data-original-price]"
-        )
-        if original_price_el:
-            record["original_price"] = original_price_el.get("content") or original_price_el.get_text(" ", strip=True)
+    # Image: prefer itemprop, then standard patterns
+    img_el = card.select_one("[itemprop='image']")
+    if img_el:
+        src = img_el.get("src") or img_el.get("data-src") or img_el.get("content", "")
+        if src:
+            record["image_url"] = urljoin(page_url, src) if page_url else src
+    if "image_url" not in record:
+        images = _extract_card_images(card, page_url)
+        if images:
+            record["image_url"] = images[0]
+            if len(images) > 1:
+                record["additional_images"] = ", ".join(images[1:])
 
     # Brand
     brand_el = card.select_one(".brand, [itemprop='brand'], .product-brand")
@@ -991,6 +1048,20 @@ def _extract_card_images(card: Tag, page_url: str) -> list[str]:
         images.append(resolved)
     return images
 
+
+_PRICE_WITH_CURRENCY_RE = re.compile(r"[\$£€¥₹]\s*\d[\d,.\s]*")
+_PRICE_EXTRACT_RE = re.compile(r"[\$£€¥₹]?\s*\d[\d,.\s]*")
+
+
+def _clean_price_text(raw: str) -> str:
+    """Extract the price portion from a string that may include surrounding text."""
+    raw = raw.strip()
+    # Prefer match with currency symbol
+    m = _PRICE_WITH_CURRENCY_RE.search(raw)
+    if m:
+        return m.group(0).strip()
+    m = _PRICE_EXTRACT_RE.search(raw)
+    return m.group(0).strip() if m else raw
 
 def _card_text_lines(card: Tag) -> list[str]:
     lines: list[str] = []

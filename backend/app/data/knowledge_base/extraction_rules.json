@@ -95,7 +95,7 @@
   },
   "candidate_cleanup": {
     "placeholder_values": ["-", "—", "--", "n/a", "na", "none", "null", "undefined"],
-    "generic_category_values": ["detail-page", "detail_page", "product", "page", "pdp", "simple", "configurable", "image", "listitem", "itemlist", "collectionpage", "productcard", "contentcard", "aggregateoffer"],
+    "generic_category_values": ["detail-page", "detail_page", "product", "page", "pdp", "simple", "configurable", "image", "imageobject", "listitem", "itemlist", "collectionpage", "productcard", "contentcard", "aggregateoffer", "productgroup", "aggregaterating", "review", "person", "rating", "merchantreturnpolicy", "merchantreturnpolicyseasonaloverride", "webpage", "organization", "speakablespecification"],
     "generic_title_values": ["chrome", "firefox", "safari", "edge", "home"],
     "field_groups": {
       "url": ["url", "apply_url"],

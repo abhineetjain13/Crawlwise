@@ -69,6 +69,10 @@ def normalize_value(field_name: str, value: object) -> object:
         text = " ".join(value.split()).strip()
         if text.lower() in PLACEHOLDER_VALUES:
             return ""
+        if _is_color_field(field_name):
+            return _normalize_color_text(text)
+        if _is_size_field(field_name):
+            return _normalize_size_text(text)
         if _is_image_primary_field(field_name):
             return _normalize_image_url(text)
         if _is_image_collection_field(field_name):
@@ -181,6 +185,25 @@ def _clean_description_text(value: str) -> str:
     return cleaned
 
 
+def _normalize_color_text(value: str) -> str:
+    cleaned = _strip_ui_noise(_strip_html(value))
+    cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
+    cleaned = re.sub(r"(?i)\bclear\b$", "", cleaned).strip(" ,")
+    return cleaned
+
+
+def _normalize_size_text(value: str) -> str:
+    cleaned = _strip_ui_noise(_strip_html(value))
+    lowered = cleaned.lower()
+    if any(token in lowered for token in ("max-width", "min-width", "vw", "vh", "sizes=", "srcset")):
+        return ""
+    cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
+    tokens = [token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()]
+    if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):
+        return ", ".join(tokens)
+    return cleaned
+
+
 def _normalize_availability(value: str) -> str:
     text = unescape(value).strip()
     lowered = text.lower()
@@ -257,6 +280,16 @@ def _is_availability_field(field_name: str) -> bool:
 
 def _is_category_field(field_name: str) -> bool:
     return _field_in_group(field_name, "category") or _field_has_any_token(field_name, CANDIDATE_CATEGORY_TOKENS)
+
+
+def _is_color_field(field_name: str) -> bool:
+    normalized = _field_token(field_name)
+    return normalized in {_field_token("color"), _field_token("colors"), _field_token("color_name")}
+
+
+def _is_size_field(field_name: str) -> bool:
+    normalized = _field_token(field_name)
+    return normalized in {_field_token("size"), _field_token("sizes"), _field_token("variant_size")}
 
 
 def _is_title_field(field_name: str) -> bool:

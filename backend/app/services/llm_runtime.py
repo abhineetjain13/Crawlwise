@@ -456,12 +456,75 @@ def _truncate_json_literal(value: Any, limit: int) -> str:
 
 
 def _enforce_token_limit(text: str, limit: int = 5600) -> str:
-    """Aggressively truncate text if it exceeds a character-based token estimate."""
-    # Rough estimate for JSON/HTML-heavy prompts: 3 chars per token.
+    """Shrink oversize prompts without slicing JSON blocks mid-token."""
     char_limit = limit * 3
     if len(text) <= char_limit:
         return text
-    return text[:char_limit] + "\n... [TRUNCATED DUE TO TOKEN LIMIT]"
+    suffix = "\n\n[TRUNCATED DUE TO TOKEN LIMIT]"
+    budget = max(0, char_limit - len(suffix))
+    sections = text.split("\n\n")
+    kept: list[str] = []
+    used = 0
+
+    for section in sections:
+        separator = 0 if not kept else 2
+        section_len = len(section)
+        if used + separator + section_len <= budget:
+            kept.append(section)
+            used += separator + section_len
+            continue
+        remaining = budget - used - separator
+        if remaining > 0:
+            trimmed = _trim_prompt_section(section, remaining)
+            if trimmed:
+                kept.append(trimmed)
+        break
+
+    if not kept:
+        return suffix.strip()
+    return "\n\n".join(kept) + suffix
+
+
+def _trim_prompt_section(section: str, budget: int) -> str:
+    if budget <= 0:
+        return ""
+    placeholder = "[TRUNCATED]"
+    if len(section) <= budget:
+        return section
+    if "\n" not in section:
+        return section[:budget]
+
+    header, body = section.split("\n", 1)
+    preserved_header = header[:budget]
+    if len(preserved_header) >= budget:
+        return preserved_header
+
+    remainder_budget = budget - len(preserved_header) - 1
+    if remainder_budget <= 0:
+        return preserved_header
+
+    trimmed_body = _trim_prompt_section_body(body, remainder_budget, placeholder)
+    if not trimmed_body:
+        return preserved_header
+    return f"{preserved_header}\n{trimmed_body}"
+
+
+def _trim_prompt_section_body(body: str, budget: int, placeholder: str) -> str:
+    if budget <= 0:
+        return ""
+    stripped = body.strip()
+    if len(stripped) <= budget:
+        return stripped
+    if stripped.startswith(("{", "[")):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+        else:
+            return _truncate_json_literal(parsed, budget)
+    if budget <= len(placeholder):
+        return placeholder[:budget]
+    return stripped[: budget - len(placeholder)].rstrip() + placeholder
 
 
 def _compact_json_value(value: Any, *, depth: int = 0, max_depth: int = 3) -> Any:

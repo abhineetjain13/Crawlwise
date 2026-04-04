@@ -426,3 +426,145 @@ def test_structured_join_key_does_not_merge_title_only_records():
     merged = listing_extractor._merge_structured_record_sets([[first], [second]])
 
     assert merged == []
+
+
+# -----------------------------------------------------------------------
+# Card title extraction: skip price-like headings
+# -----------------------------------------------------------------------
+
+def test_card_title_skips_price_heading():
+    """When the first heading contains a price, title should come from the next heading."""
+    html = """
+    <html><body>
+    <div class="product-card">
+        <h4 class="price">$295.99</h4>
+        <h4><a class="title" href="/product/1">Asus VivoBook 15</a></h4>
+        <img src="/img/laptop.png" />
+    </div>
+    <div class="product-card">
+        <h4 class="price">$399.00</h4>
+        <h4><a class="title" href="/product/2">Lenovo IdeaPad</a></h4>
+        <img src="/img/laptop2.png" />
+    </div>
+    </body></html>
+    """
+    records = extract_listing_records(html, "ecommerce_listing", set(), max_records=10)
+    assert len(records) == 2
+    assert records[0]["title"] == "Asus VivoBook 15"
+    assert records[1]["title"] == "Lenovo IdeaPad"
+    assert records[0]["price"] == "$295.99"
+
+
+def test_card_title_uses_itemprop_name():
+    """itemprop='name' should be preferred for title."""
+    html = """
+    <html><body>
+    <div class="product-card">
+        <span itemprop="name">Correct Product Name</span>
+        <h3>Wrong Heading Text</h3>
+        <span class="price">$50</span>
+    </div>
+    <div class="product-card">
+        <span itemprop="name">Another Product</span>
+        <h3>Also Wrong</h3>
+        <span class="price">$60</span>
+    </div>
+    </body></html>
+    """
+    records = extract_listing_records(html, "ecommerce_listing", set(), max_records=10)
+    assert len(records) == 2
+    assert records[0]["title"] == "Correct Product Name"
+
+
+def test_card_itemprop_image():
+    """itemprop='image' should be used for image_url."""
+    html = """
+    <html><body>
+    <div class="product-card">
+        <img itemprop="image" src="/img/product.jpg" />
+        <h3><a href="/p/1">Product A</a></h3>
+        <span class="price">$25</span>
+    </div>
+    <div class="product-card">
+        <img itemprop="image" src="/img/product2.jpg" />
+        <h3><a href="/p/2">Product B</a></h3>
+        <span class="price">$35</span>
+    </div>
+    </body></html>
+    """
+    records = extract_listing_records(
+        html, "ecommerce_listing", set(),
+        page_url="https://example.com", max_records=10,
+    )
+    assert len(records) == 2
+    assert records[0]["image_url"] == "https://example.com/img/product.jpg"
+
+
+# -----------------------------------------------------------------------
+# Price text cleanup
+# -----------------------------------------------------------------------
+
+def test_clean_price_text_strips_surrounding_text():
+    """Price extraction should strip non-price text like 'In stock Add to basket'."""
+    assert listing_extractor._clean_price_text("$51.77 In stock Add to basket") == "$51.77"
+    assert listing_extractor._clean_price_text("£29.99") == "£29.99"
+    assert listing_extractor._clean_price_text("€1,299.00 Free shipping") == "€1,299.00"
+    assert listing_extractor._clean_price_text("$0.99") == "$0.99"
+
+
+# -----------------------------------------------------------------------
+# Auto-detect cards: product signals over nav links
+# -----------------------------------------------------------------------
+
+def test_auto_detect_prefers_product_cards_over_nav_links():
+    """Auto-detect should prefer elements with links+images over plain nav lists."""
+    nav_items = "\n".join(
+        f'<li class="nav-item"><a href="/cat/{i}">Category {i}</a></li>'
+        for i in range(20)
+    )
+    product_items = "\n".join(
+        f'''<div class="item-card">
+            <a href="/product/{i}"><img src="/img/{i}.jpg" />Product {i}</a>
+            <span class="price">${i*10}.00</span>
+        </div>'''
+        for i in range(10)
+    )
+    html = f"""
+    <html><body>
+    <nav><ul>{nav_items}</ul></nav>
+    <div class="results-grid">{product_items}</div>
+    </body></html>
+    """
+    records = extract_listing_records(html, "ecommerce_listing", set(), max_records=50)
+    assert len(records) >= 5
+    assert records[0].get("price") is not None
+    assert "product" in records[0].get("url", "").lower() or records[0].get("image_url")
+
+
+# -----------------------------------------------------------------------
+# Microdata product card selector
+# -----------------------------------------------------------------------
+
+def test_itemscope_product_selector():
+    """Cards with [itemscope][itemtype*='Product'] should be matched."""
+    html = """
+    <html><body>
+    <div itemscope itemtype="https://schema.org/Product">
+        <span itemprop="name">Microdata Widget</span>
+        <span itemprop="price">$15.00</span>
+        <a href="/product/md1">Link</a>
+    </div>
+    <div itemscope itemtype="https://schema.org/Product">
+        <span itemprop="name">Microdata Gadget</span>
+        <span itemprop="price">$25.00</span>
+        <a href="/product/md2">Link</a>
+    </div>
+    </body></html>
+    """
+    records = extract_listing_records(
+        html, "ecommerce_listing", set(),
+        page_url="https://example.com", max_records=10,
+    )
+    assert len(records) == 2
+    assert records[0]["title"] == "Microdata Widget"
+    assert records[0]["price"] == "$15.00"

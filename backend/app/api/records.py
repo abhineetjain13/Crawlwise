@@ -168,15 +168,10 @@ async def _stream_export_json(session: AsyncSession, run_id: int):
 
 
 async def _stream_export_csv(session: AsyncSession, run_id: int):
-    row_stream = _stream_export_rows(session, run_id)
-    buffered_rows: list[tuple[object, dict]] = []
     fieldnames: set[str] = set()
-    async for row in row_stream:
+    async for row in _stream_export_rows(session, run_id):
         cleaned = _clean_export_data(row.data)
-        buffered_rows.append((row, cleaned))
         fieldnames.update(cleaned.keys())
-        if len(buffered_rows) >= MAX_RECORD_PAGE_SIZE:
-            break
     ordered_fieldnames = sorted(fieldnames)
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=ordered_fieldnames, extrasaction="ignore")
@@ -184,12 +179,7 @@ async def _stream_export_csv(session: AsyncSession, run_id: int):
     yield buffer.getvalue()
     buffer.seek(0)
     buffer.truncate(0)
-    for _row, cleaned in buffered_rows:
-        writer.writerow(cleaned)
-        yield buffer.getvalue()
-        buffer.seek(0)
-        buffer.truncate(0)
-    async for row in row_stream:
+    async for row in _stream_export_rows(session, run_id):
         writer.writerow(_clean_export_data(row.data))
         yield buffer.getvalue()
         buffer.seek(0)
