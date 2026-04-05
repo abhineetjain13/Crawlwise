@@ -7,9 +7,21 @@ import { useMemo, useState } from "react";
 import { PageHeader, SectionHeader } from "../../components/ui/patterns";
 import { Badge, Button, Card, Input } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
-import type { CrawlRun, SelectorRecord, SelectorUpdatePayload, SiteMemoryRecord } from "../../lib/api/types";
+import type {
+  CrawlRun,
+  SelectorCreatePayload,
+  SelectorRecord,
+  SelectorSuggestion,
+  SelectorUpdatePayload,
+  SiteMemoryRecord,
+} from "../../lib/api/types";
 
 type DraftState = Record<number, SelectorUpdatePayload>;
+type SuggestedSelectorRecord = SelectorSuggestion & {
+  key: string;
+  domain: string;
+  field_name: string;
+};
 
 export default function SiteMemoryPage() {
   const queryClient = useQueryClient();
@@ -18,6 +30,7 @@ export default function SiteMemoryPage() {
   const [pendingSaveId, setPendingSaveId] = useState<number | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [pendingDeleteDomain, setPendingDeleteDomain] = useState<string | null>(null);
+  const [pendingPromoteKey, setPendingPromoteKey] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
   const [actionError, setActionError] = useState("");
   const meQuery = useQuery({ queryKey: ["me"], queryFn: api.me });
@@ -84,6 +97,21 @@ export default function SiteMemoryPage() {
     },
     onSettled: () => {
       setPendingDeleteDomain(null);
+    },
+  });
+
+  const promoteSuggestionMutation = useMutation({
+    mutationFn: (payload: SelectorCreatePayload) => api.createSelector(payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["selectors"] });
+      await queryClient.invalidateQueries({ queryKey: ["site-memory"] });
+    },
+    onError: (error) => {
+      console.error("Failed to promote suggested selector", error);
+      setActionError(error instanceof Error ? error.message : "Unable to promote selector suggestion.");
+    },
+    onSettled: () => {
+      setPendingPromoteKey(null);
     },
   });
 
@@ -165,9 +193,11 @@ export default function SiteMemoryPage() {
                 <div className="min-w-0">
                   <div className="font-mono text-[13px] font-semibold text-foreground">{group.domain}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted">
-                    <span>{group.reusableFields.length} reusable field{group.reusableFields.length === 1 ? "" : "s"}</span>
+                    <span>{group.fields.length} promoted selector{group.fields.length === 1 ? "" : "s"}</span>
                     <span>•</span>
-                    <span>{group.fields.length} field{group.fields.length === 1 ? "" : "s"}</span>
+                    <span>{group.suggestions.length} suggestion{group.suggestions.length === 1 ? "" : "s"}</span>
+                    <span>•</span>
+                    <span>{group.reusableFields.length} reusable field{group.reusableFields.length === 1 ? "" : "s"}</span>
                     <span>•</span>
                     <span>{group.lastCrawl ? `Last crawl ${formatDate(group.lastCrawl)}` : "No crawl timestamp"}</span>
                   </div>
@@ -211,125 +241,199 @@ export default function SiteMemoryPage() {
                       </div>
                     </div>
                   ) : null}
-                  <div className="overflow-auto rounded-[var(--radius-md)] border border-border">
-                    <table className="compact-data-table">
-                      <thead>
-                        <tr>
-                          <th>Field</th>
-                          <th>Source</th>
-                          <th>XPath / CSS / Regex</th>
-                          <th>Status</th>
-                          <th>Last Updated</th>
-                          <th className="text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {group.fields.map((selector) => {
-                          const draft = drafts[selector.id];
-                          const selectorValue = draft !== undefined
-                            ? draft.xpath ?? draft.css_selector ?? draft.regex ?? ""
-                            : selector.xpath ?? selector.css_selector ?? selector.regex ?? "";
-                          const isEditing = Boolean(draft);
-                          return (
-                            <tr key={selector.id}>
-                              <td className="font-medium text-foreground">{selector.field_name}</td>
-                              <td>{selector.source}</td>
-                              <td className="min-w-[320px]">
-                                {isEditing ? (
-                                  <Input
-                                    value={selectorValue}
-                                    onChange={(event) =>
-                                      setDrafts((current) => ({
-                                        ...current,
-                                        [selector.id]: buildDraft(selector, event.target.value),
-                                      }))
-                                    }
-                                    className="font-mono text-[12px]"
-                                  />
-                                ) : (
-                                  <span className="block max-w-[420px] truncate font-mono text-[12px]" title={selectorValue}>
-                                    {selectorValue || "--"}
-                                  </span>
-                                )}
-                              </td>
-                              <td>
-                                <Badge tone={selector.is_active ? "success" : "warning"}>{selector.status}</Badge>
-                              </td>
-                              <td>{formatDate(selector.updated_at)}</td>
-                              <td>
-                                <div className="flex justify-end gap-2">
-                                  {isEditing ? (
-                                    <>
-                                      <Button
-                                        type="button"
-                                        variant="secondary"
-                                        onClick={() =>
-                                          setDrafts((current) => {
-                                            const next = { ...current };
-                                            delete next[selector.id];
-                                            return next;
-                                          })
-                                        }
-                                      >
-                                        <X className="size-3.5" />
-                                        Cancel
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="accent"
-                                        onClick={() => {
-                                          if (!draft) {
-                                            return;
-                                          }
-                                          setActionError("");
-                                          setPendingSaveId(selector.id);
-                                          saveMutation.mutate({ selectorId: selector.id, payload: draft });
-                                        }}
-                                        disabled={pendingSaveId === selector.id}
-                                      >
-                                        <Save className="size-3.5" />
-                                        Save
-                                      </Button>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        onClick={() =>
+                  <div className="mb-4 space-y-3">
+                    <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-muted">Suggested Selectors</div>
+                    {group.suggestions.length ? (
+                      group.suggestions.map((suggestion) => {
+                        const alreadyPromoted = group.fields.some((selector) => selectorFingerprint(selector) === selectorFingerprint(suggestion));
+                        const selectorValue = selectorDisplayValue(suggestion);
+                        return (
+                          <div
+                            key={suggestion.key}
+                            className="rounded-[var(--radius-md)] border border-border bg-panel px-3 py-3"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-medium text-foreground">{suggestion.field_name}</span>
+                                  <Badge tone="neutral">{suggestion.source ?? "crawl_suggestion"}</Badge>
+                                </div>
+                                {suggestion.sample_value ? (
+                                  <div className="mt-1 truncate text-[12px] text-muted" title={suggestion.sample_value ?? ""}>
+                                    Sample: {suggestion.sample_value}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <Button
+                                type="button"
+                                variant={alreadyPromoted ? "secondary" : "accent"}
+                                onClick={() => {
+                                  if (alreadyPromoted) {
+                                    return;
+                                  }
+                                  setActionError("");
+                                  setPendingPromoteKey(suggestion.key);
+                                  promoteSuggestionMutation.mutate({
+                                    domain: suggestion.domain,
+                                    field_name: suggestion.field_name,
+                                    xpath: suggestion.xpath ?? undefined,
+                                    css_selector: suggestion.css_selector ?? undefined,
+                                    regex: suggestion.regex ?? undefined,
+                                    sample_value: suggestion.sample_value ?? undefined,
+                                    source: suggestion.source ?? "site_memory_suggestion",
+                                    status: "manual",
+                                    is_active: true,
+                                  });
+                                }}
+                                disabled={alreadyPromoted || pendingPromoteKey === suggestion.key}
+                              >
+                                {alreadyPromoted ? "Promoted" : pendingPromoteKey === suggestion.key ? "Promoting..." : "Promote"}
+                              </Button>
+                            </div>
+                            <div
+                              className="mt-3 rounded-[var(--radius-sm)] border border-border/70 bg-background px-3 py-2 font-mono text-[12px] text-foreground/80"
+                              title={selectorValue}
+                            >
+                              {selectorValue || "--"}
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="rounded-[var(--radius-md)] border border-dashed border-border bg-panel px-4 py-4 text-[13px] text-muted">
+                        No selector suggestions are stored for this domain yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="mb-3 text-[12px] font-semibold uppercase tracking-[0.08em] text-muted">Promoted Selectors</div>
+                    {group.fields.length ? (
+                      <div className="overflow-auto rounded-[var(--radius-md)] border border-border">
+                        <table className="compact-data-table">
+                          <thead>
+                            <tr>
+                              <th>Field</th>
+                              <th>Source</th>
+                              <th>XPath / CSS / Regex</th>
+                              <th>Status</th>
+                              <th>Last Updated</th>
+                              <th className="text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {group.fields.map((selector) => {
+                              const draft = drafts[selector.id];
+                              const selectorValue = draft !== undefined
+                                ? draft.xpath ?? draft.css_selector ?? draft.regex ?? ""
+                                : selector.xpath ?? selector.css_selector ?? selector.regex ?? "";
+                              const isEditing = Boolean(draft);
+                              return (
+                                <tr key={selector.id}>
+                                  <td className="font-medium text-foreground">{selector.field_name}</td>
+                                  <td>{selector.source}</td>
+                                  <td className="min-w-[320px]">
+                                    {isEditing ? (
+                                      <Input
+                                        value={selectorValue}
+                                        onChange={(event) =>
                                           setDrafts((current) => ({
                                             ...current,
-                                            [selector.id]: buildDraft(selector, selector.xpath ?? selector.css_selector ?? selector.regex ?? ""),
+                                            [selector.id]: buildDraft(selector, event.target.value),
                                           }))
                                         }
-                                      >
-                                        <Pencil className="size-3.5" />
-                                        Edit
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="danger"
-                                        onClick={() => {
-                                          if (window.confirm(`Delete ${selector.field_name} from ${selector.domain}?`)) {
-                                            setActionError("");
-                                            setPendingDeleteId(selector.id);
-                                            deleteMutation.mutate(selector.id);
-                                          }
-                                        }}
-                                        disabled={pendingDeleteId === selector.id}
-                                      >
-                                        <Trash2 className="size-3.5" />
-                                        Delete
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                                        className="font-mono text-[12px]"
+                                      />
+                                    ) : (
+                                      <span className="block max-w-[420px] truncate font-mono text-[12px]" title={selectorValue}>
+                                        {selectorValue || "--"}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <Badge tone={selector.is_active ? "success" : "warning"}>{selector.status}</Badge>
+                                  </td>
+                                  <td>{formatDate(selector.updated_at)}</td>
+                                  <td>
+                                    <div className="flex justify-end gap-2">
+                                      {isEditing ? (
+                                        <>
+                                          <Button
+                                            type="button"
+                                            variant="secondary"
+                                            onClick={() =>
+                                              setDrafts((current) => {
+                                                const next = { ...current };
+                                                delete next[selector.id];
+                                                return next;
+                                              })
+                                            }
+                                          >
+                                            <X className="size-3.5" />
+                                            Cancel
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            variant="accent"
+                                            onClick={() => {
+                                              if (!draft) {
+                                                return;
+                                              }
+                                              setActionError("");
+                                              setPendingSaveId(selector.id);
+                                              saveMutation.mutate({ selectorId: selector.id, payload: draft });
+                                            }}
+                                            disabled={pendingSaveId === selector.id}
+                                          >
+                                            <Save className="size-3.5" />
+                                            Save
+                                          </Button>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            onClick={() =>
+                                              setDrafts((current) => ({
+                                                ...current,
+                                                [selector.id]: buildDraft(selector, selector.xpath ?? selector.css_selector ?? selector.regex ?? ""),
+                                              }))
+                                            }
+                                          >
+                                            <Pencil className="size-3.5" />
+                                            Edit
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            variant="danger"
+                                            onClick={() => {
+                                              if (window.confirm(`Delete ${selector.field_name} from ${selector.domain}?`)) {
+                                                setActionError("");
+                                                setPendingDeleteId(selector.id);
+                                                deleteMutation.mutate(selector.id);
+                                              }
+                                            }}
+                                            disabled={pendingDeleteId === selector.id}
+                                          >
+                                            <Trash2 className="size-3.5" />
+                                            Delete
+                                          </Button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="rounded-[var(--radius-md)] border border-dashed border-border bg-panel px-4 py-4 text-[13px] text-muted">
+                        No promoted selectors saved for this domain yet.
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : null}
@@ -381,28 +485,64 @@ function groupByDomain(selectors: SelectorRecord[], runs: CrawlRun[], siteMemory
   }
 
   const fieldsByDomain = new Map<string, string[]>();
+  const suggestionsByDomain = new Map<string, SuggestedSelectorRecord[]>();
   for (const memory of siteMemory) {
     const domain = normalizeDomain(memory.domain);
     if (!domain) continue;
     fieldsByDomain.set(domain, [...(memory.payload?.fields ?? [])].sort((a, b) => a.localeCompare(b)));
+    suggestionsByDomain.set(domain, flattenSelectorSuggestions(domain, memory.payload?.selector_suggestions ?? {}));
   }
 
-  const allDomains = new Set([...grouped.keys(), ...fieldsByDomain.keys()]);
+  const allDomains = new Set([...grouped.keys(), ...fieldsByDomain.keys(), ...suggestionsByDomain.keys()]);
   return [...allDomains]
     .map((domain) => ({
       domain,
       reusableFields: fieldsByDomain.get(domain) ?? [],
       fields: [...(grouped.get(domain) ?? [])].sort((a, b) => a.field_name.localeCompare(b.field_name)),
+      suggestions: [...(suggestionsByDomain.get(domain) ?? [])].sort((a, b) => a.field_name.localeCompare(b.field_name)),
       lastCrawl: lastCrawlByDomain.get(domain) ?? null,
     }))
     .sort((a, b) => a.domain.localeCompare(b.domain));
 }
 
+function flattenSelectorSuggestions(domain: string, suggestions: Record<string, SelectorSuggestion[]>) {
+  return Object.entries(suggestions).flatMap(([fieldName, rows], fieldIndex) =>
+    (rows ?? [])
+      .filter((row) => Boolean(selectorDisplayValue(row)))
+      .map((row, rowIndex) => ({
+        ...row,
+        key: `${domain}:${fieldName}:${fieldIndex}:${rowIndex}:${selectorFingerprint({ field_name: fieldName, ...row })}`,
+        domain,
+        field_name: fieldName,
+      })),
+  );
+}
+
+function selectorDisplayValue(row: { xpath?: string | null; css_selector?: string | null; regex?: string | null }) {
+  return row.xpath ?? row.css_selector ?? row.regex ?? "";
+}
+
+function selectorFingerprint(row: {
+  field_name?: string | null;
+  xpath?: string | null;
+  css_selector?: string | null;
+  regex?: string | null;
+}) {
+  return [
+    String(row.field_name ?? "").trim().toLowerCase(),
+    String(row.xpath ?? "").trim(),
+    String(row.css_selector ?? "").trim(),
+    String(row.regex ?? "").trim(),
+  ].join("|");
+}
+
 function normalizeDomain(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
   try {
-    return new URL(value).hostname.replace(/^www\./, "").toLowerCase();
+    return new URL(trimmed).hostname.replace(/^www\./, "").toLowerCase();
   } catch {
-    return "";
+    return trimmed.replace(/^www\./, "").toLowerCase();
   }
 }
 

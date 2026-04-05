@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlparse
 from bs4 import BeautifulSoup
 
 from app.core.config import settings
+from app.services.adapters.registry import resolve_adapter
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import fetch_rendered_html
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host
@@ -75,6 +76,7 @@ async def acquire_html(
     sleep_ms: int = 0,
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[dict]] | None = None,
+    acquisition_profile: dict[str, object] | None = None,
 ) -> tuple[str, str, str, list[dict]]:
     """Acquire HTML for a URL using the waterfall strategy."""
     result = await acquire(
@@ -87,6 +89,7 @@ async def acquire_html(
         sleep_ms=sleep_ms,
         requested_fields=requested_fields,
         requested_field_selectors=requested_field_selectors,
+        acquisition_profile=acquisition_profile,
     )
     return result.html, result.method, result.artifact_path, result.network_payloads
 
@@ -101,11 +104,13 @@ async def acquire(
     sleep_ms: int = 0,
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[dict]] | None = None,
+    acquisition_profile: dict[str, object] | None = None,
 ) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
     _write_diagnostics_stub(run_id, url, diagnostics_path)
-    prefer_stealth = host_prefers_stealth(url)
+    prefer_stealth = host_prefers_stealth(url) or bool((acquisition_profile or {}).get("prefer_stealth"))
+    browser_first = _memory_prefers_browser(acquisition_profile)
     rotator = ProxyRotator(proxy_list)
     proxy_candidates = rotator.cycle_once()
     if proxy_list and not proxy_candidates:
@@ -126,6 +131,8 @@ async def acquire(
             sleep_ms=sleep_ms,
             requested_fields=requested_fields,
             requested_field_selectors=requested_field_selectors,
+            browser_first=browser_first,
+            acquisition_profile=acquisition_profile,
         )
         if result is None and not prefer_stealth and host_prefers_stealth(url):
             result = await _acquire_once(
@@ -139,6 +146,8 @@ async def acquire(
                 sleep_ms=sleep_ms,
                 requested_fields=requested_fields,
                 requested_field_selectors=requested_field_selectors,
+                browser_first=browser_first,
+                acquisition_profile=acquisition_profile,
             )
         if result is not None:
             break
@@ -181,10 +190,51 @@ async def _acquire_once(
     sleep_ms: int,
     requested_fields: list[str] | None,
     requested_field_selectors: dict[str, list[dict]] | None,
+    browser_first: bool,
+    acquisition_profile: dict[str, object] | None,
 ) -> AcquisitionResult | None:
     import logging as _logging
     _log = _logging.getLogger(__name__)
     host_wait_seconds = await wait_for_host_slot(urlparse(url).netloc.lower(), ACQUIRE_HOST_MIN_INTERVAL_MS)
+
+    if browser_first and not advanced_mode:
+        if sleep_ms > 0:
+            await asyncio.sleep(sleep_ms / 1000)
+        try:
+            browser_result = await fetch_rendered_html(
+                url,
+                proxy=proxy,
+                prefer_stealth=prefer_stealth,
+                advanced_mode=advanced_mode,
+                max_pages=max_pages,
+                max_scrolls=max_scrolls,
+                request_delay_ms=sleep_ms,
+                requested_fields=requested_fields,
+                requested_field_selectors=requested_field_selectors,
+            )
+        except Exception as exc:
+            _log.warning("Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi", url, exc)
+        else:
+            if browser_result.html and not detect_blocked_page(browser_result.html).is_blocked:
+                return AcquisitionResult(
+                    html=browser_result.html,
+                    content_type="html",
+                    method="playwright",
+                    artifact_path=str(_artifact_path(run_id, url)),
+                    network_payloads=browser_result.network_payloads,
+                    diagnostics={
+                        "browser_attempted": True,
+                        "browser_challenge_state": browser_result.challenge_state,
+                        "browser_origin_warmed": browser_result.origin_warmed,
+                        "browser_network_payloads": len(browser_result.network_payloads or []),
+                        "browser_diagnostics": browser_result.diagnostics,
+                        "memory_prefer_stealth": bool((acquisition_profile or {}).get("prefer_stealth")),
+                        "memory_browser_first": True,
+                        "host_wait_seconds": round(host_wait_seconds, 3) if host_wait_seconds > 0 else None,
+                        "prefer_stealth": prefer_stealth,
+                        "proxy_used": bool(proxy),
+                    },
+                )
 
     # Always try curl_cffi first — it's faster and more resilient to HTTP/2 issues.
     if sleep_ms > 0:
@@ -207,10 +257,13 @@ async def _acquire_once(
                 visible_text="",
                 gate_phrases=False,
                 needs_browser=False,
+                adapter_hint=None,
                 proxy=proxy,
                 prefer_stealth=prefer_stealth,
                 advanced_mode=advanced_mode,
                 host_wait_seconds=host_wait_seconds,
+                memory_prefer_stealth=bool((acquisition_profile or {}).get("prefer_stealth")),
+                memory_browser_first=browser_first,
             ),
         )
 
@@ -226,12 +279,13 @@ async def _acquire_once(
         and visible_len > 0
         and (visible_len / html_len) < BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX
     )
+    adapter_hint = await _resolve_adapter_hint(url, html)
     needs_browser = bool(
         blocked.is_blocked
         or normalized.status_code in {403, 429, 503}
         or len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
         or gate_phrases
-        or js_shell_detected
+        or (js_shell_detected and adapter_hint is None)
         or _requested_fields_need_browser(
             html,
             visible_text,
@@ -250,10 +304,13 @@ async def _acquire_once(
         visible_text=visible_text,
         gate_phrases=gate_phrases,
         needs_browser=needs_browser,
+        adapter_hint=adapter_hint,
         proxy=proxy,
         prefer_stealth=prefer_stealth,
         advanced_mode=advanced_mode,
         host_wait_seconds=host_wait_seconds,
+        memory_prefer_stealth=bool((acquisition_profile or {}).get("prefer_stealth")),
+        memory_browser_first=browser_first,
     )
 
     # Keep the curl_cffi result as a fallback even if we escalate to browser,
@@ -347,6 +404,13 @@ async def _fetch_with_content_type(url: str, proxy: str | None) -> HttpFetchResu
     return await fetch_html_result(url, proxy=proxy)
 
 
+async def _resolve_adapter_hint(url: str, html: str) -> str | None:
+    if not html:
+        return None
+    adapter = await resolve_adapter(url, html)
+    return adapter.name if adapter is not None else None
+
+
 def _normalize_fetch_result(result: HttpFetchResult | tuple[str, str, dict | list | None]) -> HttpFetchResult:
     if isinstance(result, HttpFetchResult):
         return result
@@ -366,18 +430,13 @@ def _requested_fields_need_browser(
     requested_fields: list[str],
     requested_field_selectors: dict[str, list[dict]],
 ) -> bool:
+    """Determine if we need Playwright because of requested fields.
+    Now optimized to skip expensive text-matching on static pages.
+    """
     if not requested_fields:
         return False
-    if any(requested_field_selectors.get(str(field_name or "").strip().lower()) for field_name in requested_fields):
-        return True
-    normalized_html = " ".join(str(html or "").lower().replace("&", " and ").split())
-    normalized_visible = " ".join(str(visible_text or "").lower().replace("&", " and ").split())
-    for field_name in requested_fields:
-        terms = requested_field_terms(field_name)
-        if not terms:
-            continue
-        if any(term in normalized_visible or term in normalized_html for term in terms):
-            continue
+    # Only escalate if a dynamic interaction/selector is registered
+    if any(requested_field_selectors.get(str(f_name or "").strip().lower()) for f_name in requested_fields):
         return True
     return False
 
@@ -481,10 +540,13 @@ def _build_curl_diagnostics(
     visible_text: str,
     gate_phrases: bool,
     needs_browser: bool,
+    adapter_hint: str | None,
     proxy: str | None,
     prefer_stealth: bool,
     advanced_mode: str | None,
     host_wait_seconds: float,
+    memory_prefer_stealth: bool,
+    memory_browser_first: bool,
 ) -> dict[str, object]:
     payload = {
         "curl_status_code": normalized.status_code,
@@ -495,14 +557,27 @@ def _build_curl_diagnostics(
         "curl_block_provider": blocked.provider if blocked is not None else None,
         "curl_gate_phrases": gate_phrases,
         "curl_needs_browser": needs_browser,
+        "curl_adapter_hint": adapter_hint,
         "advanced_mode": advanced_mode,
         "proxy_used": bool(proxy),
         "prefer_stealth": prefer_stealth,
         "curl_attempts": normalized.attempts or None,
         "curl_attempt_log": normalized.attempt_log or None,
         "host_wait_seconds": round(host_wait_seconds, 3) if host_wait_seconds > 0 else None,
+        "memory_prefer_stealth": memory_prefer_stealth or None,
+        "memory_browser_first": memory_browser_first or None,
     }
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bool:
+    if not isinstance(acquisition_profile, dict):
+        return False
+    if bool(acquisition_profile.get("prefer_browser")):
+        return True
+    browser_successes = int(acquisition_profile.get("browser_success_count", 0) or 0)
+    curl_successes = int(acquisition_profile.get("curl_success_count", 0) or 0)
+    return browser_successes >= 2 and curl_successes == 0
 
 
 def _artifact_basename(run_id: int, url: str) -> str:

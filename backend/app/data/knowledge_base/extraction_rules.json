@@ -181,7 +181,7 @@
     ]
   },
   "semantic_detail": {
-    "section_skip_patterns": ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe", "review this product", "filter reviews", "rating distribution", "overall rating", "verified reviewer", "read the story", "shop women", "shop men's", "shop mens", "shop men's", "shop men"],
+    "section_skip_patterns": ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe", "review this product", "filter reviews", "rating distribution", "overall rating", "verified reviewer", "read the story", "shop women", "shop men's", "shop mens", "shop men"],
     "section_ancestor_stop_tags": ["footer", "header", "nav", "aside", "form"],
     "section_ancestor_stop_tokens": ["footer", "header", "nav", "menu", "newsletter", "breadcrumbs", "breadcrumb", "cookie", "consent", "bazaarvoice", "bv-rnr", "review", "reviews", "ratings"],
     "spec_label_block_patterns": ["play video", "watch video", "video", "learn more", "add to cart", "buy now", "primary guide", "guide", "discount", "verified reviewer", "rating summary", "filter reviews", "report", "helpful"],
@@ -226,6 +226,7 @@
     "contract_xpath": 11,
     "contract_regex": 10,
     "adapter": 9,
+    "product_detail": 9,
     "network_intercept": 8,
     "hydrated_state": 7,
     "embedded_json": 7,

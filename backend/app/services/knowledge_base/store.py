@@ -158,10 +158,43 @@ def get_selector_defaults(domain: str, field_name: str) -> list[dict]:
 async def save_selector_defaults(domain: str, field_name: str, values: list[dict]) -> None:
     async with _CACHE_LOCK:
         next_defaults = deepcopy(_CACHE.selector_defaults)
-        next_defaults.setdefault(domain, {})[field_name] = [
+        domain_rows = next_defaults.setdefault(domain, {})
+        normalized_rows = [
             row for row in (_normalize_selector_row(value) for value in values)
             if row
         ]
+        if normalized_rows:
+            domain_rows[field_name] = normalized_rows
+        else:
+            domain_rows.pop(field_name, None)
+        if not domain_rows:
+            next_defaults.pop(domain, None)
+        await _persist_json(SELECTOR_FILE, next_defaults)
+        _CACHE.selector_defaults = next_defaults
+
+
+async def save_domain_selector_defaults(domain: str, values_by_field: dict[str, list[dict]]) -> None:
+    async with _CACHE_LOCK:
+        next_defaults = deepcopy(_CACHE.selector_defaults)
+        normalized_domain_rows: dict[str, list[dict]] = {}
+        for field_name, values in values_by_field.items():
+            normalized_rows = [
+                row for row in (_normalize_selector_row(value) for value in values)
+                if row
+            ]
+            if normalized_rows:
+                normalized_domain_rows[field_name] = normalized_rows
+        if normalized_domain_rows:
+            next_defaults[domain] = normalized_domain_rows
+        else:
+            next_defaults.pop(domain, None)
+        await _persist_json(SELECTOR_FILE, next_defaults)
+        _CACHE.selector_defaults = next_defaults
+
+
+async def clear_selector_defaults() -> None:
+    async with _CACHE_LOCK:
+        next_defaults: dict[str, dict[str, list[dict]]] = {}
         await _persist_json(SELECTOR_FILE, next_defaults)
         _CACHE.selector_defaults = next_defaults
 

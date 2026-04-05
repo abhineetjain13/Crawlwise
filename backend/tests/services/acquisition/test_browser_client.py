@@ -9,9 +9,11 @@ import pytest
 
 from app.core.config import settings
 from app.services.acquisition.browser_client import (
+    _build_launch_kwargs,
     _collect_paginated_html,
     _context_kwargs,
     _cookie_policy_for_domain,
+    _fetch_rendered_html_with_fallback,
     _flatten_shadow_dom,
     _find_next_page_url,
     _goto_with_fallback,
@@ -38,7 +40,7 @@ class FakePage:
 
 @pytest.mark.asyncio
 async def test_wait_for_challenge_resolution_resolves():
-    initial = "<html><body>" + "<div></div>" * 80 + "</body></html>"
+    initial = "<html><body> captcha verify you are human " + ("a " * 1500) + "</body></html>"
     resolved = "<html><body>" + ("content " * 80) + "</body></html>"
     page = FakePage([initial, resolved])
 
@@ -55,6 +57,19 @@ def test_context_kwargs_does_not_override_host_header():
 
     assert kwargs["extra_http_headers"]["Accept-Language"] == "en-US,en;q=0.9"
     assert "Host" not in kwargs["extra_http_headers"]
+
+
+def test_build_launch_kwargs_skips_host_pinning_for_system_chrome():
+    target = type("Target", (), {
+        "dns_resolved": True,
+        "resolved_ips": ["203.0.113.10"],
+        "hostname": "example.com",
+    })()
+
+    kwargs = _build_launch_kwargs(None, target, browser_channel="chrome")
+
+    assert kwargs["channel"] == "chrome"
+    assert "args" not in kwargs
 
 
 class FakeCookieContext:
@@ -127,7 +142,7 @@ class FakePaginationPage:
         self.dismissed = 0
 
     def locator(self, selector: str):
-        if selector in {"link[rel='next']", "a[rel='next']"}:
+        if selector == "a[rel='next']":
             return FakeLocator(self._pages[self.url]["next"])
         return FakeLocator("")
 
@@ -230,6 +245,39 @@ async def test_goto_with_fallback_retries_transient_browser_dns_error(monkeypatc
 
     assert len(page.goto_calls) == 2
     assert page.wait_calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypatch):
+    attempt_calls: list[str] = []
+
+    async def fake_attempt(*_args, launch_profile, **_kwargs):
+        attempt_calls.append(str(launch_profile["label"]))
+        if launch_profile["label"] == "bundled_chromium":
+            raise RuntimeError("net::ERR_HTTP2_PROTOCOL_ERROR")
+        return type("Result", (), {"diagnostics": {}})()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client._fetch_rendered_html_attempt",
+        fake_attempt,
+    )
+
+    result = await _fetch_rendered_html_with_fallback(
+        object(),
+        target=object(),
+        url="https://example.com/product",
+        proxy=None,
+        advanced_mode=None,
+        max_pages=1,
+        max_scrolls=1,
+        prefer_stealth=False,
+        request_delay_ms=0,
+        requested_fields=[],
+        requested_field_selectors={},
+    )
+
+    assert attempt_calls == ["bundled_chromium", "system_chrome"]
+    assert result.diagnostics["browser_launch_profile"] == "system_chrome"
 
 
 @pytest.mark.asyncio

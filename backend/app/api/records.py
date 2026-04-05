@@ -70,7 +70,7 @@ async def record_provenance(
         raise HTTPException(status_code=404, detail=RECORD_NOT_FOUND_DETAIL)
     run = await get_run(session, record.run_id)
     if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
-        raise HTTPException(status_code=404, detail=RECORD_NOT_FOUND_DETAIL)
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
     return CrawlRecordProvenanceResponse.model_validate(record, from_attributes=True)
 
 

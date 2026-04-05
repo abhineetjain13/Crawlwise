@@ -11,7 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import encrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
-from app.services.llm_runtime import _call_groq, _call_provider, _enforce_token_limit, resolve_active_config, run_prompt_task
+from app.services.llm_runtime import (
+    _build_targeted_html_snippet,
+    _call_groq,
+    _call_provider,
+    _enforce_token_limit,
+    _truncate_html,
+    resolve_active_config,
+    run_prompt_task,
+)
 
 
 @pytest.mark.asyncio
@@ -253,3 +261,25 @@ def test_enforce_token_limit_preserves_json_section_validity():
 
     assert "[TRUNCATED DUE TO TOKEN LIMIT]" in truncated
     assert isinstance(json.loads(rendered_json), dict)
+
+
+def test_truncate_html_prefers_targeted_anchor_windows():
+    html = (
+        "<html><body>"
+        + ("<div>noise</div>" * 400)
+        + "<section><h2>Materials & Care</h2><p>Merino wool outer with cotton lining.</p></section>"
+        + ("<div>more-noise</div>" * 400)
+        + "</body></html>"
+    )
+
+    truncated = _truncate_html(html, 320, anchors=["materials"])
+
+    assert "Materials & Care" in truncated
+    assert "Merino wool outer" in truncated
+    assert len(truncated) <= 320
+
+
+def test_build_targeted_html_snippet_returns_empty_without_anchor_match():
+    html = "<html><body><h1>Title</h1></body></html>"
+
+    assert _build_targeted_html_snippet(html, ["reviews"], 200) == ""

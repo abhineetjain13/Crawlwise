@@ -49,7 +49,7 @@ function RunRow({
           <div className="min-w-0">
             <Link
               href={`/crawl?run_id=${run.id}`}
-              className="no-underline block truncate text-[13px] font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors max-w-[220px]"
+              className="no-underline block truncate text-[13px] font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors max-w-lg"
             >
               {domain || `Run #${run.id}`}
             </Link>
@@ -57,7 +57,7 @@ function RunRow({
               href={run.url}
               target="_blank"
               rel="noreferrer"
-              className="no-underline block max-w-[220px] truncate font-mono text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+              className="no-underline block truncate font-mono text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors max-w-lg"
               title={run.url}
             >
               {run.url}
@@ -91,8 +91,8 @@ function RunRow({
       </td>
 
       {/* Actions */}
-      <td>
-        <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <td className="text-right whitespace-nowrap">
+        <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 group-hover:opacity-100 transition-opacity">
           <Link
             href={`/crawl?run_id=${run.id}`}
             className="no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-panel)] px-2.5 text-[12px] font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-elevated)]"
@@ -239,11 +239,11 @@ export default function RunsPage() {
             <table className="compact-data-table">
               <thead>
                 <tr>
-                  <th>Run</th>
+                  <th className="min-w-[200px]">Run</th>
                   <th>Type</th>
                   <th>Status</th>
                   <th>Records</th>
-                  <th>Started</th>
+                  <th className="whitespace-nowrap">Started</th>
                   <th className="text-right">Actions</th>
                 </tr>
               </thead>

@@ -12,9 +12,14 @@ from app.models.selector import Selector
 from app.services.acquisition.browser_client import fetch_rendered_html
 from app.services.acquisition.http_client import fetch_html
 from app.services.domain_utils import normalize_domain
-from app.services.knowledge_base.store import get_selector_defaults, save_selector_defaults
+from app.services.knowledge_base.store import (
+    clear_selector_defaults,
+    get_selector_defaults,
+    load_selector_defaults,
+    save_domain_selector_defaults,
+)
 from app.services.llm_runtime import discover_xpath_candidates
-from app.services.site_memory_service import replace_selector_field
+from app.services.site_memory_service import clear_all_selector_memory, replace_selector_map
 from app.services.xpath_service import build_deterministic_selector_suggestions, extract_selector_value
 
 
@@ -28,24 +33,39 @@ async def list_selectors(session: AsyncSession, domain: str = "") -> list[Select
 
 async def create_selector(session: AsyncSession, payload: dict) -> Selector:
     selector = Selector(**_normalize_selector_payload(payload))
+    snapshots = _snapshot_selector_defaults([selector.domain])
     session.add(selector)
-    await session.commit()
+    await session.flush()
+    try:
+        await _sync_selector_defaults(session, selector.domain)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        await _restore_selector_defaults(snapshots)
+        raise
     await session.refresh(selector)
-    await _sync_selector_defaults(session, selector.domain, selector.field_name)
     return selector
 
 
 async def update_selector(session: AsyncSession, selector: Selector, payload: dict) -> Selector:
     previous_domain = selector.domain
-    previous_field_name = selector.field_name
+    snapshots = _snapshot_selector_defaults([previous_domain, selector.domain])
     normalized_payload = _normalize_selector_payload({**selector.__dict__, **payload})
     for key, value in normalized_payload.items():
         setattr(selector, key, value)
     selector.last_validated_at = datetime.now(UTC)
-    await session.commit()
+    updated_domain = selector.domain
+    await session.flush()
+    try:
+        if previous_domain != updated_domain:
+            await _sync_selector_defaults(session, previous_domain)
+        await _sync_selector_defaults(session, updated_domain)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        await _restore_selector_defaults(snapshots)
+        raise
     await session.refresh(selector)
-    await _sync_selector_defaults(session, previous_domain, previous_field_name)
-    await _sync_selector_defaults(session, selector.domain, selector.field_name)
     return selector
 
 
@@ -55,36 +75,56 @@ async def delete_selector(session: AsyncSession, selector_id: int) -> None:
     if selector is None:
         return
     domain = selector.domain
-    field_name = selector.field_name
+    snapshots = _snapshot_selector_defaults([domain])
     await session.execute(delete(Selector).where(Selector.id == selector_id))
-    await session.commit()
-    await _sync_selector_defaults(session, domain, field_name)
+    await session.flush()
+    try:
+        await _sync_selector_defaults(session, domain)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        await _restore_selector_defaults(snapshots)
+        raise
 
 
 async def delete_selectors_for_domain(session: AsyncSession, domain: str) -> int:
     normalized_domain = str(domain or "").strip().lower()
     if not normalized_domain:
         return 0
+    snapshots = _snapshot_selector_defaults([normalized_domain])
     result = await session.execute(select(Selector).where(Selector.domain == normalized_domain))
     rows = list(result.scalars().all())
     if not rows:
         return 0
     await session.execute(delete(Selector).where(Selector.domain == normalized_domain))
-    await session.commit()
-    for field_name in {row.field_name for row in rows}:
-        await _sync_selector_defaults(session, normalized_domain, field_name)
+    await session.flush()
+    try:
+        await _sync_selector_defaults(session, normalized_domain)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        await _restore_selector_defaults(snapshots)
+        raise
     return len(rows)
 
 
 async def clear_all_selectors(session: AsyncSession) -> int:
+    selector_defaults_snapshot = load_selector_defaults()
     result = await session.execute(select(Selector))
     rows = list(result.scalars().all())
-    if not rows:
+    if not rows and not selector_defaults_snapshot:
         return 0
-    await session.execute(delete(Selector))
-    await session.commit()
-    for domain, field_name in {(row.domain, row.field_name) for row in rows}:
-        await _sync_selector_defaults(session, domain, field_name)
+    if rows:
+        await session.execute(delete(Selector))
+        await session.flush()
+    try:
+        await clear_selector_defaults()
+        await clear_all_selector_memory(session, clear_suggestions=True, commit=False)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        await _restore_all_selector_defaults(selector_defaults_snapshot)
+        raise
     return len(rows)
 
 
@@ -166,35 +206,69 @@ async def suggest_selectors(session: AsyncSession, url: str, expected_columns: l
     return merged
 
 
-async def _sync_selector_defaults(session: AsyncSession, domain: str, field_name: str) -> None:
+async def _sync_selector_defaults(session: AsyncSession, domain: str) -> None:
+    if not domain:
+        return
     result = await session.execute(
         select(Selector)
         .where(
             Selector.domain == domain,
-            Selector.field_name == field_name,
             Selector.is_active.is_(True),
             Selector.status.in_(["validated", "manual"]),
         )
-        .order_by(Selector.created_at.desc())
+        .order_by(Selector.field_name.asc(), Selector.created_at.desc())
     )
     selectors = list(result.scalars().all())
-    selector_rows = [
-        {
+    selector_rows_by_field: dict[str, list[dict]] = {}
+    for selector in selectors:
+        selector_rows_by_field.setdefault(selector.field_name, []).append({
             "xpath": selector.xpath,
             "css_selector": selector.css_selector,
             "regex": selector.regex,
             "status": selector.status,
             "sample_value": selector.sample_value,
             "source": selector.source,
-        }
-        for selector in selectors
-    ]
-    await save_selector_defaults(
-        domain,
-        field_name,
-        selector_rows,
-    )
-    await replace_selector_field(session, domain, field_name, selector_rows)
+        })
+    previous_defaults = load_selector_defaults().get(domain)
+    try:
+        await save_domain_selector_defaults(domain, selector_rows_by_field)
+        await replace_selector_map(session, domain, selector_rows_by_field, commit=False)
+    except Exception:
+        # Attempt to restore previous defaults, but don't mask the original error
+        if previous_defaults is None:
+            try:
+                await save_domain_selector_defaults(domain, {})
+            except Exception:
+                pass  # Log warning: failed to clear defaults during rollback
+        else:
+            try:
+                await save_domain_selector_defaults(domain, previous_defaults)
+            except Exception:
+                pass  # Log warning: failed to restore defaults during rollback
+        await session.rollback()
+        raise
+
+
+def _snapshot_selector_defaults(domains: list[str]) -> dict[str, dict[str, list[dict]] | None]:
+    current = load_selector_defaults()
+    snapshots: dict[str, dict[str, list[dict]] | None] = {}
+    for domain in domains:
+        normalized = str(domain or "").strip().lower()
+        if not normalized or normalized in snapshots:
+            continue
+        snapshots[normalized] = current.get(normalized)
+    return snapshots
+
+
+async def _restore_selector_defaults(snapshots: dict[str, dict[str, list[dict]] | None]) -> None:
+    for domain, value in snapshots.items():
+        await save_domain_selector_defaults(domain, value or {})
+
+
+async def _restore_all_selector_defaults(defaults_snapshot: dict[str, dict[str, list[dict]]]) -> None:
+    await clear_selector_defaults()
+    for domain, rows_by_field in defaults_snapshot.items():
+        await save_domain_selector_defaults(domain, rows_by_field)
 
 
 def _normalize_selector_payload(payload: dict) -> dict:

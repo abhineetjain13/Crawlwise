@@ -8,8 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 class SiteMemoryPayload(BaseModel):
     fields: list[str] = Field(default_factory=list)
     selectors: dict[str, list[dict]] = Field(default_factory=dict)
+    selector_suggestions: dict[str, list[dict]] = Field(default_factory=dict)
     source_mappings: dict[str, str] = Field(default_factory=dict)
     llm_columns: dict[str, object] = Field(default_factory=dict)
+    acquisition: dict[str, object] = Field(default_factory=dict)
 
 
 class SiteMemoryResponse(BaseModel):

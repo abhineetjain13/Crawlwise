@@ -12,7 +12,7 @@ from app.api.records import (
     EXPORT_PARTIAL_HEADER,
     EXPORT_TOTAL_HEADER,
     MAX_RECORD_PAGE_SIZE,
-    RECORD_NOT_FOUND_DETAIL,
+    RUN_NOT_FOUND_DETAIL,
     _collect_export_rows,
     _clean_export_data,
     _stream_export_csv,
@@ -317,7 +317,7 @@ async def test_record_provenance_masks_unauthorized_run_access(db_session):
         await record_provenance(record.id, session=db_session, current_user=viewer)
 
     assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == RECORD_NOT_FOUND_DETAIL
+    assert exc_info.value.detail == RUN_NOT_FOUND_DETAIL
 
 
 def test_record_provenance_route_documents_combined_404_description():

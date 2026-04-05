@@ -78,10 +78,6 @@ def normalize_value(field_name: str, value: object) -> object:
         if _is_image_collection_field(field_name):
             return _normalize_additional_images(text)
         if _is_numeric_field(field_name):
-            if _is_price_like_field(field_name):
-                currency_match = re.search(r"[$€£¥₹]\s*\d[\d,.]*", text)
-                if currency_match:
-                    return currency_match.group(0).strip()
             match = re.search(PRICE_REGEX, text)
             return match.group(0) if match else text
         if _is_description_field(field_name):
@@ -191,6 +187,17 @@ def _clean_description_text(value: str) -> str:
 
 def _normalize_color_text(value: str) -> str:
     cleaned = _strip_ui_noise(_strip_html(value))
+    lowered = cleaned.lower()
+    
+    # Check for CSS/Style noise leakage
+    noise_tokens = (
+        "#fff", "rgb(", "rgba(", "hsl(", "var(", "transparent", 
+        "background", "color:", "border:", "display:", "margin", 
+        "padding", "font-family", "font-size", "inherit", "none"
+    )
+    if any(token in lowered for token in noise_tokens):
+        return ""
+        
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
     cleaned = re.sub(r"(?i)\bclear\b$", "", cleaned).strip(" ,")
     return cleaned
@@ -199,8 +206,15 @@ def _normalize_color_text(value: str) -> str:
 def _normalize_size_text(value: str) -> str:
     cleaned = _strip_ui_noise(_strip_html(value))
     lowered = cleaned.lower()
-    if any(token in lowered for token in ("max-width", "min-width", "vw", "vh", "sizes=", "srcset")):
+    
+    noise_tokens = (
+        "max-width", "min-width", "vw", "vh", "sizes=", "srcset",
+        "rem", "em", "px", "padding", "margin", "font-size", 
+        "display:", "border:", "auto"
+    )
+    if any(token in lowered for token in noise_tokens):
         return ""
+        
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
     tokens = [token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()]
     if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):

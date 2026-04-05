@@ -63,6 +63,8 @@ DEFAULT_MAX_RECORDS: int = _TUNING.get("default_max_records", 100)
 DEFAULT_SLEEP_MS: int = _TUNING.get("default_sleep_ms", 0)
 MIN_REQUEST_DELAY_MS: int = _TUNING.get("min_request_delay_ms", 100)
 DEFAULT_MAX_SCROLLS: int = _TUNING.get("default_max_scrolls", 10)
+BATCH_URL_CONCURRENCY: int = _TUNING.get("batch_url_concurrency", 8)
+WORKER_MAX_CONCURRENT_JOBS: int = _TUNING.get("worker_max_concurrent_jobs", 8)
 
 # Extraction tuning
 MAX_CANDIDATES_PER_FIELD: int = _TUNING.get("max_candidates_per_field", 5)

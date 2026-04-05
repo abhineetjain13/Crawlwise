@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import app.services.extract.listing_extractor as listing_extractor
 
+from app.services.discover.service import DiscoveryManifest
 from app.services.extract.listing_extractor import extract_listing_records
 
 
@@ -30,6 +31,106 @@ def test_extract_product_cards():
     assert records[0]["title"] == "Widget A"
     assert records[1]["title"] == "Widget B"
     assert "price" in records[0]
+
+
+def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_item():
+    html = """
+    <html><body>
+    <div class="product-card">
+        <h3><a href="/product/1">Widget A</a></h3>
+        <span class="price">$10.00</span>
+        <img src="https://img.example.com/a.jpg" />
+    </div>
+    <div class="product-card">
+        <h3><a href="/product/2">Widget B</a></h3>
+        <span class="price">$20.00</span>
+        <img src="https://img.example.com/b.jpg" />
+    </div>
+    </body></html>
+    """
+    manifest = DiscoveryManifest(
+        json_ld=[
+            {
+                "@type": "ItemList",
+                "itemListElement": [
+                    {
+                        "@type": "ListItem",
+                        "item": {
+                            "@type": "Product",
+                            "name": "Widget A",
+                            "url": "https://example.com/product/1",
+                            "brand": {"name": "Acme"},
+                            "description": "A richer structured description for widget A.",
+                        },
+                    },
+                    {
+                        "@type": "ListItem",
+                        "item": {
+                            "@type": "Product",
+                            "name": "Widget B",
+                            "url": "https://example.com/product/2",
+                            "brand": {"name": "Acme"},
+                            "description": "A richer structured description for widget B.",
+                        },
+                    },
+                ],
+            }
+        ]
+    )
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/products",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert len(records) == 2
+    assert records[0]["brand"] == "Acme"
+    assert records[0]["price"] == "$10.00"
+    assert records[0]["description"] == "A richer structured description for widget A."
+
+
+def test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by_position():
+    html = """
+    <html><body>
+    <script>
+    window.__STATE__ = {
+      "listListingDetails": [
+        {"id": 1511949734, "name": "Clearance", "price": 150, "location": "Peterborough, Cambridgeshire"},
+        {"id": 1511835211, "name": "Philips lumea prestige", "price": 110, "location": "Sandwell, West Midlands"}
+      ]
+    };
+    </script>
+    <div class="product-card">
+        <a href="https://www.gumtree.com/p/other-home-appliances/clearance-/1511949734">
+            <img src="https://img.example.com/a.jpg" />
+        </a>
+    </div>
+    <div class="product-card">
+        <a href="https://www.gumtree.com/p/ipl-hair-removal-appliances/philips-lumea-prestige/1511835211">
+            <img src="https://img.example.com/b.jpg" />
+        </a>
+    </div>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.gumtree.com/for-sale/kitchen-appliances",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Clearance"
+    assert records[0]["price"] == 150
+    assert records[0]["location"] == "Peterborough, Cambridgeshire"
+    assert records[0]["url"].endswith("/1511949734")
+    assert records[1]["title"] == "Philips lumea prestige"
 
 
 def test_extract_listing_records_splits_paginated_html_and_dedupes_urls():
@@ -169,17 +270,17 @@ def test_extract_hydrated_state_listing_records():
     assert records[1]["url"] == "https://example.com/p/b"
 
 
-def test_extract_items_from_json_uses_configured_max_depth(monkeypatch):
-    monkeypatch.setattr(listing_extractor, "MAX_JSON_RECURSION_DEPTH", 5)
+def test_extract_items_from_json_uses_configured_max_depth():
     payload = {"level1": {"level2": {"level3": {"level4": {"products": [
-        {"title": "Deep A", "url": "/a"},
-        {"title": "Deep B", "url": "/b"},
+        {"title": "Deep A", "url": "/product/a", "price": "19.99"},
+        {"title": "Deep B", "url": "/product/b", "price": "29.99"},
     ]}}}}}
 
     records = listing_extractor._extract_items_from_json(
         payload,
         "ecommerce_listing",
         "https://example.com",
+        max_depth=5,
     )
 
     assert len(records) == 2

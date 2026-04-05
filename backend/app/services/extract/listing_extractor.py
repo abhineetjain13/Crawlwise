@@ -101,6 +101,10 @@ def _extract_listing_records_single_page(
     if len(next_flight_records) >= 2:
         candidate_sets.append(next_flight_records)
 
+    inline_array_records = _extract_from_inline_object_arrays(html, surface, page_url)
+    if len(inline_array_records) >= 2:
+        candidate_sets.append(inline_array_records)
+
     # --- Strategy 2: DOM card detection ---
     soup = BeautifulSoup(html, "html.parser")
 
@@ -143,7 +147,11 @@ def _extract_listing_records_single_page(
 
     if not candidate_sets:
         return []
-    return max(candidate_sets, key=_listing_record_set_sort_key)[:max_records]
+    best_records = max(candidate_sets, key=_listing_record_set_sort_key)
+    merged_records = _merge_listing_candidate_sets(candidate_sets)
+    if merged_records and _listing_record_set_sort_key(merged_records) > _listing_record_set_sort_key(best_records):
+        return merged_records[:max_records]
+    return best_records[:max_records]
 
 
 def _split_paginated_html_fragments(html: str) -> list[str]:
@@ -187,6 +195,100 @@ def _listing_record_join_key(record: dict) -> str:
     price = str(record.get("price") or "").strip().lower()
     image_url = str(record.get("image_url") or "").strip().lower()
     return f"title:{title}|price:{price}|image:{image_url}"
+
+
+def _merge_listing_candidate_sets(candidate_sets: list[list[dict]]) -> list[dict]:
+    merged_by_key: dict[str, dict] = {}
+    ordered_keys: list[str] = []
+    normalized_sets = [records for records in candidate_sets if records]
+    for records in normalized_sets:
+        for record in records:
+            key = _listing_record_join_key(record)
+            if not key:
+                continue
+            existing = merged_by_key.get(key)
+            if existing is None:
+                merged_by_key[key] = dict(record)
+                ordered_keys.append(key)
+                continue
+            merged_by_key[key] = _merge_listing_record(existing, record)
+    merged_records = [merged_by_key[key] for key in ordered_keys]
+    positional_merges = _merge_listing_candidate_sets_by_position(normalized_sets)
+    if not positional_merges:
+        return merged_records
+    if not merged_records:
+        return positional_merges
+    if _listing_record_set_sort_key(positional_merges) >= _listing_record_set_sort_key(merged_records):
+        return positional_merges
+    return _dedupe_listing_records(merged_records + positional_merges)
+
+
+def _merge_listing_candidate_sets_by_position(candidate_sets: list[list[dict]]) -> list[dict]:
+    if len(candidate_sets) < 2:
+        return []
+    best_records: list[dict] = []
+    best_score: tuple[int, int, int, float, int] = (0, 0, 0, 0.0, 0)
+    for left_index, left in enumerate(candidate_sets):
+        for right in candidate_sets[left_index + 1:]:
+            merged = _merge_listing_pair_by_position(left, right)
+            if not merged:
+                continue
+            score = _listing_record_set_sort_key(merged)
+            if score > best_score:
+                best_records = merged
+                best_score = score
+    return best_records
+
+
+def _merge_listing_pair_by_position(primary_records: list[dict], secondary_records: list[dict]) -> list[dict]:
+    if not primary_records or not secondary_records:
+        return []
+    max_len = max(len(primary_records), len(secondary_records))
+    min_len = min(len(primary_records), len(secondary_records))
+    if min_len < 2:
+        return []
+    if max_len - min_len > 2:
+        return []
+    if min_len / max_len < 0.7:
+        return []
+    merged: list[dict] = []
+    for index in range(min_len):
+        record = _merge_listing_record(primary_records[index], secondary_records[index])
+        if _is_meaningful_listing_record(record):
+            merged.append(record)
+    return merged
+
+
+def _merge_listing_record(primary: dict, secondary: dict) -> dict:
+    merged = dict(primary)
+    primary_source = str(primary.get("_source") or "").strip()
+    secondary_source = str(secondary.get("_source") or "").strip()
+    for key, value in secondary.items():
+        if key.startswith("_"):
+            continue
+        if _should_prefer_listing_value(key, merged.get(key), value):
+            merged[key] = value
+    if primary_source and secondary_source and secondary_source not in primary_source.split(", "):
+        merged["_source"] = ", ".join([primary_source, secondary_source])
+    elif not primary_source and secondary_source:
+        merged["_source"] = secondary_source
+    return merged
+
+
+def _should_prefer_listing_value(field_name: str, existing: object, candidate: object) -> bool:
+    if candidate in (None, "", [], {}):
+        return False
+    if existing in (None, "", [], {}):
+        return True
+    existing_text = str(existing or "").strip()
+    candidate_text = str(candidate or "").strip()
+    if field_name in {"description", "category"}:
+        return len(candidate_text) > len(existing_text)
+    if field_name == "additional_images":
+        existing_count = len([part for part in existing_text.split(",") if part.strip()])
+        candidate_count = len([part for part in candidate_text.split(",") if part.strip()])
+        return candidate_count > existing_count
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +777,94 @@ def _extract_from_next_flight_scripts(html: str, page_url: str) -> list[dict]:
     ]
 
 
+def _extract_from_inline_object_arrays(html: str, surface: str, page_url: str) -> list[dict]:
+    candidates: list[list[dict]] = []
+    seen: set[str] = set()
+    key_pattern = re.compile(r'(?P<key>["\']?[A-Za-z_][A-Za-z0-9_-]*["\']?)\s*:\s*\[')
+
+    for match in key_pattern.finditer(html):
+        raw_key = str(match.group("key") or "").strip("\"' ")
+        if not _looks_like_inline_collection_key(raw_key):
+            continue
+        array_text = _extract_balanced_literal(html, match.end() - 1)
+        if not array_text:
+            continue
+        fingerprint = f"{raw_key}:{array_text[:200]}"
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        try:
+            parsed = json.loads(array_text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, list):
+            continue
+        objects = [item for item in parsed if isinstance(item, dict)]
+        if len(objects) < 2:
+            continue
+        normalized = _try_normalize_array(objects, surface, page_url)
+        if normalized:
+            for record in normalized:
+                record["_source"] = "inline_object_array"
+            candidates.append(normalized)
+
+    if not candidates:
+        return []
+    return max(candidates, key=_listing_record_set_sort_key)
+
+
+def _looks_like_inline_collection_key(value: str) -> bool:
+    normalized = _normalized_field_token(value)
+    if not normalized:
+        return False
+    collection_tokens = {
+        _normalized_field_token(token)
+        for token in COLLECTION_KEYS
+        if _normalized_field_token(token)
+    }
+    if normalized in collection_tokens:
+        return True
+    if normalized.startswith("list") and any(token in normalized for token in ("listing", "result", "product", "item", "record")):
+        return True
+    return any(token in normalized for token in ("listingdetails", "searchresults", "productresults"))
+
+
+def _extract_balanced_literal(text: str, start_index: int) -> str | None:
+    if start_index < 0 or start_index >= len(text) or text[start_index] not in "[{":
+        return None
+    stack = [text[start_index]]
+    in_string = False
+    escape = False
+    quote_char = ""
+    index = start_index + 1
+
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+        else:
+            if char in {'"', "'"}:
+                in_string = True
+                quote_char = char
+            elif char in "[{":
+                stack.append(char)
+            elif char in "]}":
+                if not stack:
+                    return None
+                opening = stack.pop()
+                if (opening, char) not in {("[", "]"), ("{", "}")}:
+                    return None
+                if not stack:
+                    return text[start_index:index + 1]
+        index += 1
+    return None
+
+
 def _lookup_next_flight_window_index(combined: str, raw_url: str, page_url: str) -> int | None:
     candidates: list[str] = []
     for candidate in (
@@ -705,7 +895,10 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
     record: dict = {}
 
     for canonical, aliases in FIELD_ALIASES.items():
-        values = _find_alias_values(item, [canonical, *aliases], max_depth=4)
+        values = [
+            *_preferred_generic_item_values(item, canonical),
+            *_find_alias_values(item, [canonical, *aliases], max_depth=4),
+        ]
         for value in values:
             normalized = _normalize_listing_value(canonical, value, page_url=page_url)
             if normalized in (None, "", [], {}):
@@ -729,6 +922,17 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
     if record:
         record["_raw_item"] = item
     return record if record else None
+
+
+def _preferred_generic_item_values(item: dict, canonical: str) -> list[object]:
+    if canonical == "title":
+        preferred_keys = ("name", "title", "productName", "product_name", "headline", "job_title")
+        return [
+            item[key]
+            for key in preferred_keys
+            if key in item and item[key] not in (None, "", [], {})
+        ]
+    return []
 
 
 def _normalize_product_search_item(item: dict, *, page_url: str) -> dict | None:
@@ -871,14 +1075,25 @@ def _is_meaningful_listing_record(record: dict) -> bool:
     if meaningful_keys == {"title", "image_url"} and not url_value:
         return False
 
+    product_signal_keys = meaningful_keys & {
+        "price", "sku", "brand", "rating", "description",
+        "availability", "review_count", "category", "salary", 
+        "company", "location"
+    }
+
     # Reject records that are just category/navigation links with only a title
     # (no price, sku, brand, rating, or other product signals)
     if url_value and _looks_like_category_url(url_value):
-        product_signal_keys = meaningful_keys & {
-            "price", "sku", "brand", "rating", "description",
-            "availability", "review_count", "category",
-        }
         if not product_signal_keys:
+            return False
+
+    # Stricter generic hub guard for bare links with zero product signals
+    if url_value and not product_signal_keys and meaningful_keys.issubset({"title", "image_url"}):
+        parsed = urlparse(url_value)
+        path = parsed.path.rstrip('/')
+        segments = [s for s in path.split('/') if s]
+        # Links to root or top-level dirs (/shop, /brands) without query params are hubs
+        if len(segments) <= 1 and not parsed.query:
             return False
 
     if meaningful_keys:

@@ -47,7 +47,7 @@ type CrawlRunScreenProps = {
 };
 
 const exportLinkClassName =
-  "focus-ring no-underline inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-[13px] font-medium text-white shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)] hover:text-white";
+  "focus-ring no-underline inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-[13px] font-medium !text-white shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)] !hover:text-white";
 
 function isSafeHref(href: string) {
   try {
@@ -111,7 +111,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const terminalSyncRef = useRef<string | null>(null);
   const intelligenceGroupsInitializedRef = useRef(false);
-
   const runQuery = useQuery({
     queryKey: ["crawl-run", runId],
     queryFn: () => api.getCrawl(runId),
@@ -119,6 +118,21 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       query.state.data && ACTIVE_STATUSES.has(query.state.data.status) ? POLLING_INTERVALS.ACTIVE_JOB_MS : false,
   });
   const run = runQuery.data;
+  const live = Boolean(run && ACTIVE_STATUSES.has(run.status));
+  const terminal = run ? TERMINAL_STATUSES.has(run.status) : false;
+
+  const [startMs] = useState(Date.now());
+  const [localNow, setLocalNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!live) return;
+    const interval = setInterval(() => setLocalNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [live]);
+
+  const relativeOffsetMs = run?.created_at ? Math.max(0, Date.now() - new Date(run.created_at).getTime()) : 0;
+  // If IST shift is ~5.5h, relativeOffsetMs will be huge. We need to clamp to session relative for active jobs.
+  const activeDurationMs = localNow - startMs; 
 
   const recordsQuery = useQuery({
     queryKey: ["crawl-records", runId],
@@ -126,7 +140,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     enabled: Boolean(run),
     refetchInterval: () => {
       const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
-      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? POLLING_INTERVALS.RECORDS_MS : false;
+      return latestRun && (latestRun.status === "running" || latestRun.status === "paused")
+        ? POLLING_INTERVALS.RECORDS_MS
+        : false;
     },
   });
 
@@ -135,14 +151,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     queryFn: () => api.getCrawlLogs(runId),
     refetchInterval: () => {
       const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
-      return latestRun && ACTIVE_STATUSES.has(latestRun.status) ? POLLING_INTERVALS.LOGS_MS : false;
+      return latestRun && (latestRun.status === "running" || latestRun.status === "paused")
+        ? POLLING_INTERVALS.LOGS_MS
+        : false;
     },
   });
 
   const records = useMemo(() => recordsQuery.data?.items ?? [], [recordsQuery.data?.items]);
   const logs = useMemo(() => (logsQuery.data ?? []).slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS), [logsQuery.data]);
-  const terminal = run ? TERMINAL_STATUSES.has(run.status) : false;
-  const live = Boolean(run && ACTIVE_STATUSES.has(run.status));
   const showRunLoadingState = runQuery.isLoading && !run;
 
   useEffect(() => {
@@ -393,7 +409,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     records: Number(run?.result_summary?.record_count ?? records.length) || 0,
     pages: Number(run?.result_summary?.processed_urls ?? run?.result_summary?.completed_urls ?? 0) || 0,
     fields: visibleColumns.length,
-    duration: formatDuration(run?.created_at, run?.completed_at),
+    duration: terminal 
+      ? formatDuration(run?.created_at, run?.completed_at)
+      : formatDuration(new Date(startMs).toISOString(), new Date(startMs + (Number(run?.result_summary?.elapsed_ms) || (localNow - startMs))).toISOString()),
   };
 
   async function runControl(action: "pause" | "resume" | "kill") {

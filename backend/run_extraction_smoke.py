@@ -231,10 +231,6 @@ async def main():
         status = "SKIP" if r.get("skipped") else "PASS" if r.get("ok") else "FAIL"
         print(f"  [{status}] {r['name']}")
 
-    # Exit with non-zero code if any tests failed
-    if passed < total:
-        sys.exit(1)
-
     # Write report
     report_dir = Path("artifacts/extraction_smoke")
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -242,6 +238,10 @@ async def main():
     report_path = report_dir / f"smoke_{ts}.json"
     report_path.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     print(f"\nReport: {report_path}")
+
+    # Exit with non-zero code if any tests failed
+    if passed < total:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

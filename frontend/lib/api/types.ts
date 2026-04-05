@@ -213,6 +213,7 @@ export type SelectorSuggestResponse = {
 export type SiteMemoryPayload = {
   fields: string[];
   selectors: Record<string, SelectorSuggestion[]>;
+  selector_suggestions: Record<string, SelectorSuggestion[]>;
   source_mappings: Record<string, string>;
   llm_columns: Record<string, unknown>;
 };

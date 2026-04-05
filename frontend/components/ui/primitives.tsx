@@ -227,9 +227,8 @@ export function Toggle({
 export function Metric({
   label,
   value,
-  hint,
   loading = false,
-}: Readonly<{ label: string; value: ReactNode; hint?: ReactNode; loading?: boolean }>) {
+}: Readonly<{ label: string; value: ReactNode; loading?: boolean }>) {
   return (
     <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] p-4 space-y-1.5 shadow-[var(--shadow-card-value)]">
       <p className="label-caps">{label}</p>
@@ -240,7 +239,6 @@ export function Metric({
           {value}
         </div>
       )}
-      {hint ? <div className="text-[11px] text-[var(--text-muted)]">{hint}</div> : null}
     </div>
   );
 }
@@ -252,7 +250,6 @@ export function StatCard({
   icon,
   iconColor,
   stripeColor,
-  sub,
   loading = false,
 }: Readonly<{
   label: string;
@@ -260,7 +257,6 @@ export function StatCard({
   icon?: ReactNode;
   iconColor?: string;
   stripeColor?: string;
-  sub?: ReactNode;
   loading?: boolean;
 }>) {
   return (
@@ -286,7 +282,6 @@ export function StatCard({
           {value}
         </div>
       )}
-      {sub ? <p className="mt-1.5 text-[12px] text-[var(--text-muted)]">{sub}</p> : null}
     </div>
   );
 }

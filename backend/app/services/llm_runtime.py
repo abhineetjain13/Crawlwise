@@ -212,7 +212,7 @@ async def discover_xpath_candidates(
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
             "existing_values_json": _truncate_json_literal(existing_values, LLM_EXISTING_VALUES_MAX_CHARS),
-            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS),
+            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS, anchors=missing_fields),
         },
     )
     payload = result.payload
@@ -238,7 +238,7 @@ async def extract_missing_fields(
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
             "existing_values_json": _truncate_json_literal(existing_values, LLM_EXISTING_VALUES_MAX_CHARS),
-            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS),
+            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS, anchors=missing_fields),
         },
     )
     payload = result.payload
@@ -273,7 +273,14 @@ async def review_field_candidates(
             ),
             "candidate_evidence_json": _truncate_json_literal(candidate_evidence, LLM_CANDIDATE_EVIDENCE_MAX_CHARS),
             "discovered_sources_json": _truncate_json_literal(discovered_sources, LLM_DISCOVERED_SOURCES_MAX_CHARS),
-            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS),
+            "html_snippet": _truncate_html(
+                html_text,
+                LLM_HTML_SNIPPET_MAX_CHARS,
+                anchors=[
+                    *target_fields,
+                    *[str(existing_values.get(field) or "") for field in target_fields],
+                ],
+            ),
         },
     )
     payload = result.payload
@@ -451,8 +458,59 @@ def _parse_json_array(raw_text: str) -> list | None:
     return payload if isinstance(payload, list) else None
 
 
-def _truncate_html(html_text: str, limit: int) -> str:
-    return html_text.strip()[:limit]
+def _truncate_html(html_text: str, limit: int, *, anchors: list[str] | None = None) -> str:
+    text = html_text.strip()
+    if len(text) <= limit:
+        return text
+    targeted = _build_targeted_html_snippet(text, anchors or [], limit)
+    return targeted if targeted else text[:limit]
+
+
+def _build_targeted_html_snippet(html_text: str, anchors: list[str], limit: int) -> str:
+    normalized_anchors = _normalize_html_anchor_terms(anchors)
+    if not normalized_anchors:
+        return ""
+    lowered_html = html_text.lower()
+    snippet_budget = max(200, limit)
+    window = max(180, min(800, snippet_budget // 3))
+    chunks: list[str] = []
+    seen_ranges: list[tuple[int, int]] = []
+    for anchor in normalized_anchors:
+        start_index = lowered_html.find(anchor)
+        if start_index == -1:
+            continue
+        start = max(0, start_index - window)
+        end = min(len(html_text), start_index + len(anchor) + window)
+        if any(not (end <= prev_start or start >= prev_end) for prev_start, prev_end in seen_ranges):
+            continue
+        seen_ranges.append((start, end))
+        chunks.append(html_text[start:end].strip())
+        rendered = "\n...\n".join(chunks)
+        if len(rendered) >= snippet_budget:
+            return rendered[:snippet_budget]
+        if len(chunks) >= 6:
+            break
+    return "\n...\n".join(chunks)[:snippet_budget]
+
+
+def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            continue
+        for candidate in {
+            raw,
+            raw.replace("_", " "),
+            raw.replace("&", "and"),
+        }:
+            cleaned = " ".join(candidate.split())
+            if len(cleaned) < 3 or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            terms.append(cleaned)
+    return sorted(terms, key=len, reverse=True)
 
 
 def _truncate_json_literal(value: Any, limit: int) -> str:

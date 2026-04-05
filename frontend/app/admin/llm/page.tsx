@@ -138,102 +138,125 @@ export default function AdminLlmPage() {
       <Card className="space-y-6">
         <SectionHeader title="Active Configuration" description="Choose the provider and model used by LLM-dependent features. Keys stay server-side; leaving API key blank uses the env-backed provider key when available." />
 
-        <div className="grid gap-6 md:grid-cols-3">
-          <label className="grid gap-1.5 focus-within:text-accent transition-colors">
-            <span className="label-caps">Provider</span>
-            <select
-              value={provider}
-              onChange={(event) => {
-                const newProvider = event.target.value;
-                setProvider(newProvider);
-                const p = (catalog ?? []).find((item) => item.provider === newProvider);
-                setModel(p?.recommended_models?.[0] ?? "");
-                setCustomModelEnabled(false);
-                setTestOk(null);
-                setTestMessage("");
-              }}
-              className="control-select focus-ring"
-            >
-              <option value="" disabled>Select Provider</option>
-              {(catalog ?? []).map((item) => (
-                <option key={item.provider} value={item.provider}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="grid gap-1.5">
-            <span className="label-caps">Task Context</span>
-            <select value={taskType} onChange={(event) => setTaskType(event.target.value)} className="control-select focus-ring">
-              {TASK_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="grid gap-1.5">
-            <span className="label-caps">Model</span>
-            <select
-              value={selectedModelValue}
-              onChange={(event) => {
-                const val = event.target.value;
-                if (val === "__custom__") {
-                  setCustomModelEnabled(true);
-                  setModel("");
-                } else {
+        <div className="space-y-6">
+          {/* Main selection row */}
+          <div className="grid gap-5 md:grid-cols-3">
+            <label className="grid gap-1.5 focus-within:text-accent transition-colors">
+              <span className="label-caps opacity-70">Provider</span>
+              <select
+                value={provider}
+                onChange={(event) => {
+                  const newProvider = event.target.value;
+                  setProvider(newProvider);
+                  const p = (catalog ?? []).find((item) => item.provider === newProvider);
+                  setModel(p?.recommended_models?.[0] ?? "");
                   setCustomModelEnabled(false);
-                  setModel(val);
-                }
-                setTestOk(null);
-                setTestMessage("");
-              }}
-              className="control-select focus-ring"
-            >
-              {providerModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-              <option value="__custom__">Custom (Manual ID)</option>
-            </select>
-          </label>
+                  setTestOk(null);
+                  setTestMessage("");
+                }}
+                className="control-select focus-ring w-full"
+              >
+                <option value="" disabled>Select Provider</option>
+                {(catalog ?? []).map((item) => (
+                  <option key={item.provider} value={item.provider}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <div className="md:col-span-3">
+            <label className="grid gap-1.5">
+              <span className="label-caps opacity-70">Task Context</span>
+              <select 
+                value={taskType} 
+                onChange={(event) => setTaskType(event.target.value)} 
+                className="control-select focus-ring w-full"
+              >
+                {TASK_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="grid gap-1.5">
+              <span className="label-caps opacity-70">Model</span>
+              <select
+                value={selectedModelValue}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  if (val === "__custom__") {
+                    setCustomModelEnabled(true);
+                    setModel("");
+                  } else {
+                    setCustomModelEnabled(false);
+                    setModel(val);
+                  }
+                  setTestOk(null);
+                  setTestMessage("");
+                }}
+                className="control-select focus-ring w-full"
+              >
+                {providerModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+                <option value="__custom__">Custom (Manual ID)</option>
+              </select>
+            </label>
+          </div>
+
+          {/* Secondary configuration (Custom Model / API Key / Budgets) */}
+          <div className="space-y-5 rounded-[var(--radius-lg)] bg-[var(--bg-elevated)]/30 p-4 border border-[var(--border)]/50">
             {customModelEnabled && (
-              <div className="mb-4">
-                <span className="label-caps mb-1.5 block">Custom Model Identifier</span>
+              <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                <span className="label-caps mb-1.5 block opacity-70">Custom Model Identifier</span>
                 <Input
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                   placeholder="e.g. meta-llama/Llama-3-70b-chat"
+                  className="w-full"
                 />
               </div>
             )}
             
-            <div className="grid gap-6 md:grid-cols-2">
+            <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr_1fr]">
               <label className="grid gap-1.5">
-                <span className="label-caps">API Key Override</span>
+                <span className="label-caps opacity-70">API Key Override</span>
                 <Input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={apiKeyPlaceholder(hasEnvKey, hasSavedKey)}
+                  className="w-full"
                 />
               </label>
 
-              <div className="grid grid-cols-2 gap-4">
-                <label className="grid gap-1.5">
-                  <span className="label-caps">Daily Budget (USD)</span>
-                  <Input value={dailyBudget} onChange={(e) => setDailyBudget(e.target.value)} />
-                </label>
-                <label className="grid gap-1.5">
-                  <span className="label-caps">Session Budget (USD)</span>
-                  <Input value={sessionBudget} onChange={(e) => setSessionBudget(e.target.value)} />
-                </label>
-              </div>
+              <label className="grid gap-1.5">
+                <span className="label-caps opacity-70">Daily Budget (USD)</span>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[12px] opacity-40">$</span>
+                  <Input 
+                    value={dailyBudget} 
+                    onChange={(e) => setDailyBudget(e.target.value)} 
+                    className="pl-6 w-full"
+                  />
+                </div>
+              </label>
+
+              <label className="grid gap-1.5">
+                <span className="label-caps opacity-70">Session Budget (USD)</span>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[12px] opacity-40">$</span>
+                  <Input 
+                    value={sessionBudget} 
+                    onChange={(e) => setSessionBudget(e.target.value)} 
+                    className="pl-6 w-full"
+                  />
+                </div>
+              </label>
             </div>
           </div>
         </div>

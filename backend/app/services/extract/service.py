@@ -1083,6 +1083,11 @@ def _normalize_color_candidate(value: str) -> str | None:
     cleaned = _strip_ui_noise(value)
     if not cleaned:
         return None
+    lowered = cleaned.lower()
+    if any(token in lowered for token in ("padding:", "font-size", "font-weight", "transition:", "position:", "-webkit-", "css-")):
+        return None
+    if any(marker in cleaned for marker in ("{", "}", ";")):
+        return None
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
     cleaned = re.sub(r"(?i)\bclear\b$", "", cleaned).strip(" ,")
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
@@ -1094,7 +1099,9 @@ def _normalize_size_candidate(value: str) -> str | None:
     if not cleaned:
         return None
     lowered = cleaned.lower()
-    if any(token in lowered for token in ("max-width", "min-width", "vw", "vh", "sizes=", "srcset")):
+    if any(token in lowered for token in ("max-width", "min-width", "vw", "vh", "sizes=", "srcset", "padding:", "font-size", "font-weight", "transition:", "position:", "-webkit-", "css-")):
+        return None
+    if any(marker in cleaned for marker in ("{", "}", ";")):
         return None
     if re.fullmatch(r"\d+(?:\.\d+)?\s*[A-Za-z]{1,8}", cleaned):
         return cleaned
@@ -1227,7 +1234,8 @@ def _build_product_detail_rows(manifest: DiscoveryManifest, soup: BeautifulSoup,
         if not isinstance(detail, dict):
             continue
         for field_name, value in _normalize_product_detail_payload(detail, base_url=base_url).items():
-            rows.setdefault(field_name, []).append({"value": value, "source": source})
+            normalized_source = "product_detail" if field_name == "sku" else source
+            rows.setdefault(field_name, []).append({"value": value, "source": normalized_source})
 
     for field_name, value in _extract_buy_box_candidates(soup).items():
         rows.setdefault(field_name, []).append({"value": value, "source": "dom_buy_box"})
@@ -1267,7 +1275,13 @@ def _normalize_product_detail_payload(detail: dict, *, base_url: str) -> dict[st
     title = _normalized_candidate_text(detail.get("name"))
     if title:
         record["title"] = title
-    sku = _normalized_candidate_text(detail.get("productNumber") or detail.get("productKey"))
+    material_ids = detail.get("materialIds")
+    material_skus = [
+        _normalized_candidate_text(item)
+        for item in material_ids
+        if _normalized_candidate_text(item)
+    ] if isinstance(material_ids, list) else []
+    sku = material_skus[0] if material_skus else _normalized_candidate_text(detail.get("productNumber") or detail.get("productKey"))
     if sku:
         record["sku"] = sku
     brand = detail.get("brand")

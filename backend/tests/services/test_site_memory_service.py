@@ -4,7 +4,14 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.site_memory_service import clear_all_memory, get_memory, merge_memory, replace_selector_field
+from app.services.site_memory_service import (
+    clear_all_memory,
+    clear_all_selector_memory,
+    get_memory,
+    merge_memory,
+    replace_selector_field,
+    replace_selector_map,
+)
 
 
 @pytest.mark.asyncio
@@ -14,6 +21,7 @@ async def test_merge_memory_is_additive(db_session: AsyncSession):
         "https://www.example.com/products/widget",
         fields=["materials"],
         selectors={"price": [{"xpath": "//span[@class='price']/text()", "source": "manual"}]},
+        selector_suggestions={"materials": [{"xpath": "//section[@id='materials']", "source": "crawl"}]},
         source_mappings={"price": "json_ld"},
     )
     await merge_memory(
@@ -21,6 +29,7 @@ async def test_merge_memory_is_additive(db_session: AsyncSession):
         "example.com",
         fields=["care"],
         selectors={"price": [{"regex": r"Price:\s*(\$[\d.]+)", "source": "manual"}]},
+        selector_suggestions={"materials": [{"xpath": "//button[normalize-space()='Materials']", "source": "browser_click"}]},
         source_mappings={"brand": "adapter"},
     )
 
@@ -30,6 +39,7 @@ async def test_merge_memory_is_additive(db_session: AsyncSession):
     assert memory.domain == "example.com"
     assert memory.payload["fields"] == ["materials", "care"]
     assert len(memory.payload["selectors"]["price"]) == 2
+    assert len(memory.payload["selector_suggestions"]["materials"]) == 2
     assert memory.payload["source_mappings"]["price"] == "json_ld"
     assert memory.payload["source_mappings"]["brand"] == "adapter"
 
@@ -47,6 +57,69 @@ async def test_replace_selector_field_removes_empty_selector_sets(db_session: As
 
     assert memory is not None
     assert memory.payload["selectors"] == {}
+
+
+@pytest.mark.asyncio
+async def test_replace_selector_map_replaces_authoritative_selectors_only(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        selectors={"title": [{"xpath": "//h1/text()", "source": "manual"}]},
+        selector_suggestions={"materials": [{"xpath": "//section[@id='materials']", "source": "crawl"}]},
+    )
+
+    await replace_selector_map(
+        db_session,
+        "example.com",
+        {"price": [{"xpath": "//span[@class='price']/text()", "source": "manual"}]},
+    )
+    memory = await get_memory(db_session, "example.com")
+
+    assert memory is not None
+    assert memory.payload["selectors"] == {
+        "price": [{"css_selector": None, "xpath": "//span[@class='price']/text()", "regex": None, "sample_value": None, "source": "manual", "status": "validated"}]
+    }
+    assert memory.payload["selector_suggestions"] == {
+        "materials": [{"css_selector": None, "xpath": "//section[@id='materials']", "regex": None, "sample_value": None, "source": "crawl", "status": "validated"}]
+    }
+
+
+@pytest.mark.asyncio
+async def test_clear_all_selector_memory_preserves_other_memory_payload(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        fields=["materials"],
+        selectors={"title": [{"xpath": "//h1/text()", "source": "manual"}]},
+        selector_suggestions={"materials": [{"xpath": "//section[@id='materials']", "source": "crawl"}]},
+    )
+
+    deleted = await clear_all_selector_memory(db_session)
+    memory = await get_memory(db_session, "example.com")
+
+    assert deleted == 1
+    assert memory is not None
+    assert memory.payload["fields"] == ["materials"]
+    assert memory.payload["selectors"] == {}
+    assert "materials" in memory.payload["selector_suggestions"]
+
+
+@pytest.mark.asyncio
+async def test_clear_all_selector_memory_can_clear_suggestions_too(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        selectors={"title": [{"xpath": "//h1/text()", "source": "manual"}]},
+        selector_suggestions={"materials": [{"xpath": "//section[@id='materials']", "source": "crawl"}]},
+    )
+
+    deleted = await clear_all_selector_memory(db_session, clear_suggestions=True)
+    memory = await get_memory(db_session, "example.com")
+
+    assert deleted == 1
+    assert memory is not None
+    assert memory.payload["selectors"] == {}
+    assert memory.payload["selector_suggestions"] == {}
 
 
 @pytest.mark.asyncio
@@ -90,3 +163,48 @@ async def test_clear_all_memory_noops_when_site_memory_table_missing(monkeypatch
     monkeypatch.setattr(db_session, "execute", _raise_missing_table)
     deleted = await clear_all_memory(db_session)
     assert deleted == 0
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_preserves_unknown_payload_keys(db_session: AsyncSession):
+    memory = await merge_memory(
+        db_session,
+        "example.com",
+        fields=["title"],
+    )
+    memory.payload = {
+        **memory.payload,
+        "content_map_cache": {"entries": [{"label": "Reviews"}]},
+        "interaction_plan_cache": [{"field_name": "reviews"}],
+        "quality_history": {"title": {"runs": [{"score": "GOOD"}]}},
+        "content_map_cached_at": "2026-04-05T00:00:00Z",
+        "custom_page_intelligence_flag": {"enabled": True},
+    }
+    await db_session.commit()
+
+    updated = await merge_memory(
+        db_session,
+        "example.com",
+        fields=["price"],
+    )
+
+    assert updated.payload["custom_page_intelligence_flag"] == {"enabled": True}
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_updates_acquisition_payload_without_touching_selectors(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        selectors={"title": [{"xpath": "//h1/text()", "source": "manual"}]},
+        acquisition={"prefer_stealth": True, "last_success_method": "playwright"},
+    )
+
+    memory = await get_memory(db_session, "example.com")
+
+    assert memory is not None
+    assert memory.payload["acquisition"] == {
+        "prefer_stealth": True,
+        "last_success_method": "playwright",
+    }
+    assert memory.payload["selectors"]["title"][0]["xpath"] == "//h1/text()"

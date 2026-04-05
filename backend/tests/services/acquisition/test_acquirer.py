@@ -11,6 +11,7 @@ from app.services.acquisition.acquirer import (
     _artifact_path,
     _diagnostics_path,
     _network_payload_path,
+    _requested_fields_need_browser,
     acquire,
     acquire_html,
 )
@@ -84,6 +85,38 @@ async def test_acquire_html_falls_back_to_playwright():
             result_html, method, path, payloads = await acquire_html(1, "https://example.com/spa-page")
     assert method == "playwright"
     assert len(payloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html():
+    js_heavy_html = (
+        "<html><body>"
+        + ("<script>var x=1;</script>" * 30000)
+        + "<h1>Product</h1><p>"
+        + ("Visible product copy " * 40)
+        + "</p></body></html>"
+    )
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=js_heavy_html, status_code=200, content_type="html"),
+        ),
+        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock) as resolve_adapter_mock,
+        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        resolve_adapter_mock.return_value = type("Adapter", (), {"name": "shopify"})()
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://example.com/products/widget")
+
+    assert result.method == "curl_cffi"
+    assert result.diagnostics["curl_adapter_hint"] == "shopify"
+    browser_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -311,3 +344,67 @@ async def test_acquire_retries_same_host_after_learning_stealth_preference(monke
 
     assert result.html == "<html>ok</html>"
     assert calls == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_acquire_prefers_browser_first_from_acquisition_memory(monkeypatch, tmp_path):
+    from app.services.acquisition.browser_client import BrowserResult
+
+    browser_mock = AsyncMock(return_value=BrowserResult(
+        html="<html><body><h1>Rendered Product</h1><p>" + ("x" * 600) + "</p></body></html>"
+    ))
+    fetch_mock = AsyncMock(return_value=HttpFetchResult(text="<html><body>ignored</body></html>", status_code=200, content_type="html"))
+
+    monkeypatch.setattr("app.services.acquisition.acquirer.fetch_rendered_html", browser_mock)
+    monkeypatch.setattr("app.services.acquisition.acquirer._fetch_with_content_type", fetch_mock)
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    result = await acquire(
+        42,
+        "https://example.com/products/widget",
+        acquisition_profile={"prefer_browser": True},
+    )
+
+    assert result.method == "playwright"
+    assert result.diagnostics["memory_browser_first"] is True
+    fetch_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acquire_uses_memory_prefer_stealth(monkeypatch, tmp_path):
+    captured: list[bool] = []
+
+    async def _fake_acquire_once(**kwargs):
+        captured.append(bool(kwargs.get("prefer_stealth")))
+        return type("Result", (), {
+            "html": "<html>ok</html>",
+            "json_data": None,
+            "content_type": "html",
+            "method": "curl_cffi",
+            "artifact_path": "",
+            "diagnostics_path": "",
+            "network_payloads": [],
+            "diagnostics": {},
+        })()
+
+    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
+    monkeypatch.setattr("app.services.acquisition.acquirer.host_prefers_stealth", lambda _url: False)
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    result = await acquire(
+        42,
+        "https://example.com/products/widget",
+        acquisition_profile={"prefer_stealth": True},
+    )
+
+    assert result.method == "curl_cffi"
+    assert captured == [True]
+
+
+def test_requested_fields_need_browser_normalizes_requested_terms():
+    assert _requested_fields_need_browser(
+        "<html><body><section>Q and A</section></body></html>",
+        "Q and A",
+        ["q&a"],
+        {},
+    ) is False

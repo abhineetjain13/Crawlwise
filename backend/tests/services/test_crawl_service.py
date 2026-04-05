@@ -13,6 +13,7 @@ from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
     _build_field_discovery_summary,
     _build_llm_candidate_evidence,
+    _merge_record_fields,
     _normalize_detail_candidate_values,
     active_jobs,
     commit_selected_fields,
@@ -455,7 +456,7 @@ async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_ses
 
     async def _fake_process_single_url(**kwargs):
         seen_urls.append(kwargs["url"])
-        return ([{"title": kwargs["url"]}], "success")
+        return ([{"title": kwargs["url"]}], "success", {"method": "curl_cffi", "record_count": 1})
 
     with patch("app.services.crawl_service._process_single_url", side_effect=_fake_process_single_url):
         await process_run(db_session, run.id)
@@ -679,6 +680,43 @@ async def test_extraction_verdict_in_summary(db_session: AsyncSession, test_user
     await db_session.refresh(run)
     assert "extraction_verdict" in run.result_summary
     assert run.result_summary["extraction_verdict"] in ("success", "partial")
+
+
+@pytest.mark.asyncio
+async def test_process_run_records_acquisition_summary_metrics(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product",
+        "surface": "ecommerce_detail",
+    })
+
+    with (
+        patch(
+            "app.services.crawl_service.acquire",
+            new_callable=AsyncMock,
+            return_value=_make_acq(
+                FIXTURE_HTML,
+                method="playwright",
+                network_payloads=[{"url": "https://api.example.com/product", "body": {"id": 1}}],
+            ),
+        ),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    summary = run.result_summary["acquisition_summary"]
+    assert summary["methods"]["playwright"] == 1
+    assert summary["browser_used_urls"] == 1
+    assert summary["network_payloads_total"] == 1
+
+
+def test_merge_record_fields_prefers_richer_detail_description():
+    merged = _merge_record_fields(
+        {"title": "Widget", "description": "Short desc"},
+        {"description": "A much richer product description with more detail and context."},
+    )
+    assert merged["description"] == "A much richer product description with more detail and context."
 
 
 @pytest.mark.asyncio

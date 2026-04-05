@@ -7,6 +7,8 @@ from app.services.discover.service import DiscoveryManifest
 from app.services.discover.service import discover_sources
 from app.services.extract.service import (
     _extract_image_urls,
+    _normalize_color_candidate,
+    _normalize_size_candidate,
     _resolve_candidate_url,
     _should_skip_jsonld_block,
     extract_candidates,
@@ -328,6 +330,37 @@ def test_extract_requested_unknown_image_field_uses_pattern_cleanup():
         )
     assert "hero_image_url" in candidates
     assert candidates["hero_image_url"][0]["value"] == "https://example.com/media/catalog/product/main.jpg"
+
+
+def test_extract_product_detail_prefers_material_id_for_sku():
+    html = "<html><body><h1>Widget</h1></body></html>"
+    manifest = _manifest(
+        next_data={
+            "props": {
+                "pageProps": {
+                    "data": {
+                        "getProductDetail": {
+                            "name": "Widget",
+                            "productNumber": "NUC101",
+                            "productKey": "NUC101",
+                            "materialIds": ["NUC101-1KT"],
+                        }
+                    }
+                }
+            }
+        }
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.sigmaaldrich.com/IN/en/product/sigma/nuc101",
+            "ecommerce_detail",
+            html,
+            manifest,
+            ["sku"],
+        )
+    assert "sku" in candidates
+    assert candidates["sku"][0]["value"] == "NUC101-1KT"
+    assert candidates["sku"][0]["source"] == "product_detail"
 
 
 def test_extract_semantic_requested_field_responsibilities():
@@ -966,3 +999,15 @@ def test_extract_image_urls_keeps_cdn_images_with_query_strings():
         "https://cdn.example.com/product.jpg?v=1234&width=800",
         base_url="https://example.com/product",
     ) == ["https://cdn.example.com/product.jpg?v=1234&width=800"]
+
+
+def test_normalize_color_candidate_rejects_css_noise():
+    assert _normalize_color_candidate(
+        "#0d475c;padding:8px 0;position:relative;padding:0;}.css-hazhdp-nav-bar .side-men"
+    ) is None
+
+
+def test_normalize_size_candidate_rejects_css_noise():
+    assert _normalize_size_candidate(
+        "12px;font-weight:330;-webkit-transition:0.1s ease;transition:0.1s ease;}"
+    ) is None

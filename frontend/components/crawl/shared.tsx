@@ -152,10 +152,16 @@ export function readRecordValue(record: CrawlRecord, field: string) {
 export function formatDuration(start?: string | null, end?: string | null) {
   if (!start) return "--";
   const started = new Date(start).getTime();
-  const finished = end ? new Date(end).getTime() : Date.now();
+  // Ensure we compare apples to apples: backend created_at is UTC. 
+  // If we don't have end_at, use a UTC-synced timestamp.
+  const finished = end ? new Date(end).getTime() : new Date(new Date().toISOString()).getTime();
+
   if (!Number.isFinite(started) || !Number.isFinite(finished)) return "--";
-  const seconds = Math.max(0, Math.floor((finished - started) / 1000));
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  const ms = Math.max(0, finished - started);
+  const totalSeconds = Math.floor(ms / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}m ${s}s`;
 }
 
 export function progressPercent(run: CrawlRun | undefined) {
@@ -538,7 +544,7 @@ export function SettingSection({
             checked ? "max-h-[420px]" : "max-h-0",
           )}
         >
-          <div className="border-t border-border/80 bg-[var(--setting-body-bg)] p-3">{children}</div>
+          <div className="border-t border-border/80 bg-[var(--setting-body-bg)] p-2 space-y-2">{children}</div>
         </div>
       ) : null}
     </div>
@@ -565,35 +571,36 @@ export function SliderRow({
   suffix?: string;
 }>) {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-border bg-[var(--slider-row-bg)] px-3 py-2.5 shadow-[var(--slider-row-highlight)]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="text-sm font-medium text-[var(--text-secondary)]">{label}</div>
+    <div className="rounded-[var(--radius-lg)] border border-border bg-[var(--slider-row-bg)] px-3 py-1.5 shadow-[var(--slider-row-highlight)]">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <div className="rounded-[10px] border border-[color:color-mix(in_srgb,var(--accent)_18%,var(--border))] bg-[var(--slider-value-bg)] px-2.5 py-1 text-xs font-semibold tabular-nums text-[var(--accent)]">
-            {value}
-            {suffix ?? ""}
-          </div>
-          <button type="button" onClick={onReset} aria-label={`Reset ${label}`} className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground">
-            <RotateCcw className="size-3.5" />
+          <div className="text-[12px] font-semibold text-[var(--text-secondary)]">{label}</div>
+          <button type="button" onClick={onReset} aria-label={`Reset ${label}`} className="text-muted hover:text-foreground">
+            <RotateCcw className="size-3" />
           </button>
         </div>
-      </div>
-      <div className="mt-2.5 flex items-center gap-3">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={clampNumber(value, min, max, min)}
-          onChange={(event) => onChange(event.target.value)}
-          className="slider-control"
-        />
-        <Input
-          value={value}
-          onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
-          onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
-          className="h-8 w-20 rounded-[10px] bg-[var(--slider-input-bg)] text-right font-mono text-xs tabular-nums"
-        />
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={clampNumber(value, min, max, min)}
+            onChange={(event) => onChange(event.target.value)}
+            className="slider-control w-28"
+          />
+          <div className="relative">
+            <Input
+              value={value}
+              onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
+              onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
+              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right font-mono text-[12px] tabular-nums text-[var(--accent)] focus:ring-0"
+            />
+            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[10px] lowercase text-[var(--accent)] opacity-60">
+              {suffix ?? ""}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -791,8 +798,8 @@ export function OutputTab({
       type="button"
       onClick={onClick}
       className={cn(
-        "relative px-4 py-2 text-sm font-medium",
-        active ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent" : "text-muted",
+        "relative px-4 py-2 text-sm font-medium transition-colors",
+        active ? "text-[var(--text-primary)] !text-[#10203a] after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
       )}
     >
       {children}
@@ -803,8 +810,8 @@ export function OutputTab({
 export function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: ReactNode; mono?: boolean }>) {
   return (
     <div className="flex items-start justify-between gap-4 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2">
-      <div className="shrink-0 label-caps">{label}</div>
-      <div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-sm", mono && "font-mono text-xs")}>
+      <div className="shrink-0 label-caps !text-[#43556f]">{label}</div>
+      <div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-sm text-[var(--text-secondary)] !text-[#43556f]", mono && "font-mono text-xs")}>
         {value || "--"}
       </div>
     </div>

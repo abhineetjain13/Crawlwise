@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user, get_db, require_admin
 from app.models.user import User
-from app.schemas.site_memory import SiteMemoryResponse, SiteMemoryUpdate
+from app.schemas.site_memory import SiteMemoryPayload, SiteMemoryResponse, SiteMemoryUpdate
+from app.services.domain_utils import normalize_domain
 from app.services.site_memory_service import clear_all_memory, delete_memory, get_memory, list_memory, save_memory
 
 router = APIRouter(prefix="/api/site-memory", tags=["site-memory"])
@@ -30,7 +32,14 @@ async def site_memory_get(
 ) -> SiteMemoryResponse:
     row = await get_memory(session, domain)
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site memory not found")
+        now = datetime.now(UTC)
+        return SiteMemoryResponse(
+            domain=normalize_domain(domain),
+            payload=SiteMemoryPayload(),
+            last_crawl_at=None,
+            created_at=now,
+            updated_at=now,
+        )
     return SiteMemoryResponse.model_validate(row, from_attributes=True)
 
 
@@ -46,8 +55,10 @@ async def site_memory_put(
         domain,
         fields=payload.payload.fields,
         selectors=payload.payload.selectors,
+        selector_suggestions=payload.payload.selector_suggestions,
         source_mappings=payload.payload.source_mappings,
         llm_columns=payload.payload.llm_columns,
+        acquisition=payload.payload.acquisition,
     )
     return SiteMemoryResponse.model_validate(row, from_attributes=True)
 

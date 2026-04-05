@@ -143,14 +143,13 @@ export function CrawlConfigScreen({
         const selectorRows = flattenSiteMemorySelectors(memory.payload.selectors);
         setAdditionalFields((current) => uniqueFields([...memoryFields, ...current]));
         setFieldRows((current) => mergeFieldRowsFromSiteMemory(current, selectorRows));
-        const loadedCount = memoryFields.length || selectorRows.length;
+        const loadedCount = memoryFields.length + selectorRows.length;
         if (loadedCount) {
           setSiteMemoryBanner(`Loaded ${loadedCount} reusable field${loadedCount === 1 ? "" : "s"} from Site Memory for ${domain}.`);
         }
         setAppliedMemoryDomain(domain);
       } catch (error) {
-        const status = error instanceof Error && "status" in error ? Number((error as { status?: unknown }).status) : undefined;
-        if (!cancelled && status === 404) {
+        if (!cancelled) {
           setAppliedMemoryDomain(domain);
         }
       }
@@ -325,7 +324,7 @@ export function CrawlConfigScreen({
                 value={categoryMode}
                 onChange={(value) => setCategoryMode(value as CategoryMode)}
                 options={[
-                  { value: "single", label: "Single Page" },
+                  { value: "single", label: "Single" },
                   { value: "sitemap", label: "Sitemap" },
                   { value: "bulk", label: "Bulk" },
                 ]}
@@ -449,7 +448,7 @@ export function CrawlConfigScreen({
               <div className="space-y-2">
                 <SettingSection
                   label="Smart Extraction"
-                  description="LLM fallback for selector misses."
+                  description="AI-assisted enrichment"
                   icon={<Sparkles className="size-4" />}
                   checked={smartExtraction}
                   onChange={setSmartExtraction}
@@ -504,6 +503,15 @@ export function CrawlConfigScreen({
                         step={1}
                         onChange={setMaxPages}
                         onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))}
+                      />
+                      <SliderRow
+                        label="Max Scrolls"
+                        value={maxScrolls}
+                        min={CRAWL_LIMITS.MIN_SCROLLS}
+                        max={CRAWL_LIMITS.MAX_SCROLLS}
+                        step={1}
+                        onChange={setMaxScrolls}
+                        onReset={() => setMaxScrolls(String(CRAWL_DEFAULTS.MAX_SCROLLS))}
                       />
                     </div>
                   </div>

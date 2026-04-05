@@ -29,8 +29,6 @@ ACTIVE_STATUSES = {
 }
 WORKER_PICKUP_STATUSES = {
     CrawlStatus.PENDING,
-    CrawlStatus.CLAIMED,
-    CrawlStatus.RUNNING,
 }
 CONTROL_REQUEST_KEY = "control_requested"
 CONTROL_REQUEST_PAUSE = "pause"

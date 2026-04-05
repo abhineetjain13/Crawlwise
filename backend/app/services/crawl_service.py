@@ -38,7 +38,7 @@ from app.services.extract.json_extractor import extract_json_detail, extract_jso
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import _field_quality_score, coerce_field_candidate_value, extract_candidates
 from app.services.extract.spa_pruner import prune_spa_state
-from app.services.knowledge_base.store import get_canonical_fields, get_selector_defaults, save_selector_defaults
+from app.services.knowledge_base.store import get_canonical_fields, get_selector_defaults
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
 from app.services.normalizers.field_normalizers import extract_currency_hint, normalize_value
 from app.services.pipeline_config import (
@@ -411,7 +411,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         persisted_record_count = await _count_run_records(session, run.id)
         url_verdicts: list[str] = list(persisted_summary.get("url_verdicts") or [])[:start_index]
         verdict_counts: dict[str, int] = dict(persisted_summary.get("verdict_counts") or {})
-
         for idx in range(start_index, total_urls):
             url = url_list[idx]
             await session.refresh(run)
@@ -444,7 +443,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 total_urls=total_urls,
             )
 
-            records, verdict = await _process_single_url(
+            records, verdict, url_metrics = await _process_single_url(
                 session=session,
                 run=run,
                 url=url,
@@ -461,6 +460,10 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             else:
                 url_verdicts.append(verdict)
             verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+            acquisition_summary = _merge_run_acquisition_metrics(
+                run.result_summary.get("acquisition_summary") if isinstance(run.result_summary, dict) else {},
+                url_metrics,
+            )
 
             # Update progress
             progress = int(((idx + 1) / total_urls) * 100)
@@ -475,6 +478,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 "remaining_urls": max(total_urls - (idx + 1), 0),
                 "url_verdicts": url_verdicts,
                 "verdict_counts": verdict_counts,
+                "acquisition_summary": acquisition_summary,
             }
             await session.commit()
             await session.refresh(run)
@@ -552,7 +556,10 @@ async def _process_single_url(
     max_scrolls: int,
     max_records: int,
     sleep_ms: int,
-) -> tuple[list[dict], str]:
+    update_run_state: bool = True,
+    persist_logs: bool = True,
+    persist_site_memory: bool = True,
+) -> tuple[list[dict], str, dict]:
     """Run the full 5-stage pipeline on a single URL.
 
     Returns (saved_records, extraction_verdict).
@@ -566,10 +573,14 @@ async def _process_single_url(
         for field_name in additional_fields
         if field_name
     }
+    site_memory = await get_site_memory(session, url)
+    acquisition_profile = _load_acquisition_profile(site_memory.payload if site_memory is not None else {})
 
     # ── STAGE 1: ACQUIRE ──
-    await _set_stage(session, run, "ACQUIRE")
-    await _log(session, run.id, "info", f"[ACQUIRE] Fetching {url}")
+    if update_run_state:
+        await _set_stage(session, run, "ACQUIRE")
+    if persist_logs:
+        await _log(session, run.id, "info", f"[ACQUIRE] Fetching {url}")
     acq = await acquire(
         run_id=run.id,
         url=url,
@@ -580,7 +591,16 @@ async def _process_single_url(
         sleep_ms=sleep_ms,
         requested_fields=additional_fields,
         requested_field_selectors=requested_field_selectors,
+        acquisition_profile=acquisition_profile,
     )
+    if persist_site_memory:
+        await _save_acquisition_memory(
+            session,
+            url=url,
+            previous_profile=acquisition_profile,
+            acquisition_result=acq,
+        )
+    url_metrics = _build_url_metrics(acq, requested_fields=additional_fields)
 
     # ── STAGE 1.5: BLOCKED PAGE DETECTION ──
     # For JSON responses, skip blocked detection (APIs don't serve challenge pages)
@@ -589,12 +609,13 @@ async def _process_single_url(
         if blocked.is_blocked:
             recovered = None if proxy_list else await try_blocked_adapter_recovery(url, surface)
             if recovered and recovered.records:
-                await _log(
-                    session,
-                    run.id,
-                    "info",
-                    f"[BLOCKED] {url} matched blocked-page signals, recovered {len(recovered.records)} Shopify records from public endpoint",
-                )
+                if persist_logs:
+                    await _log(
+                        session,
+                        run.id,
+                        "info",
+                        f"[BLOCKED] {url} matched blocked-page signals, recovered {len(recovered.records)} Shopify records from public endpoint",
+                    )
                 manifest = discover_sources(
                     html="",
                     network_payloads=acq.network_payloads,
@@ -604,14 +625,21 @@ async def _process_single_url(
                     return await _extract_listing(
                         session, run, url, "", acq, manifest, recovered,
                         recovered.records, additional_fields,
-                        surface, max_records,
+                        surface, max_records, url_metrics,
+                        update_run_state=update_run_state,
+                        persist_logs=persist_logs,
+                        persist_site_memory=persist_site_memory,
                     )
                 return await _extract_detail(
                     session, run, url, "", acq, manifest, recovered,
                     recovered.records, additional_fields, extraction_contract,
-                    surface,
+                    surface, url_metrics,
+                    update_run_state=update_run_state,
+                    persist_logs=persist_logs,
+                    persist_site_memory=persist_site_memory,
                 )
-            await _log(session, run.id, "warning", f"[BLOCKED] {url} — {blocked.reason}")
+            if persist_logs:
+                await _log(session, run.id, "warning", f"[BLOCKED] {url} — {blocked.reason}")
             record = CrawlRecord(
                 run_id=run.id,
                 source_url=url,
@@ -624,20 +652,25 @@ async def _process_single_url(
             )
             session.add(record)
             await session.flush()
-            return [], VERDICT_BLOCKED
+            return [], VERDICT_BLOCKED, url_metrics
 
     # ── STAGE 2: JSON-FIRST EXTRACTION PATH ──
     if acq.content_type == "json" and acq.json_data is not None:
-        await _log(session, run.id, "info", "[EXTRACT] JSON-first path — API response detected")
+        if persist_logs:
+            await _log(session, run.id, "info", "[EXTRACT] JSON-first path — API response detected")
         return await _process_json_response(
-            session, run, url, acq, is_listing, max_records, additional_fields,
+            session, run, url, acq, is_listing, max_records, additional_fields, url_metrics,
+            update_run_state=update_run_state,
+            persist_logs=persist_logs,
         )
 
     html = acq.html
 
     # ── STAGE 3: DISCOVER ──
-    await _set_stage(session, run, "DISCOVER")
-    await _log(session, run.id, "info", f"[DISCOVER] Enumerating sources (method={acq.method})")
+    if update_run_state:
+        await _set_stage(session, run, "DISCOVER")
+    if persist_logs:
+        await _log(session, run.id, "info", f"[DISCOVER] Enumerating sources (method={acq.method})")
 
     # Run platform adapter (rank 1 source)
     adapter_result = await run_adapter(url, html, surface)
@@ -650,20 +683,28 @@ async def _process_single_url(
     )
 
     # ── STAGE 4: EXTRACT ──
-    await _set_stage(session, run, "EXTRACT")
-    await _log(session, run.id, "info", "[EXTRACT] Extracting candidates")
+    if update_run_state:
+        await _set_stage(session, run, "EXTRACT")
+    if persist_logs:
+        await _log(session, run.id, "info", "[EXTRACT] Extracting candidates")
 
     if is_listing:
         return await _extract_listing(
             session, run, url, html, acq, manifest, adapter_result,
             adapter_records, additional_fields,
-            surface, max_records,
+            surface, max_records, url_metrics,
+            update_run_state=update_run_state,
+            persist_logs=persist_logs,
+            persist_site_memory=persist_site_memory,
         )
     else:
         return await _extract_detail(
             session, run, url, html, acq, manifest, adapter_result,
             adapter_records, additional_fields, extraction_contract,
-            surface,
+            surface, url_metrics,
+            update_run_state=update_run_state,
+            persist_logs=persist_logs,
+            persist_site_memory=persist_site_memory,
         )
 
 
@@ -675,7 +716,10 @@ async def _process_json_response(
     is_listing: bool,
     max_records: int,
     requested_fields: list[str],
-) -> tuple[list[dict], str]:
+    url_metrics: dict,
+    update_run_state: bool = True,
+    persist_logs: bool = True,
+) -> tuple[list[dict], str, dict]:
     """Handle a JSON API response — extract directly without HTML parsing."""
     if is_listing:
         extracted = extract_json_listing(acq.json_data, url, max_records)
@@ -683,11 +727,14 @@ async def _process_json_response(
         extracted = extract_json_detail(acq.json_data, url)
 
     if not extracted:
-        await _log(session, run.id, "warning", "[EXTRACT] JSON response parsed but no records found")
-        return [], VERDICT_SCHEMA_MISS
+        if persist_logs:
+            await _log(session, run.id, "warning", "[EXTRACT] JSON response parsed but no records found")
+        return [], VERDICT_SCHEMA_MISS, url_metrics
 
-    await _set_stage(session, run, "UNIFY")
-    await _log(session, run.id, "info", "[UNIFY] Normalizing JSON records")
+    if update_run_state:
+        await _set_stage(session, run, "UNIFY")
+    if persist_logs:
+        await _log(session, run.id, "info", "[UNIFY] Normalizing JSON records")
     saved = []
     allowed_fields = set(get_canonical_fields(run.surface)) | set(requested_fields)
     for raw_record in extracted:
@@ -730,11 +777,14 @@ async def _process_json_response(
         session.add(db_record)
         saved.append(normalized)
 
-    await _set_stage(session, run, "PUBLISH")
+    if update_run_state:
+        await _set_stage(session, run, "PUBLISH")
     verdict = _compute_verdict(saved, is_listing)
-    await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} JSON records (verdict={verdict})")
+    if persist_logs:
+        await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} JSON records (verdict={verdict})")
     await session.flush()
-    return saved, verdict
+    _finalize_url_metrics(url_metrics, records=saved, requested_fields=requested_fields)
+    return saved, verdict, url_metrics
 
 
 async def _extract_listing(
@@ -749,7 +799,11 @@ async def _extract_listing(
     additional_fields: list[str],
     surface: str,
     max_records: int,
-) -> tuple[list[dict], str]:
+    url_metrics: dict,
+    update_run_state: bool = True,
+    persist_logs: bool = True,
+    persist_site_memory: bool = True,
+) -> tuple[list[dict], str, dict]:
     """Listing extraction — adapter > structured data > DOM cards.
 
     Never falls back to a single detail-style record. If no listing items
@@ -776,13 +830,16 @@ async def _extract_listing(
     # If listing extraction found zero or one record, do NOT fall through to
     # a detail-style single-record path. Mark the run as failed.
     if not extracted_records:
-        await _log(session, run.id, "warning",
-                    "[EXTRACT] Listing extraction found 0 records — marking as listing_detection_failed")
-        return [], VERDICT_LISTING_FAILED
+        if persist_logs:
+            await _log(session, run.id, "warning",
+                        "[EXTRACT] Listing extraction found 0 records — marking as listing_detection_failed")
+        return [], VERDICT_LISTING_FAILED, url_metrics
 
     # Save each listing record
-    await _set_stage(session, run, "UNIFY")
-    await _log(session, run.id, "info", "[UNIFY] Normalizing listing records")
+    if update_run_state:
+        await _set_stage(session, run, "UNIFY")
+    if persist_logs:
+        await _log(session, run.id, "info", "[UNIFY] Normalizing listing records")
     saved: list[dict] = []
     allowed_fields = set(get_canonical_fields(surface)) | set(additional_fields)
     for raw_record in extracted_records:
@@ -820,10 +877,12 @@ async def _extract_listing(
         session.add(db_record)
         saved.append(normalized)
 
-    await _set_stage(session, run, "PUBLISH")
+    if update_run_state:
+        await _set_stage(session, run, "PUBLISH")
     verdict = _compute_verdict(saved, is_listing=True)
-    await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} listing records (verdict={verdict})")
-    if saved:
+    if persist_logs:
+        await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} listing records (verdict={verdict})")
+    if saved and persist_site_memory:
         await _save_site_memory_observations(
             session,
             url=url,
@@ -833,10 +892,10 @@ async def _extract_listing(
                 "llm_cleanup_status": {},
             },
             html_text=html,
-            browser_diagnostics=acq.diagnostics.get("browser_diagnostics") if isinstance(acq.diagnostics, dict) else {},
         )
     await session.flush()
-    return saved, verdict
+    _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
+    return saved, verdict, url_metrics
 
 
 async def _extract_detail(
@@ -851,7 +910,11 @@ async def _extract_detail(
     additional_fields: list[str],
     extraction_contract: list[dict],
     surface: str,
-) -> tuple[list[dict], str]:
+    url_metrics: dict,
+    update_run_state: bool = True,
+    persist_logs: bool = True,
+    persist_site_memory: bool = True,
+) -> tuple[list[dict], str, dict]:
     """Detail page extraction — adapter > candidates."""
     adapter_name = adapter_result.adapter_name if adapter_result else None
 
@@ -908,8 +971,10 @@ async def _extract_detail(
 
     saved: list[dict] = []
 
-    await _set_stage(session, run, "UNIFY")
-    await _log(session, run.id, "info", "[UNIFY] Normalizing detail record")
+    if update_run_state:
+        await _set_stage(session, run, "UNIFY")
+    if persist_logs:
+        await _log(session, run.id, "info", "[UNIFY] Normalizing detail record")
     if extracted_records:
         # Detail page with adapter records — take first only
         for raw_record in extracted_records[:1]:
@@ -984,10 +1049,12 @@ async def _extract_detail(
         session.add(db_record)
         saved.append(normalized)
 
-    await _set_stage(session, run, "PUBLISH")
+    if update_run_state:
+        await _set_stage(session, run, "PUBLISH")
     verdict = _compute_verdict(saved, is_listing=False)
-    await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} detail records (verdict={verdict})")
-    if saved:
+    if persist_logs:
+        await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} detail records (verdict={verdict})")
+    if saved and persist_site_memory:
         await _save_site_memory_observations(
             session,
             url=url,
@@ -995,10 +1062,10 @@ async def _extract_detail(
             extraction_contract=extraction_contract,
             source_trace=source_trace,
             html_text=html,
-            browser_diagnostics=acq.diagnostics.get("browser_diagnostics") if isinstance(acq.diagnostics, dict) else {},
         )
     await session.flush()
-    return saved, verdict
+    _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
+    return saved, verdict, url_metrics
 
 
 # ---------------------------------------------------------------------------
@@ -1496,9 +1563,23 @@ def _merge_record_fields(primary: dict, secondary: dict) -> dict:
     for key, value in secondary.items():
         if key.startswith("_"):
             continue
-        if merged.get(key) in (None, "", [], {}):
+        if _should_prefer_secondary_field(key, merged.get(key), value):
             merged[key] = value
     return merged
+
+
+def _should_prefer_secondary_field(field_name: str, existing: object, candidate: object) -> bool:
+    if candidate in (None, "", [], {}):
+        return False
+    if existing in (None, "", [], {}):
+        return True
+    if field_name in {"description", "specifications", "features_specs"}:
+        return len(_clean_candidate_text(candidate, limit=None)) > len(_clean_candidate_text(existing, limit=None))
+    if field_name == "additional_images":
+        existing_count = len([part for part in str(existing or "").split(",") if part.strip()])
+        candidate_count = len([part for part in str(candidate or "").split(",") if part.strip()])
+        return candidate_count > existing_count
+    return False
 
 
 def _requested_field_coverage(record: dict, requested_fields: list[str]) -> dict:
@@ -1515,6 +1596,104 @@ def _requested_field_coverage(record: dict, requested_fields: list[str]) -> dict
         "found": len(found),
         "missing": [field for field in normalized_requested if field not in found],
     }
+
+
+def _load_acquisition_profile(payload: dict | None) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    acquisition = payload.get("acquisition")
+    return dict(acquisition) if isinstance(acquisition, dict) else {}
+
+
+async def _save_acquisition_memory(
+    session: AsyncSession,
+    *,
+    url: str,
+    previous_profile: dict[str, object],
+    acquisition_result: AcquisitionResult,
+) -> None:
+    diagnostics = acquisition_result.diagnostics if isinstance(acquisition_result.diagnostics, dict) else {}
+    blocked = bool(diagnostics.get("curl_blocked") or diagnostics.get("browser_blocked"))
+    curl_success_count = int(previous_profile.get("curl_success_count", 0) or 0)
+    browser_success_count = int(previous_profile.get("browser_success_count", 0) or 0)
+    blocked_count = int(previous_profile.get("blocked_count", 0) or 0)
+    if acquisition_result.method == "curl_cffi":
+        curl_success_count += 1
+        browser_success_count = 0
+    elif acquisition_result.method == "playwright":
+        browser_success_count += 1
+    if blocked:
+        blocked_count += 1
+
+    prefer_browser = browser_success_count >= 2 and curl_success_count == 0
+    await merge_memory(
+        session,
+        url,
+        acquisition={
+            "prefer_stealth": bool(diagnostics.get("prefer_stealth")),
+            "prefer_browser": prefer_browser,
+            "last_success_method": acquisition_result.method,
+            "last_content_type": acquisition_result.content_type,
+            "last_adapter_hint": str(diagnostics.get("curl_adapter_hint") or "").strip() or None,
+            "curl_success_count": curl_success_count,
+            "browser_success_count": browser_success_count,
+            "blocked_count": blocked_count,
+            "last_browser_attempted": bool(diagnostics.get("browser_attempted")),
+            "updated_at": datetime.now(UTC).isoformat(),
+        },
+        last_crawl_at=datetime.now(UTC),
+    )
+
+
+def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -> dict[str, object]:
+    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    return _compact_dict({
+        "method": acq.method,
+        "content_type": acq.content_type,
+        "browser_attempted": bool(diagnostics.get("browser_attempted")),
+        "browser_used": acq.method == "playwright",
+        "memory_browser_first": bool(diagnostics.get("memory_browser_first")),
+        "proxy_used": bool(diagnostics.get("proxy_used")),
+        "network_payloads": len(acq.network_payloads or []),
+        "host_wait_seconds": float(diagnostics.get("host_wait_seconds", 0.0) or 0.0),
+        "requested_fields": len(requested_fields or []),
+    })
+
+
+def _finalize_url_metrics(url_metrics: dict[str, object], *, records: list[dict], requested_fields: list[str]) -> dict[str, object]:
+    found_counts = [
+        int((_requested_field_coverage(record, requested_fields) or {}).get("found", 0) or 0)
+        for record in records
+    ]
+    requested_total = len([field for field in requested_fields if field])
+    url_metrics["record_count"] = len(records)
+    if requested_total > 0:
+        url_metrics["requested_fields_total"] = requested_total
+        url_metrics["requested_fields_found_best"] = max(found_counts or [0])
+    return url_metrics
+
+
+def _merge_run_acquisition_metrics(existing: object, url_metrics: dict[str, object]) -> dict[str, object]:
+    current = dict(existing) if isinstance(existing, dict) else {}
+    methods = dict(current.get("methods") or {})
+    method = str(url_metrics.get("method") or "").strip()
+    if method:
+        methods[method] = int(methods.get(method, 0) or 0) + 1
+
+    summary = {
+        "methods": methods,
+        "browser_attempted_urls": int(current.get("browser_attempted_urls", 0) or 0) + int(bool(url_metrics.get("browser_attempted"))),
+        "browser_used_urls": int(current.get("browser_used_urls", 0) or 0) + int(bool(url_metrics.get("browser_used"))),
+        "memory_browser_first_urls": int(current.get("memory_browser_first_urls", 0) or 0) + int(bool(url_metrics.get("memory_browser_first"))),
+        "proxy_used_urls": int(current.get("proxy_used_urls", 0) or 0) + int(bool(url_metrics.get("proxy_used"))),
+        "network_payloads_total": int(current.get("network_payloads_total", 0) or 0) + int(url_metrics.get("network_payloads", 0) or 0),
+        "host_wait_seconds_total": round(float(current.get("host_wait_seconds_total", 0.0) or 0.0) + float(url_metrics.get("host_wait_seconds", 0.0) or 0.0), 3),
+        "records_total": int(current.get("records_total", 0) or 0) + int(url_metrics.get("record_count", 0) or 0),
+    }
+    if "requested_fields_total" in url_metrics:
+        summary["requested_fields_total"] = int(current.get("requested_fields_total", 0) or 0) + int(url_metrics.get("requested_fields_total", 0) or 0)
+        summary["requested_fields_found_best_total"] = int(current.get("requested_fields_found_best_total", 0) or 0) + int(url_metrics.get("requested_fields_found_best", 0) or 0)
+    return summary
 
 
 def _compact_dict(payload: dict) -> dict:
@@ -2099,7 +2278,6 @@ async def _save_site_memory_observations(
     extraction_contract: list[dict],
     source_trace: dict,
     html_text: str,
-    browser_diagnostics: dict | None = None,
 ) -> None:
     selectors: dict[str, list[dict]] = {}
     for row in extraction_contract:
@@ -2145,15 +2323,6 @@ async def _save_site_memory_observations(
             selectors.setdefault(normalized_field, [])
             selectors[normalized_field].extend([row for row in rows if isinstance(row, dict)])
 
-    trigger_rows = browser_diagnostics.get("field_trigger_selectors") if isinstance(browser_diagnostics, dict) else {}
-    if isinstance(trigger_rows, dict):
-        for field_name, rows in trigger_rows.items():
-            normalized_field = str(field_name or "").strip().lower()
-            if not normalized_field or not isinstance(rows, list):
-                continue
-            selectors.setdefault(normalized_field, [])
-            selectors[normalized_field].extend([row for row in rows if isinstance(row, dict)])
-
     field_discovery = source_trace.get("field_discovery") if isinstance(source_trace, dict) else {}
     source_mappings = {
         str(field_name or "").strip().lower(): str(row.get("source") or "").strip()
@@ -2168,35 +2337,35 @@ async def _save_site_memory_observations(
             "deterministic_fields": list(llm_status.get("deterministic_fields") or []),
         }
 
+    selector_suggestions: dict[str, list[dict]] = {}
+    for field_name, rows in selectors.items():
+        normalized_field = str(field_name or "").strip().lower()
+        if not normalized_field or not isinstance(rows, list):
+            continue
+        deduped_rows: list[dict] = []
+        seen_selector_rows: set[tuple[object, object, object]] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_key = (row.get("xpath"), row.get("css_selector"), row.get("regex"))
+            if row_key in seen_selector_rows:
+                continue
+            seen_selector_rows.add(row_key)
+            deduped_rows.append(row)
+            if len(deduped_rows) >= MAX_SELECTOR_ROWS_PER_FIELD:
+                break
+        if deduped_rows:
+            selector_suggestions[normalized_field] = deduped_rows
+
     await merge_memory(
         session,
         url,
         fields=requested_fields,
-        selectors=selectors,
+        selector_suggestions=selector_suggestions,
         source_mappings=source_mappings,
         llm_columns=llm_columns,
         last_crawl_at=datetime.now(UTC),
     )
-    if domain:
-        for field_name, rows in selectors.items():
-            normalized_field = str(field_name or "").strip().lower()
-            if not normalized_field or not isinstance(rows, list):
-                continue
-            existing_rows = get_selector_defaults(domain, normalized_field)
-            merged_rows = existing_rows + [row for row in rows if isinstance(row, dict)]
-            deduped_and_capped_rows: list[dict] = []
-            seen_selector_rows: set[tuple[object, object, object]] = set()
-            for row in merged_rows:
-                if not isinstance(row, dict):
-                    continue
-                row_key = (row.get("xpath"), row.get("css_selector"), row.get("regex"))
-                if row_key in seen_selector_rows:
-                    continue
-                seen_selector_rows.add(row_key)
-                deduped_and_capped_rows.append(row)
-                if len(deduped_and_capped_rows) >= MAX_SELECTOR_ROWS_PER_FIELD:
-                    break
-            await save_selector_defaults(domain, normalized_field, deduped_and_capped_rows)
 
 
 def _select_llm_review_candidates(

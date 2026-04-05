@@ -28,6 +28,11 @@ for canonical, aliases in REQUESTED_FIELD_ALIASES.items():
         if alias_key:
             alias_set.add(alias_key)
 
+_FEATURE_SKIP_PATTERN = re.compile(
+    r"\b(?:shop|review(?:s)?|verified reviewer)\b|read the story",
+    re.IGNORECASE,
+)
+
 
 def extract_semantic_detail_data(
     html: str,
@@ -188,7 +193,7 @@ def _collect_feature_values(sections: dict[str, str]) -> list[str]:
             continue
         if re.fullmatch(r"[$€£]\s?\d[\d,.\s]*", normalized_body):
             continue
-        if any(token in lowered_body for token in ("shop ", "read the story", "verified reviewer", "review", "reviews")):
+        if _FEATURE_SKIP_PATTERN.search(lowered_body):
             continue
         inferred.append(normalized_body)
     return inferred

@@ -1,6 +1,5 @@
 {
   "next_page": [
-    "link[rel='next']",
     "a[rel='next']",
     "a[aria-label*='next' i]",
     "a[title*='next' i]",
