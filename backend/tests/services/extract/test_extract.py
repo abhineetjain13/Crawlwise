@@ -5,7 +5,12 @@ from unittest.mock import patch
 
 from app.services.discover.service import DiscoveryManifest
 from app.services.discover.service import discover_sources
-from app.services.extract.service import _extract_image_urls, _resolve_candidate_url, extract_candidates
+from app.services.extract.service import (
+    _extract_image_urls,
+    _resolve_candidate_url,
+    _should_skip_jsonld_block,
+    extract_candidates,
+)
 
 
 def _manifest(**kwargs) -> DiscoveryManifest:
@@ -234,6 +239,21 @@ def test_extract_preserves_hidden_state_brand_candidates_without_dropping_dom_br
     brand_values = [candidate["value"] for candidate in candidates["brand"]]
     assert "Alpha Wire" in brand_values
     assert "Apple" in brand_values
+
+
+def test_extract_label_value_fallback_uses_full_description_sources():
+    html = "<html><head></head><body><h1>Widget</h1></body></html>"
+    manifest = _manifest(open_graph={"description": "Brand: Acme Corp"})
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert candidates["brand"][0]["source"] == "text_pattern"
+    assert candidates["brand"][0]["value"] == "Acme Corp"
 
 
 def test_extract_drops_generic_hidden_category_candidates_but_preserves_dom_category():
@@ -589,6 +609,11 @@ def test_extract_filters_schema_type_category_noise_and_keeps_real_category():
         )
     assert "category" in candidates
     assert [row["value"] for row in candidates["category"]] == ["Men > Shirts & Tops"]
+
+
+def test_should_skip_jsonld_block_handles_type_lists():
+    assert _should_skip_jsonld_block({"@type": ["Organization", "Thing"]}, "title") is True
+    assert _should_skip_jsonld_block({"@type": ["Product", "SoftwareApplication"]}, "title") is False
 
 
 def test_extract_filters_noisy_dynamic_semantic_field_names():

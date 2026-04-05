@@ -26,6 +26,7 @@ from app.services.crawl_service import (
     process_run,
     resume_run,
 )
+from app.services.site_memory_service import merge_memory
 
 
 def _make_acq(html: str = "", **kwargs) -> AcquisitionResult:
@@ -172,6 +173,33 @@ async def test_create_crawl_run_coerces_max_pages_to_int(db_session: AsyncSessio
     })
 
     assert run.settings["max_pages"] == 7
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_maps_advanced_enabled_to_auto_and_coerces_max_scrolls(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com",
+        "surface": "ecommerce_listing",
+        "settings": {"advanced_enabled": True, "max_scrolls": "12"},
+    })
+
+    assert run.settings["advanced_mode"] == "auto"
+    assert run.settings["max_scrolls"] == 12
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_includes_site_memory_fields(db_session: AsyncSession, test_user):
+    await merge_memory(db_session, "https://example.com/products/widget", fields=["materials", "care"])
+
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/products/widget",
+        "surface": "ecommerce_detail",
+    })
+
+    assert "materials" in run.requested_fields
+    assert "care" in run.requested_fields
 
 
 @pytest.mark.asyncio
@@ -669,6 +697,25 @@ async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession,
         await process_run(db_session, run.id)
 
     assert acquire_mock.await_args.kwargs["max_pages"] == 3
+
+
+@pytest.mark.asyncio
+async def test_process_run_maps_advanced_enabled_to_auto_and_passes_max_scrolls_to_acquire(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/listing",
+        "surface": "ecommerce_listing",
+        "settings": {"advanced_enabled": True, "max_scrolls": 9},
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item"}])),
+    ):
+        await process_run(db_session, run.id)
+
+    assert acquire_mock.await_args.kwargs["advanced_mode"] == "auto"
+    assert acquire_mock.await_args.kwargs["max_scrolls"] == 9
 
 
 @pytest.mark.asyncio

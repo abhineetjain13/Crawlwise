@@ -15,6 +15,18 @@ from app.models.crawl import CrawlRun
 from app.core.security import decrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
 from app.services.knowledge_base.store import get_prompt_task, load_prompt_file
+from app.services.pipeline_config import (
+    LLM_ANTHROPIC_MAX_TOKENS,
+    LLM_ANTHROPIC_TEMPERATURE,
+    LLM_CANDIDATE_EVIDENCE_MAX_CHARS,
+    LLM_DISCOVERED_SOURCES_MAX_CHARS,
+    LLM_EXISTING_VALUES_MAX_CHARS,
+    LLM_GROQ_MAX_TOKENS,
+    LLM_GROQ_TEMPERATURE,
+    LLM_HTML_SNIPPET_MAX_CHARS,
+    LLM_NVIDIA_MAX_TOKENS,
+    LLM_NVIDIA_TEMPERATURE,
+)
 
 
 _ERROR_PREFIX = "Error:"
@@ -199,8 +211,8 @@ async def discover_xpath_candidates(
         variables={
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
-            "existing_values_json": _truncate_json_literal(existing_values, 2400),
-            "html_snippet": _truncate_html(html_text, 12000),
+            "existing_values_json": _truncate_json_literal(existing_values, LLM_EXISTING_VALUES_MAX_CHARS),
+            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS),
         },
     )
     payload = result.payload
@@ -225,8 +237,8 @@ async def extract_missing_fields(
         variables={
             "url": url,
             "missing_fields_json": json.dumps(missing_fields),
-            "existing_values_json": _truncate_json_literal(existing_values, 2400),
-            "html_snippet": _truncate_html(html_text, 12000),
+            "existing_values_json": _truncate_json_literal(existing_values, LLM_EXISTING_VALUES_MAX_CHARS),
+            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS),
         },
     )
     payload = result.payload
@@ -255,10 +267,13 @@ async def review_field_candidates(
             "url": url,
             "canonical_fields_json": json.dumps(canonical_fields),
             "target_fields_json": json.dumps(target_fields),
-            "existing_values_json": _truncate_json_literal({field: existing_values.get(field) for field in target_fields}, 2400),
-            "candidate_evidence_json": _truncate_json_literal(candidate_evidence, 16000),
-            "discovered_sources_json": _truncate_json_literal(discovered_sources, 15000),
-            "html_snippet": _truncate_html(html_text, 12000),
+            "existing_values_json": _truncate_json_literal(
+                {field: existing_values.get(field) for field in target_fields},
+                LLM_EXISTING_VALUES_MAX_CHARS,
+            ),
+            "candidate_evidence_json": _truncate_json_literal(candidate_evidence, LLM_CANDIDATE_EVIDENCE_MAX_CHARS),
+            "discovered_sources_json": _truncate_json_literal(discovered_sources, LLM_DISCOVERED_SOURCES_MAX_CHARS),
+            "html_snippet": _truncate_html(html_text, LLM_HTML_SNIPPET_MAX_CHARS),
         },
     )
     payload = result.payload
@@ -319,8 +334,8 @@ async def _call_groq(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "max_tokens": 1200,
-                "temperature": 0.1,
+                "max_tokens": LLM_GROQ_MAX_TOKENS,
+                "temperature": LLM_GROQ_TEMPERATURE,
             },
         )
     if response.status_code != 200:
@@ -345,8 +360,8 @@ async def _call_anthropic(
             },
             json={
                 "model": model,
-                "max_tokens": 3000,
-                "temperature": 0.1,
+                "max_tokens": LLM_ANTHROPIC_MAX_TOKENS,
+                "temperature": LLM_ANTHROPIC_TEMPERATURE,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_prompt}],
             },
@@ -385,8 +400,8 @@ async def _call_nvidia(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "max_tokens": 1200,
-                "temperature": 0.1,
+                "max_tokens": LLM_NVIDIA_MAX_TOKENS,
+                "temperature": LLM_NVIDIA_TEMPERATURE,
             },
         )
     if response.status_code != 200:

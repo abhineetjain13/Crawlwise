@@ -31,7 +31,8 @@ def extract_selector_value(
                 return value, len(matches), xpath
     if css_selector:
         soup = BeautifulSoup(html_text, "html.parser")
-        matches = soup.select(css_selector)
+        normalized = _normalize_css_selector(css_selector)
+        matches = soup.select(normalized) if normalized else []
         if matches:
             return _node_value(matches[0]), len(matches), css_selector
     if regex:
@@ -206,10 +207,11 @@ def _normalize_suggestion(value: dict) -> dict | None:
     regex = str(value.get("regex") or "").strip() or None
     if not any([xpath, css_selector, regex]):
         return None
+    normalized_css_selector = _normalize_css_selector(css_selector) if css_selector else None
     return {
         "field_name": str(value.get("field_name") or "").strip() or None,
         "xpath": xpath,
-        "css_selector": css_selector,
+        "css_selector": normalized_css_selector if normalized_css_selector else None,
         "regex": regex,
         "status": str(value.get("status") or "validated"),
         "sample_value": str(value.get("sample_value") or value.get("value") or "").strip() or None,
@@ -227,6 +229,16 @@ def _dedupe_suggestions(rows: list[dict]) -> list[dict]:
         seen.add(key)
         deduped.append(row)
     return deduped
+
+
+def _normalize_css_selector(selector: str) -> str:
+    normalized = str(selector or "").strip()
+    if not normalized:
+        return normalized
+    normalized = normalized.replace("::shadow", " ")
+    normalized = normalized.replace(">>>", " ")
+    normalized = " ".join(part for part in normalized.split() if part)
+    return normalized
 
 
 def _unique_anchor_xpath(node: Tag, root: BeautifulSoup | Tag, *, allow_class: bool = True) -> str | None:

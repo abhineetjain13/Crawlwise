@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from html import unescape
 
 import regex as regex_lib
@@ -37,13 +38,23 @@ from app.services.extract.json_extractor import extract_json_detail, extract_jso
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import _field_quality_score, coerce_field_candidate_value, extract_candidates
 from app.services.extract.spa_pruner import prune_spa_state
-from app.services.knowledge_base.store import get_canonical_fields
+from app.services.knowledge_base.store import get_canonical_fields, get_selector_defaults, save_selector_defaults
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
 from app.services.normalizers.field_normalizers import extract_currency_hint, normalize_value
-from app.services.pipeline_config import MIN_REQUEST_DELAY_MS, VERDICT_CORE_FIELDS_DETAIL, VERDICT_CORE_FIELDS_LISTING
+from app.services.pipeline_config import (
+    DEFAULT_MAX_SCROLLS,
+    INTELLIGENCE_FIELD_NOISE_TOKENS,
+    INTELLIGENCE_VALUE_NOISE_PHRASES,
+    LLM_CLEAN_CANDIDATE_TEXT_LIMIT,
+    MIN_REQUEST_DELAY_MS,
+    VERDICT_CORE_FIELDS_DETAIL,
+    VERDICT_CORE_FIELDS_LISTING,
+)
 from app.services.domain_utils import normalize_domain
 from app.services.requested_field_policy import expand_requested_fields
+from app.services.site_memory_service import get_memory as get_site_memory, merge_memory
 from app.services.url_safety import ensure_public_crawl_targets
+from app.services.xpath_service import build_deterministic_selector_suggestions
 from app.services.xpath_service import validate_xpath_candidate
 
 
@@ -56,6 +67,7 @@ VERDICT_LISTING_FAILED = "listing_detection_failed"
 VERDICT_EMPTY = "empty"
 
 logger = logging.getLogger(__name__)
+MAX_SELECTOR_ROWS_PER_FIELD = 100
 
 
 # ---------------------------------------------------------------------------
@@ -70,12 +82,26 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
     _validate_extraction_contract(settings.get("extraction_contract") or [])
     settings["max_pages"] = max(1, int(settings.get("max_pages", 5) or 5))
     settings["max_records"] = max(1, int(settings.get("max_records", 100) or 100))
+    settings["max_scrolls"] = max(1, int(settings.get("max_scrolls", DEFAULT_MAX_SCROLLS) or DEFAULT_MAX_SCROLLS))
     settings["sleep_ms"] = max(
         MIN_REQUEST_DELAY_MS,
         int(settings.get("sleep_ms", MIN_REQUEST_DELAY_MS) or MIN_REQUEST_DELAY_MS),
     )
+    advanced_enabled = bool(settings.get("advanced_enabled"))
+    advanced_mode = str(settings.get("advanced_mode") or "").strip() or None
+    if advanced_enabled and not advanced_mode:
+        settings["advanced_mode"] = "auto"
+    elif advanced_mode:
+        settings["advanced_mode"] = advanced_mode
+    else:
+        settings["advanced_mode"] = None
     domain_requested_fields = await _load_domain_requested_fields(session, url=primary_url, surface=payload["surface"])
-    requested_fields = expand_requested_fields([*domain_requested_fields, *(payload.get("additional_fields") or [])])
+    site_memory_fields = await _load_site_memory_fields(session, url=primary_url)
+    requested_fields = expand_requested_fields([
+        *domain_requested_fields,
+        *site_memory_fields,
+        *(payload.get("additional_fields") or []),
+    ])
     if settings.get("llm_enabled"):
         settings["llm_config_snapshot"] = await snapshot_active_configs(session)
     if domain_requested_fields:
@@ -371,8 +397,11 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
         # Extract crawl settings
         proxy_list = settings.get("proxy_list", [])
-        advanced_mode = settings.get("advanced_mode")  # None, "scroll", "paginate", "load_more", "auto"
+        advanced_mode = settings.get("advanced_mode")
+        if settings.get("advanced_enabled") and not advanced_mode:
+            advanced_mode = "auto"
         max_pages = settings.get("max_pages", 5)
+        max_scrolls = settings.get("max_scrolls", DEFAULT_MAX_SCROLLS)
         max_records = settings.get("max_records", 100)
         sleep_ms = settings.get("sleep_ms", 0)
 
@@ -422,6 +451,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 proxy_list=proxy_list,
                 advanced_mode=advanced_mode,
                 max_pages=max_pages,
+                max_scrolls=max_scrolls,
                 max_records=remaining_records,
                 sleep_ms=sleep_ms,
             )
@@ -519,6 +549,7 @@ async def _process_single_url(
     proxy_list: list[str],
     advanced_mode: str | None,
     max_pages: int,
+    max_scrolls: int,
     max_records: int,
     sleep_ms: int,
 ) -> tuple[list[dict], str]:
@@ -530,6 +561,11 @@ async def _process_single_url(
     additional_fields = expand_requested_fields(run.requested_fields or [])
     extraction_contract = (run.settings or {}).get("extraction_contract", [])
     is_listing = surface in ("ecommerce_listing", "job_listing")
+    requested_field_selectors = {
+        field_name: get_selector_defaults(normalize_domain(url), field_name)
+        for field_name in additional_fields
+        if field_name
+    }
 
     # ── STAGE 1: ACQUIRE ──
     await _set_stage(session, run, "ACQUIRE")
@@ -540,7 +576,10 @@ async def _process_single_url(
         proxy_list=proxy_list or None,
         advanced_mode=advanced_mode,
         max_pages=max_pages,
+        max_scrolls=max_scrolls,
         sleep_ms=sleep_ms,
+        requested_fields=additional_fields,
+        requested_field_selectors=requested_field_selectors,
     )
 
     # ── STAGE 1.5: BLOCKED PAGE DETECTION ──
@@ -784,6 +823,18 @@ async def _extract_listing(
     await _set_stage(session, run, "PUBLISH")
     verdict = _compute_verdict(saved, is_listing=True)
     await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} listing records (verdict={verdict})")
+    if saved:
+        await _save_site_memory_observations(
+            session,
+            url=url,
+            requested_fields=additional_fields,
+            extraction_contract=[],
+            source_trace={
+                "llm_cleanup_status": {},
+            },
+            html_text=html,
+            browser_diagnostics=acq.diagnostics.get("browser_diagnostics") if isinstance(acq.diagnostics, dict) else {},
+        )
     await session.flush()
     return saved, verdict
 
@@ -840,6 +891,19 @@ async def _extract_detail(
             adapter_records=extracted_records,
             candidate_values=candidate_values,
             source_trace=source_trace,
+        )
+        candidate_values, llm_promoted_fields = _apply_llm_suggestions_to_candidate_values(
+            candidate_values,
+            allowed_fields=persisted_field_names,
+            source_trace=source_trace,
+            url=url,
+        )
+        if llm_promoted_fields:
+            llm_status = dict(source_trace.get("llm_cleanup_status") or {})
+            llm_status["auto_promoted_fields"] = sorted(llm_promoted_fields.keys())
+            source_trace["llm_cleanup_status"] = llm_status
+        source_trace = _build_field_discovery_summary(
+            source_trace, source_trace.get("candidates") or candidates, candidate_values, additional_fields, surface,
         )
 
     saved: list[dict] = []
@@ -923,6 +987,16 @@ async def _extract_detail(
     await _set_stage(session, run, "PUBLISH")
     verdict = _compute_verdict(saved, is_listing=False)
     await _log(session, run.id, "info", f"[PUBLISH] Saved {len(saved)} detail records (verdict={verdict})")
+    if saved:
+        await _save_site_memory_observations(
+            session,
+            url=url,
+            requested_fields=additional_fields,
+            extraction_contract=extraction_contract,
+            source_trace=source_trace,
+            html_text=html,
+            browser_diagnostics=acq.diagnostics.get("browser_diagnostics") if isinstance(acq.diagnostics, dict) else {},
+        )
     await session.flush()
     return saved, verdict
 
@@ -1171,6 +1245,73 @@ def _passes_detail_quality_gate(field_name: str, value: object, score: int) -> b
     return score >= 1
 
 
+def _apply_llm_suggestions_to_candidate_values(
+    candidate_values: dict[str, object],
+    *,
+    allowed_fields: set[str],
+    source_trace: dict,
+    url: str,
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    suggestions = source_trace.get("llm_cleanup_suggestions")
+    if not isinstance(suggestions, dict):
+        return candidate_values, {}
+
+    trace_candidates = source_trace.setdefault("candidates", {})
+    promoted: dict[str, dict[str, object]] = {}
+    for field_name, raw_suggestion in suggestions.items():
+        normalized_field = str(field_name or "").strip()
+        if not normalized_field or normalized_field not in allowed_fields:
+            continue
+        if candidate_values.get(normalized_field) not in (None, "", [], {}):
+            continue
+        if not isinstance(raw_suggestion, dict):
+            continue
+
+        suggested_value = raw_suggestion.get("suggested_value")
+        normalized_value = coerce_field_candidate_value(normalized_field, suggested_value, base_url=url)
+        if normalized_value in (None, "", [], {}):
+            continue
+        score = _field_quality_score(normalized_field, normalized_value)
+        if not _passes_detail_quality_gate(normalized_field, normalized_value, score):
+            continue
+
+        source = str(raw_suggestion.get("source") or "llm_cleanup").strip() or "llm_cleanup"
+        note = _clean_candidate_text(raw_suggestion.get("note") or raw_suggestion.get("reason"), limit=280)
+        candidate_values[normalized_field] = normalized_value
+        promoted[normalized_field] = _compact_dict({
+            "value": normalized_value,
+            "source": source,
+            "score": score,
+            "note": note or None,
+        })
+
+        existing_rows = trace_candidates.setdefault(normalized_field, [])
+        normalized_fingerprint = _review_bucket_fingerprint(normalized_value)
+        if not any(
+            isinstance(row, dict)
+            and str(row.get("source") or "").strip() == source
+            and _review_bucket_fingerprint(row.get("value")) == normalized_fingerprint
+            for row in existing_rows
+        ):
+            existing_rows.insert(0, _compact_dict({
+                "value": normalized_value,
+                "source": source,
+                "status": "auto_promoted",
+                "note": note or None,
+            }))
+
+        updated_suggestion = dict(raw_suggestion)
+        updated_suggestion["status"] = "auto_promoted"
+        updated_suggestion["accepted_value"] = normalized_value
+        updated_suggestion["score"] = score
+        suggestions[normalized_field] = _compact_dict(updated_suggestion)
+
+    if promoted:
+        source_trace["llm_cleanup_suggestions"] = suggestions
+        source_trace["llm_promoted_fields"] = promoted
+    return candidate_values, promoted
+
+
 def _split_detail_output_fields(
     record: dict[str, object],
     *,
@@ -1201,6 +1342,8 @@ def _build_review_bucket(
         if normalized_value is None:
             continue
         source = _review_bucket_source_for_field(field_name, candidate_map, fallback_source)
+        if not _should_surface_intelligence_field(field_name, normalized_value, source=source):
+            continue
         entry = _compact_dict({
             "key": str(field_name).strip(),
             "value": normalized_value,
@@ -1225,13 +1368,16 @@ def _merge_review_bucket_entries(*groups: list[dict[str, object]]) -> list[dict[
             normalized_value = _normalize_review_value(row.get("value"))
             if normalized_value is None:
                 continue
+            source = str(row.get("source") or "review_bucket").strip() or "review_bucket"
+            if not _should_surface_intelligence_field(key, normalized_value, source=source):
+                continue
             fingerprint = (key, _review_bucket_fingerprint(normalized_value))
             existing = merged.get(fingerprint)
             candidate = _compact_dict({
                 "key": key,
                 "value": normalized_value,
                 "confidence_score": _clamp_review_confidence(row.get("confidence_score", row.get("confidence", 5))),
-                "source": str(row.get("source") or "review_bucket").strip() or "review_bucket",
+                "source": source,
             })
             if existing is None or int(candidate["confidence_score"]) > int(existing.get("confidence_score", 0)):
                 merged[fingerprint] = candidate
@@ -1502,14 +1648,30 @@ async def _collect_detail_llm_suggestions(
 
     candidate_evidence = _build_llm_candidate_evidence(trace_candidates, preview_record)
     review_candidate_evidence = _select_llm_review_candidates(candidate_evidence, preview_record, target_fields)
+    deterministic_fields = sorted(
+        field_name
+        for field_name in target_fields
+        if field_name not in missing_fields and field_name not in review_candidate_evidence
+    )
     discovered_sources = _build_llm_discovered_sources(source_trace, manifest, target_fields=list(review_candidate_evidence.keys()))
     if not candidate_evidence and not discovered_sources and not preview_record:
-        source_trace["llm_cleanup_status"] = {"status": "no_evidence", "message": "No candidate evidence was available for cleanup review."}
+        source_trace["llm_cleanup_status"] = {
+            "status": "no_evidence",
+            "message": "No candidate evidence was available for cleanup review.",
+            "deterministic_fields": deterministic_fields,
+            "missing_fields": missing_fields,
+            "review_fields": [],
+            "llm_assisted_fields": [],
+        }
         return source_trace, llm_review_bucket
     if not review_candidate_evidence:
         source_trace["llm_cleanup_status"] = {
             "status": "skipped",
             "message": "Deterministic extraction already resolved the available field groups. LLM cleanup runs only for ambiguous or missing values.",
+            "deterministic_fields": deterministic_fields,
+            "missing_fields": missing_fields,
+            "review_fields": [],
+            "llm_assisted_fields": sorted(llm_cleanup_suggestions.keys()),
         }
         return source_trace, llm_review_bucket
 
@@ -1528,11 +1690,25 @@ async def _collect_detail_llm_suggestions(
     )
     if llm_error:
         await _log(session, run.id, "warning", f"[LLM] Cleanup review failed: {llm_error}")
-        source_trace["llm_cleanup_status"] = {"status": "error", "message": llm_error}
+        source_trace["llm_cleanup_status"] = {
+            "status": "error",
+            "message": llm_error,
+            "deterministic_fields": deterministic_fields,
+            "missing_fields": missing_fields,
+            "review_fields": sorted(review_candidate_evidence.keys()),
+            "llm_assisted_fields": sorted(llm_cleanup_suggestions.keys()),
+        }
         return source_trace, llm_review_bucket
     if not llm_reviews:
         await _log(session, run.id, "warning", "[EXTRACT] LLM cleanup review returned no suggestions")
-        source_trace["llm_cleanup_status"] = {"status": "empty", "message": "LLM cleanup review returned no suggestions."}
+        source_trace["llm_cleanup_status"] = {
+            "status": "empty",
+            "message": "LLM cleanup review returned no suggestions.",
+            "deterministic_fields": deterministic_fields,
+            "missing_fields": missing_fields,
+            "review_fields": sorted(review_candidate_evidence.keys()),
+            "llm_assisted_fields": sorted(llm_cleanup_suggestions.keys()),
+        }
         return source_trace, llm_review_bucket
 
     canonical_reviews, llm_review_bucket = _split_llm_cleanup_payload(llm_reviews)
@@ -1552,6 +1728,10 @@ async def _collect_detail_llm_suggestions(
         "canonical_count": len(llm_cleanup_suggestions),
         "review_bucket_count": len(llm_review_bucket),
         "count": len(llm_cleanup_suggestions) + len(llm_review_bucket),
+        "deterministic_fields": deterministic_fields,
+        "missing_fields": missing_fields,
+        "review_fields": sorted(review_candidate_evidence.keys()),
+        "llm_assisted_fields": sorted(llm_cleanup_suggestions.keys()),
     }
     return source_trace, llm_review_bucket
 
@@ -1681,7 +1861,7 @@ def _snapshot_for_llm(
     return _clean_candidate_text(value, limit=text_limit)
 
 
-def _clean_candidate_text(value: object, *, limit: int | None = 1200) -> str:
+def _clean_candidate_text(value: object, *, limit: int | None = LLM_CLEAN_CANDIDATE_TEXT_LIMIT) -> str:
     if value in (None, "", [], {}):
         return ""
     if isinstance(value, list):
@@ -1704,6 +1884,32 @@ def _clean_candidate_text(value: object, *, limit: int | None = 1200) -> str:
     if limit and len(text) > limit:
         return f"{text[:limit].rstrip()}..."
     return text
+
+
+def _should_surface_intelligence_field(field_name: object, value: object, *, source: str = "") -> bool:
+    normalized_field = _normalize_committed_field_name(field_name)
+    if not normalized_field or normalized_field.startswith("_"):
+        return False
+    tokens = {token for token in normalized_field.split("_") if token}
+    if tokens & INTELLIGENCE_FIELD_NOISE_TOKENS:
+        return False
+
+    normalized_value = _normalize_review_value(value)
+    if normalized_value is None:
+        return False
+    cleaned_text = _clean_candidate_text(normalized_value, limit=None)
+    if isinstance(normalized_value, str):
+        lowered_text = cleaned_text.lower()
+        if len(cleaned_text) < 3:
+            return False
+        if any(phrase in lowered_text for phrase in INTELLIGENCE_VALUE_NOISE_PHRASES):
+            return False
+
+    lowered_source = str(source or "").strip().lower()
+    if any(token in lowered_source for token in ("review", "reviews", "bazaarvoice", "rating_distribution")):
+        return False
+
+    return _field_quality_score(normalized_field, normalized_value) > 0
 
 
 def _normalize_detail_candidate_values(candidate_values: dict[str, object], *, url: str) -> dict[str, object]:
@@ -1875,6 +2081,124 @@ async def _load_domain_requested_fields(session: AsyncSession, *, url: str, surf
     return expand_requested_fields([str(field or "") for field in fields])
 
 
+async def _load_site_memory_fields(session: AsyncSession, *, url: str) -> list[str]:
+    memory = await get_site_memory(session, url)
+    if memory is None or not isinstance(memory.payload, dict):
+        return []
+    fields = memory.payload.get("fields")
+    if not isinstance(fields, list):
+        return []
+    return expand_requested_fields([str(field or "") for field in fields])
+
+
+async def _save_site_memory_observations(
+    session: AsyncSession,
+    *,
+    url: str,
+    requested_fields: list[str],
+    extraction_contract: list[dict],
+    source_trace: dict,
+    html_text: str,
+    browser_diagnostics: dict | None = None,
+) -> None:
+    selectors: dict[str, list[dict]] = {}
+    for row in extraction_contract:
+        field_name = str(row.get("field_name") or "").strip().lower()
+        xpath = str(row.get("xpath") or "").strip()
+        regex = str(row.get("regex") or "").strip()
+        if not field_name or not any([xpath, regex]):
+            continue
+        selectors.setdefault(field_name, []).append({
+            "xpath": xpath or None,
+            "css_selector": None,
+            "regex": regex or None,
+            "status": "validated",
+            "source": "crawl_contract",
+        })
+
+    domain = normalize_domain(url)
+    if html_text and domain:
+        target_fields = [field for field in requested_fields if field]
+        candidate_map = source_trace.get("candidates") if isinstance(source_trace, dict) else {}
+        selector_defaults = {
+            field_name: get_selector_defaults(domain, field_name)
+            for field_name in target_fields
+        }
+        deterministic = build_deterministic_selector_suggestions(
+            html_text,
+            target_fields,
+            existing_candidates=candidate_map if isinstance(candidate_map, dict) else {},
+            selector_defaults=selector_defaults,
+        )
+        for field_name, rows in deterministic.items():
+            if field_name not in target_fields:
+                continue
+            selectors.setdefault(field_name, [])
+            selectors[field_name].extend(rows)
+
+    suggestion_rows = source_trace.get("selector_suggestions") if isinstance(source_trace, dict) else {}
+    if isinstance(suggestion_rows, dict):
+        for field_name, rows in suggestion_rows.items():
+            normalized_field = str(field_name or "").strip().lower()
+            if not normalized_field or not isinstance(rows, list):
+                continue
+            selectors.setdefault(normalized_field, [])
+            selectors[normalized_field].extend([row for row in rows if isinstance(row, dict)])
+
+    trigger_rows = browser_diagnostics.get("field_trigger_selectors") if isinstance(browser_diagnostics, dict) else {}
+    if isinstance(trigger_rows, dict):
+        for field_name, rows in trigger_rows.items():
+            normalized_field = str(field_name or "").strip().lower()
+            if not normalized_field or not isinstance(rows, list):
+                continue
+            selectors.setdefault(normalized_field, [])
+            selectors[normalized_field].extend([row for row in rows if isinstance(row, dict)])
+
+    field_discovery = source_trace.get("field_discovery") if isinstance(source_trace, dict) else {}
+    source_mappings = {
+        str(field_name or "").strip().lower(): str(row.get("source") or "").strip()
+        for field_name, row in (field_discovery.items() if isinstance(field_discovery, dict) else [])
+        if isinstance(row, dict) and str(field_name or "").strip() and str(row.get("source") or "").strip()
+    }
+    llm_status = source_trace.get("llm_cleanup_status") if isinstance(source_trace, dict) else {}
+    llm_columns = {}
+    if isinstance(llm_status, dict):
+        llm_columns = {
+            "llm_assisted_fields": list(llm_status.get("llm_assisted_fields") or []),
+            "deterministic_fields": list(llm_status.get("deterministic_fields") or []),
+        }
+
+    await merge_memory(
+        session,
+        url,
+        fields=requested_fields,
+        selectors=selectors,
+        source_mappings=source_mappings,
+        llm_columns=llm_columns,
+        last_crawl_at=datetime.now(UTC),
+    )
+    if domain:
+        for field_name, rows in selectors.items():
+            normalized_field = str(field_name or "").strip().lower()
+            if not normalized_field or not isinstance(rows, list):
+                continue
+            existing_rows = get_selector_defaults(domain, normalized_field)
+            merged_rows = existing_rows + [row for row in rows if isinstance(row, dict)]
+            deduped_and_capped_rows: list[dict] = []
+            seen_selector_rows: set[tuple[object, object, object]] = set()
+            for row in merged_rows:
+                if not isinstance(row, dict):
+                    continue
+                row_key = (row.get("xpath"), row.get("css_selector"), row.get("regex"))
+                if row_key in seen_selector_rows:
+                    continue
+                seen_selector_rows.add(row_key)
+                deduped_and_capped_rows.append(row)
+                if len(deduped_and_capped_rows) >= MAX_SELECTOR_ROWS_PER_FIELD:
+                    break
+            await save_selector_defaults(domain, normalized_field, deduped_and_capped_rows)
+
+
 def _select_llm_review_candidates(
     candidate_evidence: dict[str, list[dict]],
     preview_record: dict,
@@ -1935,6 +2259,12 @@ def _build_field_discovery_summary(
             })
             continue
         sources = sorted({str(row.get("source") or "").strip() for row in rows if row.get("source")})
+        if tier == "intelligence" and not _should_surface_intelligence_field(
+            field_name,
+            chosen if chosen not in (None, "", [], {}) else first_row_value,
+            source=", ".join(sources),
+        ):
+            continue
         discovery[field_name] = _compact_dict({
             "status": "found",
             "value": _clean_candidate_text(chosen) if chosen not in (None, "", [], {}) else None,

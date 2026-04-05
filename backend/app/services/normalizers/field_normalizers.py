@@ -78,6 +78,10 @@ def normalize_value(field_name: str, value: object) -> object:
         if _is_image_collection_field(field_name):
             return _normalize_additional_images(text)
         if _is_numeric_field(field_name):
+            if _is_price_like_field(field_name):
+                currency_match = re.search(r"[$€£¥₹]\s*\d[\d,.]*", text)
+                if currency_match:
+                    return currency_match.group(0).strip()
             match = re.search(PRICE_REGEX, text)
             return match.group(0) if match else text
         if _is_description_field(field_name):
@@ -268,6 +272,11 @@ def _is_url_field(field_name: str) -> bool:
 
 def _is_numeric_field(field_name: str) -> bool:
     return field_name in PRICE_FIELDS or _field_in_group(field_name, "numeric") or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS)
+
+
+def _is_price_like_field(field_name: str) -> bool:
+    normalized = _field_token(field_name)
+    return field_name in PRICE_FIELDS or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS) or "price" in normalized
 
 
 def _is_description_field(field_name: str) -> bool:

@@ -8,7 +8,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionHeader } from "../ui/patterns";
 import { Button, Card, Input, Textarea } from "../ui/primitives";
 import { api } from "../../lib/api";
-import type { CrawlConfig } from "../../lib/api/types";
+import type { AdvancedCrawlMode, CrawlConfig } from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { UI_DELAYS } from "../../lib/constants/timing";
@@ -27,6 +27,7 @@ import {
   SettingSection,
   SliderRow,
   TabBar,
+  normalizeField,
   uniqueFields,
 } from "./shared";
 
@@ -50,9 +51,11 @@ export function CrawlConfigScreen({
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [smartExtraction, setSmartExtraction] = useState(false);
   const [advancedEnabled, setAdvancedEnabled] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState<AdvancedCrawlMode>("auto");
   const [requestDelay, setRequestDelay] = useState(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS));
   const [maxRecords, setMaxRecords] = useState(String(CRAWL_DEFAULTS.MAX_RECORDS));
   const [maxPages, setMaxPages] = useState(String(CRAWL_DEFAULTS.MAX_PAGES));
+  const [maxScrolls, setMaxScrolls] = useState(String(CRAWL_DEFAULTS.MAX_SCROLLS));
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [proxyInput, setProxyInput] = useState("");
   const [additionalDraft, setAdditionalDraft] = useState("");
@@ -63,6 +66,8 @@ export function CrawlConfigScreen({
   const [configError, setConfigError] = useState("");
   const [launchError, setLaunchError] = useState("");
   const [bulkBanner, setBulkBanner] = useState("");
+  const [siteMemoryBanner, setSiteMemoryBanner] = useState("");
+  const [appliedMemoryDomain, setAppliedMemoryDomain] = useState("");
 
   const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
 
@@ -114,6 +119,47 @@ export function CrawlConfigScreen({
     return () => window.clearTimeout(timer);
   }, [bulkBanner]);
 
+  const siteMemoryLookupUrl = useMemo(() => {
+    if (targetUrl.trim()) {
+      return targetUrl.trim();
+    }
+    const firstBulkUrl = parseLines(bulkUrls)[0];
+    return firstBulkUrl ?? "";
+  }, [bulkUrls, targetUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const domain = normalizeDomain(siteMemoryLookupUrl);
+    if (!domain || domain === appliedMemoryDomain) {
+      return;
+    }
+    void (async () => {
+      try {
+        const memory = await api.getSiteMemory(domain);
+        if (cancelled) {
+          return;
+        }
+        const memoryFields = uniqueFields(memory.payload.fields ?? []);
+        const selectorRows = flattenSiteMemorySelectors(memory.payload.selectors);
+        setAdditionalFields((current) => uniqueFields([...memoryFields, ...current]));
+        setFieldRows((current) => mergeFieldRowsFromSiteMemory(current, selectorRows));
+        const loadedCount = memoryFields.length || selectorRows.length;
+        if (loadedCount) {
+          setSiteMemoryBanner(`Loaded ${loadedCount} reusable field${loadedCount === 1 ? "" : "s"} from Site Memory for ${domain}.`);
+        }
+        setAppliedMemoryDomain(domain);
+      } catch (error) {
+        const status = error instanceof Error && "status" in error ? Number((error as { status?: unknown }).status) : undefined;
+        if (!cancelled && status === 404) {
+          setAppliedMemoryDomain(domain);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedMemoryDomain, siteMemoryLookupUrl]);
+
   const config = useMemo<CrawlConfig>(
     () => ({
       module: crawlTab,
@@ -123,6 +169,7 @@ export function CrawlConfigScreen({
       csv_file: csvFile,
       smart_extraction: smartExtraction,
       advanced_enabled: advancedEnabled,
+      advanced_mode: advancedMode,
       request_delay_ms: clampNumber(
         requestDelay,
         CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
@@ -131,6 +178,7 @@ export function CrawlConfigScreen({
       ),
       max_records: clampNumber(maxRecords, CRAWL_LIMITS.MIN_RECORDS, CRAWL_LIMITS.MAX_RECORDS, CRAWL_DEFAULTS.MAX_RECORDS),
       max_pages: clampNumber(maxPages, CRAWL_LIMITS.MIN_PAGES, CRAWL_LIMITS.MAX_PAGES, CRAWL_DEFAULTS.MAX_PAGES),
+      max_scrolls: clampNumber(maxScrolls, CRAWL_LIMITS.MIN_SCROLLS, CRAWL_LIMITS.MAX_SCROLLS, CRAWL_DEFAULTS.MAX_SCROLLS),
       proxy_enabled: proxyEnabled,
       proxy_lines: proxyEnabled ? parseLines(proxyInput) : [],
       additional_fields: additionalFields,
@@ -138,12 +186,14 @@ export function CrawlConfigScreen({
     [
       additionalFields,
       advancedEnabled,
+      advancedMode,
       bulkUrls,
       categoryMode,
       crawlTab,
       csvFile,
       maxPages,
       maxRecords,
+      maxScrolls,
       pdpMode,
       proxyEnabled,
       proxyInput,
@@ -231,12 +281,26 @@ export function CrawlConfigScreen({
           </button>
         </div>
       ) : null}
+      {siteMemoryBanner ? (
+        <div className="surface-banner flex items-center justify-between px-4 py-3 text-sm">
+          <div>{siteMemoryBanner}</div>
+          <button
+            type="button"
+            onClick={() => setSiteMemoryBanner("")}
+            aria-label="Close site memory banner"
+            className="inline-flex size-7 items-center justify-center rounded-md text-muted transition hover:text-foreground"
+          >
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
 
       <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]" onSubmit={startPreview}>
         <div className="space-y-4">
-          <Card className="space-y-4">
+          <Card className="space-y-5">
             <SectionHeader
               title="Target URL"
+              description="Choose the crawl surface, set your entry point, and define which fields should be captured."
               action={
                 <Button
                   variant="accent"
@@ -328,7 +392,10 @@ export function CrawlConfigScreen({
 
           <Card className="space-y-4">
             <div className="flex items-center justify-between gap-4">
-              <SectionHeader title="Field Configuration" />
+              <SectionHeader
+                title="Field Configuration"
+                description="Manual selectors layer on top of reusable Site Memory fields."
+              />
               <Button variant="ghost" type="button" onClick={addManualField}>
                 <Plus className="size-3.5" />
                 New Field
@@ -365,7 +432,7 @@ export function CrawlConfigScreen({
 
         <div className="space-y-4 xl:sticky xl:top-[68px] xl:self-start">
           <Card className="space-y-4">
-            <SectionHeader title="Run Settings" />
+            <SectionHeader title="Run Settings" description="Set crawl behavior, extraction assist, and network controls." />
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <div className="label-caps">Crawl Surface</div>
@@ -382,63 +449,79 @@ export function CrawlConfigScreen({
               <div className="space-y-2">
                 <SettingSection
                   label="Smart Extraction"
-                  description="Enable LLM fallback when selectors miss."
+                  description="LLM fallback for selector misses."
                   icon={<Sparkles className="size-4" />}
                   checked={smartExtraction}
                   onChange={setSmartExtraction}
                 />
                 <SettingSection
                   label="Advanced Crawl"
-                  description="Request delay, records, and page limits."
+                  description="Pagination, scrolling, and limits."
                   icon={<SlidersHorizontal className="size-4" />}
                   checked={advancedEnabled}
                   onChange={setAdvancedEnabled}
                 >
-                  <div className="space-y-4 rounded-[var(--radius-lg)] border border-border bg-background px-4 py-4">
-                    <SliderRow
-                      label="Request Delay"
-                      value={requestDelay}
-                      min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
-                      max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
-                      step={100}
-                      suffix=" ms"
-                      onChange={setRequestDelay}
-                      onReset={() => setRequestDelay(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS))}
-                    />
-                    <SliderRow
-                      label="Max Records"
-                      value={maxRecords}
-                      min={CRAWL_LIMITS.MIN_RECORDS}
-                      max={CRAWL_LIMITS.MAX_RECORDS}
-                      step={1}
-                      onChange={setMaxRecords}
-                      onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
-                    />
-                    <SliderRow
-                      label="Max Pages"
-                      value={maxPages}
-                      min={CRAWL_LIMITS.MIN_PAGES}
-                      max={CRAWL_LIMITS.MAX_PAGES}
-                      step={1}
-                      onChange={setMaxPages}
-                      onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))}
-                    />
+                  <div className="space-y-2.5 rounded-[var(--radius-xl)] border border-border bg-[var(--advanced-panel-bg)] px-3 py-3 shadow-[var(--advanced-panel-highlight)]">
+                    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
+                      <div className="text-sm font-medium text-[var(--text-secondary)]">Mode</div>
+                      <select
+                        aria-label="Advanced crawl mode"
+                        value={advancedMode}
+                        onChange={(event) => setAdvancedMode(event.target.value as AdvancedCrawlMode)}
+                        className="control-select focus-ring h-9 w-full"
+                      >
+                        <option value="auto">Auto</option>
+                        <option value="scroll">Scroll</option>
+                        <option value="load_more">Load More</option>
+                        <option value="paginate">Paginate</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <SliderRow
+                        label="Request Delay"
+                        value={requestDelay}
+                        min={CRAWL_LIMITS.MIN_REQUEST_DELAY_MS}
+                        max={CRAWL_LIMITS.MAX_REQUEST_DELAY_MS}
+                        step={100}
+                        suffix=" ms"
+                        onChange={setRequestDelay}
+                        onReset={() => setRequestDelay(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS))}
+                      />
+                      <SliderRow
+                        label="Max Records"
+                        value={maxRecords}
+                        min={CRAWL_LIMITS.MIN_RECORDS}
+                        max={CRAWL_LIMITS.MAX_RECORDS}
+                        step={1}
+                        onChange={setMaxRecords}
+                        onReset={() => setMaxRecords(String(CRAWL_DEFAULTS.MAX_RECORDS))}
+                      />
+                      <SliderRow
+                        label="Max Pages"
+                        value={maxPages}
+                        min={CRAWL_LIMITS.MIN_PAGES}
+                        max={CRAWL_LIMITS.MAX_PAGES}
+                        step={1}
+                        onChange={setMaxPages}
+                        onReset={() => setMaxPages(String(CRAWL_DEFAULTS.MAX_PAGES))}
+                      />
+                    </div>
                   </div>
                 </SettingSection>
                 <SettingSection
                   label="Proxy"
-                  description="Route requests through the proxy list."
+                  description="Use a proxy pool."
                   icon={<Shield className="size-4" />}
                   checked={proxyEnabled}
                   onChange={setProxyEnabled}
                 >
-                  <div className="space-y-3 rounded-[var(--radius-lg)] border border-border bg-background px-4 py-4">
+                  <div className="space-y-2 rounded-[var(--radius-lg)] border border-border bg-background px-3 py-3">
                     <div className="label-caps">Proxy Pool</div>
                     <Textarea
                       value={proxyInput}
                       onChange={(event) => setProxyInput(event.target.value)}
                       placeholder={"host:port\nhost:port:user:pass"}
-                      className="min-h-[140px] font-mono text-sm"
+                      className="min-h-[104px] font-mono text-sm"
                       aria-label="Proxy pool input"
                     />
                   </div>
@@ -469,9 +552,11 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
   const commonSettings = {
     llm_enabled: config.smart_extraction,
     advanced_enabled: config.advanced_enabled,
+    advanced_mode: config.advanced_enabled ? config.advanced_mode : null,
     sleep_ms: config.request_delay_ms,
     max_records: config.max_records,
     max_pages: config.max_pages,
+    max_scrolls: config.max_scrolls,
     proxy_enabled: config.proxy_enabled,
     proxy_list: config.proxy_enabled ? config.proxy_lines : [],
     additional_fields: additionalFields,
@@ -548,4 +633,41 @@ function canPreview(config: CrawlConfig) {
   } catch {
     return false;
   }
+}
+
+function normalizeDomain(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function flattenSiteMemorySelectors(selectors: Record<string, Array<{ xpath?: string | null; regex?: string | null }>>) {
+  return Object.entries(selectors).flatMap(([fieldName, rows]) =>
+    rows
+      .map((row, index) => ({
+        id: `site-memory-${fieldName}-${index}`,
+        fieldName,
+        xpath: row.xpath?.trim() ?? "",
+        regex: row.regex?.trim() ?? "",
+        xpathState: "idle" as const,
+        regexState: "idle" as const,
+      }))
+      .filter((row) => row.xpath || row.regex),
+  );
+}
+
+function mergeFieldRowsFromSiteMemory(current: FieldRow[], incoming: FieldRow[]) {
+  const next = [...current];
+  const seen = new Set(current.map((row) => `${normalizeField(row.fieldName)}|${row.xpath}|${row.regex}`));
+  for (const row of incoming) {
+    const key = `${normalizeField(row.fieldName)}|${row.xpath}|${row.regex}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    next.push(row);
+  }
+  return next;
 }

@@ -9,10 +9,12 @@ from lxml import etree
 import regex as regex_lib
 
 from app.models.selector import Selector
+from app.services.acquisition.browser_client import fetch_rendered_html
 from app.services.acquisition.http_client import fetch_html
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import get_selector_defaults, save_selector_defaults
 from app.services.llm_runtime import discover_xpath_candidates
+from app.services.site_memory_service import replace_selector_field
 from app.services.xpath_service import build_deterministic_selector_suggestions, extract_selector_value
 
 
@@ -93,7 +95,10 @@ async def test_selector(
     xpath: str | None = None,
     regex: str | None = None,
 ) -> tuple[str | None, int, str | None]:
-    html_text = await fetch_html(url)
+    if css_selector and any(token in css_selector for token in (">>>", "::shadow")):
+        html_text = (await fetch_rendered_html(url)).html
+    else:
+        html_text = await fetch_html(url)
     return extract_selector_value(
         html_text,
         css_selector=css_selector,
@@ -173,21 +178,23 @@ async def _sync_selector_defaults(session: AsyncSession, domain: str, field_name
         .order_by(Selector.created_at.desc())
     )
     selectors = list(result.scalars().all())
+    selector_rows = [
+        {
+            "xpath": selector.xpath,
+            "css_selector": selector.css_selector,
+            "regex": selector.regex,
+            "status": selector.status,
+            "sample_value": selector.sample_value,
+            "source": selector.source,
+        }
+        for selector in selectors
+    ]
     await save_selector_defaults(
         domain,
         field_name,
-        [
-            {
-                "xpath": selector.xpath,
-                "css_selector": selector.css_selector,
-                "regex": selector.regex,
-                "status": selector.status,
-                "sample_value": selector.sample_value,
-                "source": selector.source,
-            }
-            for selector in selectors
-        ],
+        selector_rows,
     )
+    await replace_selector_field(session, domain, field_name, selector_rows)
 
 
 def _normalize_selector_payload(payload: dict) -> dict:

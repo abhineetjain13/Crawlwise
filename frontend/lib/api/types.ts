@@ -21,6 +21,7 @@ export type CrawlPhase = "config" | "running" | "complete";
 export type CrawlModule = "category" | "pdp";
 
 export type CrawlMode = "single" | "sitemap" | "bulk" | "batch" | "csv";
+export type AdvancedCrawlMode = "auto" | "scroll" | "load_more" | "paginate";
 
 export type ResultSummary = {
   extraction_verdict?: string;
@@ -209,6 +210,21 @@ export type SelectorSuggestResponse = {
   suggestions: Record<string, SelectorSuggestion[]>;
 };
 
+export type SiteMemoryPayload = {
+  fields: string[];
+  selectors: Record<string, SelectorSuggestion[]>;
+  source_mappings: Record<string, string>;
+  llm_columns: Record<string, unknown>;
+};
+
+export type SiteMemoryRecord = {
+  domain: string;
+  payload: SiteMemoryPayload;
+  last_crawl_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type LlmConfigRecord = {
   id: number;
   provider: string;
@@ -264,9 +280,11 @@ export type CrawlConfig = {
   csv_file: File | null;
   smart_extraction: boolean;
   advanced_enabled: boolean;
+  advanced_mode: AdvancedCrawlMode;
   request_delay_ms: number;
   max_records: number;
   max_pages: number;
+  max_scrolls: number;
   proxy_enabled: boolean;
   proxy_lines: string[];
   additional_fields: string[];

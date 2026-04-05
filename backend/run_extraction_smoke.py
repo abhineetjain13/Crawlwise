@@ -42,10 +42,12 @@ TEST_SITES: list[dict] = [
     },
     {
         "name": "Dice.com job detail",
+        # Dice job-detail URLs are volatile and may need to be refreshed when listings expire.
         "url": "https://www.dice.com/job-detail/b3a0711d-49e9-4bcf-bab5-92dddfa53533",
         "surface": "ecommerce_detail",
         "page_type": "pdp",
         "expect_fields": ["title"],
+        "skip_on_404": True,
     },
     {
         "name": "SSENSE jacket PDP",
@@ -110,7 +112,10 @@ async def _run_one(site: dict, run_id: int) -> dict:
 
     try:
         # Phase 1: Acquire
-        acq = await asyncio.wait_for(acquire(run_id, url), timeout=45)
+        acquire_kwargs = {}
+        if page_type == "category":
+            acquire_kwargs = {"advanced_mode": "auto", "max_pages": 5}
+        acq = await asyncio.wait_for(acquire(run_id, url, **acquire_kwargs), timeout=45)
         result_entry["method"] = acq.method
         result_entry["html_len"] = len(acq.html or "")
         result_entry["content_type"] = acq.content_type
@@ -126,6 +131,14 @@ async def _run_one(site: dict, run_id: int) -> dict:
             return result_entry
 
         html = acq.html or ""
+        curl_status_code = int((acq.diagnostics or {}).get("curl_status_code") or 0)
+        if site.get("skip_on_404") and curl_status_code == 404:
+            result_entry["ok"] = True
+            result_entry["skipped"] = True
+            result_entry["records"] = 0
+            result_entry["note"] = "Skipped because the target URL returned HTTP 404 and the listing is volatile"
+            result_entry["elapsed_s"] = round(time.perf_counter() - started, 2)
+            return result_entry
 
         # Phase 2: Discover
         manifest = discover_sources(html, network_payloads=acq.network_payloads or [])
@@ -194,7 +207,7 @@ async def main():
         result = await _run_one(site, run_id)
         results.append(result)
 
-        status = "PASS" if result.get("ok") else "FAIL"
+        status = "SKIP" if result.get("skipped") else "PASS" if result.get("ok") else "FAIL"
         print(f"  Status: {status}")
         print(f"  Method: {result.get('method', '?')}, HTML: {result.get('html_len', 0):,}")
         if result.get("records") is not None:
@@ -215,8 +228,12 @@ async def main():
     total = len(results)
     print(f"Results: {passed}/{total} passed")
     for r in results:
-        status = "PASS" if r.get("ok") else "FAIL"
+        status = "SKIP" if r.get("skipped") else "PASS" if r.get("ok") else "FAIL"
         print(f"  [{status}] {r['name']}")
+
+    # Exit with non-zero code if any tests failed
+    if passed < total:
+        sys.exit(1)
 
     # Write report
     report_dir = Path("artifacts/extraction_smoke")

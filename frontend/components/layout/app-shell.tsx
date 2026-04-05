@@ -218,7 +218,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
   return (
     <aside
       className={cn(
-        "surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--border)] lg:flex lg:flex-col sidebar-animated",
+        "surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--border)] backdrop-blur-xl lg:flex lg:flex-col sidebar-animated",
         collapsed ? "lg:w-[52px]" : "lg:w-[220px]",
       )}
     >
@@ -259,13 +259,14 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
                     href={item.href}
                     title={collapsed ? item.label : undefined}
                     className={cn(
-                      "no-underline group flex h-8 items-center rounded-[var(--radius-md)] px-2 text-[13px] font-medium transition-all",
+                      "no-underline group relative flex h-9 items-center rounded-[12px] px-2.5 text-[13px] font-medium transition-all",
                       collapsed ? "justify-center" : "gap-2.5",
                       active
-                        ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]",
+                        ? "nav-item-active text-[var(--accent)]"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--nav-item-hover-bg)] hover:text-[var(--text-primary)]",
                     )}
                   >
+                    {active ? <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-[var(--nav-item-active-marker)]" /> : null}
                     <Icon
                       className={cn(
                         "size-4 shrink-0 transition-colors",
@@ -306,8 +307,7 @@ function ShellContent({
   return (
     <div className="flex min-w-0 flex-col">
       <header
-        className="surface-header sticky top-0 z-20 h-[52px] border-b border-[var(--border)]"
-        style={{ backdropFilter: "blur(12px)" }}
+        className="surface-header sticky top-0 z-20 h-[52px] border-b border-[var(--border)] backdrop-blur-xl"
       >
         <div className="flex h-full items-center justify-between gap-3 px-4 lg:px-6">
           <div className="flex min-w-0 items-center gap-3">

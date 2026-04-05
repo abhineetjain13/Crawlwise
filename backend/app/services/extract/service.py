@@ -95,6 +95,11 @@ def extract_candidates(
     domain = _domain(url)
     contract_by_field = _index_extraction_contract(extraction_contract or [])
     semantic = extract_semantic_detail_data(html, requested_fields=sorted(target_fields))
+    label_value_text_sources = _build_label_value_text_sources(
+        url=url,
+        soup=soup,
+        manifest=manifest,
+    )
 
     for field_name in target_fields:
         rows: list[dict] = []
@@ -204,7 +209,7 @@ def extract_candidates(
         # 9. Label-value text extraction (rank 9) — fallback for requested fields
         #    embedded inside description text as "Label: Value" patterns
         if not rows:
-            text_value = _extract_label_value_from_text(field_name, candidates, html)
+            text_value = _extract_label_value_from_text(field_name, label_value_text_sources, html)
             if text_value:
                 rows.append({"value": text_value, "source": "text_pattern"})
 
@@ -243,21 +248,13 @@ def extract_candidates(
 
 def _extract_label_value_from_text(
     field_name: str,
-    existing_candidates: dict[str, list[dict]],
+    text_sources: list[str],
     html: str,
 ) -> str | None:
     """Search description text and raw HTML for 'Label: Value' patterns matching field_name."""
     # Build human-readable label variants from the field name
     label = field_name.replace("_", " ")
     label_variants = [label, label.title(), label.upper()]
-
-    # First search in already-extracted description/summary candidates
-    text_sources: list[str] = []
-    for desc_field in ("description", "summary"):
-        for row in existing_candidates.get(desc_field, []):
-            val = str(row.get("value") or "")
-            if val:
-                text_sources.append(val)
 
     # Also search raw HTML for meta/og description
     for text in text_sources:
@@ -524,8 +521,81 @@ def _should_skip_jsonld_block(payload: dict, field_name: str) -> bool:
     """Skip non-product JSON-LD blocks for product-identity fields."""
     if field_name not in PRODUCT_IDENTITY_FIELDS:
         return False
-    block_type = str(payload.get("@type") or "").lower()
-    return block_type in JSONLD_NON_PRODUCT_BLOCK_TYPES
+    raw_types = payload.get("@type")
+    if raw_types is None:
+        type_names: list[object] = []
+    elif isinstance(raw_types, str):
+        type_names = [raw_types]
+    elif isinstance(raw_types, (list, tuple)):
+        type_names = list(raw_types)
+    else:
+        type_names = [raw_types]
+    lowered_types = [str(type_name or "").lower() for type_name in type_names if str(type_name or "").strip()]
+    return any(type_name in JSONLD_NON_PRODUCT_BLOCK_TYPES for type_name in lowered_types)
+
+
+def _build_label_value_text_sources(
+    *,
+    url: str,
+    soup: BeautifulSoup,
+    manifest: DiscoveryManifest,
+) -> list[str]:
+    text_sources: list[str] = []
+    seen: set[str] = set()
+
+    def _append_text(value: object) -> None:
+        normalized = _normalized_candidate_text(value)
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        text_sources.append(normalized)
+
+    for selector in (
+        "meta[name='description']",
+        "meta[property='og:description']",
+        "meta[name='twitter:description']",
+    ):
+        node = soup.select_one(selector)
+        if node is not None:
+            _append_text(node.get("content"))
+
+    for desc_field in ("description", "summary"):
+        rows: list[dict] = []
+        for record in manifest.adapter_data:
+            if isinstance(record, dict) and record.get(desc_field):
+                rows.append({"value": record[desc_field], "source": "adapter"})
+        for payload in manifest.network_payloads:
+            if not isinstance(payload, dict):
+                continue
+            payload_url = str(payload.get("url") or "").lower()
+            if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
+                continue
+            body = payload.get("body", {})
+            if isinstance(body, (dict, list)):
+                _append_source_candidates(rows, desc_field, body, "network_intercept", base_url=url)
+        for state in manifest._hydrated_states:
+            _append_source_candidates(rows, desc_field, state, "hydrated_state", base_url=url)
+        for payload in manifest.embedded_json:
+            _append_source_candidates(rows, desc_field, payload, "embedded_json", base_url=url)
+        if manifest.open_graph:
+            _append_source_candidates(rows, desc_field, manifest.open_graph, "open_graph", base_url=url)
+        if manifest.next_data:
+            _append_source_candidates(rows, desc_field, manifest.next_data, "next_data", base_url=url)
+        for payload in manifest.hidden_dom:
+            _append_source_candidates(rows, desc_field, payload, "hidden_dom", base_url=url)
+        for payload in manifest.json_ld:
+            if isinstance(payload, dict):
+                _append_source_candidates(rows, desc_field, payload, "json_ld", base_url=url)
+        for item in manifest.microdata:
+            if isinstance(item, dict):
+                _append_source_candidates(rows, desc_field, item, "microdata", base_url=url)
+        dom_row = _dom_pattern(soup, desc_field)
+        if dom_row:
+            rows.append(dom_row)
+        for row in rows:
+            _append_text(row.get("value"))
+
+    return text_sources
 
 
 def _deep_get_all_aliases(data: object, field_name: str, max_depth: int = 5) -> list[object]:
@@ -611,6 +681,19 @@ def coerce_field_candidate_value(field_name: str, value: object, *, base_url: st
             if re.fullmatch(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+", cleaned):
                 return None
             return cleaned
+        if _is_rating_field(field_name):
+            lowered = cleaned.lower()
+            star_word_match = re.search(r"\bstar-rating\s+([a-z]+)\b", lowered)
+            if star_word_match:
+                token = star_word_match.group(1)
+                return token.capitalize() if token else None
+            numeric_match = re.search(r"\d+(?:\.\d+)?", cleaned)
+            if numeric_match:
+                return numeric_match.group(0)
+            word_match = re.search(r"\b(one|two|three|four|five)\b", lowered)
+            if word_match:
+                return word_match.group(1).capitalize()
+            return cleaned if re.search(r"[A-Za-z]", cleaned) else None
         if _is_numeric_field(field_name):
             numeric = re.search(r"\d[\d,.]*", cleaned)
             return cleaned if numeric else None
@@ -842,6 +925,14 @@ def _field_quality_score(field_name: str, value: object) -> int:
     if _is_numeric_field(field_name):
         return 20 if re.search(r"\d", text) else 0
 
+    if _is_rating_field(field_name):
+        lowered = text.lower()
+        if re.search(r"\d+(?:\.\d+)?", text):
+            return 20
+        if re.search(r"\b(one|two|three|four|five)\b", lowered):
+            return 16
+        return 6 if re.search(r"[a-z]", lowered) else 0
+
     if _is_currency_field(field_name):
         return 25 if re.fullmatch(r"[A-Z]{3}", text.upper()) else 0
 
@@ -931,9 +1022,12 @@ def _is_numeric_field(field_name: str) -> bool:
     return (
         _field_in_group(field_name, "numeric")
         or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS)
-        or _field_has_any_token(field_name, CANDIDATE_RATING_TOKENS)
         or _field_has_any_token(field_name, CANDIDATE_REVIEW_COUNT_TOKENS)
     )
+
+
+def _is_rating_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "rating") or _field_has_any_token(field_name, CANDIDATE_RATING_TOKENS)
 
 
 def _is_availability_field(field_name: str) -> bool:
@@ -1077,19 +1171,18 @@ def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
     # found real spec entries (tables, dl, data-attributes). Skip phantom
     # aggregates built from inline label/value guesses on JS-shell pages.
     spec_entry_count = len(specifications)
-    for aggregate_field in ("specifications", "dimensions"):
+    for aggregate_field in ("specifications", "dimensions", "features_specs"):
         value = aggregates.get(aggregate_field)
-        if value not in (None, "", [], {}) and spec_entry_count >= 2:
-            rows.setdefault(aggregate_field, []).append({"value": value, "source": "semantic_spec"})
+        if value in (None, "", [], {}):
+            continue
+        if aggregate_field in {"specifications", "dimensions"} and spec_entry_count < 2:
+            continue
+        rows.setdefault(aggregate_field, []).append({"value": value, "source": "semantic_spec"})
 
-    feature_blocks = [
-        body
-        for key, body in sections.items()
-        if key in FEATURE_SECTION_ALIASES and body not in (None, "", [], {})
-    ]
-    if feature_blocks:
+    feature_value = aggregates.get("features")
+    if feature_value not in (None, "", [], {}):
         rows.setdefault("features", []).append({
-            "value": SEMANTIC_AGGREGATE_SEPARATOR.join(feature_blocks),
+            "value": feature_value,
             "source": "semantic_section",
         })
     return rows

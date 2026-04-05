@@ -10,7 +10,6 @@
   "[data-testid='consent-accept']",
   ".cookie-banner [data-consent='accept']",
   ".cookie-banner [data-accept='true']",
-  ".cookie-banner button",
   ".cookie-consent-accept",
   "#cookieConsentAccept",
   ".fc-button.fc-cta-consent",
@@ -47,6 +46,5 @@
   "button:has-text('Ich akzeptiere')",
   "button:has-text('Aceitar tudo')",
   "button:has-text('Aceitar cookies')",
-  "button:has-text('Concordo')",
-  "button:has-text('Accept')"
+  "button:has-text('Concordo')"
 ]

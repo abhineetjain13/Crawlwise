@@ -1,0 +1,13 @@
+{
+  "html_snippet_max_chars": 12000,
+  "existing_values_max_chars": 2400,
+  "candidate_evidence_max_chars": 16000,
+  "discovered_sources_max_chars": 15000,
+  "clean_candidate_text_limit": 1200,
+  "groq_max_tokens": 1200,
+  "groq_temperature": 0.1,
+  "anthropic_max_tokens": 3000,
+  "anthropic_temperature": 0.1,
+  "nvidia_max_tokens": 1200,
+  "nvidia_temperature": 0.1
+}

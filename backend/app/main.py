@@ -14,6 +14,7 @@ from app.api.llm import router as llm_router
 from app.api.records import router as records_router
 from app.api.review import router as review_router
 from app.api.selectors import router as selectors_router
+from app.api.site_memory import router as site_memory_router
 from app.api.users import router as users_router
 from app.core.config import get_frontend_origins, settings
 from app.core.database import SessionLocal
@@ -49,6 +50,7 @@ for router in [
     crawls_router,
     records_router,
     selectors_router,
+    site_memory_router,
     llm_router,
     jobs_router,
     review_router,

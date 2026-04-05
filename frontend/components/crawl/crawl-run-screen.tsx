@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader, SectionHeader } from "../ui/patterns";
 import { Badge, Button, Card, Input } from "../ui/primitives";
 import { api } from "../../lib/api";
-import type { CrawlRun } from "../../lib/api/types";
+import type { CrawlRecord, CrawlRun } from "../../lib/api/types";
 import { CRAWL_DEFAULTS } from "../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES, TERMINAL_STATUSES } from "../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
@@ -47,7 +47,7 @@ type CrawlRunScreenProps = {
 };
 
 const exportLinkClassName =
-  "focus-ring inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-[13px] font-medium text-[var(--accent-fg)] shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)]";
+  "focus-ring no-underline inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-[13px] font-medium text-white shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)] hover:text-white";
 
 function isSafeHref(href: string) {
   try {
@@ -57,6 +57,42 @@ function isSafeHref(href: string) {
   } catch {
     return false;
   }
+}
+
+function normalizeIntelligenceFieldName(value: string) {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function intelligenceValueFingerprint(value: unknown) {
+  return stringifyCell(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function intelligenceSourcePriority(kind: IntelligenceCandidate["sourceKind"], confidence?: number) {
+  if (kind === "llm_suggestion") return 3;
+  if (kind === "review_bucket") return confidence && confidence >= 8 ? 2 : 1;
+  return 0;
+}
+
+function shouldHideIntelligenceValue(record: CrawlRecord, fieldName: string, value: unknown) {
+  const normalizedField = normalizeIntelligenceFieldName(fieldName);
+  const outputFields = new Set(
+    Object.keys(record.data ?? {})
+      .map((key) => normalizeIntelligenceFieldName(key))
+      .filter(Boolean),
+  );
+  if (outputFields.has(normalizedField)) {
+    return true;
+  }
+  const fingerprint = intelligenceValueFingerprint(value);
+  if (!fingerprint) {
+    return true;
+  }
+  const outputValues = new Set(
+    Object.values(record.data ?? {})
+      .map((item) => intelligenceValueFingerprint(item))
+      .filter(Boolean),
+  );
+  return outputValues.has(fingerprint);
 }
 
 export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
@@ -151,48 +187,53 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     for (const record of records) {
       const recordUrl = extractRecordUrl(record) || record.source_url;
       const recordTitle = stringifyCell(record.data?.title).trim() || recordUrl || `Record ${record.id}`;
-      const candidateMap = record.source_trace?.candidates;
-      const reviewBucket = Array.isArray(record.review_bucket) ? record.review_bucket : [];
+      const fieldDiscovery = record.source_trace?.field_discovery;
+      const reviewBucket = Array.isArray(record.review_bucket)
+        ? record.review_bucket
+        : record.review_bucket && typeof record.review_bucket === "object"
+          ? [record.review_bucket]
+          : [];
 
-      if (candidateMap && typeof candidateMap === "object" && !Array.isArray(candidateMap)) {
-        for (const [fieldName, rawRows] of Object.entries(candidateMap as Record<string, unknown>)) {
-          if (!Array.isArray(rawRows)) {
+      if (fieldDiscovery && typeof fieldDiscovery === "object" && !Array.isArray(fieldDiscovery)) {
+        for (const [fieldName, rawEntry] of Object.entries(fieldDiscovery as Record<string, unknown>)) {
+          if (!rawEntry || typeof rawEntry !== "object") {
             continue;
           }
-          for (const rawRow of rawRows) {
-            if (!rawRow || typeof rawRow !== "object") {
-              continue;
-            }
-            const row = rawRow as Record<string, unknown>;
-            const rawValue = row.value ?? row.sample_value;
-            const displayValue = stringifyCell(rawValue).trim();
-            if (!displayValue) {
-              continue;
-            }
-            const displayLabel = stringifyCell(row.display_label).trim() || humanizeFieldName(fieldName);
-            const groupLabel = stringifyCell(row.group_label).trim() || "General";
-            const href = stringifyCell(row.href).trim() || "";
-            const sortOrder = Number(row.table_index ?? 0) * 10000 + Number(row.row_index ?? 0);
-            const key = `${record.id}:${groupLabel}:${displayLabel}:${displayValue}`;
-            const existing = grouped.get(key);
-            if (existing) {
-              if (!existing.href && href) existing.href = href;
-              existing.sortOrder = Math.min(existing.sortOrder, sortOrder || existing.sortOrder || Number.MAX_SAFE_INTEGER);
-              continue;
-            }
-            grouped.set(key, {
-              key,
-              recordId: record.id,
-              recordUrl,
-              recordTitle,
-              fieldName,
-              displayLabel,
-              groupLabel,
-              value: rawValue,
-              href: href || undefined,
-              sortOrder: sortOrder || Number.MAX_SAFE_INTEGER,
-              sourceKind: "candidate",
-            });
+          const entry = rawEntry as Record<string, unknown>;
+          if (stringifyCell(entry.status).trim() !== "found") {
+            continue;
+          }
+          if (stringifyCell(entry.tier).trim() !== "intelligence") {
+            continue;
+          }
+          const rawValue = entry.value;
+          const displayValue = stringifyCell(rawValue).trim();
+          if (!displayValue) {
+            continue;
+          }
+          if (shouldHideIntelligenceValue(record, fieldName, rawValue)) {
+            continue;
+          }
+          const sources = Array.isArray(entry.sources)
+            ? entry.sources.map((source) => stringifyCell(source).trim()).filter(Boolean)
+            : [];
+          const groupLabel = sources.length ? `Discovered via ${sources.join(", ")}` : "Discovered";
+          const key = `${record.id}:${normalizeIntelligenceFieldName(fieldName)}:${intelligenceValueFingerprint(rawValue)}`;
+          const candidate: IntelligenceCandidate = {
+            key,
+            recordId: record.id,
+            recordUrl,
+            recordTitle,
+            fieldName,
+            displayLabel: humanizeFieldName(fieldName),
+            groupLabel,
+            value: rawValue,
+            sortOrder: Number.MAX_SAFE_INTEGER - 1000,
+            sourceKind: "candidate",
+          };
+          const existing = grouped.get(key);
+          if (!existing || intelligenceSourcePriority(candidate.sourceKind) > intelligenceSourcePriority(existing.sourceKind, existing.confidenceScore)) {
+            grouped.set(key, candidate);
           }
         }
       }
@@ -207,13 +248,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         if (!fieldName || !displayValue) {
           continue;
         }
-        const confidence = Number(item.confidence_score ?? 0);
-        const source = stringifyCell(item.source).trim();
-        const key = `${record.id}:ReviewBucket:${fieldName}:${displayValue}:${confidence}:${source}`;
-        if (grouped.has(key)) {
+        const confidence = Number(item.confidence_score) || 0;
+        if (confidence < 7) {
           continue;
         }
-        grouped.set(key, {
+        if (shouldHideIntelligenceValue(record, fieldName, rawValue)) {
+          continue;
+        }
+        const key = `${record.id}:${normalizeIntelligenceFieldName(fieldName)}:${intelligenceValueFingerprint(rawValue)}`;
+        const candidate: IntelligenceCandidate = {
           key,
           recordId: record.id,
           recordUrl,
@@ -225,7 +268,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
           sortOrder: Number.MAX_SAFE_INTEGER - Math.min(Math.max(confidence, 0), 10),
           confidenceScore: confidence || undefined,
           sourceKind: "review_bucket",
-        });
+        };
+        const existing = grouped.get(key);
+        if (!existing || intelligenceSourcePriority(candidate.sourceKind, confidence) > intelligenceSourcePriority(existing.sourceKind, existing.confidenceScore)) {
+          grouped.set(key, candidate);
+        }
       }
 
       const llmSuggestions = record.source_trace?.llm_cleanup_suggestions;
@@ -240,11 +287,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
           if (!displayValue) {
             continue;
           }
-          const key = `${record.id}:Suggested:${fieldName}:${displayValue}`;
-          if (grouped.has(key)) {
+          if (shouldHideIntelligenceValue(record, fieldName, rawValue)) {
             continue;
           }
-          grouped.set(key, {
+          const key = `${record.id}:${normalizeIntelligenceFieldName(fieldName)}:${intelligenceValueFingerprint(rawValue)}`;
+          const candidate: IntelligenceCandidate = {
             key,
             recordId: record.id,
             recordUrl,
@@ -255,7 +302,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             value: rawValue,
             sortOrder: Number.MAX_SAFE_INTEGER,
             sourceKind: "llm_suggestion",
-          });
+          };
+          const existing = grouped.get(key);
+          if (!existing || intelligenceSourcePriority(candidate.sourceKind) > intelligenceSourcePriority(existing.sourceKind, existing.confidenceScore)) {
+            grouped.set(key, candidate);
+          }
         }
       }
     }

@@ -12,6 +12,7 @@ from app.services.acquisition.browser_client import (
     _collect_paginated_html,
     _context_kwargs,
     _cookie_policy_for_domain,
+    _flatten_shadow_dom,
     _find_next_page_url,
     _goto_with_fallback,
     _load_cookies,
@@ -252,6 +253,20 @@ async def test_find_next_page_url_uses_rel_next_href():
 
 
 @pytest.mark.asyncio
+async def test_find_next_page_url_uses_configured_selectors(monkeypatch):
+    class FakeCustomPage(FakePaginationPage):
+        def locator(self, selector: str):
+            if selector == "[data-next-page]":
+                return FakeLocator("/products?page=2")
+            return FakeLocator("")
+
+    monkeypatch.setattr("app.services.acquisition.browser_client.PAGINATION_NEXT_SELECTORS", ["[data-next-page]"])
+    page = FakeCustomPage()
+
+    assert await _find_next_page_url(page) == "https://example.com/products?page=2"
+
+
+@pytest.mark.asyncio
 async def test_collect_paginated_html_stops_at_max_pages(monkeypatch):
     page = FakePaginationPage()
     monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
@@ -283,3 +298,22 @@ async def test_collect_paginated_html_rejects_non_public_next_page(monkeypatch, 
     assert "Page 2" not in html
     assert page.goto_calls == []
     assert "Rejected pagination URL" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_flatten_shadow_dom_passes_configured_max_hosts(monkeypatch):
+    class FakeShadowPage:
+        def __init__(self):
+            self.calls: list[tuple[str, int]] = []
+
+        async def evaluate(self, script: str, max_hosts: int):
+            self.calls.append((script, max_hosts))
+            return 3
+
+    page = FakeShadowPage()
+    monkeypatch.setattr("app.services.acquisition.browser_client.SHADOW_DOM_FLATTEN_MAX_HOSTS", 12)
+
+    await _flatten_shadow_dom(page)
+
+    assert page.calls
+    assert page.calls[0][1] == 12

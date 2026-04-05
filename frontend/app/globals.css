@@ -45,29 +45,29 @@
   --font-jetbrains-mono: "JetBrains Mono", "Fira Code", monospace;
 
   /* ── Backgrounds ── */
-  --bg-base:           #f5f6f8;   /* page canvas */
-  --bg-alt:            #eceef2;
-  --bg-elevated:       #f0f2f5;
-  --bg-panel:          #ffffff;
-  --bg-panel-strong:   #fafbfc;
-  --bg-sidebar:        #ffffff;
+  --bg-base:           #f4f6fb;
+  --bg-alt:            #e9eef8;
+  --bg-elevated:       #edf2fa;
+  --bg-panel:          rgba(255, 255, 255, 0.9);
+  --bg-panel-strong:   #f8fbff;
+  --bg-sidebar:        rgba(248, 250, 255, 0.92);
 
   /* ── Borders ── */
-  --border:            rgba(0, 0, 0, 0.08);
-  --border-strong:     rgba(0, 0, 0, 0.14);
-  --border-focus:      #5B6CF9;
+  --border:            rgba(37, 56, 88, 0.12);
+  --border-strong:     rgba(37, 56, 88, 0.2);
+  --border-focus:      #2563eb;
 
   /* ── Text ── */
-  --text-primary:      #0d0f14;
-  --text-secondary:    #4a5568;
-  --text-muted:        #8792a2;
+  --text-primary:      #10203a;
+  --text-secondary:    #43556f;
+  --text-muted:        #7587a2;
 
   /* ── Accent (indigo-blue, Linear's signature) ── */
-  --accent:            #5B6CF9;
-  --accent-hover:      #4a5ce8;
+  --accent:            #2563eb;
+  --accent-hover:      #1d4ed8;
   --accent-fg:         #ffffff;
-  --accent-subtle:     rgba(91, 108, 249, 0.08);
-  --accent-dim:        rgba(91, 108, 249, 0.16);
+  --accent-subtle:     rgba(37, 99, 235, 0.1);
+  --accent-dim:        rgba(37, 99, 235, 0.18);
 
   /* ── Semantic ── */
   --success:           #16a34a;
@@ -87,20 +87,57 @@
   --status-neutral-bg: rgba(0, 0, 0, 0.05);
 
   /* ── Shadows ── */
-  --shadow-xs:    0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-sm:    0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-md:    0 4px 16px rgba(0, 0, 0, 0.10);
-  --shadow-lg:    0 8px 32px rgba(0, 0, 0, 0.12);
-  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.16);
+  --shadow-xs:    0 1px 3px rgba(36, 61, 99, 0.08);
+  --shadow-sm:    0 12px 24px rgba(60, 88, 138, 0.08);
+  --shadow-md:    0 22px 44px rgba(64, 92, 140, 0.12);
+  --shadow-lg:    0 28px 60px rgba(64, 92, 140, 0.16);
+  --shadow-modal: 0 30px 90px rgba(47, 71, 113, 0.22);
   --shadow-card-value:     var(--shadow-xs);
   --shadow-elevated-value: var(--shadow-md);
 
   /* ── Surfaces (gradient skins) ── */
-  --surface-card:    #ffffff;
-  --surface-header:  rgba(255, 255, 255, 0.88);
-  --surface-sidebar: #ffffff;
+  --surface-card:    linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(247, 250, 255, 0.92) 100%);
+  --surface-header:  linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(244, 248, 255, 0.74) 100%);
+  --surface-sidebar: linear-gradient(180deg, rgba(251, 252, 255, 0.92) 0%, rgba(244, 248, 255, 0.96) 100%);
   --surface-sidebar-shadow: inset -1px 0 0 var(--border);
-  --surface-drawer-shadow: 0 20px 60px rgba(0, 0, 0, 0.16);
+  --surface-drawer-shadow: 0 30px 70px rgba(45, 72, 120, 0.18);
+  --surface-card-highlight: rgba(255, 255, 255, 0.78);
+  --surface-card-edge: rgba(166, 189, 227, 0.24);
+  --surface-header-shadow: 0 10px 30px rgba(106, 133, 183, 0.08);
+  --surface-sidebar-depth: 18px 0 44px rgba(77, 105, 151, 0.06);
+  --page-glow-1: rgba(37, 99, 235, 0.14);
+  --page-glow-2: rgba(14, 165, 233, 0.12);
+  --page-glow-3: rgba(245, 158, 11, 0.08);
+  --button-secondary-bg: rgba(255, 255, 255, 0.7);
+  --button-secondary-hover-bg: var(--bg-elevated);
+  --button-ghost-hover-bg: rgba(255, 255, 255, 0.6);
+  --button-accent-bg: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, white), var(--accent));
+  --segmented-bg: rgba(255, 255, 255, 0.68);
+  --segmented-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --segmented-item-active-bg: linear-gradient(135deg, color-mix(in srgb, var(--accent) 82%, white), var(--accent));
+  --segmented-item-active-fg: #ffffff;
+  --segmented-item-hover-bg: rgba(255, 255, 255, 0.72);
+  --advanced-picker-bg: rgba(255, 255, 255, 0.72);
+  --advanced-picker-hover-bg: rgba(255, 255, 255, 0.92);
+  --advanced-picker-active-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(219, 234, 254, 0.92));
+  --advanced-panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(241, 245, 255, 0.92));
+  --advanced-panel-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  --advanced-callout-bg: rgba(37, 99, 235, 0.08);
+  --advanced-callout-border: var(--accent-subtle);
+  --setting-surface-bg: rgba(255, 255, 255, 0.6);
+  --setting-surface-active-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(239, 246, 255, 0.88));
+  --setting-icon-bg: rgba(255, 255, 255, 0.7);
+  --setting-icon-active-bg: var(--accent-subtle);
+  --setting-body-bg: rgba(255, 255, 255, 0.55);
+  --slider-row-bg: rgba(255, 255, 255, 0.72);
+  --slider-row-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  --slider-value-bg: var(--accent-subtle);
+  --slider-input-bg: rgba(255, 255, 255, 0.85);
+  --slider-thumb-border: rgba(255, 255, 255, 0.95);
+  --nav-item-hover-bg: rgba(255, 255, 255, 0.75);
+  --nav-item-active-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(219, 234, 254, 0.95));
+  --nav-item-active-shadow: var(--shadow-sm);
+  --nav-item-active-marker: var(--accent);
 
   /* ── Skeleton ── */
   --skeleton-base:      #e8ebf0;
@@ -145,10 +182,10 @@
   --transition-slow: 220ms ease;
 
   /* ── Metric accent colors (for top-stripe) ── */
-  --metric-runs-color:    #5B6CF9;
+  --metric-runs-color:    #2563eb;
   --metric-active-color:  #16a34a;
-  --metric-records-color: #8b5cf6;
-  --metric-domains-color: #0ea5e9;
+  --metric-records-color: #f59e0b;
+  --metric-domains-color: #0891b2;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -214,6 +251,43 @@ html[data-theme="dark"] {
   --surface-sidebar: var(--bg-sidebar);
   --surface-sidebar-shadow: inset -1px 0 0 var(--border);
   --surface-drawer-shadow: 0 24px 80px rgba(0, 0, 0, 0.70);
+  --surface-card-highlight: rgba(255, 255, 255, 0.02);
+  --surface-card-edge: rgba(255, 255, 255, 0.04);
+  --surface-header-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --surface-sidebar-depth: 18px 0 44px rgba(0, 0, 0, 0.16);
+  --page-glow-1: rgba(37, 99, 235, 0.08);
+  --page-glow-2: rgba(91, 108, 249, 0.08);
+  --page-glow-3: rgba(52, 211, 153, 0.05);
+  --button-secondary-bg: rgba(255, 255, 255, 0.04);
+  --button-secondary-hover-bg: rgba(255, 255, 255, 0.08);
+  --button-ghost-hover-bg: rgba(255, 255, 255, 0.06);
+  --button-accent-bg: linear-gradient(135deg, color-mix(in srgb, var(--accent) 82%, white), var(--accent));
+  --segmented-bg: rgba(255, 255, 255, 0.06);
+  --segmented-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --segmented-item-active-bg: linear-gradient(135deg, color-mix(in srgb, var(--accent) 80%, white), var(--accent));
+  --segmented-item-active-fg: #ffffff;
+  --segmented-item-hover-bg: rgba(255, 255, 255, 0.06);
+  --advanced-picker-bg: rgba(255, 255, 255, 0.03);
+  --advanced-picker-hover-bg: rgba(255, 255, 255, 0.05);
+  --advanced-picker-active-bg: linear-gradient(180deg, rgba(27, 27, 27, 0.96), rgba(37, 41, 62, 0.96));
+  --advanced-panel-bg: linear-gradient(180deg, rgba(22, 22, 22, 0.96), rgba(26, 28, 38, 0.98));
+  --advanced-panel-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --advanced-callout-bg: rgba(91, 108, 249, 0.1);
+  --advanced-callout-border: rgba(91, 108, 249, 0.18);
+  --setting-surface-bg: rgba(255, 255, 255, 0.04);
+  --setting-surface-active-bg: linear-gradient(180deg, rgba(29, 29, 29, 0.96), rgba(31, 34, 46, 0.96));
+  --setting-icon-bg: rgba(255, 255, 255, 0.05);
+  --setting-icon-active-bg: rgba(91, 108, 249, 0.14);
+  --setting-body-bg: rgba(255, 255, 255, 0.03);
+  --slider-row-bg: rgba(255, 255, 255, 0.03);
+  --slider-row-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --slider-value-bg: rgba(91, 108, 249, 0.12);
+  --slider-input-bg: rgba(255, 255, 255, 0.04);
+  --slider-thumb-border: rgba(24, 24, 24, 0.95);
+  --nav-item-hover-bg: rgba(255, 255, 255, 0.05);
+  --nav-item-active-bg: linear-gradient(135deg, rgba(31, 35, 48, 0.96), rgba(44, 50, 78, 0.96));
+  --nav-item-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.26);
+  --nav-item-active-marker: color-mix(in srgb, var(--accent) 82%, white);
 
   /* ── Skeleton ── */
   --skeleton-base:      rgba(255, 255, 255, 0.05);
@@ -243,12 +317,13 @@ html[data-theme="dark"] body {
 
 html {
   min-height: 100%;
-  background: #f5f6f8; /* matches :root --bg-base — prevents FOUC */
+  background: #f4f6fb;
   scroll-behavior: smooth;
   scrollbar-gutter: stable;
 }
 
 body {
+  position: relative;
   min-height: 100vh;
   margin: 0;
   background: var(--bg-base);
@@ -259,6 +334,19 @@ body {
   font-feature-settings: "rlig" 1, "calt" 1, "cv02" 1, "cv03" 1, "cv04" 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top left, var(--page-glow-1), transparent 30%),
+    radial-gradient(circle at top right, var(--page-glow-2), transparent 24%),
+    radial-gradient(circle at bottom center, var(--page-glow-3), transparent 26%);
+  opacity: 0.95;
+  z-index: -1;
 }
 
 a {
@@ -337,13 +425,38 @@ select:focus-visible {
 
 /* Surface helpers */
 .surface-card    { background: var(--surface-card); }
-.surface-header  { background: var(--surface-header); }
-.surface-sidebar { background: var(--surface-sidebar); box-shadow: var(--surface-sidebar-shadow); }
+.surface-header  { background: var(--surface-header); box-shadow: inset 0 -1px 0 var(--border), var(--surface-header-shadow); }
+.surface-sidebar { background: var(--surface-sidebar); box-shadow: var(--surface-sidebar-shadow), var(--surface-sidebar-depth); }
 
 .surface-banner {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--accent-subtle);
+}
+
+.accent-fill {
+  background: var(--button-accent-bg);
+  color: var(--accent-fg);
+  box-shadow: var(--shadow-sm);
+}
+
+.accent-fill:hover {
+  background: var(--accent-hover);
+}
+
+.segmented-active {
+  background: var(--segmented-item-active-bg);
+  color: var(--segmented-item-active-fg);
+  box-shadow: var(--shadow-sm);
+}
+
+.advanced-picker-active {
+  background: var(--advanced-picker-active-bg);
+}
+
+.nav-item-active {
+  background: var(--nav-item-active-bg);
+  box-shadow: var(--nav-item-active-shadow);
 }
 
 .bg-warning\/12 { background: color-mix(in srgb, var(--warning) 12%, transparent); }
@@ -452,10 +565,20 @@ select:focus-visible {
 .stat-card {
   position: relative;
   overflow: hidden;
-  background: var(--bg-panel);
+  background: var(--surface-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   padding: 20px 22px 18px;
+  box-shadow: var(--shadow-card-value), inset 0 1px 0 var(--surface-card-highlight);
+}
+
+.stat-card::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: calc(var(--radius-xl) - 1px);
+  border: 1px solid var(--surface-card-edge);
+  pointer-events: none;
 }
 
 .stat-card::before {
@@ -483,7 +606,7 @@ select:focus-visible {
 }
 
 .run-row:hover {
-  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--bg-elevated));
 }
 
 .run-row:focus-visible {
@@ -558,6 +681,35 @@ select:focus-visible {
 .animate-slide-in     { animation: slide-in-right var(--transition-slow) both; }
 .animate-pulse-subtle { animation: pulse-subtle 2.4s ease-in-out infinite; }
 .animate-spin-slow    { animation: spin 0.75s linear infinite; }
+
+.slider-control {
+  appearance: none;
+  height: 6px;
+  width: 100%;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 28%, white) 0%, color-mix(in srgb, var(--accent) 82%, white) 100%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, var(--border));
+}
+
+.slider-control::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 3px solid rgba(255, 255, 255, 0.95);
+  background: var(--accent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.slider-control::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 3px solid rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+}
 
 /* Stagger: mount-time only (stable across refetches because element identity is stable) */
 .stagger-children > *               { animation: fade-in 180ms ease-out both; }

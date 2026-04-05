@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { PageHeader, SectionHeader } from "../../components/ui/patterns";
 import { Badge, Button, Card, Input } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
-import type { CrawlRun, SelectorRecord, SelectorUpdatePayload } from "../../lib/api/types";
+import type { CrawlRun, SelectorRecord, SelectorUpdatePayload, SiteMemoryRecord } from "../../lib/api/types";
 
 type DraftState = Record<number, SelectorUpdatePayload>;
 
@@ -22,17 +22,18 @@ export default function SiteMemoryPage() {
   const [actionError, setActionError] = useState("");
   const meQuery = useQuery({ queryKey: ["me"], queryFn: api.me });
   const selectorsQuery = useQuery({ queryKey: ["selectors"], queryFn: () => api.listSelectors() });
+  const siteMemoryQuery = useQuery({ queryKey: ["site-memory"], queryFn: () => api.listSiteMemory() });
   const runsQuery = useQuery({
     queryKey: ["memory-runs"],
     queryFn: () => api.listCrawls({ page: 1, limit: 100 }),
   });
 
   const grouped = useMemo(
-    () => groupByDomain(selectorsQuery.data ?? [], runsQuery.data?.items ?? []),
-    [selectorsQuery.data, runsQuery.data?.items],
+    () => groupByDomain(selectorsQuery.data ?? [], runsQuery.data?.items ?? [], siteMemoryQuery.data ?? []),
+    [selectorsQuery.data, runsQuery.data?.items, siteMemoryQuery.data],
   );
-  const hasError = meQuery.isError || selectorsQuery.isError || runsQuery.isError;
-  const queryError = firstErrorMessage(meQuery.error, selectorsQuery.error, runsQuery.error);
+  const hasError = meQuery.isError || selectorsQuery.isError || siteMemoryQuery.isError || runsQuery.isError;
+  const queryError = firstErrorMessage(meQuery.error, selectorsQuery.error, siteMemoryQuery.error, runsQuery.error);
 
   const saveMutation = useMutation({
     mutationFn: ({ selectorId, payload }: { selectorId: number; payload: SelectorUpdatePayload }) =>
@@ -68,8 +69,14 @@ export default function SiteMemoryPage() {
   });
 
   const deleteDomainMutation = useMutation({
-    mutationFn: (domain: string) => api.deleteSelectorsByDomain(domain),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["selectors"] }),
+    mutationFn: async (domain: string) => {
+      await api.deleteSelectorsByDomain(domain);
+      await api.deleteSiteMemory(domain);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["selectors"] });
+      await queryClient.invalidateQueries({ queryKey: ["site-memory"] });
+    },
     onError: async (error) => {
       console.error("Failed to delete domain selectors", error);
       setActionError(error instanceof Error ? error.message : "Unable to delete domain selectors.");
@@ -81,8 +88,14 @@ export default function SiteMemoryPage() {
   });
 
   const clearAllMutation = useMutation({
-    mutationFn: () => api.clearAllSiteMemory(),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["selectors"] }),
+    mutationFn: async () => {
+      await api.clearAllSiteMemory();
+      await api.clearAllDomainMemory();
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["selectors"] });
+      await queryClient.invalidateQueries({ queryKey: ["site-memory"] });
+    },
     onError: async (error) => {
       console.error("Failed to clear site memory", error);
       setActionError(error instanceof Error ? error.message : "Unable to clear site memory.");
@@ -139,8 +152,8 @@ export default function SiteMemoryPage() {
 
         {actionError ? <p className="text-[13px] text-danger">{actionError}</p> : null}
 
-        {selectorsQuery.isLoading ? <p className="text-[13px] text-muted">Loading site memory…</p> : null}
-        {!selectorsQuery.isLoading && !grouped.length ? (
+        {selectorsQuery.isLoading || siteMemoryQuery.isLoading ? <p className="text-[13px] text-muted">Loading site memory…</p> : null}
+        {!selectorsQuery.isLoading && !siteMemoryQuery.isLoading && !grouped.length ? (
           <p className="text-[13px] text-muted">No Site Memory entries saved yet.</p>
         ) : null}
 
@@ -152,6 +165,8 @@ export default function SiteMemoryPage() {
                 <div className="min-w-0">
                   <div className="font-mono text-[13px] font-semibold text-foreground">{group.domain}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted">
+                    <span>{group.reusableFields.length} reusable field{group.reusableFields.length === 1 ? "" : "s"}</span>
+                    <span>•</span>
                     <span>{group.fields.length} field{group.fields.length === 1 ? "" : "s"}</span>
                     <span>•</span>
                     <span>{group.lastCrawl ? `Last crawl ${formatDate(group.lastCrawl)}` : "No crawl timestamp"}</span>
@@ -186,6 +201,16 @@ export default function SiteMemoryPage() {
 
               {open ? (
                 <div className="border-t border-border px-4 py-4">
+                  {group.reusableFields.length ? (
+                    <div className="mb-4">
+                      <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.08em] text-muted">Reusable Fields</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {group.reusableFields.map((field) => (
+                          <Badge key={field} tone="neutral">{field}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="overflow-auto rounded-[var(--radius-md)] border border-border">
                     <table className="compact-data-table">
                       <thead>
@@ -327,7 +352,7 @@ function buildDraft(selector: SelectorRecord, value: string): SelectorUpdatePayl
   return { css_selector: nextValue, xpath: null, regex: null, status: "manual", is_active: selector.is_active };
 }
 
-function groupByDomain(selectors: SelectorRecord[], runs: CrawlRun[]) {
+function groupByDomain(selectors: SelectorRecord[], runs: CrawlRun[], siteMemory: SiteMemoryRecord[]) {
   const lastCrawlByDomain = new Map<string, string>();
   for (const run of runs) {
     const domain = normalizeDomain(run.url);
@@ -335,6 +360,14 @@ function groupByDomain(selectors: SelectorRecord[], runs: CrawlRun[]) {
     const current = lastCrawlByDomain.get(domain);
     if (!current || new Date(run.updated_at).getTime() > new Date(current).getTime()) {
       lastCrawlByDomain.set(domain, run.updated_at);
+    }
+  }
+  for (const memory of siteMemory) {
+    const domain = normalizeDomain(memory.domain);
+    if (!domain || !memory.last_crawl_at) continue;
+    const current = lastCrawlByDomain.get(domain);
+    if (!current || new Date(memory.last_crawl_at).getTime() > new Date(current).getTime()) {
+      lastCrawlByDomain.set(domain, memory.last_crawl_at);
     }
   }
 
@@ -347,10 +380,19 @@ function groupByDomain(selectors: SelectorRecord[], runs: CrawlRun[]) {
     grouped.set(domain, rows);
   }
 
-  return [...grouped.entries()]
-    .map(([domain, fields]) => ({
+  const fieldsByDomain = new Map<string, string[]>();
+  for (const memory of siteMemory) {
+    const domain = normalizeDomain(memory.domain);
+    if (!domain) continue;
+    fieldsByDomain.set(domain, [...(memory.payload?.fields ?? [])].sort((a, b) => a.localeCompare(b)));
+  }
+
+  const allDomains = new Set([...grouped.keys(), ...fieldsByDomain.keys()]);
+  return [...allDomains]
+    .map((domain) => ({
       domain,
-      fields: [...fields].sort((a, b) => a.field_name.localeCompare(b.field_name)),
+      reusableFields: fieldsByDomain.get(domain) ?? [],
+      fields: [...(grouped.get(domain) ?? [])].sort((a, b) => a.field_name.localeCompare(b.field_name)),
       lastCrawl: lastCrawlByDomain.get(domain) ?? null,
     }))
     .sort((a, b) => a.domain.localeCompare(b.domain));

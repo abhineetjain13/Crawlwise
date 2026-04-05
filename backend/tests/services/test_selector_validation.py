@@ -54,6 +54,27 @@ def test_extract_selector_value_times_out_bad_regex(monkeypatch: pytest.MonkeyPa
     assert selector_used is None
 
 
+def test_extract_selector_value_supports_shadow_piercing_css_selector_syntax():
+    html = """
+    <html><body>
+      <shop-price>
+        <div data-shadow-dom-clone="true" hidden>
+          <span class="price">$19.00</span>
+        </div>
+      </shop-price>
+    </body></html>
+    """
+
+    value, count, selector_used = extract_selector_value(
+        html,
+        css_selector="shop-price >>> .price",
+    )
+
+    assert value == "$19.00"
+    assert count == 1
+    assert selector_used == "shop-price >>> .price"
+
+
 def test_build_absolute_xpath_prefers_unique_id_anchor():
     soup = BeautifulSoup(
         "<html><body><section><h1 id='product-title'>Chair</h1></section></body></html>",

@@ -1,0 +1,18 @@
+{
+  "next_page": [
+    "link[rel='next']",
+    "a[rel='next']",
+    "a[aria-label*='next' i]",
+    "a[title*='next' i]",
+    "a:has-text('Next')",
+    "button[aria-label*='next' i]"
+  ],
+  "load_more": [
+    "button:has-text('Load More')",
+    "button:has-text('Show More')",
+    "button:has-text('View All')",
+    "a:has-text('Load More')",
+    "[data-testid='load-more']",
+    ".load-more"
+  ]
+}

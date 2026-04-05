@@ -21,8 +21,10 @@ from app.services.pipeline_config import (
     BROWSER_FALLBACK_HTML_SIZE_THRESHOLD,
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
     BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX,
+    DEFAULT_MAX_SCROLLS,
     JS_GATE_PHRASES,
 )
+from app.services.requested_field_policy import requested_field_terms
 
 
 class ProxyPoolExhausted(RuntimeError):
@@ -69,8 +71,10 @@ async def acquire_html(
     proxy_list: list[str] | None = None,
     advanced_mode: str | None = None,
     max_pages: int = 5,
-    max_scrolls: int = 10,
+    max_scrolls: int = DEFAULT_MAX_SCROLLS,
     sleep_ms: int = 0,
+    requested_fields: list[str] | None = None,
+    requested_field_selectors: dict[str, list[dict]] | None = None,
 ) -> tuple[str, str, str, list[dict]]:
     """Acquire HTML for a URL using the waterfall strategy."""
     result = await acquire(
@@ -81,6 +85,8 @@ async def acquire_html(
         max_pages=max_pages,
         max_scrolls=max_scrolls,
         sleep_ms=sleep_ms,
+        requested_fields=requested_fields,
+        requested_field_selectors=requested_field_selectors,
     )
     return result.html, result.method, result.artifact_path, result.network_payloads
 
@@ -91,8 +97,10 @@ async def acquire(
     proxy_list: list[str] | None = None,
     advanced_mode: str | None = None,
     max_pages: int = 5,
-    max_scrolls: int = 10,
+    max_scrolls: int = DEFAULT_MAX_SCROLLS,
     sleep_ms: int = 0,
+    requested_fields: list[str] | None = None,
+    requested_field_selectors: dict[str, list[dict]] | None = None,
 ) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
@@ -116,6 +124,8 @@ async def acquire(
             max_scrolls=max_scrolls,
             prefer_stealth=prefer_stealth,
             sleep_ms=sleep_ms,
+            requested_fields=requested_fields,
+            requested_field_selectors=requested_field_selectors,
         )
         if result is None and not prefer_stealth and host_prefers_stealth(url):
             result = await _acquire_once(
@@ -127,6 +137,8 @@ async def acquire(
                 max_scrolls=max_scrolls,
                 prefer_stealth=True,
                 sleep_ms=sleep_ms,
+                requested_fields=requested_fields,
+                requested_field_selectors=requested_field_selectors,
             )
         if result is not None:
             break
@@ -167,6 +179,8 @@ async def _acquire_once(
     max_scrolls: int,
     prefer_stealth: bool,
     sleep_ms: int,
+    requested_fields: list[str] | None,
+    requested_field_selectors: dict[str, list[dict]] | None,
 ) -> AcquisitionResult | None:
     import logging as _logging
     _log = _logging.getLogger(__name__)
@@ -218,6 +232,12 @@ async def _acquire_once(
         or len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
         or gate_phrases
         or js_shell_detected
+        or _requested_fields_need_browser(
+            html,
+            visible_text,
+            requested_fields or [],
+            requested_field_selectors or {},
+        )
         or normalized.error
     )
     if blocked.is_blocked:
@@ -276,6 +296,8 @@ async def _acquire_once(
             max_pages=max_pages,
             max_scrolls=max_scrolls,
             request_delay_ms=sleep_ms,
+            requested_fields=requested_fields,
+            requested_field_selectors=requested_field_selectors,
         )
     except Exception as exc:
         _log.warning("Playwright failed for %s: %s — falling back to curl_cffi result", url, exc)
@@ -336,6 +358,28 @@ def _normalize_fetch_result(result: HttpFetchResult | tuple[str, str, dict | lis
         status_code=200 if content_type in {"html", "json"} else 0,
         error="",
     )
+
+
+def _requested_fields_need_browser(
+    html: str,
+    visible_text: str,
+    requested_fields: list[str],
+    requested_field_selectors: dict[str, list[dict]],
+) -> bool:
+    if not requested_fields:
+        return False
+    if any(requested_field_selectors.get(str(field_name or "").strip().lower()) for field_name in requested_fields):
+        return True
+    normalized_html = " ".join(str(html or "").lower().replace("&", " and ").split())
+    normalized_visible = " ".join(str(visible_text or "").lower().replace("&", " and ").split())
+    for field_name in requested_fields:
+        terms = requested_field_terms(field_name)
+        if not terms:
+            continue
+        if any(term in normalized_visible or term in normalized_html for term in terms):
+            continue
+        return True
+    return False
 
 
 def _artifact_path(run_id: int, url: str) -> Path:

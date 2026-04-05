@@ -6,9 +6,7 @@ Currently, discovered_data is acting as a dumping ground for both unverified pro
 The Solution:
 Implement a strict Triage Schema using Pydantic. Separate "Manifest/Provenance Data" (useful for debugging/selectors) from "Unverified Domain Data" (useful for the user to review and promote).
 code
-import pytestfrom typing import Any
-
-class UnverifiedAttribute(BaseModel):
+from pydantic import BaseModel, Field, ConfigDictclass UnverifiedAttribute(BaseModel):
     key: str
     value: Any
     confidence_score: int = Field(ge=1, le=10) # Allows UI to filter noise slider

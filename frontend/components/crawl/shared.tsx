@@ -233,6 +233,7 @@ export function PreviewModal({
   const proxyCount = Array.isArray(dispatch.settings.proxy_list) ? dispatch.settings.proxy_list.length : 0;
   const smartExtraction = Boolean(dispatch.settings.llm_enabled);
   const proxyEnabled = Boolean(dispatch.settings.proxy_enabled);
+  const advancedMode = String(dispatch.settings.advanced_mode ?? "").trim();
 
   useEffect(() => {
     previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -304,8 +305,10 @@ export function PreviewModal({
           <PreviewRow label="Mode" value={dispatch.runType} />
           <PreviewRow label="Proxy" value={proxyEnabled ? `${proxyCount} configured` : "Inactive"} />
           <PreviewRow label="Smart Extraction" value={smartExtraction ? "On" : "Off"} />
+          <PreviewRow label="Advanced Mode" value={advancedMode || "Off"} />
           <PreviewRow label="Max Records" value={String(dispatch.settings.max_records)} />
           <PreviewRow label="Max Pages" value={String(dispatch.settings.max_pages)} />
+          <PreviewRow label="Max Scrolls" value={String(dispatch.settings.max_scrolls ?? "--")} />
         </div>
         <div className="mt-4">
           <div className="label-caps mb-2">Additional Fields</div>
@@ -389,15 +392,17 @@ export function TabBar({
   options: Array<{ value: string; label: string }>;
 }>) {
   return (
-    <div className="inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-border bg-panel p-0.5">
+    <div className="inline-flex min-h-[38px] items-center rounded-[var(--radius-lg)] border border-border bg-[var(--segmented-bg)] p-1 shadow-[var(--segmented-shadow)]">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
           className={cn(
-            "rounded-[4px] px-3 py-1 text-sm font-medium transition-colors",
-            value === option.value ? "bg-accent text-white shadow-[var(--shadow-sm)]" : "text-muted hover:text-foreground",
+            "rounded-[8px] px-3 py-1.5 text-sm font-medium transition-all",
+            value === option.value
+              ? "segmented-active"
+              : "text-muted hover:bg-[var(--segmented-item-hover-bg)] hover:text-foreground",
           )}
         >
           {option.label}
@@ -417,20 +422,68 @@ export function SegmentedMode({
   options: Array<{ value: string; label: string }>;
 }>) {
   return (
-    <div className="inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-border bg-panel p-0.5">
+    <div className="inline-flex min-h-[38px] flex-wrap items-center rounded-[var(--radius-lg)] border border-border bg-[var(--segmented-bg)] p-1 shadow-[var(--segmented-shadow)]">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
           className={cn(
-            "rounded-[4px] px-3 py-1 text-sm font-medium transition-colors",
-            value === option.value ? "bg-accent text-white shadow-[var(--shadow-sm)]" : "text-muted hover:text-foreground",
+            "rounded-[8px] px-3 py-1.5 text-sm font-medium transition-all",
+            value === option.value
+              ? "segmented-active"
+              : "text-muted hover:bg-[var(--segmented-item-hover-bg)] hover:text-foreground",
           )}
         >
           {option.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+export function AdvancedModePicker({
+  value,
+  onChange,
+  options,
+}: Readonly<{
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string; description: string }>;
+}>) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "rounded-[var(--radius-lg)] border px-3 py-2.5 text-left transition-all",
+              active
+                ? "advanced-picker-active border-[color:var(--accent)] shadow-[var(--shadow-sm)]"
+                : "border-border bg-[var(--advanced-picker-bg)] hover:border-[var(--border-strong)] hover:bg-[var(--advanced-picker-hover-bg)]",
+            )}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className={cn("text-sm font-semibold leading-none", active ? "text-foreground" : "text-[var(--text-secondary)]")}>
+                {option.label}
+              </span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]",
+                  active ? "bg-accent text-[var(--accent-fg)]" : "bg-[var(--bg-elevated)] text-muted",
+                )}
+              >
+                {active ? "Active" : "Mode"}
+              </span>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-4 text-muted">{option.description}</p>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -451,15 +504,29 @@ export function SettingSection({
   children?: ReactNode;
 }>) {
   return (
-    <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-strong)] bg-[var(--bg-elevated)]">
-      <div className="flex min-h-[76px] items-center justify-between gap-4 px-4 py-3.5">
+    <div
+      className={cn(
+        "overflow-hidden rounded-[var(--radius-xl)] border backdrop-blur-sm transition-all",
+        checked
+          ? "border-[color:color-mix(in_srgb,var(--accent)_28%,var(--border))] bg-[var(--setting-surface-active-bg)] shadow-[var(--shadow-sm)]"
+          : "border-[var(--border-strong)] bg-[var(--setting-surface-bg)]",
+      )}
+    >
+      <div className="flex min-h-[68px] items-center justify-between gap-3 px-4 py-3">
         <div className="flex min-w-0 items-start gap-3">
-          <div className={cn("mt-0.5 shrink-0 transition-colors", checked ? "text-foreground" : "text-[var(--text-secondary)]")}>
+          <div
+            className={cn(
+              "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[12px] border transition-colors",
+              checked
+                ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)]"
+                : "border-border bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
+            )}
+          >
             {icon}
           </div>
           <div className="min-w-0">
             <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--text-primary)]">{label}</div>
-            <div className="text-sm text-[var(--text-secondary)]">{description}</div>
+            <div className="text-[13px] leading-5 text-[var(--text-secondary)]">{description}</div>
           </div>
         </div>
         <Toggle checked={checked} onChange={onChange} ariaLabel={label} />
@@ -468,10 +535,10 @@ export function SettingSection({
         <div
           className={cn(
             "overflow-hidden transition-[max-height] duration-200 ease-out",
-            checked ? "max-h-[480px]" : "max-h-0",
+            checked ? "max-h-[420px]" : "max-h-0",
           )}
         >
-          <div className="border-t border-border p-4">{children}</div>
+          <div className="border-t border-border/80 bg-[var(--setting-body-bg)] p-3">{children}</div>
         </div>
       ) : null}
     </div>
@@ -498,15 +565,20 @@ export function SliderRow({
   suffix?: string;
 }>) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm text-[var(--text-secondary)]">{label}</div>
-        <button type="button" onClick={onReset} className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground">
-          <RotateCcw className="size-3.5" />
-          Reset
-        </button>
+    <div className="rounded-[var(--radius-lg)] border border-border bg-[var(--slider-row-bg)] px-3 py-2.5 shadow-[var(--slider-row-highlight)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-sm font-medium text-[var(--text-secondary)]">{label}</div>
+        <div className="flex items-center gap-2">
+          <div className="rounded-[10px] border border-[color:color-mix(in_srgb,var(--accent)_18%,var(--border))] bg-[var(--slider-value-bg)] px-2.5 py-1 text-xs font-semibold tabular-nums text-[var(--accent)]">
+            {value}
+            {suffix ?? ""}
+          </div>
+          <button type="button" onClick={onReset} aria-label={`Reset ${label}`} className="inline-flex items-center gap-1 text-xs text-muted hover:text-foreground">
+            <RotateCcw className="size-3.5" />
+          </button>
+        </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="mt-2.5 flex items-center gap-3">
         <input
           type="range"
           min={min}
@@ -514,13 +586,13 @@ export function SliderRow({
           step={step}
           value={clampNumber(value, min, max, min)}
           onChange={(event) => onChange(event.target.value)}
-          className="h-1.5 w-full rounded-full bg-border"
+          className="slider-control"
         />
         <Input
-          value={suffix ? `${value}${suffix}` : value}
+          value={value}
           onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
           onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
-          className="h-8 w-24 text-right font-mono text-xs"
+          className="h-8 w-20 rounded-[10px] bg-[var(--slider-input-bg)] text-right font-mono text-xs tabular-nums"
         />
       </div>
     </div>
@@ -802,7 +874,13 @@ function normalizeLogLevel(level: string) {
 
 function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null>) {
   const internalRef = useRef<HTMLDivElement | null>(null);
-  return ref ?? internalRef;
+  const targetRef = ref ?? internalRef;
+
+  useEffect(() => {
+    scrollViewportToBottom(targetRef);
+  }, [_logCount, targetRef]);
+
+  return targetRef;
 }
 
 function getFocusableElements(container: HTMLDivElement | null) {
@@ -829,7 +907,12 @@ function Toggle({
       onClick={() => onChange(!checked)}
       className={cn("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", checked ? "bg-accent" : "bg-border")}
     >
-      <span className={cn("inline-block size-4 rounded-full bg-white shadow-sm transition-transform", checked ? "translate-x-4" : "translate-x-0.5")} />
+      <span
+        className={cn(
+          "inline-block size-4 rounded-full shadow-sm transition-transform",
+          checked ? "translate-x-4 bg-[var(--accent-fg)]" : "translate-x-0.5 bg-[var(--bg-panel-strong)]",
+        )}
+      />
     </button>
   );
 }

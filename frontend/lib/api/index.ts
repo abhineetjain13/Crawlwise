@@ -22,6 +22,8 @@ import type {
   SelectorSuggestResponse,
   SelectorTestResponse,
   SelectorUpdatePayload,
+  SiteMemoryPayload,
+  SiteMemoryRecord,
   User,
 } from "./types";
 
@@ -125,6 +127,13 @@ export const api = {
   deleteSelectorsByDomain: (domain: string) =>
     apiClient.delete<{ deleted: number }>(`/api/selectors/domain/${encodeURIComponent(domain)}`),
   clearAllSiteMemory: () => apiClient.delete<{ deleted: number }>("/api/selectors/clear-all"),
+  listSiteMemory: () => apiClient.get<SiteMemoryRecord[]>("/api/site-memory"),
+  getSiteMemory: (domain: string) => apiClient.get<SiteMemoryRecord>(`/api/site-memory/${encodeURIComponent(domain)}`),
+  updateSiteMemory: (domain: string, payload: SiteMemoryPayload) =>
+    apiClient.put<SiteMemoryRecord>(`/api/site-memory/${encodeURIComponent(domain)}`, { payload }),
+  deleteSiteMemory: (domain: string) =>
+    apiClient.delete<{ deleted: number }>(`/api/site-memory/${encodeURIComponent(domain)}`),
+  clearAllDomainMemory: () => apiClient.delete<{ deleted: number }>("/api/site-memory"),
   testSelector: (payload: { url: string; css_selector?: string | null; xpath?: string | null; regex?: string | null }) =>
     apiClient.post<SelectorTestResponse>("/api/selectors/test", payload),
   listJobs: () => apiClient.get<ActiveJob[]>("/api/jobs/active"),

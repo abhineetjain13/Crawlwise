@@ -47,6 +47,7 @@ def canonical_fields(surface: str) -> list[str]:
 
 _TUNING: dict = _load("pipeline_tuning.json", {})  # type: ignore[assignment]
 _EXTRACTION_RULES: dict = _load("extraction_rules.json", {})  # type: ignore[assignment]
+_LLM_TUNING: dict = _load("llm_tuning.json", {})  # type: ignore[assignment]
 
 # Acquisition
 HTTP_TIMEOUT_SECONDS: int = _TUNING.get("http_timeout_seconds", 20)
@@ -61,6 +62,7 @@ JS_GATE_PHRASES: list[str] = _TUNING.get("js_gate_phrases", [
 DEFAULT_MAX_RECORDS: int = _TUNING.get("default_max_records", 100)
 DEFAULT_SLEEP_MS: int = _TUNING.get("default_sleep_ms", 0)
 MIN_REQUEST_DELAY_MS: int = _TUNING.get("min_request_delay_ms", 100)
+DEFAULT_MAX_SCROLLS: int = _TUNING.get("default_max_scrolls", 10)
 
 # Extraction tuning
 MAX_CANDIDATES_PER_FIELD: int = _TUNING.get("max_candidates_per_field", 5)
@@ -100,6 +102,15 @@ CHALLENGE_POLL_INTERVAL_MS: int = _TUNING.get("challenge_poll_interval_ms", 2000
 ORIGIN_WARM_PAUSE_MS: int = _TUNING.get("origin_warm_pause_ms", 2000)
 BROWSER_ERROR_RETRY_ATTEMPTS: int = _TUNING.get("browser_error_retry_attempts", 1)
 BROWSER_ERROR_RETRY_DELAY_MS: int = _TUNING.get("browser_error_retry_delay_ms", 1000)
+BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS: int = _TUNING.get("browser_navigation_networkidle_timeout_ms", 30000)
+BROWSER_NAVIGATION_LOAD_TIMEOUT_MS: int = _TUNING.get("browser_navigation_load_timeout_ms", 15000)
+BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS: int = _TUNING.get("browser_navigation_domcontentloaded_timeout_ms", 15000)
+PAGINATION_NAVIGATION_TIMEOUT_MS: int = _TUNING.get("pagination_navigation_timeout_ms", 20000)
+SCROLL_WAIT_MIN_MS: int = _TUNING.get("scroll_wait_min_ms", 1500)
+LOAD_MORE_WAIT_MIN_MS: int = _TUNING.get("load_more_wait_min_ms", 2000)
+COOKIE_CONSENT_PREWAIT_MS: int = _TUNING.get("cookie_consent_prewait_ms", 400)
+COOKIE_CONSENT_POSTCLICK_WAIT_MS: int = _TUNING.get("cookie_consent_postclick_wait_ms", 600)
+SHADOW_DOM_FLATTEN_MAX_HOSTS: int = _TUNING.get("shadow_dom_flatten_max_hosts", 100)
 
 if HTTP_RETRY_BACKOFF_BASE_MS < 0:
     raise ValueError("pipeline_tuning.json:http_retry_backoff_base_ms must be >= 0")
@@ -142,9 +153,12 @@ DOM_PATTERNS: dict[str, str] = _EXTRACTION_RULES.get("dom_patterns", _load("dom_
 # ---------------------------------------------------------------------------
 
 _CARD_SELECTORS: dict = _load("card_selectors.json", {})  # type: ignore[assignment]
+_PAGINATION_SELECTORS: dict = _load("pagination_selectors.json", {})  # type: ignore[assignment]
 
 CARD_SELECTORS_COMMERCE: list[str] = _CARD_SELECTORS.get("ecommerce", [])
 CARD_SELECTORS_JOBS: list[str] = _CARD_SELECTORS.get("jobs", [])
+PAGINATION_NEXT_SELECTORS: list[str] = _PAGINATION_SELECTORS.get("next_page", [])
+LOAD_MORE_SELECTORS: list[str] = _PAGINATION_SELECTORS.get("load_more", [])
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +225,9 @@ CANDIDATE_UI_NOISE_TOKEN_PATTERN: str = str(_CANDIDATE_CLEANUP.get("ui_noise_tok
 CANDIDATE_UI_ICON_TOKEN_PATTERN: str = str(_CANDIDATE_CLEANUP.get("ui_icon_token_pattern", r"(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work)(?=[A-Z]|\b)|place(?=[A-Z])"))
 CANDIDATE_SCRIPT_NOISE_PATTERN: str = str(_CANDIDATE_CLEANUP.get("script_noise_pattern", r"\b(?:imageloader|document\.getelementbyid|fallback-image)\b"))
 CANDIDATE_PROMO_ONLY_TITLE_PATTERN: str = str(_CANDIDATE_CLEANUP.get("promo_only_title_pattern", r"^(?:[-–—]?\s*)?(?:\d{1,3}%\s*(?:off)?|sale|new(?:\s+in)?|view\s*\d+|best seller|top seller)\s*$"))
+_INTELLIGENCE_CLEANUP: dict = _EXTRACTION_RULES.get("intelligence_cleanup", {})  # type: ignore[assignment]
+INTELLIGENCE_FIELD_NOISE_TOKENS: set[str] = set(_INTELLIGENCE_CLEANUP.get("field_noise_tokens", []))
+INTELLIGENCE_VALUE_NOISE_PHRASES: tuple[str, ...] = tuple(_INTELLIGENCE_CLEANUP.get("value_noise_phrases", []))
 
 _SEMANTIC_DETAIL_RULES: dict = _EXTRACTION_RULES.get("semantic_detail", {})  # type: ignore[assignment]
 SECTION_SKIP_PATTERNS: tuple[str, ...] = tuple(_SEMANTIC_DETAIL_RULES.get("section_skip_patterns", ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe"]))
@@ -303,8 +320,6 @@ BLOCK_TITLE_REGEXES: list[str] = _BLOCK_SIG.get("title_regexes", [
 # ---------------------------------------------------------------------------
 
 COOKIE_CONSENT_SELECTORS: list[str] = _load("consent_selectors.json", [])  # type: ignore[assignment]
-if not COOKIE_CONSENT_SELECTORS:
-    raise ValueError("knowledge_base/consent_selectors.json must exist and contain at least one selector")
 
 
 # ---------------------------------------------------------------------------
@@ -358,3 +373,21 @@ NESTED_NON_PRODUCT_KEYS: frozenset[str] = frozenset(_EXTRACTION_RULES.get("neste
 JSONLD_TYPE_NOISE: set[str] = set(_EXTRACTION_RULES.get("jsonld_type_noise", []))
 DYNAMIC_FIELD_NAME_DROP_TOKENS: set[str] = set(_EXTRACTION_RULES.get("dynamic_field_name_drop_tokens", []))
 SOURCE_RANKING: dict[str, int] = _EXTRACTION_RULES.get("source_ranking", {})
+
+
+# ---------------------------------------------------------------------------
+# 14. LLM request tuning — loaded from llm_tuning.json
+#     Prompt truncation limits and provider request params.
+# ---------------------------------------------------------------------------
+
+LLM_HTML_SNIPPET_MAX_CHARS: int = _LLM_TUNING.get("html_snippet_max_chars", 12000)
+LLM_EXISTING_VALUES_MAX_CHARS: int = _LLM_TUNING.get("existing_values_max_chars", 2400)
+LLM_CANDIDATE_EVIDENCE_MAX_CHARS: int = _LLM_TUNING.get("candidate_evidence_max_chars", 16000)
+LLM_DISCOVERED_SOURCES_MAX_CHARS: int = _LLM_TUNING.get("discovered_sources_max_chars", 15000)
+LLM_CLEAN_CANDIDATE_TEXT_LIMIT: int = _LLM_TUNING.get("clean_candidate_text_limit", 1200)
+LLM_GROQ_MAX_TOKENS: int = _LLM_TUNING.get("groq_max_tokens", 1200)
+LLM_GROQ_TEMPERATURE: float = _LLM_TUNING.get("groq_temperature", 0.1)
+LLM_ANTHROPIC_MAX_TOKENS: int = _LLM_TUNING.get("anthropic_max_tokens", 3000)
+LLM_ANTHROPIC_TEMPERATURE: float = _LLM_TUNING.get("anthropic_temperature", 0.1)
+LLM_NVIDIA_MAX_TOKENS: int = _LLM_TUNING.get("nvidia_max_tokens", 1200)
+LLM_NVIDIA_TEMPERATURE: float = _LLM_TUNING.get("nvidia_temperature", 0.1)

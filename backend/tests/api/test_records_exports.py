@@ -4,20 +4,26 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 from app.api.records import (
     EXPORT_PAGING_HEADER,
     EXPORT_PARTIAL_HEADER,
     EXPORT_TOTAL_HEADER,
     MAX_RECORD_PAGE_SIZE,
+    RECORD_NOT_FOUND_DETAIL,
     _collect_export_rows,
     _clean_export_data,
     _stream_export_csv,
     export_csv,
     export_json,
     record_provenance,
+    router,
 )
 from app.models.crawl import CrawlRecord, CrawlRun
+from app.models.user import User
+from app.core.security import hash_password
 
 
 async def _read_streaming_body(response) -> str:
@@ -265,3 +271,60 @@ async def test_record_provenance_returns_manifest_trace(db_session, test_user):
 
     assert payload.manifest_trace["json_ld"][0]["name"] == "Item"
     assert "manifest_trace" not in payload.source_trace
+
+
+@pytest.mark.asyncio
+async def test_record_provenance_masks_unauthorized_run_access(db_session):
+    owner = User(
+        email="owner@example.com",
+        hashed_password=hash_password("password123"),
+        role="user",
+    )
+    viewer = User(
+        email="viewer@example.com",
+        hashed_password=hash_password("password123"),
+        role="user",
+    )
+    db_session.add_all([owner, viewer])
+    await db_session.flush()
+
+    run = CrawlRun(
+        user_id=owner.id,
+        run_type="crawl",
+        url="https://example.com",
+        surface="ecommerce_detail",
+        status="completed",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/item",
+        data={"title": "Item"},
+        raw_data={},
+        discovered_data={},
+        source_trace={},
+        raw_html_path=None,
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await record_provenance(record.id, session=db_session, current_user=viewer)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == RECORD_NOT_FOUND_DETAIL
+
+
+def test_record_provenance_route_documents_combined_404_description():
+    route = next(
+        route
+        for route in router.routes
+        if isinstance(route, APIRoute) and route.path == "/api/records/{record_id}/provenance"
+    )
+
+    assert route.responses[404]["description"] == "Record not found or Run not found"

@@ -22,7 +22,9 @@ export function Card({
     <section
       {...props}
       className={cn(
-        "rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] shadow-[var(--shadow-card-value)]",
+        "rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-card)] shadow-[var(--shadow-card-value)] backdrop-blur-xl",
+        "before:pointer-events-none before:absolute before:inset-[1px] before:rounded-[calc(var(--radius-xl)-1px)] before:border before:border-[var(--surface-card-edge)] before:content-['']",
+        "relative overflow-hidden",
         "p-5",
         animate && "animate-fade-in",
         className,
@@ -132,9 +134,9 @@ export function Button({
 >) {
   const variants: Record<string, string> = {
     primary:   "bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] shadow-[var(--shadow-xs)]",
-    secondary: "border border-[var(--border)] bg-[var(--bg-panel)] text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] hover:border-[var(--border-strong)]",
-    ghost:     "border border-transparent bg-transparent text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]",
-    accent:    "bg-[var(--accent)] text-[var(--accent-fg)] shadow-[var(--shadow-xs)] hover:bg-[var(--accent-hover)]",
+    secondary: "border border-[var(--border)] bg-[var(--button-secondary-bg)] text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-strong)]",
+    ghost:     "border border-transparent bg-transparent text-[var(--text-muted)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
+    accent:    "accent-fill",
     danger:    "border border-[var(--danger-bg)] bg-transparent text-[var(--danger)] hover:bg-[var(--danger-bg)]",
   };
   const sizes: Record<string, string> = {
@@ -213,7 +215,7 @@ export function Toggle({
     >
       <span
         className={cn(
-          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-[var(--shadow-xs)] transition-transform",
+          "inline-block h-3.5 w-3.5 rounded-full bg-[var(--accent-fg)] shadow-[var(--shadow-xs)] transition-transform",
           checked ? "translate-x-[14px]" : "translate-x-0.5",
         )}
       />

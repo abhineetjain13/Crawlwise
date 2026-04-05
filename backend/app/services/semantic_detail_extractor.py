@@ -157,14 +157,41 @@ def _build_semantic_aggregates(
     ]
     if dimension_lines:
         aggregates["dimensions"] = SEMANTIC_AGGREGATE_SEPARATOR.join(dimension_lines)
+    feature_values = _collect_feature_values(sections)
+    if feature_values:
+        aggregates["features"] = SEMANTIC_AGGREGATE_SEPARATOR.join(feature_values)
+    combined_lines = [*feature_values, *spec_lines]
+    if combined_lines:
+        aggregates["features_specs"] = SEMANTIC_AGGREGATE_SEPARATOR.join(combined_lines)
+    return aggregates
+
+
+def _collect_feature_values(sections: dict[str, str]) -> list[str]:
     feature_values = [
         body
         for key, body in sections.items()
         if key in FEATURE_SECTION_ALIASES and body not in (None, "", [], {})
     ]
     if feature_values:
-        aggregates["features"] = SEMANTIC_AGGREGATE_SEPARATOR.join(feature_values)
-    return aggregates
+        return feature_values
+
+    inferred: list[str] = []
+    for key, body in sections.items():
+        if body in (None, "", [], {}):
+            continue
+        normalized_key = normalize_requested_field(key)
+        normalized_body = _clean_text(body)
+        lowered_body = normalized_body.lower()
+        if normalized_key in {"description", "summary", "specifications", "dimensions", "materials", "care"}:
+            continue
+        if len(normalized_body) < 24 or len(normalized_body) > 280:
+            continue
+        if re.fullmatch(r"[$€£]\s?\d[\d,.\s]*", normalized_body):
+            continue
+        if any(token in lowered_body for token in ("shop ", "read the story", "verified reviewer", "review", "reviews")):
+            continue
+        inferred.append(normalized_body)
+    return inferred
 
 
 def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:

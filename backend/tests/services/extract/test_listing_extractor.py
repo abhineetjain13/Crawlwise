@@ -32,6 +32,48 @@ def test_extract_product_cards():
     assert "price" in records[0]
 
 
+def test_extract_listing_records_splits_paginated_html_and_dedupes_urls():
+    html = """
+    <!-- PAGE BREAK:1:https://example.com/products?page=1 -->
+    <html><body>
+    <div class="product-card">
+        <h3><a href="/product/1">Widget A</a></h3>
+        <span class="price">$10.00</span>
+    </div>
+    <div class="product-card">
+        <h3><a href="/product/2">Widget B</a></h3>
+        <span class="price">$20.00</span>
+    </div>
+    </body></html>
+    <!-- PAGE BREAK:2:https://example.com/products?page=2 -->
+    <html><body>
+    <div class="product-card">
+        <h3><a href="/product/2">Widget B</a></h3>
+        <span class="price">$20.00</span>
+    </div>
+    <div class="product-card">
+        <h3><a href="/product/3">Widget C</a></h3>
+        <span class="price">$30.00</span>
+    </div>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/products",
+        max_records=10,
+    )
+
+    assert len(records) == 3
+    assert [record["url"] for record in records] == [
+        "https://example.com/product/1",
+        "https://example.com/product/2",
+        "https://example.com/product/3",
+    ]
+
+
 def test_extract_job_cards():
     html = """
     <html><body>

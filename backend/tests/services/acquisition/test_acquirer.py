@@ -112,6 +112,35 @@ async def test_acquire_html_advanced_mode_tries_curl_then_playwright():
 
 
 @pytest.mark.asyncio
+async def test_acquire_html_passes_max_scrolls_to_playwright():
+    curl_html = "<html><body>" + "x" * 600 + "</body></html>"
+    playwright_html = "<html><body>" + "y" * 600 + "</body></html>"
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=curl_html, status_code=200, content_type="html"),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(html=playwright_html),
+        ) as fetch_rendered_html_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            await acquire_html(1, "https://example.com/spa", advanced_mode="scroll", max_scrolls=23)
+
+    assert fetch_rendered_html_mock.await_args.kwargs["max_scrolls"] == 23
+
+
+@pytest.mark.asyncio
 async def test_acquire_html_advanced_mode_falls_back_to_curl_on_playwright_failure():
     """When advanced mode Playwright crashes, fall back to curl_cffi result."""
     curl_html = "<html><body><h1>Product</h1>" + "x" * 600 + "</body></html>"

@@ -119,9 +119,46 @@ async def test_call_groq_sets_max_tokens():
         )
 
     assert captured_json["max_tokens"] == 1200
+    assert captured_json["temperature"] == 0.1
     assert text == '{"ok": true}'
     assert input_tokens == 5
     assert output_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_call_groq_uses_configured_request_params(monkeypatch):
+    captured_json: dict = {}
+
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "choices": [{"message": {"content": '{"ok": true}'}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+            }
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, _url, *, headers, json):
+            _ = headers
+            captured_json.update(json)
+            return DummyResponse()
+
+    monkeypatch.setattr("app.services.llm_runtime.LLM_GROQ_MAX_TOKENS", 321)
+    monkeypatch.setattr("app.services.llm_runtime.LLM_GROQ_TEMPERATURE", 0.25)
+
+    with patch("app.services.llm_runtime.httpx.AsyncClient", return_value=DummyClient()):
+        await _call_groq("test-key", "llama-test", "system", "user")
+
+    assert captured_json["max_tokens"] == 321
+    assert captured_json["temperature"] == 0.25
 
 
 @pytest.mark.asyncio
@@ -206,9 +243,13 @@ def test_enforce_token_limit_preserves_json_section_validity():
 
     truncated = _enforce_token_limit(prompt, limit=120)
     prefix = "Candidate evidence by field:\n"
-    start = truncated.index(prefix) + len(prefix)
-    end = truncated.index("\n\n[TRUNCATED DUE TO TOKEN LIMIT]")
-    rendered_json = truncated[start:end]
+    prefix_parts = truncated.split(prefix, 1)
+    assert len(prefix_parts) == 2, "Expected candidate evidence prefix in truncated prompt"
+    rendered_section = prefix_parts[1]
+    end_marker = "\n\n[TRUNCATED DUE TO TOKEN LIMIT]"
+    end = rendered_section.find(end_marker)
+    assert end != -1, "Expected truncation marker after rendered JSON payload"
+    rendered_json = rendered_section[:end]
 
     assert "[TRUNCATED DUE TO TOKEN LIMIT]" in truncated
     assert isinstance(json.loads(rendered_json), dict)

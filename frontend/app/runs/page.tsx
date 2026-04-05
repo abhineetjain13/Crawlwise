@@ -183,7 +183,8 @@ export default function RunsPage() {
       />
 
       {/* ── Filters ── */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-card)] p-3 shadow-[var(--shadow-card-value)]">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="flex-1">
           <Input
             placeholder="Filter by domain or URL…"
@@ -209,6 +210,7 @@ export default function RunsPage() {
         </select>
         <Button onClick={applyFilters} size="sm">Filter</Button>
         <Button variant="ghost" onClick={resetFilters} size="sm">Reset</Button>
+        </div>
       </div>
 
       {actionError ? (

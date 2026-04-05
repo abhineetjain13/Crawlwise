@@ -32,6 +32,9 @@ RECORD_NOT_FOUND_DETAIL = "Record not found"
 RECORD_NOT_FOUND_RESPONSE = {
     404: {"description": RECORD_NOT_FOUND_DETAIL},
 }
+RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
+    404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
+}
 
 
 @router.get("/api/crawls/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
@@ -54,7 +57,7 @@ async def records_list(
     )
 
 
-@router.get("/api/records/{record_id}/provenance", responses=RECORD_NOT_FOUND_RESPONSE)
+@router.get("/api/records/{record_id}/provenance", responses=RECORD_PROVENANCE_NOT_FOUND_RESPONSE)
 async def record_provenance(
     record_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -67,7 +70,7 @@ async def record_provenance(
         raise HTTPException(status_code=404, detail=RECORD_NOT_FOUND_DETAIL)
     run = await get_run(session, record.run_id)
     if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(status_code=404, detail=RECORD_NOT_FOUND_DETAIL)
     return CrawlRecordProvenanceResponse.model_validate(record, from_attributes=True)
 
 

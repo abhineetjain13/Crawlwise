@@ -60,8 +60,9 @@
     "benefits": ["benefits", "job benefits", "job_benefits", "perks", "why you'll love this job", "what we offer"],
     "skills": ["skills", "job skills", "job_skills", "competencies", "abilities", "experience", "what you'll bring"],
     "summary": ["summary", "overview", "about", "description", "our opportunity", "about the role", "about the team"],
-    "specifications": ["specifications", "details", "technical details", "product details", "the details"],
+    "specifications": ["specifications", "specs", "spec", "details", "technical details", "tech specs", "product details", "the details"],
     "features": ["features", "highlights", "key features"],
+    "features_specs": ["features specs", "features and specs", "features & specs", "features_&_specs", "feature specs", "feature details"],
     "materials": ["materials", "fabric", "composition", "fabric content"],
     "care": ["care", "care instructions", "product care"],
     "dimensions": ["dimensions", "sizing", "measurements"],
@@ -142,11 +143,48 @@
     "script_noise_pattern": "\\b(?:imageloader|document\\.getelementbyid|fallback-image)\\b",
     "promo_only_title_pattern": "^(?:[-–—]?\\s*)?(?:\\d{1,3}%\\s*(?:off)?|sale|new(?:\\s+in)?|view\\s*\\d+|best seller|top seller)\\s*$"
   },
+  "intelligence_cleanup": {
+    "field_noise_tokens": [
+      "review",
+      "reviews",
+      "reviewer",
+      "rating",
+      "ratings",
+      "votes",
+      "vote",
+      "stars",
+      "star",
+      "helpful",
+      "report",
+      "distribution",
+      "verified",
+      "language",
+      "incentives",
+      "submission"
+    ],
+    "value_noise_phrases": [
+      "verified reviewer",
+      "was this helpful",
+      "recommend this product",
+      "review this product",
+      "filter reviews",
+      "rating distribution",
+      "overall rating",
+      "out of 5",
+      "too small",
+      "too big",
+      "runs very narrow",
+      "runs very wide",
+      "report this review",
+      "reviews with",
+      "select to rate"
+    ]
+  },
   "semantic_detail": {
-    "section_skip_patterns": ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe"],
+    "section_skip_patterns": ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe", "review this product", "filter reviews", "rating distribution", "overall rating", "verified reviewer", "read the story", "shop women", "shop men's", "shop mens", "shop men's", "shop men"],
     "section_ancestor_stop_tags": ["footer", "header", "nav", "aside", "form"],
-    "section_ancestor_stop_tokens": ["footer", "header", "nav", "menu", "newsletter", "breadcrumbs", "breadcrumb", "cookie", "consent"],
-    "spec_label_block_patterns": ["play video", "watch video", "video", "learn more", "add to cart", "buy now", "primary guide", "guide", "discount"],
+    "section_ancestor_stop_tokens": ["footer", "header", "nav", "menu", "newsletter", "breadcrumbs", "breadcrumb", "cookie", "consent", "bazaarvoice", "bv-rnr", "review", "reviews", "ratings"],
+    "spec_label_block_patterns": ["play video", "watch video", "video", "learn more", "add to cart", "buy now", "primary guide", "guide", "discount", "verified reviewer", "rating summary", "filter reviews", "report", "helpful"],
     "spec_drop_labels": ["qty", "quantity", "details", "total", "subtotal", "delivery", "shipping", "aggregaterating", "aggregate_rating", "breadcrumblist", "breadcrumb_list", "organization", "webpage", "website", "imageobject", "image_object", "listitem", "list_item", "searchaction", "search_action", "offer", "itemlist", "item_list", "howto", "faqpage", "videoobject", "video_object", "creativework", "creative_work", "type", "@type", "@context", "you_are_here", "breadcrumb", "age", "language", "incentives", "verified_reviewer", "rating_distribution", "overall_rating", "review_this_product", "filter_reviews", "rating_summary", "select"],
     "spec_label_drop_country_names": true,
     "feature_section_aliases": ["features", "feature", "highlights", "key_features", "key features"],
@@ -158,7 +196,7 @@
     "organization", "website", "webpage", "breadcrumblist",
     "searchaction", "sitenavigationelement", "imageobject",
     "videoobject", "faqpage", "howto", "person",
-    "localbuisness", "localbusiness", "store"
+    "localbusiness", "store"
   ],
   "product_identity_fields": [
     "title", "price", "sale_price", "original_price", "brand",

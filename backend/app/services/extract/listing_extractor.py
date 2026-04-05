@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
-from app.services.discover.service import DiscoveryManifest
+from app.services.discover.service import DiscoveryManifest, discover_sources
 from app.services.pipeline_config import (
     CARD_SELECTORS_COMMERCE,
     CARD_SELECTORS_JOBS,
@@ -49,6 +49,44 @@ def extract_listing_records(
         List of dicts, one per detected item. Each dict includes
         ``_source`` indicating which strategy produced it.
     """
+    page_fragments = _split_paginated_html_fragments(html)
+    if len(page_fragments) > 1:
+        merged_records: list[dict] = []
+        for index, fragment in enumerate(page_fragments):
+            fragment_manifest = manifest if index == 0 else discover_sources(fragment)
+            merged_records.extend(
+                _extract_listing_records_single_page(
+                    fragment,
+                    surface,
+                    target_fields,
+                    page_url=page_url,
+                    max_records=max_records,
+                    manifest=fragment_manifest,
+                )
+            )
+            if len(merged_records) >= max_records:
+                break
+        return _dedupe_listing_records(merged_records)[:max_records]
+
+    return _extract_listing_records_single_page(
+        html,
+        surface,
+        target_fields,
+        page_url=page_url,
+        max_records=max_records,
+        manifest=manifest,
+    )
+
+
+def _extract_listing_records_single_page(
+    html: str,
+    surface: str,
+    target_fields: set[str],
+    *,
+    page_url: str = "",
+    max_records: int = 100,
+    manifest: DiscoveryManifest | None = None,
+) -> list[dict]:
     candidate_sets: list[list[dict]] = []
 
     # --- Strategy 1: Structured data sources (from manifest) ---
@@ -106,6 +144,49 @@ def extract_listing_records(
     if not candidate_sets:
         return []
     return max(candidate_sets, key=_listing_record_set_sort_key)[:max_records]
+
+
+def _split_paginated_html_fragments(html: str) -> list[str]:
+    if "<!-- PAGE BREAK:" not in html:
+        return [html]
+    fragments: list[str] = []
+    current_lines: list[str] = []
+    for line in html.splitlines():
+        if line.strip().startswith("<!-- PAGE BREAK:"):
+            if current_lines:
+                fragment = "\n".join(current_lines).strip()
+                if fragment:
+                    fragments.append(fragment)
+                current_lines = []
+            continue
+        current_lines.append(line)
+    if current_lines:
+        fragment = "\n".join(current_lines).strip()
+        if fragment:
+            fragments.append(fragment)
+    return fragments or [html]
+
+
+def _dedupe_listing_records(records: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for record in records:
+        key = _listing_record_join_key(record)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(record)
+    return deduped
+
+
+def _listing_record_join_key(record: dict) -> str:
+    url = str(record.get("url") or "").strip().lower()
+    if url:
+        return f"url:{url}"
+    title = str(record.get("title") or "").strip().lower()
+    price = str(record.get("price") or "").strip().lower()
+    image_url = str(record.get("image_url") or "").strip().lower()
+    return f"title:{title}|price:{price}|image:{image_url}"
 
 
 # ---------------------------------------------------------------------------

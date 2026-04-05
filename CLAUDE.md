@@ -214,7 +214,7 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - Zero-quality candidates filtered from dynamic/intelligence fields — placeholder values like "-" no longer appear
 - Category quality score now rejects social media names (youtube, facebook, etc.), namespace-prefixed values (food:foodProduct), and URL path fragments
 - Brand quality score penalizes URL path fragments (e.g. "facets/brands/coca-cola")
-- Extraction smoke runner expanded to 10 sites covering: ecommerce PDPs (Adorama, SSENSE, Arc'teryx, Adafruit, SparkFun, OpenFoodFacts), job listings (Dice), ecommerce listings (AutoZone, Puma)
+- Extraction smoke runner expanded to 9 sites covering: ecommerce PDPs (Adorama, SSENSE, Arc'teryx, Adafruit, SparkFun, OpenFoodFacts), job listings (Dice), ecommerce listings (AutoZone, Puma)
 - Magic numbers migration: JSON-LD frozensets (`_JSONLD_STRUCTURAL_KEYS`, `_JSONLD_NON_PRODUCT_BLOCK_TYPES`, `_PRODUCT_IDENTITY_FIELDS`, `_NESTED_NON_PRODUCT_KEYS`, `_JSONLD_TYPE_NOISE`), dynamic field drop tokens, and source ranking dict all moved from hardcoded service.py to `extraction_rules.json` and loaded via `pipeline_config.py`
 - `MAX_CANDIDATES_PER_FIELD`, `DYNAMIC_FIELD_NAME_MAX_TOKENS`, `ACCORDION_EXPAND_MAX`, `ACCORDION_EXPAND_WAIT_MS` now configurable via `pipeline_tuning.json` (were hardcoded in service.py and browser_client.py)
 - Created `block_signatures.json` and `consent_selectors.json` — these were referenced by pipeline_config.py but didn't exist as files (fell through to inline fallback defaults)
