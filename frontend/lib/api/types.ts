@@ -88,6 +88,25 @@ export type CrawlRecord = {
   raw_data: Record<string, unknown>;
   discovered_data: Record<string, unknown>;
   source_trace: Record<string, unknown>;
+  review_bucket?: Array<{
+    key: string;
+    value: unknown;
+    confidence_score: number;
+    source: string;
+  }>;
+  provenance_available?: boolean;
+  raw_html_path: string | null;
+  created_at: string;
+};
+
+export type CrawlRecordProvenance = {
+  id: number;
+  run_id: number;
+  source_url: string;
+  raw_data: Record<string, unknown>;
+  discovered_data: Record<string, unknown>;
+  source_trace: Record<string, unknown>;
+  manifest_trace: Record<string, unknown>;
   raw_html_path: string | null;
   created_at: string;
 };

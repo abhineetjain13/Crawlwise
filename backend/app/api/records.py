@@ -13,12 +13,13 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user, get_db
+from app.models.crawl import CrawlRecord
 from app.models.user import User
 from app.schemas.common import PaginatedResponse, PaginationMeta
-from app.schemas.crawl import CrawlRecordResponse
+from app.schemas.crawl import CrawlRecordProvenanceResponse, CrawlRecordResponse
 from app.services.crawl_service import get_run_records
 
-router = APIRouter(prefix="/api/crawls", tags=["records"])
+router = APIRouter(tags=["records"])
 MAX_RECORD_PAGE_SIZE = 1000
 EXPORT_PAGING_HEADER = "X-Export-Paging"
 EXPORT_TOTAL_HEADER = "X-Export-Total"
@@ -27,9 +28,13 @@ RUN_NOT_FOUND_DETAIL = "Run not found"
 RUN_NOT_FOUND_RESPONSE = {
     404: {"description": RUN_NOT_FOUND_DETAIL},
 }
+RECORD_NOT_FOUND_DETAIL = "Record not found"
+RECORD_NOT_FOUND_RESPONSE = {
+    404: {"description": RECORD_NOT_FOUND_DETAIL},
+}
 
 
-@router.get("/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get("/api/crawls/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
 async def records_list(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -49,7 +54,24 @@ async def records_list(
     )
 
 
-@router.get("/{run_id}/export/json", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get("/api/records/{record_id}/provenance", responses=RECORD_NOT_FOUND_RESPONSE)
+async def record_provenance(
+    record_id: int,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> CrawlRecordProvenanceResponse:
+    from app.services.crawl_service import get_run
+
+    record = await session.get(CrawlRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=RECORD_NOT_FOUND_DETAIL)
+    run = await get_run(session, record.run_id)
+    if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    return CrawlRecordProvenanceResponse.model_validate(record, from_attributes=True)
+
+
+@router.get("/api/crawls/{run_id}/export/json", responses=RUN_NOT_FOUND_RESPONSE)
 async def export_json(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -70,7 +92,7 @@ async def export_json(
     )
 
 
-@router.get("/{run_id}/export/csv", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get("/api/crawls/{run_id}/export/csv", responses=RUN_NOT_FOUND_RESPONSE)
 async def export_csv(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -91,7 +113,7 @@ async def export_csv(
     )
 
 
-@router.get("/{run_id}/export/discoverist", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get("/api/crawls/{run_id}/export/discoverist", responses=RUN_NOT_FOUND_RESPONSE)
 async def export_discoverist(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],

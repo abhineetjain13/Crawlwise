@@ -334,6 +334,13 @@ def _store_specification(specs: dict[str, str], label: str, value: str, *, prese
     specs[key] = value
 
 
+_DAY_TIME_KEY_RE = re.compile(
+    r"^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+    r"(?:[_\-]\d{1,2})?$",
+    re.IGNORECASE,
+)
+
+
 def _should_keep_specification(key: str, value: str, *, preserve_visible: bool = False) -> bool:
     lowered_key = key.lower()
     lowered_value = value.lower()
@@ -344,6 +351,15 @@ def _should_keep_specification(key: str, value: str, *, preserve_visible: bool =
     if re.fullmatch(r"pack[_-]?\d+", lowered_key):
         return False
     if re.fullmatch(r"\d+(?:[_-]\d+)*", lowered_key):
+        return False
+    if _DAY_TIME_KEY_RE.fullmatch(lowered_key):
+        return False
+    # Drop single-character keys and overly long sentence-like labels
+    if len(lowered_key) <= 1 or len(lowered_key) > 60:
+        return False
+    # Drop keys that look like sentences (4+ words with spaces) — these are
+    # section headings or review titles, not specification labels
+    if lowered_key.count("_") >= 5:
         return False
     if any(token in lowered_key for token in SPEC_LABEL_BLOCK_PATTERNS):
         return False

@@ -178,6 +178,37 @@ def test_extract_product_cards_captures_listing_metadata():
     assert records[0]["original_price"] == "$79.99"
 
 
+def test_extract_product_cards_infers_currency_from_locale_and_reads_swatch_color():
+    html = """
+    <html><body>
+    <div class="product-card">
+        <button class="swatch" aria-label="Color: Black / White"></button>
+        <h3><a href="/product/ua-1">UA Runner</a></h3>
+        <span class="price">59.99</span>
+    </div>
+    <div class="product-card">
+        <button class="swatch" data-color-name="Midnight Navy"></button>
+        <h3><a href="/product/ua-2">UA Hoodie</a></h3>
+        <span class="price">79.99</span>
+    </div>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.underarmour.com/en-us/c/mens/",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["color"] == "Black / White"
+    assert records[0]["currency"] == "USD"
+    assert records[1]["color"] == "Midnight Navy"
+    assert records[1]["currency"] == "USD"
+
+
 def test_extract_listing_prefers_next_flight_records_over_breadcrumb_json_ld():
     html = """
     <html><body>
@@ -348,6 +379,79 @@ def test_extract_listing_from_query_state_product_cards_and_drops_content_cards(
     assert records[0]["url"] == "https://www.kitchenaid.com/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html"
     assert records[0]["price"] == "179.99"
     assert records[0]["currency"] == "USD"
+
+
+def test_extract_listing_prefers_sigma_product_search_results_over_nav_links():
+    html = """
+    <html><body>
+      <nav>
+        <ul>
+          <li><a href="/products">Products</a></li>
+          <li><a href="/applications">Applications</a></li>
+          <li><a href="/support">Support</a></li>
+        </ul>
+      </nav>
+      <script id="__NEXT_DATA__" type="application/json">
+      {
+        "props": {
+          "apolloState": {
+            "ROOT_QUERY": {
+              "getProductSearchResults({\\"input\\":{\\"group\\":\\"product\\"}})": {
+                "__typename": "ProductSearchResults",
+                "metadata": {"itemCount": 2, "page": 1, "perPage": 20, "numPages": 1},
+                "items": [
+                  {
+                    "__typename": "Product",
+                    "name": "Magnetic Screw Cap for Headspace Vials, 18 mm thread",
+                    "productNumber": "SU860101",
+                    "productKey": "SU860101",
+                    "description": "PTFE/silicone septum, pkg of 100 ea",
+                    "brand": {"name": "Supelco", "key": "SUPELCO"},
+                    "images": [{"largeUrl": "/deepweb/assets/sigmaaldrich/product/images/a.jpg"}],
+                    "attributes": [
+                      {"label": "material", "values": ["PTFE/silicone"]},
+                      {"label": "O.D. × H", "values": ["18 mm × 11 mm"]},
+                      {"label": "fitting", "values": ["thread for 18 mm"]}
+                    ]
+                  },
+                  {
+                    "__typename": "Product",
+                    "name": "Headspace vial, screw top, rounded bottom (vial only)",
+                    "productNumber": "SU860097",
+                    "productKey": "SU860097",
+                    "description": "volume 20 mL, clear glass vial",
+                    "brand": {"name": "Supelco", "key": "SUPELCO"},
+                    "images": [{"largeUrl": "/deepweb/assets/sigmaaldrich/product/images/b.jpg"}],
+                    "attributes": [
+                      {"label": "material", "values": ["clear glass"]},
+                      {"label": "O.D. × H", "values": ["22.5 mm × 75.5 mm"]}
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+      </script>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.sigmaaldrich.com/IN/en/products/analytical-chemistry/analytical-chromatography/analytical-vials",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Magnetic Screw Cap for Headspace Vials, 18 mm thread"
+    assert records[0]["sku"] == "SU860101"
+    assert records[0]["brand"] == "Supelco"
+    assert records[0]["url"] == "https://www.sigmaaldrich.com/IN/en/product/supelco/su860101"
+    assert records[0]["materials"] == "PTFE/silicone"
+    assert "O.D. × H: 18 mm × 11 mm" in records[0]["dimensions"]
 
 
 def test_is_meaningful_listing_record_keeps_priced_record_without_url():

@@ -16,7 +16,13 @@ from app.services.acquisition.browser_client import fetch_rendered_html
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host
 from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
-from app.services.pipeline_config import ACQUIRE_HOST_MIN_INTERVAL_MS, BROWSER_FALLBACK_VISIBLE_TEXT_MIN, JS_GATE_PHRASES
+from app.services.pipeline_config import (
+    ACQUIRE_HOST_MIN_INTERVAL_MS,
+    BROWSER_FALLBACK_HTML_SIZE_THRESHOLD,
+    BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
+    BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX,
+    JS_GATE_PHRASES,
+)
 
 
 class ProxyPoolExhausted(RuntimeError):
@@ -197,11 +203,21 @@ async def _acquire_once(
     blocked = detect_blocked_page(html)
     visible_text = " ".join(BeautifulSoup(html, "html.parser").get_text(" ", strip=True).lower().split())
     gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
+    # Detect JS-shell pages: large HTML with very little visible text indicates
+    # a SPA/Next.js shell where all real content is JS-rendered.
+    html_len = len(html or "")
+    visible_len = len(visible_text)
+    js_shell_detected = (
+        html_len >= BROWSER_FALLBACK_HTML_SIZE_THRESHOLD
+        and visible_len > 0
+        and (visible_len / html_len) < BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX
+    )
     needs_browser = bool(
         blocked.is_blocked
         or normalized.status_code in {403, 429, 503}
         or len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
         or gate_phrases
+        or js_shell_detected
         or normalized.error
     )
     if blocked.is_blocked:

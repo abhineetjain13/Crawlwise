@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRecord
 from app.services.crawl_service import create_crawl_run
-from app.services.review.service import build_review_payload
+from app.services.review.service import build_review_payload, save_review
 
 
 @pytest.mark.asyncio
@@ -24,7 +24,16 @@ async def test_build_review_payload_uses_extracted_fields(db_session: AsyncSessi
             source_url="https://example.com/product/1",
             data={"title": "Chair A", "price": "10"},
             raw_data={"title": "Chair A", "price": "$10", "url": "https://example.com/product/1"},
-            discovered_data={"adapter_data": [], "json_ld": []},
+            discovered_data={
+                "review_bucket": [
+                    {
+                        "key": "material",
+                        "value": "Oak",
+                        "confidence_score": 8,
+                        "source": "adapter",
+                    }
+                ]
+            },
             source_trace={"type": "listing"},
             raw_html_path=None,
         )
@@ -35,7 +44,7 @@ async def test_build_review_payload_uses_extracted_fields(db_session: AsyncSessi
 
     assert payload is not None
     assert payload["normalized_fields"] == ["price", "title"]
-    assert payload["discovered_fields"] == ["price", "title", "url"]
+    assert payload["discovered_fields"] == ["material"]
 
 
 @pytest.mark.asyncio
@@ -82,3 +91,108 @@ async def test_build_review_payload_includes_selector_suggestions_for_detail_rec
     assert payload is not None
     assert "title" in payload["selector_suggestions"]
     assert payload["selector_suggestions"]["title"][0]["xpath"] == "/html[1]/body[1]/h1[1]"
+
+
+@pytest.mark.asyncio
+async def test_save_review_promotes_review_bucket_fields_into_canonical_data(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def _fake_save_domain_mapping(_domain: str, _surface: str, _mapping: dict[str, str]) -> None:
+        return None
+
+    async def _fake_save_canonical_fields(_surface: str, fields: list[str]) -> list[str]:
+        return fields
+
+    monkeypatch.setattr("app.services.review.service.save_domain_mapping", _fake_save_domain_mapping)
+    monkeypatch.setattr("app.services.review.service.save_canonical_fields", _fake_save_canonical_fields)
+
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product/chair-a",
+        "surface": "ecommerce_detail",
+    })
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/product/chair-a",
+        data={"title": "Chair A"},
+        raw_data={"title": "Chair A"},
+        discovered_data={
+            "review_bucket": [
+                {
+                    "key": "material",
+                    "value": "Oak",
+                    "confidence_score": 8,
+                    "source": "semantic_spec",
+                }
+            ]
+        },
+        source_trace={},
+        raw_html_path=None,
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    await save_review(
+        db_session,
+        run,
+        [{"source_field": "material", "output_field": "materials", "selected": True}],
+    )
+
+    await db_session.refresh(record)
+    assert record.data["materials"] == "Oak"
+    assert record.discovered_data == {}
+
+
+@pytest.mark.asyncio
+async def test_save_review_keeps_review_bucket_when_target_field_is_already_set(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def _fake_save_domain_mapping(_domain: str, _surface: str, _mapping: dict[str, str]) -> None:
+        return None
+
+    async def _fake_save_canonical_fields(_surface: str, fields: list[str]) -> list[str]:
+        return fields
+
+    monkeypatch.setattr("app.services.review.service.save_domain_mapping", _fake_save_domain_mapping)
+    monkeypatch.setattr("app.services.review.service.save_canonical_fields", _fake_save_canonical_fields)
+
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product/chair-a",
+        "surface": "ecommerce_detail",
+    })
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/product/chair-a",
+        data={"title": "Chair A", "materials": "Walnut"},
+        raw_data={"title": "Chair A"},
+        discovered_data={
+            "review_bucket": [
+                {
+                    "key": "material",
+                    "value": "Oak",
+                    "confidence_score": 8,
+                    "source": "semantic_spec",
+                }
+            ]
+        },
+        source_trace={},
+        raw_html_path=None,
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    await save_review(
+        db_session,
+        run,
+        [{"source_field": "material", "output_field": "materials", "selected": True}],
+    )
+
+    await db_session.refresh(record)
+    assert record.data["materials"] == "Walnut"
+    assert record.discovered_data["review_bucket"][0]["key"] == "material"
+    assert record.discovered_data["review_bucket"][0]["value"] == "Oak"

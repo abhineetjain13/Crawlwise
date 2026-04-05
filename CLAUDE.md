@@ -195,6 +195,30 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - `collection_keys.json` expanded from 15 to 37 keys (added `drinks`, `books`, `categories`, `collections`, `articles`, `content`, etc.)
 - JSON extractor now falls back to preserving scalar fields under original keys when no canonical alias matches — prevents empty records from APIs with non-standard naming (e.g. CocktailDB `strDrink`)
 - Card extraction now prefers `[itemprop='image']` for image_url before falling back to generic `<img>` selectors
+- JS-shell page detection: acquisition now triggers Playwright fallback when HTML is large (>=200KB) but visible text ratio is below 2% — catches Next.js/SPA shell pages like Sigma Aldrich where `curl_cffi` returns full HTML skeleton but no rendered product data
+- Listing extractor now detects and filters category/navigation URLs (paths like `/products/cell-culture`) from product URLs (paths like `/product/sigma/nuc101`) — prevents category hub links from being extracted as product records
+- LLM runtime calls are fire-and-forget with no retry — 429 rate limit errors fail immediately (retry/backoff removed to avoid blocking the pipeline on free-tier API limits)
+- Dynamic field name validation rejects single-character keys, keys longer than 60 chars, sentence-like keys with 5+ underscores, and JSON-LD schema type names (AggregateRating, BreadcrumbList, etc.) from leaking into `record.data`
+- Specification aggregate fields (`specifications`, `dimensions`) now require at least 2 real spec entries from the semantic extractor before being emitted — prevents phantom "specifications" on pages without actual spec tables
+- `spec_drop_labels` expanded with JSON-LD type names, day-of-week patterns, and structural artifacts
+- Extraction smoke runner (`run_extraction_smoke.py`) tests the full acquire→discover→extract pipeline without a database, validated against 5 client URLs (Adorama, Dice, SSENSE, Arc'teryx)
+- Network payload noise filtering: geo/tracking/widget API responses (geolocation, analytics, Klarna, Affirm, livechat, etc.) are now filtered by URL pattern before entering the candidate pipeline — prevents ISP names, tracking IDs, and payment widget data from polluting title/category/brand candidates
+- JSON-LD `@type` values no longer leak as category candidates: `_deep_get_all_aliases` now skips JSON-LD structural keys (`@type`, `@context`, `@id`, `@graph`), and a CamelCase schema type pattern filter catches remaining type names (e.g. IndividualProduct, PeopleAudience)
+- `generic_category_values` expanded with 30+ additional schema.org type names (IndividualProduct, PeopleAudience, PostalAddress, QuantitativeValue, etc.)
+- Dynamic field underscore threshold relaxed from >=3 to >=5 to preserve legitimate multi-word fields (job qualifications, accordion section headings)
+- LLM retry/backoff removed — 429 errors now fail fast instead of blocking the pipeline with 5-10s sleeps per retry
+- Text pattern extraction fallback: when a requested additional field has no candidates from structured sources, the pipeline now searches description text and HTML for "Label: Value" patterns matching the field name (e.g. "Supplier color: Black/Jet" inside SSENSE description)
+- `_deep_get_all_aliases` now skips non-product container keys (`review`, `reviews`, `author`, `publisher`, `breadcrumb`, etc.) during traversal — prevents review titles from leaking as product title candidates
+- JSON-LD blocks with non-product `@type` (Organization, WebSite, WebPage, BreadcrumbList, etc.) are now skipped for product-identity fields (title, price, brand, etc.) — fixes site name "SparkFun Electronics" appearing as product title
+- Candidate rows per field capped at 5 — prevents intelligence tab from showing 13+ variant SKUs or size values
+- Zero-quality candidates filtered from dynamic/intelligence fields — placeholder values like "-" no longer appear
+- Category quality score now rejects social media names (youtube, facebook, etc.), namespace-prefixed values (food:foodProduct), and URL path fragments
+- Brand quality score penalizes URL path fragments (e.g. "facets/brands/coca-cola")
+- Extraction smoke runner expanded to 10 sites covering: ecommerce PDPs (Adorama, SSENSE, Arc'teryx, Adafruit, SparkFun, OpenFoodFacts), job listings (Dice), ecommerce listings (AutoZone, Puma)
+- Magic numbers migration: JSON-LD frozensets (`_JSONLD_STRUCTURAL_KEYS`, `_JSONLD_NON_PRODUCT_BLOCK_TYPES`, `_PRODUCT_IDENTITY_FIELDS`, `_NESTED_NON_PRODUCT_KEYS`, `_JSONLD_TYPE_NOISE`), dynamic field drop tokens, and source ranking dict all moved from hardcoded service.py to `extraction_rules.json` and loaded via `pipeline_config.py`
+- `MAX_CANDIDATES_PER_FIELD`, `DYNAMIC_FIELD_NAME_MAX_TOKENS`, `ACCORDION_EXPAND_MAX`, `ACCORDION_EXPAND_WAIT_MS` now configurable via `pipeline_tuning.json` (were hardcoded in service.py and browser_client.py)
+- Created `block_signatures.json` and `consent_selectors.json` — these were referenced by pipeline_config.py but didn't exist as files (fell through to inline fallback defaults)
+- Accordion expansion in browser_client.py now uses configurable max and wait from pipeline_tuning.json, passed as JS parameter to `page.evaluate()`
 
 ## Tests
 
@@ -205,7 +229,7 @@ $env:PYTHONPATH='.'
 pytest tests -q
 ```
 
-259 tests covering: adapters, acquisition, blocked detection, JSON extraction, listing extraction (title/price separation, itemprop, auto-detect scoring, microdata cards, price cleanup), crawl service orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, discovery.
+279 tests covering: adapters, acquisition, blocked detection, JSON extraction, listing extraction (title/price separation, itemprop, auto-detect scoring, microdata cards, price cleanup, category URL filtering), crawl service orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, discovery.
 
 Acquire-only smoke checks can be run without the full crawl pipeline:
 
@@ -223,6 +247,15 @@ Each smoke run now writes a timestamped JSON report under `artifacts/acquisition
 
 Use these small batches first when validating acquisition changes. They are intentionally lighter and safer than a full `process_run()` audit, and they should remain free of site-specific fallback hacks.
 
+Full extraction pipeline smoke tests (acquire + discover + extract, no database):
+
+```powershell
+$env:PYTHONPATH='.'
+python run_extraction_smoke.py
+```
+
+This tests 10 client URLs through the complete extraction pipeline and writes a timestamped report under `artifacts/extraction_smoke/`.
+
 ## Architecture Invariants
 
 These MUST be preserved across all changes:
@@ -239,6 +272,10 @@ These MUST be preserved across all changes:
 10. **Acquisition regressions must be diagnosable from artifacts.** Successful phase-1 runs should emit HTML/JSON artifacts plus per-URL diagnostics and smoke-run summaries so failures can be compared across batches without relying on transient logs.
 11. **Cookie reuse must be policy-driven.** Do not commit site cookies. Persist only policy-approved cookies via `cookie_policy.json`, and treat challenge/session cookies as ephemeral unless explicitly allowed.
 12. **Diagnostics must be observational.** Acquisition diagnostics should report only what actually happened during the fetch/render path; do not fabricate blocker causes, fallback reasons, or retry metadata.
+13. **JS-shell detection must trigger Playwright.** Large HTML (>=200KB) with very low visible text ratio (<2%) indicates a SPA/Next.js shell. The acquirer must escalate to Playwright in these cases even when `visible_text_length` passes the absolute minimum threshold.
+14. **LLM calls must fail fast.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. Re-evaluate when using paid API keys.
+15. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to `spec_drop_labels` in `extraction_rules.json`, not hardcoded.
+16. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
 
 ## Known Gaps / Risks
 
@@ -248,15 +285,15 @@ These MUST be preserved across all changes:
 - `try_blocked_adapter_recovery()` currently only supports Shopify — other platform recovery paths not yet implemented.
 - Typed reviewed values are not yet committed end-to-end: LLM cleanup suggestions and field-commit payloads still coerce values to strings, which can flatten arrays/objects/numbers discovered during cleanup.
 - `build_absolute_xpath` generates brittle absolute paths that pollute selector memory.
-- **Schema pollution in `record.data`**: Detail page extraction surfaces spec-table labels (e.g. `price_excl._tax`, `pack_1`–`pack_5`, `category: "AggregateRating"`) as top-level fields alongside real business fields. `_build_dynamic_structured_rows()` and `_build_dynamic_semantic_rows()` in `extract/service.py` need a cleanup pass: spec-table fields should be namespaced (e.g. under a `specifications` dict) and JSON-LD type names (AggregateRating, BreadcrumbList) should not leak into category/brand fields.
+- **Schema pollution in `record.data`** (partially addressed): Dynamic field name validation now filters single-char keys, sentence-like labels (5+ underscores), JSON-LD type names, and day-of-week patterns. However, site-specific promo labels (e.g. `add_adorama_protect`) and 2-underscore heading labels from job pages (e.g. `deep_learning_mastery`) still leak through. Full spec namespacing under a `specifications` dict remains TODO.
 - **Advanced crawl modes incomplete**: `paginate` in `browser_client.py` is a POC stub (line 113 comment: "For pagination we'd collect multi-page HTML; for POC return first page"). `auto` mode only scrolls, never paginates. Multi-page listing crawls only capture page 1.
-- **Detail extraction pipeline shares the same candidate system as listing** — candidates from multiple sources (JSON-LD, embedded JSON, DOM, tables, semantic sections) are all flattened into a single candidates dict. When sources disagree (e.g. JSON-LD `@type` leaks as `category`), the highest-ranked source wins with no quality gate.
+- **Detail extraction pipeline shares the same candidate system as listing** — candidates from multiple sources (JSON-LD, embedded JSON, DOM, tables, semantic sections) are all flattened into a single candidates dict. JSON-LD `@type` leakage into category is now fixed, but other cross-source contamination (e.g. promo text from embedded JSON leaking into description) may still occur.
 - **SPA-rendered listing pages** (Oxylabs sandbox, practicesoftwaretesting.com): hydrated state arrays found in discovery but listing extractor can't parse arbitrary React/Angular state shapes into records. `_extract_items_from_json` only matches arrays with known collection keys or recurses for the largest array, missing component-level state.
 - **Listing card extraction has no fallback for content-only pages** (quotes, country lists) where repeating items don't match product card patterns (no price, no product URL). The `ecommerce_listing` surface assumption blocks extraction of non-commerce repeating data.
 
 ## Preferred Next Steps
 
-1. **Schema cleanup for detail pages**: Namespace spec-table fields under `specifications`, filter JSON-LD type names from business fields, establish a clear separation between canonical fields and discovered metadata in `record.data`.
+1. **Schema cleanup for detail pages**: Finish namespacing spec-table fields under `specifications` dict, and add surface-aware filtering (job page headings should not become spec fields).
 2. **Implement `paginate` advanced mode**: Collect multi-page HTML in `browser_client.py`, feed concatenated results through listing extraction with deduplication. Wire the existing `max_pages` setting.
 3. **Detail page multi-source reconciliation**: Add a quality gate between `extract_candidates()` and final record assembly so JSON-LD structural artifacts don't contaminate business fields.
 4. Surface extraction verdict distinctions in the run detail UI.

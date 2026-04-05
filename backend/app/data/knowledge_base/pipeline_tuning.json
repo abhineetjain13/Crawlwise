@@ -2,6 +2,8 @@
   "http_timeout_seconds": 20,
   "impersonation_target": "chrome110",
   "browser_fallback_visible_text_min": 500,
+  "browser_fallback_visible_text_ratio_max": 0.02,
+  "browser_fallback_html_size_threshold": 200000,
   "js_gate_phrases": [
     "enable javascript",
     "<noscript>"
@@ -31,5 +33,9 @@
   "challenge_poll_interval_ms": 2000,
   "origin_warm_pause_ms": 2000,
   "browser_error_retry_attempts": 1,
-  "browser_error_retry_delay_ms": 1000
+  "browser_error_retry_delay_ms": 1000,
+  "max_candidates_per_field": 5,
+  "dynamic_field_name_max_tokens": 7,
+  "accordion_expand_max": 20,
+  "accordion_expand_wait_ms": 500
 }

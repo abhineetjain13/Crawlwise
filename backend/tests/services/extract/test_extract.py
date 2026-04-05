@@ -567,12 +567,9 @@ def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholder
     assert semantic["table_groups"][0]["rows"][0]["href"] == "https://example.com/c1156.pdf"
     assert semantic["table_groups"][1]["title"] == "Environmental & Export Classifications"
     assert semantic["specifications"]["operating_temperature"] == "-"
-    operating_temperature_row = next(
-        row for row in candidates["operating_temperature"]
-        if row.get("display_label") == "Operating Temperature"
-    )
-    assert operating_temperature_row["value"] == "-"
-    assert operating_temperature_row["group_label"] == "Environmental & Export Classifications"
+    # Placeholder value "-" is preserved in semantic trace but filtered from
+    # intelligence candidates (zero quality score for dynamic fields).
+    assert "operating_temperature" not in candidates
 
 
 def test_extract_filters_schema_type_category_noise_and_keeps_real_category():
@@ -770,6 +767,82 @@ def test_extract_dedupes_same_value_across_sources_and_preserves_supporting_sour
     assert candidates["title"][0]["value"] == "Shared Title"
     assert candidates["title"][0]["source"] == "adapter, json_ld"
     assert candidates["title"][0]["sources"] == ["adapter", "json_ld"]
+
+
+def test_extract_dedupes_case_only_variants_and_keeps_best_display_value():
+    html = "<html><body></body></html>"
+    manifest = _manifest(
+        adapter_data=[{"brand": "Supelco"}],
+        json_ld=[{"brand": "SUPELCO"}],
+        _hydrated_states=[{"product": {"brand": "supelco"}}],
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert [row["value"] for row in candidates["brand"]] == ["Supelco"]
+    assert candidates["brand"][0]["sources"] == ["adapter", "hydrated_state", "json_ld"]
+
+
+def test_extract_sigma_product_detail_and_buy_box_candidates():
+    html = """
+    <html><body>
+      <div class="buy-box">
+        <h3>Select a Size</h3>
+        <div>Pack Size</div>
+        <div>100 ea</div>
+        <div>SKU</div>
+        <div>SU860101</div>
+        <div>Availability</div>
+        <div>Available to ship TODAY from Bangalore Non-Bonded Warehouse</div>
+        <div>Price</div>
+        <div>₹16,484.75</div>
+      </div>
+    </body></html>
+    """
+    manifest = _manifest(next_data={
+        "props": {
+            "pageProps": {
+                "data": {
+                    "getProductDetail": {
+                        "name": "Magnetic Screw Cap for Headspace Vials, 18 mm thread",
+                        "productNumber": "SU860101",
+                        "productKey": "SU860101",
+                        "description": "PTFE/silicone septum, pkg of 100 ea",
+                        "brand": {"name": "Supelco"},
+                        "synonyms": ["18 mm magnetic screw cap for vials"],
+                        "images": [{"largeUrl": "/deepweb/assets/sigmaaldrich/product/images/a.jpg"}],
+                        "attributes": [
+                            {"label": "material", "values": ["PTFE/silicone"]},
+                            {"label": "packaging", "values": ["pkg of 100 ea"]},
+                            {"label": "O.D. × H", "values": ["18 mm × 11 mm"]},
+                            {"label": "fitting", "values": ["thread for 18 mm"]},
+                        ],
+                    }
+                }
+            }
+        }
+    })
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.sigmaaldrich.com/IN/en/product/supelco/su860101",
+            "ecommerce_detail",
+            html,
+            manifest,
+            ["synonyms", "pack_size"],
+        )
+    assert candidates["brand"][0]["value"] == "Supelco"
+    assert candidates["sku"][0]["value"] == "SU860101"
+    assert candidates["synonyms"][0]["value"] == "18 mm magnetic screw cap for vials"
+    assert candidates["size"][0]["value"] == "100 ea"
+    assert candidates["pack_size"][0]["value"] == "100 ea"
+    assert candidates["availability"][0]["value"] == "Available to ship TODAY from Bangalore Non-Bonded Warehouse"
+    assert candidates["price"][0]["value"] == "₹16,484.75"
+    assert candidates["currency"][0]["value"] == "INR"
 
 
 def test_extract_returns_empty_candidates_for_listing_surfaces():

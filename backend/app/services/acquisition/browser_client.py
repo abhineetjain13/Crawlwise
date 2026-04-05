@@ -17,6 +17,8 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_p
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.pipeline_config import (
+    ACCORDION_EXPAND_MAX,
+    ACCORDION_EXPAND_WAIT_MS,
     BLOCK_MIN_HTML_LENGTH,
     BROWSER_ERROR_RETRY_ATTEMPTS,
     BROWSER_ERROR_RETRY_DELAY_MS,
@@ -111,6 +113,9 @@ async def fetch_rendered_html(
         result.diagnostics["challenge_ok"] = challenge_ok
         await _pause_after_navigation(request_delay_ms)
 
+        # Expand accordion/tab sections so content is in the DOM for extraction
+        await _expand_accordions(page)
+
         combined_html = await _apply_advanced_mode(
             page,
             advanced_mode,
@@ -123,7 +128,7 @@ async def fetch_rendered_html(
             result.network_payloads = intercepted
             result.diagnostics["pagination_mode"] = advanced_mode
             result.diagnostics["max_pages"] = max_pages
-            result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") + 1 if combined_html else 0
+            result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") if combined_html else 0
             await _persist_context_cookies(context, page.url or url, original_domain)
             await context.close()
             await browser.close()
@@ -200,6 +205,11 @@ async def _collect_paginated_html(page, *, max_pages: int, request_delay_ms: int
         next_page_url = await _find_next_page_url(page)
         if not next_page_url or next_page_url in visited_urls:
             break
+        try:
+            await validate_public_target(next_page_url)
+        except ValueError as exc:
+            logger.warning("Rejected pagination URL %s from %s: %s", next_page_url, page.url, exc)
+            break
         visited_urls.add(next_page_url)
         await page.goto(next_page_url, wait_until="domcontentloaded", timeout=20_000)
         await _dismiss_cookie_consent(page)
@@ -247,6 +257,38 @@ async def _find_next_page_url(page) -> str:
         logger.debug("Failed to evaluate DOM for next-page link", exc_info=True)
         return ""
     return str(href or "").strip()
+
+
+async def _expand_accordions(page) -> None:
+    """Click collapsed accordion/tab triggers to reveal hidden content for extraction."""
+    try:
+        expand_max = ACCORDION_EXPAND_MAX
+        expanded_count = await page.evaluate("""
+            (maxExpand) => {
+                let count = 0;
+                const collapsed = document.querySelectorAll(
+                    '[aria-expanded="false"], ' +
+                    'details:not([open]), ' +
+                    '[data-accordion-heading]:not([aria-expanded="true"]), ' +
+                    '[role="tab"][aria-selected="false"]'
+                );
+                for (const el of collapsed) {
+                    if (el.tagName === 'DETAILS') {
+                        el.setAttribute('open', '');
+                        count++;
+                    } else {
+                        try { el.click(); count++; } catch(e) {}
+                    }
+                    if (count >= maxExpand) break;
+                }
+                return count;
+            }
+        """, expand_max)
+        if expanded_count:
+            logger.debug("Expanded %d accordion/tab sections", expanded_count)
+            await asyncio.sleep(ACCORDION_EXPAND_WAIT_MS / 1000.0)
+    except Exception:
+        logger.debug("Accordion expansion failed (non-critical)", exc_info=True)
 
 
 async def _populate_result(result: BrowserResult, page, intercepted: list[dict]) -> None:

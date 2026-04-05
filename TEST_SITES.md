@@ -86,11 +86,9 @@ JS-rendered and complex HTTP listing pages. No aggressive bot protection.
 | LC13 | `https://www.ifixit.com/Parts` | HTTP | Easy | Repair parts tree, device compatibility hierarchy, clean HTML |
 | LC14 | `https://www.abebooks.com/servlet/SearchResults?kn=python&pt=book` | HTTP | Medium | Used books, multi-seller listing per title, ISBN-keyed |
 | LC15 | `https://www.thriftbooks.com/browse/?b.search=science` | HTTP | Easy | Book reseller, edition + condition variants in card, pagination |
-| LC16 | `https://www.zoro.com/c/power-tools` | Browser | Medium | Industrial reseller, spec attributes in card DOM, JS-rendered filters |
 | LC17 | `https://www.thomann.de/gb/guitars.html` | HTTP | Medium | EU music retailer, numbered pages, JSON-LD structured |
 | LC18 | `https://www.rockler.com/woodworking-tools` | HTTP | Medium | Specialty retail, category facets, inline JSON product data |
 | LC19 | `https://www.govplanet.com/for-sale/equipment` | Browser | Hard | Gov't surplus heavy equipment — auction site, JS listing, unusual domain |
-| LC20 | `https://www.shopgoodwill.com/Items/auctions/category/1` | Browser | Hard | Goodwill auctions, timed lots, JS-rendered, bid count in DOM |
 
 ---
 

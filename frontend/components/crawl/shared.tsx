@@ -48,6 +48,8 @@ export type IntelligenceCandidate = {
   value: unknown;
   href?: string;
   sortOrder: number;
+  confidenceScore?: number;
+  sourceKind?: "candidate" | "review_bucket" | "llm_suggestion";
 };
 export type IntelligenceRecordGroup = {
   key: string;
@@ -798,7 +800,7 @@ function normalizeLogLevel(level: string) {
   return String(level || "").trim().toUpperCase();
 }
 
-function useLogViewport(ref?: RefObject<HTMLDivElement | null>) {
+function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null>) {
   const internalRef = useRef<HTMLDivElement | null>(null);
   return ref ?? internalRef;
 }

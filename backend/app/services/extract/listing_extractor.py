@@ -71,6 +71,12 @@ def extract_listing_records(
     if len(json_ld_records) >= 2:
         candidate_sets.append(json_ld_records)
 
+    next_data = _extract_next_data_payload(soup)
+    if next_data:
+        next_data_records = _extract_from_next_data(next_data, surface, page_url)
+        if len(next_data_records) >= 2:
+            candidate_sets.append(next_data_records)
+
     selectors = CARD_SELECTORS_COMMERCE if "commerce" in surface or "ecommerce" in surface else CARD_SELECTORS_JOBS
 
     cards: list[Tag] = []
@@ -266,6 +272,14 @@ def _extract_from_json_ld(soup: BeautifulSoup, surface: str, page_url: str) -> l
     return records
 
 
+def _extract_next_data_payload(soup: BeautifulSoup) -> dict | None:
+    node = soup.select_one("script#__NEXT_DATA__")
+    if node is None:
+        return None
+    payload = _parse_json_script(node.string or node.get_text(" ", strip=True) or "")
+    return payload if isinstance(payload, dict) else None
+
+
 def _normalize_ld_item(item: dict, surface: str, page_url: str) -> dict | None:
     """Normalize a JSON-LD Product or JobPosting into a flat record."""
     record: dict = {}
@@ -289,6 +303,7 @@ def _normalize_ld_item(item: dict, surface: str, page_url: str) -> dict | None:
             offers = offers[0]
         if isinstance(offers, dict):
             record["price"] = offers.get("price") or offers.get("lowPrice") or ""
+            record["currency"] = offers.get("priceCurrency") or ""
             record["availability"] = offers.get("availability") or ""
         record["brand"] = _nested_name(item.get("brand"))
         record["sku"] = item.get("sku") or ""
@@ -328,6 +343,8 @@ def _normalize_ld_item(item: dict, surface: str, page_url: str) -> dict | None:
         record["category"] = item.get("employmentType") or ""
 
     # Remove empty values
+    if record.get("price") and not record.get("currency"):
+        record["currency"] = _infer_currency_from_page_url(page_url)
     record = {k: v for k, v in record.items() if v}
     if record:
         record["_raw_item"] = item
@@ -599,6 +616,11 @@ def _lookup_next_flight_window_index(combined: str, raw_url: str, page_url: str)
 
 def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | None:
     """Map an arbitrary dict to canonical fields using alias matching."""
+    product_search_record = _normalize_product_search_item(item, page_url=page_url)
+    if product_search_record:
+        product_search_record["_raw_item"] = item
+        return product_search_record
+
     record: dict = {}
 
     for canonical, aliases in FIELD_ALIASES.items():
@@ -615,12 +637,142 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
         if slug_url:
             record["url"] = slug_url
 
+    if record.get("price") not in (None, "", [], {}) and record.get("currency") in (None, "", [], {}):
+        inferred_currency = _infer_currency_from_page_url(page_url)
+        if inferred_currency:
+            record["currency"] = inferred_currency
+
     if "ecommerce" in _surface and record.get("url") in (None, "", [], {}) and record.get("price") in (None, "", [], {}):
         return None
 
     if record:
         record["_raw_item"] = item
     return record if record else None
+
+
+def _normalize_product_search_item(item: dict, *, page_url: str) -> dict | None:
+    typename = str(item.get("__typename") or "").strip()
+    product_number = str(item.get("productNumber") or item.get("productKey") or "").strip()
+    name = str(item.get("name") or "").strip()
+    attributes = item.get("attributes")
+    if typename != "Product" or not product_number or not name or not isinstance(attributes, list):
+        return None
+
+    record: dict[str, object] = {
+        "title": name,
+        "sku": product_number,
+        "description": str(item.get("description") or "").strip() or None,
+        "brand": _nested_name(item.get("brand")) or None,
+        "url": _product_search_detail_url(item, page_url=page_url) or None,
+    }
+
+    image_candidates = _extract_image_candidates(_product_search_images(item), page_url=page_url)
+    if image_candidates:
+        record["image_url"] = image_candidates[0]
+        if len(image_candidates) > 1:
+            record["additional_images"] = ", ".join(image_candidates[1:])
+
+    attribute_values = _product_search_attribute_map(attributes)
+    materials = attribute_values.get("material")
+    if materials:
+        record["materials"] = materials
+    dimensions = _product_search_dimensions(attributes)
+    if dimensions:
+        record["dimensions"] = dimensions
+    packaging = attribute_values.get("packaging")
+    if packaging:
+        record["size"] = packaging
+
+    return {
+        key: value
+        for key, value in record.items()
+        if value not in (None, "", [], {})
+    } or None
+
+
+def _product_search_detail_url(item: dict, *, page_url: str) -> str:
+    page_origin = ""
+    parsed = urlparse(page_url)
+    if parsed.scheme and parsed.netloc:
+        page_origin = f"{parsed.scheme}://{parsed.netloc}"
+    raw_url_candidates = [
+        item.get("url"),
+        item.get("productUrl"),
+        item.get("href"),
+    ]
+    for candidate in raw_url_candidates:
+        text = str(candidate or "").strip()
+        if not text:
+            continue
+        return urljoin(page_url, text) if page_origin else text
+
+    brand_key = ""
+    brand = item.get("brand")
+    if isinstance(brand, dict):
+        brand_key = str(brand.get("key") or brand.get("erpKey") or brand.get("name") or "").strip().lower()
+    product_key = str(item.get("productKey") or item.get("productNumber") or "").strip().lower()
+    if not page_origin or not brand_key or not product_key:
+        return ""
+    locale_match = re.search(r"/([A-Za-z]{2})/([A-Za-z]{2})/", page_url)
+    locale_prefix = f"/{locale_match.group(1)}/{locale_match.group(2)}" if locale_match else ""
+    return f"{page_origin}{locale_prefix}/product/{brand_key}/{product_key}"
+
+
+def _product_search_images(item: dict) -> list[dict | str]:
+    images = item.get("images")
+    if not isinstance(images, list):
+        return []
+    normalized: list[dict | str] = []
+    for image in images:
+        if isinstance(image, dict):
+            normalized.append({
+                "url": image.get("largeUrl") or image.get("mediumUrl") or image.get("smallUrl") or image.get("url"),
+            })
+        elif isinstance(image, str):
+            normalized.append(image)
+    return normalized
+
+
+def _product_search_attribute_map(attributes: list[object]) -> dict[str, str]:
+    mapped: dict[str, str] = {}
+    for attribute in attributes:
+        if not isinstance(attribute, dict):
+            continue
+        label = str(attribute.get("label") or "").strip().lower()
+        if not label:
+            continue
+        values = attribute.get("values")
+        if not isinstance(values, list):
+            continue
+        normalized_values = [
+            " ".join(str(value or "").replace("&#160;", " ").split()).strip()
+            for value in values
+            if str(value or "").strip()
+        ]
+        if normalized_values:
+            mapped[label] = " | ".join(normalized_values)
+    return mapped
+
+
+def _product_search_dimensions(attributes: list[object]) -> str:
+    dimension_rows: list[str] = []
+    for attribute in attributes:
+        if not isinstance(attribute, dict):
+            continue
+        label = " ".join(str(attribute.get("label") or "").replace("&#160;", " ").split()).strip()
+        values = attribute.get("values")
+        if not label or not isinstance(values, list):
+            continue
+        if not re.search(r"(?:\b(?:o\.d\.|i\.d\.|height|width|depth|diameter|length|thread|size)\b|×)", label, re.I):
+            continue
+        normalized_values = [
+            " ".join(str(value or "").replace("&#160;", " ").split()).strip()
+            for value in values
+            if str(value or "").strip()
+        ]
+        if normalized_values:
+            dimension_rows.append(f"{label}: {' | '.join(normalized_values)}")
+    return " | ".join(dimension_rows)
 
 
 def _is_meaningful_listing_record(record: dict) -> bool:
@@ -637,6 +789,17 @@ def _is_meaningful_listing_record(record: dict) -> bool:
     meaningful_keys = {key for key in public_fields if key != "url"}
     if meaningful_keys == {"title", "image_url"} and not url_value:
         return False
+
+    # Reject records that are just category/navigation links with only a title
+    # (no price, sku, brand, rating, or other product signals)
+    if url_value and _looks_like_category_url(url_value):
+        product_signal_keys = meaningful_keys & {
+            "price", "sku", "brand", "rating", "description",
+            "availability", "review_count", "category",
+        }
+        if not product_signal_keys:
+            return False
+
     if meaningful_keys:
         return True
 
@@ -655,13 +818,50 @@ def _looks_like_facet_or_filter_url(url_value: str) -> bool:
     return any(fragment in path for fragment in facet_fragments) and bool(parsed.query)
 
 
+def _looks_like_category_url(url_value: str) -> bool:
+    """Detect category/hub/navigation URLs that link to sub-categories, not items."""
+    parsed = urlparse(str(url_value or "").strip())
+    path = parsed.path.lower().rstrip("/")
+    if not path:
+        return False
+    # Paths like /products/cell-culture, /categories/electronics are category hubs.
+    # Paths like /product/sigma/nuc101 or /products/detail/123 are NOT.
+    category_prefixes = (
+        "/products/", "/categories/", "/category/", "/collections/",
+        "/departments/", "/browse/", "/c/", "/b/",
+    )
+    detail_overrides = (
+        "/product/", "/pdp/", "/dp/", "/detail/", "/item/",
+    )
+    for prefix in detail_overrides:
+        if prefix in path:
+            return False
+    segments = [s for s in path.split("/") if s]
+    # Need at least 2 path segments to be a category (e.g., /products/electronics)
+    if len(segments) < 2:
+        return False
+    # Check if any segment is a category directory marker and has a
+    # human-readable sub-category slug after it (no SKU/ID patterns).
+    category_markers = {"products", "categories", "category", "collections",
+                        "departments", "browse"}
+    last = segments[-1]
+    for i, seg in enumerate(segments[:-1]):
+        if seg in category_markers and i + 1 < len(segments):
+            # The segment after the marker should be a readable slug, not an item ID
+            if re.fullmatch(r"[a-z][a-z0-9\-]+", last) and len(last) < 60:
+                return True
+    return False
+
+
 def _looks_like_detail_record_url(url_value: str) -> bool:
     lowered = str(url_value or "").lower()
     if not lowered.startswith("http"):
         return False
     if _looks_like_facet_or_filter_url(lowered):
         return False
-    detail_markers = ("/pdp/", "/product/", "/products/", "/dp/", "/p/", "piid=")
+    if _looks_like_category_url(lowered):
+        return False
+    detail_markers = ("/pdp/", "/product/", "/dp/", "/p/", "piid=", "/item/")
     return any(marker in lowered for marker in detail_markers)
 
 
@@ -834,7 +1034,7 @@ def _extract_from_card(card: Tag, _target_fields: set[str], surface: str, page_u
 
     card_text_lines = _card_text_lines(card)
     if "ecommerce" in surface:
-        color_text = _match_line(card_text_lines, r"\bcolors?\b")
+        color_text = _extract_card_color(card, card_text_lines)
         if color_text:
             record["color"] = color_text
         size_text = _match_line(card_text_lines, r"\bsizes?\b")
@@ -843,6 +1043,10 @@ def _extract_from_card(card: Tag, _target_fields: set[str], surface: str, page_u
         dimensions_text = _match_dimensions_line(card_text_lines)
         if dimensions_text:
             record["dimensions"] = dimensions_text
+        if record.get("price") and not record.get("currency"):
+            inferred_currency = _infer_currency_from_page_url(page_url)
+            if inferred_currency:
+                record["currency"] = inferred_currency
 
     # Job fields
     if "job" in surface:
@@ -1089,4 +1293,76 @@ def _match_dimensions_line(lines: list[str]) -> str:
             return line
         if measurement_regex.search(line):
             return line
+    return ""
+
+
+def _extract_card_color(card: Tag, lines: list[str]) -> str:
+    swatch_selectors = [
+        "[data-color]",
+        "[data-color-name]",
+        "[data-testid*='color' i]",
+        "[aria-label*='color' i]",
+        "[title*='color' i]",
+        "[class*='swatch'] [aria-label]",
+        "[class*='swatch'][aria-label]",
+        "[role='radio'][aria-label]",
+        "button[aria-label]",
+    ]
+    for selector in swatch_selectors:
+        for node in card.select(selector):
+            color = _extract_color_label_from_node(node)
+            if color:
+                return color
+    return _match_line(lines, r"\bcolors?\b")
+
+
+def _extract_color_label_from_node(node: Tag) -> str:
+    candidate_values = [
+        node.get("data-color"),
+        node.get("data-color-name"),
+        node.get("aria-label"),
+        node.get("title"),
+        node.get_text(" ", strip=True),
+    ]
+    for raw_value in candidate_values:
+        text = " ".join(str(raw_value or "").split()).strip()
+        if not text:
+            continue
+        text = re.sub(r"(?i)^(selected\s+)?colors?\s*[:\-]\s*", "", text).strip()
+        text = re.sub(r"(?i)^(view|select|choose)\s+colors?\s*[:\-]?\s*", "", text).strip()
+        text = re.sub(r"(?i)\b(?:button|swatch|option)$", "", text).strip(" -,:;/")
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in {"color", "colors", "select color", "choose color"}:
+            continue
+        if len(text) > 40:
+            continue
+        return text
+    return ""
+
+
+def _infer_currency_from_page_url(page_url: str) -> str:
+    lowered = str(page_url or "").strip().lower()
+    if not lowered:
+        return ""
+    locale_hints = (
+        ("/en-us/", "USD"),
+        ("/en-ca/", "CAD"),
+        ("/fr-ca/", "CAD"),
+        ("/en-gb/", "GBP"),
+        ("/en-eu/", "EUR"),
+        ("/de-de/", "EUR"),
+        ("/fr-fr/", "EUR"),
+        ("/es-es/", "EUR"),
+        ("/it-it/", "EUR"),
+        ("/nl-nl/", "EUR"),
+        ("/en-au/", "AUD"),
+        ("/en-nz/", "NZD"),
+        ("/en-in/", "INR"),
+        ("/ja-jp/", "JPY"),
+    )
+    for token, currency in locale_hints:
+        if token in lowered:
+            return currency
     return ""

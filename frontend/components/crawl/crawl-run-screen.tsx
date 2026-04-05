@@ -74,6 +74,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const [runActionError, setRunActionError] = useState("");
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const terminalSyncRef = useRef<string | null>(null);
+  const intelligenceGroupsInitializedRef = useRef(false);
 
   const runQuery = useQuery({
     queryKey: ["crawl-run", runId],
@@ -151,6 +152,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       const recordUrl = extractRecordUrl(record) || record.source_url;
       const recordTitle = stringifyCell(record.data?.title).trim() || recordUrl || `Record ${record.id}`;
       const candidateMap = record.source_trace?.candidates;
+      const reviewBucket = Array.isArray(record.review_bucket) ? record.review_bucket : [];
 
       if (candidateMap && typeof candidateMap === "object" && !Array.isArray(candidateMap)) {
         for (const [fieldName, rawRows] of Object.entries(candidateMap as Record<string, unknown>)) {
@@ -189,9 +191,41 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               value: rawValue,
               href: href || undefined,
               sortOrder: sortOrder || Number.MAX_SAFE_INTEGER,
+              sourceKind: "candidate",
             });
           }
         }
+      }
+
+      for (const item of reviewBucket) {
+        if (!item || typeof item !== "object") {
+          continue;
+        }
+        const fieldName = stringifyCell(item.key).trim();
+        const rawValue = item.value;
+        const displayValue = stringifyCell(rawValue).trim();
+        if (!fieldName || !displayValue) {
+          continue;
+        }
+        const confidence = Number(item.confidence_score ?? 0);
+        const source = stringifyCell(item.source).trim();
+        const key = `${record.id}:ReviewBucket:${fieldName}:${displayValue}:${confidence}:${source}`;
+        if (grouped.has(key)) {
+          continue;
+        }
+        grouped.set(key, {
+          key,
+          recordId: record.id,
+          recordUrl,
+          recordTitle,
+          fieldName,
+          displayLabel: humanizeFieldName(fieldName),
+          groupLabel: confidence > 0 ? `Review Bucket (${confidence}/10)` : "Review Bucket",
+          value: rawValue,
+          sortOrder: Number.MAX_SAFE_INTEGER - Math.min(Math.max(confidence, 0), 10),
+          confidenceScore: confidence || undefined,
+          sourceKind: "review_bucket",
+        });
       }
 
       const llmSuggestions = record.source_trace?.llm_cleanup_suggestions;
@@ -220,6 +254,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             groupLabel: "Suggested",
             value: rawValue,
             sortOrder: Number.MAX_SAFE_INTEGER,
+            sourceKind: "llm_suggestion",
           });
         }
       }
@@ -257,19 +292,19 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   useEffect(() => {
     if (!intelligenceRecordGroups.length) {
       setExpandedIntelligenceGroups({});
+      intelligenceGroupsInitializedRef.current = false;
       return;
     }
     setExpandedIntelligenceGroups((current) => {
       const next: Record<string, boolean> = {};
-      let hasExpanded = false;
       for (const group of intelligenceRecordGroups) {
-        if (current[group.key]) {
-          next[group.key] = true;
-          hasExpanded = true;
+        if (group.key in current) {
+          next[group.key] = current[group.key];
         }
       }
-      if (!hasExpanded) {
+      if (!intelligenceGroupsInitializedRef.current && !(intelligenceRecordGroups[0].key in next)) {
         next[intelligenceRecordGroups[0].key] = true;
+        intelligenceGroupsInitializedRef.current = true;
       }
       return next;
     });
@@ -683,8 +718,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                               {commitPending ? "Saving..." : "Save Link"}
                             </Button>
                           </div>
-                          {expanded ? (
-                            <div className="overflow-auto">
+                          <div
+                            className={cn(
+                              "overflow-hidden transition-[opacity] duration-150 ease-out",
+                              expanded ? "opacity-100" : "opacity-0",
+                            )}
+                          >
+                            <div className={cn("pt-1", expanded ? "block" : "hidden")}>
                               <table className="compact-data-table min-w-[1080px]">
                                 <thead>
                                   <tr>
@@ -739,7 +779,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                             className="h-8 border-0 bg-transparent px-0 text-sm shadow-none"
                                           />
                                         </td>
-                                        <td className="text-xs text-muted">{item.groupLabel || "General"}</td>
+                                        <td className="text-xs text-muted">
+                                          <div>{item.groupLabel || "General"}</div>
+                                          {item.sourceKind === "review_bucket" && item.confidenceScore ? (
+                                            <div className="mt-1 text-[11px] text-foreground/70">
+                                              Confidence {item.confidenceScore}/10
+                                            </div>
+                                          ) : null}
+                                        </td>
                                         <td title={editedValue}>
                                           <div className="flex items-center gap-2">
                                             <Input
@@ -774,7 +821,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                                 </tbody>
                               </table>
                             </div>
-                          ) : null}
+                          </div>
                         </div>
                       );
                     })}

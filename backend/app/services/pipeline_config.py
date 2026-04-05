@@ -52,6 +52,8 @@ _EXTRACTION_RULES: dict = _load("extraction_rules.json", {})  # type: ignore[ass
 HTTP_TIMEOUT_SECONDS: int = _TUNING.get("http_timeout_seconds", 20)
 IMPERSONATION_TARGET: str = _TUNING.get("impersonation_target", "chrome110")
 BROWSER_FALLBACK_VISIBLE_TEXT_MIN: int = _TUNING.get("browser_fallback_visible_text_min", 500)
+BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX: float = _TUNING.get("browser_fallback_visible_text_ratio_max", 0.02)
+BROWSER_FALLBACK_HTML_SIZE_THRESHOLD: int = _TUNING.get("browser_fallback_html_size_threshold", 200000)
 JS_GATE_PHRASES: list[str] = _TUNING.get("js_gate_phrases", [
     "enable javascript",
     "<noscript>",
@@ -59,6 +61,12 @@ JS_GATE_PHRASES: list[str] = _TUNING.get("js_gate_phrases", [
 DEFAULT_MAX_RECORDS: int = _TUNING.get("default_max_records", 100)
 DEFAULT_SLEEP_MS: int = _TUNING.get("default_sleep_ms", 0)
 MIN_REQUEST_DELAY_MS: int = _TUNING.get("min_request_delay_ms", 100)
+
+# Extraction tuning
+MAX_CANDIDATES_PER_FIELD: int = _TUNING.get("max_candidates_per_field", 5)
+DYNAMIC_FIELD_NAME_MAX_TOKENS: int = _TUNING.get("dynamic_field_name_max_tokens", 7)
+ACCORDION_EXPAND_MAX: int = _TUNING.get("accordion_expand_max", 20)
+ACCORDION_EXPAND_WAIT_MS: int = _TUNING.get("accordion_expand_wait_ms", 500)
 
 # Blocked-page detection
 BLOCK_MIN_HTML_LENGTH: int = _TUNING.get("block_min_html_length", 100)
@@ -295,23 +303,8 @@ BLOCK_TITLE_REGEXES: list[str] = _BLOCK_SIG.get("title_regexes", [
 # ---------------------------------------------------------------------------
 
 COOKIE_CONSENT_SELECTORS: list[str] = _load("consent_selectors.json", [])  # type: ignore[assignment]
-
 if not COOKIE_CONSENT_SELECTORS:
-    COOKIE_CONSENT_SELECTORS = [
-        "button#onetrust-accept-btn-handler",
-        "button#CybotCookiebotDialogBodyUnderlayAccept",
-        "[aria-label='Accept Cookies']",
-        "[aria-label='Accept all']",
-        "button:has-text('Accept All')",
-        "button:has-text('Accept Cookies')",
-        "button:has-text('Accept')",
-        "button:has-text('I Accept')",
-        "button:has-text('Agree')",
-        ".cookie-consent-accept",
-        "#cookieConsentAccept",
-        ".fc-button.fc-cta-accept",
-        ".fc-primary-button",
-    ]
+    raise ValueError("knowledge_base/consent_selectors.json must exist and contain at least one selector")
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +330,31 @@ if not REVIEW_CONTAINER_KEYS:
         "microdata", "tables", "content_type", "source",
         "is_blocked", "reason", "provider",
     }
+
+
+# ---------------------------------------------------------------------------
+# 13. Extraction structural rules — loaded from extraction_rules.json
+#     JSON-LD filtering, source ranking, and dynamic field noise control.
+# ---------------------------------------------------------------------------
+
+JSONLD_STRUCTURAL_KEYS: frozenset[str] = frozenset(_EXTRACTION_RULES.get("jsonld_structural_keys", ["@type", "@context", "@id", "@graph", "@vocab", "@list", "@set"]))
+JSONLD_NON_PRODUCT_BLOCK_TYPES: frozenset[str] = frozenset(_EXTRACTION_RULES.get("jsonld_non_product_block_types", [
+    "organization", "website", "webpage", "breadcrumblist",
+    "searchaction", "sitenavigationelement", "imageobject",
+    "videoobject", "faqpage", "howto", "person",
+    "localbusiness", "store",
+]))
+PRODUCT_IDENTITY_FIELDS: frozenset[str] = frozenset(_EXTRACTION_RULES.get("product_identity_fields", [
+    "title", "price", "sale_price", "original_price", "brand",
+    "description", "sku", "image_url", "additional_images",
+    "availability", "category",
+]))
+NESTED_NON_PRODUCT_KEYS: frozenset[str] = frozenset(_EXTRACTION_RULES.get("nested_non_product_keys", [
+    "review", "reviews", "aggregaterating", "aggregate_rating",
+    "author", "publisher", "creator", "contributor",
+    "breadcrumb", "breadcrumblist", "itemlistelement",
+    "potentialaction", "mainentityofpage",
+]))
+JSONLD_TYPE_NOISE: set[str] = set(_EXTRACTION_RULES.get("jsonld_type_noise", []))
+DYNAMIC_FIELD_NAME_DROP_TOKENS: set[str] = set(_EXTRACTION_RULES.get("dynamic_field_name_drop_tokens", []))
+SOURCE_RANKING: dict[str, int] = _EXTRACTION_RULES.get("source_ranking", {})

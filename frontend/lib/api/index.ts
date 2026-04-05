@@ -4,6 +4,7 @@ import type {
   CrawlCreatePayload,
   CrawlLog,
   CrawlRecord,
+  CrawlRecordProvenance,
   CrawlRun,
   Dashboard,
   FieldCommitPayload,
@@ -92,6 +93,7 @@ export const api = {
     if (params?.limit !== undefined) query.set("limit", String(params.limit));
     return apiClient.get<Paginated<CrawlRecord>>(withQuery(`/api/crawls/${runId}/records`, query));
   },
+  getRecordProvenance: (recordId: number) => apiClient.get<CrawlRecordProvenance>(`/api/records/${recordId}/provenance`),
   getCrawlLogs: (runId: number) => apiClient.get<CrawlLog[]>(`/api/crawls/${runId}/logs`),
   exportCsv: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/csv`,
   exportJson: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/json`,

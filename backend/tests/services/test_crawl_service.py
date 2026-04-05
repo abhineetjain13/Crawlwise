@@ -163,6 +163,18 @@ async def test_create_crawl_run_clamps_sleep_ms_to_minimum_floor(db_session: Asy
 
 
 @pytest.mark.asyncio
+async def test_create_crawl_run_coerces_max_pages_to_int(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com",
+        "surface": "ecommerce_detail",
+        "settings": {"max_pages": "7"},
+    })
+
+    assert run.settings["max_pages"] == 7
+
+
+@pytest.mark.asyncio
 async def test_create_crawl_run_rejects_private_ip_targets(db_session: AsyncSession, test_user):
     with pytest.raises(ValueError, match="non-public IP address"):
         await create_crawl_run(db_session, test_user.id, {
@@ -660,7 +672,7 @@ async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession,
 
 
 @pytest.mark.asyncio
-async def test_process_run_filters_detail_data_to_canonical_fields_and_namespaces_discovered_fields(db_session: AsyncSession, test_user):
+async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_extras_to_review_bucket(db_session: AsyncSession, test_user):
     detail_html = """
     <html><body>
       <h1>Example Product</h1>
@@ -688,8 +700,9 @@ async def test_process_run_filters_detail_data_to_canonical_fields_and_namespace
 
     record = (await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))).scalars().one()
     assert "wire_gauge" not in record.data
-    assert record.discovered_data["discovered_fields"]["wire_gauge"] == "26 AWG"
-    assert record.discovered_data["specifications"]["wire_gauge"] == "26 AWG"
+    assert record.discovered_data["review_bucket"][0]["key"] == "wire_gauge"
+    assert record.discovered_data["review_bucket"][0]["value"] == "26 AWG"
+    assert record.source_trace["manifest_trace"]["tables"][0]["rows"][0]["cells"][1]["text"] == "26 AWG"
 
 
 @pytest.mark.asyncio
@@ -727,22 +740,32 @@ async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting
             new_callable=AsyncMock,
             return_value=(
                 {
-                    "description": {
-                        "suggested_value": "Sequential Prophet Rev2 with lush analog tone.",
-                        "source": "semantic_section",
-                        "supporting_sources": ["dom", "semantic_section"],
-                        "note": "Removed markup and preserved the descriptive sentence.",
+                    "canonical": {
+                        "description": {
+                            "suggested_value": "Sequential Prophet Rev2 with lush analog tone.",
+                            "source": "semantic_section",
+                            "supporting_sources": ["dom", "semantic_section"],
+                            "note": "Removed markup and preserved the descriptive sentence.",
+                        },
+                        "polyphony": {
+                            "suggested_value": "16 Voice",
+                            "source": "semantic_section",
+                            "supporting_sources": ["semantic_section"],
+                        },
+                        "number_of_keys": {
+                            "suggested_value": "61",
+                            "source": "semantic_section",
+                            "supporting_sources": ["semantic_section"],
+                        },
                     },
-                    "polyphony": {
-                        "suggested_value": "16 Voice",
-                        "source": "semantic_section",
-                        "supporting_sources": ["semantic_section"],
-                    },
-                    "number_of_keys": {
-                        "suggested_value": "61",
-                        "source": "semantic_section",
-                        "supporting_sources": ["semantic_section"],
-                    },
+                    "review_bucket": [
+                        {
+                            "key": "oscillator_count",
+                            "value": 2,
+                            "confidence_score": 8,
+                            "source": "semantic_section",
+                        }
+                    ],
                 },
                 None,
             ),
@@ -760,6 +783,7 @@ async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting
     assert suggestions["description"]["supporting_sources"] == ["dom", "semantic_section"]
     assert suggestions["polyphony"]["suggested_value"] == "16 Voice"
     assert suggestions["number_of_keys"]["suggested_value"] == "61"
+    assert records[0].discovered_data["review_bucket"][0]["key"] == "oscillator_count"
     assert "polyphony" not in records[0].data
     assert "number_of_keys" not in records[0].data
 

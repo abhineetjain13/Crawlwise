@@ -15,6 +15,7 @@ from app.api.records import (
     _stream_export_csv,
     export_csv,
     export_json,
+    record_provenance,
 )
 from app.models.crawl import CrawlRecord, CrawlRun
 
@@ -228,3 +229,39 @@ async def test_export_csv_discovers_fields_beyond_first_page(db_session, test_us
     header = payload.splitlines()[0]
 
     assert "rare_field" in header
+
+
+@pytest.mark.asyncio
+async def test_record_provenance_returns_manifest_trace(db_session, test_user):
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com",
+        surface="ecommerce_detail",
+        status="completed",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/item",
+        data={"title": "Item"},
+        raw_data={},
+        discovered_data={},
+        source_trace={
+            "type": "detail",
+            "manifest_trace": {"json_ld": [{"name": "Item"}]},
+        },
+        raw_html_path=None,
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    payload = await record_provenance(record.id, session=db_session, current_user=test_user)
+
+    assert payload.manifest_trace["json_ld"][0]["name"] == "Item"
+    assert "manifest_trace" not in payload.source_trace

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -49,32 +51,34 @@ class CrawlRecordResponse(BaseModel):
     raw_data: dict
     discovered_data: dict
     source_trace: dict
+    review_bucket: list["UnverifiedAttribute"] = Field(default_factory=list)
+    provenance_available: bool = False
     raw_html_path: str | None = None
     created_at: datetime
 
     @model_validator(mode="after")
     def _clean_for_display(self) -> "CrawlRecordResponse":
-        """Strip empty/null fields from data and manifest noise from discovered_data.
-
-        The ``data`` dict should only expose populated logical fields.
-        ``source_trace`` remains the authoritative source-preserving contract
-        for candidates, field discovery, and later review/intelligence flows.
-        ``discovered_data`` only drops bulky raw manifest containers.
-        """
+        """Expose canonical data, a review bucket, and only light trace metadata."""
         self.data = {
             k: v for k, v in self.data.items()
             if v not in (None, "", [], {}) and not str(k).startswith("_")
         }
-        # Strip raw manifest noise from discovered_data — keep only logical metadata
-        _noise_keys = {
-            "adapter_data", "network_payloads", "json_ld", "microdata",
-            "next_data", "tables", "_hydrated_states", "embedded_json",
-            "open_graph", "hidden_dom", "full_json_response",
-        }
+        manifest_trace = _extract_manifest_trace(self.source_trace, self.discovered_data)
+        self.review_bucket = _normalize_review_bucket(
+            (self.discovered_data or {}).get("review_bucket"),
+            fallback=self.discovered_data,
+        )
         self.discovered_data = {
-            k: v for k, v in self.discovered_data.items()
-            if k not in _noise_keys and v not in (None, "", [], {})
+            k: v
+            for k, v in self.discovered_data.items()
+            if k not in _DISCOVERED_DATA_EXCLUDE_KEYS and v not in (None, "", [], {})
         }
+        self.source_trace = {
+            k: v
+            for k, v in self.source_trace.items()
+            if k not in _SOURCE_TRACE_EXCLUDE_KEYS and v not in (None, "", [], {})
+        }
+        self.provenance_available = bool(manifest_trace)
         return self
 
 
@@ -166,6 +170,40 @@ class LLMCommitResponse(FieldCommitResponse):
     pass
 
 
+class UnverifiedAttribute(BaseModel):
+    key: str
+    value: Any
+    confidence_score: int = Field(ge=1, le=10)
+    source: str
+
+
+class CrawlRecordProvenanceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: int
+    source_url: str
+    raw_data: dict
+    discovered_data: dict
+    source_trace: dict
+    manifest_trace: dict = Field(default_factory=dict)
+    raw_html_path: str | None = None
+    created_at: datetime
+
+    @model_validator(mode="after")
+    def _expand_provenance(self) -> "CrawlRecordProvenanceResponse":
+        self.raw_data = self.raw_data if isinstance(self.raw_data, dict) else {}
+        self.discovered_data = self.discovered_data if isinstance(self.discovered_data, dict) else {}
+        self.source_trace = self.source_trace if isinstance(self.source_trace, dict) else {}
+        self.manifest_trace = _extract_manifest_trace(self.source_trace, self.discovered_data)
+        self.source_trace = {
+            key: value
+            for key, value in self.source_trace.items()
+            if key not in _SOURCE_TRACE_EXCLUDE_KEYS and value not in (None, "", [], {})
+        }
+        return self
+
+
 _SENSITIVE_SETTING_KEYS = {
     "api_key",
     "api_key_encrypted",
@@ -245,3 +283,115 @@ def _mask_proxy_url(value: object) -> str:
         fragment=parsed.fragment,
     )
     return urlunsplit(rebuilt)
+
+
+_LEGACY_MANIFEST_KEYS = {
+    "adapter_data",
+    "network_payloads",
+    "json_ld",
+    "microdata",
+    "next_data",
+    "_hydrated_states",
+    "embedded_json",
+    "open_graph",
+    "hidden_dom",
+    "tables",
+    "full_json_response",
+    "json_record_keys",
+    "content_type",
+}
+_LEGACY_REVIEW_KEYS = {
+    "semantic",
+    "specifications",
+    "promoted_fields",
+    "discovered_fields",
+}
+_DISCOVERED_DATA_EXCLUDE_KEYS = _LEGACY_MANIFEST_KEYS | _LEGACY_REVIEW_KEYS | {"review_bucket", "manifest_trace"}
+_SOURCE_TRACE_EXCLUDE_KEYS = {"manifest_trace"}
+
+
+def _extract_manifest_trace(source_trace: object, discovered_data: object) -> dict[str, Any]:
+    trace = source_trace if isinstance(source_trace, dict) else {}
+    discovered = discovered_data if isinstance(discovered_data, dict) else {}
+    manifest_trace = trace.get("manifest_trace")
+    if isinstance(manifest_trace, dict):
+        return {
+            key: value
+            for key, value in manifest_trace.items()
+            if value not in (None, "", [], {})
+        }
+    legacy_manifest = {
+        key: value
+        for key, value in discovered.items()
+        if key in _LEGACY_MANIFEST_KEYS and value not in (None, "", [], {})
+    }
+    return legacy_manifest
+
+
+def _normalize_review_bucket(value: object, *, fallback: object | None = None) -> list[UnverifiedAttribute]:
+    rows: list[UnverifiedAttribute] = []
+    seen: set[tuple[str, str]] = set()
+    raw_rows = value if isinstance(value, list) else []
+    for raw_row in raw_rows:
+        normalized = _normalize_review_bucket_row(raw_row)
+        if normalized is None:
+            continue
+        dedupe_key = (normalized.key, _stable_review_value_fingerprint(normalized.value))
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        rows.append(normalized)
+    if rows:
+        return rows
+    fallback_dict = fallback if isinstance(fallback, dict) else {}
+    for key in ("discovered_fields", "specifications", "promoted_fields"):
+        payload = fallback_dict.get(key)
+        if not isinstance(payload, dict):
+            continue
+        for field_name, field_value in payload.items():
+            normalized = _normalize_review_bucket_row({
+                "key": field_name,
+                "value": field_value,
+                "confidence_score": 7 if key == "specifications" else 6,
+                "source": key,
+            })
+            if normalized is None:
+                continue
+            dedupe_key = (normalized.key, _stable_review_value_fingerprint(normalized.value))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            rows.append(normalized)
+    return rows
+
+
+def _normalize_review_bucket_row(value: object) -> UnverifiedAttribute | None:
+    if not isinstance(value, dict):
+        return None
+    key = str(value.get("key") or "").strip()
+    if not key or key.startswith("_"):
+        return None
+    raw_value = value.get("value")
+    if raw_value in (None, "", [], {}):
+        return None
+    raw_confidence = value.get("confidence_score", value.get("confidence", 5))
+    try:
+        confidence_score = int(raw_confidence)
+    except (TypeError, ValueError):
+        confidence_score = 5
+    source = str(value.get("source") or "review_bucket").strip() or "review_bucket"
+    return UnverifiedAttribute(
+        key=key,
+        value=raw_value,
+        confidence_score=max(1, min(10, confidence_score)),
+        source=source,
+    )
+
+
+def _stable_review_value_fingerprint(value: object) -> str:
+    if isinstance(value, str):
+        return " ".join(value.split()).strip().casefold()
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        return str(value).strip().casefold()

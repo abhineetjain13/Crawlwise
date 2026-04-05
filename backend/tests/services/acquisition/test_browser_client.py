@@ -263,3 +263,23 @@ async def test_collect_paginated_html_stops_at_max_pages(monkeypatch):
     assert "Page 2" in html
     assert "Page 3" not in html
     assert page.goto_calls == ["https://example.com/products?page=2"]
+
+
+@pytest.mark.asyncio
+async def test_collect_paginated_html_rejects_non_public_next_page(monkeypatch, caplog):
+    page = FakePaginationPage()
+    monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
+
+    async def _reject_target(_url: str):
+        raise ValueError("Target host resolves to a non-public IP address")
+
+    monkeypatch.setattr("app.services.acquisition.browser_client.validate_public_target", _reject_target)
+
+    with caplog.at_level("WARNING"):
+        html = await _collect_paginated_html(page, max_pages=3, request_delay_ms=0)
+
+    assert "Page 1" in html
+    assert "Page 2" not in html
+    assert page.goto_calls == []
+    assert "Rejected pagination URL" in caplog.text

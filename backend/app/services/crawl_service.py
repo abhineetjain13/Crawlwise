@@ -68,6 +68,7 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
     primary_url = payload.get("url") or (urls[0] if urls else "")
     await ensure_public_crawl_targets(_collect_target_urls(payload, settings))
     _validate_extraction_contract(settings.get("extraction_contract") or [])
+    settings["max_pages"] = max(1, int(settings.get("max_pages", 5) or 5))
     settings["max_records"] = max(1, int(settings.get("max_records", 100) or 100))
     settings["sleep_ms"] = max(
         MIN_REQUEST_DELAY_MS,
@@ -649,29 +650,41 @@ async def _process_json_response(
     await _set_stage(session, run, "UNIFY")
     await _log(session, run.id, "info", "[UNIFY] Normalizing JSON records")
     saved = []
+    allowed_fields = set(get_canonical_fields(run.surface)) | set(requested_fields)
     for raw_record in extracted:
         if len(saved) >= max_records:
             break
         public_fields = _public_record_fields(raw_record)
-        normalized = _normalize_record_fields(public_fields)
+        normalized, discovered_fields = _split_detail_output_fields(public_fields, allowed_fields=allowed_fields)
         raw_data = _raw_record_payload(raw_record)
         requested_coverage = _requested_field_coverage(normalized, requested_fields)
+        review_bucket = _build_review_bucket(
+            discovered_fields,
+            fallback_source=str(raw_record.get("_source") or "json_api"),
+        )
         db_record = CrawlRecord(
             run_id=run.id,
             source_url=raw_record.get("url", url),
             data=normalized,
             raw_data=raw_data,
             discovered_data=_compact_dict({
-                "content_type": "json",
-                "source": raw_record.get("_source", "json_api"),
-                "json_record_keys": sorted(raw_data.keys()) if isinstance(raw_data, dict) else None,
-                "full_json_response": acq.json_data if not is_listing else None,
+                "review_bucket": review_bucket or None,
+                "requested_field_coverage": requested_coverage or None,
             }),
             source_trace=_compact_dict({
                 "type": "json_api",
                 "method": acq.method,
                 "requested_fields": requested_fields or None,
                 "requested_field_coverage": requested_coverage or None,
+                "manifest_trace": _build_manifest_trace(
+                    None,
+                    extra={
+                        "content_type": "json",
+                        "source": raw_record.get("_source", "json_api"),
+                        "json_record_keys": sorted(raw_data.keys()) if isinstance(raw_data, dict) else None,
+                        "full_json_response": acq.json_data if not is_listing else None,
+                    },
+                ) or None,
             }),
             raw_html_path=acq.artifact_path,
         )
@@ -732,24 +745,36 @@ async def _extract_listing(
     await _set_stage(session, run, "UNIFY")
     await _log(session, run.id, "info", "[UNIFY] Normalizing listing records")
     saved: list[dict] = []
+    allowed_fields = set(get_canonical_fields(surface)) | set(additional_fields)
     for raw_record in extracted_records:
         if len(saved) >= max_records:
             break
-        normalized = _normalize_record_fields(_public_record_fields(raw_record))
+        normalized, discovered_fields = _split_detail_output_fields(
+            _public_record_fields(raw_record),
+            allowed_fields=allowed_fields,
+        )
         raw_data = _raw_record_payload(raw_record)
+        requested_coverage = _requested_field_coverage(normalized, additional_fields)
+        review_bucket = _build_review_bucket(
+            discovered_fields,
+            fallback_source=adapter_name or source_label,
+        )
         db_record = CrawlRecord(
             run_id=run.id,
             source_url=raw_record.get("url", url),
             data=normalized,
             raw_data=raw_data,
             discovered_data=_compact_dict({
-                **manifest.as_dict(),
-                "requested_fields": additional_fields or None,
+                "review_bucket": review_bucket or None,
+                "requested_field_coverage": requested_coverage or None,
             }),
             source_trace=_compact_dict({
                 "type": "listing",
                 "adapter": adapter_name,
                 "source": source_label,
+                "requested_fields": additional_fields or None,
+                "requested_field_coverage": requested_coverage or None,
+                "manifest_trace": _build_manifest_trace(manifest) or None,
             }),
             raw_html_path=acq.artifact_path,
         )
@@ -802,8 +827,9 @@ async def _extract_detail(
     else:
         extracted_records = []
 
+    llm_review_bucket: list[dict[str, object]] = []
     if html and (run.settings or {}).get("llm_enabled"):
-        source_trace = await _collect_detail_llm_suggestions(
+        source_trace, llm_review_bucket = await _collect_detail_llm_suggestions(
             session=session,
             run=run,
             url=url,
@@ -828,17 +854,21 @@ async def _extract_detail(
             normalized, discovered_fields = _split_detail_output_fields(public_fields, allowed_fields=persisted_field_names)
             raw_data = _raw_record_payload(merged_record)
             requested_coverage = _requested_field_coverage(normalized, additional_fields)
+            review_bucket = _merge_review_bucket_entries(
+                _build_review_bucket(
+                    discovered_fields,
+                    source_trace=source_trace,
+                    fallback_source=adapter_name or "adapter",
+                ),
+                llm_review_bucket,
+            )
             db_record = CrawlRecord(
                 run_id=run.id,
                 source_url=url,
                 data=normalized,
                 raw_data=raw_data,
                 discovered_data=_compact_dict({
-                    **manifest.as_dict(),
-                    "semantic": semantic or None,
-                    "specifications": semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else None,
-                    "promoted_fields": semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else None,
-                    "discovered_fields": discovered_fields or None,
+                    "review_bucket": review_bucket or None,
                     "requested_field_coverage": requested_coverage or None,
                 }),
                 source_trace=_compact_dict({
@@ -848,6 +878,7 @@ async def _extract_detail(
                     "reconciliation": reconciliation or None,
                     "requested_fields": additional_fields or None,
                     "requested_field_coverage": requested_coverage or None,
+                    "manifest_trace": _build_manifest_trace(manifest, semantic=semantic) or None,
                 }),
                 raw_html_path=acq.artifact_path,
             )
@@ -858,19 +889,16 @@ async def _extract_detail(
         normalized, discovered_fields = _split_detail_output_fields(candidate_values, allowed_fields=persisted_field_names)
         raw_data = candidate_values
         requested_coverage = _requested_field_coverage(normalized, additional_fields)
+        review_bucket = _merge_review_bucket_entries(
+            _build_review_bucket(
+                discovered_fields,
+                source_trace=source_trace,
+                fallback_source="detail_candidates",
+            ),
+            llm_review_bucket,
+        )
         discovered_data = _compact_dict({
-            "open_graph": manifest.open_graph or None,
-            "json_ld": manifest.json_ld or None,
-            "next_data": manifest.next_data,
-            "_hydrated_states": manifest._hydrated_states or None,
-            "embedded_json": manifest.embedded_json or None,
-            "microdata": manifest.microdata or None,
-            "hidden_dom": manifest.hidden_dom or None,
-            "tables": manifest.tables or None,
-            "semantic": semantic or None,
-            "specifications": semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else None,
-            "promoted_fields": semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else None,
-            "discovered_fields": discovered_fields or None,
+            "review_bucket": review_bucket or None,
             "requested_field_coverage": requested_coverage or None,
         })
         db_record = CrawlRecord(
@@ -885,6 +913,7 @@ async def _extract_detail(
                 "reconciliation": reconciliation or None,
                 "requested_fields": additional_fields or None,
                 "requested_field_coverage": requested_coverage or None,
+                "manifest_trace": _build_manifest_trace(manifest, semantic=semantic) or None,
             }),
             raw_html_path=acq.artifact_path,
         )
@@ -1158,6 +1187,148 @@ def _split_detail_output_fields(
     return canonical, discovered
 
 
+def _build_review_bucket(
+    discovered_fields: dict[str, object],
+    *,
+    source_trace: dict | None = None,
+    fallback_source: str = "deterministic_extraction",
+) -> list[dict[str, object]]:
+    candidate_map = source_trace.get("candidates") if isinstance(source_trace, dict) else {}
+    rows: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for field_name, value in discovered_fields.items():
+        normalized_value = _normalize_review_value(value)
+        if normalized_value is None:
+            continue
+        source = _review_bucket_source_for_field(field_name, candidate_map, fallback_source)
+        entry = _compact_dict({
+            "key": str(field_name).strip(),
+            "value": normalized_value,
+            "confidence_score": _review_bucket_confidence(field_name, normalized_value, source),
+            "source": source,
+        })
+        fingerprint = (str(entry["key"]), _review_bucket_fingerprint(entry["value"]))
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        rows.append(entry)
+    return rows
+
+
+def _merge_review_bucket_entries(*groups: list[dict[str, object]]) -> list[dict[str, object]]:
+    merged: dict[tuple[str, str], dict[str, object]] = {}
+    for group in groups:
+        for row in group:
+            key = str(row.get("key") or "").strip()
+            if not key:
+                continue
+            normalized_value = _normalize_review_value(row.get("value"))
+            if normalized_value is None:
+                continue
+            fingerprint = (key, _review_bucket_fingerprint(normalized_value))
+            existing = merged.get(fingerprint)
+            candidate = _compact_dict({
+                "key": key,
+                "value": normalized_value,
+                "confidence_score": _clamp_review_confidence(row.get("confidence_score", row.get("confidence", 5))),
+                "source": str(row.get("source") or "review_bucket").strip() or "review_bucket",
+            })
+            if existing is None or int(candidate["confidence_score"]) > int(existing.get("confidence_score", 0)):
+                merged[fingerprint] = candidate
+    return sorted(
+        merged.values(),
+        key=lambda item: (
+            -int(item.get("confidence_score", 0)),
+            str(item.get("key") or ""),
+            str(item.get("source") or ""),
+        ),
+    )
+
+
+def _build_manifest_trace(
+    manifest: DiscoveryManifest | None,
+    *,
+    semantic: dict | None = None,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    manifest = manifest or DiscoveryManifest()
+    payload = _compact_dict({
+        "adapter_data": manifest.adapter_data or None,
+        "network_payloads": [
+            _compact_dict({
+                "url": row.get("url"),
+                "status": row.get("status"),
+                "body": prune_spa_state(row.get("body")),
+            })
+            for row in manifest.network_payloads
+            if isinstance(row, dict)
+        ] or None,
+        "next_data": prune_spa_state(manifest.next_data),
+        "_hydrated_states": prune_spa_state(manifest._hydrated_states),
+        "embedded_json": prune_spa_state(manifest.embedded_json),
+        "open_graph": manifest.open_graph or None,
+        "json_ld": manifest.json_ld or None,
+        "microdata": manifest.microdata or None,
+        "hidden_dom": manifest.hidden_dom or None,
+        "tables": manifest.tables or None,
+        "semantic": semantic or None,
+        **(extra or {}),
+    })
+    return payload
+
+
+def _review_bucket_source_for_field(field_name: str, candidate_map: object, fallback_source: str) -> str:
+    if isinstance(candidate_map, dict):
+        rows = candidate_map.get(field_name)
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                source = str(row.get("source") or "").strip()
+                if source:
+                    return source
+    return fallback_source
+
+
+def _review_bucket_confidence(field_name: str, value: object, source: str) -> int:
+    normalized_source = str(source or "").strip().lower()
+    base = 6
+    if normalized_source.startswith("adapter") or normalized_source in {"json_api", "network_payload"}:
+        base = 8
+    elif normalized_source.startswith("semantic_spec") or "table" in normalized_source:
+        base = 9
+    elif normalized_source.startswith("json_ld") or normalized_source.startswith("microdata"):
+        base = 8
+    elif normalized_source.startswith("llm_xpath"):
+        base = 7
+    elif normalized_source.startswith("llm_cleanup"):
+        base = 6
+    elif normalized_source.startswith("dom"):
+        base = 5
+    score = _field_quality_score(field_name, value)
+    if score >= 10:
+        base += 1
+    elif score <= 1:
+        base -= 1
+    return max(1, min(10, base))
+
+
+def _clamp_review_confidence(value: object) -> int:
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        numeric = 5
+    return max(1, min(10, numeric))
+
+
+def _review_bucket_fingerprint(value: object) -> str:
+    normalized_value = _normalize_review_value(value)
+    try:
+        return json.dumps(normalized_value, sort_keys=True, default=str)
+    except TypeError:
+        return str(normalized_value)
+
+
 def _normalize_committed_field_name(value: object) -> str:
     text = str(value or "").strip().lower()
     if not text:
@@ -1241,15 +1412,17 @@ async def _collect_detail_llm_suggestions(
     adapter_records: list[dict],
     candidate_values: dict,
     source_trace: dict,
-) -> dict:
+) -> tuple[dict, list[dict[str, object]]]:
     trace_candidates = source_trace.setdefault("candidates", {})
     llm_cleanup_suggestions: dict[str, dict] = source_trace.get("llm_cleanup_suggestions", {})
     llm_cleanup_status: dict[str, object] = dict(source_trace.get("llm_cleanup_status") or {})
+    llm_review_bucket: list[dict[str, object]] = []
     preview_record = (
         _merge_record_fields(adapter_records[0], candidate_values)
         if adapter_records else dict(candidate_values)
     )
-    target_fields = sorted(set(get_canonical_fields(surface)) | set(additional_fields))
+    canonical_fields = sorted(set(get_canonical_fields(surface)) | set(additional_fields))
+    target_fields = list(canonical_fields)
     missing_fields = [
         field_name
         for field_name in target_fields
@@ -1332,13 +1505,13 @@ async def _collect_detail_llm_suggestions(
     discovered_sources = _build_llm_discovered_sources(source_trace, manifest, target_fields=list(review_candidate_evidence.keys()))
     if not candidate_evidence and not discovered_sources and not preview_record:
         source_trace["llm_cleanup_status"] = {"status": "no_evidence", "message": "No candidate evidence was available for cleanup review."}
-        return source_trace
+        return source_trace, llm_review_bucket
     if not review_candidate_evidence:
         source_trace["llm_cleanup_status"] = {
             "status": "skipped",
             "message": "Deterministic extraction already resolved the available field groups. LLM cleanup runs only for ambiguous or missing values.",
         }
-        return source_trace
+        return source_trace, llm_review_bucket
 
     await _log(session, run.id, "info", f"[EXTRACT] LLM cleanup review for {len(review_candidate_evidence)} candidate field groups")
     llm_reviews, llm_error = await review_field_candidates(
@@ -1347,6 +1520,7 @@ async def _collect_detail_llm_suggestions(
         domain=domain,
         url=url,
         html_text=html,
+        canonical_fields=canonical_fields,
         target_fields=sorted(review_candidate_evidence.keys()),
         existing_values=preview_record,
         candidate_evidence=review_candidate_evidence,
@@ -1355,13 +1529,14 @@ async def _collect_detail_llm_suggestions(
     if llm_error:
         await _log(session, run.id, "warning", f"[LLM] Cleanup review failed: {llm_error}")
         source_trace["llm_cleanup_status"] = {"status": "error", "message": llm_error}
-        return source_trace
+        return source_trace, llm_review_bucket
     if not llm_reviews:
         await _log(session, run.id, "warning", "[EXTRACT] LLM cleanup review returned no suggestions")
         source_trace["llm_cleanup_status"] = {"status": "empty", "message": "LLM cleanup review returned no suggestions."}
-        return source_trace
+        return source_trace, llm_review_bucket
 
-    for field_name, raw_review in llm_reviews.items():
+    canonical_reviews, llm_review_bucket = _split_llm_cleanup_payload(llm_reviews)
+    for field_name, raw_review in canonical_reviews.items():
         normalized = _normalize_llm_cleanup_review(
             field_name,
             raw_review,
@@ -1374,9 +1549,11 @@ async def _collect_detail_llm_suggestions(
     source_trace["llm_cleanup_status"] = {
         **llm_cleanup_status,
         "status": "ready",
-        "count": len(llm_cleanup_suggestions),
+        "canonical_count": len(llm_cleanup_suggestions),
+        "review_bucket_count": len(llm_review_bucket),
+        "count": len(llm_cleanup_suggestions) + len(llm_review_bucket),
     }
-    return source_trace
+    return source_trace, llm_review_bucket
 
 
 def _build_llm_candidate_evidence(trace_candidates: dict, preview_record: dict) -> dict[str, list[dict]]:
@@ -1640,6 +1817,45 @@ def _normalize_llm_cleanup_review(field_name: object, raw_review: object, *, cur
     })
 
 
+def _split_llm_cleanup_payload(payload: object) -> tuple[dict[str, object], list[dict[str, object]]]:
+    if not isinstance(payload, dict):
+        return {}, []
+    if "canonical" not in payload and "review_bucket" not in payload:
+        canonical = {
+            str(key).strip(): value
+            for key, value in payload.items()
+            if str(key).strip()
+        }
+        return canonical, []
+    raw_canonical = payload.get("canonical")
+    canonical = raw_canonical if isinstance(raw_canonical, dict) else {}
+    raw_review_bucket = payload.get("review_bucket")
+    review_bucket: list[dict[str, object]] = []
+    if isinstance(raw_review_bucket, list):
+        for row in raw_review_bucket:
+            normalized = _normalize_llm_review_bucket_item(row)
+            if normalized is not None:
+                review_bucket.append(normalized)
+    return canonical, _merge_review_bucket_entries(review_bucket)
+
+
+def _normalize_llm_review_bucket_item(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    key = str(value.get("key") or "").strip()
+    if not key or key.startswith("_"):
+        return None
+    normalized_value = _normalize_review_value(value.get("value"))
+    if normalized_value is None:
+        return None
+    return _compact_dict({
+        "key": key,
+        "value": normalized_value,
+        "confidence_score": _clamp_review_confidence(value.get("confidence_score", value.get("confidence", 5))),
+        "source": str(value.get("source") or "llm_cleanup").strip() or "llm_cleanup",
+    })
+
+
 async def _load_domain_requested_fields(session: AsyncSession, *, url: str, surface: str) -> list[str]:
     domain = normalize_domain(url)
     if not domain:
@@ -1733,7 +1949,14 @@ def _build_field_discovery_summary(
     return source_trace
 
 
-def _refresh_record_commit_metadata(record: CrawlRecord, *, run: CrawlRun, field_name: str, value: object) -> None:
+def _refresh_record_commit_metadata(
+    record: CrawlRecord,
+    *,
+    run: CrawlRun,
+    field_name: str,
+    value: object,
+    source_label: str = "user_commit",
+) -> None:
     source_trace = dict(record.source_trace or {})
     field_discovery = dict(source_trace.get("field_discovery") or {})
     existing_entry = dict(field_discovery.get(field_name) or {})
@@ -1743,7 +1966,7 @@ def _refresh_record_commit_metadata(record: CrawlRecord, *, run: CrawlRun, field
         for source in existing_sources
         if str(source).strip()
     }
-    sources.add("user_commit")
+    sources.add(source_label)
     canonical_fields = set(get_canonical_fields(run.surface))
     field_discovery[field_name] = _compact_dict({
         **existing_entry,
@@ -1762,11 +1985,21 @@ def _refresh_record_commit_metadata(record: CrawlRecord, *, run: CrawlRun, field
     source_trace["field_discovery_missing"] = missing_fields
 
     committed_fields = dict(source_trace.get("committed_fields") or {})
-    committed_fields[field_name] = {"value": value, "source": "user_commit"}
+    committed_fields[field_name] = {"value": value, "source": source_label}
     source_trace["committed_fields"] = committed_fields
     record.source_trace = source_trace
 
     discovered_data = dict(record.discovered_data or {})
+    review_bucket = discovered_data.get("review_bucket") if isinstance(discovered_data.get("review_bucket"), list) else []
+    if review_bucket:
+        discovered_data["review_bucket"] = [
+            row
+            for row in review_bucket
+            if not (
+                isinstance(row, dict)
+                and str(row.get("key") or "").strip() == field_name
+            )
+        ]
     requested_fields = list(run.requested_fields or [])
     if requested_fields:
         discovered_data["requested_field_coverage"] = _requested_field_coverage(record.data or {}, requested_fields)

@@ -95,7 +95,7 @@
   },
   "candidate_cleanup": {
     "placeholder_values": ["-", "—", "--", "n/a", "na", "none", "null", "undefined"],
-    "generic_category_values": ["detail-page", "detail_page", "product", "page", "pdp", "simple", "configurable", "image", "imageobject", "listitem", "itemlist", "collectionpage", "productcard", "contentcard", "aggregateoffer", "productgroup", "aggregaterating", "review", "person", "rating", "merchantreturnpolicy", "merchantreturnpolicyseasonaloverride", "webpage", "organization", "speakablespecification"],
+    "generic_category_values": ["detail-page", "detail_page", "product", "page", "pdp", "simple", "configurable", "image", "imageobject", "listitem", "itemlist", "collectionpage", "productcard", "contentcard", "aggregateoffer", "productgroup", "aggregaterating", "review", "person", "rating", "merchantreturnpolicy", "merchantreturnpolicyseasonaloverride", "webpage", "organization", "speakablespecification", "individualproduct", "peopleaudience", "brand", "offer", "postaladdress", "country", "quantitativevalue", "unitpricespecification", "pricespecification", "deliverychargespecification", "openinghoursspecification", "geopoint", "geocoordinates", "place", "contactpoint", "searchaction", "readaction", "buyaction", "sitenavigationelement", "wpadblock", "creativework", "article", "newsarticle", "blogposting", "howto", "faqpage", "videoobject", "localbusiness", "store", "thing"],
     "generic_title_values": ["chrome", "firefox", "safari", "edge", "home"],
     "field_groups": {
       "url": ["url", "apply_url"],
@@ -147,9 +147,60 @@
     "section_ancestor_stop_tags": ["footer", "header", "nav", "aside", "form"],
     "section_ancestor_stop_tokens": ["footer", "header", "nav", "menu", "newsletter", "breadcrumbs", "breadcrumb", "cookie", "consent"],
     "spec_label_block_patterns": ["play video", "watch video", "video", "learn more", "add to cart", "buy now", "primary guide", "guide", "discount"],
-    "spec_drop_labels": ["qty", "quantity", "details", "total", "subtotal", "delivery", "shipping"],
+    "spec_drop_labels": ["qty", "quantity", "details", "total", "subtotal", "delivery", "shipping", "aggregaterating", "aggregate_rating", "breadcrumblist", "breadcrumb_list", "organization", "webpage", "website", "imageobject", "image_object", "listitem", "list_item", "searchaction", "search_action", "offer", "itemlist", "item_list", "howto", "faqpage", "videoobject", "video_object", "creativework", "creative_work", "type", "@type", "@context", "you_are_here", "breadcrumb", "age", "language", "incentives", "verified_reviewer", "rating_distribution", "overall_rating", "review_this_product", "filter_reviews", "rating_summary", "select"],
+    "spec_label_drop_country_names": true,
     "feature_section_aliases": ["features", "feature", "highlights", "key_features", "key features"],
     "dimension_keywords": ["width", "height", "depth", "length", "diameter", "weight", "dimensions", "size", "measurement", "measurements"],
     "aggregate_separator": " | "
+  },
+  "jsonld_structural_keys": ["@type", "@context", "@id", "@graph", "@vocab", "@list", "@set"],
+  "jsonld_non_product_block_types": [
+    "organization", "website", "webpage", "breadcrumblist",
+    "searchaction", "sitenavigationelement", "imageobject",
+    "videoobject", "faqpage", "howto", "person",
+    "localbuisness", "localbusiness", "store"
+  ],
+  "product_identity_fields": [
+    "title", "price", "sale_price", "original_price", "brand",
+    "description", "sku", "image_url", "additional_images",
+    "availability", "category"
+  ],
+  "nested_non_product_keys": [
+    "review", "reviews", "aggregaterating", "aggregate_rating",
+    "author", "publisher", "creator", "contributor",
+    "breadcrumb", "breadcrumblist", "itemlistelement",
+    "potentialaction", "mainentityofpage"
+  ],
+  "jsonld_type_noise": [
+    "aggregaterating", "aggregate_rating", "breadcrumblist", "breadcrumb_list",
+    "organization", "webpage", "website", "imageobject", "image_object",
+    "listitem", "list_item", "searchaction", "search_action", "offer",
+    "itemlist", "item_list", "howto", "faqpage", "videoobject", "video_object",
+    "creativework", "creative_work", "type", "context"
+  ],
+  "dynamic_field_name_drop_tokens": [
+    "arrivals", "bag", "best", "browse", "buy", "cart", "featured", "gifts",
+    "less", "location", "menu", "more", "new", "now", "recommended",
+    "review", "reviews", "save", "sell", "seller", "shop", "shopping",
+    "similar", "sort", "top", "trending", "vote", "votes"
+  ],
+  "source_ranking": {
+    "contract_xpath": 11,
+    "contract_regex": 10,
+    "adapter": 9,
+    "network_intercept": 8,
+    "hydrated_state": 7,
+    "embedded_json": 7,
+    "open_graph": 7,
+    "next_data": 7,
+    "json_ld": 6,
+    "microdata": 5,
+    "hidden_dom": 4,
+    "selector": 4,
+    "semantic_section": 3,
+    "semantic_spec": 3,
+    "dom_buy_box": 8,
+    "dom": 2,
+    "llm_xpath": 1
   }
 }

@@ -1,6 +1,9 @@
 URL: $url
 
-Target fields:
+Canonical schema fields:
+$canonical_fields_json
+
+Priority canonical fields under review:
 $target_fields_json
 
 Current extracted values:

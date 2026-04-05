@@ -22,6 +22,7 @@ JSON_CONTENT_TYPE = "application/json"
 SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 
 
+
 @dataclass
 class LLMTaskResult:
     payload: dict | list | None
@@ -239,11 +240,12 @@ async def review_field_candidates(
     domain: str,
     url: str,
     html_text: str,
+    canonical_fields: list[str],
     target_fields: list[str],
     existing_values: dict[str, object],
     candidate_evidence: dict[str, list[dict]],
     discovered_sources: dict[str, object],
-) -> tuple[dict[str, dict], str | None]:
+) -> tuple[dict[str, object], str | None]:
     result = await run_prompt_task(
         session,
         task_type="field_cleanup_review",
@@ -251,6 +253,7 @@ async def review_field_candidates(
         domain=domain,
         variables={
             "url": url,
+            "canonical_fields_json": json.dumps(canonical_fields),
             "target_fields_json": json.dumps(target_fields),
             "existing_values_json": _truncate_json_literal({field: existing_values.get(field) for field in target_fields}, 2400),
             "candidate_evidence_json": _truncate_json_literal(candidate_evidence, 16000),
@@ -275,16 +278,24 @@ async def _call_provider(
         return f"{_ERROR_PREFIX} Missing API key", 0, 0
     if normalized_provider not in SUPPORTED_LLM_PROVIDERS:
         return f"{_ERROR_PREFIX} Unsupported provider: {provider}", 0, 0
+
+    dispatch = _provider_dispatch(normalized_provider)
+    if dispatch is None:
+        return f"{_ERROR_PREFIX} Unsupported provider: {normalized_provider}", 0, 0
+
     try:
-        if normalized_provider == "groq":
-            return await _call_groq(api_key, model, system_prompt, user_prompt)
-        if normalized_provider == "anthropic":
-            return await _call_anthropic(api_key, model, system_prompt, user_prompt)
-        if normalized_provider == "nvidia":
-            return await _call_nvidia(api_key, model, system_prompt, user_prompt)
+        return await dispatch(api_key, model, system_prompt, user_prompt)
     except httpx.HTTPError as exc:
         return f"{_ERROR_PREFIX} {type(exc).__name__}: {exc}", 0, 0
-    return f"{_ERROR_PREFIX} Unsupported provider: {normalized_provider}", 0, 0
+
+
+def _provider_dispatch(provider: str):
+    """Return the async call function for the given provider, or None."""
+    return {
+        "groq": _call_groq,
+        "anthropic": _call_anthropic,
+        "nvidia": _call_nvidia,
+    }.get(provider)
 
 
 
