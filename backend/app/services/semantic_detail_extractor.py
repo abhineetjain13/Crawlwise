@@ -165,9 +165,6 @@ def _build_semantic_aggregates(
     feature_values = _collect_feature_values(sections)
     if feature_values:
         aggregates["features"] = SEMANTIC_AGGREGATE_SEPARATOR.join(feature_values)
-    combined_lines = [*feature_values, *spec_lines]
-    if combined_lines:
-        aggregates["features_specs"] = SEMANTIC_AGGREGATE_SEPARATOR.join(combined_lines)
     return aggregates
 
 
@@ -227,6 +224,17 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
         if body and key not in sections:
             sections[key] = body
 
+    for node in soup.find_all(["p", "div"]):
+        if not isinstance(node, Tag) or not _is_prominent_section_label_node(node):
+            continue
+        label = _label_text(node)
+        key = normalize_requested_field(label)
+        if not key or _is_section_label_blocked(label) or _is_ignored_section_node(node):
+            continue
+        body = _extract_section_content(node, soup)
+        if body and key not in sections:
+            sections[key] = body
+
     for details in soup.find_all("details"):
         summary = details.find("summary")
         if not summary:
@@ -254,6 +262,8 @@ def _extract_specifications(soup: BeautifulSoup, table_groups: list[dict]) -> di
     specs: dict[str, str] = {}
 
     for dl in soup.find_all("dl"):
+        if _is_ignored_section_node(dl):
+            continue
         terms = dl.find_all("dt")
         for dt in terms:
             label = _clean_text(dt.get_text(" ", strip=True))
@@ -291,6 +301,8 @@ def _extract_specifications(soup: BeautifulSoup, table_groups: list[dict]) -> di
 def _extract_table_groups(soup: BeautifulSoup) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
     for table_index, table in enumerate(soup.find_all("table"), start=1):
+        if _is_ignored_section_node(table):
+            continue
         rows = table.find_all("tr")
         if not rows:
             continue
@@ -477,6 +489,11 @@ def _extract_section_content(node: Tag, soup: BeautifulSoup) -> str:
         if isinstance(parent, Tag) and parent.name == "details":
             return _section_text(parent, label=_label_text(node))
 
+    if _is_prominent_section_label_node(node):
+        sibling_body = _collect_labeled_sibling_body(node)
+        if sibling_body:
+            return sibling_body
+
     wrapped = _find_wrapped_section_content(node)
     if wrapped:
         return wrapped
@@ -529,6 +546,24 @@ def _find_wrapped_section_content(node: Tag) -> str:
     return ""
 
 
+def _collect_labeled_sibling_body(node: Tag) -> str:
+    parts: list[str] = []
+    sibling = node.find_next_sibling()
+    steps = 0
+    while isinstance(sibling, Tag) and steps < 20:
+        if re.fullmatch(r"h[1-6]", (sibling.name or "").lower()) or sibling.name == "summary":
+            break
+        if _is_major_section_break(sibling):
+            break
+        if not _is_ignored_section_node(sibling):
+            text = _clean_text(sibling.get_text(" ", strip=True))
+            if text:
+                parts.append(text)
+        sibling = sibling.find_next_sibling()
+        steps += 1
+    return _clean_text(" ".join(parts))
+
+
 def _section_text(node: Tag, *, label: str) -> str:
     text = _clean_text(node.get_text(" ", strip=True))
     lowered_label = _clean_text(label).lower()
@@ -537,15 +572,57 @@ def _section_text(node: Tag, *, label: str) -> str:
     return text
 
 
+def _is_prominent_section_label_node(node: Tag) -> bool:
+    text = _clean_text(node.get_text(" ", strip=True))
+    lowered = text.lower()
+    if not text or len(text) > 80:
+        return False
+    if not re.search(r"[a-z]", lowered):
+        return False
+    if any(token in lowered for token in SECTION_SKIP_PATTERNS):
+        return False
+    if node.find("a", href=True):
+        return False
+    if len(text.split()) > 8:
+        return False
+    has_emphasis = node.find(["b", "strong", "u", "em"]) is not None
+    return text.endswith(":") or has_emphasis
+
+
+def _is_major_section_break(node: Tag) -> bool:
+    if not _is_prominent_section_label_node(node):
+        return False
+    normalized = normalize_requested_field(_label_text(node))
+    return bool(normalized and normalized in _CANONICAL_TO_ALIASES)
+
+
 def _lookup_semantic_value(field: str, source: dict[str, str]) -> str | None:
     if not source:
         return None
     normalized = normalize_requested_field(field)
     if normalized in source and source[normalized] not in (None, "", [], {}):
         return source[normalized]
-    for alias in _CANONICAL_TO_ALIASES.get(normalized, set()):
+
+    aliases = sorted(_CANONICAL_TO_ALIASES.get(normalized, set()), key=len, reverse=True)
+    for alias in aliases:
         if alias in source and source[alias] not in (None, "", [], {}):
             return source[alias]
+
+    for key, value in source.items():
+        if value in (None, "", [], {}):
+            continue
+        normalized_key = normalize_requested_field(key)
+        if not normalized_key:
+            continue
+        for alias in aliases:
+            if normalized_key == alias:
+                return value
+            if (
+                normalized_key.startswith(f"{alias}_")
+                or normalized_key.endswith(f"_{alias}")
+                or f"_{alias}_" in normalized_key
+            ):
+                return value
     return None
 
 

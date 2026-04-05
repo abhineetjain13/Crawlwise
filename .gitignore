@@ -25,3 +25,11 @@ backend/prune_test_out.txt
 *.pyo
 *.log
 .DS_Store
+
+# Debug artifacts
+candidates.json
+test_*.html
+test_*.json
+
+# Old knowledge dir
+knowledge/

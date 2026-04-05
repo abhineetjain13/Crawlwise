@@ -10,6 +10,8 @@ from app.services.acquisition.acquirer import (
     ProxyRotator,
     _artifact_path,
     _diagnostics_path,
+    _json_ld_listing_count,
+    _is_invalid_job_surface_page,
     _network_payload_path,
     _requested_fields_need_browser,
     acquire,
@@ -43,6 +45,11 @@ class TestProxyRotator:
     def test_strips_whitespace(self):
         r = ProxyRotator(["  http://proxy:8080  ", ""])
         assert r.next() == "http://proxy:8080"
+
+
+def test_json_ld_listing_count_handles_type_arrays_and_empty_itemlists():
+    assert _json_ld_listing_count({"@type": ["Thing", "Product"]}) == 1
+    assert _json_ld_listing_count({"@type": ["ItemList"], "itemListElement": []}) == 0
 
 
 @pytest.mark.asyncio
@@ -116,6 +123,49 @@ async def test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html():
 
     assert result.method == "curl_cffi"
     assert result.diagnostics["curl_adapter_hint"] == "shopify"
+    browser_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_structured_data():
+    js_heavy_html = """
+    <html><body>
+      <div>ok</div>
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          "mainEntity": {
+            "@type": "ItemList",
+            "itemListElement": [
+              {"item": {"@type": "Product", "name": "Filter A", "url": "/p/filter-a"}},
+              {"item": {"@type": "Product", "name": "Filter B", "url": "/p/filter-b"}}
+            ]
+          }
+        }
+      </script>
+    """ + ("<script>var x=1;</script>" * 30000) + "</body></html>"
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=js_heavy_html, status_code=200, content_type="html"),
+        ),
+        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://example.com/products/widget")
+
+    assert result.method == "curl_cffi"
+    assert result.diagnostics["curl_needs_browser"] is False
+    assert result.diagnostics["js_shell_overridden"] == "structured_data_found"
     browser_mock.assert_not_awaited()
 
 
@@ -195,6 +245,80 @@ async def test_acquire_html_advanced_mode_falls_back_to_curl_on_playwright_failu
             )
     assert method == "curl_cffi"
     assert "Product" in result_html
+
+
+def test_is_invalid_job_surface_page_detects_homepage_login_redirect():
+    html = """
+    <html>
+      <head>
+        <title>GovernmentJobs | City, State, Federal &amp; Public Sector Jobs</title>
+        <link rel="canonical" href="https://www.schooljobs.com/" />
+      </head>
+      <body><h1>log in</h1></body>
+    </html>
+    """
+
+    assert _is_invalid_job_surface_page(
+        requested_url="https://www.governmentjobs.com/careers/california/jobs/4817400",
+        final_url="https://www.governmentjobs.com/",
+        html=html,
+        surface="job_detail",
+    ) is True
+
+
+def test_is_invalid_job_surface_page_detects_soft_404_job_page():
+    html = """
+    <html>
+      <head><title>Sorry. The page you requested could not be found.</title></head>
+      <body><h1>Sorry. The page you requested could not be found.</h1></body>
+    </html>
+    """
+
+    assert _is_invalid_job_surface_page(
+        requested_url="https://www.higheredjobs.com/jobs/details.cfm?JobCode=178200990",
+        final_url="https://www.higheredjobs.com/jobs/details.cfm?JobCode=178200990",
+        html=html,
+        surface="job_detail",
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_acquire_discards_job_redirect_shell_results(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    shell_html = """
+    <html>
+      <head>
+        <title>GovernmentJobs | City, State, Federal &amp; Public Sector Jobs</title>
+        <link rel=\"canonical\" href=\"https://www.schooljobs.com/\" />
+      </head>
+      <body><h1>log in</h1></body>
+    </html>
+    """
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(
+                text=shell_html,
+                status_code=200,
+                content_type="html",
+                final_url="https://www.governmentjobs.com/",
+            ),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(
+                html=shell_html,
+                diagnostics={"final_url": "https://www.governmentjobs.com/"},
+            ),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="Unable to acquire content"):
+            await acquire(42, "https://www.governmentjobs.com/careers/california/jobs/4817400", surface="job_detail")
 
 
 @pytest.mark.asyncio
@@ -316,7 +440,6 @@ def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_acquire_retries_same_host_after_learning_stealth_preference(monkeypatch, tmp_path):
-    from pathlib import Path
 
     calls: list[bool] = []
 

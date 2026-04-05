@@ -7,6 +7,8 @@ from typing import Annotated
 from io import StringIO
 from functools import lru_cache
 from pathlib import Path
+from html import unescape
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -35,6 +37,10 @@ RECORD_NOT_FOUND_RESPONSE = {
 RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
+REPO_ROOT = Path(__file__).resolve().parents[3]
+INTELLIGENCE_VIEW_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "knowledge_base" / "intelligence-view.json"
+)
 
 
 @router.get("/api/crawls/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
@@ -111,6 +117,27 @@ async def export_csv(
         media_type="text/csv",
         headers={
             "Content-Disposition": f"attachment; filename=run-{run_id}.csv",
+            **_export_headers(metadata),
+        },
+    )
+
+
+@router.get("/api/crawls/{run_id}/export/markdown", responses=RUN_NOT_FOUND_RESPONSE)
+async def export_markdown(
+    run_id: int,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> StreamingResponse:
+    from app.services.crawl_service import get_run
+    run = await get_run(session, run_id)
+    if run is None or (_.role != "admin" and run.user_id != _.id):
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    metadata = await _collect_export_metadata(session, run_id)
+    return StreamingResponse(
+        _stream_export_markdown(session, run_id),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename=run-{run_id}.md",
             **_export_headers(metadata),
         },
     )
@@ -229,6 +256,15 @@ async def _stream_export_discoverist(session: AsyncSession, run_id: int):
         buffer.truncate(0)
 
 
+async def _stream_export_markdown(session: AsyncSession, run_id: int):
+    first = True
+    async for row in _stream_export_rows(session, run_id):
+        if not first:
+            yield "\n\n---\n\n"
+        yield _record_to_markdown(row)
+        first = False
+
+
 def _clean_export_data(data: dict) -> dict:
     """Strip empty/null values and internal keys from export data."""
     return {
@@ -243,6 +279,119 @@ def _export_headers(metadata: dict[str, int | bool]) -> dict[str, str]:
         EXPORT_TOTAL_HEADER: str(metadata["total"]),
         EXPORT_PARTIAL_HEADER: "true" if metadata["truncated"] else "false",
     }
+
+
+def _record_to_markdown(row: CrawlRecord) -> str:
+    data = _clean_export_data(row.data or {})
+    source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
+    semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
+    semantic_sections = semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
+    semantic_specs = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
+
+    title = _stringify_markdown_value(data.get("title")) or row.source_url or f"Record {row.id}"
+    lines: list[str] = [f"# {title}"]
+    if row.source_url:
+        lines.extend(["", f"Source URL: {row.source_url}"])
+
+    rendered_section_keys: set[str] = set()
+    for field_name, raw_value in data.items():
+        if str(field_name).strip().lower() == "title":
+            continue
+        rendered_value = _stringify_markdown_value(raw_value)
+        if not rendered_value:
+            continue
+        if _is_markdown_long_form(field_name, rendered_value):
+            lines.extend(["", f"## {_humanize_field_name(field_name)}", "", _render_markdown_block(rendered_value)])
+            rendered_section_keys.add(str(field_name).strip().lower())
+
+    for field_name, raw_value in semantic_sections.items():
+        normalized_field = str(field_name).strip().lower()
+        if normalized_field in rendered_section_keys:
+            continue
+        rendered_value = _stringify_markdown_value(raw_value)
+        if not rendered_value:
+            continue
+        lines.extend(["", f"## {_humanize_field_name(field_name)}", "", _render_markdown_block(rendered_value)])
+
+    scalar_rows: list[tuple[str, str]] = []
+    for field_name, raw_value in data.items():
+        normalized_field = str(field_name).strip().lower()
+        if normalized_field == "title":
+            continue
+        rendered_value = _stringify_markdown_value(raw_value)
+        if not rendered_value or normalized_field in rendered_section_keys:
+            continue
+        scalar_rows.append((_humanize_field_name(field_name), rendered_value))
+
+    if scalar_rows:
+        lines.extend(["", "## Output Fields", ""])
+        for label, value in scalar_rows:
+            lines.append(f"- {label}: {value}")
+
+    if semantic_specs:
+        lines.extend(["", "## Details", ""])
+        for field_name, raw_value in sorted(semantic_specs.items(), key=lambda item: _humanize_field_name(item[0]).lower()):
+            rendered_value = _stringify_markdown_value(raw_value)
+            if rendered_value:
+                lines.append(f"- {_humanize_field_name(field_name)}: {rendered_value}")
+
+    return "\n".join(lines).strip()
+
+
+def _stringify_markdown_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False)
+    text = unescape(text).replace("\r\n", "\n").replace("\u00a0", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _is_markdown_long_form(field_name: object, value: str) -> bool:
+    normalized = str(field_name or "").strip().lower()
+    if normalized in _intelligence_long_form_fields():
+        return True
+    return "\n" in value or len(value) > 180
+
+
+def _render_markdown_block(value: str) -> str:
+    lines = [line.strip() for line in value.split("\n") if line.strip()]
+    if not lines:
+        return ""
+    rendered: list[str] = []
+    for line in lines:
+        bullet_match = re.match(r"^(?:[•*-]|\d+\.)\s+(.*)$", line)
+        if bullet_match:
+            rendered.append(f"- {bullet_match.group(1).strip()}")
+        else:
+            rendered.append(line)
+    return "\n".join(rendered)
+
+
+def _humanize_field_name(value: object) -> str:
+    normalized = str(value or "").replace("_", " ").replace("-", " ")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return ""
+    return normalized[:1].upper() + normalized[1:]
+
+
+@lru_cache(maxsize=1)
+def _intelligence_long_form_fields() -> frozenset[str]:
+    try:
+        payload = json.loads(INTELLIGENCE_VIEW_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return frozenset()
+    rows = payload.get("long_form_fields") if isinstance(payload, dict) else []
+    return frozenset(
+        str(value).strip().lower()
+        for value in (rows if isinstance(rows, list) else [])
+        if str(value).strip()
+    )
 
 
 @lru_cache(maxsize=1)

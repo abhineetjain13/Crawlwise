@@ -571,6 +571,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     crawl_module: config.module,
     crawl_mode: config.mode,
   };
+  const inferredSurface = inferDispatchSurface(config);
 
   if (config.module === "category") {
     if (config.mode === "bulk") {
@@ -578,7 +579,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
       if (!urls.length) throw new Error("Bulk crawl needs at least one URL.");
       return {
         runType: "batch",
-        surface: "ecommerce_listing",
+        surface: inferredSurface,
         url: urls[0],
         urls,
         settings: { ...commonSettings, urls },
@@ -589,7 +590,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     if (!config.target_url.trim()) throw new Error("Enter a target URL.");
     return {
       runType: "crawl",
-      surface: "ecommerce_listing",
+      surface: inferredSurface,
       url: config.target_url.trim(),
       settings: commonSettings,
       additionalFields,
@@ -601,7 +602,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     if (!config.csv_file) throw new Error("Select a CSV file.");
     return {
       runType: "csv",
-      surface: "ecommerce_detail",
+      surface: inferredSurface,
       url: config.target_url.trim() || undefined,
       settings: commonSettings,
       additionalFields,
@@ -614,7 +615,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     if (!urls.length) throw new Error("Batch crawl needs at least one URL.");
     return {
       runType: "batch",
-      surface: "ecommerce_detail",
+      surface: inferredSurface,
       url: urls[0],
       urls,
       settings: { ...commonSettings, urls },
@@ -626,12 +627,58 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
   if (!config.target_url.trim()) throw new Error("Enter a target URL.");
   return {
     runType: "crawl",
-    surface: "ecommerce_detail",
+    surface: inferredSurface,
     url: config.target_url.trim(),
     settings: commonSettings,
     additionalFields,
     csvFile: null,
   };
+}
+
+function inferDispatchSurface(config: CrawlConfig) {
+  const fallbackSurface = config.module === "category" ? "ecommerce_listing" : "ecommerce_detail";
+  const sampleUrl =
+    config.target_url.trim() ||
+    parseLines(config.bulk_urls)[0] ||
+    "";
+  if (!looksLikeJobUrl(sampleUrl)) {
+    return fallbackSurface;
+  }
+  return config.module === "category" ? "job_listing" : "job_detail";
+}
+
+function looksLikeJobUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    const pathAndQuery = `${url.pathname}${url.search}`.toLowerCase();
+    const hostHints = [
+      "dice.com",
+      "linkedin.com",
+      "indeed.",
+      "greenhouse.io",
+      "idealist.org",
+      "usajobs.gov",
+      "remotive.com",
+    ];
+    const pathHints = [
+      "/job-detail/",
+      "/viewjob",
+      "/jobs",
+      "/job/",
+      "/position",
+      "/positions",
+      "/opening",
+      "/openings",
+      "/career",
+      "/careers",
+      "/search/results",
+    ];
+    const hasHostHint = hostHints.some((hint) => host.includes(hint));
+    return hasHostHint && pathHints.some((hint) => pathAndQuery.includes(hint));
+  } catch {
+    return false;
+  }
 }
 
 function canPreview(config: CrawlConfig) {

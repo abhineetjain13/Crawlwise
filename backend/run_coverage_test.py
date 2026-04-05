@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -27,7 +26,6 @@ from app.services.discover.service import DiscoveryManifest, discover_sources
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import extract_candidates
 from app.services.extract.json_extractor import extract_json_listing, extract_json_detail
-from app.services.normalizers.field_normalizers import normalize_value
 
 
 # ── Test URLs ──

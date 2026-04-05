@@ -99,6 +99,7 @@ export const api = {
   getCrawlLogs: (runId: number) => apiClient.get<CrawlLog[]>(`/api/crawls/${runId}/logs`),
   exportCsv: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/csv`,
   exportJson: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/json`,
+  exportMarkdown: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/markdown`,
   getReview: (runId: number) => apiClient.get<ReviewPayload>(`/api/review/${runId}`),
   reviewHtml: (runId: number) => `${getApiBaseUrl()}/api/review/${runId}/artifact-html`,
   saveReview: (runId: number, payload: { selections: ReviewSelection[]; extra_fields: string[] }) =>

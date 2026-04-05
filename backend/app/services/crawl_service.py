@@ -12,6 +12,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from html import unescape
+from urllib.parse import urlparse
 
 import regex as regex_lib
 from sqlalchemy import func, select
@@ -78,6 +79,7 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
     settings = dict(payload.get("settings", {}))
     urls = payload.get("urls") or []
     primary_url = payload.get("url") or (urls[0] if urls else "")
+    normalized_surface = _normalize_requested_surface(str(payload.get("surface") or ""), url=primary_url)
     await ensure_public_crawl_targets(_collect_target_urls(payload, settings))
     _validate_extraction_contract(settings.get("extraction_contract") or [])
     settings["max_pages"] = max(1, int(settings.get("max_pages", 5) or 5))
@@ -95,7 +97,7 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
         settings["advanced_mode"] = advanced_mode
     else:
         settings["advanced_mode"] = None
-    domain_requested_fields = await _load_domain_requested_fields(session, url=primary_url, surface=payload["surface"])
+    domain_requested_fields = await _load_domain_requested_fields(session, url=primary_url, surface=normalized_surface)
     site_memory_fields = await _load_site_memory_fields(session, url=primary_url)
     requested_fields = expand_requested_fields([
         *domain_requested_fields,
@@ -110,7 +112,7 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
         user_id=user_id,
         run_type=payload["run_type"],
         url=primary_url,
-        surface=payload["surface"],
+        surface=normalized_surface,
         status=CrawlStatus.PENDING.value,
         settings=settings,
         requested_fields=requested_fields,
@@ -584,6 +586,7 @@ async def _process_single_url(
     acq = await acquire(
         run_id=run.id,
         url=url,
+        surface=surface,
         proxy_list=proxy_list or None,
         advanced_mode=advanced_mode,
         max_pages=max_pages,
@@ -1214,6 +1217,45 @@ def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
+_JOB_HOST_HINTS = (
+    "dice.com",
+    "indeed.",
+    "linkedin.com",
+    "greenhouse.io",
+    "boards.greenhouse.io",
+    "boards-api.greenhouse.io",
+    "idealist.org",
+    "usajobs.gov",
+    "remotive.com",
+)
+_JOB_PATH_HINT_RE = re.compile(
+    r"(?i)(/job-detail/|/viewjob\b|/jobs?(?:/|$)|/positions?(?:/|$)|/openings?(?:/|$)|/careers?(?:/|$)|/search/results\b)"
+)
+
+
+def _normalize_requested_surface(surface: str, *, url: str) -> str:
+    normalized_surface = str(surface or "").strip()
+    if normalized_surface not in {"ecommerce_listing", "ecommerce_detail"}:
+        return normalized_surface
+    if not _looks_like_job_url(url):
+        return normalized_surface
+    return "job_listing" if normalized_surface.endswith("listing") else "job_detail"
+
+
+def _looks_like_job_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+    query = parsed.query.lower()
+    text = f"{host}{path}"
+    if any(token in host for token in _JOB_HOST_HINTS):
+        if _JOB_PATH_HINT_RE.search(f"{path}?{query}") or any(token in text for token in ("/job", "/jobs", "/career", "/careers")):
+            return True
+    if _JOB_PATH_HINT_RE.search(f"{path}?{query}"):
+        return True
+    return False
+
+
 async def _count_run_records(session: AsyncSession, run_id: int) -> int:
     return int(
         (
@@ -1573,7 +1615,7 @@ def _should_prefer_secondary_field(field_name: str, existing: object, candidate:
         return False
     if existing in (None, "", [], {}):
         return True
-    if field_name in {"description", "specifications", "features_specs"}:
+    if field_name in {"description", "specifications"}:
         return len(_clean_candidate_text(candidate, limit=None)) > len(_clean_candidate_text(existing, limit=None))
     if field_name == "additional_images":
         existing_count = len([part for part in str(existing or "").split(",") if part.strip()])

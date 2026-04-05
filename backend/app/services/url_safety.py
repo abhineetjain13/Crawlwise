@@ -4,7 +4,6 @@ import asyncio
 import ipaddress
 import re
 import socket
-import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import urlparse

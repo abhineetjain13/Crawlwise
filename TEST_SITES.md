@@ -75,13 +75,11 @@ JS-rendered and complex HTTP listing pages. No aggressive bot protection.
 | LC02 | `https://www.discogs.com/sell/list?genre=Electronic` | Browser | Medium | Vinyl marketplace, seller metadata, paginated, release-linked JSON |
 | LC03 | `https://www.musiciansfriend.com/guitars/electric-guitars` | HTTP | Medium | Paginated catalog, JSON-LD ProductList, faceted filters |
 | LC04 | `https://www.adorama.com/catalog.tpl?cat=DLCAM` | HTTP | Medium | Photo/video listing, numbered pagination, inline JSON product arrays |
-| LC05 | `https://www.globalindustrial.com/c/material-handling/carts` | Browser | Hard | B2B industrial, deep nested DOM, load-more, spec previews in cards |
+
 | LC06 | `https://www.uline.com/BL_8421/Boxes` | HTTP | Medium | Packaging catalog, table-based layout, variant data in DOM |
 | LC07 | `https://www.webstaurantstore.com/list/191/commercial-refrigerators.html` | HTTP | Medium | Commercial equipment, paginated, spec summaries in card DOM |
 | LC08 | `https://www.autozone.com/filters-and-pcv/oil-filter` | Browser | Medium | Auto parts, vehicle fitment filter, nested window state JSON |
-| LC09 | `https://www.vitacost.com/vitamins` | HTTP | Medium | Supplement catalog, nutrition metadata in DOM, paginated |
 | LC10 | `https://www.chewy.com/b/dry-dog-food-294` | Browser | Medium | JS-rendered product cards, ingredient previews in listing |
-| LC11 | `https://www.swappa.com/listings/phones` | Browser | Medium | Used tech marketplace, condition + price per listing, JS-rendered |
 | LC12 | `https://www.backmarket.com/en-us/l/smartphones/6b74ac09-dc46-4c8e-a5a3-5a2f98e53aec` | Browser | Medium | Refurbished marketplace, grade taxonomy, JSON-LD ProductList |
 | LC13 | `https://www.ifixit.com/Parts` | HTTP | Easy | Repair parts tree, device compatibility hierarchy, clean HTML |
 | LC14 | `https://www.abebooks.com/servlet/SearchResults?kn=python&pt=book` | HTTP | Medium | Used books, multi-seller listing per title, ISBN-keyed |
@@ -167,7 +165,6 @@ spec tables + inline JSON simultaneously — the hardest multi-source extraction
 | DJ06 | `https://jobicy.com/jobs/senior-fullstack-engineer-remote` | Jobicy | Medium | JSON-LD JobPosting, salary range, timezone requirement† |
 | DJ07 | `https://www.themuse.com/jobs/airbnb/software-engineer-backend` | The Muse | Medium | Company profile + role merged, JSON-LD, perks section† |
 | DJ08 | `https://www.themuse.com/jobs/shopify/senior-software-engineer` | The Muse | Medium | Benefits accordion, culture tags, video embed† |
-| DJ09 | `https://jobs.80000hours.org/jobs/open-philanthropy-research-analyst` | 80K Hours | Medium | Impact score, cause priority, career capital field† |
 | DJ10 | `https://startup.jobs/senior-backend-engineer-at-vercel` | Startup.jobs | Medium | Equity range, company stage, team size structured† |
 | DJ11 | `https://boards.greenhouse.io/airbnb/jobs/6290875` | Greenhouse | Medium | GH job detail — department, location, req ID, custom questions |
 | DJ12 | `https://boards.greenhouse.io/shopify/jobs/6318200` | Greenhouse | Medium | Multi-location Greenhouse, GDPR consent section in DOM |

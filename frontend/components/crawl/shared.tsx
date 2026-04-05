@@ -37,27 +37,6 @@ export type PendingDispatch = {
   csvFile: File | null;
 };
 export type OutputTabKey = "table" | "json" | "intelligence" | "logs";
-export type IntelligenceCandidate = {
-  key: string;
-  recordId: number;
-  recordUrl: string;
-  recordTitle: string;
-  fieldName: string;
-  displayLabel: string;
-  groupLabel: string;
-  value: unknown;
-  href?: string;
-  sortOrder: number;
-  confidenceScore?: number;
-  sourceKind?: "candidate" | "review_bucket" | "llm_suggestion";
-};
-export type IntelligenceRecordGroup = {
-  key: string;
-  recordId: number;
-  recordUrl: string;
-  recordTitle: string;
-  items: IntelligenceCandidate[];
-};
 
 export function parseRequestedCrawlTab(value: string | null): CrawlTab | null {
   return value === "category" || value === "pdp" ? value : null;
@@ -799,7 +778,7 @@ export function OutputTab({
       onClick={onClick}
       className={cn(
         "relative px-4 py-2 text-sm font-medium transition-colors",
-        active ? "text-[var(--text-primary)] !text-[#10203a] after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
+        active ? "text-[var(--text-primary)] after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
       )}
     >
       {children}
@@ -810,8 +789,8 @@ export function OutputTab({
 export function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: ReactNode; mono?: boolean }>) {
   return (
     <div className="flex items-start justify-between gap-4 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2">
-      <div className="shrink-0 label-caps !text-[#43556f]">{label}</div>
-      <div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-sm text-[var(--text-secondary)] !text-[#43556f]", mono && "font-mono text-xs")}>
+      <div className="shrink-0 label-caps">{label}</div>
+      <div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-sm text-[var(--text-secondary)]", mono && "font-mono text-xs")}>
         {value || "--"}
       </div>
     </div>

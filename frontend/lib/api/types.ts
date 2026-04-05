@@ -216,14 +216,15 @@ export type SiteMemoryPayload = {
   selector_suggestions: Record<string, SelectorSuggestion[]>;
   source_mappings: Record<string, string>;
   llm_columns: Record<string, unknown>;
+  acquisition: Record<string, unknown>;
 };
 
 export type SiteMemoryRecord = {
   domain: string;
   payload: SiteMemoryPayload;
   last_crawl_at: string | null;
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 export type LlmConfigRecord = {

@@ -1,0 +1,27 @@
+{
+  "long_form_fields": [
+    "description",
+    "summary",
+    "responsibilities",
+    "qualifications",
+    "requirements",
+    "benefits",
+    "skills",
+    "how_to_apply",
+    "next_steps",
+    "education",
+    "additional_information",
+    "conditions_of_employment",
+    "required_documents",
+    "how_you_will_be_evaluated",
+    "features",
+    "fit_and_sizing",
+    "materials_and_care"
+  ],
+  "section_blacklist": [
+    "help",
+    "close_this_window"
+  ],
+  "section_min_chars": 12,
+  "scalar_max_chars": 180
+}

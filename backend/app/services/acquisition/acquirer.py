@@ -23,9 +23,13 @@ from app.services.pipeline_config import (
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
     BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX,
     DEFAULT_MAX_SCROLLS,
+    JOB_ERROR_PAGE_HEADINGS,
+    JOB_ERROR_PAGE_TITLES,
     JS_GATE_PHRASES,
+    JOB_REDIRECT_SHELL_CANONICAL_URLS,
+    JOB_REDIRECT_SHELL_HEADINGS,
+    JOB_REDIRECT_SHELL_TITLES,
 )
-from app.services.requested_field_policy import requested_field_terms
 
 
 class ProxyPoolExhausted(RuntimeError):
@@ -70,6 +74,7 @@ async def acquire_html(
     run_id: int,
     url: str,
     proxy_list: list[str] | None = None,
+    surface: str | None = None,
     advanced_mode: str | None = None,
     max_pages: int = 5,
     max_scrolls: int = DEFAULT_MAX_SCROLLS,
@@ -83,6 +88,7 @@ async def acquire_html(
         run_id=run_id,
         url=url,
         proxy_list=proxy_list,
+        surface=surface,
         advanced_mode=advanced_mode,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
@@ -98,6 +104,7 @@ async def acquire(
     run_id: int,
     url: str,
     proxy_list: list[str] | None = None,
+    surface: str | None = None,
     advanced_mode: str | None = None,
     max_pages: int = 5,
     max_scrolls: int = DEFAULT_MAX_SCROLLS,
@@ -124,6 +131,7 @@ async def acquire(
             run_id=run_id,
             url=url,
             proxy=proxy,
+            surface=surface,
             advanced_mode=advanced_mode,
             max_pages=max_pages,
             max_scrolls=max_scrolls,
@@ -139,6 +147,7 @@ async def acquire(
                 run_id=run_id,
                 url=url,
                 proxy=proxy,
+                surface=surface,
                 advanced_mode=advanced_mode,
                 max_pages=max_pages,
                 max_scrolls=max_scrolls,
@@ -183,6 +192,7 @@ async def _acquire_once(
     run_id: int,
     url: str,
     proxy: str | None,
+    surface: str | None,
     advanced_mode: str | None,
     max_pages: int,
     max_scrolls: int,
@@ -204,6 +214,7 @@ async def _acquire_once(
             browser_result = await fetch_rendered_html(
                 url,
                 proxy=proxy,
+                surface=surface,
                 prefer_stealth=prefer_stealth,
                 advanced_mode=advanced_mode,
                 max_pages=max_pages,
@@ -215,7 +226,17 @@ async def _acquire_once(
         except Exception as exc:
             _log.warning("Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi", url, exc)
         else:
-            if browser_result.html and not detect_blocked_page(browser_result.html).is_blocked:
+            browser_final_url = str((browser_result.diagnostics or {}).get("final_url") or url).strip() or url
+            if (
+                browser_result.html
+                and not detect_blocked_page(browser_result.html).is_blocked
+                and not _is_invalid_job_surface_page(
+                    requested_url=url,
+                    final_url=browser_final_url,
+                    html=browser_result.html,
+                    surface=surface,
+                )
+            ):
                 return AcquisitionResult(
                     html=browser_result.html,
                     content_type="html",
@@ -294,6 +315,14 @@ async def _acquire_once(
         )
         or normalized.error
     )
+    structured_listing_override = (
+        needs_browser
+        and js_shell_detected
+        and not blocked.is_blocked
+        and _html_has_extractable_listings(html)
+    )
+    if structured_listing_override:
+        needs_browser = False
     if blocked.is_blocked:
         remember_stealth_host(url)
         prefer_stealth = True
@@ -312,6 +341,9 @@ async def _acquire_once(
         memory_prefer_stealth=bool((acquisition_profile or {}).get("prefer_stealth")),
         memory_browser_first=browser_first,
     )
+    curl_diagnostics["curl_final_url"] = normalized.final_url or url
+    if structured_listing_override:
+        curl_diagnostics["js_shell_overridden"] = "structured_data_found"
 
     # Keep the curl_cffi result as a fallback even if we escalate to browser,
     # but only when the content is substantive enough to be useful for extraction.
@@ -348,6 +380,7 @@ async def _acquire_once(
         browser_result = await fetch_rendered_html(
             url,
             proxy=proxy,
+            surface=surface,
             prefer_stealth=prefer_stealth,
             advanced_mode=advanced_mode,
             max_pages=max_pages,
@@ -363,7 +396,14 @@ async def _acquire_once(
             curl_result.diagnostics["browser_attempted"] = True
         return curl_result
 
-    if browser_result.html and not detect_blocked_page(browser_result.html).is_blocked:
+    browser_final_url = str((browser_result.diagnostics or {}).get("final_url") or url).strip() or url
+    browser_redirect_shell = _is_invalid_job_surface_page(
+        requested_url=url,
+        final_url=browser_final_url,
+        html=browser_result.html,
+        surface=surface,
+    )
+    if browser_result.html and not detect_blocked_page(browser_result.html).is_blocked and not browser_redirect_shell:
         browser_diagnostics = dict(curl_diagnostics)
         browser_diagnostics.update(
             {
@@ -393,10 +433,55 @@ async def _acquire_once(
         curl_result.diagnostics["browser_blocked"] = bool(
             browser_result.html and detect_blocked_page(browser_result.html).is_blocked
         )
+        curl_result.diagnostics["browser_redirect_shell"] = browser_redirect_shell or None
         _log.info("Playwright returned blocked/empty for %s — using curl_cffi fallback", url)
+        if _is_invalid_job_surface_page(
+            requested_url=url,
+            final_url=str(normalized.final_url or url).strip() or url,
+            html=curl_result.html,
+            surface=surface,
+        ):
+            _log.warning("Discarding curl_cffi fallback for %s because it resolved to a job redirect shell", url)
+            return None
         return curl_result
 
     return None
+
+
+def _is_invalid_job_surface_page(
+    *,
+    requested_url: str,
+    final_url: str,
+    html: str,
+    surface: str | None,
+) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface not in {"job_listing", "job_detail"}:
+        return False
+    requested = urlparse(requested_url)
+    final = urlparse(final_url or requested_url)
+    redirected_to_root = (
+        bool(final_url)
+        and requested.netloc.lower() == final.netloc.lower()
+        and requested.path.rstrip("/") != final.path.rstrip("/")
+        and final.path.rstrip("/") == ""
+    )
+    if not html:
+        return redirected_to_root
+    soup = BeautifulSoup(html, "html.parser")
+    title_text = " ".join((soup.title.get_text(" ", strip=True) if soup.title else "").split())
+    canonical_url = str((soup.select_one("link[rel='canonical']") or {}).get("href", "")).strip()
+    headings = {
+        " ".join(node.get_text(" ", strip=True).split()).lower()
+        for node in soup.select("h1, [role='heading']")
+        if node.get_text(" ", strip=True)
+    }
+    title_match = title_text in JOB_REDIRECT_SHELL_TITLES
+    canonical_match = canonical_url in JOB_REDIRECT_SHELL_CANONICAL_URLS
+    heading_match = any(heading in JOB_REDIRECT_SHELL_HEADINGS for heading in headings)
+    error_title_match = title_text in JOB_ERROR_PAGE_TITLES
+    error_heading_match = any(heading in JOB_ERROR_PAGE_HEADINGS for heading in headings)
+    return (redirected_to_root and (title_match or canonical_match or heading_match)) or error_title_match or error_heading_match
 
 
 async def _fetch_with_content_type(url: str, proxy: str | None) -> HttpFetchResult:
@@ -409,6 +494,89 @@ async def _resolve_adapter_hint(url: str, html: str) -> str | None:
         return None
     adapter = await resolve_adapter(url, html)
     return adapter.name if adapter is not None else None
+
+
+def _html_has_extractable_listings(html: str) -> bool:
+    if not html:
+        return False
+
+    soup = BeautifulSoup(html, "html.parser")
+    product_count = 0
+    for node in soup.select("script[type='application/ld+json']"):
+        raw = node.string or node.get_text(" ", strip=True) or ""
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        product_count += _json_ld_listing_count(payload)
+        if product_count >= 2:
+            return True
+
+    next_data_node = soup.select_one("script#__NEXT_DATA__")
+    if next_data_node is not None:
+        raw_next_data = next_data_node.string or next_data_node.get_text(" ", strip=True) or ""
+        signal_hits = (
+            raw_next_data.count('"productId"')
+            + raw_next_data.count('"partNumber"')
+            + raw_next_data.count('"displayName"')
+        )
+        if signal_hits >= 4:
+            return True
+
+    return False
+
+
+def _json_ld_listing_count(payload: object, *, _depth: int = 0, _max_depth: int = 2) -> int:
+    if _depth > _max_depth:
+        return 0
+    if isinstance(payload, list):
+        return sum(
+            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
+            for item in payload
+        )
+    if not isinstance(payload, dict):
+        return 0
+
+    count = 0
+    raw_ld_type = payload.get("@type", "")
+    if isinstance(raw_ld_type, str):
+        ld_types = {raw_ld_type.lower()}
+    elif isinstance(raw_ld_type, (list, tuple, set)):
+        ld_types = {
+            str(item).lower()
+            for item in raw_ld_type
+            if isinstance(item, str) and item.strip()
+        }
+    else:
+        ld_types = set()
+
+    if ld_types & {"product", "jobposting"}:
+        count += 1
+    if "itemlist" in ld_types or "itemListElement" in payload:
+        count += len(payload.get("itemListElement", []))
+
+    graph = payload.get("@graph")
+    if isinstance(graph, list):
+        count += sum(
+            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
+            for item in graph
+        )
+
+    main_entity = payload.get("mainEntity")
+    if isinstance(main_entity, dict):
+        count += _json_ld_listing_count(
+            main_entity,
+            _depth=_depth + 1,
+            _max_depth=_max_depth,
+        )
+
+    offers = payload.get("offers")
+    if isinstance(offers, dict):
+        item_offered = offers.get("itemOffered")
+        if isinstance(item_offered, list):
+            count += sum(1 for item in item_offered if isinstance(item, dict))
+
+    return count
 
 
 def _normalize_fetch_result(result: HttpFetchResult | tuple[str, str, dict | list | None]) -> HttpFetchResult:

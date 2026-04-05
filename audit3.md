@@ -1,5 +1,4 @@
-ested 10 unique URLs from the corpus and saved the raw report at qa_10sites_report.json.
-
+Tested 10 unique URLs from the corpus and saved the raw report at qa_10sites_report.json.
 Summary: 7/10 had full expected-field coverage, 2/10 were partial, 1/10 failed. The bigger problem is that 10/10 runs escalated to Playwright, including simple static pages. That is the main time bug.
 
 Top findings

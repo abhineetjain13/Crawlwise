@@ -6,13 +6,12 @@ import logging
 import asyncio
 import ipaddress
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
+from playwright.async_api import async_playwright
 
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
@@ -25,13 +24,19 @@ from app.services.pipeline_config import (
     BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
     BROWSER_NAVIGATION_LOAD_TIMEOUT_MS,
     BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS,
+    BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
     CHALLENGE_POLL_INTERVAL_MS,
     CHALLENGE_WAIT_MAX_SECONDS,
     COOKIE_CONSENT_POSTCLICK_WAIT_MS,
     COOKIE_POLICY,
     COOKIE_CONSENT_SELECTORS,
     COOKIE_CONSENT_PREWAIT_MS,
+    CARD_SELECTORS_COMMERCE,
+    CARD_SELECTORS_JOBS,
     DEFAULT_MAX_SCROLLS,
+    LISTING_MIN_ITEMS,
+    LISTING_READINESS_MAX_WAIT_MS,
+    LISTING_READINESS_POLL_MS,
     LOAD_MORE_WAIT_MIN_MS,
     LOAD_MORE_SELECTORS,
     ORIGIN_WARM_PAUSE_MS,
@@ -74,6 +79,7 @@ _STEALTH_USER_AGENT = (
 async def fetch_rendered_html(
     url: str,
     proxy: str | None = None,
+    surface: str | None = None,
     advanced_mode: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = DEFAULT_MAX_SCROLLS,
@@ -98,6 +104,7 @@ async def fetch_rendered_html(
             target=target,
             url=url,
             proxy=proxy,
+            surface=surface,
             advanced_mode=advanced_mode,
             max_pages=max_pages,
             max_scrolls=max_scrolls,
@@ -114,6 +121,7 @@ async def _fetch_rendered_html_with_fallback(
     target,
     url: str,
     proxy: str | None,
+    surface: str | None = None,
     advanced_mode: str | None,
     max_pages: int,
     max_scrolls: int,
@@ -123,13 +131,20 @@ async def _fetch_rendered_html_with_fallback(
     requested_field_selectors: dict[str, list[dict]],
 ) -> BrowserResult:
     last_error: Exception | None = None
+    first_profile_failed = False
     for profile in _browser_launch_profiles():
+        navigation_strategies = (
+            _shortened_navigation_strategies()
+            if first_profile_failed
+            else _navigation_strategies(browser_channel=str(profile.get("channel") or "").strip() or None)
+        )
         try:
             result = await _fetch_rendered_html_attempt(
                 pw,
                 target=target,
                 url=url,
                 proxy=proxy,
+                surface=surface,
                 advanced_mode=advanced_mode,
                 max_pages=max_pages,
                 max_scrolls=max_scrolls,
@@ -138,11 +153,13 @@ async def _fetch_rendered_html_with_fallback(
                 requested_fields=requested_fields,
                 requested_field_selectors=requested_field_selectors,
                 launch_profile=profile,
+                navigation_strategies=navigation_strategies,
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
             return result
         except Exception as exc:
             last_error = exc
+            first_profile_failed = True
             logger.warning("Playwright %s failed for %s: %s", profile["label"], url, exc)
             continue
     if last_error is not None:
@@ -156,6 +173,7 @@ async def _fetch_rendered_html_attempt(
     target,
     url: str,
     proxy: str | None,
+    surface: str | None,
     advanced_mode: str | None,
     max_pages: int,
     max_scrolls: int,
@@ -164,6 +182,7 @@ async def _fetch_rendered_html_attempt(
     requested_fields: list[str],
     requested_field_selectors: dict[str, list[dict]],
     launch_profile: dict[str, str | None],
+    navigation_strategies: list[tuple[str, int]] | None = None,
 ) -> BrowserResult:
     result = BrowserResult()
     intercepted: list[dict] = []
@@ -201,7 +220,11 @@ async def _fetch_rendered_html_attempt(
         else:
             result.origin_warmed = await _maybe_warm_origin(page, url)
 
-        await _goto_with_fallback(page, url, strategies=_navigation_strategies(browser_channel=browser_channel))
+        await _goto_with_fallback(
+            page,
+            url,
+            strategies=navigation_strategies or _navigation_strategies(browser_channel=browser_channel),
+        )
         await _dismiss_cookie_consent(page)
         challenge_ok, challenge_state, reasons = await _wait_for_challenge_resolution(page)
         result.challenge_state = challenge_state
@@ -217,9 +240,13 @@ async def _fetch_rendered_html_attempt(
         if field_trigger_selectors:
             result.diagnostics["field_trigger_selectors"] = field_trigger_selectors
         await _flatten_shadow_dom(page)
+        readiness = await _wait_for_listing_readiness(page, surface)
+        if readiness:
+            result.diagnostics["listing_readiness"] = readiness
 
         combined_html = await _apply_advanced_mode(
             page,
+            surface,
             advanced_mode,
             max_scrolls,
             max_pages=max_pages,
@@ -278,12 +305,16 @@ async def _pause_after_navigation(request_delay_ms: int) -> None:
 
 async def _apply_advanced_mode(
     page,
+    surface: str | None,
     advanced_mode: str | None,
     max_scrolls: int,
     *,
     max_pages: int,
     request_delay_ms: int,
 ) -> str | None:
+    normalized_surface = str(surface or "").strip().lower()
+    if advanced_mode == "auto" and normalized_surface.endswith("_detail"):
+        return None
     if advanced_mode == "scroll":
         await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
         return None
@@ -293,6 +324,7 @@ async def _apply_advanced_mode(
     if advanced_mode == "paginate":
         return await _collect_paginated_html(
             page,
+            surface=surface,
             max_pages=max_pages,
             request_delay_ms=request_delay_ms,
         )
@@ -304,6 +336,7 @@ async def _apply_advanced_mode(
         if next_page_url:
             return await _collect_paginated_html(
                 page,
+                surface=surface,
                 max_pages=max_pages,
                 request_delay_ms=request_delay_ms,
             )
@@ -313,6 +346,7 @@ async def _apply_advanced_mode(
 async def _collect_paginated_html(
     page,
     *,
+    surface: str | None = None,
     max_pages: int,
     request_delay_ms: int,
 ) -> str:
@@ -350,7 +384,58 @@ async def _collect_paginated_html(
             requested_field_selectors={},
         )
         await _flatten_shadow_dom(page)
+        await _wait_for_listing_readiness(page, surface)
     return "\n".join(fragments)
+
+
+async def _wait_for_listing_readiness(page, surface: str | None) -> dict[str, object] | None:
+    normalized_surface = str(surface or "").strip().lower()
+    if not normalized_surface.endswith("listing"):
+        return None
+    selectors = (
+        CARD_SELECTORS_JOBS
+        if normalized_surface == "job_listing"
+        else CARD_SELECTORS_COMMERCE
+    )
+    if not selectors:
+        return None
+    elapsed = 0
+    poll_ms = max(100, LISTING_READINESS_POLL_MS)
+    max_wait_ms = max(0, LISTING_READINESS_MAX_WAIT_MS)
+    best_selector = ""
+    best_count = 0
+    while elapsed <= max_wait_ms:
+        current_best_selector = ""
+        current_best_count = 0
+        for selector in selectors:
+            try:
+                count = await page.locator(selector).count()
+            except Exception:
+                logger.debug("Listing readiness count failed for selector %s", selector, exc_info=True)
+                continue
+            if count > current_best_count:
+                current_best_count = count
+                current_best_selector = selector
+            if count >= LISTING_MIN_ITEMS:
+                return {
+                    "ready": True,
+                    "selector": selector,
+                    "count": count,
+                    "waited_ms": elapsed,
+                }
+        if current_best_count > best_count:
+            best_count = current_best_count
+            best_selector = current_best_selector
+        if elapsed >= max_wait_ms:
+            break
+        await page.wait_for_timeout(poll_ms)
+        elapsed += poll_ms
+    return {
+        "ready": False,
+        "selector": best_selector or None,
+        "count": best_count,
+        "waited_ms": elapsed,
+    }
 
 
 async def _find_next_page_url(page) -> str:
@@ -649,6 +734,7 @@ async def _flatten_shadow_dom(page) -> None:
 async def _populate_result(result: BrowserResult, page, intercepted: list[dict]) -> None:
     result.html = await page.content()
     result.network_payloads = intercepted
+    result.diagnostics["final_url"] = str(page.url or "").strip() or None
     if result.html:
         result.diagnostics["html_length"] = len(result.html)
         result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
@@ -671,6 +757,13 @@ def _navigation_strategies(*, browser_channel: str | None = None) -> list[tuple[
         ("networkidle", BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS),
         ("load", BROWSER_NAVIGATION_LOAD_TIMEOUT_MS),
         ("domcontentloaded", BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS),
+    ]
+
+
+def _shortened_navigation_strategies() -> list[tuple[str, int]]:
+    return [
+        ("domcontentloaded", 12000),
+        ("commit", 8000),
     ]
 
 
@@ -715,8 +808,10 @@ async def _goto_with_fallback(
             for wait_until, timeout in strategies:
                 if wait_until in ("load", "networkidle"):
                     try:
-                        # Allocate a fixed optimistic budget rather than the full timeout
-                        await page.wait_for_load_state(wait_until, timeout=10000)
+                        await page.wait_for_load_state(
+                            wait_until,
+                            timeout=min(timeout, BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS),
+                        )
                     except Exception:
                         pass
             return
@@ -931,10 +1026,6 @@ def _context_kwargs(prefer_stealth: bool, *, browser_channel: str | None = None)
         "is_mobile": False,
         "has_touch": False,
         "color_scheme": "light",
-        "extra_http_headers": {
-            "Accept-Language": "en-US,en;q=0.9",
-            "Upgrade-Insecure-Requests": "1",
-        },
     }
     if prefer_stealth:
         kwargs["user_agent"] = _STEALTH_USER_AGENT

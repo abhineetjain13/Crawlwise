@@ -1,6 +1,8 @@
 {
   "price_fields": ["price", "sale_price", "original_price"],
   "price_regex": "\\d[\\d,.]*",
+  "salary_fields": ["salary", "compensation", "pay", "salary_range", "base_salary", "pay_range", "compensation_range"],
+  "salary_range_regex": "(?:[$€£₹]|USD|EUR|GBP|INR)?\\s*\\d[\\d,.]*[kKMB]?\\s*(?:[-–—]|to|until)\\s*(?:[$€£₹]|USD|EUR|GBP|INR)?\\s*\\d[\\d,.]*[kKMB]?(?:\\s*/\\s*[a-z]+)?|\\d[\\d,.]*[kKMB]?\\s*(?:[$€£₹]|USD|EUR|GBP|INR)",
   "nested_object_keys": {
     "text_fields": ["name", "label", "title", "text", "value", "content", "description", "alt"],
     "url_fields": ["href", "url", "link", "canonical_url"],

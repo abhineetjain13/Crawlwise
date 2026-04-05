@@ -1,6 +1,7 @@
 # Tests for the extraction service.
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 from app.services.discover.service import DiscoveryManifest
@@ -11,6 +12,7 @@ from app.services.extract.service import (
     _normalize_size_candidate,
     _resolve_candidate_url,
     _should_skip_jsonld_block,
+    coerce_field_candidate_value,
     extract_candidates,
 )
 
@@ -258,6 +260,55 @@ def test_extract_label_value_fallback_uses_full_description_sources():
     assert candidates["brand"][0]["value"] == "Acme Corp"
 
 
+def test_extract_job_company_from_open_graph_site_name():
+    html = "<html><body><h1>Supervisor Food and Beverage</h1></body></html>"
+    manifest = _manifest(open_graph={"og:site_name": "Woodbine Entertainment"})
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://woodbine.com/corporate/job/?id=abc",
+            "job_detail",
+            html,
+            manifest,
+            ["company"],
+        )
+    assert candidates["company"][0]["source"] == "open_graph"
+    assert candidates["company"][0]["value"] == "Woodbine Entertainment"
+
+
+def test_extract_label_value_fallback_uses_salary_alias_labels():
+    html = "<html><body><h1>Widget</h1></body></html>"
+    manifest = _manifest(
+        open_graph={
+            "description": (
+                "Salary range: The target hiring salary range for this position is "
+                "$82,000 - $92,000."
+            )
+        }
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job",
+            "job_detail",
+            html,
+            manifest,
+            ["salary"],
+        )
+    assert candidates["salary"][0]["source"] == "text_pattern"
+    assert "$82,000 - $92,000" in str(candidates["salary"][0]["value"])
+
+
+def test_coerce_field_candidate_value_joins_description_lists():
+    value = ["Paragraph one.", "Paragraph two.", "Final details."]
+
+    coerced = coerce_field_candidate_value(
+        "description",
+        value,
+        base_url="https://example.com/product",
+    )
+
+    assert coerced == "Paragraph one. Paragraph two. Final details."
+
+
 def test_extract_drops_generic_hidden_category_candidates_but_preserves_dom_category():
     html = "<html><body><div itemprop='category'>Audio Cables</div></body></html>"
     manifest = _manifest(_hydrated_states=[{"page": {"type": "detail-page"}}])
@@ -406,6 +457,87 @@ def test_extract_semantic_requested_field_from_accordion():
         )
     assert "responsibilities" in candidates
     assert "Build internal tools." in candidates["responsibilities"][0]["value"]
+
+
+def test_extract_semantic_requested_field_from_emphasized_paragraph_heading():
+    html = """
+    <html><body>
+    <p><b><u>Key Responsibilities:</u></b></p>
+    <ul>
+      <li>Build the product experience.</li>
+      <li>Ship improvements weekly.</li>
+    </ul>
+    <p><b><u>Skills:</u></b></p>
+    <ul>
+      <li>Strong stakeholder communication.</li>
+    </ul>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job",
+            "job_detail",
+            html,
+            manifest,
+            ["responsibilities", "skills"],
+        )
+    assert "responsibilities" in candidates
+    assert "Build the product experience." in candidates["responsibilities"][0]["value"]
+    assert "Strong stakeholder communication." not in candidates["responsibilities"][0]["value"]
+    assert "skills" in candidates
+    assert "Strong stakeholder communication." in candidates["skills"][0]["value"]
+
+
+def test_extract_semantic_requested_field_matches_prefixed_responsibilities_heading():
+    html = """
+    <html><body>
+    <p><b><u>Some Key Responsibilities:</u></b></p>
+    <ul>
+      <li>Deliver high energy pre-shift meetings.</li>
+      <li>Engage guests throughout the shift.</li>
+    </ul>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job",
+            "job_detail",
+            html,
+            manifest,
+            ["responsibilities"],
+        )
+    assert "responsibilities" in candidates
+    assert candidates["responsibilities"][0]["source"] == "semantic_section"
+    assert "Deliver high energy pre-shift meetings." in candidates["responsibilities"][0]["value"]
+    assert "Engage guests throughout the shift." in candidates["responsibilities"][0]["value"]
+
+
+def test_extract_job_qualifications_strip_html_from_json_ld():
+    html = "<html><body><h1>Foreign Affairs Officer</h1></body></html>"
+    manifest = _manifest(json_ld=[{
+        "@type": "JobPosting",
+        "qualifications": (
+            "<p><strong>Note:</strong> Submit transcripts.</p>"
+            "<ul><li>Experience analyzing policy.</li><li>Experience with Congress.</li></ul>"
+        ),
+    }])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job/1",
+            "job_detail",
+            html,
+            manifest,
+            ["qualifications"],
+        )
+    assert "qualifications" in candidates
+    value = candidates["qualifications"][0]["value"]
+    assert "<p>" not in value
+    assert "<li>" not in value
+    assert "Submit transcripts." in value
+    assert "Experience analyzing policy." in value
+    assert "Experience with Congress." in value
 
 
 def test_extract_hydrated_state_source():
@@ -913,6 +1045,69 @@ def test_extract_returns_empty_candidates_for_listing_surfaces():
     )
     assert candidates == {}
     assert trace["surface_gate"] == "listing"
+
+
+def test_extract_product_string_payload_surfaces_fit_materials_and_carousel_text():
+    html = "<html><body><h1>Sylan 2 Shoe Men's</h1></body></html>"
+    manifest = _manifest(next_data={
+        "props": {
+            "pageProps": {
+                "product": json.dumps({
+                    "name": "Sylan 2 Shoe Men's",
+                    "description": "<p>Built for confident speed.</p>",
+                    "detailedImages": [
+                        {"url": "https://images.arcteryx.com/details/1350x1710/S26-X000010155-Sylan-2-Shoe-Mantis-Mantis-Profile.jpg"},
+                        {"url": "https://images.arcteryx.com/details/1350x1710/S26-X000010155-Sylan-2-Shoe-Mantis-Mantis-Hover.jpg"},
+                    ],
+                    "bigWidgets": [
+                        {
+                            "label": "Footwear Fit",
+                            "type": "generic",
+                            "html": "<p>Choose the size equal to your measured foot length.</p>",
+                        }
+                    ],
+                    "customerTips": {
+                        "value": "This shoe is designed for a Precision Fit.",
+                    },
+                    "materials": ["Lining: Textile", "Outsole: Rubber"],
+                    "careInstructions": ["Surface clean only"],
+                    "features": [
+                        {
+                            "label": "Technical features",
+                            "value": [
+                                "Responsive for efficiency and reduced fatigue",
+                                "Propulsive yet stable",
+                            ],
+                        }
+                    ],
+                    "centreSectionTemplate": {
+                        "featureTiles": [
+                            {
+                                "title": "Speedy construction",
+                                "description": "The rockered shape maximizes energy return.",
+                            }
+                        ]
+                    },
+                })
+            }
+        }
+    })
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://arcteryx.com/us/en/shop/mens/sylan-2-shoe-0155",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert candidates["image_url"][0]["value"].endswith("Profile.jpg")
+    assert "Hover.jpg" in candidates["additional_images"][0]["value"]
+    assert "Choose the size equal to your measured foot length." in candidates["fit_and_sizing"][0]["value"]
+    assert "Product tip: This shoe is designed for a Precision Fit." in candidates["fit_and_sizing"][0]["value"]
+    assert "Lining: Textile" in candidates["materials_and_care"][0]["value"]
+    assert "Surface clean only" in candidates["materials_and_care"][0]["value"]
+    assert "Technical features:" in candidates["features"][0]["value"]
+    assert "Speedy construction: The rockered shape maximizes energy return." in candidates["features"][0]["value"]
 
 
 def test_extract_priority_order():

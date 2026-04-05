@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -32,13 +31,12 @@ async def site_memory_get(
 ) -> SiteMemoryResponse:
     row = await get_memory(session, domain)
     if row is None:
-        now = datetime.now(UTC)
         return SiteMemoryResponse(
             domain=normalize_domain(domain),
             payload=SiteMemoryPayload(),
             last_crawl_at=None,
-            created_at=now,
-            updated_at=now,
+            created_at=None,
+            updated_at=None,
         )
     return SiteMemoryResponse.model_validate(row, from_attributes=True)
 

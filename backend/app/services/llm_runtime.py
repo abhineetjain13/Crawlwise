@@ -463,15 +463,17 @@ def _truncate_html(html_text: str, limit: int, *, anchors: list[str] | None = No
     if len(text) <= limit:
         return text
     targeted = _build_targeted_html_snippet(text, anchors or [], limit)
-    return targeted if targeted else text[:limit]
+    return targeted[:limit] if targeted else text[:limit]
 
 
 def _build_targeted_html_snippet(html_text: str, anchors: list[str], limit: int) -> str:
+    if limit <= 0:
+        return ""
     normalized_anchors = _normalize_html_anchor_terms(anchors)
     if not normalized_anchors:
         return ""
     lowered_html = html_text.lower()
-    snippet_budget = max(200, limit)
+    snippet_budget = max(100, limit)
     window = max(180, min(800, snippet_budget // 3))
     chunks: list[str] = []
     seen_ranges: list[tuple[int, int]] = []

@@ -87,6 +87,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
         crawl_runs_deleted = await session.execute(delete(CrawlRun))
         if is_sqlite:
             await _reset_sqlite_sequences(session)
+            await session.execute(text("VACUUM"))
         await session.commit()
     except Exception:
         await session.rollback()

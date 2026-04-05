@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,8 @@ from app.services.knowledge_base.store import (
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.site_memory_service import clear_all_selector_memory, replace_selector_map
 from app.services.xpath_service import build_deterministic_selector_suggestions, extract_selector_value
+
+logger = logging.getLogger(__name__)
 
 
 async def list_selectors(session: AsyncSession, domain: str = "") -> list[Selector]:
@@ -49,12 +52,12 @@ async def create_selector(session: AsyncSession, payload: dict) -> Selector:
 
 async def update_selector(session: AsyncSession, selector: Selector, payload: dict) -> Selector:
     previous_domain = selector.domain
-    snapshots = _snapshot_selector_defaults([previous_domain, selector.domain])
     normalized_payload = _normalize_selector_payload({**selector.__dict__, **payload})
     for key, value in normalized_payload.items():
         setattr(selector, key, value)
     selector.last_validated_at = datetime.now(UTC)
     updated_domain = selector.domain
+    snapshots = _snapshot_selector_defaults([previous_domain, updated_domain])
     await session.flush()
     try:
         if previous_domain != updated_domain:
@@ -118,8 +121,8 @@ async def clear_all_selectors(session: AsyncSession) -> int:
         await session.execute(delete(Selector))
         await session.flush()
     try:
-        await clear_selector_defaults()
         await clear_all_selector_memory(session, clear_suggestions=True, commit=False)
+        await clear_selector_defaults()
         await session.commit()
     except Exception:
         await session.rollback()
@@ -239,12 +242,22 @@ async def _sync_selector_defaults(session: AsyncSession, domain: str) -> None:
             try:
                 await save_domain_selector_defaults(domain, {})
             except Exception:
-                pass  # Log warning: failed to clear defaults during rollback
+                logger.warning(
+                    "Failed to clear selector defaults during rollback for domain=%s previous_defaults_missing=%s",
+                    domain,
+                    previous_defaults is None,
+                    exc_info=True,
+                )
         else:
             try:
                 await save_domain_selector_defaults(domain, previous_defaults)
             except Exception:
-                pass  # Log warning: failed to restore defaults during rollback
+                logger.warning(
+                    "Failed to restore selector defaults during rollback for domain=%s previous_defaults_missing=%s",
+                    domain,
+                    previous_defaults is None,
+                    exc_info=True,
+                )
         await session.rollback()
         raise
 

@@ -2,7 +2,6 @@ import asyncio
 import time
 import json
 import httpx
-from datetime import datetime
 import os
 import sys
 
@@ -21,6 +20,9 @@ REGRESSION_URLS = [
     {"url": "https://scrapingcourse.com/ecommerce/products/chaz-kangeroo-hoodie", "schema": "ecommerce_detail", "name": "Detail scrapingcourse hoodie"},
     {"url": "https://www.ifixit.com/products/iphone-14-battery", "schema": "ecommerce_detail", "name": "Detail ifixit battery"}
 ]
+PORT = 8000
+BASE_URL = f"http://127.0.0.1:{PORT}"
+SUCCESS_STATUSES = {"completed", "success"}
 
 async def run_single(client: httpx.AsyncClient, target: dict):
     start = time.perf_counter()
@@ -33,7 +35,7 @@ async def run_single(client: httpx.AsyncClient, target: dict):
     }
     
     try:
-        resp = await client.post("http://127.0.0.1:8001/api/crawl/sync", json=req_body, timeout=120)
+        resp = await client.post(f"{BASE_URL}/api/crawl/sync", json=req_body, timeout=120)
         data = resp.json()
         duration = time.perf_counter() - start
         
@@ -75,7 +77,7 @@ def compute_coverage(records: list) -> float:
 
 async def main():
     print(f"Starting Regression Suite: {len(REGRESSION_URLS)} targets")
-    print("Ensure backend server is running at http://127.0.0.1:8000\n")
+    print(f"Ensure backend server is running at {BASE_URL}\n")
     
     results = []
     async with httpx.AsyncClient() as client:
@@ -84,7 +86,7 @@ async def main():
             res = await run_single(client, target)
             res["coverage"] = compute_coverage(res.get("records", []))
             
-            status_symbol = "✅" if res["status"] in ["completed", "success"] else "❌"
+            status_symbol = "✅" if res["status"] in SUCCESS_STATUSES else "❌"
             browser_used = "🌐 PB" if res.get("used_browser") else "⚡ CC"
             
             print(f"   {status_symbol} {res['status'].upper()} in {res['duration']:.2f}s | Records: {res.get('records_count', 0)} | Coverage: {res['coverage']} | {browser_used}")
@@ -104,7 +106,7 @@ async def main():
     avg_latency = total_time / len(results)
     avg_coverage = sum(r.get("coverage", 0) for r in results) / len(results)
     browser_exes = sum(1 for r in results if r.get("used_browser"))
-    failed_runs = sum(1 for r in results if r["status"] != "completed")
+    failed_runs = sum(1 for r in results if r["status"] not in SUCCESS_STATUSES)
     
     print(f"Total time:       {total_time:.2f}s")
     print(f"Average latency:  {avg_latency:.2f}s")

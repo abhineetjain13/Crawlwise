@@ -153,6 +153,32 @@ async def test_create_crawl_run(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_create_crawl_run_normalizes_job_listing_urls_from_ecommerce_surface(
+    db_session: AsyncSession, test_user
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://www.dice.com/jobs",
+        "surface": "ecommerce_listing",
+    })
+
+    assert run.surface == "job_listing"
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_normalizes_job_detail_urls_from_ecommerce_surface(
+    db_session: AsyncSession, test_user
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://www.dice.com/job-detail/1c33f6c6-b536-48ed-8f3d-b6e1eddf03e1",
+        "surface": "ecommerce_detail",
+    })
+
+    assert run.surface == "job_detail"
+
+
+@pytest.mark.asyncio
 async def test_create_crawl_run_clamps_sleep_ms_to_minimum_floor(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",

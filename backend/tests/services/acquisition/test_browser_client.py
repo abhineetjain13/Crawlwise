@@ -52,11 +52,12 @@ async def test_wait_for_challenge_resolution_resolves():
     assert reasons == []
 
 
-def test_context_kwargs_does_not_override_host_header():
+def test_context_kwargs_uses_locale_instead_of_overriding_headers():
     kwargs = _context_kwargs(prefer_stealth=False)
 
-    assert kwargs["extra_http_headers"]["Accept-Language"] == "en-US,en;q=0.9"
-    assert "Host" not in kwargs["extra_http_headers"]
+    assert kwargs["locale"] == "en-US"
+    assert kwargs["timezone_id"] == "UTC"
+    assert "extra_http_headers" not in kwargs
 
 
 def test_build_launch_kwargs_skips_host_pinning_for_system_chrome():
@@ -90,6 +91,7 @@ class FakeGotoPage:
         self.url = ""
         self.goto_calls: list[tuple[str, str, int]] = []
         self.wait_calls: list[int] = []
+        self.load_state_calls: list[tuple[str, int]] = []
 
     async def goto(self, url: str, *, wait_until: str, timeout: int):
         self.goto_calls.append((url, wait_until, timeout))
@@ -104,6 +106,9 @@ class FakeGotoPage:
 
     async def wait_for_timeout(self, value: int):
         self.wait_calls.append(value)
+
+    async def wait_for_load_state(self, state: str, *, timeout: int):
+        self.load_state_calls.append((state, timeout))
 
 
 class FakeLocator:
@@ -248,11 +253,37 @@ async def test_goto_with_fallback_retries_transient_browser_dns_error(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypatch):
-    attempt_calls: list[str] = []
+async def test_goto_with_fallback_uses_configured_optimistic_wait(monkeypatch):
+    page = FakeGotoPage([
+        {
+            "page_url": "https://example.com",
+            "html": "<html><body>ok</body></html>",
+        }
+    ])
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client.BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS",
+        2500,
+    )
 
-    async def fake_attempt(*_args, launch_profile, **_kwargs):
-        attempt_calls.append(str(launch_profile["label"]))
+    await _goto_with_fallback(
+        page,
+        "https://example.com",
+        strategies=[
+            ("networkidle", 30000),
+            ("load", 15000),
+            ("domcontentloaded", 15000),
+        ],
+    )
+
+    assert page.load_state_calls == [("networkidle", 2500), ("load", 2500)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypatch):
+    attempt_calls: list[tuple[str, list[tuple[str, int]] | None]] = []
+
+    async def fake_attempt(*_args, launch_profile, navigation_strategies=None, **_kwargs):
+        attempt_calls.append((str(launch_profile["label"]), navigation_strategies))
         if launch_profile["label"] == "bundled_chromium":
             raise RuntimeError("net::ERR_HTTP2_PROTOCOL_ERROR")
         return type("Result", (), {"diagnostics": {}})()
@@ -276,7 +307,11 @@ async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypat
         requested_field_selectors={},
     )
 
-    assert attempt_calls == ["bundled_chromium", "system_chrome"]
+    assert attempt_calls[0][0] == "bundled_chromium"
+    assert attempt_calls[1] == (
+        "system_chrome",
+        [("domcontentloaded", 12000), ("commit", 8000)],
+    )
     assert result.diagnostics["browser_launch_profile"] == "system_chrome"
 
 

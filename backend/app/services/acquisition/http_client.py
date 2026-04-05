@@ -109,6 +109,8 @@ async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) ->
         attempt_log.append(_build_attempt_entry(result, attempt=attempt, impersonate=impersonate))
         result.attempt_log = list(attempt_log)
         last_result = result
+        if result.text and result.content_type == "html" and detect_blocked_page(result.text).is_blocked:
+            return result
         if result.error and not result.status_code:
             if attempt < attempts:
                 await asyncio.sleep(_retry_backoff_seconds(attempt))

@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
-from app.core.config import Settings, _normalize_sqlite_database_url, _resolve_project_path
+from app.core.config import _normalize_sqlite_database_url, _resolve_project_path
 from app.services.pipeline_config import COOKIE_CONSENT_SELECTORS
 
 

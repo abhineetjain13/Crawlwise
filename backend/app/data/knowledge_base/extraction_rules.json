@@ -1,7 +1,7 @@
 {
   "field_aliases": {
     "title": ["title", "name", "job_title", "position", "headline", "productName", "product_name"],
-    "url": ["url", "link", "href", "apply_url", "canonical_url", "product_url", "landingPageUrl", "detailPageLink", "detail_page_link"],
+    "url": ["url", "link", "href", "apply_url", "canonical_url", "product_url", "landingPageUrl", "detailPageLink", "detail_page_link", "position_uri"],
     "slug": ["slug"],
     "price": ["price", "amount", "cost", "sale_price", "current_price"],
     "sale_price": ["sale_price", "saleprice", "sellingprice", "newprice", "discount_price", "discountedPrice"],
@@ -14,10 +14,10 @@
     "finish": ["finish", "surface_finish", "texture"],
     "size": ["size", "sizes", "variant_size", "dimension_label"],
     "description": ["description", "body", "summary", "snippet", "content", "body_html", "short_description"],
-    "company": ["company", "company_name", "companyName", "organization", "employer", "hiring_organization"],
+    "company": ["company", "company_name", "companyName", "organization", "employer", "hiring_organization", "agency"],
     "location": ["location", "candidate_required_location", "job_location", "city", "region"],
-    "salary": ["salary", "compensation", "pay", "salary_range"],
-    "category": ["category", "department", "type", "product_type", "job_type", "employment_type"],
+    "salary": ["salary", "compensation", "pay", "salary_range", "base_salary", "pay_range", "compensation_range", "salary_display"],
+    "category": ["category", "department", "product_type", "job_type", "employment_type"],
     "sku": ["sku", "product_id", "item_id", "id"],
     "availability": ["availability", "in_stock", "stock_status"],
     "tags": ["tags", "labels", "keywords"],
@@ -55,14 +55,13 @@
     "dealer_name": ["dealer_name", "dealer"]
   },
   "requested_field_aliases": {
-    "responsibilities": ["responsibilities", "job responsibilities", "duties", "job duties", "what you'll do", "what_you_ll_do", "what_you_will_do", "role responsibilities"],
+    "responsibilities": ["responsibilities", "job responsibilities", "key responsibilities", "duties", "job duties", "what you'll do", "what_you_ll_do", "what_you_will_do", "role responsibilities"],
     "qualifications": ["qualifications", "job qualifications", "job_qualification", "prerequisites", "minimum requirements", "minimum_requirements", "preferred qualifications", "preferred_qualifications", "who you are", "what we're looking for"],
     "benefits": ["benefits", "job benefits", "job_benefits", "perks", "why you'll love this job", "what we offer"],
     "skills": ["skills", "job skills", "job_skills", "competencies", "abilities", "experience", "what you'll bring"],
     "summary": ["summary", "overview", "about", "description", "our opportunity", "about the role", "about the team"],
     "specifications": ["specifications", "specs", "spec", "details", "technical details", "tech specs", "product details", "the details"],
     "features": ["features", "highlights", "key features"],
-    "features_specs": ["features specs", "features and specs", "features & specs", "features_&_specs", "feature specs", "feature details"],
     "materials": ["materials", "fabric", "composition", "fabric content"],
     "care": ["care", "care instructions", "product care"],
     "dimensions": ["dimensions", "sizing", "measurements"],
@@ -97,17 +96,25 @@
   "candidate_cleanup": {
     "placeholder_values": ["-", "—", "--", "n/a", "na", "none", "null", "undefined"],
     "generic_category_values": ["detail-page", "detail_page", "product", "page", "pdp", "simple", "configurable", "image", "imageobject", "listitem", "itemlist", "collectionpage", "productcard", "contentcard", "aggregateoffer", "productgroup", "aggregaterating", "review", "person", "rating", "merchantreturnpolicy", "merchantreturnpolicyseasonaloverride", "webpage", "organization", "speakablespecification", "individualproduct", "peopleaudience", "brand", "offer", "postaladdress", "country", "quantitativevalue", "unitpricespecification", "pricespecification", "deliverychargespecification", "openinghoursspecification", "geopoint", "geocoordinates", "place", "contactpoint", "searchaction", "readaction", "buyaction", "sitenavigationelement", "wpadblock", "creativework", "article", "newsarticle", "blogposting", "howto", "faqpage", "videoobject", "localbusiness", "store", "thing"],
-    "generic_title_values": ["chrome", "firefox", "safari", "edge", "home"],
+    "generic_title_values": [
+      "chrome", "firefox", "safari", "edge", "home",
+      "cookie preferences", "cookie settings", "privacy preferences",
+      "privacy settings", "manage cookies", "consent preferences",
+      "accept cookies", "sign in", "log in", "my account",
+      "newsletter", "create account", "register"
+    ],
     "field_groups": {
       "url": ["url", "apply_url"],
       "image_primary": ["image_url"],
       "image_collection": ["additional_images"],
       "numeric": ["price", "sale_price", "original_price", "rating", "review_count"],
+      "salary": ["salary"],
       "currency": ["currency"],
       "availability": ["availability"],
       "category": ["category"],
       "title": ["title"],
       "description": ["description", "summary"],
+      "job_text": ["responsibilities", "requirements", "qualifications", "benefits", "skills"],
       "entity_name": ["brand", "company"],
       "identifier": ["sku", "vin", "dealer_name"]
     },
@@ -115,7 +122,8 @@
       "url_suffixes": ["_url", "url", "_link", "link", "_href", "href"],
       "image_tokens": ["image", "images", "gallery", "photo", "thumbnail", "hero"],
       "currency_tokens": ["currency"],
-      "price_tokens": ["price", "amount", "cost", "salary", "pay", "rate"],
+      "price_tokens": ["price", "amount", "cost"],
+      "salary_tokens": ["salary", "pay", "rate", "compensation"],
       "rating_tokens": ["rating", "score"],
       "review_count_tokens": ["review_count", "reviews", "rating_count"],
       "availability_tokens": ["availability", "stock"],
@@ -241,5 +249,112 @@
     "dom_buy_box": 8,
     "dom": 2,
     "llm_xpath": 1
+  },
+  "listing_extraction": {
+    "minimal_visual_fields": [
+      "title",
+      "image_url"
+    ],
+    "product_signal_fields": [
+      "price",
+      "sku",
+      "brand",
+      "rating",
+      "description",
+      "availability",
+      "review_count",
+      "category",
+      "salary",
+      "company",
+      "location"
+    ],
+    "job_signal_fields": [
+      "company",
+      "location",
+      "salary",
+      "job_type",
+      "posted_date",
+      "apply_url"
+    ],
+    "detail_path_markers": [
+      "/product/",
+      "/pdp/",
+      "/dp/",
+      "/p/",
+      "/item/",
+      "/job/",
+      "/jobs/",
+      "/position/",
+      "/opening/",
+      "/job-detail/"
+    ],
+    "swatch_container_selectors": [
+      "[class*='swatch']",
+      "[class*='color-chip']",
+      "[class*='color-option']",
+      "[data-color]",
+      "[aria-label*='color' i]"
+    ],
+    "image_exclude_tokens": [
+      "icon",
+      "logo",
+      "sprite",
+      "badge",
+      "favicon",
+      "placeholder"
+    ],
+    "color_action_values": [
+      "add to cart",
+      "add to bag",
+      "quick view",
+      "quick shop",
+      "save",
+      "wishlist",
+      "add to wishlist",
+      "more options",
+      "select",
+      "choose",
+      "buy now",
+      "checkout",
+      "shop now"
+    ],
+    "color_action_prefixes": [
+      "add to ",
+      "select ",
+      "choose ",
+      "shop ",
+      "buy ",
+      "view "
+    ],
+    "filter_option_keys": [
+      "name",
+      "value",
+      "selected",
+      "tooltip",
+      "count",
+      "sort",
+      "showicon",
+      "description",
+      "displayname",
+      "filtertype"
+    ]
+  },
+  "acquisition_guards": {
+    "job_redirect_shell_titles": [
+      "GovernmentJobs | City, State, Federal & Public Sector Jobs"
+    ],
+    "job_redirect_shell_canonical_urls": [
+      "https://www.schooljobs.com/"
+    ],
+    "job_redirect_shell_headings": [
+      "log in",
+      "sign in to apply"
+    ],
+    "job_error_page_titles": [
+      "Sorry. The page you requested could not be found."
+    ],
+    "job_error_page_headings": [
+      "sorry. the page you requested could not be found."
+    ]
   }
 }

@@ -84,7 +84,7 @@ CARD_AUTODETECT_MIN_SIBLINGS: int = _TUNING.get("card_autodetect_min_siblings", 
 
 # JSON extraction
 JSON_MAX_SEARCH_DEPTH: int = _TUNING.get("json_max_search_depth", 5)
-MAX_JSON_RECURSION_DEPTH: int = _TUNING.get("max_json_recursion_depth", 4)
+MAX_JSON_RECURSION_DEPTH: int = _TUNING.get("max_json_recursion_depth", 8)
 
 # HTTP provider (Phase 1 hardening)
 HTTP_RETRY_STATUS_CODES: list[int] = _TUNING.get("http_retry_status_codes", [403, 429, 503])
@@ -107,7 +107,10 @@ BROWSER_ERROR_RETRY_DELAY_MS: int = _TUNING.get("browser_error_retry_delay_ms", 
 BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS: int = _TUNING.get("browser_navigation_networkidle_timeout_ms", 30000)
 BROWSER_NAVIGATION_LOAD_TIMEOUT_MS: int = _TUNING.get("browser_navigation_load_timeout_ms", 15000)
 BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS: int = _TUNING.get("browser_navigation_domcontentloaded_timeout_ms", 15000)
+BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS: int = _TUNING.get("browser_navigation_optimistic_wait_ms", 3000)
 PAGINATION_NAVIGATION_TIMEOUT_MS: int = _TUNING.get("pagination_navigation_timeout_ms", 20000)
+LISTING_READINESS_MAX_WAIT_MS: int = _TUNING.get("listing_readiness_max_wait_ms", 12000)
+LISTING_READINESS_POLL_MS: int = _TUNING.get("listing_readiness_poll_ms", 500)
 SCROLL_WAIT_MIN_MS: int = _TUNING.get("scroll_wait_min_ms", 1500)
 LOAD_MORE_WAIT_MIN_MS: int = _TUNING.get("load_more_wait_min_ms", 2000)
 COOKIE_CONSENT_PREWAIT_MS: int = _TUNING.get("cookie_consent_prewait_ms", 400)
@@ -173,6 +176,8 @@ _NORM_RULES: dict = _load("normalization_rules.json", {})  # type: ignore[assign
 
 PRICE_FIELDS: set[str] = set(_NORM_RULES.get("price_fields", ["price", "sale_price"]))
 PRICE_REGEX: str = _NORM_RULES.get("price_regex", r"\d[\d,.]*")
+SALARY_FIELDS: set[str] = set(_NORM_RULES.get("salary_fields", ["salary", "compensation"]))
+SALARY_RANGE_REGEX: str = _NORM_RULES.get("salary_range_regex", r"\d.*")
 _NESTED_OBJECT_KEYS: dict = _NORM_RULES.get("nested_object_keys", {})  # type: ignore[assignment]
 NESTED_TEXT_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("text_fields", ["name", "label", "title", "text", "value", "content", "description", "alt"]))
 NESTED_URL_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("url_fields", ["href", "url", "link", "canonical_url"]))
@@ -215,7 +220,8 @@ _CANDIDATE_FIELD_NAME_PATTERNS: dict = _CANDIDATE_CLEANUP.get("field_name_patter
 CANDIDATE_URL_SUFFIXES: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("url_suffixes", ["_url", "url", "_link", "link", "_href", "href"]))
 CANDIDATE_IMAGE_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("image_tokens", ["image", "images", "gallery", "photo", "thumbnail", "hero"]))
 CANDIDATE_CURRENCY_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("currency_tokens", ["currency"]))
-CANDIDATE_PRICE_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("price_tokens", ["price", "amount", "cost", "salary", "pay", "rate"]))
+CANDIDATE_PRICE_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("price_tokens", ["price", "amount", "cost"]))
+CANDIDATE_SALARY_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("salary_tokens", ["salary", "pay", "rate", "compensation"]))
 CANDIDATE_RATING_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("rating_tokens", ["rating", "score"]))
 CANDIDATE_REVIEW_COUNT_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("review_count_tokens", ["review_count", "reviews", "rating_count"]))
 CANDIDATE_AVAILABILITY_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_FIELD_NAME_PATTERNS.get("availability_tokens", ["availability", "stock"]))
@@ -230,6 +236,22 @@ CANDIDATE_PROMO_ONLY_TITLE_PATTERN: str = str(_CANDIDATE_CLEANUP.get("promo_only
 _INTELLIGENCE_CLEANUP: dict = _EXTRACTION_RULES.get("intelligence_cleanup", {})  # type: ignore[assignment]
 INTELLIGENCE_FIELD_NOISE_TOKENS: set[str] = set(_INTELLIGENCE_CLEANUP.get("field_noise_tokens", []))
 INTELLIGENCE_VALUE_NOISE_PHRASES: tuple[str, ...] = tuple(_INTELLIGENCE_CLEANUP.get("value_noise_phrases", []))
+_LISTING_EXTRACTION_RULES: dict = _EXTRACTION_RULES.get("listing_extraction", {})  # type: ignore[assignment]
+LISTING_DETAIL_PATH_MARKERS: tuple[str, ...] = tuple(_LISTING_EXTRACTION_RULES.get("detail_path_markers", []))
+LISTING_SWATCH_CONTAINER_SELECTORS: tuple[str, ...] = tuple(_LISTING_EXTRACTION_RULES.get("swatch_container_selectors", []))
+LISTING_IMAGE_EXCLUDE_TOKENS: tuple[str, ...] = tuple(_LISTING_EXTRACTION_RULES.get("image_exclude_tokens", []))
+LISTING_COLOR_ACTION_VALUES: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("color_action_values", []))
+LISTING_COLOR_ACTION_PREFIXES: tuple[str, ...] = tuple(_LISTING_EXTRACTION_RULES.get("color_action_prefixes", []))
+LISTING_FILTER_OPTION_KEYS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("filter_option_keys", []))
+LISTING_MINIMAL_VISUAL_FIELDS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("minimal_visual_fields", []))
+LISTING_PRODUCT_SIGNAL_FIELDS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("product_signal_fields", []))
+LISTING_JOB_SIGNAL_FIELDS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("job_signal_fields", []))
+_ACQUISITION_GUARDS: dict = _EXTRACTION_RULES.get("acquisition_guards", {})  # type: ignore[assignment]
+JOB_REDIRECT_SHELL_TITLES: frozenset[str] = frozenset(_ACQUISITION_GUARDS.get("job_redirect_shell_titles", []))
+JOB_REDIRECT_SHELL_CANONICAL_URLS: frozenset[str] = frozenset(_ACQUISITION_GUARDS.get("job_redirect_shell_canonical_urls", []))
+JOB_REDIRECT_SHELL_HEADINGS: frozenset[str] = frozenset(_ACQUISITION_GUARDS.get("job_redirect_shell_headings", []))
+JOB_ERROR_PAGE_TITLES: frozenset[str] = frozenset(_ACQUISITION_GUARDS.get("job_error_page_titles", []))
+JOB_ERROR_PAGE_HEADINGS: frozenset[str] = frozenset(_ACQUISITION_GUARDS.get("job_error_page_headings", []))
 
 _SEMANTIC_DETAIL_RULES: dict = _EXTRACTION_RULES.get("semantic_detail", {})  # type: ignore[assignment]
 SECTION_SKIP_PATTERNS: tuple[str, ...] = tuple(_SEMANTIC_DETAIL_RULES.get("section_skip_patterns", ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe"]))

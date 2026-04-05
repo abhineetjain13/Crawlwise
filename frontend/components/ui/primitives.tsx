@@ -250,6 +250,7 @@ export function StatCard({
   icon,
   iconColor,
   stripeColor,
+  sub,
   loading = false,
 }: Readonly<{
   label: string;
@@ -257,6 +258,7 @@ export function StatCard({
   icon?: ReactNode;
   iconColor?: string;
   stripeColor?: string;
+  sub?: ReactNode;
   loading?: boolean;
 }>) {
   return (
@@ -280,6 +282,11 @@ export function StatCard({
       ) : (
         <div className="mt-2 text-[28px] font-bold tracking-[var(--tracking-tighter)] text-[var(--text-primary)]">
           {value}
+        </div>
+      )}
+      {sub && !loading && (
+        <div className="mt-1.5 text-[11px] font-medium text-[var(--text-muted)]">
+          {sub}
         </div>
       )}
     </div>

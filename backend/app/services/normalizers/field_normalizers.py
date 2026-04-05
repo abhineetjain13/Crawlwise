@@ -15,7 +15,6 @@ from app.services.pipeline_config import (
     CANDIDATE_GENERIC_CATEGORY_VALUES,
     CANDIDATE_GENERIC_TITLE_VALUES,
     CANDIDATE_IMAGE_TOKENS,
-    CANDIDATE_IDENTIFIER_TOKENS,
     CANDIDATE_PRICE_TOKENS,
     CANDIDATE_PROMO_ONLY_TITLE_PATTERN,
     CANDIDATE_SCRIPT_NOISE_PATTERN,
@@ -55,6 +54,7 @@ CURRENCY_CODES = {
 _CURRENCY_TOKEN_RE = re.compile(r"\b[A-Z]{3}\b")
 _CURRENCY_AFTER_AMOUNT_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*([A-Z]{3})\b")
 _CURRENCY_BEFORE_AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*\d[\d,]*(?:\.\d+)?\b")
+_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 _CURRENCY_SYMBOL_MAP = {
     "$": "USD",
     "€": "EUR",
@@ -62,6 +62,50 @@ _CURRENCY_SYMBOL_MAP = {
     "¥": "JPY",
     "₹": "INR",
 }
+_COLOR_NOISE_TOKENS = (
+    "rgb(",
+    "rgba(",
+    "hsl(",
+    "var(",
+    "background",
+    "color:",
+    "border:",
+    "display:",
+    "margin",
+    "padding",
+    "font-family",
+    "font-size",
+    "inherit",
+)
+_SIZE_NOISE_TOKENS = (
+    "max-width",
+    "min-width",
+    "vw",
+    "vh",
+    "sizes=",
+    "srcset",
+    "rem",
+    "em",
+    "px",
+    "padding",
+    "margin",
+    "font-size",
+    "display:",
+    "border:",
+    "auto",
+)
+
+
+def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
+    parts: list[str] = []
+    for token in tokens:
+        escaped = re.escape(token)
+        parts.append(rf"\b{escaped}\b" if token.isalnum() else escaped)
+    return re.compile("|".join(parts), re.IGNORECASE)
+
+
+_COLOR_NOISE_RE = _compile_noise_token_pattern(_COLOR_NOISE_TOKENS)
+_SIZE_NOISE_RE = _compile_noise_token_pattern(_SIZE_NOISE_TOKENS)
 
 
 def normalize_value(field_name: str, value: object) -> object:
@@ -161,10 +205,18 @@ def _split_image_values(value: str) -> list[str]:
     return urls
 
 
-def _strip_html(value: str) -> str:
+def _strip_html(value: str, *, preserve_paragraphs: bool = False) -> str:
     if "<" not in value or ">" not in value:
         return unescape(value).strip()
-    text = BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+    soup = BeautifulSoup(value, "html.parser")
+    if preserve_paragraphs:
+        for tag in soup.find_all(["p", "li", "br", "div"]):
+            tag.insert_before("\n")
+        text = soup.get_text(" ", strip=False)
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return unescape(text).strip()
+    text = soup.get_text(" ", strip=True)
     return " ".join(unescape(text).split()).strip()
 
 
@@ -180,24 +232,22 @@ def _clean_title_text(value: str) -> str:
 
 
 def _clean_description_text(value: str) -> str:
-    cleaned = _strip_html(value)
-    cleaned = _strip_ui_noise(cleaned)
+    cleaned = _strip_html(value, preserve_paragraphs=True)
+    cleaned = _strip_ui_noise(cleaned, preserve_newlines=True)
     return cleaned
 
 
 def _normalize_color_text(value: str) -> str:
     cleaned = _strip_ui_noise(_strip_html(value))
     lowered = cleaned.lower()
-    
-    # Check for CSS/Style noise leakage
-    noise_tokens = (
-        "#fff", "rgb(", "rgba(", "hsl(", "var(", "transparent", 
-        "background", "color:", "border:", "display:", "margin", 
-        "padding", "font-family", "font-size", "inherit", "none"
-    )
-    if any(token in lowered for token in noise_tokens):
+
+    hex_match = _HEX_COLOR_RE.search(lowered)
+    if hex_match:
+        return hex_match.group(0)
+
+    if _COLOR_NOISE_RE.search(lowered):
         return ""
-        
+
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
     cleaned = re.sub(r"(?i)\bclear\b$", "", cleaned).strip(" ,")
     return cleaned
@@ -206,15 +256,10 @@ def _normalize_color_text(value: str) -> str:
 def _normalize_size_text(value: str) -> str:
     cleaned = _strip_ui_noise(_strip_html(value))
     lowered = cleaned.lower()
-    
-    noise_tokens = (
-        "max-width", "min-width", "vw", "vh", "sizes=", "srcset",
-        "rem", "em", "px", "padding", "margin", "font-size", 
-        "display:", "border:", "auto"
-    )
-    if any(token in lowered for token in noise_tokens):
+
+    if _SIZE_NOISE_RE.search(lowered):
         return ""
-        
+
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
     tokens = [token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()]
     if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):
@@ -236,7 +281,7 @@ def _normalize_availability(value: str) -> str:
     return text
 
 
-def _strip_ui_noise(value: str) -> str:
+def _strip_ui_noise(value: str, *, preserve_newlines: bool = False) -> str:
     text = unescape(value).strip()
     if not text:
         return ""
@@ -249,8 +294,13 @@ def _strip_ui_noise(value: str) -> str:
     for phrase in CANDIDATE_UI_NOISE_PHRASES:
         if phrase:
             text = re.sub(rf"\b{re.escape(phrase)}\b", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text).strip(" -|,:;/")
-    return text
+    if preserve_newlines:
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = "\n".join(line.strip(" -|,:;/") for line in text.split("\n"))
+    else:
+        text = re.sub(r"\s+", " ", text).strip(" -|,:;/")
+    return text.strip()
 
 
 def _field_token(field_name: str) -> str:

@@ -24,6 +24,8 @@
     "[class*='search-result-item']"
   ],
   "jobs": [
+    "[data-qa-id='search-result']",
+    "#search-results > div",
     ".job_seen_beacon",
     ".base-card",
     ".job-card",

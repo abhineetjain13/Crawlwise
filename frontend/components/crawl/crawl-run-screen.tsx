@@ -24,14 +24,10 @@ import {
   formatDuration,
   humanizeVerdict,
   humanizeFieldName,
-  type IntelligenceCandidate,
-  type IntelligenceRecordGroup,
-  isEmptyCandidateValue,
   isListingRun,
   LogTerminal,
   OutputTab,
   type OutputTabKey,
-  presentCandidateValue,
   PreviewRow,
   progressPercent,
   ProgressBar,
@@ -47,7 +43,7 @@ type CrawlRunScreenProps = {
 };
 
 const exportLinkClassName =
-  "focus-ring no-underline inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-[13px] font-medium !text-white shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)] !hover:text-white";
+  "focus-ring no-underline inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-[13px] font-medium !text-white shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)] hover:!text-white";
 
 function isSafeHref(href: string) {
   try {
@@ -59,40 +55,139 @@ function isSafeHref(href: string) {
   }
 }
 
-function normalizeIntelligenceFieldName(value: string) {
+type HybridSection = {
+  key: string;
+  title: string;
+  value: string;
+  source: "output" | "semantic";
+};
+
+type HybridSpec = {
+  key: string;
+  label: string;
+  value: string;
+};
+
+type HybridScalar = {
+  key: string;
+  label: string;
+  value: string;
+};
+
+type HybridRecordGroup = {
+  key: string;
+  recordId: number;
+  recordUrl: string;
+  recordTitle: string;
+  sections: HybridSection[];
+  specifications: HybridSpec[];
+  scalarFields: HybridScalar[];
+};
+
+const LONG_FORM_FIELDS = new Set([
+  "description",
+  "summary",
+  "responsibilities",
+  "qualifications",
+  "requirements",
+  "benefits",
+  "skills",
+  "how_to_apply",
+  "next_steps",
+  "education",
+  "additional_information",
+  "conditions_of_employment",
+  "required_documents",
+  "how_you_will_be_evaluated",
+  "features",
+  "fit_and_sizing",
+  "materials_and_care"
+]);
+const SECTION_BLACKLIST = new Set([
+  "help",
+  "close_this_window"
+]);
+const SECTION_MIN_CHARS = 12;
+const SCALAR_MAX_CHARS = 180;
+
+function normalizeHybridFieldName(value: string) {
   return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
-function intelligenceValueFingerprint(value: unknown) {
-  return stringifyCell(value).replace(/\s+/g, " ").trim().toLowerCase();
+function normalizeHybridText(value: unknown) {
+  return stringifyCell(value).replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
 }
 
-function intelligenceSourcePriority(kind: IntelligenceCandidate["sourceKind"], confidence?: number) {
-  if (kind === "llm_suggestion") return 3;
-  if (kind === "review_bucket") return confidence && confidence >= 8 ? 2 : 1;
-  return 0;
+function hybridTextFingerprint(value: string) {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function shouldHideIntelligenceValue(record: CrawlRecord, fieldName: string, value: unknown) {
-  const normalizedField = normalizeIntelligenceFieldName(fieldName);
-  const outputFields = new Set(
-    Object.keys(record.data ?? {})
-      .map((key) => normalizeIntelligenceFieldName(key))
-      .filter(Boolean),
-  );
-  if (outputFields.has(normalizedField)) {
-    return true;
+function isUsefulHybridSection(key: string, value: string) {
+  const normalizedKey = normalizeHybridFieldName(key);
+  const normalizedValue = normalizeHybridText(value);
+  if (!normalizedValue || normalizedValue.length < SECTION_MIN_CHARS) {
+    return false;
   }
-  const fingerprint = intelligenceValueFingerprint(value);
-  if (!fingerprint) {
-    return true;
+  if (SECTION_BLACKLIST.has(normalizedKey)) {
+    return false;
   }
-  const outputValues = new Set(
-    Object.values(record.data ?? {})
-      .map((item) => intelligenceValueFingerprint(item))
-      .filter(Boolean),
+  if (hybridTextFingerprint(normalizedValue) === "help") {
+    return false;
+  }
+  return true;
+}
+
+function isScalarField(key: string, value: unknown) {
+  const normalizedKey = normalizeHybridFieldName(key);
+  const normalizedValue = normalizeHybridText(value);
+  if (!normalizedValue) {
+    return false;
+  }
+  if (LONG_FORM_FIELDS.has(normalizedKey)) {
+    return false;
+  }
+  if (normalizedKey === "url") {
+    return false;
+  }
+  return normalizedValue.length <= SCALAR_MAX_CHARS && !normalizedValue.includes("\n");
+}
+
+function renderRichText(value: string) {
+  const lines = normalizeHybridText(value)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const blocks: Array<{ type: "p" | "ul"; lines: string[] }> = [];
+
+  for (const line of lines) {
+    const bulletMatch = line.match(/^(?:[•*-]|\d+\.)\s+(.*)$/);
+    if (bulletMatch) {
+      const last = blocks[blocks.length - 1];
+      if (last?.type === "ul") {
+        last.lines.push(bulletMatch[1].trim());
+      } else {
+        blocks.push({ type: "ul", lines: [bulletMatch[1].trim()] });
+      }
+      continue;
+    }
+    blocks.push({ type: "p", lines: [line] });
+  }
+
+  return (
+    <div className="space-y-3 text-[13px] leading-6 text-[var(--text-secondary)]">
+      {blocks.map((block, index) =>
+        block.type === "ul" ? (
+          <ul key={`ul-${index}`} className="list-disc space-y-1 pl-5">
+            {block.lines.map((line, lineIndex) => (
+              <li key={`${index}-${lineIndex}`}>{line}</li>
+            ))}
+          </ul>
+        ) : (
+          <p key={`p-${index}`}>{block.lines[0]}</p>
+        ),
+      )}
+    </div>
   );
-  return outputValues.has(fingerprint);
 }
 
 export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
@@ -102,11 +197,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
   const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
   const [runActionPending, setRunActionPending] = useState<"pause" | "resume" | "kill" | null>(null);
-  const [selectedCandidateKeys, setSelectedCandidateKeys] = useState<Record<string, boolean>>({});
-  const [candidateEdits, setCandidateEdits] = useState<Record<string, { fieldName: string; value?: string }>>({});
   const [expandedIntelligenceGroups, setExpandedIntelligenceGroups] = useState<Record<string, boolean>>({});
-  const [commitPending, setCommitPending] = useState(false);
-  const [commitError, setCommitError] = useState("");
   const [runActionError, setRunActionError] = useState("");
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const terminalSyncRef = useRef<string | null>(null);
@@ -121,7 +212,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const live = Boolean(run && ACTIVE_STATUSES.has(run.status));
   const terminal = run ? TERMINAL_STATUSES.has(run.status) : false;
 
-  const [startMs] = useState(Date.now());
+  const runCreatedMs = run?.created_at ? new Date(run.created_at).getTime() : null;
+  const [startMs] = useState(() => runCreatedMs ?? Date.now());
   const [localNow, setLocalNow] = useState(Date.now());
 
   useEffect(() => {
@@ -132,7 +224,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
   const relativeOffsetMs = run?.created_at ? Math.max(0, Date.now() - new Date(run.created_at).getTime()) : 0;
   // If IST shift is ~5.5h, relativeOffsetMs will be huge. We need to clamp to session relative for active jobs.
-  const activeDurationMs = localNow - startMs; 
+  const activeDurationMs = localNow - startMs;
 
   const recordsQuery = useQuery({
     queryKey: ["crawl-records", runId],
@@ -197,164 +289,87 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => window.cancelAnimationFrame(frame);
   }, [logs, live]);
 
-  const intelligenceCandidates = useMemo<IntelligenceCandidate[]>(() => {
-    const grouped = new Map<string, IntelligenceCandidate>();
+  const intelligenceRecordGroups = useMemo<HybridRecordGroup[]>(() => {
+    return records
+      .map((record) => {
+        const recordUrl = extractRecordUrl(record) || record.source_url;
+        const recordTitle = stringifyCell(record.data?.title).trim() || recordUrl || `Record ${record.id}`;
+        const sourceTrace = record.source_trace && typeof record.source_trace === "object" ? record.source_trace : {};
+        const semantic = sourceTrace && typeof sourceTrace.semantic === "object" ? sourceTrace.semantic as Record<string, unknown> : {};
+        const sectionPayload = semantic && typeof semantic.sections === "object" ? semantic.sections as Record<string, unknown> : {};
+        const specPayload = semantic && typeof semantic.specifications === "object" ? semantic.specifications as Record<string, unknown> : {};
+        const sectionMap = new Map<string, HybridSection>();
+        const sectionFingerprints = new Set<string>();
 
-    for (const record of records) {
-      const recordUrl = extractRecordUrl(record) || record.source_url;
-      const recordTitle = stringifyCell(record.data?.title).trim() || recordUrl || `Record ${record.id}`;
-      const fieldDiscovery = record.source_trace?.field_discovery;
-      const reviewBucket = Array.isArray(record.review_bucket)
-        ? record.review_bucket
-        : record.review_bucket && typeof record.review_bucket === "object"
-          ? [record.review_bucket]
-          : [];
+        for (const [fieldName, rawValue] of Object.entries(record.data ?? {})) {
+          const normalizedField = normalizeHybridFieldName(fieldName);
+          const value = normalizeHybridText(rawValue);
+          if (!LONG_FORM_FIELDS.has(normalizedField) || !isUsefulHybridSection(fieldName, value)) {
+            continue;
+          }
+          const fingerprint = hybridTextFingerprint(value);
+          if (sectionFingerprints.has(fingerprint)) {
+            continue;
+          }
+          sectionFingerprints.add(fingerprint);
+          sectionMap.set(normalizedField, {
+            key: normalizedField,
+            title: humanizeFieldName(fieldName),
+            value,
+            source: "output",
+          });
+        }
 
-      if (fieldDiscovery && typeof fieldDiscovery === "object" && !Array.isArray(fieldDiscovery)) {
-        for (const [fieldName, rawEntry] of Object.entries(fieldDiscovery as Record<string, unknown>)) {
-          if (!rawEntry || typeof rawEntry !== "object") {
+        for (const [fieldName, rawValue] of Object.entries(sectionPayload)) {
+          const normalizedField = normalizeHybridFieldName(fieldName);
+          const value = normalizeHybridText(rawValue);
+          if (!isUsefulHybridSection(fieldName, value)) {
             continue;
           }
-          const entry = rawEntry as Record<string, unknown>;
-          if (stringifyCell(entry.status).trim() !== "found") {
+          const fingerprint = hybridTextFingerprint(value);
+          if (sectionFingerprints.has(fingerprint)) {
             continue;
           }
-          if (stringifyCell(entry.tier).trim() !== "intelligence") {
-            continue;
-          }
-          const rawValue = entry.value;
-          const displayValue = stringifyCell(rawValue).trim();
-          if (!displayValue) {
-            continue;
-          }
-          if (shouldHideIntelligenceValue(record, fieldName, rawValue)) {
-            continue;
-          }
-          const sources = Array.isArray(entry.sources)
-            ? entry.sources.map((source) => stringifyCell(source).trim()).filter(Boolean)
-            : [];
-          const groupLabel = sources.length ? `Discovered via ${sources.join(", ")}` : "Discovered";
-          const key = `${record.id}:${normalizeIntelligenceFieldName(fieldName)}:${intelligenceValueFingerprint(rawValue)}`;
-          const candidate: IntelligenceCandidate = {
-            key,
-            recordId: record.id,
-            recordUrl,
-            recordTitle,
-            fieldName,
-            displayLabel: humanizeFieldName(fieldName),
-            groupLabel,
-            value: rawValue,
-            sortOrder: Number.MAX_SAFE_INTEGER - 1000,
-            sourceKind: "candidate",
-          };
-          const existing = grouped.get(key);
-          if (!existing || intelligenceSourcePriority(candidate.sourceKind) > intelligenceSourcePriority(existing.sourceKind, existing.confidenceScore)) {
-            grouped.set(key, candidate);
-          }
+          sectionFingerprints.add(fingerprint);
+          sectionMap.set(normalizedField, {
+            key: normalizedField,
+            title: humanizeFieldName(fieldName),
+            value,
+            source: "semantic",
+          });
         }
-      }
 
-      for (const item of reviewBucket) {
-        if (!item || typeof item !== "object") {
-          continue;
-        }
-        const fieldName = stringifyCell(item.key).trim();
-        const rawValue = item.value;
-        const displayValue = stringifyCell(rawValue).trim();
-        if (!fieldName || !displayValue) {
-          continue;
-        }
-        const confidence = Number(item.confidence_score) || 0;
-        if (confidence < 7) {
-          continue;
-        }
-        if (shouldHideIntelligenceValue(record, fieldName, rawValue)) {
-          continue;
-        }
-        const key = `${record.id}:${normalizeIntelligenceFieldName(fieldName)}:${intelligenceValueFingerprint(rawValue)}`;
-        const candidate: IntelligenceCandidate = {
-          key,
+        const specifications = Object.entries(specPayload)
+          .map(([fieldName, rawValue]) => ({
+            key: normalizeHybridFieldName(fieldName),
+            label: humanizeFieldName(fieldName),
+            value: normalizeHybridText(rawValue),
+          }))
+          .filter((row) => row.value)
+          .sort((left, right) => left.label.localeCompare(right.label));
+
+        const scalarFields = Object.entries(record.data ?? {})
+          .map(([fieldName, rawValue]) => ({
+            key: normalizeHybridFieldName(fieldName),
+            label: humanizeFieldName(fieldName),
+            value: normalizeHybridText(rawValue),
+          }))
+          .filter((row) => isScalarField(row.key, row.value))
+          .sort((left, right) => left.label.localeCompare(right.label));
+
+        return {
+          key: `${record.id}:${recordUrl}`,
           recordId: record.id,
           recordUrl,
           recordTitle,
-          fieldName,
-          displayLabel: humanizeFieldName(fieldName),
-          groupLabel: confidence > 0 ? `Review Bucket (${confidence}/10)` : "Review Bucket",
-          value: rawValue,
-          sortOrder: Number.MAX_SAFE_INTEGER - Math.min(Math.max(confidence, 0), 10),
-          confidenceScore: confidence || undefined,
-          sourceKind: "review_bucket",
+          sections: Array.from(sectionMap.values()),
+          specifications,
+          scalarFields,
         };
-        const existing = grouped.get(key);
-        if (!existing || intelligenceSourcePriority(candidate.sourceKind, confidence) > intelligenceSourcePriority(existing.sourceKind, existing.confidenceScore)) {
-          grouped.set(key, candidate);
-        }
-      }
-
-      const llmSuggestions = record.source_trace?.llm_cleanup_suggestions;
-      if (llmSuggestions && typeof llmSuggestions === "object" && !Array.isArray(llmSuggestions)) {
-        for (const [fieldName, rawSuggestion] of Object.entries(llmSuggestions as Record<string, unknown>)) {
-          if (!rawSuggestion || typeof rawSuggestion !== "object") {
-            continue;
-          }
-          const suggestion = rawSuggestion as Record<string, unknown>;
-          const rawValue = suggestion.suggested_value;
-          const displayValue = stringifyCell(rawValue).trim();
-          if (!displayValue) {
-            continue;
-          }
-          if (shouldHideIntelligenceValue(record, fieldName, rawValue)) {
-            continue;
-          }
-          const key = `${record.id}:${normalizeIntelligenceFieldName(fieldName)}:${intelligenceValueFingerprint(rawValue)}`;
-          const candidate: IntelligenceCandidate = {
-            key,
-            recordId: record.id,
-            recordUrl,
-            recordTitle,
-            fieldName,
-            displayLabel: humanizeFieldName(fieldName),
-            groupLabel: "Suggested",
-            value: rawValue,
-            sortOrder: Number.MAX_SAFE_INTEGER,
-            sourceKind: "llm_suggestion",
-          };
-          const existing = grouped.get(key);
-          if (!existing || intelligenceSourcePriority(candidate.sourceKind) > intelligenceSourcePriority(existing.sourceKind, existing.confidenceScore)) {
-            grouped.set(key, candidate);
-          }
-        }
-      }
-    }
-
-    return Array.from(grouped.values()).sort((left, right) => {
-      if (left.recordId !== right.recordId) return left.recordId - right.recordId;
-      if (left.groupLabel !== right.groupLabel) return left.groupLabel.localeCompare(right.groupLabel);
-      if (left.sortOrder !== right.sortOrder) return left.sortOrder - right.sortOrder;
-      if (left.displayLabel !== right.displayLabel) return left.displayLabel.localeCompare(right.displayLabel);
-      return String(left.value ?? "").localeCompare(String(right.value ?? ""));
-    });
+      })
+      .filter((group) => group.sections.length || group.specifications.length || group.scalarFields.length)
+      .sort((left, right) => left.recordId - right.recordId);
   }, [records]);
-
-  const intelligenceRecordGroups = useMemo<IntelligenceRecordGroup[]>(() => {
-    const groups = new Map<string, IntelligenceRecordGroup>();
-    for (const item of intelligenceCandidates) {
-      const key = `${item.recordId}:${item.recordUrl}`;
-      const existing = groups.get(key);
-      if (existing) {
-        existing.items.push(item);
-        continue;
-      }
-      groups.set(key, {
-        key,
-        recordId: item.recordId,
-        recordUrl: item.recordUrl,
-        recordTitle: item.recordTitle,
-        items: [item],
-      });
-    }
-    return Array.from(groups.values()).sort((left, right) => left.recordId - right.recordId);
-  }, [intelligenceCandidates]);
 
   useEffect(() => {
     if (!intelligenceRecordGroups.length) {
@@ -431,71 +446,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     } finally {
       setRunActionPending(null);
     }
-  }
-
-  async function commitSelectedCandidates(candidateKeys?: string[]) {
-    const allowedKeys = candidateKeys ? new Set(candidateKeys) : null;
-    const selectedItems = intelligenceCandidates
-      .filter((item) => (allowedKeys ? allowedKeys.has(item.key) : selectedCandidateKeys[item.key]))
-      .map((item) => ({
-        record_id: item.recordId,
-        field_name: (candidateEdits[item.key]?.fieldName ?? item.displayLabel).trim(),
-        value: candidateEdits[item.key]?.value ?? item.value,
-      }));
-
-    const validItems = selectedItems.filter((item) => item.field_name && !isEmptyCandidateValue(item.value));
-    if (!validItems.length) {
-      return;
-    }
-
-    setCommitPending(true);
-    setCommitError("");
-    try {
-      await api.commitSelectedFields(runId, validItems);
-      setSelectedCandidateKeys({});
-      setCandidateEdits((current) => {
-        if (!allowedKeys) {
-          return {};
-        }
-        const next = { ...current };
-        for (const key of allowedKeys) {
-          delete next[key];
-        }
-        return next;
-      });
-      await Promise.all([recordsQuery.refetch(), logsQuery.refetch()]);
-    } catch (error) {
-      setCommitError(error instanceof Error ? error.message : "Unable to save selected fields.");
-    } finally {
-      setCommitPending(false);
-    }
-  }
-
-  function setGroupCandidateSelection(group: IntelligenceRecordGroup, checked: boolean) {
-    setSelectedCandidateKeys((current) => {
-      const next = { ...current };
-      for (const item of group.items) {
-        if (checked) {
-          next[item.key] = true;
-        } else {
-          delete next[item.key];
-        }
-      }
-      return next;
-    });
-  }
-
-  async function commitRecordGroup(group: IntelligenceRecordGroup) {
-    const selectedKeys = group.items.filter((item) => selectedCandidateKeys[item.key]).map((item) => item.key);
-    if (selectedKeys.length) {
-      await commitSelectedCandidates(selectedKeys);
-      return;
-    }
-    setSelectedCandidateKeys((current) => ({
-      ...current,
-      ...Object.fromEntries(group.items.map((item) => [item.key, true])),
-    }));
-    await commitSelectedCandidates(group.items.map((item) => item.key));
   }
 
   function resetToConfig() {
@@ -660,7 +610,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 className={cn(exportLinkClassName, "shadow-[var(--shadow-sm)]")}
               >
                 <Download className="size-3.5" />
-                CSV
+                Excel (CSV)
               </a>
               <a
                 href={api.exportJson(runId)}
@@ -670,6 +620,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               >
                 <Download className="size-3.5" />
                 JSON
+              </a>
+              <a
+                href={api.exportMarkdown(runId)}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(exportLinkClassName, "shadow-[var(--shadow-sm)]")}
+              >
+                <Download className="size-3.5" />
+                Markdown
               </a>
             </div>
           </div>
@@ -742,15 +701,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
             {outputTab === "intelligence" ? (
               <Card className="space-y-4 p-4">
-                {commitError ? (
-                  <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
-                    {commitError}
-                  </div>
-                ) : null}
-                {intelligenceCandidates.length ? (
+                {intelligenceRecordGroups.length ? (
                   <div className="space-y-4">
                     {intelligenceRecordGroups.map((group) => {
-                      const selectedCount = group.items.filter((item) => selectedCandidateKeys[item.key]).length;
                       const expanded = Boolean(expandedIntelligenceGroups[group.key]);
                       return (
                         <div key={group.key} className="space-y-2">
@@ -769,23 +722,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                               </div>
                               <ChevronDown className={cn("size-4 shrink-0 transition-transform", expanded ? "rotate-180" : "")} />
                             </button>
-                            <Badge tone="neutral">{group.items.length} rows</Badge>
-                            <Badge tone="neutral">{selectedCount} selected</Badge>
-                            <Button
-                              variant="ghost"
-                              type="button"
-                              onClick={() => setGroupCandidateSelection(group, selectedCount !== group.items.length)}
-                            >
-                              {selectedCount === group.items.length ? "Unselect Link" : "Select Link"}
-                            </Button>
-                            <Button
-                              variant="accent"
-                              type="button"
-                              onClick={() => void commitRecordGroup(group)}
-                              disabled={commitPending}
-                            >
-                              {commitPending ? "Saving..." : "Save Link"}
-                            </Button>
+                            {group.sections.length ? <Badge tone="accent">{group.sections.length} sections</Badge> : null}
+                            {group.specifications.length ? <Badge tone="neutral">{group.specifications.length} details</Badge> : null}
+                            {group.scalarFields.length ? <Badge tone="neutral">{group.scalarFields.length} output fields</Badge> : null}
                           </div>
                           <div
                             className={cn(
@@ -794,101 +733,61 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                             )}
                           >
                             <div className={cn("pt-1", expanded ? "block" : "hidden")}>
-                              <table className="compact-data-table min-w-[1080px]">
-                                <thead>
-                                  <tr>
-                                    <th className="w-10">
-                                      <input
-                                        type="checkbox"
-                                        aria-label={`Select all rows for ${group.recordTitle}`}
-                                        checked={group.items.length > 0 && selectedCount === group.items.length}
-                                        onChange={(event) => setGroupCandidateSelection(group, event.target.checked)}
-                                      />
-                                    </th>
-                                    <th className="w-[220px]">Field</th>
-                                    <th className="w-[160px]">Section</th>
-                                    <th>Value</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {group.items.map((item) => {
-                                    const editedFieldName = candidateEdits[item.key]?.fieldName ?? item.displayLabel;
-                                    const editedValue = candidateEdits[item.key]?.value ?? presentCandidateValue(item.value);
-                                    return (
-                                      <tr key={item.key}>
-                                        <td className="w-10">
-                                          <input
-                                            type="checkbox"
-                                            checked={Boolean(selectedCandidateKeys[item.key])}
-                                            onChange={(event) => {
-                                              const checked = event.target.checked;
-                                              setSelectedCandidateKeys((current) => {
-                                                if (checked) {
-                                                  return { ...current, [item.key]: true };
-                                                }
-                                                const next = { ...current };
-                                                delete next[item.key];
-                                                return next;
-                                              });
-                                            }}
-                                          />
-                                        </td>
-                                        <td className="w-[220px]" title={editedFieldName}>
-                                          <Input
-                                            value={editedFieldName}
-                                            onChange={(event) =>
-                                              setCandidateEdits((current) => ({
-                                                ...current,
-                                                [item.key]: {
-                                                  fieldName: event.target.value,
-                                                  value: current[item.key]?.value,
-                                                },
-                                              }))
-                                            }
-                                            className="h-8 border-0 bg-transparent px-0 text-sm shadow-none"
-                                          />
-                                        </td>
-                                        <td className="text-xs text-muted">
-                                          <div>{item.groupLabel || "General"}</div>
-                                          {item.sourceKind === "review_bucket" && item.confidenceScore ? (
-                                            <div className="mt-1 text-[11px] text-foreground/70">
-                                              Confidence {item.confidenceScore}/10
-                                            </div>
-                                          ) : null}
-                                        </td>
-                                        <td title={editedValue}>
+                              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.9fr)]">
+                                <div className="space-y-4">
+                                  {group.sections.length ? (
+                                    <div className="space-y-3">
+                                      {group.sections.map((section) => (
+                                        <Card key={section.key} className="space-y-3 p-4">
                                           <div className="flex items-center gap-2">
-                                            <Input
-                                              value={editedValue}
-                                              onChange={(event) =>
-                                                setCandidateEdits((current) => ({
-                                                  ...current,
-                                                  [item.key]: {
-                                                    fieldName: current[item.key]?.fieldName ?? item.displayLabel,
-                                                    value: event.target.value,
-                                                  },
-                                                }))
-                                              }
-                                              className="h-8 border-0 bg-transparent px-0 font-mono text-sm shadow-none"
-                                            />
-                                            {item.href && isSafeHref(item.href) ? (
-                                              <a
-                                                href={item.href}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="shrink-0 text-xs text-accent underline-offset-2 hover:underline"
-                                                title={item.href}
-                                              >
-                                                Open
-                                              </a>
-                                            ) : null}
+                                            <div className="text-sm font-semibold text-foreground">{section.title}</div>
+                                            <Badge tone={section.source === "output" ? "accent" : "info"}>
+                                              {section.source === "output" ? "Output" : "HTML"}
+                                            </Badge>
                                           </div>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
+                                          {renderRichText(section.value)}
+                                        </Card>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-[10px] border border-dashed border-border bg-panel/40 p-4 text-sm text-muted">
+                                      No long-form content was extracted for this record.
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="space-y-4">
+                                  {group.scalarFields.length ? (
+                                    <Card className="space-y-3 p-4">
+                                      <div className="text-sm font-semibold text-foreground">Output Fields</div>
+                                      <table className="compact-data-table">
+                                        <tbody>
+                                          {group.scalarFields.map((field) => (
+                                            <tr key={field.key}>
+                                              <td className="w-[40%] text-xs text-muted">{field.label}</td>
+                                              <td className="text-sm text-foreground">{field.value}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </Card>
+                                  ) : null}
+                                  {group.specifications.length ? (
+                                    <Card className="space-y-3 p-4">
+                                      <div className="text-sm font-semibold text-foreground">Details</div>
+                                      <table className="compact-data-table">
+                                        <tbody>
+                                          {group.specifications.map((row) => (
+                                            <tr key={row.key}>
+                                              <td className="w-[40%] text-xs text-muted">{row.label}</td>
+                                              <td className="text-sm text-foreground">{row.value}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </Card>
+                                  ) : null}
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>

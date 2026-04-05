@@ -18,6 +18,7 @@ from app.api.records import (
     _stream_export_csv,
     export_csv,
     export_json,
+    export_markdown,
     record_provenance,
     router,
 )
@@ -146,6 +147,60 @@ async def test_export_csv_includes_all_rows_and_paging_headers(db_session, test_
     assert payload.count("\n") == total_records + 1
     assert response.headers[EXPORT_PAGING_HEADER] == "2"
     assert response.headers[EXPORT_TOTAL_HEADER] == str(total_records)
+    assert response.headers[EXPORT_PARTIAL_HEADER] == "false"
+
+
+@pytest.mark.asyncio
+async def test_export_markdown_includes_sections_details_and_headers(db_session, test_user):
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com",
+        surface="ecommerce_detail",
+        status="completed",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    db_session.add(
+        CrawlRecord(
+            run_id=run.id,
+            source_url="https://example.com/item-1",
+            data={
+                "title": "Sylan 2 Shoe Men's",
+                "description": "Built for speed.\n- Stable ride\n- Fast toe-off",
+                "price": "$180",
+            },
+            raw_data={},
+            discovered_data={},
+            source_trace={
+                "semantic": {
+                    "sections": {"materials_and_care": "Spot clean only."},
+                    "specifications": {"weight": "310 g", "drop": "6 mm"},
+                }
+            },
+            raw_html_path=None,
+        )
+    )
+    await db_session.commit()
+
+    response = await export_markdown(run.id, session=db_session, _=test_user)
+    payload = await _read_streaming_body(response)
+
+    assert "# Sylan 2 Shoe Men's" in payload
+    assert "Source URL: https://example.com/item-1" in payload
+    assert "## Description" in payload
+    assert "- Stable ride" in payload
+    assert "## Materials and care" in payload
+    assert "## Output Fields" in payload
+    assert "- Price: $180" in payload
+    assert "## Details" in payload
+    assert "- Weight: 310 g" in payload
+    assert response.headers[EXPORT_PAGING_HEADER] == "1"
+    assert response.headers[EXPORT_TOTAL_HEADER] == "1"
     assert response.headers[EXPORT_PARTIAL_HEADER] == "false"
 
 

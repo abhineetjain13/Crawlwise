@@ -93,6 +93,67 @@ def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_
     assert records[0]["description"] == "A richer structured description for widget A."
 
 
+def test_extract_listing_records_handles_main_entity_itemlist_manifest():
+    manifest = DiscoveryManifest(
+        json_ld=[
+            {
+                "@type": "WebPage",
+                "mainEntity": {
+                    "@type": "ItemList",
+                    "itemListElement": [
+                        {"item": {"@type": "Product", "name": "Filter A", "url": "/p/filter-a"}},
+                        {"item": {"@type": "Product", "name": "Filter B", "url": "/p/filter-b"}},
+                    ],
+                },
+            }
+        ]
+    )
+
+    records = extract_listing_records(
+        "<html><body></body></html>",
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert [record["title"] for record in records] == ["Filter A", "Filter B"]
+    assert records[0]["url"] == "https://example.com/p/filter-a"
+
+
+def test_extract_listing_records_handles_graph_wrapped_json_ld_without_manifest():
+    html = """
+    <html><body>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "ItemList",
+          "itemListElement": [
+            {"item": {"@type": "Product", "name": "Mirror", "url": "/p/mirror"}},
+            {"item": {"@type": "Product", "name": "Lamp", "url": "/p/lamp"}}
+          ]
+        }
+      ]
+    }
+    </script>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        max_records=10,
+    )
+
+    assert [record["title"] for record in records] == ["Mirror", "Lamp"]
+    assert records[1]["url"] == "https://example.com/p/lamp"
+
+
 def test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by_position():
     html = """
     <html><body>
@@ -524,6 +585,86 @@ def test_extract_listing_from_query_state_product_cards_and_drops_content_cards(
     assert records[0]["currency"] == "USD"
 
 
+def test_extract_listing_ignores_kitchenaid_style_variant_option_rows():
+    html = "<html><body></body></html>"
+    manifest = type("Manifest", (), {
+        "json_ld": [],
+        "next_data": {
+            "props": {
+                "pageProps": {
+                    "dehydratedState": {
+                        "queries": [
+                            {
+                                "queryKey": ["KA_CUSTOM_PRODUCT_LISTING"],
+                                "state": {
+                                    "data": {
+                                        "items": [
+                                            {
+                                                "__typename": "ProductCard",
+                                                "name": "7 Quart Bowl-Lift Stand Mixer",
+                                                "detailPageLink": {"href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.7-quart-bowl-lift-stand-mixer.KSM70SKXXBK.html"},
+                                                "assets": [{"src": "https://images.example.com/mixer-main.jpg", "type": "IMAGE"}],
+                                                "price": {"specialValue": 549.99, "currency": "USD"},
+                                            },
+                                            {
+                                                "__typename": "ProductCard",
+                                                "name": "5.5 Quart Bowl-Lift Stand Mixer",
+                                                "detailPageLink": {"href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.5.5-quart-bowl-lift-stand-mixer.KSM55SXXXER.html"},
+                                                "assets": [{"src": "https://images.example.com/mixer-two-main.jpg", "type": "IMAGE"}],
+                                                "price": {"specialValue": 449.99, "currency": "USD"},
+                                            },
+                                            {
+                                                "availability": "IN_STOCK",
+                                                "skuId": "550",
+                                                "commercialCode": "KSM70SKXXBK",
+                                                "twelvenc": "KSM70SKXXBK",
+                                                "label": "Cast Iron Black",
+                                                "labelEn": "Cast Iron Black",
+                                                "image": {"src": "https://www.kitchenaid.com/is/image/content/dam/business-unit/global-assets/color-swatches/Images/K2.png?wid=150&hei=150", "alt": "Cast Iron Black", "type": "IMAGE"},
+                                                "detailPageLink": {"label": "7 Quart Bowl-Lift Stand Mixer", "href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.7-quart-bowl-lift-stand-mixer.KSM70SKXXBK.html"},
+                                                "assets": [{"src": "https://images.example.com/mixer-gallery.jpg", "type": "IMAGE"}],
+                                                "price": {"currentValue": 649.99, "specialValue": 549.99, "currency": "USD"},
+                                            },
+                                            {
+                                                "availability": "IN_STOCK",
+                                                "skuId": "551",
+                                                "commercialCode": "KSM55SXXXER",
+                                                "twelvenc": "KSM55SXXXER",
+                                                "label": "Empire Red",
+                                                "labelEn": "Empire Red",
+                                                "image": {"src": "https://www.kitchenaid.com/is/image/content/dam/business-unit/global-assets/color-swatches/Images/ER.png?wid=150&hei=150", "alt": "Empire Red", "type": "IMAGE"},
+                                                "detailPageLink": {"label": "5.5 Quart Bowl-Lift Stand Mixer", "href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.5.5-quart-bowl-lift-stand-mixer.KSM55SXXXER.html"},
+                                                "assets": [{"src": "https://images.example.com/mixer-two-gallery.jpg", "type": "IMAGE"}],
+                                                "price": {"currentValue": 499.99, "specialValue": 449.99, "currency": "USD"},
+                                            },
+                                        ]
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        "_hydrated_states": [],
+        "network_payloads": [],
+    })()
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.kitchenaid.com/countertop-appliances/stand-mixers/bowl-lift-stand-mixers",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "7 Quart Bowl-Lift Stand Mixer"
+    assert records[0]["image_url"] == "https://images.example.com/mixer-main.jpg"
+    assert "color-swatches" not in records[0]["image_url"]
+
+
 def test_extract_listing_prefers_sigma_product_search_results_over_nav_links():
     html = """
     <html><body>
@@ -616,6 +757,205 @@ def test_is_meaningful_listing_record_drops_title_and_image_only_record_without_
     assert listing_extractor._is_meaningful_listing_record(record) is False
 
 
+def test_is_meaningful_listing_record_drops_job_like_nav_link_without_title_or_salary():
+    record = {
+        "url": "https://www.higheredjobs.com/search/",
+        "company": "Job Seekers",
+    }
+
+    assert listing_extractor._is_meaningful_listing_record(record) is False
+
+
+def test_extract_card_images_skips_swatch_and_icon_images():
+    html = """
+    <div class="product-card">
+        <div class="swatch-list">
+            <button aria-label="Color Blue">
+                <img src="/images/swatch-blue.jpg" />
+            </button>
+        </div>
+        <img src="/images/logo-badge.png" />
+        <img src="/images/product-main.jpg" />
+        <img src="/images/product-alt.jpg" />
+    </div>
+    """
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+
+    images = listing_extractor._extract_card_images(
+        soup.select_one(".product-card"),
+        "https://example.com/category",
+    )
+
+    assert images == [
+        "https://example.com/images/product-main.jpg",
+        "https://example.com/images/product-alt.jpg",
+    ]
+
+
+def test_extract_color_label_from_node_skips_action_buttons():
+    html = '<button aria-label="Add to cart"></button>'
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+
+    assert listing_extractor._extract_color_label_from_node(soup.button) == ""
+
+
+def test_extract_listing_records_ignores_filter_option_inline_arrays():
+    html = """
+    <html><body>
+    <script>
+    window.__FILTERS__ = {
+      "securityClearance": [
+        {"Name": "Not Required", "Value": "0", "Selected": false, "Tooltip": "", "Count": 0, "Sort": null, "ShowIcon": false, "Description": null, "DisplayName": null, "FilterType": null},
+        {"Name": "Confidential", "Value": "1", "Selected": false, "Tooltip": "", "Count": 0, "Sort": null, "ShowIcon": false, "Description": null, "DisplayName": null, "FilterType": null}
+      ]
+    };
+    </script>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "job_listing",
+        set(),
+        page_url="https://www.usajobs.gov/search/results/?k=software%20engineer&p=1",
+        max_records=10,
+    )
+
+    assert records == []
+
+
+def test_is_meaningful_listing_record_rejects_numeric_titles_and_filter_counts():
+    assert listing_extractor._is_meaningful_listing_record({"title": 1, "price": 0}) is False
+    assert listing_extractor._is_meaningful_listing_record({"title": "(1353)", "url": ""}) is False
+
+
+def test_extract_listing_records_uses_usajobs_network_payload_aliases():
+    html = "<html><body></body></html>"
+    manifest = DiscoveryManifest(
+        network_payloads=[
+            {
+                "url": "https://www.usajobs.gov/Search/ExecuteSearch",
+                "body": {
+                    "Jobs": [
+                        {
+                            "Title": "Software Engineer II",
+                            "Agency": "House of Representatives",
+                            "Department": "Legislative Branch",
+                            "SalaryDisplay": "Starting at $108,763 Per year (HS )",
+                            "Location": "Washington, District of Columbia",
+                            "PositionURI": "https://www.usajobs.gov/job/863502700",
+                        },
+                        {
+                            "Title": "Computer Engineer",
+                            "Agency": "Air Force Materiel Command",
+                            "Department": "Department of the Air Force",
+                            "SalaryDisplay": "Starting at $89,508 Per year (NH 3)",
+                            "Location": "Multiple Locations",
+                            "PositionURI": "https://www.usajobs.gov/job/863855200",
+                        },
+                    ]
+                },
+            }
+        ]
+    )
+
+    records = extract_listing_records(
+        html,
+        "job_listing",
+        set(),
+        page_url="https://www.usajobs.gov/search/results/?k=software%20engineer&p=1",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Software Engineer II"
+    assert records[0]["company"] == "House of Representatives"
+    assert records[0]["category"] == "Legislative Branch"
+    assert records[0]["salary"] == "Starting at $108,763 Per year (HS )"
+    assert records[0]["url"] == "https://www.usajobs.gov/job/863502700"
+
+
+def test_extract_from_card_infers_dice_job_fields():
+    html = """
+    <div data-testid="job-card">
+      <a data-testid="job-search-job-card-link" href="https://www.dice.com/job-detail/abc123"></a>
+      <div class="header">
+        <span class="logo">
+          <a href="/company-profile/example-company"><p>Example Company</p></a>
+        </span>
+      </div>
+      <div class="content" aria-label="Details for Data Engineer position" role="main">
+        <div class="self-stretch">
+          <a data-testid="job-search-job-detail-link" aria-label="Data Engineer" href="https://www.dice.com/job-detail/abc123">Data Engineer</a>
+          <span>
+            <div>
+              <p>Des Moines, Iowa</p>
+            </div>
+            <div><p>Yesterday</p></div>
+          </span>
+          <p>USD 80,001.00 - 120,000.00 per year</p>
+          <div><p>Full-Time</p></div>
+        </div>
+      </div>
+    </div>
+    """
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+
+    record = listing_extractor._extract_from_card(
+        soup.select_one("[data-testid='job-card']"),
+        set(),
+        "job_listing",
+        "https://www.dice.com/jobs",
+    )
+
+    assert record["title"] == "Data Engineer"
+    assert record["company"] == "Example Company"
+    assert record["location"] == "Des Moines, Iowa"
+    assert record["salary"] == "USD 80,001.00 - 120,000.00 per year"
+    assert record["job_type"] == "Full-Time"
+    assert record["posted_date"] == "Yesterday"
+    assert record["apply_url"] == "https://www.dice.com/job-detail/abc123"
+
+
+def test_extract_from_card_handles_idealist_job_card():
+    html = """
+    <div data-qa-id="search-result">
+      <div>
+        <a href="/en/nonprofit-job/123-example-role">
+          <div>
+            <h3><span data-qa-id="search-result-link">Executive Operations</span></h3>
+            <h4><div>Ground Zero</div></h4>
+          </div>
+          <div>
+            <span><span>On-site</span></span>
+            <span><span>Rajasthan, India</span></span>
+            <span><span>Full Time</span></span>
+            <span><span>INR 500,000 - 600,000 / year</span></span>
+          </div>
+          <div><span>Posted 16 days ago</span></div>
+        </a>
+      </div>
+    </div>
+    """
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+
+    record = listing_extractor._extract_from_card(
+        soup.select_one("[data-qa-id='search-result']"),
+        set(),
+        "job_listing",
+        "https://www.idealist.org/en/jobs",
+    )
+
+    assert record["title"] == "Executive Operations"
+    assert record["company"] == "Ground Zero"
+    assert record["location"] == "On-site"
+    assert record["job_type"] == "Full Time"
+    assert record["salary"] == "INR 500,000 - 600,000 / year"
+    assert record["posted_date"] == "Posted 16 days ago"
+    assert record["url"] == "https://www.idealist.org/en/nonprofit-job/123-example-role"
+
+
 def test_lookup_next_flight_window_index_returns_none_when_url_cannot_be_found():
     combined = '"displayName":"Ghost Product","listingUrl":"https://cdn.example.com/other-item"'
 
@@ -666,6 +1006,41 @@ def test_extract_structured_sources_merges_records_from_multiple_sources():
     assert "next_data" in mirror["_source"]
 
 
+def test_extract_structured_sources_reads_deep_hydrated_state_records(monkeypatch):
+    monkeypatch.setattr(listing_extractor, "MAX_JSON_RECURSION_DEPTH", 1)
+    manifest = DiscoveryManifest(
+        _hydrated_states=[
+            {
+                "props": {
+                    "pageProps": {
+                        "initialState": {
+                            "search": {
+                                "results": {
+                                    "products": [
+                                        {"title": "Deep Product A", "url": "/p/a", "price": "10.00"},
+                                        {"title": "Deep Product B", "url": "/p/b", "price": "20.00"},
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    )
+
+    records = extract_listing_records(
+        "<html><body></body></html>",
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert [record["title"] for record in records] == ["Deep Product A", "Deep Product B"]
+
+
 def test_structured_join_key_does_not_merge_title_only_records():
     first = {"title": "Accent Mirror", "brand": "Acme"}
     second = {"title": "Accent Mirror", "brand": "Other"}
@@ -673,6 +1048,49 @@ def test_structured_join_key_does_not_merge_title_only_records():
     merged = listing_extractor._merge_structured_record_sets([[first], [second]])
 
     assert merged == []
+
+
+def test_normalize_ld_item_preserves_zero_price():
+    record = listing_extractor._normalize_ld_item(
+        {
+            "@type": "Product",
+            "name": "Free Sample",
+            "offers": {"price": 0},
+        },
+        "ecommerce_listing",
+        "https://example.com/category",
+    )
+
+    assert record is not None
+    assert record["price"] == 0
+
+
+def test_auto_detect_cards_ignores_sidebar_filter_groups_for_commerce():
+    html = """
+    <html><body>
+      <aside class="filters">
+        <ul>
+          <li class="choice"><a href="/filters?brand=a">Brand A (1353)</a></li>
+          <li class="choice"><a href="/filters?brand=b">Brand B (42)</a></li>
+          <li class="choice"><a href="/filters?brand=c">Brand C (8)</a></li>
+        </ul>
+      </aside>
+      <section class="results-grid">
+        <div class="entry"><a href="/p/1"><img src="/1.jpg" /></a><h3>Widget A</h3><span class="price">$10</span></div>
+        <div class="entry"><a href="/p/2"><img src="/2.jpg" /></a><h3>Widget B</h3><span class="price">$20</span></div>
+        <div class="entry"><a href="/p/3"><img src="/3.jpg" /></a><h3>Widget C</h3><span class="price">$30</span></div>
+      </section>
+    </body></html>
+    """
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+
+    cards, _selector = listing_extractor._auto_detect_cards(soup, surface="ecommerce_listing")
+
+    assert [card.get_text(" ", strip=True) for card in cards] == [
+        "Widget A $10",
+        "Widget B $20",
+        "Widget C $30",
+    ]
 
 
 # -----------------------------------------------------------------------

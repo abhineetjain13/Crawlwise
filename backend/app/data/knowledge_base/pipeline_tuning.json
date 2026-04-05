@@ -38,6 +38,8 @@
   "browser_navigation_load_timeout_ms": 15000,
   "browser_navigation_domcontentloaded_timeout_ms": 15000,
   "pagination_navigation_timeout_ms": 20000,
+  "listing_readiness_max_wait_ms": 12000,
+  "listing_readiness_poll_ms": 500,
   "scroll_wait_min_ms": 1500,
   "load_more_wait_min_ms": 2000,
   "cookie_consent_prewait_ms": 400,

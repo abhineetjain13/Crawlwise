@@ -20,6 +20,7 @@ from app.services.pipeline_config import (
     CANDIDATE_IDENTIFIER_TOKENS,
     CANDIDATE_IMAGE_TOKENS,
     CANDIDATE_PRICE_TOKENS,
+    CANDIDATE_SALARY_TOKENS,
     CANDIDATE_PROMO_ONLY_TITLE_PATTERN,
     CANDIDATE_RATING_TOKENS,
     CANDIDATE_REVIEW_COUNT_TOKENS,
@@ -32,14 +33,16 @@ from app.services.pipeline_config import (
     DOM_PATTERNS,
     DYNAMIC_FIELD_NAME_DROP_TOKENS,
     DYNAMIC_FIELD_NAME_MAX_TOKENS,
-    FEATURE_SECTION_ALIASES,
     FIELD_ALIASES,
     JSONLD_NON_PRODUCT_BLOCK_TYPES,
     JSONLD_STRUCTURAL_KEYS,
     JSONLD_TYPE_NOISE,
     MAX_CANDIDATES_PER_FIELD,
     NESTED_NON_PRODUCT_KEYS,
+    PRICE_REGEX,
     PRODUCT_IDENTITY_FIELDS,
+    REQUESTED_FIELD_ALIASES,
+    SALARY_RANGE_REGEX,
     SEMANTIC_AGGREGATE_SEPARATOR,
     SOURCE_RANKING,
 )
@@ -52,6 +55,27 @@ _UI_NOISE_TOKEN_RE = re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE)
 _UI_ICON_TOKEN_RE = re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_ICON_TOKEN_PATTERN else None
 _SCRIPT_NOISE_RE = re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE) if CANDIDATE_SCRIPT_NOISE_PATTERN else None
 _PROMO_ONLY_TITLE_RE = re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE) if CANDIDATE_PROMO_ONLY_TITLE_PATTERN else None
+
+_GA_DATA_LAYER_KEYS = frozenset({
+    "event", "ecommerce", "gtm.start", "gtm.uniqueEventId",
+    "pageType", "pageName", "visitorType",
+})
+
+
+def _looks_like_ga_data_layer(payload: object) -> bool:
+    """Return True if the payload looks like a Google Analytics data layer push."""
+    if not isinstance(payload, dict):
+        return False
+    return bool(_GA_DATA_LAYER_KEYS & set(payload.keys()))
+
+
+# Penalize cookie consent, account, and generic nav modal titles
+_TITLE_NOISE_TOKENS = (
+    "cookie", "cookies", "privacy", "consent", "preferences",
+    "sign in", "log in", "login", "register", "my account",
+    "newsletter", "subscribe", "terms", "conditions",
+    "gdpr", "ccpa",
+)
 def _is_valid_dynamic_field_name(normalized: str) -> bool:
     """Reject field names that are noise: single chars, sentence-like, or JSON-LD types."""
     if len(normalized) <= 1 or len(normalized) > 60:
@@ -151,6 +175,10 @@ def extract_candidates(
             _append_source_candidates(rows, field_name, payload, "embedded_json", base_url=url)
         if manifest.open_graph:
             _append_source_candidates(rows, field_name, manifest.open_graph, "open_graph", base_url=url)
+            if field_name == "company":
+                site_name = manifest.open_graph.get("og:site_name")
+                if site_name not in (None, "", [], {}):
+                    rows.append({"value": site_name, "source": "open_graph"})
         if manifest.next_data:
             _append_source_candidates(rows, field_name, manifest.next_data, "next_data", base_url=url)
         for payload in manifest.hidden_dom:
@@ -238,7 +266,7 @@ def extract_candidates(
             source_trace[field_name] = filtered_rows
 
     target_fields = set(target_fields)
-    candidates = _clean_candidate_field_map(candidates, target_fields=target_fields)
+    candidates = _clean_candidate_field_map(candidates, target_fields=target_fields, surface=surface)
     source_trace = {field_name: candidates[field_name] for field_name in candidates}
 
     # Apply domain field mappings
@@ -252,9 +280,7 @@ def _extract_label_value_from_text(
     html: str,
 ) -> str | None:
     """Search description text and raw HTML for 'Label: Value' patterns matching field_name."""
-    # Build human-readable label variants from the field name
-    label = field_name.replace("_", " ")
-    label_variants = [label, label.title(), label.upper()]
+    label_variants = _label_value_variants(field_name)
 
     # Also search raw HTML for meta/og description
     for text in text_sources:
@@ -266,16 +292,27 @@ def _extract_label_value_from_text(
                 if 1 < len(value) < 200:
                     return value
 
-    # Fallback: scan raw HTML for the pattern in meta tags or text content
-    for variant in label_variants:
-        pattern = re.compile(re.escape(variant) + r"\s*:\s*([^<\n\"]{2,80})", re.IGNORECASE)
-        match = pattern.search(html)
-        if match:
-            value = match.group(1).strip().rstrip(".")
-            if 1 < len(value) < 200:
-                return value
-
     return None
+
+
+def _label_value_variants(field_name: str) -> list[str]:
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def _append(label: object) -> None:
+        text = " ".join(str(label or "").replace("_", " ").split()).strip()
+        lowered = text.lower()
+        if not lowered or lowered in seen:
+            return
+        seen.add(lowered)
+        variants.append(text)
+
+    _append(field_name)
+    for alias in FIELD_ALIASES.get(field_name, []):
+        _append(alias)
+    for alias in REQUESTED_FIELD_ALIASES.get(field_name, []):
+        _append(alias)
+    return variants
 
 
 def _dom_pattern(soup: BeautifulSoup, field_name: str) -> dict | None:
@@ -361,6 +398,28 @@ def _normalized_candidate_text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
+def _normalize_html_rich_text(value: str) -> str:
+    text = str(value or "")
+    if "<" not in text or ">" not in text:
+        return _normalized_candidate_text(text)
+    soup = BeautifulSoup(text, "html.parser")
+    for tag in soup.find_all(["p", "li", "br", "div"]):
+        tag.insert_before("\n")
+    rendered = soup.get_text(" ", strip=False)
+    rendered = re.sub(r"[ \t]+", " ", rendered)
+    rendered = re.sub(r" *\n+ *", "\n", rendered)
+    rendered = re.sub(r"\n{3,}", "\n\n", rendered)
+    lines = []
+    for raw_line in rendered.splitlines():
+        line = _normalized_candidate_text(raw_line)
+        if not line:
+            continue
+        if line.startswith(("-", "*")):
+            line = f"• {line[1:].strip()}"
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def _candidate_value_fingerprint(value: object) -> str:
     if isinstance(value, (dict, list)):
         return _comparable_candidate_value(value)
@@ -412,9 +471,21 @@ def _clean_candidate_field_map(
     candidate_map: dict[str, list[dict]],
     *,
     target_fields: set[str],
+    surface: str,
 ) -> dict[str, list[dict]]:
     filtered_map: dict[str, list[dict]] = {}
+    is_job = "job" in str(surface or "").lower()
+    is_ecommerce = "ecommerce" in str(surface or "").lower()
+
     for field_name, rows in candidate_map.items():
+        # Vertical-specific suppression:
+        # Job boards should never emit commerce prices or currencies
+        if is_job and field_name in {"price", "sale_price", "original_price", "currency"}:
+            continue
+        # Ecommerce sites should never emit job salaries or hiring organizations
+        if is_ecommerce and field_name in {"salary", "hiringOrganization", "hiring_organization"}:
+            continue
+
         filtered_rows = _filter_candidate_rows(field_name, rows, target_fields=target_fields)
         if filtered_rows:
             filtered_map[field_name] = filtered_rows
@@ -595,6 +666,12 @@ def _build_label_value_text_sources(
         for row in rows:
             _append_text(row.get("value"))
 
+    for selector in ("article", "main", "body"):
+        node = soup.select_one(selector)
+        if node is not None:
+            _append_text(node.get_text("\n", strip=True))
+            break
+
     return text_sources
 
 
@@ -634,6 +711,10 @@ def _append_source_candidates(
     *,
     base_url: str = "",
 ) -> None:
+    # Skip brand/entity_name extraction from GA data layer — GA brand is the retailer's
+    # name, not the product manufacturer. JSON-LD (rank 6) will supply the real brand.
+    if _is_entity_name_field(field_name) and _looks_like_ga_data_layer(payload):
+        return
     for match in _deep_get_all_aliases(payload, field_name):
         value = coerce_field_candidate_value(field_name, match, base_url=base_url)
         if value is not None:
@@ -645,6 +726,8 @@ def coerce_field_candidate_value(field_name: str, value: object, *, base_url: st
         return None
     if isinstance(value, str):
         cleaned = _normalized_candidate_text(value)
+        if _is_description_field(field_name) or _is_job_text_field(field_name):
+            cleaned = _normalize_html_rich_text(cleaned)
         parsed = _parse_json_like_value(cleaned)
         if parsed is not None:
             parsed_value = coerce_field_candidate_value(field_name, parsed, base_url=base_url)
@@ -695,10 +778,37 @@ def coerce_field_candidate_value(field_name: str, value: object, *, base_url: st
                 return word_match.group(1).capitalize()
             return cleaned if re.search(r"[A-Za-z]", cleaned) else None
         if _is_numeric_field(field_name):
-            numeric = re.search(r"\d[\d,.]*", cleaned)
+            numeric = re.search(PRICE_REGEX, cleaned)
             return cleaned if numeric else None
+        if _is_salary_field(field_name):
+            salary_match = re.search(SALARY_RANGE_REGEX, cleaned)
+            if salary_match:
+                return _normalized_candidate_text(salary_match.group(0))
+            money_match = re.search(
+                r"(?:[$€£₹]\s*\d[\d,.]*|\b(?:USD|EUR|GBP|INR)\s*\d[\d,.]*|\d[\d,.]*\s*(?:USD|EUR|GBP|INR)\b)",
+                cleaned,
+                re.IGNORECASE,
+            )
+            if money_match:
+                value = _normalized_candidate_text(money_match.group(0))
+                unit_match = re.match(
+                    r"\s*(?:/\s*)?(hour|hr|year|yr|month|mo|week|wk|day)\b",
+                    cleaned[money_match.end():],
+                    re.IGNORECASE,
+                )
+                if unit_match:
+                    value = f"{value}/{unit_match.group(1).lower()}"
+                return value
+            numeric = re.search(PRICE_REGEX, cleaned)
+            return _normalized_candidate_text(numeric.group(0)) if numeric else None
         if _is_availability_field(field_name):
-            return cleaned if cleaned.lower() != "availability" else None
+            lowered = cleaned.lower()
+            if lowered == "availability":
+                return None
+            # Reject Google Analytics custom dimension/metric placeholder names
+            if re.fullmatch(r"dimension\d+|metric\d+|cd\d+|ev\d+", lowered):
+                return None
+            return cleaned
         if _is_title_field(field_name):
             cleaned = _strip_ui_noise(cleaned)
             if not cleaned or cleaned.lower() in CANDIDATE_GENERIC_TITLE_VALUES:
@@ -716,6 +826,17 @@ def coerce_field_candidate_value(field_name: str, value: object, *, base_url: st
     if isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, list):
+        if _is_description_field(field_name):
+            parts: list[str] = []
+            for item in value:
+                coerced = coerce_field_candidate_value(
+                    field_name, item, base_url=base_url
+                )
+                if isinstance(coerced, str):
+                    cleaned = coerced.strip()
+                    if cleaned:
+                        parts.append(cleaned)
+            return " ".join(parts) if parts else None
         if _is_image_primary_field(field_name) or _is_image_collection_field(field_name):
             images = _extract_image_urls(value, base_url=base_url)
             if not images:
@@ -887,6 +1008,8 @@ def _field_quality_score(field_name: str, value: object) -> int:
             score -= 12
         if any(token in lowered for token in ("discover this", "purchase", "shop ", "buy now", "sigma-aldrich.com")):
             score -= 12
+        if any(token in lowered for token in _TITLE_NOISE_TOKENS):
+            score -= 22
         if re.search(r"\.(?:jpg|jpeg|png|webp|gif|svg|avif)\b", lowered):
             score -= 24
         if "|" in text:
@@ -907,6 +1030,33 @@ def _field_quality_score(field_name: str, value: object) -> int:
             score -= 2
         if len(text.split()) <= 6:
             score -= 10
+        return score
+
+    if _is_job_text_field(field_name):
+        score = 10
+        lowered = text.lower()
+        word_count = len(text.split())
+        if len(text) >= 40:
+            score += 10
+        if len(text) >= 140:
+            score += 6
+        if any(marker in text for marker in (".", ";", ":", "•")):
+            score += 4
+        if word_count <= 3:
+            score -= 10
+        if any(
+            phrase in lowered
+            for phrase in (
+                "help center",
+                "contact us",
+                "click here",
+                "learn more",
+                "read more",
+                "was this helpful",
+                "faq",
+            )
+        ):
+            score -= 24
         return score
 
     if _is_entity_name_field(field_name):
@@ -1026,6 +1176,13 @@ def _is_numeric_field(field_name: str) -> bool:
     )
 
 
+def _is_salary_field(field_name: str) -> bool:
+    return (
+        _field_in_group(field_name, "salary")
+        or _field_has_any_token(field_name, CANDIDATE_SALARY_TOKENS)
+    )
+
+
 def _is_rating_field(field_name: str) -> bool:
     return _field_in_group(field_name, "rating") or _field_has_any_token(field_name, CANDIDATE_RATING_TOKENS)
 
@@ -1052,6 +1209,10 @@ def _is_title_field(field_name: str) -> bool:
 
 def _is_description_field(field_name: str) -> bool:
     return _field_in_group(field_name, "description") or _field_has_any_token(field_name, CANDIDATE_DESCRIPTION_TOKENS)
+
+
+def _is_job_text_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "job_text")
 
 
 def _is_entity_name_field(field_name: str) -> bool:
@@ -1087,6 +1248,12 @@ def _normalize_color_candidate(value: str) -> str | None:
     if any(token in lowered for token in ("padding:", "font-size", "font-weight", "transition:", "position:", "-webkit-", "css-")):
         return None
     if any(marker in cleaned for marker in ("{", "}", ";")):
+        return None
+    # Reject JavaScript minified booleans/expressions: !1 (false), !0 (true)
+    if re.search(r"!\d", cleaned):
+        return None
+    # Reject JS object shorthand patterns: key:value with non-alpha keys
+    if re.search(r"(?<![A-Za-z ])\s*:\s*!", cleaned):
         return None
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
     cleaned = re.sub(r"(?i)\bclear\b$", "", cleaned).strip(" ,")
@@ -1178,7 +1345,7 @@ def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
     # found real spec entries (tables, dl, data-attributes). Skip phantom
     # aggregates built from inline label/value guesses on JS-shell pages.
     spec_entry_count = len(specifications)
-    for aggregate_field in ("specifications", "dimensions", "features_specs"):
+    for aggregate_field in ("specifications", "dimensions"):
         value = aggregates.get(aggregate_field)
         if value in (None, "", [], {}):
             continue
@@ -1245,6 +1412,11 @@ def _build_product_detail_rows(manifest: DiscoveryManifest, soup: BeautifulSoup,
 def _find_product_detail_payload(payload: object) -> dict | None:
     if payload in (None, "", [], {}):
         return None
+    if isinstance(payload, str):
+        parsed = _parse_json_like_value(payload)
+        if isinstance(parsed, (dict, list)):
+            return _find_product_detail_payload(parsed)
+        return None
     if isinstance(payload, dict):
         props = payload.get("props")
         if isinstance(props, dict):
@@ -1253,10 +1425,19 @@ def _find_product_detail_payload(payload: object) -> dict | None:
                 data = page_props.get("data")
                 if isinstance(data, dict) and isinstance(data.get("getProductDetail"), dict):
                     return data["getProductDetail"]
+                product_blob = page_props.get("product")
+                if isinstance(product_blob, str):
+                    parsed_product = _parse_json_like_value(product_blob)
+                    if isinstance(parsed_product, dict):
+                        return parsed_product
+                if isinstance(page_props.get("product"), dict):
+                    return page_props["product"]
         if isinstance(payload.get("getProductDetail"), dict):
             return payload["getProductDetail"]
         required_keys = {"productNumber", "productKey", "name"}
         if required_keys.issubset(payload.keys()):
+            return payload
+        if {"description", "variants", "detailedImages"} & set(payload.keys()):
             return payload
         for value in payload.values():
             found = _find_product_detail_payload(value)
@@ -1299,6 +1480,12 @@ def _normalize_product_detail_payload(detail: dict, *, base_url: str) -> dict[st
             record["synonyms"] = " | ".join(dict.fromkeys(values))
 
     images = _extract_image_urls(detail.get("images"), base_url=base_url)
+    if not images:
+        images = _extract_image_urls(detail.get("detailedImages"), base_url=base_url)
+    if not images:
+        images = _extract_image_urls(detail.get("colourAlternateViews"), base_url=base_url)
+    if not images:
+        images = _extract_image_urls(detail.get("variants"), base_url=base_url)
     if images:
         record["image_url"] = images[0]
         if len(images) > 1:
@@ -1315,6 +1502,26 @@ def _normalize_product_detail_payload(detail: dict, *, base_url: str) -> dict[st
         dimensions = _product_detail_dimensions(attr_map)
         if dimensions:
             record["dimensions"] = dimensions
+    features_text = _product_detail_features(detail.get("features"))
+    feature_tile_text = _product_detail_feature_tiles(
+        ((detail.get("centreSectionTemplate") or {}).get("featureTiles"))
+        if isinstance(detail.get("centreSectionTemplate"), dict)
+        else None
+    )
+    if features_text and feature_tile_text:
+        record["features"] = f"{features_text}{SEMANTIC_AGGREGATE_SEPARATOR}{feature_tile_text}"
+    elif features_text:
+        record["features"] = features_text
+    elif feature_tile_text:
+        record["features"] = feature_tile_text
+
+    fit_text = _product_detail_fit_and_sizing(detail)
+    if fit_text:
+        record["fit_and_sizing"] = fit_text
+
+    materials_and_care = _product_detail_materials_and_care(detail)
+    if materials_and_care:
+        record["materials_and_care"] = materials_and_care
     return record
 
 
@@ -1342,6 +1549,101 @@ def _product_detail_dimensions(attr_map: dict[str, str]) -> str | None:
     for label, value in attr_map.items():
         if any(token in label.lower() for token in DIMENSION_KEYWORDS) or "thread" in label.lower():
             rows.append(f"{label.replace('_', ' ')}: {value}")
+    return SEMANTIC_AGGREGATE_SEPARATOR.join(rows) if rows else None
+
+
+def _product_detail_features(value: object) -> str | None:
+    if not isinstance(value, list):
+        return None
+    sections: list[str] = []
+    for row in value[:12]:
+        if not isinstance(row, dict):
+            continue
+        label = _normalized_candidate_text(row.get("label"))
+        bullet_rows = row.get("value")
+        bullets = [
+            _normalized_candidate_text(item)
+            for item in (bullet_rows if isinstance(bullet_rows, list) else [])
+            if _normalized_candidate_text(item)
+        ]
+        if not bullets:
+            continue
+        if label:
+            sections.append(f"{label}:{SEMANTIC_AGGREGATE_SEPARATOR}" + SEMANTIC_AGGREGATE_SEPARATOR.join(f"- {item}" for item in bullets))
+        else:
+            sections.append(SEMANTIC_AGGREGATE_SEPARATOR.join(f"- {item}" for item in bullets))
+    return SEMANTIC_AGGREGATE_SEPARATOR.join(sections) if sections else None
+
+
+def _product_detail_feature_tiles(value: object) -> str | None:
+    if not isinstance(value, list):
+        return None
+    rows: list[str] = []
+    for tile in value[:12]:
+        if not isinstance(tile, dict):
+            continue
+        title = _normalized_candidate_text(tile.get("title") or tile.get("name"))
+        description = _normalized_candidate_text(tile.get("description"))
+        if title and description:
+            rows.append(f"{title}: {description}")
+        elif description:
+            rows.append(description)
+    return SEMANTIC_AGGREGATE_SEPARATOR.join(dict.fromkeys(rows)) if rows else None
+
+
+def _product_detail_fit_and_sizing(detail: dict) -> str | None:
+    rows: list[str] = []
+    widgets = detail.get("bigWidgets")
+    if isinstance(widgets, list):
+        for widget in widgets[:12]:
+            if not isinstance(widget, dict):
+                continue
+            label = _normalized_candidate_text(widget.get("label"))
+            widget_type = _normalized_candidate_text(widget.get("type"))
+            html = _normalize_html_rich_text(str(widget.get("html") or ""))
+            html = _normalized_candidate_text(html)
+            if any(token in f"{label} {widget_type}".lower() for token in ("fit", "size", "sizing")) and html:
+                rows.append(f"{label}: {html}" if label else html)
+    customer_tip = ""
+    customer_tips = detail.get("customerTips")
+    if isinstance(customer_tips, dict):
+        customer_tip = _normalized_candidate_text(customer_tips.get("value"))
+    if customer_tip:
+        rows.append(f"Product tip: {customer_tip}")
+    sizing_chart = detail.get("sizingChart")
+    if isinstance(sizing_chart, dict):
+        label = _normalized_candidate_text(sizing_chart.get("label"))
+        url = _resolve_candidate_url(_normalized_candidate_text(sizing_chart.get("url")), base_url="")
+        if label and url:
+            rows.append(f"{label}: {url}")
+        elif label:
+            rows.append(label)
+    size = detail.get("size")
+    if isinstance(size, dict):
+        size_value = _normalized_candidate_text(size.get("value"))
+        if size_value:
+            rows.append(f"Size: {size_value}")
+    return SEMANTIC_AGGREGATE_SEPARATOR.join(dict.fromkeys(row for row in rows if row)) or None
+
+
+def _product_detail_materials_and_care(detail: dict) -> str | None:
+    rows: list[str] = []
+    materials = [
+        _normalized_candidate_text(item)
+        for item in (detail.get("materials") if isinstance(detail.get("materials"), list) else [])
+        if _normalized_candidate_text(item)
+    ]
+    if materials:
+        rows.append("Materials:")
+        rows.extend(f"- {item}" for item in materials)
+    care = [
+        _normalized_candidate_text(item)
+        for item in (detail.get("careInstructions") if isinstance(detail.get("careInstructions"), list) else [])
+        if _normalized_candidate_text(item)
+    ]
+    if care:
+        rows.append("Care:")
+        rows.extend(f"- {item}" for item in care)
     return SEMANTIC_AGGREGATE_SEPARATOR.join(rows) if rows else None
 
 
