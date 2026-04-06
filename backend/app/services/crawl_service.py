@@ -35,12 +35,11 @@ from app.services.crawl_state import (
     set_control_request,
     update_run_status,
 )
-from app.services.discover import DiscoveryManifest, discover_sources
 from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
 from app.services.extract.listing_extractor import extract_listing_records
+from app.services.extract.source_parsers import parse_page_sources
 from app.services.extract.service import coerce_field_candidate_value, extract_candidates
 from app.services.xpath_service import validate_xpath_syntax
-from app.services.extract.spa_pruner import prune_spa_state
 from app.services.knowledge_base.store import get_canonical_fields, get_selector_defaults
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
 from app.services.normalizers import extract_currency_hint, normalize_value
@@ -657,15 +656,9 @@ async def _process_single_url(
                         "info",
                         f"[BLOCKED] {url} matched blocked-page signals, recovered {len(recovered.records)} Shopify records from public endpoint",
                     )
-                manifest = discover_sources(
-                    html="",
-                    network_payloads=acq.network_payloads,
-                    adapter_records=recovered.records,
-                    evidence_context=_build_browser_evidence_context(acq),
-                )
                 if is_listing:
                     return await _extract_listing(
-                        session, run, url, "", acq, manifest, recovered,
+                        session, run, url, "", acq, recovered,
                         recovered.records, additional_fields,
                         surface, max_records, url_metrics,
                         update_run_state=update_run_state,
@@ -673,7 +666,7 @@ async def _process_single_url(
                         persist_site_memory=persist_site_memory,
                     )
                 return await _extract_detail(
-                    session, run, url, "", acq, manifest, recovered,
+                    session, run, url, "", acq, recovered,
                     recovered.records, additional_fields, extraction_contract,
                     surface, url_metrics,
                     update_run_state=update_run_state,
@@ -720,13 +713,6 @@ async def _process_single_url(
     adapter_result = await run_adapter(url, html, surface)
     adapter_records = adapter_result.records if adapter_result else []
 
-    manifest = discover_sources(
-        html=html,
-        network_payloads=acq.network_payloads,
-        adapter_records=adapter_records,
-        evidence_context=_build_browser_evidence_context(acq),
-    )
-
     # ── STAGE 2: ANALYZE ──
     if update_run_state:
         await _set_stage(session, run, STAGE_ANALYZE)
@@ -736,7 +722,7 @@ async def _process_single_url(
     if is_listing:
         extraction_started_at = time.perf_counter()
         records, verdict, url_metrics = await _extract_listing(
-            session, run, url, html, acq, manifest, adapter_result,
+            session, run, url, html, acq, adapter_result,
             adapter_records, additional_fields,
             surface, max_records, url_metrics,
             update_run_state=update_run_state,
@@ -780,15 +766,9 @@ async def _process_single_url(
             browser_html = browser_acq.html
             browser_adapter_result = await run_adapter(url, browser_html, surface)
             browser_adapter_records = browser_adapter_result.records if browser_adapter_result else []
-            browser_manifest = discover_sources(
-                html=browser_html,
-                network_payloads=browser_acq.network_payloads,
-                adapter_records=browser_adapter_records,
-                evidence_context=_build_browser_evidence_context(browser_acq),
-            )
             extraction_started_at = time.perf_counter()
             records, verdict, url_metrics = await _extract_listing(
-                session, run, url, browser_html, browser_acq, browser_manifest, browser_adapter_result,
+                session, run, url, browser_html, browser_acq, browser_adapter_result,
                 browser_adapter_records, additional_fields,
                 surface, max_records, url_metrics,
                 update_run_state=update_run_state,
@@ -803,7 +783,7 @@ async def _process_single_url(
     else:
         extraction_started_at = time.perf_counter()
         records, verdict, url_metrics = await _extract_detail(
-            session, run, url, html, acq, manifest, adapter_result,
+            session, run, url, html, acq, adapter_result,
             adapter_records, additional_fields, extraction_contract,
             surface, url_metrics,
             update_run_state=update_run_state,
@@ -889,7 +869,9 @@ async def _process_json_response(
                 "requested_fields": requested_fields or None,
                 "requested_field_coverage": requested_coverage or None,
                 "manifest_trace": _build_manifest_trace(
-                    None,
+                    html="",
+                    xhr_payloads=[],
+                    adapter_records=[],
                     extra={
                         "content_type": "json",
                         "source": raw_record.get("_source", "json_api"),
@@ -919,7 +901,6 @@ async def _extract_listing(
     url: str,
     html: str,
     acq: AcquisitionResult,
-    manifest: DiscoveryManifest,
     adapter_result,
     adapter_records: list[dict],
     additional_fields: list[str],
@@ -947,7 +928,8 @@ async def _extract_listing(
         target_fields=set(additional_fields),
         page_url=url,
         max_records=max_records,
-        manifest=manifest,
+        xhr_payloads=acq.network_payloads,
+        adapter_records=adapter_records,
     )
     source_label = "listing_extractor"
     if not extracted_records and adapter_records:
@@ -988,7 +970,8 @@ async def _extract_listing(
         fallback_record = _build_legible_listing_fallback_record(
             url=url,
             html=html,
-            manifest=manifest,
+            xhr_payloads=acq.network_payloads,
+            adapter_records=adapter_records,
         )
         if fallback_record is not None:
             if update_run_state:
@@ -1094,7 +1077,11 @@ async def _extract_listing(
                 "surface_requested": surface if effective_surface != surface else None,
                 "requested_fields": additional_fields or None,
                 "requested_field_coverage": requested_coverage or None,
-                "manifest_trace": _build_manifest_trace(manifest) or None,
+                "manifest_trace": _build_manifest_trace(
+                    html=html,
+                    xhr_payloads=acq.network_payloads,
+                    adapter_records=adapter_records,
+                ) or None,
             }),
             raw_html_path=acq.artifact_path,
         )
@@ -1214,7 +1201,6 @@ async def _extract_detail(
     url: str,
     html: str,
     acq: AcquisitionResult,
-    manifest: DiscoveryManifest,
     adapter_result,
     adapter_records: list[dict],
     additional_fields: list[str],
@@ -1239,7 +1225,14 @@ async def _extract_detail(
     )
 
     candidates, source_trace = extract_candidates(
-        url, surface, html, manifest, additional_fields, extraction_contract, resolved_fields=resolved_schema.fields,
+        url,
+        surface,
+        html,
+        acq.network_payloads,
+        additional_fields,
+        extraction_contract,
+        resolved_fields=resolved_schema.fields,
+        adapter_records=adapter_records,
     )
     persisted_field_names = set(resolved_schema.fields)
     candidate_values, reconciliation = _reconcile_detail_candidate_values(
@@ -1273,7 +1266,7 @@ async def _extract_detail(
             url=url,
             surface=surface,
             html=html,
-            manifest=manifest,
+            xhr_payloads=acq.network_payloads,
             additional_fields=additional_fields,
             adapter_records=extracted_records,
             candidate_values=candidate_values,
@@ -1333,7 +1326,12 @@ async def _extract_detail(
                     "reconciliation": reconciliation or None,
                     "requested_fields": additional_fields or None,
                     "requested_field_coverage": requested_coverage or None,
-                    "manifest_trace": _build_manifest_trace(manifest, semantic=semantic) or None,
+                    "manifest_trace": _build_manifest_trace(
+                        html=html,
+                        xhr_payloads=acq.network_payloads,
+                        adapter_records=adapter_records,
+                        semantic=semantic,
+                    ) or None,
                 }),
                 raw_html_path=acq.artifact_path,
             )
@@ -1369,7 +1367,12 @@ async def _extract_detail(
                 "reconciliation": reconciliation or None,
                 "requested_fields": additional_fields or None,
                 "requested_field_coverage": requested_coverage or None,
-                "manifest_trace": _build_manifest_trace(manifest, semantic=semantic) or None,
+                "manifest_trace": _build_manifest_trace(
+                    html=html,
+                    xhr_payloads=acq.network_payloads,
+                    adapter_records=adapter_records,
+                    semantic=semantic,
+                ) or None,
             }),
             raw_html_path=acq.artifact_path,
         )
@@ -1564,8 +1567,11 @@ def _build_legible_listing_fallback_record(
     *,
     url: str,
     html: str,
-    manifest: DiscoveryManifest,
+    xhr_payloads: list[dict],
+    adapter_records: list[dict],
 ) -> dict[str, dict[str, object] | dict[str, int | bool | str]] | None:
+    page_sources = parse_page_sources(html)
+    tables = list(page_sources.get("tables") or [])
     soup = BeautifulSoup(html or "", "html.parser")
     for selector in ("script", "style", "noscript", "svg", "iframe", "header", "footer", "nav", "aside"):
         for node in soup.select(selector):
@@ -1610,7 +1616,7 @@ def _build_legible_listing_fallback_record(
             if total_chars >= 2400 or len(markdown_lines) >= 24:
                 break
 
-    table_markdown = _render_manifest_tables_markdown(manifest.tables)
+    table_markdown = _render_manifest_tables_markdown(tables)
     if table_markdown:
         if markdown_lines:
             markdown_lines.extend(["## Tables", table_markdown])
@@ -1642,18 +1648,18 @@ def _build_legible_listing_fallback_record(
     })
     raw_data = _compact_dict({
         "page_text_excerpt": page_markdown or None,
-        "tables": manifest.tables[:3] if manifest.tables else None,
+        "tables": tables[:3] if tables else None,
         "typed_table_rows": fallback_table_rows or None,
     })
     summary: dict[str, int | bool | str] = _compact_dict({
         "title": title or None,
         "has_description": bool(description),
         "content_chars": total_chars,
-        "table_count": len(manifest.tables or []),
+        "table_count": len(tables),
         "has_tables": has_tables,
         "typed_row_count": len(fallback_table_rows),
     })
-    manifest_tables = list(manifest.tables or [])
+    manifest_tables = list(tables)
     if fallback_table_rows:
         manifest_tables.append({
             "table_index": len(manifest_tables) + 1,
@@ -1681,6 +1687,14 @@ def _build_legible_listing_fallback_record(
         "raw_data": raw_data,
         "summary": summary,
         "manifest_trace": _compact_dict({
+            "adapter_data": adapter_records or None,
+            "network_payloads": [{"url": row.get("url"), "status": row.get("status")} for row in xhr_payloads if isinstance(row, dict)] or None,
+            "next_data": page_sources.get("next_data") or None,
+            "_hydrated_states": page_sources.get("hydrated_states") or None,
+            "embedded_json": page_sources.get("embedded_json") or None,
+            "open_graph": page_sources.get("open_graph") or None,
+            "json_ld": page_sources.get("json_ld") or None,
+            "microdata": page_sources.get("microdata") or None,
             "tables": manifest_tables or None,
             "fallback_table_rows": fallback_table_rows or None,
         }),
@@ -2072,49 +2086,36 @@ def _merge_review_bucket_entries(*groups: list[dict[str, object]]) -> list[dict[
 
 
 def _build_manifest_trace(
-    manifest: DiscoveryManifest | None,
     *,
+    html: str,
+    xhr_payloads: list[dict],
+    adapter_records: list[dict],
     semantic: dict | None = None,
     extra: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    manifest = manifest or DiscoveryManifest()
+    page_sources = parse_page_sources(html)
     payload = _compact_dict({
-        "adapter_data": manifest.adapter_data or None,
+        "adapter_data": adapter_records or None,
         "network_payloads": [
             _compact_dict({
                 "url": row.get("url"),
                 "status": row.get("status"),
-                "body": prune_spa_state(row.get("body")),
+                "body": row.get("body"),
             })
-            for row in manifest.network_payloads
+            for row in xhr_payloads
             if isinstance(row, dict)
         ] or None,
-        "next_data": prune_spa_state(manifest.next_data),
-        "_hydrated_states": prune_spa_state(manifest._hydrated_states),
-        "embedded_json": prune_spa_state(manifest.embedded_json),
-        "open_graph": manifest.open_graph or None,
-        "json_ld": manifest.json_ld or None,
-        "microdata": manifest.microdata or None,
-        "hidden_dom": manifest.hidden_dom or None,
-        "gallery_media": manifest.gallery_media or None,
-        "expanded_sections": manifest.expanded_sections or None,
-        "tables": manifest.tables or None,
-        "evidence_graph": _build_evidence_graph(manifest) or None,
-        "evidence_context": manifest.evidence_context or None,
+        "next_data": page_sources.get("next_data") or None,
+        "_hydrated_states": page_sources.get("hydrated_states") or None,
+        "embedded_json": page_sources.get("embedded_json") or None,
+        "open_graph": page_sources.get("open_graph") or None,
+        "json_ld": page_sources.get("json_ld") or None,
+        "microdata": page_sources.get("microdata") or None,
+        "tables": page_sources.get("tables") or None,
         "semantic": semantic or None,
         **(extra or {}),
     })
     return payload
-
-
-def _build_browser_evidence_context(acq: AcquisitionResult) -> dict[str, object]:
-    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
-    return _compact_dict({
-        "accordion_summary": diagnostics.get("accordion_summary"),
-        "field_activation": diagnostics.get("field_activation"),
-        "field_trigger_selectors": diagnostics.get("field_trigger_selectors"),
-        "browser_diagnostics": diagnostics.get("browser_diagnostics"),
-    })
 
 
 def _resolve_listing_surface(
@@ -2162,47 +2163,6 @@ def _looks_like_job_listing_page(*, url: str, html: str, acq: AcquisitionResult)
     return signals >= 2
 
 
-def _build_evidence_graph(manifest: DiscoveryManifest) -> dict[str, object]:
-    nodes: list[dict[str, object]] = []
-    edges: list[dict[str, object]] = []
-
-    def add_node(node_type: str, count: int, **extra: object) -> None:
-        if count <= 0:
-            return
-        node_id = f"{node_type}:{len(nodes) + 1}"
-        nodes.append(_compact_dict({
-            "id": node_id,
-            "type": node_type,
-            "count": count,
-            **extra,
-        }))
-
-    add_node("adapter_records", len(manifest.adapter_data or []))
-    add_node("network_payloads", len(manifest.network_payloads or []))
-    add_node("json_ld", len(manifest.json_ld or []))
-    add_node("microdata", len(manifest.microdata or []))
-    add_node("hidden_dom", len(manifest.hidden_dom or []))
-    add_node("gallery_media", len(manifest.gallery_media or []))
-    add_node("expanded_sections", len(manifest.expanded_sections or []))
-    add_node("tables", len(manifest.tables or []))
-    evidence_context = manifest.evidence_context if isinstance(manifest.evidence_context, dict) else {}
-    activation = evidence_context.get("field_activation") if isinstance(evidence_context.get("field_activation"), dict) else {}
-    activation_rows = sum(
-        len(rows)
-        for key, rows in activation.items()
-        if key != "_plan" and isinstance(rows, list)
-    )
-    activation_plan = activation.get("_plan") if isinstance(activation.get("_plan"), list) else []
-    if activation_rows or activation_plan:
-        add_node("activation", activation_rows or len(activation_plan), plan_fields=[
-            str(row.get("field_name") or "").strip()
-            for row in activation_plan
-            if isinstance(row, dict) and str(row.get("field_name") or "").strip()
-        ] or None)
-    if nodes:
-        for node in nodes:
-            edges.append({"from": "page", "to": node["id"], "relationship": "contains"})
-    return _compact_dict({"nodes": nodes or None, "edges": edges or None})
 
 
 def _review_bucket_source_for_field(field_name: str, candidate_map: object, fallback_source: str) -> str:
@@ -2517,7 +2477,7 @@ async def _collect_detail_llm_suggestions(
     url: str,
     surface: str,
     html: str,
-    manifest: DiscoveryManifest,
+    xhr_payloads: list[dict],
     additional_fields: list[str],
     adapter_records: list[dict],
     candidate_values: dict,
@@ -2618,7 +2578,12 @@ async def _collect_detail_llm_suggestions(
         for field_name in target_fields
         if field_name not in missing_fields and field_name not in review_candidate_evidence
     )
-    discovered_sources = _build_llm_discovered_sources(source_trace, manifest, target_fields=list(review_candidate_evidence.keys()))
+    discovered_sources = _build_llm_discovered_sources(
+        source_trace,
+        html=html,
+        xhr_payloads=xhr_payloads,
+        target_fields=list(review_candidate_evidence.keys()),
+    )
     if not candidate_evidence and not discovered_sources and not preview_record:
         source_trace["llm_cleanup_status"] = {
             "status": "no_evidence",
@@ -2746,31 +2711,33 @@ def _build_llm_candidate_evidence(trace_candidates: dict, preview_record: dict) 
 
 def _build_llm_discovered_sources(
     source_trace: dict,
-    manifest: DiscoveryManifest,
     *,
+    html: str,
+    xhr_payloads: list[dict],
     target_fields: list[str] | None = None,
 ) -> dict[str, object]:
+    page_sources = parse_page_sources(html)
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
     relevant_fields = {field for field in (target_fields or []) if field}
     semantic_sections = semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
     semantic_specs = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
     semantic_promoted = semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else {}
     manifest_snapshot = _compact_dict({
-        "next_data": _snapshot_for_llm(prune_spa_state(manifest.next_data), max_items=150, text_limit=2000),
-        "hydrated_states": _snapshot_for_llm(prune_spa_state(manifest._hydrated_states), max_items=150, text_limit=2000),
-        "embedded_json": _snapshot_for_llm(prune_spa_state(manifest.embedded_json), max_items=150, text_limit=2000),
-        "json_ld": _snapshot_for_llm(manifest.json_ld, max_items=150, text_limit=2000),
-        "microdata": _snapshot_for_llm(manifest.microdata, max_items=150, text_limit=2000),
+        "next_data": _snapshot_for_llm(page_sources.get("next_data"), max_items=150, text_limit=2000),
+        "hydrated_states": _snapshot_for_llm(page_sources.get("hydrated_states"), max_items=150, text_limit=2000),
+        "embedded_json": _snapshot_for_llm(page_sources.get("embedded_json"), max_items=150, text_limit=2000),
+        "json_ld": _snapshot_for_llm(page_sources.get("json_ld"), max_items=150, text_limit=2000),
+        "microdata": _snapshot_for_llm(page_sources.get("microdata"), max_items=150, text_limit=2000),
         "network_payloads": _snapshot_for_llm([
             _compact_dict({
                 "url": payload.get("url"),
                 "status": payload.get("status"),
-                "body": prune_spa_state(payload.get("body")),
+                "body": payload.get("body"),
             })
-            for payload in manifest.network_payloads[:2]
+            for payload in xhr_payloads[:2]
             if isinstance(payload, dict)
         ], max_items=150, text_limit=2000),
-        "tables": _snapshot_for_llm(manifest.tables, max_items=150, text_limit=2000),
+        "tables": _snapshot_for_llm(page_sources.get("tables"), max_items=150, text_limit=2000),
     })
     semantic_snapshot = _compact_dict({
         "sections": _snapshot_for_llm(

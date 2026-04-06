@@ -2,9 +2,56 @@
 from __future__ import annotations
 
 import app.services.extract.listing_extractor as listing_extractor
+from unittest.mock import patch
 
-from app.services.discover import DiscoveryManifest
-from app.services.extract.listing_extractor import extract_listing_records
+from app.services.extract.listing_extractor import extract_listing_records as _extract_listing_records_impl
+
+
+def _sources(**kwargs) -> dict:
+    return kwargs
+
+
+def extract_listing_records(
+    html: str,
+    surface: str,
+    target_fields: set[str],
+    page_url: str = "",
+    max_records: int = 100,
+    manifest: dict | None = None,
+) -> list[dict]:
+    sources = dict(manifest or {})
+    page_sources = {
+        "next_data": sources.get("next_data"),
+        "hydrated_states": sources.get("_hydrated_states") or sources.get("hydrated_states") or [],
+        "embedded_json": sources.get("embedded_json") or [],
+        "open_graph": sources.get("open_graph") or {},
+        "json_ld": sources.get("json_ld") or [],
+        "microdata": sources.get("microdata") or [],
+        "tables": sources.get("tables") or [],
+    }
+    if any(page_sources.values()):
+        with patch(
+            "app.services.extract.listing_extractor.parse_page_sources",
+            return_value=page_sources,
+        ):
+            return _extract_listing_records_impl(
+                html,
+                surface,
+                target_fields,
+                page_url=page_url,
+                max_records=max_records,
+                xhr_payloads=sources.get("network_payloads") or [],
+                adapter_records=sources.get("adapter_data") or [],
+            )
+    return _extract_listing_records_impl(
+        html,
+        surface,
+        target_fields,
+        page_url=page_url,
+        max_records=max_records,
+        xhr_payloads=sources.get("network_payloads") or [],
+        adapter_records=sources.get("adapter_data") or [],
+    )
 
 
 def test_extract_product_cards():
@@ -48,7 +95,7 @@ def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_
     </div>
     </body></html>
     """
-    manifest = DiscoveryManifest(
+    manifest = _sources(
         json_ld=[
             {
                 "@type": "ItemList",
@@ -93,8 +140,64 @@ def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_
     assert records[0]["description"] == "A richer structured description for widget A."
 
 
+def test_extract_listing_records_merges_adapter_rows_with_dom_job_cards():
+    html = """
+    <html><body>
+      <div class="job-card">
+        <a href="https://example.com/jobs/164066">
+          <h3>Medical Surgical Registered Nurse / RN</h3>
+          <div class="company">Emory Univ Hosp-Midtown</div>
+          <div class="location">Atlanta, GA, 30308</div>
+          <div class="salary">$52/hr</div>
+        </a>
+      </div>
+      <div class="job-card">
+        <a href="https://example.com/jobs/164065">
+          <h3>Cardiovascular Step Down Registered Nurse / RN</h3>
+          <div class="company">Emory Univ Hosp-Midtown</div>
+          <div class="location">Atlanta, GA, 30308</div>
+        </a>
+      </div>
+    </body></html>
+    """
+    manifest = _sources(
+        adapter_data=[
+            {
+                "title": "Medical Surgical Registered Nurse / RN",
+                "url": "https://example.com/jobs/164066",
+                "job_id": "164066",
+                "department": "Nursing",
+            },
+            {
+                "title": "Cardiovascular Step Down Registered Nurse / RN",
+                "url": "https://example.com/jobs/164065",
+                "job_id": "164065",
+                "department": "Nursing",
+            },
+        ]
+    )
+
+    records = extract_listing_records(
+        html,
+        "job_listing",
+        set(),
+        page_url="https://example.com/jobs",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert len(records) == 2
+    assert records[0]["job_id"] == "164066"
+    assert records[0]["department"] == "Nursing"
+    assert records[0]["company"] == "Emory Univ Hosp-Midtown"
+    assert records[0]["location"] == "Atlanta, GA, 30308"
+    assert records[0]["salary"] == "$52/hr"
+    assert "adapter" in records[0]["_source"]
+    assert "listing_card" in records[0]["_source"]
+
+
 def test_extract_listing_records_handles_main_entity_itemlist_manifest():
-    manifest = DiscoveryManifest(
+    manifest = _sources(
         json_ld=[
             {
                 "@type": "WebPage",
@@ -362,17 +465,17 @@ def test_amazon_style_listing():
 
 def test_extract_hydrated_state_listing_records():
     html = "<html><body><h1>Fallback</h1></body></html>"
-    manifest = type("Manifest", (), {
-        "json_ld": [],
-        "next_data": None,
-        "_hydrated_states": [
+    manifest = _sources(
+        json_ld=[],
+        next_data=None,
+        _hydrated_states=[
             {"products": [
                 {"title": "Hydrated A", "url": "/p/a", "image_url": "/img/a.jpg"},
                 {"title": "Hydrated B", "url": "/p/b", "image_url": "/img/b.jpg"},
             ]}
         ],
-        "network_payloads": [],
-    })()
+        network_payloads=[],
+    )
     records = extract_listing_records(html, "ecommerce_listing", set(), page_url="https://example.com", manifest=manifest)
     assert len(records) == 2
     assert records[0]["title"] == "Hydrated A"
@@ -521,9 +624,9 @@ def test_extract_listing_rejects_weak_collection_json_ld_without_item_fields():
 
 def test_extract_listing_prefers_rich_product_array_over_category_links():
     html = "<html><body></body></html>"
-    manifest = type("Manifest", (), {
-        "json_ld": [],
-        "next_data": {
+    manifest = _sources(
+        json_ld=[],
+        next_data={
             "topCategories": [
                 {"name": "lipstick", "link": "/makeup/lips/lipstick/c/249"},
                 {"name": "highlighter", "link": "/makeup/face/face-illuminator/c/237"},
@@ -556,9 +659,9 @@ def test_extract_listing_prefers_rich_product_array_over_category_links():
                 },
             ],
         },
-        "_hydrated_states": [],
-        "network_payloads": [],
-    })()
+        _hydrated_states=[],
+        network_payloads=[],
+    )
 
     records = extract_listing_records(
         html,
@@ -604,9 +707,9 @@ def test_normalize_listing_value_only_promotes_true_product_short_paths():
 
 def test_extract_listing_from_query_state_product_cards_and_drops_content_cards():
     html = "<html><body></body></html>"
-    manifest = type("Manifest", (), {
-        "json_ld": [],
-        "next_data": {
+    manifest = _sources(
+        json_ld=[],
+        next_data={
             "props": {
                 "pageProps": {
                     "dehydratedState": {
@@ -645,9 +748,9 @@ def test_extract_listing_from_query_state_product_cards_and_drops_content_cards(
                 }
             }
         },
-        "_hydrated_states": [],
-        "network_payloads": [],
-    })()
+        _hydrated_states=[],
+        network_payloads=[],
+    )
 
     records = extract_listing_records(
         html,
@@ -667,9 +770,9 @@ def test_extract_listing_from_query_state_product_cards_and_drops_content_cards(
 
 def test_extract_listing_ignores_kitchenaid_style_variant_option_rows():
     html = "<html><body></body></html>"
-    manifest = type("Manifest", (), {
-        "json_ld": [],
-        "next_data": {
+    manifest = _sources(
+        json_ld=[],
+        next_data={
             "props": {
                 "pageProps": {
                     "dehydratedState": {
@@ -726,9 +829,9 @@ def test_extract_listing_ignores_kitchenaid_style_variant_option_rows():
                 }
             }
         },
-        "_hydrated_states": [],
-        "network_payloads": [],
-    })()
+        _hydrated_states=[],
+        network_payloads=[],
+    )
 
     records = extract_listing_records(
         html,
@@ -1072,7 +1175,7 @@ def test_extract_listing_records_handles_article_cards_inside_testid_grid():
 
 def test_extract_listing_records_uses_usajobs_network_payload_aliases():
     html = "<html><body></body></html>"
-    manifest = DiscoveryManifest(
+    manifest = _sources(
         network_payloads=[
             {
                 "url": "https://www.usajobs.gov/Search/ExecuteSearch",
@@ -1197,6 +1300,134 @@ def test_extract_from_card_handles_idealist_job_card():
     assert record["url"] == "https://www.idealist.org/en/nonprofit-job/123-example-role"
 
 
+def test_extract_listing_records_ignores_informational_inline_arrays_on_loading_shell_pages():
+    html = """
+    <html><body>
+      <script type="application/json">
+        {
+          "items": [
+            {
+              "name": "Premier Delivery",
+              "url": "/pages/informational/premier-delivery",
+              "sku": "46448",
+              "publication_date": "2025-05-13T14:11:30.453Z"
+            },
+            {
+              "name": "Karen Millen App",
+              "url": "/pages/informational/download-the-app",
+              "sku": "55444",
+              "publication_date": "2025-07-07T09:26:04.690Z"
+            }
+          ]
+        }
+      </script>
+      <section data-test-id="content-grid">
+        <div data-test-id="product-card-skeleton"></div>
+        <div data-test-id="product-card-skeleton"></div>
+        <div data-test-id="product-card-skeleton"></div>
+        <div data-test-id="product-card-skeleton"></div>
+      </section>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.karenmillen.com/categories/womens-coats-jackets",
+        max_records=10,
+    )
+
+    assert records == []
+
+
+def test_extract_from_card_handles_clark_job_card_metadata_selectors():
+    html = """
+    <li data-testid="careers-search-result-listing">
+      <article class="mb-2">
+        <a class="listings__link" href="/careerdetail/?id=100709">
+          <h2 data-testid="careers-search-result-listing-job-title">1st Shift Outbound Material Handler-$20.00/Hr. (4 weeks PTO)</h2>
+          <span data-testid="careers-search-result-listing-company-name">WebstaurantStore</span>
+          <span data-testid="careers-search-result-listing-job-location">Savannah, GA</span>
+        </a>
+      </article>
+    </li>
+    <li data-testid="careers-search-result-listing">
+      <article class="mb-2">
+        <a class="listings__link" href="/careerdetail/?id=100710">
+          <h2 data-testid="careers-search-result-listing-job-title">2nd Shift Picker</h2>
+          <span data-testid="careers-search-result-listing-company-name">Clark Food Service Equipment</span>
+          <span data-testid="careers-search-result-listing-job-location">Lancaster, PA</span>
+        </a>
+      </article>
+    </li>
+    """
+
+    records = extract_listing_records(
+        html,
+        "job_listing",
+        set(),
+        page_url="https://careers.clarkassociatesinc.biz/",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "1st Shift Outbound Material Handler-$20.00/Hr. (4 weeks PTO)"
+    assert records[0]["company"] == "WebstaurantStore"
+    assert records[0]["location"] == "Savannah, GA"
+    assert records[0]["url"] == "https://careers.clarkassociatesinc.biz/careerdetail/?id=100709"
+
+
+def test_extract_from_card_handles_atlas_job_card_metadata_rows():
+    html = """
+    <div class="pp-content-post pp-content-grid-post job_listing">
+      <div itemprop="publisher" itemscope itemtype="https://schema.org/Organization">
+        <meta itemprop="name" content="Atlas Medstaff" />
+      </div>
+      <a class="atlas_js_job_title" href="https://atlasmedstaff.com/job/1475834-rn-telemetry-prescott-arizona/">
+        <span class="title_js_left">RN:</span>
+        <span class="title_js_right">Telemetry</span>
+        <span class="title_js_second_specialty">, Med/Surg</span>
+      </a>
+      <div class="atlas_js_job_more_info_div">
+        <p class="atlas_js_job_more_info"><img src="/wp-content/uploads/2024/11/Icon-Location.svg"/><span>Prescott, Arizona</span></p>
+        <p class="atlas_js_job_more_info"><img src="/wp-content/uploads/2024/11/Icon-Pay.svg"/><span>$1,886/wk est</span></p>
+        <p class="atlas_js_job_more_info"><img src="/wp-content/uploads/2025/03/Job-Number-Icon.svg"/><span>1475834</span></p>
+      </div>
+    </div>
+    <div class="pp-content-post pp-content-grid-post job_listing">
+      <div itemprop="publisher" itemscope itemtype="https://schema.org/Organization">
+        <meta itemprop="name" content="Atlas Medstaff" />
+      </div>
+      <a class="atlas_js_job_title" href="https://atlasmedstaff.com/job/1475835-rn-icu-prescott-arizona/">
+        <span class="title_js_left">RN:</span>
+        <span class="title_js_right">ICU</span>
+      </a>
+      <div class="atlas_js_job_more_info_div">
+        <p class="atlas_js_job_more_info"><img src="/wp-content/uploads/2024/11/Icon-Location.svg"/><span>Prescott, Arizona</span></p>
+        <p class="atlas_js_job_more_info"><img src="/wp-content/uploads/2024/11/Icon-Pay.svg"/><span>$2,001/wk est</span></p>
+      </div>
+    </div>
+    """
+
+    records = extract_listing_records(
+        html,
+        "job_listing",
+        set(),
+        page_url="https://atlasmedstaff.com/job-search/",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "RN: Telemetry, Med/Surg"
+    assert records[0]["company"] == "Atlas Medstaff"
+    assert records[0]["location"] == "Prescott, Arizona"
+    assert records[0]["salary"] == "$1,886/wk est"
+    assert records[0]["url"] == "https://atlasmedstaff.com/job/1475834-rn-telemetry-prescott-arizona/"
+    assert "image_url" not in records[0]
+    assert "additional_images" not in records[0]
+
+
 def test_lookup_next_flight_window_index_returns_none_when_url_cannot_be_found():
     combined = '"displayName":"Ghost Product","listingUrl":"https://cdn.example.com/other-item"'
 
@@ -1211,8 +1442,8 @@ def test_lookup_next_flight_window_index_returns_none_when_url_cannot_be_found()
 
 def test_extract_structured_sources_merges_records_from_multiple_sources():
     html = "<html><body></body></html>"
-    manifest = type("Manifest", (), {
-        "json_ld": [
+    manifest = _sources(
+        json_ld=[
             {
                 "@type": "ItemList",
                 "itemListElement": [
@@ -1220,15 +1451,15 @@ def test_extract_structured_sources_merges_records_from_multiple_sources():
                 ],
             }
         ],
-        "next_data": {
+        next_data={
             "products": [
                 {"title": "Mirror", "url": "/p/mirror", "sku": "SKU-1", "price": "99.00", "brand": "Acme"},
                 {"title": "Lamp", "url": "/p/lamp", "sku": "SKU-2", "price": "49.00", "brand": "Glow"},
             ]
         },
-        "_hydrated_states": [],
-        "network_payloads": [],
-    })()
+        _hydrated_states=[],
+        network_payloads=[],
+    )
 
     records = extract_listing_records(
         html,
@@ -1249,7 +1480,7 @@ def test_extract_structured_sources_merges_records_from_multiple_sources():
 
 def test_extract_structured_sources_reads_deep_hydrated_state_records(monkeypatch):
     monkeypatch.setattr(listing_extractor, "MAX_JSON_RECURSION_DEPTH", 1)
-    manifest = DiscoveryManifest(
+    manifest = _sources(
         _hydrated_states=[
             {
                 "props": {

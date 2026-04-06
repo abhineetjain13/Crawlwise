@@ -49,7 +49,7 @@ from app.services.pipeline_config import (
     NESTED_URL_KEYS,
     PAGE_URL_CURRENCY_HINTS,
 )
-from app.services.discover import DiscoveryManifest, discover_sources
+from app.services.extract.source_parsers import parse_page_sources
 from app.services.xpath_service import bs4_tag_to_xpath, simplify_xpath
 _EMPTY_VALUES = (None, "", [], {})
 _NUMERIC_ONLY_RE = re.compile(r"^\s*\(?\s*[\d,]+\s*\)?\s*$")
@@ -64,7 +64,8 @@ def extract_listing_records(
     target_fields: set[str],
     page_url: str = "",
     max_records: int = 100,
-    manifest: DiscoveryManifest | None = None,
+    xhr_payloads: list[dict] | None = None,
+    adapter_records: list[dict] | None = None,
 ) -> list[dict]:
     """Extract multiple records from a listing/category page.
 
@@ -82,9 +83,6 @@ def extract_listing_records(
     if len(page_fragments) > 1:
         merged_records: list[dict] = []
         for index, fragment in enumerate(page_fragments):
-            fragment_manifest = (
-                manifest if index == 0 else discover_sources(html=fragment)
-            )
             merged_records.extend(
                 _extract_listing_records_single_page(
                     fragment,
@@ -92,7 +90,8 @@ def extract_listing_records(
                     target_fields,
                     page_url=page_url,
                     max_records=max_records,
-                    manifest=fragment_manifest,
+                    xhr_payloads=xhr_payloads if index == 0 else None,
+                    adapter_records=adapter_records if index == 0 else None,
                 )
             )
             if len(merged_records) >= max_records:
@@ -105,7 +104,8 @@ def extract_listing_records(
         target_fields,
         page_url=page_url,
         max_records=max_records,
-        manifest=manifest,
+        xhr_payloads=xhr_payloads,
+        adapter_records=adapter_records,
     )
 
 
@@ -116,28 +116,30 @@ def _extract_listing_records_single_page(
     *,
     page_url: str = "",
     max_records: int = 100,
-    manifest: DiscoveryManifest | None = None,
+    xhr_payloads: list[dict] | None = None,
+    adapter_records: list[dict] | None = None,
 ) -> list[dict]:
-    if manifest is None:
-        manifest = discover_sources(html=html)
+    page_sources = parse_page_sources(html)
+    adapter_records = adapter_records or []
+    xhr_payloads = xhr_payloads or []
 
     candidate_sets: list[list[dict]] = []
 
-    adapter_data = getattr(manifest, "adapter_data", None) if manifest is not None else None
-    if adapter_data:
-        adapter_records = _adapter_candidate_records(adapter_data)
-        if adapter_records:
-            candidate_sets.append(adapter_records)
+    if adapter_records:
+        adapter_candidate_records = _adapter_candidate_records(adapter_records)
+        if adapter_candidate_records:
+            candidate_sets.append(adapter_candidate_records)
 
-    # --- Strategy 1: Structured data sources (from manifest) ---
-    if manifest:
-        structured_records = _extract_from_structured_sources(
-            manifest, surface, page_url
-        )
-        if len(structured_records) >= 1:
-            for record in structured_records:
-                record["_source"] = record.get("_source", "structured")
-            candidate_sets.append(structured_records)
+    structured_records = _extract_from_structured_sources(
+        page_sources=page_sources,
+        xhr_payloads=xhr_payloads,
+        surface=surface,
+        page_url=page_url,
+    )
+    if len(structured_records) >= 1:
+        for record in structured_records:
+            record["_source"] = record.get("_source", "structured")
+        candidate_sets.append(structured_records)
 
     next_flight_records = _extract_from_next_flight_scripts(html, page_url)
     if len(next_flight_records) >= 1:
@@ -375,7 +377,9 @@ def _should_prefer_listing_value(
 
 
 def _extract_from_structured_sources(
-    manifest: DiscoveryManifest,
+    *,
+    page_sources: dict[str, object],
+    xhr_payloads: list[dict],
     surface: str,
     page_url: str,
 ) -> list[dict]:
@@ -389,7 +393,7 @@ def _extract_from_structured_sources(
 
     # JSON-LD: look for ItemList or arrays of Product/JobPosting
     ld_records: list[dict] = []
-    for payload in manifest.json_ld:
+    for payload in page_sources.get("json_ld") or []:
         if isinstance(payload, dict):
             ld_records.extend(_extract_ld_records_from_payload(payload, surface, page_url))
     ld_records = [record for record in ld_records if _is_meaningful_structured_listing_record(record)]
@@ -398,15 +402,17 @@ def _extract_from_structured_sources(
         candidates.append(ld_records)
 
     # __NEXT_DATA__: search for product/job arrays in page props
-    if manifest.next_data:
-        next_records = _extract_from_next_data(manifest.next_data, surface, page_url)
+    next_data = page_sources.get("next_data")
+    if next_data:
+        next_records = _extract_from_next_data(next_data, surface, page_url)
         next_records = [record for record in next_records if _is_meaningful_structured_listing_record(record)]
         if next_records:
             candidates.append(next_records)
 
     # Additional hydrated state blobs discovered from inline scripts
-    if manifest._hydrated_states:
-        for state in manifest._hydrated_states:
+    hydrated_states = page_sources.get("hydrated_states") or []
+    if hydrated_states:
+        for state in hydrated_states:
             state_records = _extract_items_from_json(
                 state,
                 surface,
@@ -423,7 +429,7 @@ def _extract_from_structured_sources(
                     candidates.append(filtered_state_records)
 
     # Network payloads: look for JSON arrays of items
-    for payload in manifest.network_payloads:
+    for payload in xhr_payloads:
         body = payload.get("body")
         if not isinstance(body, (dict, list)):
             continue

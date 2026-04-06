@@ -443,9 +443,6 @@ def _record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
     evidence_refs = {
         "json_ld_count": len(manifest_trace.get("json_ld") or []) if isinstance(manifest_trace.get("json_ld"), list) else 0,
         "table_count": len(manifest_trace.get("tables") or []) if isinstance(manifest_trace.get("tables"), list) else 0,
-        "gallery_media_count": len(manifest_trace.get("gallery_media") or []) if isinstance(manifest_trace.get("gallery_media"), list) else 0,
-        "expanded_sections_count": len(manifest_trace.get("expanded_sections") or []) if isinstance(manifest_trace.get("expanded_sections"), list) else 0,
-        "activation_present": bool(manifest_trace.get("evidence_context")),
     }
     return {
         "record_id": row.id,

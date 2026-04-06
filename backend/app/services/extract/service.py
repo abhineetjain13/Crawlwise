@@ -9,7 +9,6 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from lxml import etree, html as lxml_html
 
-from app.services.discover import DiscoveryManifest
 from app.services.pipeline_config import (
     CANDIDATE_AVAILABILITY_TOKENS,
     CANDIDATE_CATEGORY_TOKENS,
@@ -49,10 +48,10 @@ from app.services.pipeline_config import (
     SALARY_RANGE_REGEX,
     SEMANTIC_AGGREGATE_SEPARATOR,
 )
+from app.services.extract.source_parsers import parse_page_sources
 from app.services.requested_field_policy import (
     expand_requested_fields,
     normalize_requested_field,
-    requested_field_terms,
 )
 from app.services.semantic_detail_extractor import extract_semantic_detail_data, resolve_requested_field_values
 from app.services.knowledge_base.store import get_canonical_fields, get_domain_mapping, get_selector_defaults
@@ -97,10 +96,11 @@ def extract_candidates(
     url: str,
     surface: str,
     html: str,
-    manifest: DiscoveryManifest,
+    xhr_payloads: list[dict],
     additional_fields: list[str],
     extraction_contract: list[dict] | None = None,
     resolved_fields: list[str] | None = None,
+    adapter_records: list[dict] | None = None,
 ) -> tuple[dict, dict]:
     """Extract candidate values for each target field.
 
@@ -115,6 +115,15 @@ def extract_candidates(
 
     soup = BeautifulSoup(html, "html.parser")
     tree = _build_xpath_tree(html)
+    page_sources = parse_page_sources(html)
+    adapter_records = adapter_records or []
+    network_payloads = xhr_payloads or []
+    next_data = page_sources.get("next_data")
+    hydrated_states = page_sources.get("hydrated_states") or []
+    embedded_json = page_sources.get("embedded_json") or []
+    open_graph = page_sources.get("open_graph") or {}
+    json_ld = page_sources.get("json_ld") or []
+    microdata = page_sources.get("microdata") or []
     candidates: dict[str, list[dict]] = {}
     target_fields = sorted(set(resolved_fields or get_canonical_fields(surface)) | set(expand_requested_fields(additional_fields)))
     domain = _domain(url)
@@ -123,7 +132,14 @@ def extract_candidates(
     label_value_text_sources = _build_label_value_text_sources(
         url=url,
         soup=soup,
-        manifest=manifest,
+        adapter_records=adapter_records,
+        network_payloads=network_payloads,
+        next_data=next_data,
+        hydrated_states=hydrated_states,
+        embedded_json=embedded_json,
+        open_graph=open_graph,
+        json_ld=json_ld,
+        microdata=microdata,
     )
 
     canonical_target_fields = set(get_canonical_fields(surface))
@@ -165,7 +181,7 @@ def extract_candidates(
 
         # 1. Platform adapter result
         rows = []
-        for record in manifest.adapter_data:
+        for record in adapter_records:
             if isinstance(record, dict) and field_name in record and record[field_name]:
                 rows.append({"value": record[field_name], "source": "adapter"})
         if _commit(rows):
@@ -173,7 +189,7 @@ def extract_candidates(
 
         # 2. XHR / JSON API payloads
         rows = []
-        for payload in manifest.network_payloads:
+        for payload in network_payloads:
             if not isinstance(payload, dict):
                 continue
             payload_url = str(payload.get("url") or "").lower()
@@ -187,7 +203,7 @@ def extract_candidates(
 
         # 3. JSON-LD
         rows = []
-        for payload in manifest.json_ld:
+        for payload in json_ld:
             if isinstance(payload, dict):
                 if _should_skip_jsonld_block(payload, field_name):
                     continue
@@ -197,13 +213,21 @@ def extract_candidates(
 
         # 4. __NEXT_DATA__ / hydrated client state
         rows = []
-        for payload in manifest.embedded_json:
+        for payload in embedded_json:
             _append_source_candidates(rows, field_name, payload, "embedded_json", base_url=url)
-        if manifest.next_data:
-            _append_source_candidates(rows, field_name, manifest.next_data, "next_data", base_url=url)
-        for state in manifest._hydrated_states:
+        if next_data:
+            _append_source_candidates(rows, field_name, next_data, "next_data", base_url=url)
+        for state in hydrated_states:
             _append_source_candidates(rows, field_name, state, "hydrated_state", base_url=url)
-        rows.extend(_structured_manifest_candidates(manifest, field_name))
+        rows.extend(
+            _structured_source_candidates(
+                field_name,
+                next_data=next_data,
+                hydrated_states=hydrated_states,
+                embedded_json=embedded_json,
+                network_payloads=network_payloads,
+            )
+        )
         if _commit(rows):
             continue
 
@@ -231,13 +255,13 @@ def extract_candidates(
         dom_row = _dom_pattern(soup, field_name)
         if dom_row:
             rows.append(dom_row)
-        for item in manifest.microdata:
+        for item in microdata:
             if isinstance(item, dict):
                 _append_source_candidates(rows, field_name, item, "microdata", base_url=url)
-        if manifest.open_graph:
-            _append_source_candidates(rows, field_name, manifest.open_graph, "open_graph", base_url=url)
+        if open_graph:
+            _append_source_candidates(rows, field_name, open_graph, "open_graph", base_url=url)
             if field_name == "company":
-                site_name = manifest.open_graph.get("og:site_name")
+                site_name = open_graph.get("og:site_name")
                 if site_name not in (None, "", [], {}):
                     rows.append({"value": site_name, "source": "open_graph"})
         if field_name in canonical_target_fields or field_name in REQUESTED_FIELD_ALIASES:
@@ -257,8 +281,20 @@ def extract_candidates(
         _commit(rows)
 
     dynamic_rows = _build_dynamic_semantic_rows(semantic)
-    structured_rows = _build_dynamic_structured_rows(manifest)
-    product_detail_rows = _build_product_detail_rows(manifest, soup, base_url=url)
+    structured_rows = _build_dynamic_structured_rows(
+        next_data=next_data,
+        hydrated_states=hydrated_states,
+        embedded_json=embedded_json,
+        network_payloads=network_payloads,
+    )
+    product_detail_rows = _build_product_detail_rows(
+        soup,
+        base_url=url,
+        next_data=next_data,
+        hydrated_states=hydrated_states,
+        embedded_json=embedded_json,
+        network_payloads=network_payloads,
+    )
     merged_dynamic_rows: dict[str, list[dict]] = {}
     for field_name, rows in structured_rows.items():
         merged_dynamic_rows.setdefault(field_name, []).extend(rows)
@@ -558,7 +594,14 @@ def _build_label_value_text_sources(
     *,
     url: str,
     soup: BeautifulSoup,
-    manifest: DiscoveryManifest,
+    adapter_records: list[dict],
+    network_payloads: list[dict],
+    next_data: object,
+    hydrated_states: list[object],
+    embedded_json: list[object],
+    open_graph: dict[str, object],
+    json_ld: list[dict],
+    microdata: list[dict],
 ) -> list[str]:
     text_sources: list[str] = []
     seen: set[str] = set()
@@ -581,10 +624,10 @@ def _build_label_value_text_sources(
 
     for desc_field in ("description", "summary"):
         rows: list[dict] = []
-        for record in manifest.adapter_data:
+        for record in adapter_records:
             if isinstance(record, dict) and record.get(desc_field):
                 rows.append({"value": record[desc_field], "source": "adapter"})
-        for payload in manifest.network_payloads:
+        for payload in network_payloads:
             if not isinstance(payload, dict):
                 continue
             payload_url = str(payload.get("url") or "").lower()
@@ -593,20 +636,18 @@ def _build_label_value_text_sources(
             body = payload.get("body", {})
             if isinstance(body, (dict, list)):
                 _append_source_candidates(rows, desc_field, body, "network_intercept", base_url=url)
-        for state in manifest._hydrated_states:
+        for state in hydrated_states:
             _append_source_candidates(rows, desc_field, state, "hydrated_state", base_url=url)
-        for payload in manifest.embedded_json:
+        for payload in embedded_json:
             _append_source_candidates(rows, desc_field, payload, "embedded_json", base_url=url)
-        if manifest.open_graph:
-            _append_source_candidates(rows, desc_field, manifest.open_graph, "open_graph", base_url=url)
-        if manifest.next_data:
-            _append_source_candidates(rows, desc_field, manifest.next_data, "next_data", base_url=url)
-        for payload in manifest.hidden_dom:
-            _append_source_candidates(rows, desc_field, payload, "hidden_dom", base_url=url)
-        for payload in manifest.json_ld:
+        if open_graph:
+            _append_source_candidates(rows, desc_field, open_graph, "open_graph", base_url=url)
+        if next_data:
+            _append_source_candidates(rows, desc_field, next_data, "next_data", base_url=url)
+        for payload in json_ld:
             if isinstance(payload, dict):
                 _append_source_candidates(rows, desc_field, payload, "json_ld", base_url=url)
-        for item in manifest.microdata:
+        for item in microdata:
             if isinstance(item, dict):
                 _append_source_candidates(rows, desc_field, item, "microdata", base_url=url)
         dom_row = _dom_pattern(soup, desc_field)
@@ -620,11 +661,6 @@ def _build_label_value_text_sources(
         if node is not None:
             _append_text(node.get_text("\n", strip=True))
             break
-
-    for payload in manifest.expanded_sections:
-        if isinstance(payload, dict):
-            _append_text(payload.get("heading"))
-            _append_text(payload.get("text"))
 
     return text_sources
 
@@ -1090,21 +1126,22 @@ def _normalize_size_candidate(value: str) -> str | None:
     return cleaned or None
 
 
-def _structured_manifest_candidates(manifest: DiscoveryManifest, field_name: str) -> list[dict]:
-    if field_name == "additional_images" and manifest.gallery_media:
-        gallery_urls = [
-            _normalized_candidate_text(item.get("src"))
-            for item in manifest.gallery_media
-            if isinstance(item, dict) and _normalized_candidate_text(item.get("src"))
-        ]
-        if gallery_urls:
-            return [{"value": ", ".join(dict.fromkeys(gallery_urls)), "source": "gallery_media"}]
-    if field_name not in {"specifications", "dimensions"}:
-        section_value = _extract_expanded_section_value(manifest.expanded_sections, field_name)
-        return [{"value": section_value, "source": "expanded_section"}] if section_value else []
+def _structured_source_candidates(
+    field_name: str,
+    *,
+    next_data: object,
+    hydrated_states: list[object],
+    embedded_json: list[object],
+    network_payloads: list[dict],
+) -> list[dict]:
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    sources: list[tuple[str, object]] = _structured_manifest_sources(manifest)
+    sources: list[tuple[str, object]] = _structured_source_payloads(
+        next_data=next_data,
+        hydrated_states=hydrated_states,
+        embedded_json=embedded_json,
+        network_payloads=network_payloads,
+    )
     for source, payload in sources:
         value = _extract_structured_field_value(payload, field_name)
         normalized = _normalized_candidate_text(value)
@@ -1116,25 +1153,6 @@ def _structured_manifest_candidates(manifest: DiscoveryManifest, field_name: str
         seen.add(key)
         rows.append({"value": value, "source": source})
     return rows
-
-
-def _extract_expanded_section_value(expanded_sections: list[dict], field_name: str) -> str | None:
-    if not expanded_sections:
-        return None
-    terms = requested_field_terms(field_name)
-    if not terms:
-        return None
-    for payload in expanded_sections:
-        if not isinstance(payload, dict):
-            continue
-        heading = _normalized_candidate_text(payload.get("heading"))
-        text = _normalized_candidate_text(payload.get("text"))
-        haystack = f"{heading} {text}".lower().strip()
-        if not haystack:
-            continue
-        if any(term in haystack for term in terms):
-            return text or heading or None
-    return None
 
 
 def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
@@ -1198,9 +1216,20 @@ def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
     return rows
 
 
-def _build_dynamic_structured_rows(manifest: DiscoveryManifest) -> dict[str, list[dict]]:
+def _build_dynamic_structured_rows(
+    *,
+    next_data: object,
+    hydrated_states: list[object],
+    embedded_json: list[object],
+    network_payloads: list[dict] | None = None,
+) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {}
-    for source, payload in _structured_manifest_sources(manifest):
+    for source, payload in _structured_source_payloads(
+        next_data=next_data,
+        hydrated_states=hydrated_states,
+        embedded_json=embedded_json,
+        network_payloads=network_payloads or [],
+    ):
         spec_map = _extract_structured_spec_map(payload)
         if not spec_map:
             continue
@@ -1230,9 +1259,22 @@ def _build_dynamic_structured_rows(manifest: DiscoveryManifest) -> dict[str, lis
     return rows
 
 
-def _build_product_detail_rows(manifest: DiscoveryManifest, soup: BeautifulSoup, *, base_url: str) -> dict[str, list[dict]]:
+def _build_product_detail_rows(
+    soup: BeautifulSoup,
+    *,
+    base_url: str,
+    next_data: object,
+    hydrated_states: list[object],
+    embedded_json: list[object],
+    network_payloads: list[dict] | None = None,
+) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {}
-    for source, payload in _structured_manifest_sources(manifest):
+    for source, payload in _structured_source_payloads(
+        next_data=next_data,
+        hydrated_states=hydrated_states,
+        embedded_json=embedded_json,
+        network_payloads=network_payloads or [],
+    ):
         detail = _find_product_detail_payload(payload)
         if not isinstance(detail, dict):
             continue
@@ -1583,11 +1625,17 @@ _NETWORK_PAYLOAD_NOISE_URL_PATTERNS = re.compile(
 )
 
 
-def _structured_manifest_sources(manifest: DiscoveryManifest) -> list[tuple[str, object]]:
-    sources: list[tuple[str, object]] = [("next_data", manifest.next_data)]
-    sources.extend(("hydrated_state", payload) for payload in manifest._hydrated_states)
-    sources.extend(("embedded_json", payload) for payload in manifest.embedded_json)
-    for payload in manifest.network_payloads:
+def _structured_source_payloads(
+    *,
+    next_data: object,
+    hydrated_states: list[object],
+    embedded_json: list[object],
+    network_payloads: list[dict],
+) -> list[tuple[str, object]]:
+    sources: list[tuple[str, object]] = [("next_data", next_data)]
+    sources.extend(("hydrated_state", payload) for payload in hydrated_states)
+    sources.extend(("embedded_json", payload) for payload in embedded_json)
+    for payload in network_payloads:
         if not isinstance(payload, dict):
             continue
         payload_url = str(payload.get("url") or "").lower()

@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from app.services.discover import DiscoveryManifest
-from app.services.discover import discover_sources
 from app.services.extract.service import (
     _extract_image_urls,
     _normalize_color_candidate,
@@ -13,12 +11,55 @@ from app.services.extract.service import (
     _resolve_candidate_url,
     _should_skip_jsonld_block,
     coerce_field_candidate_value,
-    extract_candidates,
+    extract_candidates as _extract_candidates_impl,
 )
 
 
-def _manifest(**kwargs) -> DiscoveryManifest:
-    return DiscoveryManifest(**kwargs)
+def _manifest(**kwargs) -> dict:
+    return kwargs
+
+
+def extract_candidates(
+    url: str,
+    surface: str,
+    html: str,
+    manifest: dict | None,
+    additional_fields: list[str],
+    extraction_contract: list[dict] | None = None,
+    resolved_fields: list[str] | None = None,
+):
+    sources = dict(manifest or {})
+    page_sources = {
+        "next_data": sources.get("next_data"),
+        "hydrated_states": sources.get("_hydrated_states") or sources.get("hydrated_states") or [],
+        "embedded_json": sources.get("embedded_json") or [],
+        "open_graph": sources.get("open_graph") or {},
+        "json_ld": sources.get("json_ld") or [],
+        "microdata": sources.get("microdata") or [],
+        "tables": sources.get("tables") or [],
+    }
+    if any(page_sources.values()):
+        with patch("app.services.extract.service.parse_page_sources", return_value=page_sources):
+            return _extract_candidates_impl(
+                url,
+                surface,
+                html,
+                sources.get("network_payloads") or [],
+                additional_fields,
+                extraction_contract,
+                resolved_fields,
+                sources.get("adapter_data") or [],
+            )
+    return _extract_candidates_impl(
+        url,
+        surface,
+        html,
+        sources.get("network_payloads") or [],
+        additional_fields,
+        extraction_contract,
+        resolved_fields,
+        sources.get("adapter_data") or [],
+    )
 
 
 def test_extract_from_json_ld():
@@ -123,7 +164,7 @@ def test_extract_recovers_nested_offer_fields_from_json_ld_with_trailing_semicol
       </script>
     </body></html>
     """
-    manifest = discover_sources(html)
+    manifest = _manifest()
     with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
         candidates, _ = extract_candidates(
             "https://www.evo.com/snowboards/lib-tech-skate-banana-btx-snowboard",

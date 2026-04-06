@@ -8,6 +8,8 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+_DISPLAY_HIDDEN_RECORD_FIELDS = {"page_markdown", "table_markdown", "record_type"}
+
 
 class CrawlCreate(BaseModel):
     run_type: str  # "crawl", "batch", "csv"
@@ -61,7 +63,11 @@ class CrawlRecordResponse(BaseModel):
         """Expose canonical data, a review bucket, and only light trace metadata."""
         self.data = {
             k: v for k, v in self.data.items()
-            if v not in (None, "", [], {}) and not str(k).startswith("_")
+            if (
+                v not in (None, "", [], {})
+                and not str(k).startswith("_")
+                and str(k) not in _DISPLAY_HIDDEN_RECORD_FIELDS
+            )
         }
         manifest_trace = _extract_manifest_trace(self.source_trace, self.discovered_data)
         self.review_bucket = _normalize_review_bucket(
@@ -294,7 +300,6 @@ _LEGACY_MANIFEST_KEYS = {
     "_hydrated_states",
     "embedded_json",
     "open_graph",
-    "hidden_dom",
     "tables",
     "full_json_response",
     "json_record_keys",

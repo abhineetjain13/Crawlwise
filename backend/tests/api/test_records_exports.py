@@ -13,12 +13,16 @@ from app.api.records import (
     EXPORT_TOTAL_HEADER,
     MAX_RECORD_PAGE_SIZE,
     RUN_NOT_FOUND_DETAIL,
+    _artifact_table_rows,
     _collect_export_rows,
     _clean_export_data,
+    _legacy_fallback_markdown_rows,
     _stream_export_csv,
+    export_artifacts_json,
     export_csv,
     export_json,
     export_markdown,
+    export_tables_csv,
     record_provenance,
     router,
 )
@@ -233,7 +237,7 @@ async def test_stream_export_csv_consumes_row_stream_once(monkeypatch):
     assert "description" in payload
     assert "Item 1" in payload
     assert "Item 2" in payload
-    assert page_calls == [1, 2, 1, 2]
+    assert page_calls == [1, 2]
 
 
 def test_clean_export_data_preserves_duplicate_alias_fields():
@@ -290,6 +294,185 @@ async def test_export_csv_discovers_fields_beyond_first_page(db_session, test_us
     header = payload.splitlines()[0]
 
     assert "rare_field" in header
+
+
+@pytest.mark.asyncio
+async def test_export_csv_does_not_fall_back_to_typed_table_rows(db_session, test_user):
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com/specs",
+        surface="tabular",
+        status="completed",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    db_session.add(
+        CrawlRecord(
+            run_id=run.id,
+            source_url="https://example.com/specs",
+            data={"page_markdown": "# Specs"},
+            raw_data={},
+            discovered_data={},
+            source_trace={
+                "manifest_trace": {
+                    "tables": [
+                        {
+                            "table_index": 1,
+                            "caption": "Specifications",
+                            "headers": [{"text": "Name"}, {"text": "Value"}],
+                            "rows": [{"row_index": 1, "cells": [{"text": "Voltage"}, {"text": "220V"}]}],
+                        }
+                    ]
+                }
+            },
+            raw_html_path=None,
+        )
+    )
+    await db_session.commit()
+
+    response = await export_csv(run.id, session=db_session, _=test_user)
+    payload = await _read_streaming_body(response)
+
+    assert payload == ""
+
+
+@pytest.mark.asyncio
+async def test_export_tables_csv_returns_flattened_rows(db_session, test_user):
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com/specs",
+        surface="tabular",
+        status="completed",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/specs",
+        data={},
+        raw_data={},
+        discovered_data={},
+        source_trace={
+            "manifest_trace": {
+                "tables": [
+                    {
+                        "table_index": 2,
+                        "section_title": "Specs",
+                        "headers": [{"text": "Field"}, {"text": "Reading"}],
+                        "rows": [{"row_index": 3, "cells": [{"text": "Current"}, {"text": "5A"}]}],
+                    }
+                ]
+            }
+        },
+        raw_html_path=None,
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    response = await export_tables_csv(run.id, session=db_session, _=test_user)
+    payload = await _read_streaming_body(response)
+
+    assert "Current" in payload
+    assert "5A" in payload
+
+
+@pytest.mark.asyncio
+async def test_export_artifacts_json_includes_typed_bundles(db_session, test_user):
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com/item",
+        surface="ecommerce_detail",
+        status="completed",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+
+    record = CrawlRecord(
+        run_id=run.id,
+        source_url="https://example.com/item",
+        data={"title": "Widget", "page_markdown": "# Widget"},
+        raw_data={},
+        discovered_data={},
+        source_trace={
+            "type": "detail",
+            "manifest_trace": {
+                "json_ld": [{"name": "Widget"}],
+                "tables": [],
+            },
+        },
+        raw_html_path=None,
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    response = await export_artifacts_json(run.id, session=db_session, _=test_user)
+    payload = json.loads(await _read_streaming_body(response))
+
+    assert payload[0]["structured_record"]["title"] == "Widget"
+    assert payload[0]["evidence_refs"]["json_ld_count"] == 1
+
+
+def test_artifact_table_rows_flattens_manifest_tables():
+    row = CrawlRecord(
+        id=7,
+        run_id=1,
+        source_url="https://example.com/table",
+        data={},
+        raw_data={},
+        discovered_data={},
+        source_trace={
+            "manifest_trace": {
+                "tables": [
+                    {
+                        "table_index": 1,
+                        "headers": [{"text": "Key"}, {"text": "Value"}],
+                        "rows": [{"row_index": 1, "cells": [{"text": "Weight"}, {"text": "10kg"}]}],
+                    }
+                ]
+            }
+        },
+        raw_html_path=None,
+    )
+
+    flattened = _artifact_table_rows(row)
+
+    assert flattened[0]["Key"] == "Weight"
+    assert flattened[0]["Value"] == "10kg"
+
+
+def test_legacy_fallback_markdown_rows_extracts_structured_rows():
+    row = CrawlRecord(
+        id=8,
+        run_id=1,
+        source_url="https://example.com/jobs",
+        data={
+            "page_markdown": "# Jobs\n\n## [Executive Assistant](https://example.com/jobs/executive-assistant)\nHigh-level support role.\n## [Recruiter](https://example.com/jobs/recruiter)\nSources talent.",
+        },
+        raw_data={},
+        discovered_data={},
+        source_trace={"type": "listing_fallback"},
+        raw_html_path=None,
+    )
+
+    rows = _legacy_fallback_markdown_rows(row)
+
+    assert rows[0]["title"] == "Executive Assistant"
+    assert rows[0]["url"] == "https://example.com/jobs/executive-assistant"
+    assert rows[0]["description"] == "High-level support role."
 
 
 @pytest.mark.asyncio
