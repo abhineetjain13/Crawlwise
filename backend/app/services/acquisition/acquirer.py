@@ -34,7 +34,6 @@ from app.services.pipeline_config import (
     JOB_REDIRECT_SHELL_TITLES,
 )
 from app.services.platform_resolver import resolve_platform_family
-from app.services.requested_field_policy import requested_fields_require_browser
 
 _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset({
     "sign in",
@@ -363,12 +362,6 @@ async def _acquire_once(
         or (len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN and content_len < _JS_SHELL_MIN_CONTENT_LEN)
         or gate_phrases
         or (js_shell_detected and adapter_hint is None and platform_family is None and len(visible_text) < 1000)
-        or _requested_fields_need_browser(
-            html,
-            visible_text,
-            requested_fields or [],
-            requested_field_selectors or {},
-        )
         or normalized.error
     )
     structured_listing_override = (
@@ -810,23 +803,6 @@ def _normalize_fetch_result(result: HttpFetchResult | tuple[str, str, dict | lis
         json_data=json_data,
         status_code=200 if content_type in {"html", "json"} else 0,
         error="",
-    )
-
-
-def _requested_fields_need_browser(
-    html: str,
-    visible_text: str,
-    requested_fields: list[str],
-    requested_field_selectors: dict[str, list[dict]],
-) -> bool:
-    """Determine if we need Playwright because of requested fields.
-    Now optimized to skip expensive text-matching on static pages.
-    """
-    if not requested_fields:
-        return False
-    return requested_fields_require_browser(
-        requested_fields,
-        requested_field_selectors=requested_field_selectors,
     )
 
 

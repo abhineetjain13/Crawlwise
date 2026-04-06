@@ -21,11 +21,11 @@ from app.services.acquisition.browser_client import (
     _find_next_page_url,
     _goto_with_fallback,
     _load_cookies,
-    _open_requested_field_sections,
     _pause_after_navigation,
     _retryable_browser_error_reason,
     _save_cookies,
     _wait_for_challenge_resolution,
+    expand_all_interactive_elements,
 )
 
 
@@ -475,12 +475,12 @@ async def test_pause_after_navigation_polls_checkpoint_during_long_wait(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_open_requested_field_sections_honors_checkpoint(monkeypatch):
+async def test_expand_all_interactive_elements_honors_checkpoint(monkeypatch):
     checkpoint = AsyncMock()
 
-    class FakeRequestedFieldPage:
+    class FakeInteractivePage:
         async def evaluate(self, *_args, **_kwargs):
-            return [{"field_name": "details"}]
+            return 3
 
     monkeypatch.setattr(
         "app.services.acquisition.browser_client.ACCORDION_EXPAND_WAIT_MS",
@@ -491,13 +491,9 @@ async def test_open_requested_field_sections_honors_checkpoint(monkeypatch):
         50,
     )
 
-    await _open_requested_field_sections(
-        FakeRequestedFieldPage(),
-        requested_fields=["details"],
-        requested_field_selectors={},
-        checkpoint=checkpoint,
-    )
+    summary = await expand_all_interactive_elements(FakeInteractivePage(), checkpoint=checkpoint)
 
+    assert summary["expanded_count"] == 3
     assert checkpoint.await_count >= 3
 
 
@@ -646,8 +642,7 @@ async def test_collect_paginated_html_allows_in_place_pagination_without_goto(mo
     monkeypatch.setattr("app.services.acquisition.browser_client._click_and_observe_next_page", _fake_click_and_observe_next_page)
     monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
     monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
-    monkeypatch.setattr("app.services.acquisition.browser_client._expand_accordions", AsyncMock())
-    monkeypatch.setattr("app.services.acquisition.browser_client._open_requested_field_sections", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client.expand_all_interactive_elements", AsyncMock())
 
     html = await _collect_paginated_html(page, max_pages=3, request_delay_ms=0)
 

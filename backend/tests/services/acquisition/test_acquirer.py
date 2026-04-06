@@ -13,7 +13,6 @@ from app.services.acquisition.acquirer import (
     _json_ld_listing_count,
     _is_invalid_job_surface_page,
     _network_payload_path,
-    _requested_fields_need_browser,
     acquire,
     acquire_html,
 )
@@ -123,6 +122,7 @@ async def test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html():
 
     assert result.method == "curl_cffi"
     assert result.diagnostics["curl_adapter_hint"] == "shopify"
+    assert result.diagnostics["curl_platform_family"] == "generic_commerce"
     browser_mock.assert_not_awaited()
 
 
@@ -209,6 +209,57 @@ async def test_acquire_html_auto_mode_keeps_curl_when_structured_listings_are_ex
     assert result.method == "curl_cffi"
     assert result.diagnostics["js_shell_overridden"] == "structured_data_found"
     browser_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acquire_detail_requested_fields_are_not_overridden_by_listing_structured_data():
+    js_heavy_html = """
+    <html><body>
+      <div>ok</div>
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          "mainEntity": {
+            "@type": "ItemList",
+            "itemListElement": [
+              {"item": {"@type": "Product", "name": "Filter A", "url": "/p/filter-a"}}
+            ]
+          }
+        }
+      </script>
+    """ + ("<script>var x=1;</script>" * 30000) + "</body></html>"
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=js_heavy_html, status_code=200, content_type="html"),
+        ),
+        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(html="<html><body><details open><summary>Returns</summary><p>30 day returns</p></details></body></html>"),
+        ) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(
+                1,
+                "https://example.com/products/widget",
+                surface="ecommerce_detail",
+                requested_fields=["returns"],
+            )
+
+    assert result.method == "playwright"
+    browser_mock.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -502,10 +553,30 @@ async def test_acquire_writes_diagnostics_artifact(tmp_path, monkeypatch):
     assert payload["artifact_path"] == result.artifact_path
     assert payload["diagnostics"]["curl_status_code"] == 200
     assert payload["diagnostics"]["curl_needs_browser"] is False
+    assert payload["diagnostics"]["curl_platform_family"] == "generic_commerce"
     assert payload["diagnostics"]["curl_attempt_log"] == [
         {"attempt": 1, "impersonate": "chrome110", "status_code": 200, "content_type": "html", "blocked": False}
     ]
     assert payload["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_acquire_diagnostics_include_platform_family_for_real_family_url(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    html = "<html><body><h1>Jobs</h1><p>" + ("Open roles " * 80) + "</p><table class='iCIMS_JobsTable'></table></body></html>"
+
+    with patch(
+        "app.services.acquisition.acquirer._fetch_with_content_type",
+        new_callable=AsyncMock,
+        return_value=HttpFetchResult(text=html, status_code=200, content_type="html"),
+    ):
+        result = await acquire(
+            42,
+            "https://ehccareers-emory.icims.com/jobs/search?pr=0&searchRelation=keyword_all",
+            surface="job_listing",
+        )
+
+    assert result.diagnostics["curl_platform_family"] == "icims"
 
 
 @pytest.mark.asyncio
@@ -659,10 +730,62 @@ async def test_acquire_enables_stealth_only_when_anti_bot_mode_is_enabled(monkey
     assert captured == [True]
 
 
-def test_requested_fields_need_browser_normalizes_requested_terms():
-    assert _requested_fields_need_browser(
-        "<html><body><section>Q and A</section></body></html>",
-        "Q and A",
-        ["q&a"],
-        {},
-    ) is False
+@pytest.mark.asyncio
+async def test_acquire_browser_first_domain_enables_anti_bot_runtime(monkeypatch, tmp_path):
+    captured: list[bool] = []
+
+    async def _fake_acquire_once(**kwargs):
+        runtime_options = kwargs.get("runtime_options")
+        captured.append(bool(getattr(runtime_options, "anti_bot_enabled", False)))
+        return type("Result", (), {
+            "html": "<html>ok</html>",
+            "json_data": None,
+            "content_type": "html",
+            "method": "playwright",
+            "artifact_path": "",
+            "diagnostics_path": "",
+            "network_payloads": [],
+            "diagnostics": {},
+        })()
+
+    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    result = await acquire(
+        42,
+        "https://www.reverb.com/marketplace?product_type=electric-guitars",
+    )
+
+    assert result.method == "playwright"
+    assert captured == [True]
+
+
+@pytest.mark.asyncio
+async def test_acquire_prefer_browser_profile_enables_anti_bot_runtime(monkeypatch, tmp_path):
+    captured: list[bool] = []
+
+    async def _fake_acquire_once(**kwargs):
+        runtime_options = kwargs.get("runtime_options")
+        captured.append(bool(getattr(runtime_options, "anti_bot_enabled", False)))
+        return type("Result", (), {
+            "html": "<html>ok</html>",
+            "json_data": None,
+            "content_type": "html",
+            "method": "playwright",
+            "artifact_path": "",
+            "diagnostics_path": "",
+            "network_payloads": [],
+            "diagnostics": {},
+        })()
+
+    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    result = await acquire(
+        42,
+        "https://example.com/products/widget",
+        acquisition_profile={"prefer_browser": True},
+    )
+
+    assert result.method == "playwright"
+    assert captured == [True]

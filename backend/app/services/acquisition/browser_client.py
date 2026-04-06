@@ -25,7 +25,6 @@ from app.services.acquisition.cookie_store import (
     save_cookies_payload,
 )
 from app.services.pipeline_config import (
-    ACCORDION_EXPAND_MAX,
     ACCORDION_EXPAND_WAIT_MS,
     BLOCK_MIN_HTML_LENGTH,
     BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS,
@@ -34,7 +33,6 @@ from app.services.pipeline_config import (
     BROWSER_ERROR_RETRY_DELAY_MS,
     BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
     BROWSER_NAVIGATION_LOAD_TIMEOUT_MS,
-    BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS,
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
     CHALLENGE_POLL_INTERVAL_MS,
     CHALLENGE_WAIT_MAX_SECONDS,
@@ -59,7 +57,6 @@ from app.services.pipeline_config import (
     SURFACE_READINESS_MAX_WAIT_MS,
     SURFACE_READINESS_POLL_MS,
 )
-from app.services.requested_field_policy import requested_field_terms
 from app.services.url_safety import validate_public_target
 
 logger = logging.getLogger(__name__)
@@ -328,15 +325,9 @@ async def _fetch_rendered_html_attempt(
             if surface_readiness is not None:
                 result.diagnostics["surface_readiness"] = surface_readiness
         await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
-        await _expand_accordions(page, checkpoint=checkpoint)
-        field_trigger_selectors = await _open_requested_field_sections(
-            page,
-            requested_fields=requested_fields,
-            requested_field_selectors=requested_field_selectors,
-            checkpoint=checkpoint,
-        )
-        if field_trigger_selectors:
-            result.diagnostics["field_trigger_selectors"] = field_trigger_selectors
+        interactive_expansion = await expand_all_interactive_elements(page, checkpoint=checkpoint)
+        if interactive_expansion:
+            result.diagnostics["interactive_expansion"] = interactive_expansion
         await _flatten_shadow_dom(page)
 
         traversal_started_at = time.perf_counter()
@@ -607,13 +598,7 @@ async def _collect_paginated_html(
             )
         await _dismiss_cookie_consent(page, checkpoint=checkpoint)
         await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
-        await _expand_accordions(page, checkpoint=checkpoint)
-        await _open_requested_field_sections(
-            page,
-            requested_fields=[],
-            requested_field_selectors={},
-            checkpoint=checkpoint,
-        )
+        await expand_all_interactive_elements(page, checkpoint=checkpoint)
         await _flatten_shadow_dom(page)
         await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
     return "\n".join(fragments)
@@ -840,189 +825,45 @@ async def _click_and_observe_next_page(
     return ""
 
 
-async def _expand_accordions(
+async def expand_all_interactive_elements(
     page,
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> None:
+) -> dict[str, object]:
     try:
         expanded_count = await page.evaluate(
             """
-            (maxExpand) => {
+            () => {
                 let count = 0;
-                const collapsed = document.querySelectorAll(
-                    '[aria-expanded="false"], ' +
-                    'details:not([open]), ' +
-                    '[data-accordion-heading]:not([aria-expanded="true"]), ' +
-                    '[role="tab"][aria-selected="false"]'
-                );
-                for (const el of collapsed) {
-                    if (el.tagName === 'DETAILS') {
-                        el.setAttribute('open', '');
+                const seen = new Set();
+                const targets = [
+                    ...document.querySelectorAll('details > summary'),
+                    ...document.querySelectorAll('[aria-expanded="false"]'),
+                    ...document.querySelectorAll('button[data-toggle]'),
+                    ...document.querySelectorAll('[role="tab"]'),
+                ];
+                for (const el of targets) {
+                    if (!(el instanceof Element) || seen.has(el)) continue;
+                    seen.add(el);
+                    try {
+                        el.click();
                         count++;
-                    } else {
-                        try { el.click(); count++; } catch (error) {}
-                    }
-                    if (count >= maxExpand) break;
+                    } catch (error) {}
                 }
                 return count;
             }
             """,
-            ACCORDION_EXPAND_MAX,
         )
         if expanded_count:
-            logger.debug("Expanded %d accordion/tab sections", expanded_count)
+            logger.debug("Expanded %d interactive elements", expanded_count)
             await _cooperative_sleep_ms(ACCORDION_EXPAND_WAIT_MS, checkpoint=checkpoint)
+        return {
+            "actions": ["expand_all_interactive_elements"],
+            "expanded_count": int(expanded_count or 0),
+        }
     except Exception:
-        logger.debug("Accordion expansion failed (non-critical)", exc_info=True)
-
-
-async def _open_requested_field_sections(
-    page,
-    *,
-    requested_fields: list[str],
-    requested_field_selectors: dict[str, list[dict]],
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> dict[str, list[dict]]:
-    plans: list[dict[str, object]] = []
-    for field_name in requested_fields:
-        normalized_field = str(field_name or "").strip().lower()
-        if not normalized_field:
-            continue
-        plans.append({
-            "field_name": normalized_field,
-            "terms": requested_field_terms(normalized_field),
-            "selectors": [
-                {
-                    "css_selector": str(row.get("css_selector") or "").strip() or None,
-                    "xpath": str(row.get("xpath") or "").strip() or None,
-                }
-                for row in (requested_field_selectors.get(normalized_field) or [])
-                if isinstance(row, dict)
-            ],
-        })
-    if not plans:
-        return {}
-
-    try:
-        clicked_rows = await page.evaluate(
-            """
-            (fieldPlans) => {
-                const normalize = (value) =>
-                    String(value || '')
-                        .toLowerCase()
-                        .replace(/&/g, ' and ')
-                        .replace(/[_-]+/g, ' ')
-                        .replace(/\\s+/g, ' ')
-                        .trim();
-                const roots = [document];
-                const queue = [document];
-                const seen = new Set([document]);
-                while (queue.length) {
-                    const root = queue.shift();
-                    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-                    let current = walker.currentNode;
-                    while (current) {
-                        if (current.shadowRoot && !seen.has(current.shadowRoot)) {
-                            roots.push(current.shadowRoot);
-                            queue.push(current.shadowRoot);
-                            seen.add(current.shadowRoot);
-                        }
-                        current = walker.nextNode();
-                    }
-                }
-                const gatherBySelector = (selector, xpath) => {
-                    const matches = [];
-                    if (xpath) {
-                        for (const root of roots) {
-                            try {
-                                const doc = root.ownerDocument || document;
-                                const result = doc.evaluate(xpath, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-                                for (let i = 0; i < result.snapshotLength; i += 1) {
-                                    const node = result.snapshotItem(i);
-                                    if (node && node.nodeType === Node.ELEMENT_NODE) matches.push(node);
-                                }
-                            } catch (error) {}
-                        }
-                    }
-                    if (selector) {
-                        for (const root of roots) {
-                            try { matches.push(...Array.from(root.querySelectorAll(selector))); } catch (error) {}
-                        }
-                    }
-                    return matches;
-                };
-                const selectableNodes = () => {
-                    const nodes = [];
-                    const selectors = [
-                        '[aria-controls]',
-                        '[role="tab"]',
-                        '[role="button"]',
-                        'button',
-                        'summary',
-                        '[data-accordion-heading]',
-                        '[data-tab-heading]',
-                        'a',
-                        'li',
-                        'div',
-                    ];
-                    for (const root of roots) {
-                        for (const selector of selectors) {
-                            try { nodes.push(...Array.from(root.querySelectorAll(selector))); } catch (error) {}
-                        }
-                    }
-                    return nodes;
-                };
-                const clicked = [];
-                const seenNodes = new Set();
-                for (const plan of fieldPlans) {
-                    const terms = Array.isArray(plan.terms) ? plan.terms.map(normalize).filter(Boolean) : [];
-                    let targets = [];
-                    for (const selectorPlan of (Array.isArray(plan.selectors) ? plan.selectors : [])) {
-                        targets.push(...gatherBySelector(selectorPlan.css_selector, selectorPlan.xpath));
-                    }
-                    if (!targets.length && terms.length) {
-                        const candidates = selectableNodes();
-                        targets = candidates.filter((node) => {
-                            const text = normalize(node.textContent || node.getAttribute('aria-label') || node.getAttribute('title') || '');
-                            return terms.some((term) => term && text.includes(term));
-                        });
-                    }
-                    for (const node of targets) {
-                        if (!(node instanceof Element) || seenNodes.has(node)) continue;
-                        seenNodes.add(node);
-                        try { node.click(); } catch (error) { continue; }
-                        clicked.push({
-                            field_name: plan.field_name,
-                            css_selector: null,
-                            xpath: null,
-                            regex: null,
-                            status: 'clicked',
-                            sample_value: normalize(node.textContent || ''),
-                            source: 'requested_field_section',
-                        });
-                        break;
-                    }
-                }
-                return clicked;
-            }
-            """,
-            plans,
-        )
-        if clicked_rows:
-            await _cooperative_sleep_ms(ACCORDION_EXPAND_WAIT_MS, checkpoint=checkpoint)
-        selectors: dict[str, list[dict]] = {}
-        for row in clicked_rows or []:
-            if not isinstance(row, dict):
-                continue
-            field_name = str(row.get("field_name") or "").strip().lower()
-            if not field_name:
-                continue
-            selectors.setdefault(field_name, []).append(row)
-        return selectors
-    except Exception:
-        logger.debug("Requested field section expansion failed (non-critical)", exc_info=True)
-        return {}
+        logger.debug("Interactive element expansion failed (non-critical)", exc_info=True)
+    return {}
 
 
 async def _flatten_shadow_dom(page) -> None:
