@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from json import loads as parse_json
 
 from bs4 import BeautifulSoup
 
@@ -36,7 +37,7 @@ class WalmartAdapter(BaseAdapter):
         node = soup.select_one("script#__NEXT_DATA__")
         if node and node.string:
             try:
-                return json.loads(node.string)
+                return parse_json(node.string)
             except json.JSONDecodeError:
                 pass
         return {}

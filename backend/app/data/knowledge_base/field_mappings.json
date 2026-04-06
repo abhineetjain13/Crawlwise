@@ -1,8 +1,0 @@
-{
-  "example.com": {
-    "ecommerce_detail": {
-      "wire_gauge": "wire_gauge",
-      "material": "materials"
-    }
-  }
-}

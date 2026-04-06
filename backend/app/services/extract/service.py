@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from json import loads as parse_json
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -48,7 +49,11 @@ from app.services.pipeline_config import (
     SEMANTIC_AGGREGATE_SEPARATOR,
     SOURCE_RANKING,
 )
-from app.services.requested_field_policy import expand_requested_fields, normalize_requested_field
+from app.services.requested_field_policy import (
+    expand_requested_fields,
+    normalize_requested_field,
+    requested_field_terms,
+)
 from app.services.semantic_detail_extractor import extract_semantic_detail_data, resolve_requested_field_values
 from app.services.knowledge_base.store import get_canonical_fields, get_domain_mapping, get_selector_defaults
 from app.services.xpath_service import build_absolute_xpath, extract_selector_value
@@ -255,6 +260,19 @@ def extract_candidates(
             source_trace[field_name] = filtered_rows
 
     target_fields = set(target_fields)
+    if (
+        "additional_images" in target_fields
+        and "additional_images" not in candidates
+        and candidates.get("image_url")
+    ):
+        mirrored_rows = [
+            {**row, "value": row.get("value")}
+            for row in candidates["image_url"]
+            if row.get("value") not in (None, "", [], {})
+        ]
+        if mirrored_rows:
+            candidates["additional_images"] = mirrored_rows
+            source_trace["additional_images"] = mirrored_rows
     candidates = _clean_candidate_field_map(candidates, target_fields=target_fields, surface=surface)
     source_trace = {field_name: candidates[field_name] for field_name in candidates}
 
@@ -661,6 +679,11 @@ def _build_label_value_text_sources(
             _append_text(node.get_text("\n", strip=True))
             break
 
+    for payload in manifest.expanded_sections:
+        if isinstance(payload, dict):
+            _append_text(payload.get("heading"))
+            _append_text(payload.get("text"))
+
     return text_sources
 
 
@@ -894,7 +917,7 @@ def _parse_json_like_value(value: str) -> dict | list | None:
     if candidate[:1] not in "{[":
         return None
     try:
-        parsed = json.loads(candidate)
+        parsed = parse_json(candidate)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, (dict, list)) else None
@@ -1289,8 +1312,17 @@ def _normalize_size_candidate(value: str) -> str | None:
 
 
 def _structured_manifest_candidates(manifest: DiscoveryManifest, field_name: str) -> list[dict]:
+    if field_name == "additional_images" and manifest.gallery_media:
+        gallery_urls = [
+            _normalized_candidate_text(item.get("src"))
+            for item in manifest.gallery_media
+            if isinstance(item, dict) and _normalized_candidate_text(item.get("src"))
+        ]
+        if gallery_urls:
+            return [{"value": ", ".join(dict.fromkeys(gallery_urls)), "source": "gallery_media"}]
     if field_name not in {"specifications", "dimensions"}:
-        return []
+        section_value = _extract_expanded_section_value(manifest.expanded_sections, field_name)
+        return [{"value": section_value, "source": "expanded_section"}] if section_value else []
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
     sources: list[tuple[str, object]] = _structured_manifest_sources(manifest)
@@ -1307,8 +1339,26 @@ def _structured_manifest_candidates(manifest: DiscoveryManifest, field_name: str
     return rows
 
 
+def _extract_expanded_section_value(expanded_sections: list[dict], field_name: str) -> str | None:
+    if not expanded_sections:
+        return None
+    terms = requested_field_terms(field_name)
+    if not terms:
+        return None
+    for payload in expanded_sections:
+        if not isinstance(payload, dict):
+            continue
+        heading = _normalized_candidate_text(payload.get("heading"))
+        text = _normalized_candidate_text(payload.get("text"))
+        haystack = f"{heading} {text}".lower().strip()
+        if not haystack:
+            continue
+        if any(term in haystack for term in terms):
+            return text or heading or None
+    return None
+
+
 def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
-    sections = semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
     specifications = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
     aggregates = semantic.get("aggregates") if isinstance(semantic.get("aggregates"), dict) else {}
     table_groups = semantic.get("table_groups") if isinstance(semantic.get("table_groups"), list) else []
@@ -1495,8 +1545,7 @@ def _normalize_product_detail_payload(detail: dict, *, base_url: str) -> dict[st
         images = _extract_image_urls(detail.get("variants"), base_url=base_url)
     if images:
         record["image_url"] = images[0]
-        if len(images) > 1:
-            record["additional_images"] = ", ".join(images[1:])
+        record["additional_images"] = ", ".join(images[1:] if len(images) > 1 else images)
 
     attributes = detail.get("attributes")
     if isinstance(attributes, list):

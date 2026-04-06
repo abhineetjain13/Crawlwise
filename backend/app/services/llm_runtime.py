@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from json import loads as parse_json
 from dataclasses import dataclass
 from decimal import Decimal
 from string import Template
@@ -487,7 +488,7 @@ def _parse_json_object(raw_text: str) -> dict | None:
     if start == -1 or end < start:
         return None
     try:
-        payload = json.loads(raw_text[start:end + 1])
+        payload = parse_json(raw_text[start:end + 1])
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
@@ -499,7 +500,7 @@ def _parse_json_array(raw_text: str) -> list | None:
     if start == -1 or end < start:
         return None
     try:
-        payload = json.loads(raw_text[start:end + 1])
+        payload = parse_json(raw_text[start:end + 1])
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, list) else None
@@ -674,7 +675,7 @@ def _trim_prompt_section_body(body: str, budget: int, placeholder: str) -> str:
         return stripped
     if stripped.startswith(("{", "[")):
         try:
-            parsed = json.loads(stripped)
+            parsed = parse_json(stripped)
         except json.JSONDecodeError:
             pass
         else:

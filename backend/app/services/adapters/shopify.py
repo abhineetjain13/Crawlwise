@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from json import loads as parse_json
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import urljoin, urlparse
 
@@ -131,7 +132,7 @@ class ShopifyAdapter(BaseAdapter):
         match = re.search(pattern, html, re.DOTALL)
         if match:
             try:
-                meta = json.loads(match.group(1))
+                meta = parse_json(match.group(1))
                 product = meta.get("product", {})
                 if product.get("title"):
                     records.append({

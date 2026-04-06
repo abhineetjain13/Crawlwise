@@ -6,7 +6,6 @@ import json
 from typing import Annotated
 from io import StringIO
 from functools import lru_cache
-from pathlib import Path
 from html import unescape
 import re
 
@@ -19,6 +18,7 @@ from app.models.crawl import CrawlRecord
 from app.models.user import User
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.crawl import CrawlRecordProvenanceResponse, CrawlRecordResponse
+from app.services.config.selectors import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
 from app.services.crawl_service import get_run_records
 
 router = APIRouter(tags=["records"])
@@ -37,9 +37,7 @@ RECORD_NOT_FOUND_RESPONSE = {
 RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
-MARKDOWN_VIEW_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent / "data" / "knowledge_base" / "markdown-view.json"
-)
+_FALLBACK_INTERNAL_FIELDS = frozenset({"page_markdown", "table_markdown", "record_type"})
 
 
 @router.get("/api/crawls/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
@@ -121,6 +119,27 @@ async def export_csv(
     )
 
 
+@router.get("/api/crawls/{run_id}/export/tables.csv", responses=RUN_NOT_FOUND_RESPONSE)
+async def export_tables_csv(
+    run_id: int,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> StreamingResponse:
+    from app.services.crawl_service import get_run
+    run = await get_run(session, run_id)
+    if run is None or (_.role != "admin" and run.user_id != _.id):
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    metadata = await _collect_export_metadata(session, run_id)
+    return StreamingResponse(
+        _stream_export_tables_csv(session, run_id),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=run-{run_id}-tables.csv",
+            **_export_headers(metadata),
+        },
+    )
+
+
 @router.get("/api/crawls/{run_id}/export/markdown", responses=RUN_NOT_FOUND_RESPONSE)
 async def export_markdown(
     run_id: int,
@@ -137,6 +156,27 @@ async def export_markdown(
         media_type="text/markdown; charset=utf-8",
         headers={
             "Content-Disposition": f"attachment; filename=run-{run_id}.md",
+            **_export_headers(metadata),
+        },
+    )
+
+
+@router.get("/api/crawls/{run_id}/export/artifacts.json", responses=RUN_NOT_FOUND_RESPONSE)
+async def export_artifacts_json(
+    run_id: int,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> StreamingResponse:
+    from app.services.crawl_service import get_run
+    run = await get_run(session, run_id)
+    if run is None or (_.role != "admin" and run.user_id != _.id):
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    metadata = await _collect_export_metadata(session, run_id)
+    return StreamingResponse(
+        _stream_export_artifacts_json(session, run_id),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f"attachment; filename=run-{run_id}-artifacts.json",
             **_export_headers(metadata),
         },
     )
@@ -219,10 +259,14 @@ async def _stream_export_json(session: AsyncSession, run_id: int):
 
 
 async def _stream_export_csv(session: AsyncSession, run_id: int):
+    rows, _ = await _collect_export_rows(session, run_id)
+    cleaned_records = [_clean_export_data(row.data if isinstance(row.data, dict) else {}) for row in rows]
+    structured_rows = [row for row in cleaned_records if row]
+    if not structured_rows:
+        return
     fieldnames: set[str] = set()
-    async for row in _stream_export_rows(session, run_id):
-        cleaned = _clean_export_data(row.data)
-        fieldnames.update(cleaned.keys())
+    for row in structured_rows:
+        fieldnames.update(row.keys())
     ordered_fieldnames = sorted(fieldnames)
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=ordered_fieldnames, extrasaction="ignore")
@@ -230,8 +274,32 @@ async def _stream_export_csv(session: AsyncSession, run_id: int):
     yield buffer.getvalue()
     buffer.seek(0)
     buffer.truncate(0)
-    async for row in _stream_export_rows(session, run_id):
-        writer.writerow(_clean_export_data(row.data))
+    for row in structured_rows:
+        writer.writerow(row)
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+
+
+async def _stream_export_tables_csv(session: AsyncSession, run_id: int):
+    rows, _ = await _collect_export_rows(session, run_id)
+    async for chunk in _stream_table_rows_csv(_collect_table_export_rows(rows)):
+        yield chunk
+
+
+async def _stream_table_rows_csv(table_rows: list[dict]) :
+    fieldnames: set[str] = set()
+    for row in table_rows:
+        fieldnames.update(row.keys())
+    ordered_fieldnames = sorted(fieldnames)
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=ordered_fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    yield buffer.getvalue()
+    buffer.seek(0)
+    buffer.truncate(0)
+    for row in table_rows:
+        writer.writerow(row)
         yield buffer.getvalue()
         buffer.seek(0)
         buffer.truncate(0)
@@ -264,11 +332,132 @@ async def _stream_export_markdown(session: AsyncSession, run_id: int):
         first = False
 
 
+async def _stream_export_artifacts_json(session: AsyncSession, run_id: int):
+    rows, _ = await _collect_export_rows(session, run_id)
+    bundles = [_record_artifact_bundle(row) for row in rows]
+    yield json.dumps(bundles, indent=2)
+
+
 def _clean_export_data(data: dict) -> dict:
     """Strip empty/null values and internal keys from export data."""
     return {
         k: v for k, v in data.items()
-        if v not in (None, "", [], {}) and not str(k).startswith("_")
+        if (
+            v not in (None, "", [], {})
+            and not str(k).startswith("_")
+            and str(k) not in _FALLBACK_INTERNAL_FIELDS
+        )
+    }
+
+
+def _collect_table_export_rows(rows: list[CrawlRecord]) -> list[dict]:
+    flattened: list[dict] = []
+    for row in rows:
+        for table_row in _artifact_table_rows(row):
+            flattened.append(table_row)
+    return flattened
+
+
+def _artifact_table_rows(row: CrawlRecord) -> list[dict]:
+    legacy_rows = _legacy_fallback_markdown_rows(row)
+    if legacy_rows:
+        return legacy_rows
+    source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
+    manifest_trace = source_trace.get("manifest_trace") if isinstance(source_trace.get("manifest_trace"), dict) else {}
+    tables = manifest_trace.get("tables") if isinstance(manifest_trace.get("tables"), list) else []
+    flattened: list[dict] = []
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        headers = table.get("headers") if isinstance(table.get("headers"), list) else []
+        header_labels = [
+            str((cell.get("text") if isinstance(cell, dict) else "") or "").strip() or f"column_{index + 1}"
+            for index, cell in enumerate(headers)
+        ]
+        for row_index, table_row in enumerate(table.get("rows") or [], start=1):
+            if not isinstance(table_row, dict):
+                continue
+            cells = table_row.get("cells") if isinstance(table_row.get("cells"), list) else []
+            payload: dict[str, object] = {
+                "record_id": row.id,
+                "source_url": row.source_url,
+                "table_index": table.get("table_index"),
+                "table_caption": table.get("caption"),
+                "table_section_title": table.get("section_title"),
+                "table_row_index": table_row.get("row_index") or row_index,
+            }
+            for index, cell in enumerate(cells):
+                if not isinstance(cell, dict):
+                    continue
+                label = header_labels[index] if index < len(header_labels) else f"column_{index + 1}"
+                payload[label] = cell.get("text")
+            flattened.append({k: v for k, v in payload.items() if v not in (None, "", [], {})})
+    return flattened
+
+
+def _legacy_fallback_markdown_rows(row: CrawlRecord) -> list[dict]:
+    source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
+    if str(source_trace.get("type") or "") != "listing_fallback":
+        return []
+    data = row.data if isinstance(row.data, dict) else {}
+    markdown = _stringify_markdown_value(data.get("page_markdown"))
+    if not markdown:
+        return []
+    rows: list[dict] = []
+    current: dict[str, object] | None = None
+    for raw_line in markdown.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^## \[(.+?)\]\((https?://[^)]+)\)$", line)
+        if match:
+            if current:
+                rows.append(current)
+            current = {
+                "record_id": row.id,
+                "source_url": row.source_url,
+                "table_caption": "Fallback listing rows",
+                "title": match.group(1).strip(),
+                "url": match.group(2).strip(),
+            }
+            continue
+        if current is not None and "description" not in current:
+            current["description"] = line
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
+    raw_data = row.data if isinstance(row.data, dict) else {}
+    source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
+    manifest_trace = source_trace.get("manifest_trace") if isinstance(source_trace.get("manifest_trace"), dict) else {}
+    cleaned = _clean_export_data(raw_data)
+    page_summary = {
+        "record_id": row.id,
+        "source_url": row.source_url,
+        "title": cleaned.get("title") or raw_data.get("title"),
+        "fallback_type": source_trace.get("type"),
+        "markdown_excerpt": _stringify_markdown_value(raw_data.get("page_markdown"))[:500] or None,
+    }
+    evidence_refs = {
+        "json_ld_count": len(manifest_trace.get("json_ld") or []) if isinstance(manifest_trace.get("json_ld"), list) else 0,
+        "table_count": len(manifest_trace.get("tables") or []) if isinstance(manifest_trace.get("tables"), list) else 0,
+        "gallery_media_count": len(manifest_trace.get("gallery_media") or []) if isinstance(manifest_trace.get("gallery_media"), list) else 0,
+        "expanded_sections_count": len(manifest_trace.get("expanded_sections") or []) if isinstance(manifest_trace.get("expanded_sections"), list) else 0,
+        "activation_present": bool(manifest_trace.get("evidence_context")),
+    }
+    return {
+        "record_id": row.id,
+        "source_url": row.source_url,
+        "structured_record": cleaned or None,
+        "table_rows": _artifact_table_rows(row) or None,
+        "page_summary": {k: v for k, v in page_summary.items() if v not in (None, "", [], {})} or None,
+        "markdown": {
+            "page_markdown": raw_data.get("page_markdown"),
+            "table_markdown": raw_data.get("table_markdown"),
+        } if raw_data.get("page_markdown") or raw_data.get("table_markdown") else None,
+        "evidence_refs": evidence_refs,
     }
 
 
@@ -281,11 +470,18 @@ def _export_headers(metadata: dict[str, int | bool]) -> dict[str, str]:
 
 
 def _record_to_markdown(row: CrawlRecord) -> str:
-    data = _clean_export_data(row.data or {})
+    raw_data = row.data if isinstance(row.data, dict) else {}
+    data = _clean_export_data(raw_data)
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
     semantic_sections = semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
     semantic_specs = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
+
+    if str(source_trace.get("type") or "") == "listing_fallback":
+        title = _stringify_markdown_value(raw_data.get("title")) or row.source_url or f"Record {row.id}"
+        page_markdown = _stringify_markdown_value(raw_data.get("page_markdown"))
+        if page_markdown:
+            return page_markdown if page_markdown.lstrip().startswith("#") else f"# {title}\n\n{page_markdown}"
 
     title = _stringify_markdown_value(data.get("title")) or row.source_url or f"Record {row.id}"
     lines: list[str] = [f"# {title}"]
@@ -309,6 +505,7 @@ def _record_to_markdown(row: CrawlRecord) -> str:
             rendered_section_keys.add(normalized_field)
             continue
         scalar_rows.append((_humanize_field_name(field_name), raw_value))
+        rendered_section_keys.add(normalized_field)
 
     if scalar_rows:
         lines.extend(["", "## Fields", ""])
@@ -400,11 +597,7 @@ def _humanize_field_name(value: object) -> str:
 
 @lru_cache(maxsize=1)
 def _markdown_long_form_fields() -> frozenset[str]:
-    try:
-        payload = json.loads(MARKDOWN_VIEW_CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return frozenset()
-    rows = payload.get("long_form_fields") if isinstance(payload, dict) else []
+    rows = MARKDOWN_VIEW.get("long_form_fields") if isinstance(MARKDOWN_VIEW, dict) else []
     return frozenset(
         str(value).strip().lower()
         for value in (rows if isinstance(rows, list) else [])
@@ -414,6 +607,4 @@ def _markdown_long_form_fields() -> frozenset[str]:
 
 @lru_cache(maxsize=1)
 def _discoverist_schema() -> tuple[str, ...]:
-    schema_path = Path(__file__).resolve().parent.parent / "data" / "knowledge_base" / "discoverist_schema.json"
-    payload = json.loads(schema_path.read_text(encoding="utf-8"))
-    return tuple(str(field_name) for field_name in payload if str(field_name).strip())
+    return tuple(str(field_name) for field_name in DISCOVERIST_SCHEMA if str(field_name).strip())

@@ -1,4 +1,0 @@
-{
-  "detail_core_fields": ["title", "price", "brand"],
-  "listing_core_fields": ["title"]
-}

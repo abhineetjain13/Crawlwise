@@ -6,6 +6,7 @@ import hashlib
 import json
 import re as _re
 import time
+from json import loads as parse_json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -32,6 +33,8 @@ from app.services.pipeline_config import (
     JOB_REDIRECT_SHELL_HEADINGS,
     JOB_REDIRECT_SHELL_TITLES,
 )
+from app.services.platform_resolver import resolve_platform_family
+from app.services.requested_field_policy import requested_fields_require_browser
 
 _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset({
     "sign in",
@@ -145,13 +148,17 @@ async def acquire(
 ) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
-    runtime_options = resolve_browser_runtime_options(acquisition_profile)
-    prefer_stealth = runtime_options.warm_origin
-    
-    # Domain-based fast track: Skip curl_cffi for known problematic domains
+    profile = dict(acquisition_profile or {})
+
+    # Domain-based fast track: known problematic domains should use the
+    # hardened browser runtime, not the minimal default browser settings.
     domain = urlparse(url).netloc.lower().replace("www.", "")
-    browser_first = any(df in domain for df in BROWSER_FIRST_DOMAINS)
-    
+    browser_first = any(df in domain for df in BROWSER_FIRST_DOMAINS) or _memory_prefers_browser(profile)
+    if browser_first and "anti_bot_enabled" not in profile:
+        profile["anti_bot_enabled"] = True
+    runtime_options = resolve_browser_runtime_options(profile)
+    prefer_stealth = runtime_options.warm_origin
+
     rotator = ProxyRotator(proxy_list)
     proxy_candidates = rotator.cycle_once()
     if proxy_list and not proxy_candidates:
@@ -174,7 +181,7 @@ async def acquire(
             requested_fields=requested_fields,
             requested_field_selectors=requested_field_selectors,
             browser_first=browser_first,
-            acquisition_profile=acquisition_profile,
+            acquisition_profile=profile,
             runtime_options=runtime_options,
             checkpoint=checkpoint,
         )
@@ -305,6 +312,7 @@ async def _acquire_once(
     curl_result: AcquisitionResult | None = None
 
     if normalized.content_type == "json":
+        platform_family = resolve_platform_family(url, "")
         return AcquisitionResult(
             html=html,
             json_data=normalized.json_data,
@@ -316,12 +324,13 @@ async def _acquire_once(
                 blocked=None,
                 visible_text="",
                 content_len=None,
-                gate_phrases=False,
-                needs_browser=False,
-                adapter_hint=None,
-                proxy=proxy,
-                prefer_stealth=prefer_stealth,
-                traversal_mode=traversal_mode,
+                    gate_phrases=False,
+                    needs_browser=False,
+                    adapter_hint=None,
+                    platform_family=platform_family,
+                    proxy=proxy,
+                    prefer_stealth=prefer_stealth,
+                    traversal_mode=traversal_mode,
                 host_wait_seconds=host_wait_seconds,
                 memory_prefer_stealth=bool((acquisition_profile or {}).get("prefer_stealth")),
                 anti_bot_enabled=runtime_options.anti_bot_enabled,
@@ -345,6 +354,7 @@ async def _acquire_once(
         and (visible_len / content_len) < _JS_SHELL_VISIBLE_RATIO_MAX
     )
     adapter_hint = await _resolve_adapter_hint(url, html)
+    platform_family = resolve_platform_family(url, html)
     
     # Determine if we really need a browser.
     needs_browser = bool(
@@ -352,7 +362,7 @@ async def _acquire_once(
         or normalized.status_code in {403, 429, 503}
         or (len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN and content_len < _JS_SHELL_MIN_CONTENT_LEN)
         or gate_phrases
-        or (js_shell_detected and adapter_hint is None and len(visible_text) < 1000)
+        or (js_shell_detected and adapter_hint is None and platform_family is None and len(visible_text) < 1000)
         or _requested_fields_need_browser(
             html,
             visible_text,
@@ -364,6 +374,7 @@ async def _acquire_once(
     structured_listing_override = (
         needs_browser
         and not blocked.is_blocked
+        and not str(surface or "").strip().lower().endswith("detail")
         and _html_has_extractable_listings_from_soup(soup)
     )
     invalid_surface_page = _is_invalid_surface_page(
@@ -386,6 +397,7 @@ async def _acquire_once(
         gate_phrases=gate_phrases,
         needs_browser=needs_browser,
         adapter_hint=adapter_hint,
+        platform_family=platform_family,
         proxy=proxy,
         prefer_stealth=prefer_stealth,
         traversal_mode=traversal_mode,
@@ -718,7 +730,7 @@ def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
     for node in soup.select("script[type='application/ld+json']"):
         raw = node.string or node.get_text(" ", strip=True) or ""
         try:
-            payload = json.loads(raw)
+            payload = parse_json(raw)
         except (json.JSONDecodeError, TypeError):
             continue
         product_count += _json_ld_listing_count(payload)
@@ -812,10 +824,10 @@ def _requested_fields_need_browser(
     """
     if not requested_fields:
         return False
-    # Only escalate if a dynamic interaction/selector is registered
-    if any(requested_field_selectors.get(str(f_name or "").strip().lower()) for f_name in requested_fields):
-        return True
-    return False
+    return requested_fields_require_browser(
+        requested_fields,
+        requested_field_selectors=requested_field_selectors,
+    )
 
 
 def _artifact_path(run_id: int, url: str) -> Path:
@@ -901,6 +913,7 @@ def _build_curl_diagnostics(
     gate_phrases: bool,
     needs_browser: bool,
     adapter_hint: str | None,
+    platform_family: str | None,
     proxy: str | None,
     prefer_stealth: bool,
     traversal_mode: str | None,
@@ -922,6 +935,7 @@ def _build_curl_diagnostics(
         "curl_gate_phrases": gate_phrases,
         "curl_needs_browser": needs_browser,
         "curl_adapter_hint": adapter_hint,
+        "curl_platform_family": platform_family,
         "traversal_mode": traversal_mode,
         "proxy_used": bool(proxy),
         "prefer_stealth": prefer_stealth,

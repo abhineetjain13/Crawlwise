@@ -6,6 +6,7 @@ import json
 from datetime import UTC
 from email.utils import parsedate_to_datetime
 import time
+from json import loads as parse_json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -102,8 +103,7 @@ def _build_attempt_order(*, url: str, allow_stealth_retry: bool, force_stealth: 
         profiles.append(stealth_profile)
     if force_stealth:
         return [stealth_profile]
-    primary_target = str(IMPERSONATION_TARGET or "").strip()
-    primary = primary_target if primary_target in profiles else profiles[0]
+    primary = profiles[0]
     ordered = [primary, *[profile for profile in profiles if profile != primary]]
     return ordered[:1] if not allow_stealth_retry else ordered
 
@@ -224,13 +224,13 @@ def _parse_content(text: str, headers: dict[str, str]) -> tuple[str, dict | list
     ct = (headers.get("content-type") or "").lower()
     if "application/json" in ct or "text/json" in ct:
         try:
-            return "json", json.loads(text) if text else None
+            return "json", parse_json(text) if text else None
         except json.JSONDecodeError:
             return "html", None
     stripped = text.lstrip()
     if stripped[:1] in {"{", "["}:
         try:
-            return "json", json.loads(text)
+            return "json", parse_json(text)
         except json.JSONDecodeError:
             return "html", None
     return "html", None

@@ -1,60 +1,22 @@
-# File-backed knowledge-base access.
 from __future__ import annotations
 
 import asyncio
-import json
-import logging
-import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[2] / "data" / "knowledge_base"
-SCHEMA_FILE = BASE_DIR / "canonical_schemas.json"
-MAPPING_FILE = BASE_DIR / "field_mappings.json"
-SELECTOR_FILE = BASE_DIR / "selector_defaults.json"
-PROMPT_FILE = BASE_DIR / "prompt_registry.json"
-PROMPTS_DIR = BASE_DIR / "prompts"
+from app.services.config.field_mappings import CANONICAL_SCHEMAS, PROMPT_REGISTRY
 
-logger = logging.getLogger(__name__)
+PROMPTS_DIR = Path(__file__).resolve().parents[2] / "data" / "knowledge_base" / "prompts"
 
 
 @dataclass
 class _KnowledgeBaseCache:
-    canonical_schemas: dict[str, list[str]] = field(default_factory=dict)
+    canonical_schemas: dict[str, list[str]] = field(default_factory=lambda: deepcopy(CANONICAL_SCHEMAS))
     field_mappings: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
     selector_defaults: dict[str, dict[str, list[dict]]] = field(default_factory=dict)
-    prompt_registry: dict[str, dict] = field(default_factory=dict)
+    prompt_registry: dict[str, dict] = field(default_factory=lambda: deepcopy(PROMPT_REGISTRY))
     prompt_files: dict[str, str] = field(default_factory=dict)
-
-
-def _load_json(path: Path, fallback: dict | list) -> dict | list:
-    if not path.exists():
-        return fallback
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _stage_json_temp(path: Path, payload: dict | list) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, indent=2)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    return temp_path
-
-
-def _write_json(path: Path, payload: dict | list) -> None:
-    temp_path = _stage_json_temp(path, payload)
-    try:
-        os.replace(temp_path, path)
-    except Exception:
-        try:
-            temp_path.unlink()
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def _load_prompt_files() -> dict[str, str]:
@@ -62,44 +24,15 @@ def _load_prompt_files() -> dict[str, str]:
         return {}
     prompt_files: dict[str, str] = {}
     for path in PROMPTS_DIR.rglob("*"):
-        if not path.is_file():
-            continue
-        prompt_files[path.relative_to(PROMPTS_DIR).as_posix()] = path.read_text(encoding="utf-8")
+        if path.is_file():
+            prompt_files[path.relative_to(PROMPTS_DIR).as_posix()] = path.read_text(encoding="utf-8")
     return prompt_files
 
 
-def load_selector_defaults_from_disk() -> dict[str, dict[str, list[dict]]]:
-    raw = dict(_load_json(SELECTOR_FILE, {}))
-    normalized: dict[str, dict[str, list[dict]]] = {}
-    for domain, domain_rows in raw.items():
-        if not isinstance(domain_rows, dict):
-            continue
-        normalized[domain] = {}
-        for field_name, rows in domain_rows.items():
-            if not isinstance(rows, list):
-                continue
-            normalized_rows = [_normalize_selector_row(row) for row in rows]
-            normalized[domain][field_name] = [row for row in normalized_rows if row]
-    return normalized
-
-
 def _build_cache() -> _KnowledgeBaseCache:
-    return _KnowledgeBaseCache(
-        canonical_schemas=dict(_load_json(SCHEMA_FILE, {})),
-        field_mappings=dict(_load_json(MAPPING_FILE, {})),
-        selector_defaults=load_selector_defaults_from_disk(),
-        prompt_registry=dict(_load_json(PROMPT_FILE, {})),
-        prompt_files=_load_prompt_files(),
-    )
-
-
-async def _persist_json(path: Path, payload: dict | list) -> None:
-    snapshot = deepcopy(payload)
-    try:
-        await asyncio.to_thread(_write_json, path, snapshot)
-    except Exception:
-        logger.exception("Failed to persist knowledge-base payload", extra={"path": str(path)})
-        raise
+    cache = _KnowledgeBaseCache()
+    cache.prompt_files = _load_prompt_files()
+    return cache
 
 
 def load_canonical_schemas() -> dict[str, list[str]]:
@@ -121,10 +54,7 @@ async def save_canonical_fields(surface: str, fields: list[str]) -> list[str]:
                 continue
             merged.append(value)
             seen.add(value)
-        next_schemas = deepcopy(_CACHE.canonical_schemas)
-        next_schemas[surface] = merged
-        await _persist_json(SCHEMA_FILE, next_schemas)
-        _CACHE.canonical_schemas = next_schemas
+        _CACHE.canonical_schemas[surface] = merged
         return merged
 
 
@@ -142,7 +72,6 @@ async def save_domain_mapping(domain: str, surface: str, mapping: dict[str, str]
         domain_rows = next_mappings.setdefault(domain, {})
         current = domain_rows.setdefault(surface, {})
         current.update(mapping)
-        await _persist_json(MAPPING_FILE, next_mappings)
         _CACHE.field_mappings = next_mappings
 
 
@@ -159,17 +88,13 @@ async def save_selector_defaults(domain: str, field_name: str, values: list[dict
     async with _CACHE_LOCK:
         next_defaults = deepcopy(_CACHE.selector_defaults)
         domain_rows = next_defaults.setdefault(domain, {})
-        normalized_rows = [
-            row for row in (_normalize_selector_row(value) for value in values)
-            if row
-        ]
+        normalized_rows = [row for row in (_normalize_selector_row(value) for value in values) if row]
         if normalized_rows:
             domain_rows[field_name] = normalized_rows
         else:
             domain_rows.pop(field_name, None)
         if not domain_rows:
             next_defaults.pop(domain, None)
-        await _persist_json(SELECTOR_FILE, next_defaults)
         _CACHE.selector_defaults = next_defaults
 
 
@@ -178,25 +103,19 @@ async def save_domain_selector_defaults(domain: str, values_by_field: dict[str, 
         next_defaults = deepcopy(_CACHE.selector_defaults)
         normalized_domain_rows: dict[str, list[dict]] = {}
         for field_name, values in values_by_field.items():
-            normalized_rows = [
-                row for row in (_normalize_selector_row(value) for value in values)
-                if row
-            ]
+            normalized_rows = [row for row in (_normalize_selector_row(value) for value in values) if row]
             if normalized_rows:
                 normalized_domain_rows[field_name] = normalized_rows
         if normalized_domain_rows:
             next_defaults[domain] = normalized_domain_rows
         else:
             next_defaults.pop(domain, None)
-        await _persist_json(SELECTOR_FILE, next_defaults)
         _CACHE.selector_defaults = next_defaults
 
 
 async def clear_selector_defaults() -> None:
     async with _CACHE_LOCK:
-        next_defaults: dict[str, dict[str, list[dict]]] = {}
-        await _persist_json(SELECTOR_FILE, next_defaults)
-        _CACHE.selector_defaults = next_defaults
+        _CACHE.selector_defaults = {}
 
 
 def load_prompt_registry() -> dict[str, dict]:
@@ -214,38 +133,8 @@ def load_prompt_file(relative_path: str) -> str:
 
 async def reset_learned_state() -> None:
     async with _CACHE_LOCK:
-        empty_mappings: dict[str, dict[str, dict[str, str]]] = {}
-        empty_defaults: dict[str, dict[str, list[dict]]] = {}
-        mapping_tmp: Path | None = None
-        selector_tmp: Path | None = None
-        mapping_backup = MAPPING_FILE.with_suffix(f"{MAPPING_FILE.suffix}.bak")
-        selector_backup = SELECTOR_FILE.with_suffix(f"{SELECTOR_FILE.suffix}.bak")
-        try:
-            mapping_tmp = await asyncio.to_thread(_stage_json_temp, MAPPING_FILE, empty_mappings)
-            selector_tmp = await asyncio.to_thread(_stage_json_temp, SELECTOR_FILE, empty_defaults)
-            for backup in (mapping_backup, selector_backup):
-                backup.unlink(missing_ok=True)
-            if MAPPING_FILE.exists():
-                await asyncio.to_thread(os.replace, MAPPING_FILE, mapping_backup)
-            if SELECTOR_FILE.exists():
-                await asyncio.to_thread(os.replace, SELECTOR_FILE, selector_backup)
-            await asyncio.to_thread(os.replace, mapping_tmp, MAPPING_FILE)
-            await asyncio.to_thread(os.replace, selector_tmp, SELECTOR_FILE)
-            mapping_backup.unlink(missing_ok=True)
-            selector_backup.unlink(missing_ok=True)
-        except Exception:
-            logger.exception("Failed to reset learned knowledge-base state atomically")
-            if mapping_tmp is not None:
-                mapping_tmp.unlink(missing_ok=True)
-            if selector_tmp is not None:
-                selector_tmp.unlink(missing_ok=True)
-            if mapping_backup.exists():
-                await asyncio.to_thread(os.replace, mapping_backup, MAPPING_FILE)
-            if selector_backup.exists():
-                await asyncio.to_thread(os.replace, selector_backup, SELECTOR_FILE)
-            raise
-        _CACHE.field_mappings = empty_mappings
-        _CACHE.selector_defaults = empty_defaults
+        _CACHE.field_mappings = {}
+        _CACHE.selector_defaults = {}
 
 
 def _normalize_selector_row(value: object) -> dict | None:

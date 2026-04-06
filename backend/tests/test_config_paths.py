@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 
 from app.core.config import _normalize_sqlite_database_url, _resolve_project_path
+from app.services.config.selectors import CONSENT_SELECTORS as MODULE_COOKIE_CONSENT_SELECTORS
 from app.services.pipeline_config import COOKIE_CONSENT_SELECTORS
 
 
@@ -38,20 +38,10 @@ def test_cookie_consent_selectors_avoid_overbroad_accept_matches():
     assert "button:has-text('Accept All')" in COOKIE_CONSENT_SELECTORS
 
 
-def test_pipeline_config_allows_missing_cookie_consent_selector_file(monkeypatch):
+def test_pipeline_config_uses_python_selector_module():
     import app.services.pipeline_config as pipeline_config
 
-    original_exists = Path.exists
-
-    def fake_exists(path: Path) -> bool:
-        if path.name == "consent_selectors.json":
-            return False
-        return original_exists(path)
-
-    with monkeypatch.context() as patcher:
-        patcher.setattr(Path, "exists", fake_exists)
-        reloaded = importlib.reload(pipeline_config)
-        assert reloaded.COOKIE_CONSENT_SELECTORS == []
-
+    reloaded = importlib.reload(pipeline_config)
+    assert reloaded.COOKIE_CONSENT_SELECTORS == list(MODULE_COOKIE_CONSENT_SELECTORS)
     restored = importlib.reload(pipeline_config)
     assert restored.COOKIE_CONSENT_SELECTORS != []

@@ -39,10 +39,10 @@ class RemotiveAdapter(BaseAdapter):
 
     def _extract_remotive_from_html(self, html: str, url: str) -> list[dict]:
         """Extract Remotive jobs from rendered HTML (non-API path)."""
-        import json
+        from json import loads as parse_json
         # Remotive sometimes renders JSON in the page body
         try:
-            data = json.loads(html.strip())
+            data = parse_json(html.strip())
             if isinstance(data, dict):
                 jobs = data.get("jobs", [])
             elif isinstance(data, list):
@@ -73,9 +73,9 @@ class RemotiveAdapter(BaseAdapter):
 
     def _extract_remoteok_from_html(self, html: str, url: str) -> list[dict]:
         """Extract RemoteOK jobs from rendered HTML (non-API path)."""
-        import json
+        from json import loads as parse_json
         try:
-            data = json.loads(html.strip())
+            data = parse_json(html.strip())
             if isinstance(data, list):
                 jobs = data
             else:

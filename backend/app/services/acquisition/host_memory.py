@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from json import loads as parse_json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -78,7 +79,7 @@ def _load() -> dict[str, dict[str, object]]:
     if not path.exists():
         return _CACHE
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = parse_json(path.read_text(encoding="utf-8"))
     except Exception:
         logger.debug("Failed to parse host memory file at %s", path, exc_info=True)
         return _CACHE

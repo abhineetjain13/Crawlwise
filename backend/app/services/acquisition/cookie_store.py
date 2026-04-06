@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from json import loads as parse_json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -54,7 +55,7 @@ def load_cookies_for_context(domain: str) -> list[dict]:
     if path is None or not path.exists():
         return []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = parse_json(path.read_text(encoding="utf-8"))
     except Exception:
         return []
     return filter_persistable_cookies(payload, domain=domain)

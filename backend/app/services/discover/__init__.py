@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from json import loads as parse_json
 from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup, Tag
@@ -23,7 +24,10 @@ class DiscoveryManifest:
     json_ld: list[dict] = field(default_factory=list)            # rank 4: JSON-LD
     microdata: list[dict] = field(default_factory=list)          # rank 5: Microdata/RDFa
     hidden_dom: list[dict] = field(default_factory=list)
+    gallery_media: list[dict] = field(default_factory=list)
+    expanded_sections: list[dict] = field(default_factory=list)
     tables: list[dict] = field(default_factory=list)  # rank 8: HTML tables with preserved structure
+    evidence_context: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -36,7 +40,10 @@ class DiscoveryManifest:
             "json_ld": self.json_ld,
             "microdata": self.microdata,
             "hidden_dom": self.hidden_dom,
+            "gallery_media": self.gallery_media,
+            "expanded_sections": self.expanded_sections,
             "tables": self.tables,
+            "evidence_context": self.evidence_context,
         }
 
 
@@ -44,6 +51,7 @@ def discover_sources(
     html: str,
     network_payloads: list[dict] | None = None,
     adapter_records: list[dict] | None = None,
+    evidence_context: dict[str, object] | None = None,
 ) -> DiscoveryManifest:
     """Discover all structured data sources in the HTML.
 
@@ -87,9 +95,12 @@ def discover_sources(
 
     # Rank 6: hidden DOM and hidden structured data
     manifest.hidden_dom = _extract_hidden_dom(soup)
+    manifest.gallery_media = _extract_gallery_media(soup)
+    manifest.expanded_sections = _extract_expanded_sections(soup)
 
     # Rank 8: HTML tables
     manifest.tables = _extract_tables(soup)
+    manifest.evidence_context = dict(evidence_context or {})
 
     return manifest
 
@@ -125,7 +136,7 @@ def _extract_next_data(soup: BeautifulSoup) -> dict | None:
     node = soup.select_one("script#__NEXT_DATA__")
     if node and node.string:
         try:
-            return json.loads(node.string)
+            return parse_json(node.string)
         except json.JSONDecodeError:
             return None
     return None
@@ -283,6 +294,58 @@ def _extract_hidden_dom(soup: BeautifulSoup) -> list[dict]:
     return payloads
 
 
+def _extract_gallery_media(soup: BeautifulSoup) -> list[dict]:
+    selectors = (
+        "[data-gallery] img, [data-carousel] img, [class*='gallery'] img, [class*='carousel'] img, "
+        "[class*='thumbnail'] img, [class*='image'] img, main img"
+    )
+    payloads: list[dict] = []
+    seen_urls: set[str] = set()
+    for node in soup.select(selectors):
+        src = str(node.get("src") or node.get("data-src") or node.get("data-zoom-image") or "").strip()
+        if not src or src in seen_urls:
+            continue
+        seen_urls.add(src)
+        payloads.append({
+            "src": src,
+            "alt": _clean_text(node.get("alt")),
+            "title": _clean_text(node.get("title")),
+        })
+    return payloads
+
+
+def _extract_expanded_sections(soup: BeautifulSoup) -> list[dict]:
+    selectors = (
+        "details[open], [aria-expanded='true'], [role='tabpanel'], "
+        "[class*='accordion'][class*='open'], [class*='expanded'], [data-state='open']"
+    )
+    payloads: list[dict] = []
+    seen: set[str] = set()
+    for index, node in enumerate(soup.select(selectors), start=1):
+        text = _clean_text(node.get_text(" ", strip=True))
+        if len(text) < 20:
+            continue
+        heading = ""
+        summary = node.find("summary") if isinstance(node, Tag) else None
+        if summary is not None:
+            heading = _clean_text(summary.get_text(" ", strip=True))
+        if not heading:
+            heading = _clean_text(
+                str(node.get("aria-label") or node.get("title") or node.get("data-title") or "")
+            )
+        payload = {
+            "section_index": index,
+            "heading": heading or None,
+            "text": text,
+        }
+        fingerprint = json.dumps(payload, sort_keys=True, default=str)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        payloads.append(payload)
+    return payloads
+
+
 def _normalized_script_identifier(node: Tag, text: str, fingerprint: str | None = None) -> str:
     script_id = str(node.get("id") or "").strip().lower()
     if script_id:
@@ -313,7 +376,7 @@ def _parse_json_blob(text: str) -> dict | list | None:
         else:
             return None
     try:
-        parsed = json.loads(stripped)
+        parsed = parse_json(stripped)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, (dict, list)) else None
@@ -336,7 +399,7 @@ def _extract_next_bootstrap_children(text: str) -> list[str]:
         return results
     for match in re.finditer(r'"children":"((?:\\.|[^"\\])*)"', text):
         try:
-            decoded = json.loads(f'"{match.group(1)}"')
+            decoded = parse_json(f'"{match.group(1)}"')
         except json.JSONDecodeError:
             continue
         cleaned = str(decoded or "").strip()
