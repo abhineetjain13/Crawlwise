@@ -65,7 +65,6 @@ class ReviewPromotion(Base):
     surface: Mapped[str] = mapped_column(String(40))
     approved_schema: Mapped[dict] = mapped_column(JSON, default=dict)
     field_mapping: Mapped[dict] = mapped_column(JSON, default=dict)
-    selector_memory: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -22,7 +22,9 @@ from app.services.config.field_mappings import (
 from app.services.config.selectors import (
     CARD_SELECTORS as _CARD_SELECTORS,
     CONSENT_SELECTORS as _CONSENT_SELECTORS,
+    DISCOVERIST_SCHEMA as _DISCOVERIST_SCHEMA,
     DOM_PATTERNS as _DOM_PATTERNS,
+    MARKDOWN_VIEW as _MARKDOWN_VIEW,
     PAGINATION_SELECTORS as _PAGINATION_SELECTORS,
     REVIEW_CONTAINER_KEYS as _REVIEW_CONTAINER_KEYS,
 )
@@ -290,6 +292,8 @@ BLOCK_TITLE_REGEXES = _BLOCK_SIG.get("title_regexes", [])
 COOKIE_CONSENT_SELECTORS = list(_CONSENT_SELECTORS)
 COOKIE_POLICY = dict(_COOKIE_POLICY)
 REVIEW_CONTAINER_KEYS = set(_REVIEW_CONTAINER_KEYS)
+MARKDOWN_VIEW = dict(_MARKDOWN_VIEW)
+DISCOVERIST_SCHEMA = tuple(_DISCOVERIST_SCHEMA)
 JSONLD_STRUCTURAL_KEYS = frozenset(_EXTRACTION_RULES.get("jsonld_structural_keys", ["@type", "@context", "@id", "@graph", "@vocab", "@list", "@set"]))
 JSONLD_NON_PRODUCT_BLOCK_TYPES = frozenset(_EXTRACTION_RULES.get("jsonld_non_product_block_types", ["organization", "website", "webpage", "breadcrumblist", "searchaction", "sitenavigationelement", "imageobject", "videoobject", "faqpage", "howto", "person", "localbusiness", "store"]))
 PRODUCT_IDENTITY_FIELDS = frozenset(_EXTRACTION_RULES.get("product_identity_fields", ["title", "price", "sale_price", "original_price", "brand", "description", "sku", "image_url", "additional_images", "availability", "category"]))

@@ -12,7 +12,6 @@ from app.core.config import PROJECT_ROOT, settings
 from app.core.database import is_sqlite
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.llm import LLMCostLog
-from app.models.selector import Selector
 from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import reset_learned_state
@@ -83,7 +82,6 @@ async def reset_application_data(session: AsyncSession) -> dict:
         crawl_records_deleted = await session.execute(delete(CrawlRecord))
         promotions_deleted = await session.execute(delete(ReviewPromotion))
         llm_cost_deleted = await session.execute(delete(LLMCostLog))
-        selectors_deleted = await session.execute(delete(Selector))
         crawl_runs_deleted = await session.execute(delete(CrawlRun))
         if is_sqlite:
             await _reset_sqlite_sequences(session)
@@ -101,7 +99,10 @@ async def reset_application_data(session: AsyncSession) -> dict:
 
     artifacts_removed = _reset_directory(settings.artifacts_dir)
     cookies_removed = _reset_directory(settings.cookie_store_dir)
-    legacy_artifacts_removed = sum(_reset_directory(path) for path in _legacy_artifact_paths())
+    legacy_artifacts_removed = sum(
+        _reset_directory(path, create_if_missing=False)
+        for path in _legacy_artifact_paths()
+    )
     await reset_learned_state()
 
     return {
@@ -110,7 +111,6 @@ async def reset_application_data(session: AsyncSession) -> dict:
         "crawl_logs_deleted": crawl_logs_deleted.rowcount or 0,
         "review_promotions_deleted": promotions_deleted.rowcount or 0,
         "llm_cost_logs_deleted": llm_cost_deleted.rowcount or 0,
-        "selectors_deleted": selectors_deleted.rowcount or 0,
         "artifacts_removed": artifacts_removed,
         "legacy_artifacts_removed": legacy_artifacts_removed,
         "cookies_removed": cookies_removed,
@@ -118,9 +118,10 @@ async def reset_application_data(session: AsyncSession) -> dict:
     }
 
 
-def _reset_directory(path) -> int:
+def _reset_directory(path, *, create_if_missing: bool = True) -> int:
     if not path.exists():
-        path.mkdir(parents=True, exist_ok=True)
+        if create_if_missing:
+            path.mkdir(parents=True, exist_ok=True)
         return 0
     removed = 0
     for child in path.iterdir():
@@ -137,7 +138,8 @@ def _reset_directory(path) -> int:
             removed += 1
         except Exception:
             logger.exception("Failed to remove path during reset: %s", child)
-    path.mkdir(parents=True, exist_ok=True)
+    if create_if_missing:
+        path.mkdir(parents=True, exist_ok=True)
     return removed
 
 
@@ -151,7 +153,7 @@ async def _reset_sqlite_sequences(session: AsyncSession) -> None:
         text(
             """
             DELETE FROM sqlite_sequence
-            WHERE name IN ('crawl_runs', 'crawl_records', 'crawl_logs', 'review_promotions', 'selectors', 'llm_cost_log')
+            WHERE name IN ('crawl_runs', 'crawl_records', 'crawl_logs', 'review_promotions', 'llm_cost_log')
             """
         )
     )

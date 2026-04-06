@@ -102,18 +102,6 @@ class ReviewFieldChoice(BaseModel):
     selected: bool = True
 
 
-class ReviewSelectorRule(BaseModel):
-    id: int | None = None
-    field_name: str
-    css_selector: str | None = None
-    xpath: str | None = None
-    regex: str | None = None
-    status: str | None = None
-    sample_value: str | None = None
-    source: str | None = None
-    is_active: bool = True
-
-
 class ReviewResponse(BaseModel):
     run: CrawlRunResponse
     normalized_fields: list[str]
@@ -121,18 +109,12 @@ class ReviewResponse(BaseModel):
     canonical_fields: list[str]
     domain_mapping: dict[str, str]
     suggested_mapping: dict[str, str]
-    selector_memory: list[dict]
-    selector_suggestions: dict[str, list[dict]]
     records: list[CrawlRecordResponse]
 
 
 class ReviewSaveRequest(BaseModel):
     selections: list[ReviewFieldChoice]
     extra_fields: list[str] = Field(default_factory=list)
-
-
-class ReviewSelectorPreviewRequest(BaseModel):
-    selectors: list[ReviewSelectorRule] = Field(default_factory=list)
 
 
 class ReviewSaveResponse(BaseModel):
@@ -142,10 +124,6 @@ class ReviewSaveResponse(BaseModel):
     selected_fields: list[str]
     canonical_fields: list[str]
     field_mapping: dict[str, str]
-
-
-class ReviewSelectorPreviewResponse(BaseModel):
-    records: list[CrawlRecordResponse]
 
 
 class FieldCommitItem(BaseModel):

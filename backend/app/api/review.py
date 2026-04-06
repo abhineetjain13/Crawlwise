@@ -13,13 +13,11 @@ from app.schemas.crawl import (
     CrawlRecordResponse,
     CrawlRunResponse,
     ReviewResponse,
-    ReviewSelectorPreviewRequest,
-    ReviewSelectorPreviewResponse,
     ReviewSaveRequest,
     ReviewSaveResponse,
 )
 from app.services.crawl_service import get_run
-from app.services.review import build_review_payload, load_review_html, preview_selectors, save_review
+from app.services.review import build_review_payload, load_review_html, save_review
 
 router = APIRouter(prefix="/api/review", tags=["review"])
 
@@ -45,8 +43,6 @@ async def review_detail(
         canonical_fields=payload["canonical_fields"],
         domain_mapping=payload["domain_mapping"],
         suggested_mapping=payload["suggested_mapping"],
-        selector_memory=payload["selector_memory"],
-        selector_suggestions=payload["selector_suggestions"],
         records=[CrawlRecordResponse.model_validate(row, from_attributes=True) for row in payload["records"]],
     )
 
@@ -89,20 +85,3 @@ async def review_save(
     result = await save_review(session, run, selections)
     return ReviewSaveResponse.model_validate(result)
 
-
-@router.post("/{run_id}/selector-preview")
-async def review_selector_preview(
-    run_id: int,
-    payload: ReviewSelectorPreviewRequest,
-    session: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
-) -> ReviewSelectorPreviewResponse:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
-    preview = await preview_selectors(session, run_id, [row.model_dump() for row in payload.selectors])
-    if preview is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
-    return ReviewSelectorPreviewResponse(
-        records=[CrawlRecordResponse.model_validate(row) for row in preview["records"]],
-    )

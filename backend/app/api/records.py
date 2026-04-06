@@ -18,8 +18,8 @@ from app.models.crawl import CrawlRecord
 from app.models.user import User
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.crawl import CrawlRecordProvenanceResponse, CrawlRecordResponse
-from app.services.config.selectors import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
 from app.services.crawl_service import get_run_records
+from app.services.pipeline_config import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
 
 router = APIRouter(tags=["records"])
 MAX_RECORD_PAGE_SIZE = 1000
