@@ -1582,8 +1582,9 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
     rather than pure element count to avoid selecting navigation lists.
     """
     for noise_el in soup.select(
-        "aside, nav, [class*='filter'], [class*='facet'], "
-        "[class*='sidebar'], [class*='breadcrumb'], footer, header"
+        "aside, nav, [class*='filter' i], [class*='facet' i], "
+        "[class*='sidebar' i], [class*='breadcrumb' i], "
+        "[class*='navigation' i], [class*='menu' i], footer, header"
     ):
         noise_el.decompose()
 

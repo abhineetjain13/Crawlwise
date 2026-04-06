@@ -104,6 +104,7 @@ def _find_items_array(data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH)
 def _normalize_item(item: dict, page_url: str) -> dict:
     """Map an arbitrary JSON object to canonical fields."""
     record: dict = {}
+    consumed_keys: set[str] = set()
     # Flatten one level of nesting for fields like {"company": {"name": "X"}}
     flat = _flatten_one_level(item)
     list_join_fields = {
@@ -122,7 +123,8 @@ def _normalize_item(item: dict, page_url: str) -> dict:
     }
 
     for canonical, aliases in FIELD_ALIASES.items():
-        values = _find_alias_values(flat, [canonical, *aliases], max_depth=4)
+        candidate_keys = [canonical, *aliases]
+        values = _find_alias_values(flat, candidate_keys, max_depth=4)
         for value in values:
             normalized = _normalize_json_value(
                 canonical,
@@ -133,6 +135,7 @@ def _normalize_item(item: dict, page_url: str) -> dict:
             if normalized in (None, "", [], {}):
                 continue
             record[canonical] = normalized
+            consumed_keys.update(key for key in candidate_keys if key in item)
             break
 
     if "image_url" not in record and record.get("additional_images"):
@@ -154,13 +157,12 @@ def _normalize_item(item: dict, page_url: str) -> dict:
     if record.get("company") and "brand" in record and record["company"] == record["brand"]:
         record.pop("brand", None)
 
-    # Fallback: when alias matching found nothing, preserve scalar fields under
-    # their original keys so records from APIs with non-standard naming (e.g.
-    # CocktailDB's strDrink, strCategory) are not silently dropped.
-    if not record:
-        for key, value in item.items():
-            if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value):
-                record[key] = value
+    # Always preserve unmapped scalar fields under their original keys.
+    for key, value in item.items():
+        if key in consumed_keys or key.startswith("_"):
+            continue
+        if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value.strip()):
+            record[key] = value
 
     if record:
         record["_raw_item"] = item
