@@ -25,6 +25,7 @@
   "harvest_cookie_names": [],
   "harvest_name_prefixes": [],
   "harvest_name_contains": [],
+  "blocked_rules_precede_harvest": true,
   "reuse_in_http_client": true,
   "domain_overrides": {
     "your-domain.com": {
@@ -33,12 +34,9 @@
         "locale",
         "currency"
       ],
-      "harvest_cookie_names": [
-        "cf_clearance",
-        "datadome"
-      ]
+      "harvest_cookie_names": []
     }
   },
   "template": true,
-  "note": "Replace your-domain.com with the real production domain(s) before enabling domain-specific cookie overrides."
+  "note": "Replace your-domain.com with the real production domain(s) before enabling domain-specific cookie overrides. blocked_name_prefixes and blocked_name_contains always take precedence over harvest_* rules."
 }

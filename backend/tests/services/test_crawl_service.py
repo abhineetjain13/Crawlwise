@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.crawl import CrawlLog, CrawlRecord, ReviewPromotion
+from app.models.crawl import CrawlLog, CrawlRecord
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_state import set_control_request
@@ -154,7 +154,7 @@ async def test_create_crawl_run(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_normalizes_job_listing_urls_from_ecommerce_surface(
+async def test_create_crawl_run_preserves_user_requested_listing_surface_for_job_urls(
     db_session: AsyncSession, test_user
 ):
     run = await create_crawl_run(db_session, test_user.id, {
@@ -163,11 +163,11 @@ async def test_create_crawl_run_normalizes_job_listing_urls_from_ecommerce_surfa
         "surface": "ecommerce_listing",
     })
 
-    assert run.surface == "job_listing"
+    assert run.surface == "ecommerce_listing"
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_normalizes_job_detail_urls_from_ecommerce_surface(
+async def test_create_crawl_run_preserves_user_requested_detail_surface_for_job_urls(
     db_session: AsyncSession, test_user
 ):
     run = await create_crawl_run(db_session, test_user.id, {
@@ -176,7 +176,20 @@ async def test_create_crawl_run_normalizes_job_detail_urls_from_ecommerce_surfac
         "surface": "ecommerce_detail",
     })
 
-    assert run.surface == "job_detail"
+    assert run.surface == "ecommerce_detail"
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_preserves_requested_surface_for_hash_routes(
+    db_session: AsyncSession, test_user
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://practicesoftwaretesting.com/#/product/01HB",
+        "surface": "ecommerce_listing",
+    })
+
+    assert run.surface == "ecommerce_listing"
 
 
 @pytest.mark.asyncio
@@ -686,6 +699,35 @@ async def test_process_run_json_api(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_process_run_json_api_learns_and_keeps_domain_specific_fields_in_same_run(db_session: AsyncSession, test_user):
+    json_payload = {
+        "products": [
+            {"title": "Widget", "price": 12.5, "brand": "Acme", "warrantyInformation": "1 year"},
+            {"title": "Thing", "price": 8.0, "brand": "Acme", "warrantyInformation": "2 years"},
+        ]
+    }
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://dummyjson.example/products",
+        "surface": "ecommerce_listing",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq("", json_data=json_payload, content_type="json")),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+    )).scalars().all()
+    assert len(records) == 2
+    assert records[0].data["warranty_information"] == "1 year"
+    assert "warranty_information" in records[0].source_trace["schema_resolution"]["resolved_fields"]
+
+
+@pytest.mark.asyncio
 async def test_process_run_listing_no_records_fails(db_session: AsyncSession, test_user):
     """Listing page with no extractable records should be marked failed, not completed."""
     empty_listing_html = """
@@ -711,6 +753,49 @@ async def test_process_run_listing_no_records_fails(db_session: AsyncSession, te
     # Should NOT be "completed" — listing extraction failed
     assert run.status == "failed"
     assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
+
+
+@pytest.mark.asyncio
+async def test_process_run_reclassifies_detail_html_even_when_requested_surface_is_listing(
+    db_session: AsyncSession, test_user
+):
+    detail_html = """
+    <html><body>
+      <main>
+        <h1>Precision Screwdriver</h1>
+        <div class="product-meta">
+          <span class="price">$19.99</span>
+          <span class="sku">PSD-19</span>
+        </div>
+        <button>Add to cart</button>
+      </main>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/item?id=123",
+        "surface": "ecommerce_listing",
+    })
+
+    adapter = AdapterResult(
+        adapter_name="test",
+        records=[{"title": "Precision Screwdriver", "price": "$19.99", "sku": "PSD-19"}],
+    )
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 1
+
+    record = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().one()
+    assert record.data["title"] == "Precision Screwdriver"
 
 
 @pytest.mark.asyncio
@@ -885,10 +970,10 @@ async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_ex
         await process_run(db_session, run.id)
 
     record = (await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))).scalars().one()
-    assert "wire_gauge" not in record.data
-    assert record.discovered_data["review_bucket"][0]["key"] == "wire_gauge"
-    assert record.discovered_data["review_bucket"][0]["value"] == "26 AWG"
+    assert record.data["wire_gauge"] == "26 AWG"
+    assert record.discovered_data.get("review_bucket") in (None, [])
     assert record.source_trace["manifest_trace"]["tables"][0]["rows"][0]["cells"][1]["text"] == "26 AWG"
+    assert record.source_trace["schema_resolution"]["resolved_fields"]
 
 
 @pytest.mark.asyncio
@@ -1026,23 +1111,22 @@ async def test_commit_selected_fields_preserves_typed_values_and_refreshes_metad
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_reuses_domain_approved_fields(db_session: AsyncSession, test_user):
-    seed_run = await create_crawl_run(db_session, test_user.id, {
-        "run_type": "crawl",
-        "url": "https://example.com/product/seed",
-        "surface": "ecommerce_detail",
-    })
-    db_session.add(
-        ReviewPromotion(
-            run_id=seed_run.id,
-            domain="example.com",
-            surface="ecommerce_detail",
-            approved_schema={"fields": ["polyphony", "number_of_keys"]},
-            field_mapping={"polyphony": "polyphony", "number_of_keys": "number_of_keys"},
-            selector_memory={},
-        )
+async def test_create_crawl_run_reuses_domain_schema_fields_from_site_memory(db_session: AsyncSession, test_user):
+    await merge_memory(
+        db_session,
+        "example.com",
+        schemas={
+            "ecommerce_detail": {
+                "baseline_fields": ["title", "price"],
+                "fields": ["title", "price", "polyphony", "number_of_keys"],
+                "new_fields": ["polyphony", "number_of_keys"],
+                "deprecated_fields": [],
+                "source": "review",
+                "confidence": 1.0,
+                "saved_at": "2026-04-06T00:00:00+00:00",
+            }
+        },
     )
-    await db_session.commit()
 
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",

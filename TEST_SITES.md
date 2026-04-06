@@ -77,7 +77,6 @@ JS-rendered and complex HTTP listing pages. No aggressive bot protection.
 | LC04 | `https://www.adorama.com/catalog.tpl?cat=DLCAM` | HTTP | Medium | Photo/video listing, numbered pagination, inline JSON product arrays |
 
 | LC06 | `https://www.uline.com/BL_8421/Boxes` | HTTP | Medium | Packaging catalog, table-based layout, variant data in DOM |
-| LC07 | `https://www.webstaurantstore.com/list/191/commercial-refrigerators.html` | HTTP | Medium | Commercial equipment, paginated, spec summaries in card DOM |
 | LC08 | `https://www.autozone.com/filters-and-pcv/oil-filter` | Browser | Medium | Auto parts, vehicle fitment filter, nested window state JSON |
 | LC10 | `https://www.chewy.com/b/dry-dog-food-294` | Browser | Medium | JS-rendered product cards, ingredient previews in listing |
 | LC12 | `https://www.backmarket.com/en-us/l/smartphones/6b74ac09-dc46-4c8e-a5a3-5a2f98e53aec` | Browser | Medium | Refurbished marketplace, grade taxonomy, JSON-LD ProductList |

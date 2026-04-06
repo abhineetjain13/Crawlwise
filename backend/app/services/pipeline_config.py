@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 _KB_DIR = Path(__file__).resolve().parents[1] / "data" / "knowledge_base"
 
@@ -24,6 +25,54 @@ def _load(filename: str, fallback: dict | list) -> dict | list:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return fallback
+
+
+def _currency_symbol_class(symbol_map: dict[object, object]) -> str:
+    symbols = sorted(
+        {
+            str(symbol).strip()
+            for symbol in symbol_map.keys()
+            if str(symbol).strip()
+        }
+    )
+    if not symbols:
+        return r"[$€£¥₹]"
+    return "[" + "".join(re.escape(symbol) for symbol in symbols) + "]"
+
+
+def _currency_code_alternation(currency_codes: object) -> str:
+    codes = sorted(
+        {
+            str(code).strip().upper()
+            for code in (currency_codes or [])
+            if str(code).strip()
+        }
+    )
+    if not codes:
+        return r"[A-Z]{3}"
+    return "(?:" + "|".join(re.escape(code) for code in codes) + ")"
+
+
+def _expand_salary_range_regex(rules: dict[str, object]) -> str:
+    raw_pattern = str(rules.get("salary_range_regex") or "").strip()
+    if not raw_pattern:
+        raw_pattern = (
+            r"(?:(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\s*\d[\d,.]*[kKmMbB]?\s*"
+            r"(?:[-–—]|to|until)\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\s*"
+            r"\d[\d,.]*[kKmMbB]?\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?"
+            r"(?:\s*/\s*[a-zA-Z]+)?|(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)\s*"
+            r"\d[\d,.]*[kKmMbB]?(?:\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?"
+            r"(?:\s*/\s*[a-zA-Z]+)?|\d[\d,.]*[kKmMbB]?(?:\s*(?:__CURRENCY_SYMBOL_CLASS__|"
+            r"__CURRENCY_CODE_ALT__))?(?:\s*/\s*[a-zA-Z]+)?)"
+        )
+    expanded = raw_pattern.replace(
+        "__CURRENCY_SYMBOL_CLASS__",
+        _currency_symbol_class(dict(rules.get("currency_symbol_map", {}))),
+    ).replace(
+        "__CURRENCY_CODE_ALT__",
+        _currency_code_alternation(rules.get("currency_codes", [])),
+    )
+    return expanded if expanded.startswith("(?i)") else f"(?i){expanded}"
 
 
 # ---------------------------------------------------------------------------
@@ -191,10 +240,7 @@ _NORM_RULES: dict = _load("normalization_rules.json", {})  # type: ignore[assign
 PRICE_FIELDS: set[str] = set(_NORM_RULES.get("price_fields", ["price", "sale_price"]))
 PRICE_REGEX: str = _NORM_RULES.get("price_regex", r"\d[\d,.]*")
 SALARY_FIELDS: set[str] = set(_NORM_RULES.get("salary_fields", ["salary", "compensation"]))
-SALARY_RANGE_REGEX: str = _NORM_RULES.get(
-    "salary_range_regex",
-    r"(?:(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?\s*\d[\d,.]*[kKmMbB]?\s*(?:[-–—]|to|until)\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?\s*\d[\d,.]*[kKmMbB]?\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?(?:\s*/\s*[a-zA-Z]+)?|(?:[$€£₹]|(?i:USD|EUR|GBP|INR))\s*\d[\d,.]*[kKmMbB]?(?:\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR)))?(?:\s*/\s*[a-zA-Z]+)?|\d[\d,.]*[kKmMbB]?(?:\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR)))?(?:\s*/\s*[a-zA-Z]+)?)",
-)
+SALARY_RANGE_REGEX: str = _expand_salary_range_regex(_NORM_RULES)
 CURRENCY_CODES: set[str] = set(_NORM_RULES.get("currency_codes", []))
 CURRENCY_SYMBOL_MAP: dict[str, str] = dict(_NORM_RULES.get("currency_symbol_map", {}))
 COLOR_NOISE_TOKENS: tuple[str, ...] = tuple(_NORM_RULES.get("color_noise_tokens", []))

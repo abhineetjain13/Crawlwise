@@ -18,6 +18,7 @@ from app.services.llm_runtime import (
     _enforce_token_limit,
     _truncate_html,
     resolve_active_config,
+    snapshot_active_configs,
     run_prompt_task,
 )
 
@@ -90,6 +91,35 @@ async def test_run_prompt_task_logs_cost_usage(db_session: AsyncSession):
     assert rows[0].task_type == "xpath_discovery"
     assert rows[0].input_tokens == 120
     assert rows[0].output_tokens == 18
+
+
+@pytest.mark.asyncio
+async def test_snapshot_active_configs_includes_page_classification(db_session: AsyncSession):
+    db_session.add_all([
+        LLMConfig(
+            provider="groq",
+            model="llama-general",
+            api_key_encrypted=encrypt_secret("general-key"),
+            task_type="general",
+            per_domain_daily_budget_usd=Decimal("1.00"),
+            global_session_budget_usd=Decimal("5.00"),
+            is_active=True,
+        ),
+        LLMConfig(
+            provider="groq",
+            model="llama-page",
+            api_key_encrypted=encrypt_secret("page-key"),
+            task_type="page_classification",
+            per_domain_daily_budget_usd=Decimal("1.00"),
+            global_session_budget_usd=Decimal("5.00"),
+            is_active=True,
+        ),
+    ])
+    await db_session.commit()
+
+    snapshot = await snapshot_active_configs(db_session)
+
+    assert snapshot["page_classification"]["model"] == "llama-page"
 
 
 @pytest.mark.asyncio

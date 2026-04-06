@@ -493,6 +493,48 @@ async def test_acquire_writes_failure_diagnostics_when_all_attempts_fail(tmp_pat
     assert payload["diagnostics"]["error_code"] == "acquisition_failed"
 
 
+@pytest.mark.asyncio
+async def test_acquire_returns_blocked_html_instead_of_raising_when_challenge_page_persists(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    blocked_html = """
+    <html>
+      <head><title>Just a moment...</title></head>
+      <body>
+        <div class="cf-browser-verification">Verification successful. Waiting for demo.opencart.com to respond...</div>
+      </body>
+    </html>
+    """
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(
+                text=blocked_html,
+                status_code=403,
+                content_type="html",
+                final_url="https://demo.opencart.com/",
+            ),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(
+                html=blocked_html,
+                challenge_state="blocked_signal",
+                diagnostics={"final_url": "https://demo.opencart.com/"},
+            ),
+        ),
+    ):
+        result = await acquire(42, "https://demo.opencart.com/", surface="ecommerce_listing")
+
+    assert result.method == "playwright"
+    assert "Just a moment" in result.html
+    assert result.diagnostics["browser_blocked"] is True
+
+
 @pytest.fixture(autouse=True)
 def _reset_host_memory():
     reset_host_memory()
@@ -521,61 +563,6 @@ def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_acquire_retries_same_host_after_learning_stealth_preference(monkeypatch, tmp_path):
-
-    calls: list[bool] = []
-
-    async def _fake_acquire_once(**kwargs):
-        calls.append(bool(kwargs.get("prefer_stealth")))
-        if len(calls) == 1:
-            monkeypatch.setattr("app.services.acquisition.acquirer.host_prefers_stealth", lambda _url: True)
-            return None
-        return type("Result", (), {
-            "html": "<html>ok</html>",
-            "json_data": None,
-            "content_type": "html",
-            "method": "curl_cffi",
-            "artifact_path": "",
-            "diagnostics_path": "",
-            "network_payloads": [],
-            "diagnostics": {},
-        })()
-
-    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
-    monkeypatch.setattr("app.services.acquisition.acquirer.host_prefers_stealth", lambda _url: False)
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-
-    result = await acquire(42, "https://www.wayfair.com/example")
-
-    assert result.html == "<html>ok</html>"
-    assert calls == [False, True]
-
-
-@pytest.mark.asyncio
-async def test_acquire_prefers_browser_first_from_acquisition_memory(monkeypatch, tmp_path):
-    from app.services.acquisition.browser_client import BrowserResult
-
-    browser_mock = AsyncMock(return_value=BrowserResult(
-        html="<html><body><h1>Rendered Product</h1><p>" + ("x" * 600) + "</p></body></html>"
-    ))
-    fetch_mock = AsyncMock(return_value=HttpFetchResult(text="<html><body>ignored</body></html>", status_code=200, content_type="html"))
-
-    monkeypatch.setattr("app.services.acquisition.acquirer.fetch_rendered_html", browser_mock)
-    monkeypatch.setattr("app.services.acquisition.acquirer._fetch_with_content_type", fetch_mock)
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-
-    result = await acquire(
-        42,
-        "https://example.com/products/widget",
-        acquisition_profile={"prefer_browser": True},
-    )
-
-    assert result.method == "playwright"
-    assert result.diagnostics["memory_browser_first"] is True
-    fetch_mock.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_acquire_uses_memory_prefer_stealth(monkeypatch, tmp_path):
     captured: list[bool] = []
 
@@ -593,7 +580,6 @@ async def test_acquire_uses_memory_prefer_stealth(monkeypatch, tmp_path):
         })()
 
     monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
-    monkeypatch.setattr("app.services.acquisition.acquirer.host_prefers_stealth", lambda _url: False)
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
 
     result = await acquire(

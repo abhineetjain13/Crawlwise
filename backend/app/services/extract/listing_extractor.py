@@ -43,6 +43,7 @@ from app.services.pipeline_config import (
     PAGE_URL_CURRENCY_HINTS,
 )
 from app.services.discover.service import DiscoveryManifest, discover_sources
+from app.services.xpath_service import bs4_tag_to_xpath, simplify_xpath
 _EMPTY_VALUES = (None, "", [], {})
 _NUMERIC_ONLY_RE = re.compile(r"^\s*\(?\s*[\d,]+\s*\)?\s*$")
 _FILTER_COUNT_RE = re.compile(r"^\s*\(\s*\d[\d,]*\s*\)\s*$")
@@ -115,17 +116,17 @@ def _extract_listing_records_single_page(
         structured_records = _extract_from_structured_sources(
             manifest, surface, page_url
         )
-        if len(structured_records) >= 2:
+        if len(structured_records) >= 1:
             for record in structured_records:
                 record["_source"] = record.get("_source", "structured")
             candidate_sets.append(structured_records)
 
     next_flight_records = _extract_from_next_flight_scripts(html, page_url)
-    if len(next_flight_records) >= 2:
+    if len(next_flight_records) >= 1:
         candidate_sets.append(next_flight_records)
 
     inline_array_records = _extract_from_inline_object_arrays(html, surface, page_url)
-    if len(inline_array_records) >= 2:
+    if len(inline_array_records) >= 1:
         candidate_sets.append(inline_array_records)
 
     # --- Strategy 2: DOM card detection ---
@@ -1356,6 +1357,9 @@ def _is_meaningful_listing_record(record: dict) -> bool:
     if not public_fields:
         return False
 
+    meaningful_keys = {key for key in public_fields if key != "url"}
+    has_price_or_img = "price" in meaningful_keys or "image_url" in meaningful_keys
+
     raw_title = public_fields.get("title")
     if raw_title is not None:
         title_str = str(raw_title).strip()
@@ -1363,7 +1367,7 @@ def _is_meaningful_listing_record(record: dict) -> bool:
             return False
         if isinstance(raw_title, (int, float)) and not isinstance(raw_title, bool):
             return False
-        if _NUMERIC_ONLY_RE.match(title_str):
+        if _NUMERIC_ONLY_RE.match(title_str) and not has_price_or_img:
             return False
 
     raw_price = public_fields.get("price")
@@ -1371,11 +1375,11 @@ def _is_meaningful_listing_record(record: dict) -> bool:
     if (
         raw_price in (0, "0", "$0", "0.00", "$0.00")
         and not url_value
+        and not public_fields.get("title")
         and len(public_fields) <= 2
     ):
         return False
 
-    meaningful_keys = {key for key in public_fields if key != "url"}
     if meaningful_keys == LISTING_MINIMAL_VISUAL_FIELDS and not url_value:
         return False
 
@@ -1590,30 +1594,37 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
 
     best_cards: list[Tag] = []
     best_selector = ""
-    best_score: tuple[float, int] = (0.0, 0)
-
-    containers = soup.select(
+    best_score: tuple[float, int] = (_MIN_CARD_SIGNAL_RATIO, 0)
+    PRIMARY_CONTAINER_SELECTOR = (
         "ul, ol, div.grid, div.row, div[class*='results'], "
         "div[class*='product'], div[class*='listing'], div[class*='search'], "
-        "div[class*='tile'], div[class*='card'], main, section"
+        "div[class*='tile'], div[class*='card']"
     )
-    for container in containers:
-        children = [c for c in container.children if isinstance(c, Tag)]
-        if len(children) < 3:
-            continue
-        tag_classes: dict[tuple, list[Tag]] = {}
-        for child in children:
-            key = (child.name, tuple(sorted(child.get("class", []))))
-            tag_classes.setdefault(key, []).append(child)
-        for key, group in tag_classes.items():
-            if len(group) < 3:
+    FALLBACK_CONTAINER_SELECTOR = "main, section"
+
+    def _scan_containers(containers: list[Tag]) -> None:
+        nonlocal best_cards, best_selector, best_score
+        for container in containers:
+            children = [c for c in container.children if isinstance(c, Tag)]
+            if len(children) < 3:
                 continue
-            score = _card_group_score(group, surface=surface)
-            if score > best_score:
-                best_cards = group
-                best_score = score
-                classes = ".".join(key[1]) if key[1] else ""
-                best_selector = f"{key[0]}.{classes}" if classes else key[0]
+            tag_classes: dict[tuple, list[Tag]] = {}
+            for child in children:
+                key = (child.name, tuple(sorted(child.get("class", []))))
+                tag_classes.setdefault(key, []).append(child)
+            for key, group in tag_classes.items():
+                if len(group) < 3:
+                    continue
+                score = _card_group_score(group, surface=surface)
+                if score > best_score:
+                    best_cards = group
+                    best_score = score
+                    classes = ".".join(key[1]) if key[1] else ""
+                    best_selector = f"{key[0]}.{classes}" if classes else key[0]
+
+    _scan_containers(soup.select(PRIMARY_CONTAINER_SELECTOR))
+    if not best_cards:
+        _scan_containers(soup.select(FALLBACK_CONTAINER_SELECTOR))
     return best_cards, best_selector
 
 
@@ -1623,7 +1634,7 @@ def _card_group_score(group: list[Tag], surface: str = "") -> tuple[float, int]:
     Returns (signal_ratio, count) so groups with higher signal density win,
     with count as a tiebreaker.
     """
-    signals = 0
+    signals = 0.0
     normalized_surface = str(surface or "").lower()
     is_commerce = "commerce" in normalized_surface
     for el in group[:30]:  # sample first 30
@@ -1633,17 +1644,27 @@ def _card_group_score(group: list[Tag], surface: str = "") -> tuple[float, int]:
             el.select_one("[itemprop='price'], .price, [class*='price'], .amount")
         )
         text = el.get_text(" ", strip=True)
-        has_substantial_text = len(text) > 20
+        has_substantial_text = len(text) > 40
+        has_multi_elements = len(
+            [child for child in el.children if isinstance(child, Tag)]
+        ) > 1
+        if not has_link:
+            continue
         if is_commerce:
-            if has_link and (has_image or has_price):
-                signals += 1
-        elif has_link and (has_image or has_price or has_substantial_text):
-            signals += 1
+            if has_image and has_price:
+                signals += 1.0
+            elif has_image or has_price:
+                signals += 0.5
+        elif has_image or has_price:
+            signals += 1.0
+        elif has_substantial_text and has_multi_elements:
+            signals += 0.4
     sample_size = min(len(group), 30)
     ratio = signals / sample_size if sample_size > 0 else 0.0
     return (ratio, len(group))
 
 
+_MIN_CARD_SIGNAL_RATIO = 0.45
 _PRICE_LIKE_RE = re.compile(r"^[\s$£€¥₹]?\d[\d,.\s]*$")
 
 
@@ -1677,6 +1698,7 @@ def _extract_from_card(
         if price_el:
             raw_price = price_el.get("content") or price_el.get_text(" ", strip=True)
             record["price"] = _clean_price_text(raw_price)
+            record["_xpath_price"] = simplify_xpath(bs4_tag_to_xpath(price_el))
         original_price_el = card.select_one(
             ".original-price, .compare-price, .was-price, .strike, s, del, [data-original-price]"
         )
@@ -1685,6 +1707,7 @@ def _extract_from_card(
                 " ", strip=True
             )
             record["original_price"] = _clean_price_text(raw_op)
+            record["_xpath_original_price"] = simplify_xpath(bs4_tag_to_xpath(original_price_el))
 
     # Title: prefer itemprop, then class-based, then headings — skip price-like text
     title_selectors = [
@@ -1708,6 +1731,8 @@ def _extract_from_card(
             text = title_el.get_text(" ", strip=True)
             if text and not _PRICE_LIKE_RE.match(text):
                 record["title"] = text
+                record["_xpath_title"] = simplify_xpath(bs4_tag_to_xpath(title_el))
+                record["_selector_title"] = sel
                 break
 
     url = _best_card_link(card, page_url)
@@ -1724,6 +1749,7 @@ def _extract_from_card(
         src = img_el.get("src") or img_el.get("data-src") or img_el.get("content", "")
         if src:
             record["image_url"] = urljoin(page_url, src) if page_url else src
+            record["_xpath_image_url"] = simplify_xpath(bs4_tag_to_xpath(img_el))
     if "image_url" not in record:
         images = _extract_card_images(card, page_url)
         if images:
@@ -1735,6 +1761,7 @@ def _extract_from_card(
     brand_el = card.select_one(".brand, [itemprop='brand'], .product-brand")
     if brand_el:
         record["brand"] = brand_el.get_text(strip=True)
+        record["_xpath_brand"] = simplify_xpath(bs4_tag_to_xpath(brand_el))
 
     # Rating
     rating_el = card.select_one(
@@ -1746,6 +1773,7 @@ def _extract_from_card(
             or rating_el.get("aria-label", "")
             or rating_el.get_text(" ", strip=True)
         )
+        record["_xpath_rating"] = simplify_xpath(bs4_tag_to_xpath(rating_el))
 
     review_count_el = card.select_one(
         "[itemprop='reviewCount'], [aria-label*='review'], .review-count, .count"
@@ -1756,6 +1784,7 @@ def _extract_from_card(
             or review_count_el.get("aria-label", "")
             or review_count_el.get_text(" ", strip=True)
         )
+        record["_xpath_review_count"] = simplify_xpath(bs4_tag_to_xpath(review_count_el))
 
     card_text_lines = _card_text_lines(card)
     identifier_fields = _extract_card_identifiers(card, card_text_lines)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re as _re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -16,14 +17,11 @@ from app.core.config import settings
 from app.services.adapters.registry import resolve_adapter
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import fetch_rendered_html
-from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host
 from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
 from app.services.pipeline_config import (
     ACQUIRE_HOST_MIN_INTERVAL_MS,
-    BROWSER_FALLBACK_HTML_SIZE_THRESHOLD,
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
-    BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX,
     DEFAULT_MAX_SCROLLS,
     JOB_ERROR_PAGE_HEADINGS,
     JOB_ERROR_PAGE_TITLES,
@@ -32,6 +30,20 @@ from app.services.pipeline_config import (
     JOB_REDIRECT_SHELL_HEADINGS,
     JOB_REDIRECT_SHELL_TITLES,
 )
+
+_COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset({
+    "sign in",
+    "log in",
+    "login",
+    "access denied",
+    "403 forbidden",
+    "404 not found",
+    "page not found",
+    "session expired",
+    "account required",
+})
+_JS_SHELL_MIN_CONTENT_LEN = 50_000
+_JS_SHELL_VISIBLE_RATIO_MAX = 0.08
 
 
 class ProxyPoolExhausted(RuntimeError):
@@ -70,6 +82,17 @@ class AcquisitionResult:
     diagnostics_path: str = ""
     network_payloads: list[dict] = field(default_factory=list)
     diagnostics: dict[str, object] = field(default_factory=dict)
+
+
+def _content_html_length(html: str) -> int:
+    """Return HTML length with non-content tag bodies removed for shell detection."""
+    stripped = _re.sub(
+        r"<(script|style|svg)\b[^>]*>.*?</\1\s*>",
+        "",
+        html,
+        flags=_re.IGNORECASE | _re.DOTALL,
+    )
+    return max(len(stripped), 1)
 
 
 async def acquire_html(
@@ -121,8 +144,8 @@ async def acquire(
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
     _write_diagnostics_stub(run_id, url, diagnostics_path)
-    prefer_stealth = host_prefers_stealth(url) or bool((acquisition_profile or {}).get("prefer_stealth"))
-    browser_first = _memory_prefers_browser(acquisition_profile)
+    prefer_stealth = bool((acquisition_profile or {}).get("prefer_stealth"))
+    browser_first = False
     rotator = ProxyRotator(proxy_list)
     proxy_candidates = rotator.cycle_once()
     if proxy_list and not proxy_candidates:
@@ -148,23 +171,6 @@ async def acquire(
             acquisition_profile=acquisition_profile,
             checkpoint=checkpoint,
         )
-        if result is None and not prefer_stealth and host_prefers_stealth(url):
-            result = await _acquire_once(
-                run_id=run_id,
-                url=url,
-                proxy=proxy,
-                surface=surface,
-                advanced_mode=advanced_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                prefer_stealth=True,
-                sleep_ms=sleep_ms,
-                requested_fields=requested_fields,
-                requested_field_selectors=requested_field_selectors,
-                browser_first=browser_first,
-                acquisition_profile=acquisition_profile,
-                checkpoint=checkpoint,
-            )
         if result is not None:
             break
 
@@ -240,32 +246,35 @@ async def _acquire_once(
         except Exception as exc:
             _log.warning("Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi", url, exc)
         else:
-            browser_final_url = str((browser_result.diagnostics or {}).get("final_url") or url).strip() or url
+            browser_html = browser_result.html if isinstance(browser_result.html, str) else ""
+            browser_diagnostics = browser_result.diagnostics if isinstance(browser_result.diagnostics, dict) else {}
+            browser_network_payloads = browser_result.network_payloads if isinstance(browser_result.network_payloads, list) else []
+            browser_final_url = str(browser_diagnostics.get("final_url") or url).strip() or url
             if (
-                browser_result.html
-                and not detect_blocked_page(browser_result.html).is_blocked
+                browser_html
+                and not detect_blocked_page(browser_html).is_blocked
                 and not _is_invalid_surface_page(
                     requested_url=url,
                     final_url=browser_final_url,
-                    html=browser_result.html,
+                    html=browser_html,
                     surface=surface,
                 )
             ):
                 return AcquisitionResult(
-                    html=browser_result.html,
+                    html=browser_html,
                     content_type="html",
                     method="playwright",
                     artifact_path=str(_artifact_path(run_id, url)),
-                    network_payloads=browser_result.network_payloads,
+                    network_payloads=browser_network_payloads,
                     diagnostics={
                         "browser_attempted": True,
                         "browser_challenge_state": browser_result.challenge_state,
                         "browser_origin_warmed": browser_result.origin_warmed,
-                        "browser_network_payloads": len(browser_result.network_payloads or []),
-                        "browser_diagnostics": browser_result.diagnostics,
+                        "browser_network_payloads": len(browser_network_payloads),
+                        "browser_diagnostics": browser_diagnostics,
                         "timings_ms": _merge_timing_maps(
                             {"browser_total_ms": _elapsed_ms(browser_started_at)},
-                            browser_result.diagnostics.get("timings_ms"),
+                            browser_diagnostics.get("timings_ms"),
                             {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
                         ),
                         "memory_prefer_stealth": bool((acquisition_profile or {}).get("prefer_stealth")),
@@ -296,6 +305,7 @@ async def _acquire_once(
                 normalized=normalized,
                 blocked=None,
                 visible_text="",
+                content_len=None,
                 gate_phrases=False,
                 needs_browser=False,
                 adapter_hint=None,
@@ -314,12 +324,12 @@ async def _acquire_once(
     gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
     # Detect JS-shell pages: large HTML with very little visible text indicates
     # a SPA/Next.js shell where all real content is JS-rendered.
-    html_len = len(html or "")
+    content_len = _content_html_length(html)
     visible_len = len(visible_text)
     js_shell_detected = (
-        html_len >= BROWSER_FALLBACK_HTML_SIZE_THRESHOLD
+        content_len >= _JS_SHELL_MIN_CONTENT_LEN
         and visible_len > 0
-        and (visible_len / html_len) < BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX
+        and (visible_len / content_len) < _JS_SHELL_VISIBLE_RATIO_MAX
     )
     adapter_hint = await _resolve_adapter_hint(url, html)
     needs_browser = bool(
@@ -338,7 +348,6 @@ async def _acquire_once(
     )
     structured_listing_override = (
         needs_browser
-        and js_shell_detected
         and not blocked.is_blocked
         and _html_has_extractable_listings(html)
     )
@@ -352,15 +361,13 @@ async def _acquire_once(
         needs_browser = False
     if invalid_surface_page:
         needs_browser = True
-    if blocked.is_blocked:
-        remember_stealth_host(url)
-        prefer_stealth = True
     decision_ms = _elapsed_ms(decision_started_at)
 
     curl_diagnostics = _build_curl_diagnostics(
         normalized=normalized,
         blocked=blocked,
         visible_text=visible_text,
+        content_len=content_len,
         gate_phrases=gate_phrases,
         needs_browser=needs_browser,
         adapter_hint=adapter_hint,
@@ -440,37 +447,40 @@ async def _acquire_once(
             curl_result.diagnostics["browser_attempted"] = True
         return curl_result
 
-    browser_final_url = str((browser_result.diagnostics or {}).get("final_url") or url).strip() or url
+    browser_html = browser_result.html if isinstance(browser_result.html, str) else ""
+    browser_result_diagnostics = browser_result.diagnostics if isinstance(browser_result.diagnostics, dict) else {}
+    browser_network_payloads = browser_result.network_payloads if isinstance(browser_result.network_payloads, list) else []
+    browser_final_url = str(browser_result_diagnostics.get("final_url") or url).strip() or url
     browser_redirect_shell = _is_invalid_surface_page(
         requested_url=url,
         final_url=browser_final_url,
-        html=browser_result.html,
+        html=browser_html,
         surface=surface,
     )
-    if browser_result.html and not detect_blocked_page(browser_result.html).is_blocked and not browser_redirect_shell:
-        browser_diagnostics = dict(curl_diagnostics)
-        browser_diagnostics.update(
+    if browser_html and not detect_blocked_page(browser_html).is_blocked and not browser_redirect_shell:
+        merged_browser_diagnostics = dict(curl_diagnostics)
+        merged_browser_diagnostics.update(
             {
                 "browser_attempted": True,
                 "browser_challenge_state": browser_result.challenge_state,
                 "browser_origin_warmed": browser_result.origin_warmed,
-                "browser_network_payloads": len(browser_result.network_payloads or []),
-                "browser_diagnostics": browser_result.diagnostics,
+                "browser_network_payloads": len(browser_network_payloads),
+                "browser_diagnostics": browser_result_diagnostics,
                 "timings_ms": _merge_timing_maps(
                     curl_diagnostics.get("timings_ms"),
                     {"browser_total_ms": _elapsed_ms(browser_started_at)},
-                    browser_result.diagnostics.get("timings_ms"),
+                    browser_result_diagnostics.get("timings_ms"),
                     {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
                 ),
             }
         )
         return AcquisitionResult(
-            html=browser_result.html,
+            html=browser_html,
             content_type="html",
             method="playwright",
             artifact_path=str(_artifact_path(run_id, url)),
-            network_payloads=browser_result.network_payloads,
-            diagnostics=browser_diagnostics,
+            network_payloads=browser_network_payloads,
+            diagnostics=merged_browser_diagnostics,
         )
 
     # Playwright returned empty or blocked — prefer curl_cffi result if available.
@@ -478,16 +488,16 @@ async def _acquire_once(
         curl_result.diagnostics["browser_attempted"] = True
         curl_result.diagnostics["browser_challenge_state"] = browser_result.challenge_state
         curl_result.diagnostics["browser_origin_warmed"] = browser_result.origin_warmed
-        curl_result.diagnostics["browser_network_payloads"] = len(browser_result.network_payloads or [])
-        curl_result.diagnostics["browser_diagnostics"] = browser_result.diagnostics
+        curl_result.diagnostics["browser_network_payloads"] = len(browser_network_payloads)
+        curl_result.diagnostics["browser_diagnostics"] = browser_result_diagnostics
         curl_result.diagnostics["browser_blocked"] = bool(
-            browser_result.html and detect_blocked_page(browser_result.html).is_blocked
+            browser_html and detect_blocked_page(browser_html).is_blocked
         )
         curl_result.diagnostics["browser_redirect_shell"] = browser_redirect_shell or None
         curl_result.diagnostics["timings_ms"] = _merge_timing_maps(
             curl_result.diagnostics.get("timings_ms"),
             {"browser_total_ms": _elapsed_ms(browser_started_at)},
-            browser_result.diagnostics.get("timings_ms"),
+            browser_result_diagnostics.get("timings_ms"),
             {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
         )
         _log.info("Playwright returned blocked/empty for %s — using curl_cffi fallback", url)
@@ -500,6 +510,51 @@ async def _acquire_once(
             _log.warning("Discarding curl_cffi fallback for %s because it resolved to a job redirect shell", url)
             return None
         return curl_result
+
+    browser_blocked = bool(browser_html and detect_blocked_page(browser_html).is_blocked)
+    if browser_blocked and not browser_redirect_shell:
+        blocked_diagnostics = dict(curl_diagnostics)
+        blocked_diagnostics.update(
+            {
+                "browser_attempted": True,
+                "browser_challenge_state": browser_result.challenge_state,
+                "browser_origin_warmed": browser_result.origin_warmed,
+                "browser_network_payloads": len(browser_network_payloads),
+                "browser_diagnostics": browser_result_diagnostics,
+                "browser_blocked": True,
+                "browser_redirect_shell": browser_redirect_shell or None,
+                "timings_ms": _merge_timing_maps(
+                    curl_diagnostics.get("timings_ms"),
+                    {"browser_total_ms": _elapsed_ms(browser_started_at)},
+                    browser_result_diagnostics.get("timings_ms"),
+                    {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
+                ),
+            }
+        )
+        return AcquisitionResult(
+            html=browser_html,
+            content_type="html",
+            method="playwright",
+            artifact_path=str(_artifact_path(run_id, url)),
+            network_payloads=browser_network_payloads,
+            diagnostics=blocked_diagnostics,
+        )
+
+    if blocked.is_blocked and not invalid_surface_page:
+        curl_diagnostics["timings_ms"] = _merge_timing_maps(
+            curl_diagnostics.get("timings_ms"),
+            {"browser_total_ms": _elapsed_ms(browser_started_at)},
+            browser_result_diagnostics.get("timings_ms"),
+            {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
+        )
+        return AcquisitionResult(
+            html=html,
+            json_data=normalized.json_data,
+            content_type=normalized.content_type,
+            method="curl_cffi",
+            artifact_path=str(_artifact_path(run_id, url)),
+            diagnostics=curl_diagnostics,
+        )
 
     return None
 
@@ -541,6 +596,7 @@ def _is_invalid_surface_page(
         requested_url=requested_url,
         final_url=final_url,
         surface=surface,
+        html=html,
     )
 
 
@@ -585,18 +641,29 @@ def _is_invalid_commerce_surface_page(
     requested_url: str,
     final_url: str,
     surface: str | None,
+    html: str = "",
 ) -> bool:
     normalized_surface = str(surface or "").strip().lower()
     if normalized_surface not in {"ecommerce_detail", "ecommerce_listing"}:
         return False
     requested = urlparse(requested_url)
     final = urlparse(final_url or requested_url)
-    return bool(
+    redirected_to_root = bool(
         final_url
         and requested.netloc.lower() == final.netloc.lower()
         and requested.path.rstrip("/") != final.path.rstrip("/")
         and final.path.rstrip("/") == ""
     )
+    if redirected_to_root:
+        return True
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        title_text = " ".join(
+            (soup.title.get_text(" ", strip=True) if soup.title else "").lower().split()
+        )
+        if any(fragment in title_text for fragment in _COMMERCE_REDIRECT_TITLE_FRAGMENTS):
+            return True
+    return False
 
 
 async def _fetch_with_content_type(url: str, proxy: str | None) -> HttpFetchResult:
@@ -609,6 +676,13 @@ async def _resolve_adapter_hint(url: str, html: str) -> str | None:
         return None
     adapter = await resolve_adapter(url, html)
     return adapter.name if adapter is not None else None
+
+
+_NEXT_DATA_PRODUCT_SIGNALS = (
+    '"productId"', '"partNumber"', '"displayName"', '"sku"', '"skuId"', '"price"', '"salePrice"',
+    '"listPrice"', '"imageUrl"', '"imageURL"', '"image_url"', '"availability"', '"inStock"',
+    '"slug"', '"handle"', '"jobId"', '"jobTitle"', '"companyName"',
+)
 
 
 def _html_has_extractable_listings(html: str) -> bool:
@@ -630,18 +704,14 @@ def _html_has_extractable_listings(html: str) -> bool:
     next_data_node = soup.select_one("script#__NEXT_DATA__")
     if next_data_node is not None:
         raw_next_data = next_data_node.string or next_data_node.get_text(" ", strip=True) or ""
-        signal_hits = (
-            raw_next_data.count('"productId"')
-            + raw_next_data.count('"partNumber"')
-            + raw_next_data.count('"displayName"')
-        )
+        signal_hits = sum(raw_next_data.count(key) for key in _NEXT_DATA_PRODUCT_SIGNALS)
         if signal_hits >= 4:
             return True
 
     return False
 
 
-def _json_ld_listing_count(payload: object, *, _depth: int = 0, _max_depth: int = 2) -> int:
+def _json_ld_listing_count(payload: object, *, _depth: int = 0, _max_depth: int = 3) -> int:
     if _depth > _max_depth:
         return 0
     if isinstance(payload, list):
@@ -821,6 +891,7 @@ def _build_curl_diagnostics(
     normalized: HttpFetchResult,
     blocked,
     visible_text: str,
+    content_len: int | None,
     gate_phrases: bool,
     needs_browser: bool,
     adapter_hint: str | None,
@@ -831,11 +902,14 @@ def _build_curl_diagnostics(
     memory_prefer_stealth: bool,
     memory_browser_first: bool,
 ) -> dict[str, object]:
+    response_headers = normalized.headers if isinstance(normalized.headers, dict) else {}
     payload = {
         "curl_status_code": normalized.status_code,
         "curl_content_type": normalized.content_type,
         "curl_error": normalized.error or None,
+        "curl_retry_after_seconds": normalized.retry_after_seconds,
         "curl_visible_text_length": len(visible_text),
+        "content_len": content_len,
         "curl_blocked": blocked.is_blocked if blocked is not None else False,
         "curl_block_provider": blocked.provider if blocked is not None else None,
         "curl_gate_phrases": gate_phrases,
@@ -847,6 +921,7 @@ def _build_curl_diagnostics(
         "curl_impersonate_profile": normalized.impersonate_profile or None,
         "curl_attempts": normalized.attempts or None,
         "curl_attempt_log": normalized.attempt_log or None,
+        "curl_response_headers": _select_response_headers(response_headers) or None,
         "host_wait_seconds": round(host_wait_seconds, 3) if host_wait_seconds > 0 else None,
         "memory_prefer_stealth": memory_prefer_stealth or None,
         "memory_browser_first": memory_browser_first or None,
@@ -872,6 +947,15 @@ def _merge_timing_maps(*maps: object) -> dict[str, int]:
             if int_value >= 0:
                 merged[str(key)] = int_value
     return merged
+
+
+def _select_response_headers(headers: dict[str, str]) -> dict[str, str]:
+    keep = ("server", "cf-mitigated", "retry-after", "content-type", "accept-ch", "critical-ch")
+    return {
+        key: str(headers.get(key) or "")
+        for key in keep
+        if str(headers.get(key) or "").strip()
+    }
 
 
 def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bool:

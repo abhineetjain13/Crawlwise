@@ -91,8 +91,8 @@ async def reset_application_data(session: AsyncSession) -> dict:
         if is_sqlite:
             try:
                 async with session.bind.connect() as connection:
+                    connection = await connection.execution_options(isolation_level="AUTOCOMMIT")
                     await connection.execute(text("VACUUM"))
-                    await connection.commit()
             except Exception:
                 logger.exception("SQLite VACUUM failed after application data reset")
     except Exception:

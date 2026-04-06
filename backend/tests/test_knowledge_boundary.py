@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 
-from app.services.pipeline_config import CANONICAL_SCHEMAS, FIELD_ALIASES
+from app.services.pipeline_config import CANONICAL_SCHEMAS, FIELD_ALIASES, SALARY_RANGE_REGEX
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -123,3 +124,12 @@ def test_services_do_not_define_disallowed_inline_knowledge_constants():
         "These knowledge constants must come from the JSON-backed config layer, not "
         "be redefined in service modules.\n" + "\n".join(offenders)
     )
+
+
+def test_salary_range_regex_expands_currency_placeholders():
+    assert "__CURRENCY_SYMBOL_CLASS__" not in SALARY_RANGE_REGEX
+    assert "__CURRENCY_CODE_ALT__" not in SALARY_RANGE_REGEX
+    assert "¥" in SALARY_RANGE_REGEX
+    assert "(?i:" not in SALARY_RANGE_REGEX
+    assert re.search(SALARY_RANGE_REGEX, "¥120,000 - ¥140,000 / month")
+    assert re.search(SALARY_RANGE_REGEX, "usd 80k to usd 100k")

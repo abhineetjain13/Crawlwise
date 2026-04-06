@@ -143,13 +143,14 @@ async def test_reset_application_data_ignores_sqlite_vacuum_failures(
         async def __aexit__(self, exc_type, exc, tb) -> None:
             await self._connection.__aexit__(exc_type, exc, tb)
 
+        async def execution_options(self, **kwargs):
+            await self._connection.execution_options(**kwargs)
+            return self
+
         async def execute(self, statement, *args, **kwargs):
             if str(statement) == "VACUUM":
                 raise RuntimeError("vacuum failed")
             return await self._connection.execute(statement, *args, **kwargs)
-
-        async def commit(self) -> None:
-            await self._connection.commit()
 
     def _connect_with_failing_vacuum(engine):
         return _FailingVacuumConnection(real_connect(engine))

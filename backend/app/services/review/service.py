@@ -10,15 +10,14 @@ from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.selector import Selector
 from app.services.crawl_service import _normalize_committed_field_name, _refresh_record_commit_metadata
 from app.services.knowledge_base.store import (
-    get_canonical_fields,
     get_domain_mapping,
     get_selector_defaults,
-    save_canonical_fields,
     save_domain_mapping,
 )
 from app.services.normalizers.field_normalizers import normalize_value
 from app.services.pipeline_config import REVIEW_CONTAINER_KEYS
 from app.services.domain_utils import normalize_domain
+from app.services.schema_service import load_resolved_schema, persist_resolved_schema
 from app.services.xpath_service import extract_selector_value
 from app.services.xpath_service import build_deterministic_selector_suggestions
 
@@ -29,10 +28,11 @@ async def build_review_payload(session: AsyncSession, run_id: int) -> dict | Non
         return None
     records_result = await session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run_id))
     records = list(records_result.scalars().all())
-    selector_result = await session.execute(select(Selector).where(Selector.domain == _domain(run.url)))
+    domain = _domain(run.url)
+    selector_result = await session.execute(select(Selector).where(Selector.domain == domain))
     selectors = list(selector_result.scalars().all())
-    canonical_fields = get_canonical_fields(run.surface)
-    domain_mapping = get_domain_mapping(_domain(run.url), run.surface)
+    canonical_fields = (await load_resolved_schema(session, run.surface, domain)).fields
+    domain_mapping = get_domain_mapping(domain, run.surface)
     normalized_fields = sorted({
         key for record in records
         for key, val in _safe_dict(record.data).items()
@@ -107,12 +107,46 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
     }
     domain = _domain(run.url)
     await save_domain_mapping(domain, run.surface, mapping)
-    canonical_fields = await save_canonical_fields(run.surface, list(mapping.values()))
+    resolved_schema = await load_resolved_schema(session, run.surface, domain)
+    next_fields = [
+        *resolved_schema.fields,
+        *[str(value or "").strip().lower() for value in mapping.values()],
+    ]
+    updated_schema = await persist_resolved_schema(
+        session,
+        resolved_schema.__class__(
+            surface=resolved_schema.surface,
+            domain=resolved_schema.domain,
+            baseline_fields=list(resolved_schema.baseline_fields),
+            fields=list(dict.fromkeys(field for field in next_fields if field)),
+            new_fields=list(dict.fromkeys([
+                *resolved_schema.new_fields,
+                *[
+                    str(value or "").strip().lower()
+                    for value in mapping.values()
+                    if str(value or "").strip().lower() not in set(resolved_schema.baseline_fields)
+                ],
+            ])),
+            deprecated_fields=list(resolved_schema.deprecated_fields),
+            source="review",
+            confidence=1.0,
+            saved_at=resolved_schema.saved_at,
+            stale=False,
+        ),
+    )
     promotion = ReviewPromotion(
         run_id=run.id,
         domain=domain,
         surface=run.surface,
-        approved_schema={"fields": canonical_fields},
+        approved_schema={
+            "fields": updated_schema.fields,
+            "baseline_fields": updated_schema.baseline_fields,
+            "new_fields": updated_schema.new_fields,
+            "deprecated_fields": updated_schema.deprecated_fields,
+            "source": updated_schema.source,
+            "confidence": updated_schema.confidence,
+            "saved_at": updated_schema.saved_at,
+        },
         field_mapping=mapping,
         selector_memory={},
     )
@@ -124,7 +158,7 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
         "domain": domain,
         "surface": run.surface,
         "selected_fields": list(dict.fromkeys(mapping.values())),
-        "canonical_fields": canonical_fields,
+        "canonical_fields": updated_schema.fields,
         "field_mapping": mapping,
     }
 

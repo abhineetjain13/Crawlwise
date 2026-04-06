@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.services.pipeline_config import COOKIE_POLICY
+
+logger = logging.getLogger(__name__)
 
 
 def cookie_policy_for_domain(domain: str) -> dict[str, object]:
@@ -104,19 +107,39 @@ def is_persistable_cookie(cookie: dict, *, domain: str) -> bool:
             extracted_domain = ""
         if extracted_domain and not cookie_domain_matches(extracted_domain, domain):
             return False
-    name_allowed = cookie_name_allowed(name, policy)
-    if not name_allowed and cookie_name_blocked(name, policy):
-        return False
     expires = cookie_expiry(cookie)
     now = time.time()
     if expires is None:
         return bool(policy.get("persist_session_cookies", False))
     if expires <= now:
         return False
-    max_ttl = int(policy.get("max_persisted_ttl_seconds", 0) or 0)
+    raw_max_ttl = policy.get("max_persisted_ttl_seconds", 0)
+    try:
+        max_ttl = int(raw_max_ttl or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid cookie policy value for %s: %r",
+            "max_persisted_ttl_seconds",
+            raw_max_ttl,
+        )
+        max_ttl = 0
     if max_ttl > 0 and expires - now > max_ttl:
         return False
+    if cookie_name_explicitly_allowed(name, policy):
+        return True
+    if cookie_name_blocked(name, policy):
+        return False
     return True
+
+
+def cookie_name_explicitly_allowed(name: str, policy: dict[str, object]) -> bool:
+    normalized = str(name or "").strip().lower()
+    allowed_names = {
+        str(value).strip().lower()
+        for value in policy.get("allowed_cookie_names", [])
+        if str(value).strip()
+    }
+    return normalized in allowed_names
 
 
 def cookie_name_allowed(name: str, policy: dict[str, object]) -> bool:

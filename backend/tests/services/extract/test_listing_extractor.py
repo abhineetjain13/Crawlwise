@@ -98,15 +98,15 @@ def test_extract_listing_records_handles_main_entity_itemlist_manifest():
         json_ld=[
             {
                 "@type": "WebPage",
-                "mainEntity": {
-                    "@type": "ItemList",
-                    "itemListElement": [
-                        {"item": {"@type": "Product", "name": "Filter A", "url": "/p/filter-a"}},
-                        {"item": {"@type": "Product", "name": "Filter B", "url": "/p/filter-b"}},
-                    ],
-                },
-            }
-        ]
+                    "mainEntity": {
+                        "@type": "ItemList",
+                        "itemListElement": [
+                            {"item": {"@type": "Product", "name": "Filter A", "url": "/p/filter-a", "image": "/img/a.jpg"}},
+                            {"item": {"@type": "Product", "name": "Filter B", "url": "/p/filter-b", "image": "/img/b.jpg"}},
+                        ],
+                    },
+                }
+            ]
     )
 
     records = extract_listing_records(
@@ -128,16 +128,16 @@ def test_extract_listing_records_handles_graph_wrapped_json_ld_without_manifest(
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
-      "@graph": [
-        {
-          "@type": "ItemList",
-          "itemListElement": [
-            {"item": {"@type": "Product", "name": "Mirror", "url": "/p/mirror"}},
-            {"item": {"@type": "Product", "name": "Lamp", "url": "/p/lamp"}}
+          "@graph": [
+            {
+              "@type": "ItemList",
+              "itemListElement": [
+                {"item": {"@type": "Product", "name": "Mirror", "url": "/p/mirror", "image": "/img/mirror.jpg"}},
+                {"item": {"@type": "Product", "name": "Lamp", "url": "/p/lamp", "image": "/img/lamp.jpg"}}
+              ]
+            }
           ]
         }
-      ]
-    }
     </script>
     </body></html>
     """
@@ -261,18 +261,18 @@ def test_auto_detect_repeating_cards():
     """When no known selector matches, auto-detect repeating siblings."""
     html = """
     <html><body>
-    <div class="results-grid">
-        <div class="item-xyz">
-            <h4><a href="/p/1">Item One</a></h4>
+        <div class="results-grid">
+            <div class="item-xyz">
+                <h4><a href="/p/1"><img src="/img/1.jpg" />Item One</a></h4>
+            </div>
+            <div class="item-xyz">
+                <h4><a href="/p/2"><img src="/img/2.jpg" />Item Two</a></h4>
+            </div>
+            <div class="item-xyz">
+                <h4><a href="/p/3"><img src="/img/3.jpg" />Item Three</a></h4>
+            </div>
         </div>
-        <div class="item-xyz">
-            <h4><a href="/p/2">Item Two</a></h4>
-        </div>
-        <div class="item-xyz">
-            <h4><a href="/p/3">Item Three</a></h4>
-        </div>
-    </div>
-    </body></html>
+        </body></html>
     """
     records = extract_listing_records(html, "ecommerce_listing", set(), max_records=100)
     assert len(records) >= 3
@@ -319,8 +319,8 @@ def test_extract_hydrated_state_listing_records():
         "next_data": None,
         "_hydrated_states": [
             {"products": [
-                {"title": "Hydrated A", "url": "/p/a"},
-                {"title": "Hydrated B", "url": "/p/b"},
+                {"title": "Hydrated A", "url": "/p/a", "image_url": "/img/a.jpg"},
+                {"title": "Hydrated B", "url": "/p/b", "image_url": "/img/b.jpg"},
             ]}
         ],
         "network_payloads": [],
@@ -941,6 +941,20 @@ def test_extract_listing_records_ignores_filter_option_inline_arrays():
 def test_is_meaningful_listing_record_rejects_numeric_titles_and_filter_counts():
     assert listing_extractor._is_meaningful_listing_record({"title": 1, "price": 0}) is False
     assert listing_extractor._is_meaningful_listing_record({"title": "(1353)", "url": ""}) is False
+
+
+def test_is_meaningful_listing_record_keeps_numeric_title_with_price_or_image():
+    assert listing_extractor._is_meaningful_listing_record({"title": "2024", "price": "$199"}) is True
+    assert (
+        listing_extractor._is_meaningful_listing_record(
+            {
+                "title": "911",
+                "image_url": "https://cdn.example.com/911.jpg",
+                "url": "https://example.com/product/911",
+            }
+        )
+        is True
+    )
 
 
 def test_is_meaningful_listing_record_rejects_category_hub_url_with_only_visual_fields():

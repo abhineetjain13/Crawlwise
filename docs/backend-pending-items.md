@@ -14,6 +14,7 @@ This file is the single backlog for major backend bugs, refactors, and architect
 - Worker orphan recovery no longer fails every active run at startup; it now only recovers stale `claimed`/`running` runs after a grace window.
 - XPath validation now rejects disallowed axes, union expressions, variables, and non-allowlisted functions before selector or contract evaluation.
 - Pause/kill responsiveness now reaches into host pacing, configured acquire sleeps, browser readiness polling, challenge waits, and scroll/load-more delays via cooperative checkpoints instead of only checking around URL boundaries.
+- Anti-bot roadmap for Cloudflare/Akamai and related providers is tracked in `docs/anti-bot-hardening-plan.md`.
 - Listing extraction now rejects more category/facet hub cards that only expose visual fields plus a hub-like URL while still allowing detail-like item URLs.
 - Stale architecture-doc findings about missing `DiscoveryManifest`/`discover_sources` imports are no longer applicable.
 - Standard record responses already lazy-load heavy provenance: manifest-heavy payloads are hidden from `/api/crawls/{run_id}/records`, with a dedicated `/api/records/{record_id}/provenance` endpoint for full trace inspection.
@@ -33,6 +34,10 @@ This file is the single backlog for major backend bugs, refactors, and architect
   Remaining gap: one in-flight network call or browser navigation can still hold the worker until that call returns, and large batches still suffer head-of-line blocking because URLs are processed serially.
 
 ## Priority 2
+
+- Dynamic schema phase 2 follow-up.
+  Current state: runtime schema resolution is now domain-scoped and DB-backed via `site_memory`.
+  Remaining gap: exports, frontend/admin schema visibility, explicit global-promotion workflow, and broader heuristic-to-config cleanup are still deferred.
 
 - Extraction-quality cleanup for static/detail pages.
   Continue improving table/spec normalization for fields like `price`, `sku`, and `image_url`, and keep filtering CSS/style/unit leakage from semantic fields such as `color`, `size`, and `category`.

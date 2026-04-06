@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import logging
+import re
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
@@ -12,11 +13,20 @@ from app.models.site_memory import SiteMemory
 from app.services.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
+_SURFACE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
+
+
+def _normalize_surface_key(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized or not _SURFACE_KEY_RE.match(normalized):
+        return ""
+    return normalized
 
 
 def _empty_payload() -> dict:
     return {
         "fields": [],
+        "schemas": {},
         "selectors": {},
         "selector_suggestions": {},
         "source_mappings": {},
@@ -34,6 +44,44 @@ def _normalize_fields(fields: list[str] | None) -> list[str]:
             continue
         normalized.append(value)
         seen.add(value)
+    return normalized
+
+
+def _normalize_schema_snapshot(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    baseline_fields = _normalize_fields(value.get("baseline_fields") if isinstance(value.get("baseline_fields"), list) else [])
+    fields = _normalize_fields(value.get("fields") if isinstance(value.get("fields"), list) else [])
+    new_fields = _normalize_fields(value.get("new_fields") if isinstance(value.get("new_fields"), list) else [])
+    deprecated_fields = _normalize_fields(value.get("deprecated_fields") if isinstance(value.get("deprecated_fields"), list) else [])
+    raw_conf = value.get("confidence", 0.0)
+    try:
+        confidence = float(raw_conf or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    normalized = {
+        "baseline_fields": baseline_fields,
+        "fields": fields,
+        "new_fields": new_fields,
+        "deprecated_fields": deprecated_fields,
+        "source": str(value.get("source") or "static").strip() or "static",
+        "confidence": confidence,
+        "saved_at": str(value.get("saved_at") or "").strip() or None,
+    }
+    return normalized
+
+
+def _normalize_schema_map(value: object) -> dict[str, dict]:
+    rows = value if isinstance(value, dict) else {}
+    normalized: dict[str, dict] = {}
+    for surface, snapshot in rows.items():
+        normalized_surface = _normalize_surface_key(surface)
+        if not normalized_surface:
+            continue
+        normalized_snapshot = _normalize_schema_snapshot(snapshot)
+        if normalized_snapshot is None:
+            continue
+        normalized[normalized_surface] = normalized_snapshot
     return normalized
 
 
@@ -87,8 +135,23 @@ def _normalize_payload(payload: dict | None) -> dict:
     source_mappings = current.get("source_mappings") if isinstance(current.get("source_mappings"), dict) else {}
     llm_columns = current.get("llm_columns") if isinstance(current.get("llm_columns"), dict) else {}
     acquisition = current.get("acquisition") if isinstance(current.get("acquisition"), dict) else {}
+    schemas = _normalize_schema_map(current.get("schemas"))
+    legacy_fields = _normalize_fields(current.get("fields") if isinstance(current.get("fields"), list) else [])
+    if legacy_fields:
+        legacy_snapshot = schemas.get("legacy")
+        if legacy_snapshot is None:
+            schemas["legacy"] = {
+                "baseline_fields": [],
+                "fields": legacy_fields,
+                "new_fields": legacy_fields,
+                "deprecated_fields": [],
+                "source": "legacy",
+                "confidence": 1.0,
+                "saved_at": None,
+            }
     normalized = {
-        "fields": _normalize_fields(current.get("fields") if isinstance(current.get("fields"), list) else []),
+        "fields": legacy_fields,
+        "schemas": schemas,
         "selectors": _normalize_selector_map(current.get("selectors")),
         "selector_suggestions": _normalize_selector_map(current.get("selector_suggestions")),
         "source_mappings": {
@@ -162,6 +225,7 @@ async def merge_memory(
     fields: list[str] | None = None,
     selectors: dict[str, list[dict]] | None = None,
     selector_suggestions: dict[str, list[dict]] | None = None,
+    schemas: dict[str, dict] | None = None,
     source_mappings: dict[str, str] | None = None,
     llm_columns: dict[str, object] | None = None,
     acquisition: dict[str, object] | None = None,
@@ -179,6 +243,12 @@ async def merge_memory(
 
         payload = _normalize_payload(memory.payload)
         payload["fields"] = _normalize_fields([*payload["fields"], *(fields or [])])
+        for surface, snapshot in (schemas or {}).items():
+            normalized_surface = _normalize_surface_key(surface)
+            normalized_snapshot = _normalize_schema_snapshot(snapshot)
+            if not normalized_surface or normalized_snapshot is None:
+                continue
+            payload["schemas"][normalized_surface] = normalized_snapshot
 
         for field_name, rows in (selectors or {}).items():
             normalized_field = str(field_name or "").strip().lower()
@@ -232,6 +302,11 @@ async def merge_memory(
         logger.warning("site_memory table missing; merge_memory is running in no-op mode")
         payload = _normalize_payload(_empty_payload())
         payload["fields"] = _normalize_fields([*payload["fields"], *(fields or [])])
+        for surface, snapshot in (schemas or {}).items():
+            normalized_surface = _normalize_surface_key(surface)
+            normalized_snapshot = _normalize_schema_snapshot(snapshot)
+            if normalized_surface and normalized_snapshot is not None:
+                payload["schemas"][normalized_surface] = normalized_snapshot
         for field_name, rows in (selectors or {}).items():
             normalized_field = str(field_name or "").strip().lower()
             if normalized_field:
@@ -269,6 +344,7 @@ async def save_memory(
     fields: list[str] | None = None,
     selectors: dict[str, list[dict]] | None = None,
     selector_suggestions: dict[str, list[dict]] | None = None,
+    schemas: dict[str, dict] | None = None,
     source_mappings: dict[str, str] | None = None,
     llm_columns: dict[str, object] | None = None,
     acquisition: dict[str, object] | None = None,
@@ -280,6 +356,7 @@ async def save_memory(
         fields=fields,
         selectors=selectors,
         selector_suggestions=selector_suggestions,
+        schemas=schemas,
         source_mappings=source_mappings,
         llm_columns=llm_columns,
         acquisition=acquisition,

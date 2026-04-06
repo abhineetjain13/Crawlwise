@@ -1,5 +1,20 @@
 # CLAUDE.md
 
+## Error Handling Philosophy: Fail Loud, Never Fake
+
+Prefer a visible failure over a silent fallback
+
+- Never silently swallow errors to keep things "working"
+- Surface the error. Don't substitute placeholder data
+- Fallbacks are acceptable only when disclosed. Show a banner, log a warning, annotate the output
+- Design for debuggability, not cosmetic stability
+
+Priority order:
+1. Works correctly with real data
+2. Falls back visibly - clearly signals degraded mode
+3. Fails with a clear error message
+4. Silently degrades to looks "fine" - never do this
+
 ## Project
 
 CrawlerAI is a POC crawler stack with:
@@ -13,6 +28,17 @@ CrawlerAI is a POC crawler stack with:
 - `docs/backend-architecture.md`: current backend architecture and invariants only.
 - `docs/backend-pending-items.md`: the single consolidated backend backlog for bugs, refactors, and follow-up architecture work.
 - Root audit files are historical inputs, not the canonical backlog.
+
+## Control Ownership
+
+User-selected crawl controls are authoritative. The backend must preserve them exactly as submitted.
+
+- `surface` / page type is user-owned. Do not normalize, reinterpret, or reclassify `category`/listing vs `pdp`/detail in the backend.
+- `settings.llm_enabled` is user-owned. Do not auto-enable LLM flows.
+- `settings.advanced_mode` is user-owned. Traversal helpers (`paginate`, `scroll`, `load_more`) may run only when explicitly requested by the user.
+- `settings.proxy_list` is user-owned. Do not auto-switch to hidden proxy policy or host-learned proxy behavior.
+- Browser rendering escalation is allowed when acquisition needs a browser, but browser rendering does not authorize traversal. Rendering and traversal are separate decisions.
+- If the user selects the wrong mode, fail visibly or return obviously poor results with diagnostics. Do not silently rewrite the request to "help".
 
 ## Current Crawl Contract
 
@@ -33,7 +59,7 @@ Category is the default page type in the UI.
 
 ### Crawl settings currently wired
 
-- `settings.advanced_mode`: `null | "auto" | "paginate" | "scroll" | "load_more"`
+- `settings.advanced_mode`: `null | "paginate" | "scroll" | "load_more"`
 - `settings.max_pages`
 - `settings.max_records`
 - `settings.sleep_ms`
@@ -41,7 +67,7 @@ Category is the default page type in the UI.
 - `settings.llm_enabled`
 - `settings.extraction_contract`: row-wise `field_name`, `xpath`, `regex`
 
-`advanced_mode` is listing traversal only. It governs `paginate`, `scroll`, `load_more`, and legacy `auto` traversal behavior on listing pages. It does not control automatic browser rendering.
+`advanced_mode` is listing traversal only. It governs `paginate`, `scroll`, and `load_more` on listing pages. It does not control automatic browser rendering.
 
 Automatic browser escalation is system-owned and independent of `advanced_mode`. The acquisition layer may still escalate from `curl_cffi` to Playwright for both listing and detail pages when curl output is blocked, redirected, empty, or structurally unusable.
 
@@ -78,9 +104,10 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
 - JSON responses detected via Content-Type header or body sniffing, parsed automatically
 - HTML waterfall: curl_cffi → Playwright fallback (when JS-blocked or short content)
 - `blocked_detector.py`: Post-acquisition blocked/challenge page detection with deterministic signatures for WAFs (PerimeterX, Cloudflare, Akamai, Datadome), CAPTCHA pages, access-denied pages
-- `host_memory.py`: TTL-aware, file-backed memory of which hosts need stealth TLS
+- `host_memory.py`: TTL-aware, file-backed acquisition history. It is diagnostic/supporting state, not authority for rewriting user-owned crawl controls.
 - `browser_client.py`: Stealth context, challenge wait, origin warming, cookie consent dismissal, network XHR/fetch interception
 - Detail pages never run traversal helpers (`paginate` / `scroll` / `load_more`) even if `advanced_mode` is present; traversal is listing-only policy.
+- Listing pages also never run traversal helpers unless `advanced_mode` was explicitly set by the user.
 
 #### Acquisition hardening rules
 
@@ -97,6 +124,7 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
 - Commerce redirect shells are invalid acquisition results. Same-host redirects from a requested commerce URL to `/` must not be accepted as success merely because the redirected page contains structured data.
 - Acquisition diagnostics should expose per-URL timing phases when available: curl fetch, browser decision, browser launch, origin warm-up, navigation, challenge wait, listing readiness wait, traversal, acquisition total, and extraction total.
 - Detail-page UI should surface acquisition metadata from `source_trace` so audits can see method, browser attempt status, challenge state, and final URL without opening raw diagnostics artifacts.
+- Backend diagnostics may classify or describe what happened, but diagnostics must not silently mutate the user-requested crawl mode.
 
 #### Acquisition hardening backlog
 
@@ -300,10 +328,11 @@ These MUST be preserved across all changes:
 10. **Acquisition regressions must be diagnosable from artifacts.** Successful phase-1 runs should emit HTML/JSON artifacts plus per-URL diagnostics and smoke-run summaries so failures can be compared across batches without relying on transient logs.
 11. **Cookie reuse must be policy-driven.** Do not commit site cookies. Persist only policy-approved cookies via `cookie_policy.json`, and treat challenge/session cookies as ephemeral unless explicitly allowed.
 12. **Diagnostics must be observational.** Acquisition diagnostics should report only what actually happened during the fetch/render path; do not fabricate blocker causes, fallback reasons, or retry metadata.
-13. **JS-shell detection must trigger Playwright.** Large HTML (>=200KB) with very low visible text ratio (<2%) indicates a SPA/Next.js shell. The acquirer must escalate to Playwright in these cases even when `visible_text_length` passes the absolute minimum threshold.
-14. **LLM calls must fail fast.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. Re-evaluate when using paid API keys.
-15. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to `spec_drop_labels` in `extraction_rules.json`, not hardcoded.
-16. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
+13. **User-owned crawl controls must never be rewritten by the backend.** Do not normalize or reclassify `surface`, auto-enable LLM, auto-enable traversal, or auto-switch hidden proxy policy. If the user chose poorly, fail visibly instead of mutating the request.
+14. **JS-shell detection may trigger Playwright rendering, not traversal.** Browser escalation is allowed for rendering blocked/empty/JS-shell pages, but pagination, infinite scroll, and load-more remain explicit `advanced_mode` actions only.
+15. **LLM calls must fail fast.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. Re-evaluate when using paid API keys.
+16. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to `spec_drop_labels` in `extraction_rules.json`, not hardcoded.
+17. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
 
 ## Backlog Reference
 

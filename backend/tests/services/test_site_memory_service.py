@@ -208,3 +208,92 @@ async def test_merge_memory_updates_acquisition_payload_without_touching_selecto
         "last_success_method": "playwright",
     }
     assert memory.payload["selectors"]["title"][0]["xpath"] == "//h1/text()"
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_persists_surface_scoped_schema_snapshots(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        schemas={
+            "ecommerce_detail": {
+                "baseline_fields": ["title", "price"],
+                "fields": ["title", "price", "materials"],
+                "new_fields": ["materials"],
+                "deprecated_fields": [],
+                "source": "learned",
+                "confidence": 0.75,
+                "saved_at": "2026-04-06T00:00:00+00:00",
+            }
+        },
+    )
+
+    memory = await get_memory(db_session, "example.com")
+
+    assert memory is not None
+    assert memory.payload["schemas"]["ecommerce_detail"]["fields"] == ["title", "price", "materials"]
+    assert memory.payload["schemas"]["ecommerce_detail"]["new_fields"] == ["materials"]
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_defaults_invalid_schema_confidence_to_zero(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        schemas={
+            "ecommerce_detail": {
+                "baseline_fields": ["title"],
+                "fields": ["title", "materials"],
+                "new_fields": ["materials"],
+                "deprecated_fields": [],
+                "source": "learned",
+                "confidence": "high",
+                "saved_at": "2026-04-06T00:00:00+00:00",
+            }
+        },
+    )
+
+    memory = await get_memory(db_session, "example.com")
+
+    assert memory is not None
+    assert memory.payload["schemas"]["ecommerce_detail"]["confidence"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_keeps_surface_schemas_isolated(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        schemas={
+            "ecommerce_detail": {
+                "baseline_fields": ["title"],
+                "fields": ["title", "materials"],
+                "new_fields": ["materials"],
+                "deprecated_fields": [],
+                "source": "learned",
+                "confidence": 0.75,
+                "saved_at": "2026-04-06T00:00:00+00:00",
+            }
+        },
+    )
+    await merge_memory(
+        db_session,
+        "example.com",
+        schemas={
+            "job_detail": {
+                "baseline_fields": ["title", "company"],
+                "fields": ["title", "company", "team"],
+                "new_fields": ["team"],
+                "deprecated_fields": [],
+                "source": "review",
+                "confidence": 1.0,
+                "saved_at": "2026-04-06T00:00:00+00:00",
+            }
+        },
+    )
+
+    memory = await get_memory(db_session, "example.com")
+
+    assert memory is not None
+    assert memory.payload["schemas"]["ecommerce_detail"]["new_fields"] == ["materials"]
+    assert memory.payload["schemas"]["job_detail"]["new_fields"] == ["team"]

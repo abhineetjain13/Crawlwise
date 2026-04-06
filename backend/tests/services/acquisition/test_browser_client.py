@@ -9,7 +9,9 @@ import pytest
 
 from app.core.config import settings
 from app.services.acquisition.browser_client import (
+    _assess_challenge_signals,
     _build_launch_kwargs,
+    _click_and_observe_next_page,
     _collect_paginated_html,
     _context_kwargs,
     _cookie_policy_for_domain,
@@ -18,6 +20,7 @@ from app.services.acquisition.browser_client import (
     _find_next_page_url,
     _goto_with_fallback,
     _load_cookies,
+    _open_requested_field_sections,
     _pause_after_navigation,
     _retryable_browser_error_reason,
     _save_cookies,
@@ -91,18 +94,63 @@ async def test_wait_for_challenge_resolution_waits_for_surface_readiness_after_i
     resolved_shell = "<html><body><div>loading</div></body></html>"
     ready = "<html><body><h1>Product title</h1><span class='price'>$10</span>" + ("content " * 40) + "</body></html>"
     page = FakeSurfaceReadyPage([initial, resolved_shell, ready], readiness_counts=[0, 0, 1])
+    original_detector = __import__(
+        "app.services.acquisition.browser_client",
+        fromlist=["detect_blocked_page"],
+    ).detect_blocked_page
+    provider_verdict = type("BlockedVerdict", (), {"is_blocked": True, "provider": "cloudflare"})()
+    clear_verdict = type("BlockedVerdict", (), {"is_blocked": False, "provider": None})()
 
-    ok, state, reasons = await _wait_for_challenge_resolution(
-        page,
-        max_wait_ms=1000,
-        poll_interval_ms=250,
-        surface="ecommerce_detail",
-    )
+    try:
+        __import__(
+            "app.services.acquisition.browser_client",
+            fromlist=["detect_blocked_page"],
+        ).detect_blocked_page = (
+            lambda html: provider_verdict if "checking your browser" in html.lower() else clear_verdict
+        )
+
+        ok, state, reasons = await _wait_for_challenge_resolution(
+            page,
+            max_wait_ms=1000,
+            poll_interval_ms=250,
+            surface="ecommerce_detail",
+        )
+    finally:
+        __import__(
+            "app.services.acquisition.browser_client",
+            fromlist=["detect_blocked_page"],
+        ).detect_blocked_page = original_detector
 
     assert ok
     assert state == "waiting_resolved"
     assert page.timeout_calls
     assert reasons == []
+
+
+def test_assess_challenge_signals_waits_only_for_provider_signed_short_block(monkeypatch):
+    provider_verdict = type("BlockedVerdict", (), {"is_blocked": True, "provider": "cloudflare"})()
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client.detect_blocked_page",
+        lambda _html: provider_verdict,
+    )
+
+    assessment = _assess_challenge_signals("<html><body>temporarily blocked</body></html>")
+
+    assert assessment.state == "waiting_unresolved"
+    assert assessment.should_wait is True
+
+
+def test_assess_challenge_signals_does_not_wait_for_short_unattributed_block(monkeypatch):
+    generic_verdict = type("BlockedVerdict", (), {"is_blocked": True, "provider": None})()
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client.detect_blocked_page",
+        lambda _html: generic_verdict,
+    )
+
+    assessment = _assess_challenge_signals("<html><body>blocked</body></html>")
+
+    assert assessment.state == "blocked_signal"
+    assert assessment.should_wait is False
 
 
 def test_context_kwargs_uses_locale_instead_of_overriding_headers():
@@ -215,6 +263,56 @@ class FakePaginationPage:
         return ""
 
 
+class FakeClickableLocator:
+    def __init__(self, page, *, exists: bool, click_callback=None, inner_html: str = ""):
+        self._page = page
+        self._exists = exists
+        self._click_callback = click_callback
+        self._inner_html = inner_html
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return 1 if self._exists else 0
+
+    async def click(self, timeout: int | None = None):
+        self._page.click_calls.append(timeout or 0)
+        if self._click_callback is not None:
+            await self._click_callback()
+
+    async def inner_html(self):
+        return self._inner_html
+
+
+class FakeClickObservePage:
+    def __init__(self):
+        self.url = "https://example.com/products?page=1"
+        self.click_calls: list[int] = []
+        self.load_state_calls: list[tuple[str, int]] = []
+        self.wait_calls: list[int] = []
+        self._container_html = "<div>before</div>"
+
+    def locator(self, selector: str):
+        if selector == "a[rel='next']":
+            return FakeClickableLocator(self, exists=False)
+        if selector == '[class*="product"], [class*="result"], ul.products, main':
+            return FakeClickableLocator(self, exists=True, inner_html=self._container_html)
+        if selector == '[aria-label*="next" i]':
+            async def _after_click():
+                self._container_html = "<div>after</div>"
+
+            return FakeClickableLocator(self, exists=True, click_callback=_after_click)
+        return FakeClickableLocator(self, exists=False)
+
+    async def wait_for_load_state(self, state: str, *, timeout: int):
+        self.load_state_calls.append((state, timeout))
+
+    async def wait_for_timeout(self, value: int):
+        self.wait_calls.append(value)
+
+
 @pytest.mark.asyncio
 async def test_load_cookies_filters_sensitive_expired_and_session_cookies(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "cookie_store_dir", tmp_path)
@@ -270,6 +368,37 @@ async def test_save_cookies_removes_stale_cookie_file_when_no_persistable_cookie
     assert not cookie_path.exists()
 
 
+@pytest.mark.asyncio
+async def test_save_cookies_persists_explicitly_allowed_clearance_cookie(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "cookie_store_dir", tmp_path)
+    monkeypatch.setattr(
+        "app.services.acquisition.cookie_store.COOKIE_POLICY",
+        {
+            "persist_session_cookies": False,
+            "max_persisted_ttl_seconds": 2592000,
+            "blocked_name_prefixes": ["cf_", "__cf"],
+            "blocked_name_contains": ["challenge"],
+            "allowed_cookie_names": ["cf_clearance"],
+            "harvest_cookie_names": [],
+            "harvest_name_prefixes": [],
+            "harvest_name_contains": [],
+            "reuse_in_http_client": True,
+            "domain_overrides": {},
+        },
+    )
+    future = int(time.time()) + 1800
+    context = FakeCookieContext(cookies=[
+        {"name": "cf_clearance", "value": "clearance-token", "domain": "example.com", "path": "/", "expires": future},
+    ])
+
+    await _save_cookies(context, "example.com")
+
+    stored = json.loads((tmp_path / "example.com.json").read_text(encoding="utf-8"))
+    assert stored == [
+        {"name": "cf_clearance", "value": "clearance-token", "domain": "example.com", "path": "/", "expires": future}
+    ]
+
+
 def test_cookie_policy_domain_override_matches_subdomain():
     policy = _cookie_policy_for_domain("www.your-domain.com")
 
@@ -306,7 +435,7 @@ async def test_goto_with_fallback_retries_transient_browser_dns_error(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_goto_with_fallback_uses_configured_optimistic_wait(monkeypatch):
+async def test_goto_with_fallback_only_uses_load_for_optimistic_wait(monkeypatch):
     page = FakeGotoPage([
         {
             "page_url": "https://example.com",
@@ -328,7 +457,7 @@ async def test_goto_with_fallback_uses_configured_optimistic_wait(monkeypatch):
         ],
     )
 
-    assert page.load_state_calls == [("networkidle", 2500), ("load", 2500)]
+    assert page.load_state_calls == [("load", 2500)]
 
 
 @pytest.mark.asyncio
@@ -342,6 +471,33 @@ async def test_pause_after_navigation_polls_checkpoint_during_long_wait(monkeypa
     await _pause_after_navigation(350, checkpoint=checkpoint)
 
     assert checkpoint.await_count >= 4
+
+
+@pytest.mark.asyncio
+async def test_open_requested_field_sections_honors_checkpoint(monkeypatch):
+    checkpoint = AsyncMock()
+
+    class FakeRequestedFieldPage:
+        async def evaluate(self, *_args, **_kwargs):
+            return [{"field_name": "details"}]
+
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client.ACCORDION_EXPAND_WAIT_MS",
+        125,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client.INTERRUPTIBLE_WAIT_POLL_MS",
+        50,
+    )
+
+    await _open_requested_field_sections(
+        FakeRequestedFieldPage(),
+        requested_fields=["details"],
+        requested_field_selectors={},
+        checkpoint=checkpoint,
+    )
+
+    assert checkpoint.await_count >= 3
 
 
 @pytest.mark.asyncio
@@ -413,6 +569,17 @@ async def test_find_next_page_url_uses_configured_selectors(monkeypatch):
     page = FakeCustomPage()
 
     assert await _find_next_page_url(page) == "https://example.com/products?page=2"
+
+
+@pytest.mark.asyncio
+async def test_click_and_observe_next_page_waits_for_domcontentloaded_after_click():
+    page = FakeClickObservePage()
+
+    next_page_url = await _click_and_observe_next_page(page)
+
+    assert next_page_url == "https://example.com/products?page=1"
+    assert page.load_state_calls == [("domcontentloaded", 5000)]
+    assert page.click_calls == [1500]
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.crawl import CrawlRecord
 from app.services.crawl_service import create_crawl_run
 from app.services.review.service import build_review_payload, save_review
+from app.services.site_memory_service import get_memory
 
 
 @pytest.mark.asyncio
@@ -97,17 +98,7 @@ async def test_build_review_payload_includes_selector_suggestions_for_detail_rec
 async def test_save_review_promotes_review_bucket_fields_into_canonical_data(
     db_session: AsyncSession,
     test_user,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    async def _fake_save_domain_mapping(_domain: str, _surface: str, _mapping: dict[str, str]) -> None:
-        return None
-
-    async def _fake_save_canonical_fields(_surface: str, fields: list[str]) -> list[str]:
-        return fields
-
-    monkeypatch.setattr("app.services.review.service.save_domain_mapping", _fake_save_domain_mapping)
-    monkeypatch.setattr("app.services.review.service.save_canonical_fields", _fake_save_canonical_fields)
-
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/product/chair-a",
@@ -121,7 +112,7 @@ async def test_save_review_promotes_review_bucket_fields_into_canonical_data(
         discovered_data={
             "review_bucket": [
                 {
-                    "key": "material",
+                    "key": "wire_gauge",
                     "value": "Oak",
                     "confidence_score": 8,
                     "source": "semantic_spec",
@@ -137,29 +128,22 @@ async def test_save_review_promotes_review_bucket_fields_into_canonical_data(
     await save_review(
         db_session,
         run,
-        [{"source_field": "material", "output_field": "materials", "selected": True}],
+        [{"source_field": "wire_gauge", "output_field": "wire_gauge", "selected": True}],
     )
 
     await db_session.refresh(record)
-    assert record.data["materials"] == "Oak"
+    memory = await get_memory(db_session, "example.com")
+    assert record.data["wire_gauge"] == "Oak"
     assert record.discovered_data == {}
+    assert memory is not None
+    assert memory.payload["schemas"]["ecommerce_detail"]["new_fields"] == ["wire_gauge"]
 
 
 @pytest.mark.asyncio
 async def test_save_review_keeps_review_bucket_when_target_field_is_already_set(
     db_session: AsyncSession,
     test_user,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    async def _fake_save_domain_mapping(_domain: str, _surface: str, _mapping: dict[str, str]) -> None:
-        return None
-
-    async def _fake_save_canonical_fields(_surface: str, fields: list[str]) -> list[str]:
-        return fields
-
-    monkeypatch.setattr("app.services.review.service.save_domain_mapping", _fake_save_domain_mapping)
-    monkeypatch.setattr("app.services.review.service.save_canonical_fields", _fake_save_canonical_fields)
-
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/product/chair-a",

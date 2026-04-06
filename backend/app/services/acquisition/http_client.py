@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from email.utils import parsedate_to_datetime
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -11,7 +13,6 @@ from curl_cffi import requests
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.cookie_store import load_cookies_for_http
-from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host
 from app.services.pipeline_config import (
     HTTP_MAX_RETRIES,
     HTTP_IMPERSONATION_PROFILES,
@@ -47,6 +48,7 @@ class HttpFetchResult:
     attempts: int = 0
     error: str = ""
     attempt_log: list[dict[str, object]] = field(default_factory=list)
+    retry_after_seconds: float | None = None
 
 async def fetch_html(url: str, proxy: str | None = None) -> str:
     """Fetch HTML via the shared HTTP provider and return the text payload."""
@@ -87,26 +89,26 @@ async def fetch_html_result(
 
 
 def _build_attempt_order(*, url: str, allow_stealth_retry: bool, force_stealth: bool) -> list[str]:
-    prefer_stealth = force_stealth or host_prefers_stealth(url)
     profiles = [profile for profile in HTTP_IMPERSONATION_PROFILES if profile]
     if not profiles:
-        profiles = [IMPERSONATION_TARGET]
-    stealth_profile = HTTP_STEALTH_IMPERSONATION_PROFILE or profiles[-1]
+        fallback_profile = str(IMPERSONATION_TARGET or "").strip()
+        if fallback_profile:
+            profiles = [fallback_profile]
+    if not profiles:
+        raise ValueError("No valid HTTP impersonation profile is configured")
+    stealth_profile = str(HTTP_STEALTH_IMPERSONATION_PROFILE or "").strip() or profiles[-1]
     if stealth_profile not in profiles:
         profiles.append(stealth_profile)
     if force_stealth:
         return [stealth_profile]
-    if prefer_stealth:
-        ordered = [stealth_profile, *[profile for profile in profiles if profile != stealth_profile]]
-        return ordered[:1] if not allow_stealth_retry else ordered
-    primary = IMPERSONATION_TARGET if IMPERSONATION_TARGET in profiles else profiles[0]
+    primary_target = str(IMPERSONATION_TARGET or "").strip()
+    primary = primary_target if primary_target in profiles else profiles[0]
     ordered = [primary, *[profile for profile in profiles if profile != primary]]
     return ordered[:1] if not allow_stealth_retry else ordered
 
 
 def _remember_successful_fetch(url: str, result: HttpFetchResult) -> None:
-    if result.stealth_used:
-        remember_stealth_host(url)
+    return None
 
 
 async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) -> HttpFetchResult:
@@ -131,7 +133,8 @@ async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) ->
                 continue
             return result
         if result.status_code in HTTP_RETRY_STATUS_CODES and attempt < attempts:
-            await asyncio.sleep(_retry_backoff_seconds(attempt))
+            delay_seconds = max(_retry_backoff_seconds(attempt), float(result.retry_after_seconds or 0.0))
+            await asyncio.sleep(delay_seconds)
             continue
         return result
 
@@ -156,6 +159,8 @@ def _build_attempt_entry(result: HttpFetchResult, *, attempt: int, impersonate: 
         entry["content_type"] = result.content_type
     if result.error:
         entry["error"] = result.error
+    if result.retry_after_seconds is not None:
+        entry["retry_after_seconds"] = result.retry_after_seconds
     if result.text and result.content_type == "html":
         entry["blocked"] = detect_blocked_page(result.text).is_blocked
     return entry
@@ -204,6 +209,7 @@ async def _fetch_once(url: str, proxy: str | None, *, impersonate: str) -> HttpF
         impersonate_profile=impersonate,
         attempts=1,
         error=error,
+        retry_after_seconds=_parse_retry_after(headers),
     )
 
 
@@ -241,6 +247,21 @@ def _should_retry_with_stealth(result: HttpFetchResult) -> bool:
     if result.content_type != "json" and detect_blocked_page(result.text).is_blocked:
         return True
     return False
+
+
+def _parse_retry_after(headers: dict[str, str]) -> float | None:
+    raw_value = str((headers or {}).get("retry-after") or "").strip()
+    if not raw_value:
+        return None
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(raw_value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    return max(0.0, retry_at.timestamp() - time.time())
 
 
 _validate_retry_backoff_config()

@@ -14,5 +14,15 @@
     "system_file": "field_cleanup_review.system.txt",
     "user_file": "field_cleanup_review.user.txt",
     "response_type": "object"
+  },
+  "page_classification": {
+    "system_file": "page_classification.system.txt",
+    "user_file": "page_classification.user.txt",
+    "response_type": "object"
+  },
+  "schema_inference": {
+    "system_file": "schema_inference.system.txt",
+    "user_file": "schema_inference.user.txt",
+    "response_type": "object"
   }
 }

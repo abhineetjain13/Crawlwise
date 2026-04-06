@@ -87,6 +87,7 @@ def extract_candidates(
     manifest: DiscoveryManifest,
     additional_fields: list[str],
     extraction_contract: list[dict] | None = None,
+    resolved_fields: list[str] | None = None,
 ) -> tuple[dict, dict]:
     """Extract candidate values for each target field.
 
@@ -103,7 +104,7 @@ def extract_candidates(
     tree = _build_xpath_tree(html)
     candidates: dict[str, list[dict]] = {}
     source_trace: dict[str, list[dict]] = {}
-    target_fields = sorted(set(get_canonical_fields(surface)) | set(expand_requested_fields(additional_fields)))
+    target_fields = sorted(set(resolved_fields or get_canonical_fields(surface)) | set(expand_requested_fields(additional_fields)))
     domain = _domain(url)
     contract_by_field = _index_extraction_contract(extraction_contract or [])
     semantic = extract_semantic_detail_data(html, requested_fields=sorted(target_fields))

@@ -8,8 +8,8 @@ import pytest
 from curl_cffi.const import CurlOpt
 from app.core.config import settings
 
-from app.services.acquisition.host_memory import host_prefers_stealth, reset_host_memory
-from app.services.acquisition.http_client import _retry_backoff_seconds, fetch_html_result
+from app.services.acquisition.http_client import _build_attempt_order, _retry_backoff_seconds, fetch_html_result
+from app.services.acquisition.cookie_store import is_persistable_cookie
 from app.services.url_safety import ValidatedTarget
 
 
@@ -21,16 +21,8 @@ class FakeResponse:
     url: str = "https://example.com"
 
 
-@pytest.fixture(autouse=True)
-def _reset_memory():
-    reset_host_memory()
-    yield
-    reset_host_memory()
-
-
 @pytest.mark.asyncio
 async def test_fetch_html_result_retries_with_stealth(monkeypatch, tmp_path):
-    monkeypatch.setattr("app.services.acquisition.host_memory.settings.artifacts_dir", tmp_path)
     monkeypatch.setattr("app.services.acquisition.http_client.HTTP_MAX_RETRIES", 0)
     monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110", "chrome131"))
     monkeypatch.setattr("app.services.acquisition.http_client.HTTP_STEALTH_IMPERSONATION_PROFILE", "chrome131")
@@ -68,7 +60,6 @@ async def test_fetch_html_result_retries_with_stealth(monkeypatch, tmp_path):
     assert result.status_code == 200
     assert result.stealth_used
     assert calls == ["chrome110", "chrome131"]
-    assert host_prefers_stealth("https://example.com/product")
     assert result.impersonate_profile == "chrome131"
 
 
@@ -213,9 +204,9 @@ async def test_fetch_html_result_attaches_harvested_cookies(monkeypatch, tmp_pat
         {
             "persist_session_cookies": False,
             "max_persisted_ttl_seconds": 0,
-            "blocked_name_prefixes": ["cf_", "dd_", "px"],
-            "blocked_name_contains": ["challenge"],
-            "harvest_cookie_names": ["datadome"],
+            "blocked_name_prefixes": ["cf_", "dd_", "px", "datadome"],
+            "blocked_name_contains": ["challenge", "datadome"],
+            "harvest_cookie_names": [],
             "reuse_in_http_client": True,
             "domain_overrides": {},
         },
@@ -245,7 +236,44 @@ async def test_fetch_html_result_attaches_harvested_cookies(monkeypatch, tmp_pat
     result = await fetch_html_result("https://example.com/product", allow_stealth_retry=False)
 
     assert result.status_code == 200
-    assert captured["cookies"] == {"datadome": "token"}
+    assert captured["cookies"] is None
+
+
+def test_build_attempt_order_rejects_empty_impersonation_profiles(monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("", None))
+    monkeypatch.setattr("app.services.acquisition.http_client.IMPERSONATION_TARGET", "")
+
+    with pytest.raises(ValueError, match="No valid HTTP impersonation profile"):
+        _build_attempt_order(
+            url="https://example.com",
+            allow_stealth_retry=True,
+            force_stealth=False,
+        )
+
+
+def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(caplog, monkeypatch):
+    future = 4102444800
+    monkeypatch.setattr(
+        "app.services.acquisition.cookie_store.COOKIE_POLICY",
+        {
+            "persist_session_cookies": False,
+            "max_persisted_ttl_seconds": "not-a-number",
+            "blocked_name_prefixes": [],
+            "blocked_name_contains": [],
+            "harvest_cookie_names": [],
+            "reuse_in_http_client": True,
+            "domain_overrides": {},
+        },
+    )
+
+    with caplog.at_level("WARNING"):
+        allowed = is_persistable_cookie(
+            {"name": "prefs", "value": "1", "domain": "example.com", "path": "/", "expires": future},
+            domain="example.com",
+        )
+
+    assert allowed is True
+    assert "max_persisted_ttl_seconds" in caplog.text
 
 
 def test_retry_backoff_seconds_is_bounded(monkeypatch):
@@ -263,3 +291,48 @@ def test_retry_backoff_seconds_rejects_invalid_bounds(monkeypatch):
 
     with pytest.raises(ValueError, match="HTTP_RETRY_BACKOFF_MAX_MS"):
         _retry_backoff_seconds(1)
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_honors_retry_after_header(monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_MAX_RETRIES", 1)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+
+    calls = 0
+    sleeps: list[float] = []
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return FakeResponse(
+                    status_code=429,
+                    text="<html><body><main><h1>Rate limited</h1><p>" + ("x" * 400) + "</p></main></body></html>",
+                    headers={"content-type": "text/html; charset=utf-8", "retry-after": "7"},
+                )
+            return FakeResponse(
+                status_code=200,
+                text="<html><body>ok</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+
+    async def _fake_sleep(delay: float):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+    monkeypatch.setattr("app.services.acquisition.http_client.asyncio.sleep", _fake_sleep)
+
+    result = await fetch_html_result("https://example.com/product", allow_stealth_retry=False)
+
+    assert result.status_code == 200
+    assert sleeps == [7.0]

@@ -248,6 +248,7 @@ async def _fetch_rendered_html_attempt(
         await _goto_with_fallback(
             page,
             url,
+            surface=surface,
             strategies=navigation_strategies or _navigation_strategies(browser_channel=browser_channel),
             checkpoint=checkpoint,
         )
@@ -263,6 +264,15 @@ async def _fetch_rendered_html_attempt(
         result.challenge_state = challenge_state
         result.diagnostics["challenge_reasons"] = reasons
         result.diagnostics["challenge_ok"] = challenge_ok
+        if not challenge_ok:
+            await _populate_result(result, page, intercepted)
+            result.diagnostics["final_url"] = page.url or url
+            result.diagnostics["html_length"] = len(result.html or "")
+            result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
+            timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
+            result.diagnostics["timings_ms"] = timings_ms
+            await _persist_context_cookies(context, page.url or url, original_domain)
+            return result
         readiness_started_at = time.perf_counter()
         surface_readiness = await _wait_for_surface_readiness(
             page,
@@ -278,6 +288,7 @@ async def _fetch_rendered_html_attempt(
             page,
             requested_fields=requested_fields,
             requested_field_selectors=requested_field_selectors,
+            checkpoint=checkpoint,
         )
         if field_trigger_selectors:
             result.diagnostics["field_trigger_selectors"] = field_trigger_selectors
@@ -449,7 +460,7 @@ async def _apply_advanced_mode(
                 request_delay_ms=request_delay_ms,
                 checkpoint=checkpoint,
             )
-        next_page_url = await _find_next_page_url(page)
+        next_page_url = await _click_and_observe_next_page(page, checkpoint=checkpoint)
         if next_page_url:
             return await _collect_paginated_html(
                 page,
@@ -480,8 +491,10 @@ async def _collect_paginated_html(
         fragments.append(f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{await page.content()}")
         if page_index + 1 >= page_limit:
             break
-        next_page_url = await _find_next_page_url(page)
-        if not next_page_url or next_page_url in visited_urls:
+        current_url = str(page.url or "").strip()
+        next_page_url = await _click_and_observe_next_page(page, checkpoint=checkpoint)
+        page_advanced_in_place = str(page.url or "").strip() != current_url or next_page_url == current_url
+        if not next_page_url or (next_page_url in visited_urls and not page_advanced_in_place):
             break
         try:
             await validate_public_target(next_page_url)
@@ -489,11 +502,24 @@ async def _collect_paginated_html(
             logger.warning("Rejected pagination URL %s from %s: %s", next_page_url, page.url, exc)
             break
         visited_urls.add(next_page_url)
-        await page.goto(
-            next_page_url,
-            wait_until="domcontentloaded",
-            timeout=PAGINATION_NAVIGATION_TIMEOUT_MS,
-        )
+        if not page_advanced_in_place:
+            await page.goto(
+                next_page_url,
+                wait_until="domcontentloaded",
+                timeout=PAGINATION_NAVIGATION_TIMEOUT_MS,
+            )
+            try:
+                await page.wait_for_load_state(
+                    "load",
+                    timeout=BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
+                )
+            except Exception:
+                pass
+            await _wait_for_surface_readiness(
+                page,
+                surface=surface,
+                checkpoint=checkpoint,
+            )
         await _dismiss_cookie_consent(page, checkpoint=checkpoint)
         await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
         await _expand_accordions(page, checkpoint=checkpoint)
@@ -501,6 +527,7 @@ async def _collect_paginated_html(
             page,
             requested_fields=[],
             requested_field_selectors={},
+            checkpoint=checkpoint,
         )
         await _flatten_shadow_dom(page)
         await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
@@ -625,7 +652,7 @@ async def _wait_for_surface_readiness(
     }
 
 
-async def _find_next_page_url(page) -> str:
+async def _find_next_page_url_anchor_only(page) -> str:
     for selector in PAGINATION_NEXT_SELECTORS:
         try:
             locator = page.locator(selector).first
@@ -657,6 +684,75 @@ async def _find_next_page_url(page) -> str:
         logger.debug("Failed to evaluate DOM for next-page link", exc_info=True)
         return ""
     return str(href or "").strip()
+
+
+async def _find_next_page_url(page) -> str:
+    return await _find_next_page_url_anchor_only(page)
+
+
+async def _click_and_observe_next_page(
+    page,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> str:
+    next_page_url = await _find_next_page_url_anchor_only(page)
+    if next_page_url:
+        return next_page_url
+
+    async def _container_hash() -> int | None:
+        selector = '[class*="product"], [class*="result"], ul.products, main'
+        try:
+            locator = page.locator(selector).first
+            if not await locator.count():
+                return None
+            return hash((await locator.inner_html())[:2000])
+        except Exception:
+            logger.debug("Failed to inspect listing container before/after pagination click", exc_info=True)
+            return None
+
+    click_selectors = [
+        *PAGINATION_NEXT_SELECTORS,
+        '[aria-label*="next" i]',
+        'button[class*="next"]',
+        '[role="button"][class*="next"]',
+        'button:has-text("Next")',
+        '[data-testid*="next"]',
+    ]
+    target = None
+    for selector in click_selectors:
+        try:
+            locator = page.locator(selector).first
+            if await locator.count():
+                target = locator
+                break
+        except Exception:
+            logger.debug("Failed to inspect clickable pagination selector %s", selector, exc_info=True)
+    if target is None:
+        return ""
+
+    initial_url = str(page.url or "").strip()
+    initial_hash = await _container_hash()
+    try:
+        await target.click(timeout=1500)
+    except Exception:
+        logger.debug("Failed to click next-page control", exc_info=True)
+        return ""
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=5000)
+    except Exception:
+        logger.debug("Timed out waiting for domcontentloaded after pagination click", exc_info=True)
+
+    waited_ms = 0
+    poll_ms = 250
+    while waited_ms < 3000:
+        await _cooperative_page_wait(page, poll_ms, checkpoint=checkpoint)
+        waited_ms += poll_ms
+        current_url = str(page.url or "").strip()
+        if current_url != initial_url:
+            return current_url
+        if await _container_hash() != initial_hash:
+            return current_url
+    return ""
 
 
 async def _expand_accordions(
@@ -701,6 +797,7 @@ async def _open_requested_field_sections(
     *,
     requested_fields: list[str],
     requested_field_selectors: dict[str, list[dict]],
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, list[dict]]:
     plans: list[dict[str, object]] = []
     for field_name in requested_fields:
@@ -828,7 +925,7 @@ async def _open_requested_field_sections(
             plans,
         )
         if clicked_rows:
-            await _cooperative_sleep_ms(ACCORDION_EXPAND_WAIT_MS)
+            await _cooperative_sleep_ms(ACCORDION_EXPAND_WAIT_MS, checkpoint=checkpoint)
         selectors: dict[str, list[dict]] = {}
         for row in clicked_rows or []:
             if not isinstance(row, dict):
@@ -949,7 +1046,6 @@ def _navigation_strategies(*, browser_channel: str | None = None) -> list[tuple[
             ("commit", BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS),
         ]
     return [
-        ("networkidle", BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS),
         ("load", BROWSER_NAVIGATION_LOAD_TIMEOUT_MS),
         ("domcontentloaded", BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS),
     ]
@@ -966,21 +1062,21 @@ async def _goto_with_fallback(
     page,
     url: str,
     *,
+    surface: str | None = None,
     strategies: list[tuple[str, int]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Navigate with progressively less strict wait conditions.
 
-    Some modern storefronts keep background requests open long enough that
-    `networkidle` times out even though the page is already usable. We still
-    want the rendered DOM in those cases, so fall back to `load` and then
-    `domcontentloaded` before failing the crawl.
+    Modern storefronts often keep background requests, beacons, or websocket
+    connections active indefinitely. We therefore use `domcontentloaded` as the
+    hard navigation boundary, then do a short best-effort `load` wait instead
+    of waiting for network silence.
 
     Also handles non-timeout errors (e.g. ERR_HTTP2_PROTOCOL_ERROR) by
-    retrying with less strict wait conditions before giving up.
+    retrying before giving up.
     """
     strategies = strategies or _navigation_strategies()
-    max_timeout = max([timeout for _, timeout in strategies] or [30000])
     last_error = None
     browser_error_retries = max(0, BROWSER_ERROR_RETRY_ATTEMPTS)
 
@@ -988,8 +1084,11 @@ async def _goto_with_fallback(
         try:
             if checkpoint is not None:
                 await checkpoint()
-            # 1. Guarantee domcontentloaded to secure the DOM before background requests time out.
-            await page.goto(url, wait_until="domcontentloaded", timeout=max_timeout)
+            await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
+            )
             browser_error_reason = await _retryable_browser_error_reason(page)
             if browser_error_reason is not None:
                 if attempt >= browser_error_retries:
@@ -1006,9 +1105,9 @@ async def _goto_with_fallback(
                 )
                 continue
 
-            # 2. Optimistically wait for stricter states if requested, suppressing timeouts.
+            # Best-effort hydration window after DOM readiness.
             for wait_until, timeout in strategies:
-                if wait_until in ("load", "networkidle"):
+                if wait_until == "load":
                     try:
                         await page.wait_for_load_state(
                             wait_until,
@@ -1243,8 +1342,10 @@ def _assess_challenge_signals(html: str) -> ChallengeAssessment:
         if short_html:
             reasons.append("short_html")
         return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=reasons)
-    if blocked_verdict.is_blocked and short_html and "access_denied" not in strong_hits:
-        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=strong_hits or weak_hits or ["blocked_detector"])
+    has_provider_signature = bool(blocked_verdict.provider)
+    if blocked_verdict.is_blocked and short_html and has_provider_signature:
+        reasons = strong_hits or weak_hits or [str(blocked_verdict.provider), "blocked_detector"]
+        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=reasons)
     if blocked_verdict.is_blocked:
         return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits or weak_hits or ["blocked_detector"])
     if short_html and strong_hits:
@@ -1359,8 +1460,6 @@ def _cookie_name_blocked(name: str, policy: dict[str, object]) -> bool:
     normalized = str(name or "").strip().lower()
     if not normalized:
         return True
-    if _cookie_name_allowed(name, policy):
-        return False
     blocked_prefixes = [str(value).strip().lower() for value in policy.get("blocked_name_prefixes", []) if str(value).strip()]
     for prefix in blocked_prefixes:
         if normalized.startswith(prefix):

@@ -6,6 +6,7 @@ import pytest
 from app.schemas.selector import SelectorCreate, SelectorTestRequest
 from app.services.selector_service import _normalize_selector_payload
 from app.services.xpath_service import (
+    bs4_tag_to_xpath,
     build_absolute_xpath,
     extract_selector_value,
     validate_xpath_candidate,
@@ -110,11 +111,35 @@ def test_build_absolute_xpath_uses_relative_anchor_instead_of_full_dom_path():
     assert "/html" not in xpath
 
 
+def test_bs4_tag_to_xpath_excludes_document_root():
+    soup = BeautifulSoup(
+        "<html><body><section><h1>Title</h1></section></body></html>",
+        "html.parser",
+    )
+
+    xpath = bs4_tag_to_xpath(soup.select_one("h1"))
+
+    assert "[document]" not in xpath
+    assert xpath == "/html/body/section/h1"
+
+
 def test_validate_xpath_syntax_rejects_disallowed_axis():
     valid, error = validate_xpath_syntax("//div/ancestor::section")
 
     assert valid is False
     assert error == "XPath axis is not allowed"
+
+
+def test_validate_xpath_syntax_allows_common_node_tests():
+    valid, error = validate_xpath_syntax("//div/node() | //comment()")
+
+    assert valid is False
+    assert error == "XPath unions are not supported"
+
+    valid, error = validate_xpath_syntax("//div/node()[1]")
+
+    assert valid is True
+    assert error is None
 
 
 def test_normalize_selector_payload_rejects_disallowed_xpath_function():

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from string import Template
@@ -32,6 +34,7 @@ from app.services.pipeline_config import (
 _ERROR_PREFIX = "Error:"
 JSON_CONTENT_TYPE = "application/json"
 SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
+logger = logging.getLogger(__name__)
 
 
 
@@ -64,7 +67,7 @@ async def snapshot_active_configs(
     task_types: list[str] | None = None,
 ) -> dict[str, dict]:
     snapshot: dict[str, dict] = {}
-    for task_type in task_types or ["general", "xpath_discovery", "missing_field_extraction", "field_cleanup_review"]:
+    for task_type in task_types or ["general", "xpath_discovery", "missing_field_extraction", "field_cleanup_review", "page_classification", "schema_inference"]:
         config = await resolve_active_config(session, task_type)
         if config is not None:
             snapshot[task_type] = _serialize_config_snapshot(config)
@@ -120,7 +123,7 @@ async def run_prompt_task(
     # Groq's 8b/70b models often have a 6k-8k limit on some tiers.
     safe_user_prompt = _enforce_token_limit(rendered_user_prompt, limit=5600)
     
-    raw, input_tokens, output_tokens = await _call_provider(
+    raw, input_tokens, output_tokens = await _call_provider_with_retry(
         provider=str(config.get("provider") or ""),
         model=str(config.get("model") or ""),
         api_key=_resolve_provider_api_key(
@@ -271,7 +274,10 @@ async def review_field_candidates(
                 {field: existing_values.get(field) for field in target_fields},
                 LLM_EXISTING_VALUES_MAX_CHARS,
             ),
-            "candidate_evidence_json": _truncate_json_literal(candidate_evidence, LLM_CANDIDATE_EVIDENCE_MAX_CHARS),
+            "candidate_evidence_json": _truncate_json_literal(
+                _safe_truncate_for_prompt(candidate_evidence),
+                LLM_CANDIDATE_EVIDENCE_MAX_CHARS,
+            ),
             "discovered_sources_json": _truncate_json_literal(discovered_sources, LLM_DISCOVERED_SOURCES_MAX_CHARS),
             "html_snippet": _truncate_html(
                 html_text,
@@ -309,6 +315,47 @@ async def _call_provider(
         return await dispatch(api_key, model, system_prompt, user_prompt)
     except httpx.HTTPError as exc:
         return f"{_ERROR_PREFIX} {type(exc).__name__}: {exc}", 0, 0
+
+
+async def _call_provider_with_retry(
+    *,
+    provider: str,
+    model: str,
+    api_key: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_retries: int = 3,
+    base_delay_s: float = 2.0,
+) -> tuple[str, int, int]:
+    """Wrap _call_provider with exponential backoff for rate limits."""
+    last_error = ""
+    for attempt in range(max_retries):
+        result, input_tokens, output_tokens = await _call_provider(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        if not result.startswith(_ERROR_PREFIX):
+            return result, input_tokens, output_tokens
+        if "429" in result or "rate" in result.lower():
+            last_error = result
+            if attempt == max_retries - 1:
+                break
+            wait_s = base_delay_s * (2 ** attempt)
+            logger.warning(
+                "LLM rate limit on attempt %d/%d for provider=%s model=%s, retrying in %.1fs",
+                attempt + 1,
+                max_retries,
+                provider,
+                model,
+                wait_s,
+            )
+            await asyncio.sleep(wait_s)
+            continue
+        return result, input_tokens, output_tokens
+    return last_error or f"{_ERROR_PREFIX} Rate limited after {max_retries} attempts", 0, 0
 
 
 def _provider_dispatch(provider: str):
@@ -515,6 +562,30 @@ def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
     return sorted(terms, key=len, reverse=True)
 
 
+def _safe_truncate_for_prompt(
+    value: object,
+    max_str_len: int = 400,
+    max_list_items: int = 5,
+) -> object:
+    """Recursively truncate prompt data while preserving JSON structure."""
+    if isinstance(value, str):
+        return value[:max_str_len] + "..." if len(value) > max_str_len else value
+    if isinstance(value, list):
+        truncated = [
+            _safe_truncate_for_prompt(item, max_str_len=max_str_len, max_list_items=max_list_items)
+            for item in value[:max_list_items]
+        ]
+        if len(value) > max_list_items:
+            truncated.append(f"... ({len(value) - max_list_items} more items)")
+        return truncated
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_truncate_for_prompt(item, max_str_len=max_str_len, max_list_items=max_list_items)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _truncate_json_literal(value: Any, limit: int) -> str:
     compact = _compact_json_value(value)
     rendered = json.dumps(compact, default=str)
@@ -707,7 +778,7 @@ async def test_provider_connection(
     api_key: str | None = None,
 ) -> tuple[bool, str]:
     resolved_key = str(api_key or "").strip() or _provider_env_key(provider)
-    raw, _input_tokens, _output_tokens = await _call_provider(
+    raw, _input_tokens, _output_tokens = await _call_provider_with_retry(
         provider=provider,
         model=model,
         api_key=resolved_key,

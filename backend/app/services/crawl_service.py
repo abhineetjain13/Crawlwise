@@ -13,13 +13,12 @@ import re
 import time
 from datetime import UTC, datetime
 from html import unescape
-from urllib.parse import urlparse
 
 import regex as regex_lib
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
+from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.services.acquisition.acquirer import AcquisitionResult, ProxyPoolExhausted, acquire
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
@@ -54,6 +53,14 @@ from app.services.pipeline_config import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.requested_field_policy import expand_requested_fields
+from app.services.schema_service import (
+    ResolvedSchema,
+    learn_schema_from_record,
+    load_resolved_schema,
+    persist_resolved_schema,
+    resolve_schema,
+    schema_trace_payload,
+)
 from app.services.site_memory_service import get_memory as get_site_memory, merge_memory
 from app.services.url_safety import ensure_public_crawl_targets
 from app.services.xpath_service import build_deterministic_selector_suggestions
@@ -86,7 +93,7 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
     settings = dict(payload.get("settings", {}))
     urls = payload.get("urls") or []
     primary_url = payload.get("url") or (urls[0] if urls else "")
-    normalized_surface = _normalize_requested_surface(str(payload.get("surface") or ""), url=primary_url)
+    normalized_surface = str(payload.get("surface") or "").strip()
     await ensure_public_crawl_targets(_collect_target_urls(payload, settings))
     _validate_extraction_contract(settings.get("extraction_contract") or [])
     settings["max_pages"] = max(1, int(settings.get("max_pages", 5) or 5))
@@ -687,7 +694,6 @@ async def _process_single_url(
         return records, verdict, url_metrics
 
     html = acq.html
-
     # ── STAGE 3: DISCOVER ──
     if update_run_state:
         await _set_stage(session, run, "DISCOVER")
@@ -818,10 +824,28 @@ async def _process_json_response(
     if persist_logs:
         await _log(session, run.id, "info", "[UNIFY] Normalizing JSON records")
     saved = []
-    allowed_fields = set(get_canonical_fields(run.surface)) | set(requested_fields)
+    resolved_schema = await resolve_schema(
+        session,
+        run.surface,
+        url,
+        run_id=run.id,
+        explicit_fields=requested_fields,
+        sample_record=extracted[0] if extracted and isinstance(extracted[0], dict) else None,
+        llm_enabled=bool((run.settings or {}).get("llm_enabled")),
+    )
+    current_schema = resolved_schema
     for raw_record in extracted:
         if len(saved) >= max_records:
             break
+        learned_schema = await _refresh_schema_from_record(
+            session,
+            surface=run.surface,
+            url=url,
+            base_schema=current_schema,
+            sample_record=raw_record,
+        )
+        current_schema = learned_schema or current_schema
+        allowed_fields = set(current_schema.fields)
         public_fields = _public_record_fields(raw_record)
         normalized, discovered_fields = _split_detail_output_fields(public_fields, allowed_fields=allowed_fields)
         raw_data = _raw_record_payload(raw_record)
@@ -842,6 +866,7 @@ async def _process_json_response(
             source_trace=_compact_dict({
                 "type": "json_api",
                 "method": acq.method,
+                "schema_resolution": schema_trace_payload(current_schema),
                 "acquisition": _build_acquisition_trace(acq).get("acquisition"),
                 "requested_fields": requested_fields or None,
                 "requested_field_coverage": requested_coverage or None,
@@ -924,10 +949,28 @@ async def _extract_listing(
     if persist_logs:
         await _log(session, run.id, "info", "[UNIFY] Normalizing listing records")
     saved: list[dict] = []
-    allowed_fields = set(get_canonical_fields(surface)) | set(additional_fields)
+    resolved_schema = await resolve_schema(
+        session,
+        surface,
+        url,
+        run_id=run.id,
+        explicit_fields=additional_fields,
+        sample_record=extracted_records[0] if extracted_records and isinstance(extracted_records[0], dict) else None,
+        llm_enabled=bool((run.settings or {}).get("llm_enabled")),
+    )
+    current_schema = resolved_schema
     for raw_record in extracted_records:
         if len(saved) >= max_records:
             break
+        learned_schema = await _refresh_schema_from_record(
+            session,
+            surface=surface,
+            url=url,
+            base_schema=current_schema,
+            sample_record=raw_record,
+        )
+        current_schema = learned_schema or current_schema
+        allowed_fields = set(current_schema.fields)
         normalized, discovered_fields = _split_detail_output_fields(
             _public_record_fields(raw_record),
             allowed_fields=allowed_fields,
@@ -949,6 +992,7 @@ async def _extract_listing(
             }),
             source_trace=_compact_dict({
                 "type": "listing",
+                "schema_resolution": schema_trace_payload(current_schema),
                 **_build_acquisition_trace(acq),
                 "adapter": adapter_name,
                 "source": source_label,
@@ -1001,11 +1045,21 @@ async def _extract_detail(
 ) -> tuple[list[dict], str, dict]:
     """Detail page extraction — adapter > candidates."""
     adapter_name = adapter_result.adapter_name if adapter_result else None
+    resolved_schema = await resolve_schema(
+        session,
+        surface,
+        url,
+        run_id=run.id,
+        explicit_fields=additional_fields,
+        html=html,
+        sample_record=adapter_records[0] if adapter_records and isinstance(adapter_records[0], dict) else None,
+        llm_enabled=bool((run.settings or {}).get("llm_enabled")),
+    )
 
     candidates, source_trace = extract_candidates(
-        url, surface, html, manifest, additional_fields, extraction_contract,
+        url, surface, html, manifest, additional_fields, extraction_contract, resolved_fields=resolved_schema.fields,
     )
-    persisted_field_names = set(get_canonical_fields(surface)) | set(additional_fields)
+    persisted_field_names = set(resolved_schema.fields)
     candidate_values, reconciliation = _reconcile_detail_candidate_values(
         candidates,
         allowed_fields=persisted_field_names,
@@ -1042,6 +1096,7 @@ async def _extract_detail(
             adapter_records=extracted_records,
             candidate_values=candidate_values,
             source_trace=source_trace,
+            resolved_schema=resolved_schema,
         )
         candidate_values, llm_promoted_fields = _apply_llm_suggestions_to_candidate_values(
             candidate_values,
@@ -1092,6 +1147,7 @@ async def _extract_detail(
                     **source_trace,
                     "type": "detail",
                     "adapter": adapter_name,
+                    "schema_resolution": schema_trace_payload(resolved_schema),
                     "reconciliation": reconciliation or None,
                     "requested_fields": additional_fields or None,
                     "requested_field_coverage": requested_coverage or None,
@@ -1127,6 +1183,7 @@ async def _extract_detail(
             source_trace=_compact_dict({
                 **source_trace,
                 "type": "detail",
+                "schema_resolution": schema_trace_payload(resolved_schema),
                 "reconciliation": reconciliation or None,
                 "requested_fields": additional_fields or None,
                 "requested_field_coverage": requested_coverage or None,
@@ -1302,45 +1359,6 @@ def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
-_JOB_HOST_HINTS = (
-    "dice.com",
-    "indeed.",
-    "linkedin.com",
-    "greenhouse.io",
-    "boards.greenhouse.io",
-    "boards-api.greenhouse.io",
-    "idealist.org",
-    "usajobs.gov",
-    "remotive.com",
-)
-_JOB_PATH_HINT_RE = re.compile(
-    r"(?i)(/job-detail/|/viewjob\b|/jobs?(?:/|$)|/positions?(?:/|$)|/openings?(?:/|$)|/careers?(?:/|$)|/search/results\b)"
-)
-
-
-def _normalize_requested_surface(surface: str, *, url: str) -> str:
-    normalized_surface = str(surface or "").strip()
-    if normalized_surface not in {"ecommerce_listing", "ecommerce_detail"}:
-        return normalized_surface
-    if not _looks_like_job_url(url):
-        return normalized_surface
-    return "job_listing" if normalized_surface.endswith("listing") else "job_detail"
-
-
-def _looks_like_job_url(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
-    host = parsed.netloc.lower()
-    path = parsed.path.lower()
-    query = parsed.query.lower()
-    text = f"{host}{path}"
-    if any(token in host for token in _JOB_HOST_HINTS):
-        if _JOB_PATH_HINT_RE.search(f"{path}?{query}") or any(token in text for token in ("/job", "/jobs", "/career", "/careers")):
-            return True
-    if _JOB_PATH_HINT_RE.search(f"{path}?{query}"):
-        return True
-    return False
-
-
 async def _count_run_records(session: AsyncSession, run_id: int) -> int:
     return int(
         (
@@ -1362,8 +1380,9 @@ def _public_record_fields(record: dict) -> dict:
 
 def _normalize_record_fields(record: dict[str, object]) -> dict[str, object]:
     normalized = _compact_dict({
-        key: normalize_value(key, value)
+        _normalize_committed_field_name(key): normalize_value(_normalize_committed_field_name(key), value)
         for key, value in record.items()
+        if _normalize_committed_field_name(key)
     })
     if not str(normalized.get("currency") or "").strip():
         for field_name in ("price", "sale_price", "original_price", "salary"):
@@ -1670,11 +1689,13 @@ def _review_bucket_fingerprint(value: object) -> str:
 
 
 def _normalize_committed_field_name(value: object) -> str:
-    text = str(value or "").strip().lower()
+    text = str(value or "").strip()
     if not text:
         return ""
-    normalized = re.sub(r"\s+", "_", text)
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    normalized = re.sub(r"\s+", "_", text.lower())
     normalized = re.sub(r"[^a-z0-9_]+", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized)
     return normalized.strip("_")
 
 
@@ -1864,6 +1885,7 @@ def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
             "challenge_state": diagnostics.get("browser_challenge_state"),
             "origin_warmed": diagnostics.get("browser_origin_warmed"),
             "invalid_surface_page": diagnostics.get("invalid_surface_page"),
+            "page_classification": diagnostics.get("page_classification") if isinstance(diagnostics.get("page_classification"), dict) else None,
             "timings_ms": timing_map or None,
         }) or None,
     })
@@ -1907,6 +1929,7 @@ async def _collect_detail_llm_suggestions(
     adapter_records: list[dict],
     candidate_values: dict,
     source_trace: dict,
+    resolved_schema: ResolvedSchema,
 ) -> tuple[dict, list[dict[str, object]]]:
     trace_candidates = source_trace.setdefault("candidates", {})
     llm_cleanup_suggestions: dict[str, dict] = source_trace.get("llm_cleanup_suggestions", {})
@@ -1916,7 +1939,7 @@ async def _collect_detail_llm_suggestions(
         _merge_record_fields(adapter_records[0], candidate_values)
         if adapter_records else dict(candidate_values)
     )
-    canonical_fields = sorted(set(get_canonical_fields(surface)) | set(additional_fields))
+    canonical_fields = sorted(set(resolved_schema.fields) | set(additional_fields))
     target_fields = list(canonical_fields)
     missing_fields = [
         field_name
@@ -2412,22 +2435,8 @@ def _normalize_llm_review_bucket_item(value: object) -> dict[str, object] | None
 
 
 async def _load_domain_requested_fields(session: AsyncSession, *, url: str, surface: str) -> list[str]:
-    domain = normalize_domain(url)
-    if not domain:
-        return []
-    result = await session.execute(
-        select(ReviewPromotion)
-        .where(ReviewPromotion.domain == domain, ReviewPromotion.surface == surface)
-        .order_by(ReviewPromotion.updated_at.desc(), ReviewPromotion.created_at.desc())
-        .limit(1)
-    )
-    promotion = result.scalar_one_or_none()
-    if promotion is None or not isinstance(promotion.approved_schema, dict):
-        return []
-    fields = promotion.approved_schema.get("fields")
-    if not isinstance(fields, list):
-        return []
-    return expand_requested_fields([str(field or "") for field in fields])
+    resolved = await load_resolved_schema(session, surface, url)
+    return expand_requested_fields(list(resolved.new_fields))
 
 
 async def _load_site_memory_fields(session: AsyncSession, *, url: str) -> list[str]:
@@ -2438,6 +2447,34 @@ async def _load_site_memory_fields(session: AsyncSession, *, url: str) -> list[s
     if not isinstance(fields, list):
         return []
     return expand_requested_fields([str(field or "") for field in fields])
+
+
+async def _refresh_schema_from_record(
+    session: AsyncSession,
+    *,
+    surface: str,
+    url: str,
+    base_schema: ResolvedSchema,
+    sample_record: dict | None,
+) -> ResolvedSchema | None:
+    if not isinstance(sample_record, dict) or not sample_record:
+        return None
+    learned = learn_schema_from_record(
+        surface=surface,
+        domain=base_schema.domain or normalize_domain(url),
+        baseline_fields=base_schema.baseline_fields,
+        explicit_fields=[field for field in base_schema.fields if field not in set(base_schema.baseline_fields)],
+        sample_record=sample_record,
+    )
+    if (
+        learned.fields == base_schema.fields
+        and learned.new_fields == base_schema.new_fields
+        and learned.deprecated_fields == base_schema.deprecated_fields
+        and not base_schema.stale
+        and base_schema.saved_at
+    ):
+        return None
+    return await persist_resolved_schema(session, learned)
 
 
 async def _save_site_memory_observations(
@@ -2584,6 +2621,7 @@ def _build_field_discovery_summary(
 
     for field_name in sorted(set(candidates.keys()) | set(candidate_values.keys()) | target_fields):
         rows = candidates.get(field_name, [])
+        winning_row = rows[0] if rows and isinstance(rows[0], dict) else {}
         first_row_value = rows[0].get("value") if rows and isinstance(rows[0], dict) else None
         chosen = candidate_values.get(field_name, first_row_value)
         tier = "canonical" if field_name in target_fields else "intelligence"
@@ -2609,6 +2647,8 @@ def _build_field_discovery_summary(
             "value": _clean_candidate_text(chosen) if chosen not in (None, "", [], {}) else None,
             "tier": tier,
             "sources": sources or None,
+            "xpath": winning_row.get("xpath") or winning_row.get("_xpath") or None,
+            "css_selector": winning_row.get("css_selector") or winning_row.get("_selector") or None,
             "candidate_count": len(rows),
             "is_canonical": field_name in canonical or None,
         })

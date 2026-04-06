@@ -2,7 +2,7 @@
   "price_fields": ["price", "sale_price", "original_price"],
   "price_regex": "\\d[\\d,.]*",
   "salary_fields": ["salary", "compensation", "pay", "salary_range", "base_salary", "pay_range", "compensation_range"],
-  "salary_range_regex": "(?:(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[-–—]|to|until)\\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?(?:\\s*/\\s*[a-zA-Z]+)?|(?:[$€£₹]|(?i:USD|EUR|GBP|INR))\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR)))?(?:\\s*/\\s*[a-zA-Z]+)?|\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR)))?(?:\\s*/\\s*[a-zA-Z]+)?)",
+  "salary_range_regex": "(?:(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:[-–—]|to|until)\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\\s*\\d[\\d,.]*[kKmMbB]?\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?(?:\\s*/\\s*[a-zA-Z]+)?|(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)\\s*\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?(?:\\s*/\\s*[a-zA-Z]+)?|\\d[\\d,.]*[kKmMbB]?(?:\\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?(?:\\s*/\\s*[a-zA-Z]+)?)",
   "currency_codes": [
     "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
     "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BOV",
