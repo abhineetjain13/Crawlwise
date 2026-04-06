@@ -62,11 +62,6 @@ from app.services.schema_service import (
     resolve_schema,
     schema_trace_payload,
 )
-from app.services.site_memory_service import (
-    get_memory as get_site_memory,
-    is_public_memory_field_name,
-    merge_memory,
-)
 from app.services.url_safety import ensure_public_crawl_targets
 from app.services.xpath_service import build_deterministic_selector_suggestions
 from app.services.xpath_service import validate_xpath_candidate
@@ -117,10 +112,8 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
     settings["advanced_mode"] = requested_advanced_mode or None
     settings["traversal_mode"] = _resolve_traversal_mode(settings)
     domain_requested_fields = await _load_domain_requested_fields(session, url=primary_url, surface=normalized_surface)
-    site_memory_fields = await _load_site_memory_fields(session, url=primary_url)
     requested_fields = expand_requested_fields([
         *domain_requested_fields,
-        *site_memory_fields,
         *(payload.get("additional_fields") or []),
     ])
     if settings.get("llm_enabled"):
@@ -590,7 +583,6 @@ async def _process_single_url(
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
-    persist_site_memory: bool = True,
 ) -> tuple[list[dict], str, dict]:
     """Run the single-URL pipeline.
 
@@ -605,11 +597,7 @@ async def _process_single_url(
         for field_name in additional_fields
         if field_name
     }
-    site_memory = await get_site_memory(session, url)
-    acquisition_profile = _build_acquisition_profile(
-        site_memory.payload if site_memory is not None else {},
-        run.settings or {},
-    )
+    acquisition_profile = _build_acquisition_profile(run.settings or {})
 
     # ── STAGE 1: FETCH ──
     if update_run_state:
@@ -632,13 +620,6 @@ async def _process_single_url(
         checkpoint=checkpoint,
     )
     acquisition_ms = _elapsed_ms(acquisition_started_at)
-    if persist_site_memory:
-        await _save_acquisition_memory(
-            session,
-            url=url,
-            previous_profile=acquisition_profile,
-            acquisition_result=acq,
-        )
     url_metrics = _build_url_metrics(acq, requested_fields=additional_fields)
     url_metrics["acquisition_ms"] = acquisition_ms
 
@@ -663,7 +644,6 @@ async def _process_single_url(
                         surface, max_records, url_metrics,
                         update_run_state=update_run_state,
                         persist_logs=persist_logs,
-                        persist_site_memory=persist_site_memory,
                     )
                 return await _extract_detail(
                     session, run, url, "", acq, recovered,
@@ -671,7 +651,6 @@ async def _process_single_url(
                     surface, url_metrics,
                     update_run_state=update_run_state,
                     persist_logs=persist_logs,
-                    persist_site_memory=persist_site_memory,
                 )
             if persist_logs:
                 await _log(session, run.id, "warning", f"[BLOCKED] {url} — {blocked.reason}")
@@ -727,7 +706,6 @@ async def _process_single_url(
             surface, max_records, url_metrics,
             update_run_state=update_run_state,
             persist_logs=persist_logs,
-            persist_site_memory=persist_site_memory,
         )
         url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
         if verdict == VERDICT_LISTING_FAILED and acq.method == "curl_cffi":
@@ -756,13 +734,6 @@ async def _process_single_url(
                 checkpoint=checkpoint,
             )
             browser_retry_ms = _elapsed_ms(browser_retry_started_at)
-            if persist_site_memory:
-                await _save_acquisition_memory(
-                    session,
-                    url=url,
-                    previous_profile=browser_profile,
-                    acquisition_result=browser_acq,
-                )
             browser_html = browser_acq.html
             browser_adapter_result = await run_adapter(url, browser_html, surface)
             browser_adapter_records = browser_adapter_result.records if browser_adapter_result else []
@@ -773,7 +744,6 @@ async def _process_single_url(
                 surface, max_records, url_metrics,
                 update_run_state=update_run_state,
                 persist_logs=persist_logs,
-                persist_site_memory=persist_site_memory,
             )
             url_metrics["listing_browser_retry"] = True
             url_metrics["listing_browser_retry_method"] = browser_acq.method
@@ -788,7 +758,6 @@ async def _process_single_url(
             surface, url_metrics,
             update_run_state=update_run_state,
             persist_logs=persist_logs,
-            persist_site_memory=persist_site_memory,
         )
         url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
         return records, verdict, url_metrics
@@ -909,7 +878,6 @@ async def _extract_listing(
     url_metrics: dict,
     update_run_state: bool = True,
     persist_logs: bool = True,
-    persist_site_memory: bool = True,
 ) -> tuple[list[dict], str, dict]:
     """Listing extraction — adapter > structured data > DOM cards.
 
@@ -1093,17 +1061,6 @@ async def _extract_listing(
     verdict = _compute_verdict(saved, is_listing=True)
     if persist_logs:
         await _log(session, run.id, "info", f"[SAVE] Saved {len(saved)} listing records (verdict={verdict})")
-    if saved and persist_site_memory:
-        await _save_site_memory_observations(
-            session,
-            url=url,
-            requested_fields=additional_fields,
-            extraction_contract=[],
-            source_trace={
-                "llm_cleanup_status": {},
-            },
-            html_text=html,
-        )
     await session.flush()
     _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
     return saved, verdict, url_metrics
@@ -1209,7 +1166,6 @@ async def _extract_detail(
     url_metrics: dict,
     update_run_state: bool = True,
     persist_logs: bool = True,
-    persist_site_memory: bool = True,
 ) -> tuple[list[dict], str, dict]:
     """Detail page extraction — adapter > candidates."""
     adapter_name = adapter_result.adapter_name if adapter_result else None
@@ -1384,15 +1340,6 @@ async def _extract_detail(
     verdict = _compute_verdict(saved, is_listing=False)
     if persist_logs:
         await _log(session, run.id, "info", f"[SAVE] Saved {len(saved)} detail records (verdict={verdict})")
-    if saved and persist_site_memory:
-        await _save_site_memory_observations(
-            session,
-            url=url,
-            requested_fields=additional_fields,
-            extraction_contract=extraction_contract,
-            source_trace=source_trace,
-            html_text=html,
-        )
     await session.flush()
     _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
     return saved, verdict, url_metrics
@@ -2274,15 +2221,8 @@ def _requested_field_coverage(record: dict, requested_fields: list[str]) -> dict
     }
 
 
-def _load_acquisition_profile(payload: dict | None) -> dict[str, object]:
-    if not isinstance(payload, dict):
-        return {}
-    acquisition = payload.get("acquisition")
-    return dict(acquisition) if isinstance(acquisition, dict) else {}
-
-
-def _build_acquisition_profile(memory_payload: dict | None, run_settings: dict | None) -> dict[str, object]:
-    profile = _load_acquisition_profile(memory_payload)
+def _build_acquisition_profile(run_settings: dict | None) -> dict[str, object]:
+    profile: dict[str, object] = {}
     settings = run_settings if isinstance(run_settings, dict) else {}
     if "anti_bot_enabled" in settings:
         profile["anti_bot_enabled"] = bool(settings.get("anti_bot_enabled"))
@@ -2298,47 +2238,6 @@ def _resolve_traversal_mode(settings: dict | None) -> str | None:
     if mode in _TRAVERSAL_MODES:
         return mode
     return None
-
-
-async def _save_acquisition_memory(
-    session: AsyncSession,
-    *,
-    url: str,
-    previous_profile: dict[str, object],
-    acquisition_result: AcquisitionResult,
-) -> None:
-    diagnostics = acquisition_result.diagnostics if isinstance(acquisition_result.diagnostics, dict) else {}
-    blocked = bool(diagnostics.get("curl_blocked") or diagnostics.get("browser_blocked"))
-    curl_success_count = int(previous_profile.get("curl_success_count", 0) or 0)
-    browser_success_count = int(previous_profile.get("browser_success_count", 0) or 0)
-    blocked_count = int(previous_profile.get("blocked_count", 0) or 0)
-    if acquisition_result.method == "curl_cffi":
-        curl_success_count += 1
-        browser_success_count = 0
-    elif acquisition_result.method == "playwright":
-        browser_success_count += 1
-    if blocked:
-        blocked_count += 1
-
-    prefer_browser = browser_success_count >= 2 and curl_success_count == 0
-    await merge_memory(
-        session,
-        url,
-        acquisition={
-            "prefer_stealth": bool(diagnostics.get("prefer_stealth")),
-            "prefer_browser": prefer_browser,
-            "last_success_method": acquisition_result.method,
-            "last_content_type": acquisition_result.content_type,
-            "last_adapter_hint": str(diagnostics.get("curl_adapter_hint") or "").strip() or None,
-            "last_platform_family": str(diagnostics.get("curl_platform_family") or "").strip() or None,
-            "curl_success_count": curl_success_count,
-            "browser_success_count": browser_success_count,
-            "blocked_count": blocked_count,
-            "last_browser_attempted": bool(diagnostics.get("browser_attempted")),
-            "updated_at": datetime.now(UTC).isoformat(),
-        },
-        last_crawl_at=datetime.now(UTC),
-    )
 
 
 def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -> dict[str, object]:
@@ -2999,16 +2898,6 @@ async def _load_domain_requested_fields(session: AsyncSession, *, url: str, surf
     return expand_requested_fields(list(resolved.new_fields))
 
 
-async def _load_site_memory_fields(session: AsyncSession, *, url: str) -> list[str]:
-    memory = await get_site_memory(session, url)
-    if memory is None or not isinstance(memory.payload, dict):
-        return []
-    fields = memory.payload.get("fields")
-    if not isinstance(fields, list):
-        return []
-    return expand_requested_fields([str(field or "") for field in fields])
-
-
 async def _refresh_schema_from_record(
     session: AsyncSession,
     *,
@@ -3035,104 +2924,6 @@ async def _refresh_schema_from_record(
     ):
         return None
     return await persist_resolved_schema(session, learned)
-
-
-async def _save_site_memory_observations(
-    session: AsyncSession,
-    *,
-    url: str,
-    requested_fields: list[str],
-    extraction_contract: list[dict],
-    source_trace: dict,
-    html_text: str,
-) -> None:
-    selectors: dict[str, list[dict]] = {}
-    for row in extraction_contract:
-        field_name = str(row.get("field_name") or "").strip().lower()
-        xpath = str(row.get("xpath") or "").strip()
-        regex = str(row.get("regex") or "").strip()
-        if not field_name or not any([xpath, regex]):
-            continue
-        selectors.setdefault(field_name, []).append({
-            "xpath": xpath or None,
-            "css_selector": None,
-            "regex": regex or None,
-            "status": "validated",
-            "source": "crawl_contract",
-        })
-
-    domain = normalize_domain(url)
-    if html_text and domain:
-        target_fields = [field for field in requested_fields if field]
-        candidate_map = source_trace.get("candidates") if isinstance(source_trace, dict) else {}
-        selector_defaults = {
-            field_name: get_selector_defaults(domain, field_name)
-            for field_name in target_fields
-        }
-        deterministic = build_deterministic_selector_suggestions(
-            html_text,
-            target_fields,
-            existing_candidates=candidate_map if isinstance(candidate_map, dict) else {},
-            selector_defaults=selector_defaults,
-        )
-        for field_name, rows in deterministic.items():
-            if field_name not in target_fields:
-                continue
-            selectors.setdefault(field_name, [])
-            selectors[field_name].extend(rows)
-
-    suggestion_rows = source_trace.get("selector_suggestions") if isinstance(source_trace, dict) else {}
-    if isinstance(suggestion_rows, dict):
-        for field_name, rows in suggestion_rows.items():
-            normalized_field = str(field_name or "").strip().lower()
-            if not normalized_field or not isinstance(rows, list):
-                continue
-            selectors.setdefault(normalized_field, [])
-            selectors[normalized_field].extend([row for row in rows if isinstance(row, dict)])
-
-    field_discovery = source_trace.get("field_discovery") if isinstance(source_trace, dict) else {}
-    source_mappings = {
-        str(field_name or "").strip().lower(): str(row.get("source") or "").strip()
-        for field_name, row in (field_discovery.items() if isinstance(field_discovery, dict) else [])
-        if isinstance(row, dict) and str(field_name or "").strip() and str(row.get("source") or "").strip()
-    }
-    llm_status = source_trace.get("llm_cleanup_status") if isinstance(source_trace, dict) else {}
-    llm_columns = {}
-    if isinstance(llm_status, dict):
-        llm_columns = {
-            "llm_assisted_fields": list(llm_status.get("llm_assisted_fields") or []),
-            "deterministic_fields": list(llm_status.get("deterministic_fields") or []),
-        }
-
-    selector_suggestions: dict[str, list[dict]] = {}
-    for field_name, rows in selectors.items():
-        normalized_field = str(field_name or "").strip().lower()
-        if not normalized_field or not isinstance(rows, list):
-            continue
-        deduped_rows: list[dict] = []
-        seen_selector_rows: set[tuple[object, object, object]] = set()
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            row_key = (row.get("xpath"), row.get("css_selector"), row.get("regex"))
-            if row_key in seen_selector_rows:
-                continue
-            seen_selector_rows.add(row_key)
-            deduped_rows.append(row)
-            if len(deduped_rows) >= MAX_SELECTOR_ROWS_PER_FIELD:
-                break
-        if deduped_rows:
-            selector_suggestions[normalized_field] = deduped_rows
-
-    await merge_memory(
-        session,
-        url,
-        fields=[field for field in requested_fields if is_public_memory_field_name(field)],
-        selector_suggestions=selector_suggestions,
-        source_mappings=source_mappings,
-        llm_columns=llm_columns,
-        last_crawl_at=datetime.now(UTC),
-    )
 
 
 def _select_llm_review_candidates(

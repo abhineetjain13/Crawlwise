@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import get_canonical_fields
 from app.services.llm_runtime import run_prompt_task
-from app.services.site_memory_service import get_memory, merge_memory
 
 logger = logging.getLogger(__name__)
 
@@ -181,27 +180,11 @@ async def load_resolved_schema(
             saved_at=None,
             stale=False,
         )
-    memory = await get_memory(session, normalized_domain)
-    payload = memory.payload if memory is not None and isinstance(memory.payload, dict) else {}
-    schema_map = payload.get("schemas") if isinstance(payload.get("schemas"), dict) else {}
-    snapshot = schema_map.get(surface)
-    if not isinstance(snapshot, dict):
-        legacy_fields = payload.get("fields") if isinstance(payload.get("fields"), list) else []
-        if legacy_fields:
-            snapshot = {
-                "baseline_fields": baseline_fields,
-                "fields": _dedupe_fields([*baseline_fields, *_dedupe_fields(legacy_fields)]),
-                "new_fields": [field for field in _dedupe_fields(legacy_fields) if field not in set(baseline_fields)],
-                "deprecated_fields": [],
-                "source": "legacy",
-                "confidence": 1.0,
-                "saved_at": None,
-            }
     return _snapshot_to_resolved(
         surface=surface,
         domain=normalized_domain,
         baseline_fields=baseline_fields,
-        snapshot=snapshot,
+        snapshot=None,
         explicit_fields=normalized_explicit,
     )
 
@@ -209,13 +192,6 @@ async def load_resolved_schema(
 async def persist_resolved_schema(session: AsyncSession, schema: ResolvedSchema) -> ResolvedSchema:
     schema.saved_at = schema.saved_at or _now_iso()
     schema.stale = False
-    await merge_memory(
-        session,
-        schema.domain,
-        fields=schema.new_fields,
-        schemas={schema.surface: _schema_payload(schema)},
-        last_crawl_at=datetime.now(UTC),
-    )
     return schema
 
 

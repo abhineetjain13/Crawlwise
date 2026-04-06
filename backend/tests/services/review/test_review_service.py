@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.crawl import CrawlRecord
 from app.services.crawl_service import create_crawl_run
 from app.services.review import build_review_payload, save_review
-from app.services.site_memory_service import get_memory
 
 
 @pytest.mark.asyncio
@@ -132,11 +131,8 @@ async def test_save_review_promotes_review_bucket_fields_into_canonical_data(
     )
 
     await db_session.refresh(record)
-    memory = await get_memory(db_session, "example.com")
     assert record.data["wire_gauge"] == "Oak"
     assert record.discovered_data == {}
-    assert memory is not None
-    assert memory.payload["schemas"]["ecommerce_detail"]["new_fields"] == ["wire_gauge"]
 
 
 @pytest.mark.asyncio

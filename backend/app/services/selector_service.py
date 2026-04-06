@@ -19,7 +19,6 @@ from app.services.knowledge_base.store import (
     save_domain_selector_defaults,
 )
 from app.services.llm_runtime import discover_xpath_candidates
-from app.services.site_memory_service import clear_all_selector_memory, replace_selector_map
 from app.services.xpath_service import (
     build_deterministic_selector_suggestions,
     extract_selector_value,
@@ -124,7 +123,6 @@ async def clear_all_selectors(session: AsyncSession) -> int:
         await session.execute(delete(Selector))
         await session.flush()
     try:
-        await clear_all_selector_memory(session, clear_suggestions=True, commit=False)
         await clear_selector_defaults()
         await session.commit()
     except Exception:
@@ -238,7 +236,6 @@ async def _sync_selector_defaults(session: AsyncSession, domain: str) -> None:
     previous_defaults = load_selector_defaults().get(domain)
     try:
         await save_domain_selector_defaults(domain, selector_rows_by_field)
-        await replace_selector_map(session, domain, selector_rows_by_field, commit=False)
     except Exception:
         # Attempt to restore previous defaults, but don't mask the original error
         if previous_defaults is None:

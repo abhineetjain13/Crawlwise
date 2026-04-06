@@ -17,7 +17,6 @@ from app.services.schema_service import (
     persist_resolved_schema,
     resolve_schema,
 )
-from app.services.site_memory_service import merge_memory
 
 
 def test_is_valid_schema_field_name_rejects_invalid_names():
@@ -43,20 +42,20 @@ def test_learn_schema_from_record_promotes_scalar_domain_fields():
 
 
 @pytest.mark.asyncio
-async def test_load_resolved_schema_uses_site_memory_snapshot(db_session: AsyncSession):
+async def test_load_resolved_schema_keeps_explicit_fields_without_cross_run_persistence(db_session: AsyncSession):
     await persist_resolved_schema(
         db_session,
         learn_schema_from_record(
             surface="ecommerce_detail",
             domain="example.com",
             baseline_fields=["title", "price"],
-            sample_record={"title": "Chair", "price": "10", "materials": "Oak"},
+            sample_record={"title": "Chair", "price": "10", "wire_gauge": "26 AWG"},
         ),
     )
 
     resolved = await load_resolved_schema(db_session, "ecommerce_detail", "example.com", explicit_fields=["finish"])
 
-    assert "materials" in resolved.fields
+    assert "wire_gauge" not in resolved.fields
     assert "finish" in resolved.fields
     assert resolved.domain == "example.com"
 
@@ -137,53 +136,6 @@ async def test_resolve_schema_ignores_empty_llm_payload_without_persisting(db_se
     assert resolved.source == "static"
     memory_resolved = await load_resolved_schema(db_session, "ecommerce_detail", "example.com")
     assert memory_resolved.saved_at is None
-
-
-@pytest.mark.asyncio
-async def test_load_resolved_schema_defaults_invalid_confidence_to_zero(db_session: AsyncSession):
-    await merge_memory(
-        db_session,
-        "example.com",
-        schemas={
-            "ecommerce_detail": {
-                "baseline_fields": ["title"],
-                "fields": ["title", "materials"],
-                "new_fields": ["materials"],
-                "deprecated_fields": [],
-                "source": "learned",
-                "confidence": "broken",
-                "saved_at": "2026-04-06T00:00:00+00:00",
-            }
-        },
-    )
-
-    resolved = await load_resolved_schema(db_session, "ecommerce_detail", "example.com")
-
-    assert resolved.confidence == 0.0
-
-
-@pytest.mark.asyncio
-async def test_load_resolved_schema_derives_deprecated_fields_from_stored_fields(db_session: AsyncSession):
-    await merge_memory(
-        db_session,
-        "example.com",
-        schemas={
-            "ecommerce_detail": {
-                "baseline_fields": ["title", "price"],
-                "fields": ["title"],
-                "new_fields": [],
-                "deprecated_fields": [],
-                "source": "learned",
-                "confidence": 0.7,
-                "saved_at": "2026-04-06T00:00:00+00:00",
-            }
-        },
-    )
-
-    resolved = await load_resolved_schema(db_session, "ecommerce_detail", "example.com")
-
-    assert resolved.fields == ["title", "price"]
-    assert resolved.deprecated_fields == ["price"]
 
 
 def test_learn_schema_from_record_normalizes_record_keys_for_deprecated_detection():

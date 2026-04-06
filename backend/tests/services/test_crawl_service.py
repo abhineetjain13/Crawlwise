@@ -29,7 +29,6 @@ from app.services.crawl_service import (
     process_run,
     resume_run,
 )
-from app.services.site_memory_service import merge_memory
 
 
 def _make_acq(html: str = "", **kwargs) -> AcquisitionResult:
@@ -226,20 +225,6 @@ async def test_create_crawl_run_keeps_advanced_mode_empty_without_explicit_trave
     assert run.settings["advanced_mode"] is None
     assert run.settings["traversal_mode"] is None
     assert run.settings["max_scrolls"] == 12
-
-
-@pytest.mark.asyncio
-async def test_create_crawl_run_includes_site_memory_fields(db_session: AsyncSession, test_user):
-    await merge_memory(db_session, "https://example.com/products/widget", fields=["materials", "care"])
-
-    run = await create_crawl_run(db_session, test_user.id, {
-        "run_type": "crawl",
-        "url": "https://example.com/products/widget",
-        "surface": "ecommerce_detail",
-    })
-
-    assert "materials" in run.requested_fields
-    assert "care" in run.requested_fields
 
 
 @pytest.mark.asyncio
@@ -1566,35 +1551,6 @@ async def test_commit_selected_fields_preserves_typed_values_and_refreshes_metad
     assert record.source_trace["field_discovery_missing"] == []
     assert record.discovered_data["requested_field_coverage"] == {"requested": 2, "found": 2, "missing": []}
     assert record.source_trace["llm_cleanup_suggestions"]["dimensions"]["status"] == "accepted"
-
-
-@pytest.mark.asyncio
-async def test_create_crawl_run_reuses_domain_schema_fields_from_site_memory(db_session: AsyncSession, test_user):
-    await merge_memory(
-        db_session,
-        "example.com",
-        schemas={
-            "ecommerce_detail": {
-                "baseline_fields": ["title", "price"],
-                "fields": ["title", "price", "polyphony", "number_of_keys"],
-                "new_fields": ["polyphony", "number_of_keys"],
-                "deprecated_fields": [],
-                "source": "review",
-                "confidence": 1.0,
-                "saved_at": "2026-04-06T00:00:00+00:00",
-            }
-        },
-    )
-
-    run = await create_crawl_run(db_session, test_user.id, {
-        "run_type": "crawl",
-        "url": "https://example.com/product/rev2",
-        "surface": "ecommerce_detail",
-        "additional_fields": ["finish"],
-    })
-
-    assert run.requested_fields == ["polyphony", "number_of_keys", "finish"]
-    assert run.settings["domain_requested_fields"] == ["polyphony", "number_of_keys"]
 
 
 @pytest.mark.asyncio
