@@ -261,3 +261,80 @@ def test_extract_from_books_collection_key():
     records = extract_json_listing(data)
     assert len(records) == 2
     assert records[0]["title"] == "Clean Code"
+
+
+def test_extract_jobs_from_unknown_ats_collection_key():
+    data = {
+        "payload": {
+            "jobPostingPreviews": [
+                {
+                    "jobId": "62197",
+                    "jobTitle": "Senior Data Engineer",
+                    "companyName": "Acme",
+                    "jobLocation": "Remote",
+                    "salaryDisplay": "$140k-$180k",
+                    "applyUrl": "https://example.com/jobs/62197",
+                },
+                {
+                    "jobId": "62198",
+                    "jobTitle": "Platform Engineer",
+                    "companyName": "Acme",
+                    "jobLocation": "Austin, TX",
+                    "applyUrl": "https://example.com/jobs/62198",
+                },
+            ]
+        }
+    }
+
+    records = extract_json_listing(data, "https://example.com/careers")
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Senior Data Engineer"
+    assert records[0]["job_id"] == "62197"
+    assert records[0]["salary"] == "$140k-$180k"
+    assert records[0]["apply_url"] == "https://example.com/jobs/62197"
+    assert "sku" not in records[0]
+
+
+def test_extract_json_listing_prefers_job_contract_over_generic_id_aliases():
+    data = {
+        "job_requisitions": [
+            {
+                "id": "REQ-77",
+                "title": "Site Reliability Engineer",
+                "company_name": "Example Corp",
+                "location": "Remote",
+                "url": "/jobs/req-77",
+            }
+        ]
+    }
+
+    records = extract_json_listing(data, "https://example.com/jobs")
+
+    assert len(records) == 1
+    assert records[0]["job_id"] == "REQ-77"
+    assert records[0]["apply_url"] == "https://example.com/jobs/req-77"
+    assert "sku" not in records[0]
+
+
+def test_extract_json_listing_does_not_restore_fields_removed_by_job_contract():
+    data = {
+        "job_requisitions": [
+            {
+                "id": "REQ-77",
+                "title": "Site Reliability Engineer",
+                "company_name": "Example Corp",
+                "location": "Remote",
+                "url": "/jobs/req-77",
+                "sku": "SKU-77",
+                "brand": "Example Corp",
+            }
+        ]
+    }
+
+    records = extract_json_listing(data, "https://example.com/jobs")
+
+    assert len(records) == 1
+    assert records[0]["job_id"] == "REQ-77"
+    assert "sku" not in records[0]
+    assert "brand" not in records[0]

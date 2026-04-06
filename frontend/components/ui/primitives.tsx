@@ -88,10 +88,12 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
       {...normalizedProps}
       className={cn(
         "focus-ring h-8 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
-        "bg-[var(--bg-panel)] px-3 text-[13px] text-[var(--text-primary)]",
+        "bg-[var(--control-input-bg)] px-3 text-[13px] text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
+        "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
+        "focus:shadow-[var(--control-input-focus-shadow)]",
         "placeholder:text-[var(--text-muted)]",
         "hover:border-[var(--border-strong)]",
-        "transition-[border-color,box-shadow]",
+        "transition-all",
         normalizedProps.className,
       )}
     />
@@ -110,10 +112,12 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
       {...normalizedProps}
       className={cn(
         "focus-ring min-h-20 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
-        "bg-[var(--bg-panel)] px-3 py-2 text-[13px] text-[var(--text-primary)]",
+        "bg-[var(--control-input-bg)] px-3 py-2 text-[13px] text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
+        "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
+        "focus:shadow-[var(--control-input-focus-shadow)]",
         "placeholder:text-[var(--text-muted)]",
         "hover:border-[var(--border-strong)]",
-        "transition-[border-color,box-shadow]",
+        "transition-all",
         normalizedProps.className,
       )}
     />

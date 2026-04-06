@@ -21,8 +21,6 @@ import {
   ManualFieldEditor,
   parseLines,
   type PdpMode,
-  type PendingDispatch,
-  PreviewModal,
   SegmentedMode,
   SettingSection,
   SliderRow,
@@ -62,13 +60,8 @@ export function CrawlConfigScreen({
   const [additionalDraft, setAdditionalDraft] = useState("");
   const [additionalFields, setAdditionalFields] = useState<string[]>([]);
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [pendingDispatch, setPendingDispatch] = useState<PendingDispatch | null>(null);
   const [configError, setConfigError] = useState("");
-  const [launchError, setLaunchError] = useState("");
   const [bulkBanner, setBulkBanner] = useState("");
-  const [siteMemoryBanner, setSiteMemoryBanner] = useState("");
-  const [appliedMemoryDomain, setAppliedMemoryDomain] = useState("");
 
   const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
 
@@ -120,46 +113,6 @@ export function CrawlConfigScreen({
     return () => window.clearTimeout(timer);
   }, [bulkBanner]);
 
-  const siteMemoryLookupUrl = useMemo(() => {
-    if (targetUrl.trim()) {
-      return targetUrl.trim();
-    }
-    const firstBulkUrl = parseLines(bulkUrls)[0];
-    return firstBulkUrl ?? "";
-  }, [bulkUrls, targetUrl]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const domain = normalizeDomain(siteMemoryLookupUrl);
-    if (!domain || domain === appliedMemoryDomain) {
-      return;
-    }
-    void (async () => {
-      try {
-        const memory = await api.getSiteMemory(domain);
-        if (cancelled) {
-          return;
-        }
-        const memoryFields = uniqueFields(memory.payload.fields ?? []);
-        const selectorRows = flattenSiteMemorySelectors(memory.payload.selectors);
-        setAdditionalFields((current) => uniqueFields([...memoryFields, ...current]));
-        setFieldRows((current) => mergeFieldRowsFromSiteMemory(current, selectorRows));
-        const loadedCount = memoryFields.length + selectorRows.length;
-        if (loadedCount) {
-          setSiteMemoryBanner(`Loaded ${loadedCount} reusable field${loadedCount === 1 ? "" : "s"} from Site Memory for ${domain}.`);
-        }
-        setAppliedMemoryDomain(domain);
-      } catch (error) {
-        if (!cancelled) {
-          setAppliedMemoryDomain(domain);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [appliedMemoryDomain, siteMemoryLookupUrl]);
-
   const config = useMemo<CrawlConfig>(
     () => ({
       module: crawlTab,
@@ -205,50 +158,36 @@ export function CrawlConfigScreen({
     ],
   );
 
-  function startPreview(event: FormEvent) {
+  async function startCrawl(event: FormEvent) {
     event.preventDefault();
     setConfigError("");
     try {
       const dispatch = buildDispatch(config);
-      setPendingDispatch(dispatch);
-      setPreviewOpen(true);
-    } catch (error) {
-      setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
-    }
-  }
-
-  async function launchPending() {
-    if (!pendingDispatch) {
-      return;
-    }
-    setLaunchError("");
-    try {
       let response: { run_id: number };
-      if (pendingDispatch.runType === "csv") {
-        if (!pendingDispatch.csvFile) {
+      if (dispatch.runType === "csv") {
+        if (!dispatch.csvFile) {
           throw new Error("CSV file is missing.");
         }
         response = await api.createCsvCrawl({
-          file: pendingDispatch.csvFile,
-          surface: pendingDispatch.surface,
-          additionalFields: pendingDispatch.additionalFields,
-          settings: pendingDispatch.settings,
+          file: dispatch.csvFile,
+          surface: dispatch.surface,
+          additionalFields: dispatch.additionalFields,
+          settings: dispatch.settings,
         });
       } else {
         response = await api.createCrawl({
-          run_type: pendingDispatch.runType,
-          url: pendingDispatch.url,
-          urls: pendingDispatch.urls,
-          surface: pendingDispatch.surface,
-          settings: pendingDispatch.settings,
-          additional_fields: pendingDispatch.additionalFields,
+          run_type: dispatch.runType,
+          url: dispatch.url,
+          urls: dispatch.urls,
+          surface: dispatch.surface,
+          settings: dispatch.settings,
+          additional_fields: dispatch.additionalFields,
         });
       }
-      setPreviewOpen(false);
-      setPendingDispatch(null);
       router.replace((`/crawl?run_id=${response.run_id}`) as Route);
     } catch (error) {
-      setLaunchError(error instanceof Error ? error.message : "Unable to launch crawl.");
+      const message = error instanceof Error ? error.message : "Unable to launch crawl.";
+      setConfigError(message);
     }
   }
 
@@ -283,21 +222,7 @@ export function CrawlConfigScreen({
           </button>
         </div>
       ) : null}
-      {siteMemoryBanner ? (
-        <div className="surface-banner flex items-center justify-between px-4 py-3 text-sm">
-          <div>{siteMemoryBanner}</div>
-          <button
-            type="button"
-            onClick={() => setSiteMemoryBanner("")}
-            aria-label="Close site memory banner"
-            className="inline-flex size-7 items-center justify-center rounded-md text-muted transition hover:text-foreground"
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
-
-      <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]" onSubmit={startPreview}>
+      <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]" onSubmit={(event) => void startCrawl(event)}>
         <div className="space-y-4">
           <Card className="space-y-5">
             <SectionHeader
@@ -338,19 +263,10 @@ export function CrawlConfigScreen({
               </div>
               <Button
                 variant="accent"
-                type="button"
+                type="submit"
                 disabled={!canPreview(config)}
-                onClick={() => {
-                  try {
-                    setPendingDispatch(buildDispatch(config));
-                    setPreviewOpen(true);
-                    setConfigError("");
-                  } catch (error) {
-                    setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
-                  }
-                }}
               >
-                Review Before Running
+                Start Crawl
               </Button>
             </div>
 
@@ -406,7 +322,7 @@ export function CrawlConfigScreen({
             <div className="flex items-center justify-between gap-4">
               <SectionHeader
                 title="Field Configuration"
-                description="Manual selectors layer on top of reusable Site Memory fields."
+                description="Add manual selectors for fields you want to force or test."
               />
               <Button variant="ghost" type="button" onClick={addManualField}>
                 <Plus className="size-3.5" />
@@ -519,7 +435,7 @@ export function CrawlConfigScreen({
                 </SettingSection>
                 <SettingSection
                   label="Anti-Bot Browser Mode"
-                  description="Opt in to slower challenge handling and stealth logic for protected sites."
+                  description="Adds browser-style waits for protected sites."
                   icon={<Shield className="size-4" />}
                   checked={antiBotEnabled}
                   onChange={setAntiBotEnabled}
@@ -548,17 +464,6 @@ export function CrawlConfigScreen({
         </div>
       </form>
 
-      {previewOpen && pendingDispatch ? (
-        <PreviewModal
-          dispatch={pendingDispatch}
-          onCancel={() => {
-            setPreviewOpen(false);
-            setPendingDispatch(null);
-          }}
-          onLaunch={() => void launchPending()}
-          launchError={launchError}
-        />
-      ) : null}
     </div>
   );
 }
@@ -697,41 +602,4 @@ function canPreview(config: CrawlConfig) {
   } catch {
     return false;
   }
-}
-
-function normalizeDomain(value: string) {
-  try {
-    return new URL(value).hostname.replace(/^www\./, "").toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function flattenSiteMemorySelectors(selectors: Record<string, Array<{ xpath?: string | null; regex?: string | null }>>) {
-  return Object.entries(selectors).flatMap(([fieldName, rows]) =>
-    rows
-      .map((row, index) => ({
-        id: `site-memory-${fieldName}-${index}`,
-        fieldName,
-        xpath: row.xpath?.trim() ?? "",
-        regex: row.regex?.trim() ?? "",
-        xpathState: "idle" as const,
-        regexState: "idle" as const,
-      }))
-      .filter((row) => row.xpath || row.regex),
-  );
-}
-
-function mergeFieldRowsFromSiteMemory(current: FieldRow[], incoming: FieldRow[]) {
-  const next = [...current];
-  const seen = new Set(current.map((row) => `${normalizeField(row.fieldName)}|${row.xpath}|${row.regex}`));
-  for (const row of incoming) {
-    const key = `${normalizeField(row.fieldName)}|${row.xpath}|${row.regex}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(row);
-  }
-  return next;
 }

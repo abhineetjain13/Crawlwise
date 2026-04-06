@@ -1,7 +1,5 @@
 import time
-import json
 import requests
-import sys
 
 PORT = 8000
 BASE_URL = f"http://127.0.0.1:{PORT}"

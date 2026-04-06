@@ -361,6 +361,48 @@ def test_coerce_field_candidate_value_rejects_asset_font_urls_for_url_fields():
     assert _resolve_candidate_url("https://cdn.example.com/fonts/inter.woff2", "https://example.com") == ""
 
 
+def test_resolve_candidate_url_strips_tracking_query_params():
+    assert (
+        _resolve_candidate_url(
+            "https://example.com/product/widget?utm_source=newsletter&ref=home&id=9",
+            "https://example.com",
+        )
+        == "https://example.com/product/widget?id=9"
+    )
+
+
+def test_resolve_candidate_url_preserves_fragment_and_non_tracking_ref_prefix_keys():
+    assert (
+        _resolve_candidate_url(
+            "https://example.com/product/widget?referrer=home&ref=nav&id=9#details",
+            "https://example.com",
+        )
+        == "https://example.com/product/widget?referrer=home&id=9#details"
+    )
+
+
+def test_extract_rejects_noise_title_and_placeholder_image_candidates():
+    html = "<html><body></body></html>"
+    manifest = _manifest(
+        json_ld=[{
+            "@type": "Product",
+            "name": "Cart",
+            "image": "https://example.com/assets/logo-placeholder.png",
+        }]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert "title" not in candidates
+    assert "image_url" not in candidates
+
+
 def test_extract_drops_generic_hidden_category_candidates_but_preserves_dom_category():
     html = "<html><body><div itemprop='category'>Audio Cables</div></body></html>"
     manifest = _manifest(_hydrated_states=[{"page": {"type": "detail-page"}}])
@@ -675,6 +717,60 @@ def test_extract_semantic_specifications_are_exposed_as_candidate_rows_without_r
     assert candidates["impedance"][0]["value"] == "50 Ohms"
     assert "specifications" in candidates
     assert "wire_gauge: 26 AWG" in candidates["specifications"][0]["value"]
+
+
+def test_extract_job_detail_semantic_specs_do_not_emit_specifications_aggregate():
+    html = """
+    <html><body>
+    <table>
+      <tr><th>Salary Range</th><td>$82,000 - $92,000</td></tr>
+      <tr><th>Requisition ID</th><td>1393</td></tr>
+    </table>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job",
+            "job_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert "salary" in candidates
+    assert candidates["salary"][0]["value"] == "$82,000 - $92,000"
+    assert "requisition_id" in candidates
+    assert candidates["requisition_id"][0]["value"] == "1393"
+    assert "specifications" not in candidates
+
+
+def test_extract_job_detail_ignores_polluted_resolved_fields():
+    html = "<html><body><h1>Engineer</h1></body></html>"
+    manifest = _manifest(json_ld=[{
+        "@type": "JobPosting",
+        "title": "Engineer",
+        "salaryCurrency": "USD",
+        "employmentType": "FULL_TIME",
+        "color": "Blue",
+        "sku": "ABC-123",
+        "image": "https://example.com/job.jpg",
+    }])
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/job/1",
+            "job_detail",
+            html,
+            manifest,
+            [],
+            resolved_fields=["title", "category", "color", "currency", "image_url", "additional_images", "sku"],
+        )
+    assert "title" in candidates
+    assert "category" not in candidates
+    assert "color" not in candidates
+    assert "currency" not in candidates
+    assert "image_url" not in candidates
+    assert "additional_images" not in candidates
+    assert "sku" not in candidates
 
 
 def test_extract_semantic_specifications_allow_additional_colons_in_value():

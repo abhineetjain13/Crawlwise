@@ -212,6 +212,109 @@ async def test_acquire_html_auto_mode_keeps_curl_when_structured_listings_are_ex
 
 
 @pytest.mark.asyncio
+async def test_acquire_listing_search_shell_without_extractable_records_escalates_to_browser():
+    shell_html = """
+    <html data-jibe-search-version="4.11.178">
+      <body>
+        <h1>FoxRC Careers Home Job Search</h1>
+        <p>Search jobs by keyword and location.</p>
+        <script>
+          window._jibe = {"cid":"thecheesecakefactory"};
+          window.searchConfig = {"query":{"keywords":"Dough Bird","limit":"100","page":"1"}};
+        </script>
+      </body>
+    </html>
+    """
+    browser_html = """
+    <html><body>
+      <ul>
+        <li><a href="https://example.com/jobs/1">Dishwasher</a></li>
+        <li><a href="https://example.com/jobs/2">Server</a></li>
+      </ul>
+    </body></html>
+    """
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
+        ),
+        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(html=browser_html),
+        ) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://example.com/jobs?keywords=Dough%20Bird", surface="job_listing")
+
+    assert result.method == "playwright"
+    browser_mock.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acquire_job_listing_iframe_shell_escalates_to_browser():
+    shell_html = """
+    <html><body>
+      <main>
+        <h1>Careers</h1>
+        <iframe src="https://boards.greenhouse.io/embed/job_board?for=example"></iframe>
+      </main>
+    </body></html>
+    """
+    browser_html = """
+    <html><body>
+      <div class="job-card">
+        <a href="https://example.com/jobs/1"><h3>Platform Engineer</h3><p>Remote</p></a>
+      </div>
+      <div class="job-card">
+        <a href="https://example.com/jobs/2"><h3>Data Engineer</h3><p>Austin, TX</p></a>
+      </div>
+    </body></html>
+    """
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
+        ),
+        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(
+                html=browser_html,
+                promoted_sources=[{"kind": "iframe", "url": "https://boards.greenhouse.io/embed/job_board?for=example"}],
+            ),
+        ) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://example.com/careers", surface="job_listing")
+
+    assert result.method == "playwright"
+    assert result.promoted_sources
+    assert result.diagnostics["browser_retry_reason"] == "iframe_shell"
+    browser_mock.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_acquire_detail_requested_fields_are_not_overridden_by_listing_structured_data():
     js_heavy_html = """
     <html><body>

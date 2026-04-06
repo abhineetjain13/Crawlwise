@@ -5,7 +5,7 @@
 CrawlerAI is a POC crawler stack with:
 
 - `backend/`: FastAPI + SQLAlchemy async backend, crawl worker loop, adapters, deterministic extraction pipeline, review/promotion flow.
-- `frontend/`: Next.js app for crawl submission, run inspection, review, selectors, admin views.
+- `frontend/`: Next.js app for crawl submission, run inspection, review, and admin views.
 - `docs/`: product notes and implementation planning docs.
 
 ## Documentation Map
@@ -56,32 +56,11 @@ Category is the default page type in the UI.
 
 Automatic browser escalation is system-owned and independent of `advanced_mode`. The acquisition layer may still escalate from `curl_cffi` to Playwright for both listing and detail pages when curl output is blocked, redirected, empty, or structurally unusable.
 
-## Frontend State
-
-### Implemented
-
-- Unified crawl studio at `/crawl`
-- Tabs for `Crawl`, `Batch`, and `CSV`
-- Compact right-side crawl settings rail
-- Category/PDP toggle, defaulting to Category
-- Advanced crawl toggle + mode dropdown
-- Proxy rotation toggle + list input
-- LLM toggle kept separate and off by default
-- Extraction contract editor with row-wise add/delete
-- Legacy `/crawl/category` and `/crawl/pdp` routes now redirect to `/crawl`
-- Root route now redirects to `/login`
-- Protected app routes are gated by a frontend `me()` check before child pages mount
-
-### Notes
-
-- CSV submission uses multipart `POST /api/crawls/csv`
-- Batch submission uses JSON `POST /api/crawls` with `run_type="batch"`
-
 ## Backend State
 
 ### Pipeline architecture
 
-The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT → UNIFY → PUBLISH
+The crawl pipeline follows: ACQUIRE → EXTRACT → UNIFY → PUBLISH
 
 #### Acquisition layer (`services/acquisition/`)
 
@@ -90,9 +69,10 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
 - HTML waterfall: curl_cffi → Playwright fallback (when JS-blocked or short content)
 - `blocked_detector.py`: Post-acquisition blocked/challenge page detection with deterministic signatures for WAFs (PerimeterX, Cloudflare, Akamai, Datadome), CAPTCHA pages, access-denied pages
 - `host_memory.py`: TTL-aware, file-backed acquisition history. It is diagnostic/supporting state, not authority for rewriting user-owned crawl controls.
-- `browser_client.py`: Stealth context, challenge wait, origin warming, cookie consent dismissal, network XHR/fetch interception
+- `browser_client.py`: Stealth context, challenge wait, origin warming, cookie consent dismissal, network XHR/fetch interception, unconditional interactive expansion before HTML capture
 - Detail pages never run traversal helpers (`paginate` / `scroll` / `load_more`) even if `advanced_mode` is present; traversal is listing-only policy.
 - Listing pages also never run traversal helpers unless `advanced_mode` was explicitly set by the user.
+- Playwright sessions do not map requested field names to click plans. The browser path always runs `expand_all_interactive_elements(page)` and then captures the page.
 
 #### Acquisition hardening rules
 
@@ -123,12 +103,6 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
   - Expand HTTP impersonation beyond a fixed pair and support bounded browser-fingerprint rotation for repeated 403/429/503 style soft blocks.
   - Record the selected fingerprint in diagnostics for later analysis.
 
-#### Discovery layer (`services/discover/`)
-
-- `service.py`: Produces `DiscoveryManifest` from HTML — discovers adapter data, network payloads, __NEXT_DATA__, JSON-LD, microdata, tables, hydrated state objects (__NUXT__, __APOLLO_STATE__, etc.)
-- Discovery is intentionally source-preserving: adapter outputs, JSON-LD, intercepted network JSON, hydrated state, tables, and DOM-derived signals should all remain available for downstream reconciliation even when only one source wins deterministic extraction.
-- Acquisition/discovery should optimize for preserving all useful source evidence in `raw_data`, `source_trace`, and manifest-derived structures; user-facing cleanup happens later in review/output layers.
-
 #### Extraction layer (`services/extract/`)
 
 - `listing_extractor.py`: Structured-data-first strategy for listings:
@@ -137,21 +111,25 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
   3. Hydrated state objects (__NUXT__, __APOLLO_STATE__, etc.)
   4. Network payloads (XHR/fetch intercepted JSON)
   5. DOM card detection (CSS selectors + auto-detect heuristic)
-  - All structured sources are collected and ranked by field richness — sparse JSON-LD no longer short-circuits richer hydrated state data
   - `_extract_items_from_json` reads `max_json_recursion_depth` from `pipeline_tuning.json` (default `8`) to find deeply nested product arrays
   - Card title extraction uses ordered selectors (`[itemprop='name']` → `.title` → headings) and skips price-like text to prevent price/title confusion
   - Card auto-detect scores candidate groups by product signal density (link + image + price) instead of pure element count, preventing nav lists from winning over product tiles
   - Price text is cleaned via regex to strip surrounding UI text (e.g. "In stock Add to basket")
-  - `card_selectors.json` includes 22 ecommerce and 12 job selectors, including microdata `[itemscope][itemtype*='Product']` and class-substring patterns
+- `source_parsers.py`: Shared source parsing for `__NEXT_DATA__`, hydrated states, embedded JSON, Open Graph, JSON-LD, microdata, and tables
 - `json_extractor.py`: First-class JSON API extraction — finds data arrays in nested JSON using 37 collection keys (including `products`, `jobs`, `drinks`, `books`, `categories`, etc.) plus GraphQL edges/node patterns. Falls back to preserving scalar fields under original keys when no canonical alias matches.
-- `service.py`: Detail page candidate extraction with priority: contract > adapter > network > __NEXT_DATA__ > JSON-LD > microdata > selectors > DOM patterns
+- `service.py`: Detail page extraction uses a strict first-match hierarchy per field: adapter → XHR/JSON payload → JSON-LD → hydrated state (`__NEXT_DATA__` / `__NUXT_DATA__`) → DOM selector defaults → LLM fallback
 - `semantic_detail_extractor.py`: Extracts sections, specifications, label/value patterns from detail pages
+- No manifest wrapper, evidence graph, or evidence bucket model exists between acquisition and extraction. Extraction takes plain `html`, `xhr_payloads`, and `url`.
 
 #### Adapter registry (`services/adapters/`)
 
 - Domain-matched adapters checked first, signal-based (Shopify) last
-- Adapters: Amazon, Walmart, eBay, Indeed, LinkedIn Jobs, Greenhouse, Remotive/RemoteOK, Shopify
+- Adapters: Amazon, Walmart, eBay, ADP, Workday, iCIMS, Indeed, LinkedIn Jobs, Greenhouse, Remotive/RemoteOK, Shopify
+- Acquisition diagnostics now include an advisory `curl_platform_family` classification loaded from `platform_families.json`
+- ADP: WorkForceNow recruitment DOM extraction for listing/detail pages after browser hydration
 - Greenhouse: JSON API at boards-api.greenhouse.io + HTML fallback
+- iCIMS: embedded-iframe board follow, AJAX pagination endpoint support, and HTML fragment parsing
+- Workday: DOM extraction for listing/detail pages using `data-automation-id` signals
 - Remotive/RemoteOK: HTML fallback (JSON-first path handles API responses directly)
 - `try_blocked_adapter_recovery()`: When pages are blocked, attempt recovery via public platform endpoints (currently Shopify only)
 
@@ -172,23 +150,26 @@ Run status currently reflects verdict as: `completed` (`success`) and `failed` (
 
 Listing pages that produce 0 real item-level records are never downgraded into a single detail-style fallback record. They get `listing_detection_failed` verdict and a failed run status.
 
-#### Selector memory
-
-Placeholder selectors like `[data-field='x']` are no longer saved. Selectors are only stored when sourced from an adapter, user contract, or validated DOM match.
-
 ### Pipeline configuration (`services/pipeline_config.py`)
 
-All tunable values (field aliases, collection keys, DOM patterns, card selectors, normalization rules, verdict rules, block signatures, consent selectors, etc.) are loaded from JSON files in `data/knowledge_base/` at startup. Code MUST import from `pipeline_config` — never hardcode these values.
+Pipeline config now imports typed Python constants from:
+
+- `services/config/extraction_rules.py`
+- `services/config/block_signatures.py`
+- `services/config/selectors.py`
+- `services/config/field_mappings.py`
+
+Code should continue to import from `pipeline_config.py`, not duplicate config values in service code.
 
 ### Record field policy
 
 - `record.data`: Only populated logical fields shown to users. Empty/null fields and `_`-prefixed internal fields are stripped in the API response.
-- `record.discovered_data`: Raw manifest containers (adapter_data, json_ld, network_payloads, etc.) are stripped from API responses. Only logical metadata (content_type, source, requested_field_coverage) is exposed.
+- `record.discovered_data`: Large raw source containers are stripped from API responses. Only logical metadata (content_type, source, requested_field_coverage) is exposed.
 - `record.raw_data`: Full raw extraction data, available for review/promote resolution but not shown in default views.
-- `record.source_trace.field_discovery`: Deterministic field-level discovery summary for requested/additional fields. This is the primary backend contract for intelligence/review display: chosen value, contributing sources, candidate counts, and missing fields.
+- `record.source_trace.field_discovery`: Deterministic field-level discovery summary for requested/additional fields. This is the primary backend contract for intelligence/review display: chosen value, source, and missing fields.
 - `record.source_trace.acquisition`: Lightweight acquisition summary for UI/review use: final URL, browser attempt/use flags, challenge state, invalid-surface marker, and timing diagnostics.
 - Requested field coverage is tracked in `discovered_data.requested_field_coverage` — it does NOT affect the extraction verdict.
-- Review/LLM-oriented workflows should consume cleaned logical candidates plus preserved raw source evidence; do not throw away source-specific data during acquisition/discovery just because it is hidden from the default API view.
+- Review/LLM-oriented workflows should consume cleaned logical candidates plus preserved raw source evidence.
 
 ### Review service
 
@@ -200,7 +181,7 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 
 - Single-page frontend contract now uses `run_type="crawl"`
 - Listing extractor now resolves relative URLs against the page URL
-- Review payload now exposes extracted fields instead of manifest container keys
+- Review payload now exposes extracted fields instead of raw source containers
 - Password hashing now uses `pbkdf2_sha256` instead of the broken bcrypt runtime path
 - Shopify PDP adapter now scopes detail acquisition to `/products/<handle>.js`
 - Extraction contract rows now feed XPath and regex candidate extraction
@@ -222,8 +203,7 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - `_extract_items_from_json` now uses `pipeline_tuning.json:max_json_recursion_depth` (default `4`) for deeply nested product arrays (e.g. Myntra `searchData.results.products`)
 - Hydrated state patterns expanded: `__myx`, `__STORE__`, `__APP_STATE__`
 - Field aliases expanded: `landingPageUrl`, `searchImage`, `discountedPrice`, `mrp`
-- Discovery now preserves more usable source evidence for detail pages: embedded JSON blobs, hydrated state assignments, semantic sections, and structured table/spec rows all feed field-level candidate generation
-- Detail runs now persist deterministic `field_discovery` summaries for requested fields so intelligence/review UIs can show discovered values and source provenance instead of raw manifest blobs alone
+- Detail runs now persist deterministic `field_discovery` summaries for requested fields so intelligence/review UIs can show discovered values and source provenance instead of raw source blobs alone
 - Manual reviewed-field commits now use a generic `commit-fields` API route rather than LLM-only naming
 - API auth now accepts either the session cookie or `Authorization: Bearer <token>` for the same protected endpoints
 - Listing card title extraction now uses ordered selectors (`[itemprop='name']` → `.title` → headings) and skips price-like headings — fixes webscraper.io where price `<h4>` preceded title `<h4>`
@@ -256,10 +236,14 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - Category quality score now rejects social media names (youtube, facebook, etc.), namespace-prefixed values (food:foodProduct), and URL path fragments
 - Brand quality score penalizes URL path fragments (e.g. "facets/brands/coca-cola")
 - Extraction smoke runner expanded to 9 sites covering: ecommerce PDPs (Adorama, SSENSE, Arc'teryx, Adafruit, SparkFun, OpenFoodFacts), job listings (Dice), ecommerce listings (AutoZone, Puma)
-- Magic numbers migration: JSON-LD frozensets (`_JSONLD_STRUCTURAL_KEYS`, `_JSONLD_NON_PRODUCT_BLOCK_TYPES`, `_PRODUCT_IDENTITY_FIELDS`, `_NESTED_NON_PRODUCT_KEYS`, `_JSONLD_TYPE_NOISE`), dynamic field drop tokens, and source ranking dict all moved from hardcoded service.py to `extraction_rules.json` and loaded via `pipeline_config.py`
-- `MAX_CANDIDATES_PER_FIELD`, `DYNAMIC_FIELD_NAME_MAX_TOKENS`, `ACCORDION_EXPAND_MAX`, `ACCORDION_EXPAND_WAIT_MS` now configurable via `pipeline_tuning.json` (were hardcoded in service.py and browser_client.py)
-- Created `block_signatures.json` and `consent_selectors.json` — these were referenced by pipeline_config.py but didn't exist as files (fell through to inline fallback defaults)
-- Accordion expansion in browser_client.py now uses configurable max and wait from pipeline_tuning.json, passed as JS parameter to `page.evaluate()`
+- Config modules were collapsed from runtime JSON files into typed Python config modules consumed through `pipeline_config.py`
+- Browser field-activation planning was removed in favor of unconditional `expand_all_interactive_elements(page)` during Playwright capture
+- Site memory and selector CRUD subsystems were removed; site-specific extraction rules live in versioned adapter code
+- Discovery manifest and evidence bucket abstractions were removed; plain extraction inputs replaced them
+- Restored first-class iCIMS adapter coverage for ATS boards, including branded shell pages that embed the real iCIMS job board in an iframe
+- Restored first-class Workday adapter coverage for ATS listing/detail pages using rendered `data-automation-id` DOM
+- Restored first-class ADP WorkForceNow adapter coverage for ATS listing/detail pages using hydrated recruitment DOM
+- Added typed artifact exports: `tables.csv`, `artifacts.json`, and CSV fallback to typed table rows when structured records are empty
 
 ## Tests
 
@@ -270,7 +254,8 @@ $env:PYTHONPATH='.'
 pytest tests -q
 ```
 
-The backend test tree currently collects 360 tests covering adapters, acquisition, blocked detection, JSON extraction, listing extraction, crawl service orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, discovery, and worker recovery.
+The backend test mix covers adapters, acquisition, blocked detection, JSON extraction, listing extraction, crawl orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, and worker recovery.
+Use the current `pytest` collection as the source of truth for exact test counts.
 
 Acquire-only smoke checks can be run without the full crawl pipeline:
 
@@ -288,20 +273,20 @@ Each smoke run now writes a timestamped JSON report under `artifacts/acquisition
 
 Use these small batches first when validating acquisition changes. They are intentionally lighter and safer than a full `process_run()` audit, and they should remain free of site-specific fallback hacks.
 
-Full extraction pipeline smoke tests (acquire + discover + extract, no database):
+Full extraction pipeline smoke tests (acquire + extract, no database):
 
 ```powershell
 $env:PYTHONPATH='.'
 python run_extraction_smoke.py
 ```
 
-This tests 10 client URLs through the complete extraction pipeline and writes a timestamped report under `artifacts/extraction_smoke/`.
+This exercises the complete acquisition and extraction pipeline without the database and writes a timestamped report under `artifacts/extraction_smoke/`.
 
 ## Architecture Invariants
 
 These MUST be preserved across all changes:
 
-1. **No magic values in code.** All tunable thresholds, field lists, selectors, and patterns MUST live in `data/knowledge_base/*.json` and be loaded via `pipeline_config.py`. Never hardcode these in service code.
+1. **No duplicate magic values in service code.** Shared tunables live in the typed config modules imported through `pipeline_config.py`. Do not duplicate them in service code.
 2. **Async-safe adapters.** All HTTP calls in async adapter methods MUST use `asyncio.to_thread()` for synchronous libraries (curl_cffi). Blocking the event loop causes visible user-facing latency.
 3. **Verdict based on core fields only.** `_compute_verdict()` determines success/partial based on VERDICT_CORE_FIELDS presence. Requested field coverage is metadata, not a verdict input.
 4. **Clean record API responses.** `CrawlRecordResponse.data` strips empty/null values and `_`-prefixed internal keys. `discovered_data` strips raw manifest containers. Users see only populated logical fields.
@@ -315,9 +300,12 @@ These MUST be preserved across all changes:
 12. **Diagnostics must be observational.** Acquisition diagnostics should report only what actually happened during the fetch/render path; do not fabricate blocker causes, fallback reasons, or retry metadata.
 13. **User-owned crawl controls must never be rewritten by the backend.** Do not normalize or reclassify `surface`, auto-enable LLM, auto-enable traversal, or auto-switch hidden proxy policy. If the user chose poorly, fail visibly instead of mutating the request.
 14. **JS-shell detection may trigger Playwright rendering, not traversal.** Browser escalation is allowed for rendering blocked/empty/JS-shell pages, but pagination, infinite scroll, and load-more remain explicit `advanced_mode` actions only.
-15. **LLM calls must fail fast.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. Re-evaluate when using paid API keys.
-16. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to `spec_drop_labels` in `extraction_rules.json`, not hardcoded.
-17. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
+15. **Field extraction is first-match, not score-based.** For each field, resolution order is adapter → XHR/JSON payload → JSON-LD → hydrated state → DOM selector defaults → LLM fallback. First valid hit wins.
+16. **Playwright expansion is generic, not field-routed.** No code path may use requested field names to decide what to click before capture; the browser path runs the same interactive expansion pass on every session.
+17. **Deleted subsystems stay deleted.** Do not reintroduce site memory, selector CRUD, discovery manifests, evidence buckets, or runtime-editable per-domain extraction logic under new names.
+18. **LLM calls must fail fast.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. Re-evaluate when using paid API keys.
+19. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to config, not hardcoded.
+20. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
 
 ## Backlog Reference
 

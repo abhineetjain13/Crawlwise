@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from html import unescape
 import re
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -18,6 +19,7 @@ from app.services.pipeline_config import (
     CANDIDATE_IMAGE_TOKENS,
     CANDIDATE_PRICE_TOKENS,
     CANDIDATE_PROMO_ONLY_TITLE_PATTERN,
+    CANDIDATE_SALARY_TOKENS,
     CANDIDATE_SCRIPT_NOISE_PATTERN,
     CANDIDATE_UI_ICON_TOKEN_PATTERN,
     CANDIDATE_UI_NOISE_PHRASES,
@@ -39,9 +41,22 @@ _CURRENCY_TOKEN_RE = re.compile(r"\b[A-Z]{3}\b")
 _CURRENCY_AFTER_AMOUNT_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*([A-Z]{3})\b")
 _CURRENCY_BEFORE_AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*\d[\d,]*(?:\.\d+)?\b")
 _HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+_NUMERIC_ONLY_RE = re.compile(r"^\d+$")
+_TITLE_NOISE_WORDS = {"home", "cart", "sign in", "search results", "access denied", "loading..."}
+_SALARY_NOISE_PATTERN = re.compile(r"\b(?:competitive|depends on experience|doe)\b", re.IGNORECASE)
+_IMAGE_NOISE_PATTERN = re.compile(r"\b(?:icon|logo|sprite|placeholder|avatar)\b", re.IGNORECASE)
+_NOISE_URL_SUFFIXES = (".js", ".css", ".woff", ".woff2", ".svg", "spinner.gif")
+_GENERIC_PLATFORM_URLS = {
+    "https://www.shopify.com",
+    "https://www.linkedin.com/jobs",
+}
+_LOWERCASED_GENERIC_PLATFORM_URL_PREFIXES = tuple(url.lower() for url in _GENERIC_PLATFORM_URLS)
+_TRACKING_QUERY_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "ref", "ref_src")
 
 
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
+    if not tokens:
+        return re.compile(r"(?!x)x", re.IGNORECASE)
     parts: list[str] = []
     for token in tokens:
         escaped = re.escape(token)
@@ -63,9 +78,9 @@ def normalize_value(field_name: str, value: object) -> object:
         if _is_size_field(field_name):
             return _normalize_size_text(text)
         if _is_image_primary_field(field_name):
-            return _normalize_image_url(text)
+            return _strip_tracking_params(_normalize_image_url(text))
         if _is_image_collection_field(field_name):
-            return _normalize_additional_images(text)
+            return _strip_tracking_params(_normalize_additional_images(text))
         if _is_numeric_field(field_name):
             match = re.search(PRICE_REGEX, text)
             return match.group(0) if match else text
@@ -101,6 +116,50 @@ def normalize_value(field_name: str, value: object) -> object:
     return value
 
 
+def validate_value(field_name: str, value: object) -> object | None:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, str):
+        text = " ".join(str(value).split()).strip()
+        if not text:
+            return None
+        if _is_title_field(field_name) or _is_entity_name_field(field_name):
+            lowered = text.lower()
+            if len(text) < 3 or len(text) > 250:
+                return None
+            if lowered in _TITLE_NOISE_WORDS or _NUMERIC_ONLY_RE.fullmatch(text):
+                return None
+            return text
+        if _is_numeric_field(field_name):
+            amount = _extract_positive_number(text)
+            return text if amount is not None and amount > 0 else None
+        if _is_salary_field(field_name):
+            if _SALARY_NOISE_PATTERN.search(text) or not re.search(r"\d", text):
+                return None
+            return text
+        if _is_image_collection_field(field_name):
+            normalized_urls = [
+                normalized_url
+                for normalized_url in (
+                    _strip_tracking_params(url)
+                    for url in _split_image_values(text)
+                )
+                if _is_valid_http_url(normalized_url) and not _IMAGE_NOISE_PATTERN.search(normalized_url)
+            ]
+            return ", ".join(normalized_urls) if normalized_urls else None
+        if _is_image_primary_field(field_name):
+            normalized_url = _strip_tracking_params(text)
+            if not _is_valid_http_url(normalized_url) or _IMAGE_NOISE_PATTERN.search(normalized_url):
+                return None
+            return normalized_url
+        if _is_url_field(field_name):
+            normalized_url = _strip_tracking_params(text)
+            if not _is_valid_http_url(normalized_url):
+                return None
+            return normalized_url
+    return value
+
+
 def extract_currency_hint(value: object) -> str:
     text = str(value or "").strip()
     if not text:
@@ -121,6 +180,41 @@ def extract_currency_hint(value: object) -> str:
             return currency
     valid_tokens = [token for token in _CURRENCY_TOKEN_RE.findall(upper_text) if token in CURRENCY_CODES]
     return valid_tokens[0] if valid_tokens else ""
+
+
+def _strip_tracking_params(value: str) -> str:
+    text = str(value or "").strip()
+    if not text.startswith(("http://", "https://")):
+        return text
+    parsed = urlsplit(text)
+    filtered = [
+        (key, val)
+        for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+        if key and not any(key.lower().startswith(prefix) for prefix in _TRACKING_QUERY_PREFIXES)
+    ]
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(filtered, doseq=True), ""))
+
+
+def _is_valid_http_url(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text.startswith(("http://", "https://")):
+        return False
+    lowered = text.lower()
+    if any(lowered.endswith(suffix) for suffix in _NOISE_URL_SUFFIXES):
+        return False
+    if any(lowered.startswith(prefix) for prefix in _LOWERCASED_GENERIC_PLATFORM_URL_PREFIXES):
+        return False
+    return True
+
+
+def _extract_positive_number(value: str) -> float | None:
+    match = re.search(PRICE_REGEX, str(value or ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(",", ""))
+    except ValueError:
+        return None
 
 
 def _normalize_image_url(value: str) -> str:
@@ -320,3 +414,7 @@ def _is_entity_name_field(field_name: str) -> bool:
 
 def _is_currency_field(field_name: str) -> bool:
     return _field_in_group(field_name, "currency") or _field_has_any_token(field_name, CANDIDATE_CURRENCY_TOKENS)
+
+
+def _is_salary_field(field_name: str) -> bool:
+    return _field_in_group(field_name, "salary") or _field_has_any_token(field_name, CANDIDATE_SALARY_TOKENS)

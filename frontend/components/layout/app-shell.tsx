@@ -10,7 +10,6 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
-  Database,
   Globe,
   History,
   LayoutDashboard,
@@ -38,7 +37,6 @@ const navGroups = [
       { href: "/dashboard",  label: "Dashboard",     icon: LayoutDashboard },
       { href: "/crawl",      label: "Crawl Studio",   icon: Globe           },
       { href: "/runs",       label: "History",        icon: History         },
-      { href: "/memory",     label: "Site Memory",    icon: Database        },
       { href: "/selectors",  label: "Selector Tool",  icon: Search          },
       { href: "/jobs",       label: "Jobs",           icon: Activity        },
     ],
@@ -414,7 +412,6 @@ function getFallbackHeader(pathname: string): TopBarState {
   if (pathname.startsWith("/crawl"))        return { title: "Crawl Studio" };
   if (pathname.startsWith("/runs/"))        return { title: "Run Details" };
   if (pathname.startsWith("/runs"))         return { title: "Run History" };
-  if (pathname.startsWith("/memory"))       return { title: "Site Memory" };
   if (pathname.startsWith("/selectors"))    return { title: "Selector Tool" };
   if (pathname.startsWith("/admin/users"))  return { title: "Users" };
   if (pathname.startsWith("/admin/llm"))    return { title: "LLM Config" };

@@ -16,10 +16,11 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.services.acquisition.acquirer import acquire
-from app.services.discover import discover_sources
 from app.services.extract.listing_extractor import extract_listing_records
+from app.services.extract.source_parsers import parse_page_sources
 from app.services.extract.service import extract_candidates
 from app.services.semantic_detail_extractor import extract_semantic_detail_data
 
@@ -141,7 +142,12 @@ async def _run_one(site: dict, run_id: int) -> dict:
             return result_entry
 
         # Phase 2: Discover
-        manifest = discover_sources(html, network_payloads=acq.network_payloads or [])
+        parsed_sources = parse_page_sources(html)
+        manifest = SimpleNamespace(
+            json_ld=parsed_sources.get("json_ld") or [],
+            next_data=parsed_sources.get("next_data"),
+            _hydrated_states=parsed_sources.get("hydrated_states") or [],
+        )
         result_entry["json_ld_count"] = len(manifest.json_ld)
         result_entry["has_next_data"] = bool(manifest.next_data)
         result_entry["hydrated_states"] = len(manifest._hydrated_states)
@@ -149,7 +155,7 @@ async def _run_one(site: dict, run_id: int) -> dict:
         # Phase 3: Extract
         if page_type == "category":
             records = extract_listing_records(
-                html, surface, set(), page_url=url, max_records=50, manifest=manifest,
+                html, surface, set(), page_url=url, max_records=50, xhr_payloads=acq.network_payloads or [],
             )
             result_entry["records"] = len(records)
             result_entry["record_sources"] = list({r.get("_source", "?") for r in records})
@@ -169,7 +175,7 @@ async def _run_one(site: dict, run_id: int) -> dict:
             # Detail page
             semantic = extract_semantic_detail_data(html, requested_fields=[])
             candidates, _ = extract_candidates(
-                url, surface, html, manifest, additional_fields=[],
+                url, surface, html, acq.network_payloads or [], additional_fields=[],
             )
             result_entry["candidate_fields"] = sorted(candidates.keys())
             result_entry["spec_count"] = len(semantic.get("specifications", {}))

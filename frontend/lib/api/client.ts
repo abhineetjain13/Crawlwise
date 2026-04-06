@@ -146,6 +146,7 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
   const isFormData = init?.body instanceof FormData;
   const maxAttempts = 3;
   const candidateBaseUrls = getApiBaseUrlCandidates();
+  const hasConfiguredBaseUrl = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || candidateBaseUrls.length === 1;
   const accessToken = readAccessToken();
   let lastError: ApiError | null = null;
   let lastFetchError: Error | null = null;
@@ -188,7 +189,13 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
       if (response.status === 401) {
         storeAccessToken(null);
       }
+      if (response.status === 404 && hasConfiguredBaseUrl) {
+        throw error;
+      }
       if (!error.isRetryable || attempt === maxAttempts) {
+        if (response.status !== 404) {
+          throw error;
+        }
         break;
       }
 

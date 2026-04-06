@@ -115,6 +115,7 @@ EXTRACTION_RULES = {
         "dealer_name": ["dealer_name", "dealer"],
     },
     "requested_field_aliases": {
+        "salary": ["salary", "compensation", "pay", "salary range", "salary_range", "base salary", "base_salary", "pay range", "pay_range", "compensation range", "compensation_range", "salary display", "salary_display"],
         "responsibilities": ["responsibilities", "job responsibilities", "key responsibilities", "duties", "job duties", "what you'll do", "what_you_ll_do", "what_you_will_do", "role responsibilities"],
         "qualifications": ["qualifications", "job qualifications", "job_qualification", "prerequisites", "minimum requirements", "minimum_requirements", "preferred qualifications", "preferred_qualifications", "who you are", "what we're looking for"],
         "benefits": ["benefits", "job benefits", "job_benefits", "perks", "why you'll love this job", "what we offer"],

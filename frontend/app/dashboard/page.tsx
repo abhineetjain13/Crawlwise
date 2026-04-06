@@ -244,28 +244,24 @@ export default function DashboardPage() {
             value={(data?.total_runs ?? 0).toLocaleString()}
             icon={<Hash className="size-3.5" />}
             stripeColor="var(--metric-runs-color)"
-            sub="All crawl jobs"
           />
           <StatCard
             label="Active Runs"
             value={(data?.active_runs ?? 0).toLocaleString()}
             icon={<Activity className="size-3.5" />}
             stripeColor="var(--metric-active-color)"
-            sub={data?.active_runs ? "Running now" : "None in progress"}
           />
           <StatCard
             label="Total Records"
             value={(data?.total_records ?? 0).toLocaleString()}
             icon={<LayoutDashboard className="size-3.5" />}
             stripeColor="var(--metric-records-color)"
-            sub="Extracted rows"
           />
           <StatCard
             label="Unique Domains"
             value={totalDomains.toLocaleString()}
             icon={<Globe className="size-3.5" />}
             stripeColor="var(--metric-domains-color)"
-            sub="Crawled sites"
           />
         </MetricGrid>
       )}

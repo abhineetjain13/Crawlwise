@@ -12,6 +12,7 @@ from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.browser_client import (
     _assess_challenge_signals,
     _build_launch_kwargs,
+    _collect_frame_sources,
     _click_and_observe_next_page,
     _collect_paginated_html,
     _context_kwargs,
@@ -25,6 +26,7 @@ from app.services.acquisition.browser_client import (
     _retryable_browser_error_reason,
     _save_cookies,
     _wait_for_challenge_resolution,
+    _wait_for_listing_readiness,
     expand_all_interactive_elements,
 )
 
@@ -73,6 +75,40 @@ class FakeSurfaceReadyPage(FakePage):
             self._contents.pop(0)
         if len(self._readiness_counts) > 1:
             self._readiness_counts.pop(0)
+
+
+class FakeBehavioralListingPage(FakePage):
+    def __init__(self, metrics: list[dict[str, int]]):
+        super().__init__(["<html><body>jobs</body></html>"] * max(1, len(metrics)))
+        self._metrics = metrics
+
+    async def evaluate(self, _script: str):
+        return self._metrics[0] if self._metrics else {}
+
+    async def wait_for_timeout(self, value: int):
+        self.timeout_calls.append(value)
+        if len(self._metrics) > 1:
+            self._metrics.pop(0)
+
+
+class FakeFrame:
+    def __init__(self, url: str, html: str):
+        self.url = url
+        self._html = html
+
+    async def content(self):
+        return self._html
+
+
+class FakeFramePage(FakePage):
+    def __init__(self):
+        super().__init__(["<html><body><main>Root</main></body></html>"])
+        self.url = "https://example.com/careers"
+        self.frames = [
+            object(),
+            FakeFrame("https://example.com/embed/jobs", "<section><a href='/jobs/1'>Role</a></section>"),
+            FakeFrame("https://boards.greenhouse.io/embed/job_board?for=example", "<section><a href='/jobs/2'>Other Role</a></section>"),
+        ]
 
 
 @pytest.mark.asyncio
@@ -126,6 +162,40 @@ async def test_wait_for_challenge_resolution_waits_for_surface_readiness_after_i
     assert state == "waiting_resolved"
     assert page.timeout_calls
     assert reasons == []
+
+
+@pytest.mark.asyncio
+async def test_wait_for_listing_readiness_accepts_behavioral_stability_without_selector_match(monkeypatch):
+    page = FakeBehavioralListingPage([
+        {"link_count": 3, "cardish_count": 4, "text_length": 600, "html_length": 1500, "loading": False},
+        {"link_count": 3, "cardish_count": 4, "text_length": 600, "html_length": 1500, "loading": False},
+    ])
+    monkeypatch.setattr("app.services.acquisition.browser_client.CARD_SELECTORS_JOBS", ["[data-never-matches]"])
+    monkeypatch.setattr("app.services.acquisition.browser_client.LISTING_READINESS_POLL_MS", 10)
+    monkeypatch.setattr("app.services.acquisition.browser_client.LISTING_READINESS_MAX_WAIT_MS", 250)
+
+    readiness = await _wait_for_listing_readiness(page, "job_listing")
+
+    assert readiness is not None
+    assert readiness["ready"] is True
+    assert readiness["reason"] in {"behavioral_stability", "behavioral_links"}
+
+
+@pytest.mark.asyncio
+async def test_collect_frame_sources_inlines_frame_html_and_tracks_promoted_sources():
+    html, frame_sources, promoted_sources = await _collect_frame_sources(FakeFramePage())
+
+    assert "FRAME START: https://example.com/embed/jobs" in html
+    assert "FRAME START: https://boards.greenhouse.io/embed/job_board?for=example" not in html
+    assert len(frame_sources) == 2
+    assert promoted_sources == [
+        {
+            "kind": "iframe",
+            "url": "https://boards.greenhouse.io/embed/job_board?for=example",
+            "same_origin": False,
+            "html_available": True,
+        }
+    ]
 
 
 def test_assess_challenge_signals_waits_only_for_provider_signed_short_block(monkeypatch):

@@ -16,6 +16,7 @@ from app.services.crawl_service import (
     _build_field_discovery_summary,
     _build_llm_candidate_evidence,
     _merge_record_fields,
+    _normalize_record_fields,
     _normalize_detail_candidate_values,
     active_jobs,
     commit_selected_fields,
@@ -136,6 +137,12 @@ def test_normalize_detail_candidate_values_dedupes_primary_image_from_additional
     assert normalized["additional_images"] == "https://example.com/images/alt.jpg"
 
 
+def test_normalize_record_fields_does_not_infer_currency_for_job_surfaces():
+    normalized = _normalize_record_fields({"salary": "$20.00/Hr."}, surface="job_listing")
+    assert normalized["salary"] == "$20.00/Hr."
+    assert "currency" not in normalized
+
+
 # --- CRUD ---
 
 @pytest.mark.asyncio
@@ -187,6 +194,19 @@ async def test_create_crawl_run_preserves_requested_surface_for_hash_routes(
     })
 
     assert run.surface == "ecommerce_listing"
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_run_unescapes_html_entity_urls(
+    db_session: AsyncSession, test_user
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&amp;ccId=19000101_000001&amp;type=MP",
+        "surface": "job_listing",
+    })
+
+    assert run.url == "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&ccId=19000101_000001&type=MP"
 
 
 @pytest.mark.asyncio
@@ -790,6 +810,96 @@ async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(
 
 
 @pytest.mark.asyncio
+async def test_process_run_blocked_jibe_listing_recovers_via_public_endpoint(db_session: AsyncSession, test_user):
+    challenge_html = """
+    <html><head><title>403 Forbidden</title></head>
+    <body><h1>403 Forbidden</h1></body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://www.foxrccareers.com/foxrc-careers-home/jobs?keywords=Dough%20Bird",
+        "surface": "job_listing",
+    })
+
+    recovered = AdapterResult(
+        records=[
+            {
+                "title": "Dishwasher",
+                "company": "Doughbird",
+                "job_id": "5920",
+                "url": "https://www.foxrccareers.com/jobs/5920?lang=en-us",
+                "apply_url": "https://apply.example.com/jobs/5920",
+            }
+        ],
+        source_type="jibe_adapter_recovery",
+        adapter_name="jibe",
+    )
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(challenge_html)),
+        patch("app.services.crawl_service.try_blocked_adapter_recovery", new_callable=AsyncMock,
+              return_value=recovered),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 1
+    assert run.result_summary.get("extraction_verdict") == "success"
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().all()
+    assert len(records) == 1
+    assert records[0].data["title"] == "Dishwasher"
+
+
+@pytest.mark.asyncio
+async def test_process_run_blocked_oracle_hcm_listing_recovers_via_public_endpoint(db_session: AsyncSession, test_user):
+    challenge_html = """
+    <html><head><title>403 Forbidden</title></head>
+    <body><h1>403 Forbidden</h1></body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location",
+        "surface": "job_listing",
+    })
+
+    recovered = AdapterResult(
+        records=[
+            {
+                "title": "Server",
+                "company": "Brookdale Senior Living Inc.",
+                "job_id": "25019248",
+                "url": "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/25019248/",
+                "apply_url": "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/25019248/",
+            }
+        ],
+        source_type="oracle_hcm_adapter_recovery",
+        adapter_name="oracle_hcm",
+    )
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+              return_value=_make_acq(challenge_html)),
+        patch("app.services.crawl_service.try_blocked_adapter_recovery", new_callable=AsyncMock,
+              return_value=recovered),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 1
+    assert run.result_summary.get("extraction_verdict") == "success"
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().all()
+    assert len(records) == 1
+    assert records[0].data["title"] == "Server"
+
+
+@pytest.mark.asyncio
 async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_session: AsyncSession, test_user):
     curl_shell_html = """
     <html><head><title>Gear | Reverb</title></head>
@@ -1294,6 +1404,57 @@ async def test_process_run_listing_retries_with_browser_after_weak_curl_listing(
 
 
 @pytest.mark.asyncio
+async def test_process_run_job_listing_retries_browser_after_title_url_only_curl_records(db_session: AsyncSession, test_user):
+    weak_listing_html = """
+    <html><body>
+      <ul>
+        <li><a href="https://example.com/jobs/1">Platform Engineer</a></li>
+        <li><a href="https://example.com/jobs/2">Data Engineer</a></li>
+      </ul>
+    </body></html>
+    """
+    browser_listing_html = """
+    <html><body>
+      <div class="job-card">
+        <a href="https://example.com/jobs/1">
+          <h3>Platform Engineer</h3>
+          <span class="company">Acme</span>
+          <span class="location">Remote</span>
+        </a>
+      </div>
+      <div class="job-card">
+        <a href="https://example.com/jobs/2">
+          <h3>Data Engineer</h3>
+          <span class="company">Acme</span>
+          <span class="location">Austin, TX</span>
+        </a>
+      </div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/jobs",
+        "surface": "job_listing",
+    })
+
+    acquire_mock = AsyncMock(side_effect=[
+        _make_acq(weak_listing_html, method="curl_cffi"),
+        _make_acq(browser_listing_html, method="playwright"),
+    ])
+
+    with (
+        patch("app.services.crawl_service.acquire", acquire_mock),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+    assert acquire_mock.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_extraction_verdict_in_summary(db_session: AsyncSession, test_user):
     """Successful runs should have extraction_verdict=success in result_summary."""
     run = await create_crawl_run(db_session, test_user.id, {
@@ -1389,6 +1550,23 @@ async def test_process_run_does_not_infer_advanced_mode_from_toggle_and_passes_m
 
 
 @pytest.mark.asyncio
+async def test_process_run_normalizes_html_escaped_target_url_before_acquire(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&amp;ccId=19000101_000001&amp;type=MP",
+        "surface": "job_listing",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item", "location": "Lancaster"}])),
+    ):
+        await process_run(db_session, run.id)
+
+    assert acquire_mock.await_args.kwargs["url"] == "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&ccId=19000101_000001&type=MP"
+
+
+@pytest.mark.asyncio
 async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_extras_to_review_bucket(db_session: AsyncSession, test_user):
     detail_html = """
     <html><body>
@@ -1420,6 +1598,50 @@ async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_ex
     assert record.discovered_data.get("review_bucket") in (None, [])
     assert record.source_trace["manifest_trace"]["tables"][0]["rows"][0]["cells"][1]["text"] == "26 AWG"
     assert record.source_trace["schema_resolution"]["resolved_fields"]
+
+
+@pytest.mark.asyncio
+async def test_process_run_drops_commerce_leakage_from_job_listing_records(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://careers.clarkassociatesinc.biz/",
+        "surface": "job_listing",
+    })
+
+    adapter = AdapterResult(
+        adapter_name="test",
+        records=[{
+            "title": "1st Shift Outbound Material Handler-$20.00/Hr. (4 weeks PTO)",
+            "company": "WebstaurantStore",
+            "location": "Savannah, GA",
+            "salary": "$20.00/Hr.",
+            "currency": "USD",
+            "price": "$20.00/Hr.",
+            "url": "https://careers.clarkassociatesinc.biz/careerdetail/?id=100709",
+        }],
+    )
+
+    with (
+        patch(
+            "app.services.crawl_service.acquire",
+            new_callable=AsyncMock,
+            return_value=_make_acq(
+                "<html><body><main><p>Job listings</p><p>"
+                + ("Open roles available. " * 40)
+                + "</p></main></body></html>"
+            ),
+        ),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    record = (await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))).scalars().one()
+    assert record.data["salary"] == "$20.00/Hr."
+    assert "currency" not in record.data
+    assert "price" not in record.data
+    review_bucket = record.discovered_data.get("review_bucket") or []
+    assert all(row.get("key") != "currency" for row in review_bucket)
+    assert all(row.get("key") != "price" for row in review_bucket)
 
 
 @pytest.mark.asyncio
@@ -1479,7 +1701,6 @@ async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting
                         {
                             "key": "oscillator_count",
                             "value": 2,
-                            "confidence_score": 8,
                             "source": "semantic_section",
                         }
                     ],

@@ -37,24 +37,24 @@ from app.services.crawl_state import (
 )
 from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
 from app.services.extract.listing_extractor import extract_listing_records
+from app.services.extract.listing_quality import assess_listing_record_quality
 from app.services.extract.source_parsers import parse_page_sources
 from app.services.extract.service import coerce_field_candidate_value, extract_candidates
 from app.services.xpath_service import validate_xpath_syntax
 from app.services.knowledge_base.store import get_canonical_fields, get_selector_defaults
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
-from app.services.normalizers import extract_currency_hint, normalize_value
+from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
 from app.services.pipeline_config import (
     DEFAULT_MAX_SCROLLS,
     DISCOVERED_FIELD_NOISE_TOKENS,
     DISCOVERED_VALUE_NOISE_PHRASES,
     LLM_CLEAN_CANDIDATE_TEXT_LIMIT,
     MIN_REQUEST_DELAY_MS,
-    VERDICT_CORE_FIELDS_DETAIL,
-    VERDICT_CORE_FIELDS_LISTING,
 )
 from app.services.domain_utils import normalize_domain
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.schema_service import (
+    _supports_record_learning,
     ResolvedSchema,
     learn_schema_from_record,
     load_resolved_schema,
@@ -94,8 +94,12 @@ class RunControlSignal(RuntimeError):
 # ---------------------------------------------------------------------------
 
 async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -> CrawlRun:
+    payload = dict(payload or {})
     settings = dict(payload.get("settings", {}))
-    urls = payload.get("urls") or []
+    payload["url"] = _normalize_target_url(payload.get("url"))
+    payload["urls"] = [_normalize_target_url(value) for value in (payload.get("urls") or [])]
+    settings["urls"] = [_normalize_target_url(value) for value in (settings.get("urls") or [])]
+    urls = [value for value in (payload.get("urls") or []) if value]
     primary_url = payload.get("url") or (urls[0] if urls else "")
     normalized_surface = str(payload.get("surface") or "").strip()
     await ensure_public_crawl_targets(_collect_target_urls(payload, settings))
@@ -417,6 +421,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             url_list = [run.url]
         else:
             raise ValueError("No URL provided")
+        url_list = [_normalize_target_url(value) for value in url_list]
+        url_list = [value for value in url_list if value]
 
         # Extract crawl settings
         proxy_list = settings.get("proxy_list", [])
@@ -635,7 +641,7 @@ async def _process_single_url(
                         session,
                         run.id,
                         "info",
-                        f"[BLOCKED] {url} matched blocked-page signals, recovered {len(recovered.records)} Shopify records from public endpoint",
+                        f"[BLOCKED] {url} matched blocked-page signals, recovered {len(recovered.records)} {recovered.adapter_name or 'adapter'} records from public endpoint",
                     )
                 if is_listing:
                     return await _extract_listing(
@@ -814,7 +820,11 @@ async def _process_json_response(
         current_schema = learned_schema or current_schema
         allowed_fields = set(current_schema.fields)
         public_fields = _public_record_fields(raw_record)
-        normalized, discovered_fields = _split_detail_output_fields(public_fields, allowed_fields=allowed_fields)
+        normalized, discovered_fields = _split_detail_output_fields(
+            public_fields,
+            allowed_fields=allowed_fields,
+            surface=run.surface,
+        )
         raw_data = _raw_record_payload(raw_record)
         requested_coverage = _requested_field_coverage(normalized, requested_fields)
         review_bucket = _build_review_bucket(
@@ -856,7 +866,7 @@ async def _process_json_response(
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
-    verdict = _compute_verdict(saved, is_listing)
+    verdict = _compute_verdict(saved, run.surface)
     if persist_logs:
         await _log(session, run.id, "info", f"[SAVE] Saved {len(saved)} JSON records (verdict={verdict})")
     await session.flush()
@@ -1019,6 +1029,7 @@ async def _extract_listing(
         normalized, discovered_fields = _split_detail_output_fields(
             public_record,
             allowed_fields=allowed_fields,
+            surface=effective_surface,
         )
         raw_data = _raw_record_payload(raw_record)
         requested_coverage = _requested_field_coverage(normalized, additional_fields)
@@ -1058,7 +1069,7 @@ async def _extract_listing(
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
-    verdict = _compute_verdict(saved, is_listing=True)
+    verdict = _compute_verdict(saved, effective_surface)
     if persist_logs:
         await _log(session, run.id, "info", f"[SAVE] Saved {len(saved)} listing records (verdict={verdict})")
     await session.flush()
@@ -1106,6 +1117,20 @@ def _sanitize_listing_record_fields(record: dict, *, surface: str) -> dict:
     if "job" not in str(surface or "").lower():
         return sanitized
 
+    if sanitized.get("price") not in (None, "", [], {}) and sanitized.get("salary") in (None, "", [], {}):
+        sanitized["salary"] = sanitized.get("price")
+    for field_name in (
+        "price",
+        "sale_price",
+        "original_price",
+        "currency",
+        "sku",
+        "part_number",
+        "availability",
+        "rating",
+        "review_count",
+    ):
+        sanitized.pop(field_name, None)
     sanitized.pop("image_url", None)
     sanitized.pop("additional_images", None)
 
@@ -1254,7 +1279,11 @@ async def _extract_detail(
         for raw_record in extracted_records[:1]:
             merged_record = _merge_record_fields(raw_record, candidate_values)
             public_fields = _public_record_fields(merged_record)
-            normalized, discovered_fields = _split_detail_output_fields(public_fields, allowed_fields=persisted_field_names)
+            normalized, discovered_fields = _split_detail_output_fields(
+                public_fields,
+                allowed_fields=persisted_field_names,
+                surface=surface,
+            )
             raw_data = _raw_record_payload(merged_record)
             requested_coverage = _requested_field_coverage(normalized, additional_fields)
             review_bucket = _merge_review_bucket_entries(
@@ -1295,7 +1324,11 @@ async def _extract_detail(
             saved.append(normalized)
     elif candidate_values or source_trace.get("llm_cleanup_suggestions"):
         # Build record from candidates (detail page, no adapter)
-        normalized, discovered_fields = _split_detail_output_fields(candidate_values, allowed_fields=persisted_field_names)
+        normalized, discovered_fields = _split_detail_output_fields(
+            candidate_values,
+            allowed_fields=persisted_field_names,
+            surface=surface,
+        )
         raw_data = candidate_values
         requested_coverage = _requested_field_coverage(normalized, additional_fields)
         review_bucket = _merge_review_bucket_entries(
@@ -1337,7 +1370,7 @@ async def _extract_detail(
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
-    verdict = _compute_verdict(saved, is_listing=False)
+    verdict = _compute_verdict(saved, surface)
     if persist_logs:
         await _log(session, run.id, "info", f"[SAVE] Saved {len(saved)} detail records (verdict={verdict})")
     await session.flush()
@@ -1349,26 +1382,45 @@ async def _extract_detail(
 # Verdict helpers
 # ---------------------------------------------------------------------------
 
-def _compute_verdict(
-    records: list[dict],
-    is_listing: bool,
-) -> str:
+def _compute_verdict(records: list[dict], surface: str) -> str:
     """Compute extraction quality verdict for a single URL.
 
     Verdict is based on core field presence, not requested fields.
     Requested field coverage is tracked separately in ``_requested_field_coverage``
     and stored in ``discovered_data`` — it does NOT downgrade the verdict.
     """
+    is_listing = "listing" in str(surface or "").lower()
     if not records:
         return VERDICT_LISTING_FAILED if is_listing else VERDICT_EMPTY
 
-    core_fields = VERDICT_CORE_FIELDS_LISTING if is_listing else VERDICT_CORE_FIELDS_DETAIL
     for record in records:
-        record_keys = {k for k in record if not k.startswith("_")}
-        if core_fields & record_keys:
+        if _passes_core_verdict(record, surface):
             return VERDICT_SUCCESS
 
     return VERDICT_PARTIAL
+
+
+def _passes_core_verdict(record: dict, surface: str) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    if "listing" in normalized_surface:
+        return assess_listing_record_quality(record, surface=normalized_surface).meaningful
+    normalized_record = {
+        key: value
+        for key, value in dict(record or {}).items()
+        if not str(key).startswith("_") and value not in (None, "", [], {})
+    }
+    title = normalized_record.get("title")
+    url = normalized_record.get("url")
+    price = normalized_record.get("price") or normalized_record.get("sale_price") or normalized_record.get("original_price")
+    image_url = normalized_record.get("image_url")
+    company = normalized_record.get("company")
+    description = normalized_record.get("description")
+
+    if normalized_surface == "job_detail":
+        return bool(title and company and description)
+    if normalized_surface == "ecommerce_detail":
+        return bool(title and (price or image_url))
+    return bool(title and (price or image_url or company or description))
 
 
 def _aggregate_verdict(verdicts: list[str]) -> str:
@@ -1474,15 +1526,15 @@ async def _persist_failure_state(session: AsyncSession, run_id: int, error_msg: 
 
 def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
     candidates: list[str] = []
-    direct_url = str(payload.get("url") or "").strip()
+    direct_url = _normalize_target_url(payload.get("url"))
     if direct_url:
         candidates.append(direct_url)
     for value in payload.get("urls") or []:
-        candidate = str(value or "").strip()
+        candidate = _normalize_target_url(value)
         if candidate:
             candidates.append(candidate)
     for value in settings.get("urls") or []:
-        candidate = str(value or "").strip()
+        candidate = _normalize_target_url(value)
         if candidate:
             candidates.append(candidate)
     csv_content = str(settings.get("csv_content") or "")
@@ -1780,6 +1832,13 @@ def _should_skip_fallback_node(node: Tag, *, page_url: str) -> bool:
     return False
 
 
+def _normalize_target_url(value: object) -> str:
+    text = unescape(str(value or "")).strip()
+    if not text:
+        return ""
+    return re.sub(r"\s+", "", text)
+
+
 def _render_manifest_tables_markdown(tables: list[dict] | None) -> str:
     rendered_tables: list[str] = []
     for table in list(tables or [])[:3]:
@@ -1802,13 +1861,22 @@ def _render_manifest_tables_markdown(tables: list[dict] | None) -> str:
     return "\n\n".join(rendered_tables).strip()
 
 
-def _normalize_record_fields(record: dict[str, object]) -> dict[str, object]:
-    normalized = _compact_dict({
-        _normalize_committed_field_name(key): normalize_value(_normalize_committed_field_name(key), value)
-        for key, value in record.items()
-        if _normalize_committed_field_name(key)
-    })
-    if not str(normalized.get("currency") or "").strip():
+def _normalize_record_fields(record: dict[str, object], *, surface: str = "") -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    normalized_surface = str(surface or "").strip().lower()
+    for key, value in record.items():
+        normalized_key = _normalize_committed_field_name(key)
+        if not normalized_key:
+            continue
+        normalized_value = normalize_value(normalized_key, value)
+        validated_value = validate_value(normalized_key, normalized_value)
+        if validated_value in (None, "", [], {}):
+            continue
+        normalized[normalized_key] = validated_value
+    normalized = _compact_dict(normalized)
+    if "job" in normalized_surface:
+        normalized.pop("currency", None)
+    if "job" not in normalized_surface and not str(normalized.get("currency") or "").strip():
         for field_name in ("price", "sale_price", "original_price", "salary"):
             currency_hint = extract_currency_hint(normalized.get(field_name))
             if currency_hint:
@@ -1872,19 +1940,12 @@ def _reconcile_detail_candidate_values(
 def _passes_detail_quality_gate(field_name: str, value: object) -> bool:
     if value in (None, "", [], {}):
         return False
-    if isinstance(value, str):
-        text = " ".join(value.split()).strip()
-        if not text or text.lower() in {"-", "—", "--", "n/a", "na", "none", "null", "undefined"}:
-            return False
-        if field_name in {"title", "brand", "category"}:
-            return len(text) >= 2
-        if field_name in {"price", "sale_price", "original_price", "salary", "review_count", "rating"}:
-            return bool(re.search(r"\d", text))
-        if field_name == "currency":
-            return bool(re.fullmatch(r"[A-Z]{3}", text.upper()) or re.search(r"[€£$¥₹]", text))
-        if field_name in {"sku", "availability"}:
-            return len(text) >= 2
-        return len(text) >= 1
+    validated = validate_value(field_name, value)
+    if validated in (None, "", [], {}):
+        return False
+    if isinstance(validated, str):
+        text = " ".join(validated.split()).strip()
+        return bool(text and text.lower() not in {"-", "—", "--", "n/a", "na", "none", "null", "undefined"})
     return True
 
 
@@ -1957,8 +2018,9 @@ def _split_detail_output_fields(
     record: dict[str, object],
     *,
     allowed_fields: set[str],
+    surface: str = "",
 ) -> tuple[dict[str, object], dict[str, object]]:
-    normalized = _normalize_record_fields(record)
+    normalized = _normalize_record_fields(record, surface=surface)
     canonical: dict[str, object] = {}
     discovered: dict[str, object] = {}
     for key, value in normalized.items():
@@ -1988,7 +2050,6 @@ def _build_review_bucket(
         entry = _compact_dict({
             "key": str(field_name).strip(),
             "value": normalized_value,
-            "confidence_score": _review_bucket_confidence(field_name, normalized_value, source),
             "source": source,
         })
         fingerprint = (str(entry["key"]), _review_bucket_fingerprint(entry["value"]))
@@ -2017,15 +2078,13 @@ def _merge_review_bucket_entries(*groups: list[dict[str, object]]) -> list[dict[
             candidate = _compact_dict({
                 "key": key,
                 "value": normalized_value,
-                "confidence_score": _clamp_review_confidence(row.get("confidence_score", row.get("confidence", 5))),
                 "source": source,
             })
-            if existing is None or int(candidate["confidence_score"]) > int(existing.get("confidence_score", 0)):
+            if existing is None:
                 merged[fingerprint] = candidate
     return sorted(
         merged.values(),
         key=lambda item: (
-            -int(item.get("confidence_score", 0)),
             str(item.get("key") or ""),
             str(item.get("source") or ""),
         ),
@@ -2125,36 +2184,6 @@ def _review_bucket_source_for_field(field_name: str, candidate_map: object, fall
     return fallback_source
 
 
-def _review_bucket_confidence(field_name: str, value: object, source: str) -> int:
-    normalized_source = str(source or "").strip().lower()
-    base = 6
-    if normalized_source.startswith("adapter") or normalized_source in {"json_api", "network_payload"}:
-        base = 8
-    elif normalized_source.startswith("semantic_spec") or "table" in normalized_source:
-        base = 9
-    elif normalized_source.startswith("json_ld") or normalized_source.startswith("microdata"):
-        base = 8
-    elif normalized_source.startswith("llm_xpath"):
-        base = 7
-    elif normalized_source.startswith("llm_cleanup"):
-        base = 6
-    elif normalized_source.startswith("dom"):
-        base = 5
-    if _passes_detail_quality_gate(field_name, value):
-        base += 1
-    else:
-        base -= 1
-    return max(1, min(10, base))
-
-
-def _clamp_review_confidence(value: object) -> int:
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        numeric = 5
-    return max(1, min(10, numeric))
-
-
 def _review_bucket_fingerprint(value: object) -> str:
     normalized_value = _normalize_review_value(value)
     try:
@@ -2252,6 +2281,8 @@ def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -
         "memory_browser_first": bool(diagnostics.get("memory_browser_first")),
         "proxy_used": bool(diagnostics.get("proxy_used")),
         "network_payloads": len(acq.network_payloads or []),
+        "promoted_sources": len(acq.promoted_sources or []),
+        "frame_sources": len(acq.frame_sources or []),
         "host_wait_seconds": float(diagnostics.get("host_wait_seconds", 0.0) or 0.0),
         "requested_fields": len(requested_fields or []),
         "curl_fetch_ms": int(timing_map.get("curl_fetch_ms", 0) or 0),
@@ -2297,6 +2328,8 @@ def _merge_run_acquisition_metrics(existing: object, url_metrics: dict[str, obje
         "memory_browser_first_urls": int(current.get("memory_browser_first_urls", 0) or 0) + int(bool(url_metrics.get("memory_browser_first"))),
         "proxy_used_urls": int(current.get("proxy_used_urls", 0) or 0) + int(bool(url_metrics.get("proxy_used"))),
         "network_payloads_total": int(current.get("network_payloads_total", 0) or 0) + int(url_metrics.get("network_payloads", 0) or 0),
+        "promoted_sources_total": int(current.get("promoted_sources_total", 0) or 0) + int(url_metrics.get("promoted_sources", 0) or 0),
+        "frame_sources_total": int(current.get("frame_sources_total", 0) or 0) + int(url_metrics.get("frame_sources", 0) or 0),
         "host_wait_seconds_total": round(float(current.get("host_wait_seconds_total", 0.0) or 0.0) + float(url_metrics.get("host_wait_seconds", 0.0) or 0.0), 3),
         "records_total": int(current.get("records_total", 0) or 0) + int(url_metrics.get("record_count", 0) or 0),
         "acquisition_ms_total": int(current.get("acquisition_ms_total", 0) or 0) + int(url_metrics.get("acquisition_ms", 0) or 0),
@@ -2337,6 +2370,8 @@ def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
             "challenge_state": diagnostics.get("browser_challenge_state"),
             "origin_warmed": diagnostics.get("browser_origin_warmed"),
             "invalid_surface_page": diagnostics.get("invalid_surface_page"),
+            "promoted_sources": acq.promoted_sources or None,
+            "frame_sources": acq.frame_sources or None,
             "page_classification": diagnostics.get("page_classification") if isinstance(diagnostics.get("page_classification"), dict) else None,
             "timings_ms": timing_map or None,
         }) or None,
@@ -2888,7 +2923,6 @@ def _normalize_llm_review_bucket_item(value: object) -> dict[str, object] | None
     return _compact_dict({
         "key": key,
         "value": normalized_value,
-        "confidence_score": _clamp_review_confidence(value.get("confidence_score", value.get("confidence", 5))),
         "source": str(value.get("source") or "llm_cleanup").strip() or "llm_cleanup",
     })
 
@@ -2907,6 +2941,8 @@ async def _refresh_schema_from_record(
     sample_record: dict | None,
 ) -> ResolvedSchema | None:
     if not isinstance(sample_record, dict) or not sample_record:
+        return None
+    if not _supports_record_learning(surface):
         return None
     learned = learn_schema_from_record(
         surface=surface,

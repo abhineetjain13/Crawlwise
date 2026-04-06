@@ -73,6 +73,8 @@ class BrowserResult:
 
     html: str = ""
     network_payloads: list[dict] = field(default_factory=list)
+    frame_sources: list[dict] = field(default_factory=list)
+    promoted_sources: list[dict] = field(default_factory=list)
     challenge_state: str = "none"
     origin_warmed: bool = False
     diagnostics: dict[str, object] = field(default_factory=dict)
@@ -344,9 +346,16 @@ async def _fetch_rendered_html_attempt(
         if combined_html is not None:
             result.html = combined_html
             result.network_payloads = intercepted
+            traversal_html, frame_sources, promoted_sources = await _collect_frame_sources(page)
+            if traversal_html and traversal_html != result.html:
+                result.html = "\n".join([result.html, traversal_html])
+            result.frame_sources = frame_sources
+            result.promoted_sources = promoted_sources
             result.diagnostics["traversal_mode"] = traversal_mode
             result.diagnostics["max_pages"] = max_pages
             result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") if combined_html else 0
+            result.diagnostics["frame_sources"] = len(frame_sources)
+            result.diagnostics["promoted_sources"] = len(promoted_sources)
             timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
             result.diagnostics["timings_ms"] = timings_ms
             await _persist_context_cookies(context, page.url or url, original_domain)
@@ -381,7 +390,9 @@ def _should_retry_launch_profile(result: BrowserResult, *, surface: str | None) 
         return True
     if _is_listing_surface(surface):
         readiness = result.diagnostics.get("listing_readiness")
-        if isinstance(readiness, dict) and not bool(readiness.get("ready")) and _html_looks_low_value(result.html):
+        if isinstance(readiness, dict) and (
+            not bool(readiness.get("ready")) or bool(readiness.get("shell_like"))
+        ) and _html_looks_low_value(result.html):
             return True
     return False
 
@@ -393,6 +404,52 @@ async def _page_looks_low_value(page) -> bool:
         logger.debug("Failed to inspect page content for low-value result detection", exc_info=True)
         return False
     return _html_looks_low_value(html)
+
+
+async def _collect_frame_sources(page) -> tuple[str, list[dict], list[dict]]:
+    try:
+        main_html = await _page_content_with_retry(page)
+    except Exception:
+        logger.debug("Failed to read main page content while collecting frame sources", exc_info=True)
+        return "", [], []
+
+    main_origin = _origin_url(str(getattr(page, "url", "") or ""))
+    frame_sources: list[dict] = []
+    promoted_sources: list[dict] = []
+    same_origin_fragments: list[str] = []
+    for frame in list(getattr(page, "frames", []) or [])[1:]:
+        frame_url = str(getattr(frame, "url", "") or "").strip()
+        if not frame_url:
+            continue
+        frame_origin = _origin_url(frame_url)
+        same_origin = bool(main_origin and frame_origin and main_origin == frame_origin)
+        frame_entry = {"url": frame_url, "same_origin": same_origin}
+        try:
+            frame_html = await frame.content()
+        except Exception:
+            frame_html = ""
+        if frame_html:
+            frame_entry["html_length"] = len(frame_html)
+        frame_sources.append(frame_entry)
+        if same_origin and frame_html:
+            same_origin_fragments.append(
+                "\n".join([
+                    f"<!-- FRAME START: {frame_url} -->",
+                    frame_html,
+                    f"<!-- FRAME END: {frame_url} -->",
+                ])
+            )
+        if not same_origin or not frame_html:
+            promoted_sources.append({
+                "kind": "iframe",
+                "url": frame_url,
+                "same_origin": same_origin,
+                "html_available": bool(frame_html),
+            })
+    combined_html = main_html
+    if same_origin_fragments:
+        combined_html = "\n".join([main_html, *same_origin_fragments])
+    return combined_html, frame_sources, promoted_sources
 
 
 def _html_looks_low_value(html: str) -> bool:
@@ -618,14 +675,33 @@ async def _wait_for_listing_readiness(
         if normalized_surface == "job_listing"
         else CARD_SELECTORS_COMMERCE
     )
+    page_url = str(getattr(page, "url", "") or "").lower()
+    if normalized_surface == "job_listing" and "candidateexperience" in page_url and "oraclecloud.com" in page_url:
+        selectors = [*selectors, "a[href*='/job/']"]
+    if normalized_surface == "job_listing" and "workforcenow.adp.com" in page_url:
+        selectors = [*selectors, ".current-openings-item", "[id^='lblTitle_']"]
+    if normalized_surface == "job_listing" and "paycomonline.net" in page_url:
+        selectors = [*selectors, "a[href*='/jobs/']"]
+    if normalized_surface == "job_listing" and "recruiting.ultipro.com" in page_url:
+        selectors = [*selectors, "a[href*='/jobboard/jobdetails/']", "a[href*='/jobboard/']", "[data-testid*='job' i]"]
     if not selectors:
         return None
     elapsed = 0
     poll_ms = max(100, LISTING_READINESS_POLL_MS)
     max_wait_ms = max(0, LISTING_READINESS_MAX_WAIT_MS)
+    if normalized_surface == "job_listing" and "candidateexperience" in page_url and "oraclecloud.com" in page_url:
+        max_wait_ms = max(max_wait_ms, 25_000)
+    if normalized_surface == "job_listing" and any(
+        token in page_url
+        for token in ("workforcenow.adp.com", "paycomonline.net", "recruiting.ultipro.com")
+    ):
+        max_wait_ms = max(max_wait_ms, 20_000)
     best_selector = ""
     best_count = 0
+    stable_windows = 0
+    last_snapshot: dict[str, object] | None = None
     while elapsed <= max_wait_ms:
+        page_metrics = await _snapshot_listing_page_metrics(page)
         current_best_selector = ""
         current_best_count = 0
         for selector in selectors:
@@ -640,23 +716,105 @@ async def _wait_for_listing_readiness(
             if count >= LISTING_MIN_ITEMS:
                 return {
                     "ready": True,
+                    "reason": "selector_match",
                     "selector": selector,
                     "count": count,
+                    "link_count": int((page_metrics or {}).get("link_count", 0) or 0),
                     "waited_ms": elapsed,
                 }
         if current_best_count > best_count:
             best_count = current_best_count
             best_selector = current_best_selector
+        shell_like = _listing_metrics_look_shell_like(page_metrics)
+        if _listing_metrics_stable(last_snapshot, page_metrics):
+            stable_windows += 1
+        else:
+            stable_windows = 0
+        last_snapshot = page_metrics
+        if stable_windows >= 1 and page_metrics and not shell_like:
+            return {
+                "ready": True,
+                "reason": "behavioral_stability",
+                "selector": best_selector or None,
+                "count": best_count,
+                "link_count": int(page_metrics.get("link_count", 0) or 0),
+                "waited_ms": elapsed,
+                "shell_like": False,
+            }
+        if (
+            page_metrics
+            and not shell_like
+            and int(page_metrics.get("link_count", 0) or 0) >= LISTING_MIN_ITEMS
+            and elapsed >= poll_ms
+        ):
+            return {
+                "ready": True,
+                "reason": "behavioral_links",
+                "selector": best_selector or None,
+                "count": best_count,
+                "link_count": int(page_metrics.get("link_count", 0) or 0),
+                "waited_ms": elapsed,
+                "shell_like": False,
+            }
         if elapsed >= max_wait_ms:
             break
         await _cooperative_page_wait(page, poll_ms, checkpoint=checkpoint)
         elapsed += poll_ms
     return {
         "ready": False,
+        "reason": "timeout",
         "selector": best_selector or None,
         "count": best_count,
+        "link_count": int((last_snapshot or {}).get("link_count", 0) or 0),
+        "shell_like": _listing_metrics_look_shell_like(last_snapshot),
         "waited_ms": elapsed,
     }
+
+
+async def _snapshot_listing_page_metrics(page) -> dict[str, object]:
+    try:
+        return await page.evaluate(
+            """
+            () => {
+                const body = document.body;
+                const main = document.querySelector("main");
+                const root = main || body;
+                const linkCount = Array.from((root || document).querySelectorAll("a[href]")).length;
+                const cardishCount = Array.from((root || document).querySelectorAll("[data-testid*='job' i], [class*='job'], [class*='career'], [class*='opening'], [class*='result'], article, li")).length;
+                const text = ((root && root.innerText) || document.body?.innerText || "").trim();
+                const loadingText = text.toLowerCase();
+                const loading = /loading|searching|please wait|just a moment/.test(loadingText);
+                const htmlLength = (root && root.innerHTML ? root.innerHTML.length : 0);
+                return {
+                    link_count: linkCount,
+                    cardish_count: cardishCount,
+                    text_length: text.length,
+                    html_length: htmlLength,
+                    loading: loading,
+                };
+            }
+            """
+        )
+    except Exception:
+        logger.debug("Failed to snapshot listing page metrics", exc_info=True)
+        return {}
+
+
+def _listing_metrics_stable(previous: dict[str, object] | None, current: dict[str, object] | None) -> bool:
+    if not previous or not current:
+        return False
+    keys = ("link_count", "cardish_count", "text_length")
+    return all(int(previous.get(key, -1) or 0) == int(current.get(key, -2) or 0) for key in keys)
+
+
+def _listing_metrics_look_shell_like(metrics: dict[str, object] | None) -> bool:
+    if not metrics:
+        return True
+    if bool(metrics.get("loading")):
+        return True
+    link_count = int(metrics.get("link_count", 0) or 0)
+    text_length = int(metrics.get("text_length", 0) or 0)
+    return link_count < LISTING_MIN_ITEMS and text_length < 300
 
 
 def _detail_readiness_selectors(surface: str | None) -> list[str]:
@@ -760,6 +918,81 @@ async def _find_next_page_url(page) -> str:
     return await _find_next_page_url_anchor_only(page)
 
 
+async def _snapshot_pagination_state(page) -> dict[str, object]:
+    try:
+        return await page.evaluate(
+            """
+            () => {
+                const root = document.querySelector("main") || document.body || document.documentElement;
+                const listingLinks = Array.from((root || document).querySelectorAll("a[href]"))
+                    .map((anchor) => {
+                        const text = (anchor.textContent || anchor.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
+                        const href = (anchor.getAttribute("href") || "").trim();
+                        if (!text || !href) return null;
+                        const loweredHref = href.toLowerCase();
+                        const loweredText = text.toLowerCase();
+                        const looksLikeListingHref =
+                            loweredHref.includes("/job/") ||
+                            loweredHref.includes("/jobs/") ||
+                            loweredHref.includes("/career") ||
+                            loweredHref.includes("/position");
+                        const withinLikelyCard = !!anchor.closest(
+                            "article, li, tr, [role='listitem'], [data-automation-id], [class*='job'], [class*='career'], [class*='opening'], [class*='result']"
+                        );
+                        const looksLikeListing =
+                            (looksLikeListingHref || withinLikelyCard) &&
+                            text.length >= 8 &&
+                            !/apply|read more|save job|learn more|search/.test(loweredText);
+                        if (!looksLikeListing) return null;
+                        return `${text}@@${href}`;
+                    })
+                    .filter(Boolean)
+                    .slice(0, 8);
+                const activePaginationNode =
+                    document.querySelector("[aria-current='page']") ||
+                    document.querySelector("[aria-current='true']") ||
+                    document.querySelector("[aria-selected='true']") ||
+                    Array.from(document.querySelectorAll("button, a, [role='button']")).find((node) => {
+                        const classes = (node.className || "").toString().toLowerCase();
+                        const ariaPressed = (node.getAttribute("aria-pressed") || "").toLowerCase();
+                        return classes.includes("active") || classes.includes("current") || ariaPressed === "true";
+                    });
+                const paginationMarker = activePaginationNode
+                    ? ((activePaginationNode.getAttribute("aria-label") || activePaginationNode.textContent || "").replace(/\\s+/g, " ").trim())
+                    : "";
+                return {
+                    url: window.location.href,
+                    pagination_marker: paginationMarker,
+                    listing_signature: listingLinks.join("\\n"),
+                    listing_link_count: listingLinks.length,
+                    root_text_length: ((root && root.innerText) || "").trim().length,
+                };
+            }
+            """
+        )
+    except Exception:
+        logger.debug("Failed to snapshot pagination state", exc_info=True)
+        return {}
+
+
+def _pagination_state_changed(previous: dict[str, object] | None, current: dict[str, object] | None) -> bool:
+    if not previous or not current:
+        return False
+    previous_marker = str(previous.get("pagination_marker") or "").strip()
+    current_marker = str(current.get("pagination_marker") or "").strip()
+    if previous_marker and current_marker and previous_marker != current_marker:
+        return True
+    previous_signature = str(previous.get("listing_signature") or "").strip()
+    current_signature = str(current.get("listing_signature") or "").strip()
+    if previous_signature and current_signature and previous_signature != current_signature:
+        return True
+    previous_count = int(previous.get("listing_link_count", 0) or 0)
+    current_count = int(current.get("listing_link_count", 0) or 0)
+    if previous_count != current_count and max(previous_count, current_count) >= LISTING_MIN_ITEMS:
+        return True
+    return False
+
+
 async def _click_and_observe_next_page(
     page,
     *,
@@ -801,6 +1034,7 @@ async def _click_and_observe_next_page(
         return ""
 
     initial_url = str(page.url or "").strip()
+    initial_state = await _snapshot_pagination_state(page)
     initial_hash = await _container_hash()
     try:
         await target.click(timeout=1500)
@@ -820,6 +1054,9 @@ async def _click_and_observe_next_page(
         current_url = str(page.url or "").strip()
         if current_url != initial_url:
             return current_url
+        current_state = await _snapshot_pagination_state(page)
+        if _pagination_state_changed(initial_state, current_state):
+            return current_url or initial_url
         if await _container_hash() != initial_hash:
             return current_url
     return ""
@@ -838,10 +1075,14 @@ async def expand_all_interactive_elements(
                 const seen = new Set();
                 const targets = [
                     ...document.querySelectorAll('details > summary'),
-                    ...document.querySelectorAll('[aria-expanded="false"]'),
-                    ...document.querySelectorAll('button[data-toggle]'),
-                    ...document.querySelectorAll('[role="tab"]'),
-                ];
+                    ...document.querySelectorAll('[aria-expanded="false"]:not([role="menuitem"])'),
+                    ...document.querySelectorAll('button[data-toggle]:not([data-toggle="modal"]):not([role="menuitem"])'),
+                ].filter((el) => {
+                    if (!(el instanceof Element)) return false;
+                    if (el.closest('nav, [role="navigation"], [role="menubar"]')) return false;
+                    if (el.closest('[aria-modal="true"], [role="dialog"], .modal')) return false;
+                    return true;
+                });
                 for (const el of targets) {
                     if (!(el instanceof Element) || seen.has(el)) continue;
                     seen.add(el);
@@ -952,9 +1193,11 @@ async def _populate_result(
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    result.html = await _page_content_with_retry(page, checkpoint=checkpoint)
+    result.html, result.frame_sources, result.promoted_sources = await _collect_frame_sources(page)
     result.network_payloads = intercepted
     result.diagnostics["final_url"] = str(page.url or "").strip() or None
+    result.diagnostics["frame_sources"] = len(result.frame_sources)
+    result.diagnostics["promoted_sources"] = len(result.promoted_sources)
     if result.html:
         result.diagnostics["html_length"] = len(result.html)
         result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked

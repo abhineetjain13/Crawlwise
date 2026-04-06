@@ -88,15 +88,20 @@ def _find_items_array(data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH)
 
     # Recurse into dict values looking for the largest array of objects.
     best: list[dict] = []
+    best_score = -1
     for key, value in data.items():
         if isinstance(value, dict):
             found = _find_items_array(value, max_depth - 1)
-            if len(found) > len(best):
+            score = _score_candidate_array(found)
+            if score > best_score:
                 best = found
+                best_score = score
         elif isinstance(value, list) and key != "edges":
             objects = [item for item in value if isinstance(item, dict)]
-            if len(objects) >= 1 and len(objects) > len(best):
+            score = _score_candidate_array(objects)
+            if score > best_score:
                 best = objects
+                best_score = score
 
     return best
 
@@ -157,16 +162,84 @@ def _normalize_item(item: dict, page_url: str) -> dict:
     if record.get("company") and "brand" in record and record["company"] == record["brand"]:
         record.pop("brand", None)
 
-    # Always preserve unmapped scalar fields under their original keys.
+    # Preserve unmapped scalar fields before applying any surface contract so the
+    # contract can remove incompatible fields decisively.
     for key, value in item.items():
         if key in consumed_keys or key.startswith("_"):
             continue
         if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value.strip()):
             record[key] = value
 
+    inferred_surface = _infer_surface_from_item(item, page_url=page_url, normalized=record)
+    if inferred_surface == "job_listing":
+        record = _apply_job_surface_contract(record, item=item, page_url=page_url)
+
     if record:
         record["_raw_item"] = item
+        if inferred_surface:
+            record["_surface"] = inferred_surface
     return record
+
+
+def _score_candidate_array(items: list[dict]) -> int:
+    if not items:
+        return -1
+    sample = items[:5]
+    score = len(items)
+    for item in sample:
+        keys = {str(key).strip().lower() for key in item}
+        if keys & {"title", "name", "job_title", "position"}:
+            score += 3
+        if keys & {"url", "href", "link", "positionuri", "apply_url"}:
+            score += 3
+        if keys & {"company", "company_name", "companyname", "salary", "salarydisplay", "jobid", "job_id", "location"}:
+            score += 4
+        if keys & {"price", "sale_price", "brand", "sku"}:
+            score += 2
+    return score
+
+
+def _infer_surface_from_item(item: dict, *, page_url: str, normalized: dict) -> str:
+    page_url_lower = str(page_url or "").lower()
+    normalized_keys = {str(key).lower() for key in normalized}
+    raw_keys = {str(key).lower() for key in item}
+    if "jobs" in page_url_lower or "career" in page_url_lower:
+        return "job_listing"
+    if normalized_keys & {"company", "salary", "job_type", "posted_date", "apply_url"}:
+        return "job_listing"
+    if raw_keys & {"jobid", "job_id", "salarydisplay", "positionuri", "companyname"}:
+        return "job_listing"
+    return ""
+
+
+def _apply_job_surface_contract(record: dict, *, item: dict, page_url: str) -> dict:
+    normalized = dict(record)
+    if normalized.get("price") not in (None, "", [], {}) and normalized.get("salary") in (None, "", [], {}):
+        normalized["salary"] = normalized.pop("price")
+    if normalized.get("apply_url") in (None, "", [], {}) and normalized.get("url") not in (None, "", [], {}):
+        normalized["apply_url"] = normalized["url"]
+    if normalized.get("job_id") in (None, "", [], {}):
+        for key in ("jobId", "job_id", "id", "requisitionNumber", "requisition_number", "reqId"):
+            value = item.get(key)
+            if value not in (None, "", [], {}):
+                normalized["job_id"] = str(value).strip()
+                break
+    for field_name in (
+        "price",
+        "sale_price",
+        "original_price",
+        "currency",
+        "image_url",
+        "additional_images",
+        "sku",
+        "part_number",
+        "brand",
+        "availability",
+        "rating",
+        "review_count",
+    ):
+        normalized.pop(field_name, None)
+    return normalized
 
 
 def _normalize_json_value(

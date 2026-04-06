@@ -4,12 +4,18 @@ from __future__ import annotations
 import logging
 
 from app.services.adapters.amazon import AmazonAdapter
+from app.services.adapters.adp import ADPAdapter
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.adapters.ebay import EbayAdapter
 from app.services.adapters.greenhouse import GreenhouseAdapter
+from app.services.adapters.icims import ICIMSAdapter
 from app.services.adapters.indeed import IndeedAdapter
+from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
+from app.services.adapters.oracle_hcm import OracleHCMAdapter
+from app.services.adapters.paycom import PaycomAdapter
 from app.services.adapters.remotive import RemotiveAdapter
+from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.walmart import WalmartAdapter
 
@@ -18,6 +24,12 @@ _ADAPTERS: list[BaseAdapter] = [
     AmazonAdapter(),
     WalmartAdapter(),
     EbayAdapter(),
+    ADPAdapter(),
+    ICIMSAdapter(),
+    OracleHCMAdapter(),
+    PaycomAdapter(),
+    SaaSHRAdapter(),
+    JibeAdapter(),
     IndeedAdapter(),
     LinkedInAdapter(),
     GreenhouseAdapter(),
@@ -56,12 +68,36 @@ async def try_blocked_adapter_recovery(
     general; it only uses known public data endpoints when a platform supports
     them directly.
     """
-    if surface not in {"ecommerce_listing", "ecommerce_detail"}:
+    if surface not in {"ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail"}:
         return None
 
     shopify = ShopifyAdapter()
+    jibe = JibeAdapter()
+    oracle_hcm = OracleHCMAdapter()
     proxies = [proxy.strip() for proxy in (proxy_list or []) if proxy and proxy.strip()] or [None]
     for proxy in proxies:
+        try:
+            records = await oracle_hcm.try_public_endpoint(url, "", surface, proxy=proxy)
+        except Exception as exc:
+            logger.debug("Oracle HCM recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
+            records = []
+        if records:
+            return AdapterResult(
+                records=records,
+                source_type="oracle_hcm_adapter_recovery",
+                adapter_name=oracle_hcm.name,
+            )
+        try:
+            records = await jibe.try_public_endpoint(url, "", surface, proxy=proxy)
+        except Exception as exc:
+            logger.debug("Jibe recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
+            records = []
+        if records:
+            return AdapterResult(
+                records=records,
+                source_type="jibe_adapter_recovery",
+                adapter_name=jibe.name,
+            )
         try:
             records = await shopify.try_public_endpoint(url, surface, proxy=proxy)
         except Exception as exc:

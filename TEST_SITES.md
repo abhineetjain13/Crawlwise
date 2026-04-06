@@ -132,7 +132,6 @@ spec tables + inline JSON simultaneously — the hardest multi-source extraction
 | DC15 | `https://www.abebooks.com/9780132350884/Clean-Code-Handbook-Agile-Software-0132350882/plp` | HTTP | Medium | Multi-seller table, shipping region data, condition descriptions |
 | DC16 | `https://www.adorama.com/ib5dviii.html` | Browser | Medium | Camera body — bundle options, rebate data in DOM, multi-source pricing |
 | DC17 | `https://www.rockler.com/jessem-mast-r-lift-ii-excel-router-lift` | HTTP | Medium | Compatibility chart, video embed, spec table, router size matrix |
-| DC19 | `https://www.swappa.com/buy/apple-iphone-15-pro` | Browser | Medium | Live marketplace — condition grades, seller ratings, pricing distribution |
 | DC20 | `https://www.backmarket.com/en-us/p/iphone-14-128-gb-midnight/dba71a89-1e8e-4278-967e-0ef1c0d05f31` | Browser | Medium | Refurbished grade taxonomy, warranty terms, JSON-LD Product† |
 
 ---
@@ -170,7 +169,6 @@ parallel arrays, and non-standard schema patterns that stress-test normalisation
 | # | URL | Format | Nesting Depth | What to Extract |
 |---|---|---|---|---|
 | RD01 | `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson` | GeoJSON | Deep | Geometry coords, nested `properties`, magnitude type variants |
-| RD03 | `https://clinicaltrials.gov/api/query/full_studies?expr=diabetes&min_rnk=1&max_rnk=3&fmt=JSON` | JSON API | Extreme | 100+ fields per study, eligibility criteria, arm descriptions |
 || RD11 | `https://api.coingecko.com/api/v3/coins/bitcoin` | JSON API | Deep | market_data nested 3 levels, community_data, developer_data |
 | RD12 | `https://restcountries.com/v3.1/name/germany` | JSON API | Medium | Currency object, languages, translations, demonyms, flags map |
 | RD13 | `https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,precipitation` | JSON API | Medium | Time-series parallel arrays, hourly units, timezone metadata |

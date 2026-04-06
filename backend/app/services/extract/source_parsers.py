@@ -249,10 +249,21 @@ def _parse_hydrated_assignment(text: str) -> dict | list | None:
 
 
 def _parse_react_create_element_props(text: str) -> dict | list | None:
-    match = re.search(r"createElement\([^,]+,\s*(\{.*\})\s*\)", text, re.DOTALL)
-    if not match:
-        return None
-    return _parse_json_blob(match.group(1))
+    for match in re.finditer(r"createElement\s*\(", text):
+        args_start = match.end()
+        args_end = _find_matching_delimiter(text, args_start - 1, "(", ")")
+        if args_end == -1:
+            continue
+        args = _split_top_level_arguments(text[args_start:args_end])
+        if len(args) < 2:
+            continue
+        props_fragment = _extract_balanced_json_fragment(args[1].strip())
+        if not props_fragment:
+            continue
+        parsed = _parse_json_blob(props_fragment)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _extract_next_bootstrap_children(text: str) -> list[str]:
@@ -288,6 +299,97 @@ def _extract_balanced_json_fragment(text: str) -> str:
             if depth == 0:
                 return candidate[: index + 1]
     return ""
+
+
+def _find_matching_delimiter(text: str, start_index: int, opening: str, closing: str) -> int:
+    depth = 0
+    current_string_char = ""
+    escape = False
+    template_expression_depth = 0
+    for index in range(start_index, len(text)):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if current_string_char:
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if current_string_char == "`":
+                if char == "$" and next_char == "{":
+                    template_expression_depth = 1 if template_expression_depth == 0 else template_expression_depth + 1
+                    continue
+                if char == "{" and template_expression_depth > 0 and (index == 0 or text[index - 1] != "$"):
+                    template_expression_depth += 1
+                    continue
+                if char == "}" and template_expression_depth > 0:
+                    template_expression_depth -= 1
+                    continue
+                if char == "`" and template_expression_depth == 0:
+                    current_string_char = ""
+                continue
+            if char == current_string_char:
+                current_string_char = ""
+            continue
+        if char in {'"', "'", "`"}:
+            current_string_char = char
+            continue
+        if char == opening:
+            depth += 1
+            continue
+        if char == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _split_top_level_arguments(text: str) -> list[str]:
+    args: list[str] = []
+    start = 0
+    paren_depth = 0
+    brace_depth = 0
+    bracket_depth = 0
+    in_string = ""
+    escape = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == in_string:
+                in_string = ""
+            continue
+        if char in {'"', "'", "`"}:
+            in_string = char
+            continue
+        if char == "(":
+            paren_depth += 1
+            continue
+        if char == ")":
+            paren_depth = max(0, paren_depth - 1)
+            continue
+        if char == "{":
+            brace_depth += 1
+            continue
+        if char == "}":
+            brace_depth = max(0, brace_depth - 1)
+            continue
+        if char == "[":
+            bracket_depth += 1
+            continue
+        if char == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+            continue
+        if char == "," and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0:
+            args.append(text[start:index].strip())
+            start = index + 1
+    trailing = text[start:].strip()
+    if trailing:
+        args.append(trailing)
+    return args
 
 
 def _normalized_script_identifier(node: Tag, text: str, fingerprint: str) -> str:

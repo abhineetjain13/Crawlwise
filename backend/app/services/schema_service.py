@@ -1,41 +1,21 @@
 from __future__ import annotations
 
-import asyncio
-import html
-import json
-import logging
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlparse, urlunparse
+import logging
+import re
+import warnings
 
-from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import get_canonical_fields
-from app.services.llm_runtime import run_prompt_task
 
 logger = logging.getLogger(__name__)
 
 _FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
 _NUMERIC_ONLY_RE = re.compile(r"^\d+$")
 _MAX_SCHEMA_AGE = timedelta(days=7)
-_PROMPT_SAFE_SURFACE_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
-_PROMPT_ESCAPE_PATTERNS = (
-    re.compile(r"ignore\s+previous", re.IGNORECASE),
-    re.compile(r"\bsystem\s*:", re.IGNORECASE),
-    re.compile(r"\bassistant\s*:", re.IGNORECASE),
-)
-_PROMPT_INJECTION_PATTERNS = (
-    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
-    re.compile(r"disregard\s+(the\s+)?system", re.IGNORECASE),
-    re.compile(r"you are now", re.IGNORECASE),
-    re.compile(r"repeat after me", re.IGNORECASE),
-)
-_SCHEMA_PROMPT_HTML_MAX_CHARS = 3500
-_SCHEMA_PROMPT_SURFACE_MAX_CHARS = 40
-_SCHEMA_PROMPT_BASELINE_FIELD_LIMIT = 120
 
 
 @dataclass
@@ -47,7 +27,6 @@ class ResolvedSchema:
     new_fields: list[str]
     deprecated_fields: list[str]
     source: str
-    confidence: float
     saved_at: str | None
     stale: bool
 
@@ -86,15 +65,13 @@ def _dedupe_fields(values: list[str] | None) -> list[str]:
     return deduped
 
 
+def _supports_record_learning(surface: str) -> bool:
+    normalized = str(surface or "").strip().lower()
+    return normalized not in {"job_listing", "job_detail"}
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _safe_float(value: object, default: float = 0.0) -> float:
-    try:
-        return float(value) if value is not None else default
-    except (TypeError, ValueError):
-        return default
 
 
 def _parse_saved_at(value: object) -> datetime | None:
@@ -138,7 +115,6 @@ def _snapshot_to_resolved(
         new_fields=new_fields,
         deprecated_fields=deprecated_fields,
         source=str(payload.get("source") or "static").strip() or "static",
-        confidence=_safe_float(payload.get("confidence", 0.0)),
         saved_at=saved_at,
         stale=stale,
     )
@@ -151,7 +127,6 @@ def _schema_payload(schema: ResolvedSchema) -> dict:
         "new_fields": list(schema.new_fields),
         "deprecated_fields": list(schema.deprecated_fields),
         "source": schema.source,
-        "confidence": schema.confidence,
         "saved_at": schema.saved_at,
     }
 
@@ -163,6 +138,7 @@ async def load_resolved_schema(
     *,
     explicit_fields: list[str] | None = None,
 ) -> ResolvedSchema:
+    del session
     baseline_fields = _dedupe_fields(get_canonical_fields(surface))
     normalized_domain = normalize_domain(domain)
     normalized_explicit = _dedupe_fields(explicit_fields)
@@ -176,7 +152,6 @@ async def load_resolved_schema(
             new_fields=[field for field in fields if field not in set(baseline_fields)],
             deprecated_fields=[],
             source="static",
-            confidence=1.0 if baseline_fields else 0.0,
             saved_at=None,
             stale=False,
         )
@@ -190,6 +165,7 @@ async def load_resolved_schema(
 
 
 async def persist_resolved_schema(session: AsyncSession, schema: ResolvedSchema) -> ResolvedSchema:
+    del session
     schema.saved_at = schema.saved_at or _now_iso()
     schema.stale = False
     return schema
@@ -209,11 +185,14 @@ def learn_schema_from_record(
     normalized_record_values: dict[str, object] = {}
     discovered_new_fields: list[str] = []
     baseline_set = set(baseline)
+    allow_record_learning = _supports_record_learning(surface)
     for key, value in record.items():
         normalized = _normalize_field_name(key)
         if normalized and normalized not in normalized_record_values:
             normalized_record_values[normalized] = value
         if (
+            not allow_record_learning
+            or
             not is_valid_schema_field_name(normalized)
             or normalized in baseline_set
             or normalized in discovered_new_fields
@@ -235,139 +214,6 @@ def learn_schema_from_record(
             if field not in normalized_record_values or normalized_record_values.get(field) in (None, "", [], {})
         ],
         source="learned",
-        confidence=0.75,
-        saved_at=_now_iso(),
-        stale=False,
-    )
-
-
-def _prune_html_for_schema_llm(html: str, max_chars: int = 3500) -> str:
-    stripped = re.sub(r"<(script|style|svg|noscript)\b[^>]*>.*?</\1\s*>", "", html, flags=re.IGNORECASE | re.DOTALL)
-    stripped = re.sub(r"<!--.*?-->", "", stripped, flags=re.DOTALL)
-    stripped = re.sub(r"\s{3,}", "  ", stripped)
-    return stripped[:max_chars]
-
-
-def _escape_for_prompt(text: str, *, max_chars: int) -> str:
-    escaped = str(text or "").strip()
-    for pattern in _PROMPT_ESCAPE_PATTERNS:
-        escaped = pattern.sub(lambda match: " ".join(f"`{part}`" for part in match.group(0).split()), escaped)
-    return escaped[:max_chars]
-
-
-def _prompt_injection_detected(text: str) -> bool:
-    normalized = str(text or "")
-    return any(pattern.search(normalized) for pattern in _PROMPT_INJECTION_PATTERNS)
-
-
-def _normalize_prompt_url(url: str, fallback_domain: str) -> str:
-    parsed = urlparse(str(url or "").strip())
-    if parsed.scheme in {"http", "https"} and parsed.netloc:
-        normalized = parsed._replace(fragment="", netloc=parsed.netloc.lower())
-        return urlunparse(normalized)
-    normalized_domain = normalize_domain(fallback_domain)
-    if normalized_domain:
-        return f"https://{normalized_domain}/"
-    raise ValueError("Invalid schema inference URL")
-
-
-def _sanitize_prompt_surface(surface: str) -> str:
-    normalized = str(surface or "").strip().lower()
-    if not normalized or len(normalized) > _SCHEMA_PROMPT_SURFACE_MAX_CHARS or not _PROMPT_SAFE_SURFACE_RE.match(normalized):
-        raise ValueError("Invalid schema inference surface")
-    if _prompt_injection_detected(normalized):
-        raise ValueError("Unsafe schema inference surface")
-    return normalized
-
-
-def _sanitize_baseline_fields_json(baseline_fields: list[str]) -> str:
-    sanitized_fields = [
-        field
-        for field in _dedupe_fields(baseline_fields)
-        if is_valid_schema_field_name(field)
-    ][:_SCHEMA_PROMPT_BASELINE_FIELD_LIMIT]
-    return json.dumps(sanitized_fields, separators=(",", ":"))
-
-
-def _sanitize_html_snippet_for_prompt(html_text: str) -> str:
-    soup = BeautifulSoup(html.unescape(str(html_text or "")), "html.parser")
-    for tag in soup.find_all(["script", "style", "svg", "noscript", "iframe", "object", "embed", "meta", "link", "template"]):
-        tag.decompose()
-    for tag in soup.find_all(True):
-        tag.attrs = {}
-    cleaned_text = soup.get_text("\n", strip=True)
-    cleaned_text = re.sub(r"\s{3,}", "  ", cleaned_text)
-    escaped = _escape_for_prompt(cleaned_text, max_chars=_SCHEMA_PROMPT_HTML_MAX_CHARS)
-    if _prompt_injection_detected(escaped):
-        raise ValueError("Unsafe schema inference HTML snippet")
-    return escaped
-
-
-async def _infer_schema_via_llm(
-    session: AsyncSession,
-    *,
-    surface: str,
-    domain: str,
-    baseline_fields: list[str],
-    explicit_fields: list[str],
-    html: str,
-    run_id: int | None,
-    url: str,
-) -> ResolvedSchema | None:
-    if not html or surface == "tabular":
-        return None
-    normalized_url = _normalize_prompt_url(url, domain)
-    sanitized_surface = _sanitize_prompt_surface(surface)
-    sanitized_baseline_fields_json = _sanitize_baseline_fields_json(baseline_fields)
-    sanitized_html_snippet = _sanitize_html_snippet_for_prompt(_prune_html_for_schema_llm(html))
-    result = await asyncio.wait_for(
-        run_prompt_task(
-            session,
-            task_type="schema_inference",
-            run_id=run_id,
-            domain=domain,
-            variables={
-                "url": normalized_url,
-                "surface": sanitized_surface,
-                "baseline_fields_json": sanitized_baseline_fields_json,
-                "html_snippet": sanitized_html_snippet,
-            },
-        ),
-        timeout=12.0,
-    )
-    if result.error_message or not isinstance(result.payload, dict):
-        logger.warning(
-            "Schema inference LLM unavailable for surface=%s domain=%s: %s",
-            surface,
-            domain,
-            result.error_message or "non-dict payload",
-        )
-        return None
-    payload = result.payload
-    confirmed_fields = [
-        field for field in _dedupe_fields(payload.get("confirmed_fields") if isinstance(payload.get("confirmed_fields"), list) else [])
-        if field in set(baseline_fields)
-    ]
-    inferred_new_fields = [
-        field for field in _dedupe_fields(payload.get("new_fields") if isinstance(payload.get("new_fields"), list) else [])
-        if is_valid_schema_field_name(field) and field not in set(baseline_fields)
-    ]
-    absent_fields = [
-        field for field in _dedupe_fields(payload.get("absent_fields") if isinstance(payload.get("absent_fields"), list) else [])
-        if field in set(baseline_fields)
-    ]
-    if not confirmed_fields and not inferred_new_fields and not absent_fields:
-        return None
-    fields = _dedupe_fields([*baseline_fields, *confirmed_fields, *inferred_new_fields, *explicit_fields])
-    return ResolvedSchema(
-        surface=surface,
-        domain=domain,
-        baseline_fields=_dedupe_fields(baseline_fields),
-        fields=fields,
-        new_fields=[field for field in fields if field not in set(baseline_fields)],
-        deprecated_fields=absent_fields,
-        source="llm_inferred",
-        confidence=0.6,
         saved_at=_now_iso(),
         stale=False,
     )
@@ -385,12 +231,21 @@ async def resolve_schema(
     sample_record: dict | None = None,
     llm_enabled: bool = False,
 ) -> ResolvedSchema:
+    del run_id, html, url
+    if llm_enabled:
+        warnings.warn(
+            "LLM-based schema inference is no longer supported; falling back to deterministic schema resolution.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     resolved = await load_resolved_schema(
         session,
         surface,
         domain,
         explicit_fields=explicit_fields,
     )
+    if not _supports_record_learning(surface):
+        return resolved
     if not resolved.domain:
         return resolved
     try:
@@ -403,19 +258,6 @@ async def resolve_schema(
                 sample_record=sample_record,
             )
             return await persist_resolved_schema(session, learned)
-        if (not resolved.saved_at or resolved.stale) and llm_enabled and "detail" in surface and html:
-            inferred = await _infer_schema_via_llm(
-                session,
-                surface=surface,
-                domain=resolved.domain,
-                baseline_fields=resolved.baseline_fields,
-                explicit_fields=_dedupe_fields(explicit_fields),
-                html=html,
-                run_id=run_id,
-                url=url,
-            )
-            if inferred is not None:
-                return await persist_resolved_schema(session, inferred)
     except Exception:
         logger.exception(
             "Schema resolution enrichment failed for surface=%s domain=%s; returning fallback resolved schema",
@@ -436,7 +278,6 @@ def schema_trace_payload(schema: ResolvedSchema) -> dict:
         "new_fields": list(schema.new_fields),
         "deprecated_fields": list(schema.deprecated_fields),
         "source": schema.source,
-        "confidence": schema.confidence,
         "saved_at": schema.saved_at,
         "stale": schema.stale,
     }

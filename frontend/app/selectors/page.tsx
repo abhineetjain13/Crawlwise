@@ -401,7 +401,7 @@ export default function SelectorsPage() {
           <div className="flex justify-end border-t border-border pt-4">
             <Button type="button" variant="accent" onClick={() => void saveAcceptedRows()} disabled={savingAccepted || !rows.some((row) => row.state === "accepted")}>
               <Check className="size-3.5" />
-              {savingAccepted ? "Saving..." : "Save Accepted To Site Memory"}
+              {savingAccepted ? "Saving..." : "Save Accepted Selectors"}
             </Button>
           </div>
         </Card>

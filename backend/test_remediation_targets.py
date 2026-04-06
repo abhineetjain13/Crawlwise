@@ -1,9 +1,6 @@
 import asyncio
 import time
-import json
 import httpx
-import sys
-import os
 
 PORT = 8000
 BASE_URL = f"http://127.0.0.1:{PORT}"

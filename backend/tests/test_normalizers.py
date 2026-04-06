@@ -1,7 +1,7 @@
 # Tests for field normalizers.
 from __future__ import annotations
 
-from app.services.normalizers import extract_currency_hint, normalize_value
+from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
 
 
 def test_normalize_price():
@@ -59,3 +59,18 @@ def test_normalize_size_and_color_option_text():
     assert normalize_value("size", "Choose an option XS S M L XL") == "XS, S, M, L, XL"
     assert normalize_value("size", "(max-width: 416px) 100vw, 416px") == ""
     assert normalize_value("color", "Choose an option Black Gray Orange Clear") == "Black Gray Orange"
+
+
+def test_validate_image_collection_filters_each_url_individually():
+    assert (
+        validate_value(
+            "additional_images",
+            "https://cdn.example.com/a.jpg?utm_source=x, https://cdn.example.com/logo-placeholder.png, https://cdn.example.com/b.jpg",
+        )
+        == "https://cdn.example.com/a.jpg, https://cdn.example.com/b.jpg"
+    )
+
+
+def test_validate_http_url_rejects_generic_platform_prefixes_with_paths():
+    assert validate_value("url", "https://www.shopify.com/pricing") is None
+    assert validate_value("url", "https://www.linkedin.com/jobs/view/123") is None

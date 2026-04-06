@@ -17,15 +17,7 @@ Routing rules:
 - Each review_bucket item must be an object with:
   - "key": snake_case field name
   - "value": extracted value
-  - "confidence_score": integer from 1 to 10
   - "source": strongest supporting source label
-
-Review bucket confidence guidance:
-- 9-10: definitive enduring attribute or specification
-- 6-8: likely useful product/job/entity attribute but not canonical
-- 3-5: weaker contextual attribute that may still help review
-- 1-2: very noisy or uncertain; include only if still meaningfully attribute-like
-- never emit 0
 
 Extraction rules:
 - Preserve legible, user-valuable details when the evidence clearly supports them.

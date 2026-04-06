@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 from json import loads as parse_json
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 from lxml import etree, html as lxml_html
@@ -55,6 +55,7 @@ from app.services.requested_field_policy import (
 )
 from app.services.semantic_detail_extractor import extract_semantic_detail_data, resolve_requested_field_values
 from app.services.knowledge_base.store import get_canonical_fields, get_domain_mapping, get_selector_defaults
+from app.services.normalizers import validate_value
 from app.services.xpath_service import build_absolute_xpath, extract_selector_value
 
 _UI_NOISE_TOKEN_RE = re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_NOISE_TOKEN_PATTERN else None
@@ -125,7 +126,10 @@ def extract_candidates(
     json_ld = page_sources.get("json_ld") or []
     microdata = page_sources.get("microdata") or []
     candidates: dict[str, list[dict]] = {}
-    target_fields = sorted(set(resolved_fields or get_canonical_fields(surface)) | set(expand_requested_fields(additional_fields)))
+    base_target_fields = set(resolved_fields or get_canonical_fields(surface))
+    if str(surface or "").strip().lower() in {"job_listing", "job_detail"}:
+        base_target_fields = set(get_canonical_fields(surface))
+    target_fields = sorted(base_target_fields | set(expand_requested_fields(additional_fields)))
     domain = _domain(url)
     contract_by_field = _index_extraction_contract(extraction_contract or [])
     semantic = extract_semantic_detail_data(html, requested_fields=sorted(target_fields))
@@ -280,8 +284,9 @@ def extract_candidates(
                 rows.append({"value": text_value, "source": "text_pattern"})
         _commit(rows)
 
-    dynamic_rows = _build_dynamic_semantic_rows(semantic)
+    dynamic_rows = _build_dynamic_semantic_rows(semantic, surface=surface)
     structured_rows = _build_dynamic_structured_rows(
+        surface=surface,
         next_data=next_data,
         hydrated_states=hydrated_states,
         embedded_json=embedded_json,
@@ -420,6 +425,9 @@ def _finalize_candidate_rows(field_name: str, rows: list[dict], *, base_url: str
         value = coerce_field_candidate_value(field_name, row.get("value"), base_url=base_url)
         if value in (None, "", [], {}):
             value = _normalized_candidate_value(row.get("value"))
+        if value in (None, "", [], {}):
+            continue
+        value = validate_value(field_name, value)
         if value in (None, "", [], {}):
             continue
         source_parts = _source_labels(row)
@@ -906,14 +914,34 @@ def _resolve_candidate_url(value: str, base_url: str) -> str:
         return ""
     if candidate.startswith("//"):
         resolved = f"https:{candidate}"
+        resolved = _strip_tracking_query_params(resolved)
         return "" if _looks_like_asset_url(resolved) else resolved
     if candidate.startswith(("http://", "https://")):
-        return "" if _looks_like_asset_url(candidate) else candidate
+        normalized = _strip_tracking_query_params(candidate)
+        return "" if _looks_like_asset_url(normalized) else normalized
     if candidate.startswith("/"):
         resolved = urljoin(base_url, candidate) if base_url else candidate
+        resolved = _strip_tracking_query_params(resolved)
         return "" if _looks_like_asset_url(resolved) else resolved
     resolved = urljoin(base_url, candidate) if re.search(r"^[A-Za-z0-9][^ ]*/[^ ]+$", candidate) and base_url else ""
+    resolved = _strip_tracking_query_params(resolved) if resolved else ""
     return "" if _looks_like_asset_url(resolved) else resolved
+
+
+def _strip_tracking_query_params(url: str) -> str:
+    parsed = urlsplit(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return str(url or "").strip()
+    filtered_query = [
+        (key, val)
+        for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+        if key
+        and (
+            (key_lower := key.lower()) not in {"ref", "ref_src"}
+            and not key_lower.startswith(("utm_", "fbclid", "gclid", "mc_"))
+        )
+    ]
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(filtered_query, doseq=True), parsed.fragment))
 
 
 def _looks_like_asset_url(url: str) -> bool:
@@ -1155,7 +1183,7 @@ def _structured_source_candidates(
     return rows
 
 
-def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
+def _build_dynamic_semantic_rows(semantic: dict, *, surface: str = "") -> dict[str, list[dict]]:
     specifications = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
     aggregates = semantic.get("aggregates") if isinstance(semantic.get("aggregates"), dict) else {}
     table_groups = semantic.get("table_groups") if isinstance(semantic.get("table_groups"), list) else []
@@ -1203,6 +1231,8 @@ def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
         value = aggregates.get(aggregate_field)
         if value in (None, "", [], {}):
             continue
+        if aggregate_field == "specifications" and str(surface or "").lower().startswith("job_"):
+            continue
         if aggregate_field in {"specifications", "dimensions"} and spec_entry_count < 2:
             continue
         rows.setdefault(aggregate_field, []).append({"value": value, "source": "semantic_spec"})
@@ -1218,6 +1248,7 @@ def _build_dynamic_semantic_rows(semantic: dict) -> dict[str, list[dict]]:
 
 def _build_dynamic_structured_rows(
     *,
+    surface: str = "",
     next_data: object,
     hydrated_states: list[object],
     embedded_json: list[object],
@@ -1234,7 +1265,7 @@ def _build_dynamic_structured_rows(
         if not spec_map:
             continue
         spec_lines = [f"{label}: {value}" for label, value in spec_map.items()]
-        if spec_lines:
+        if spec_lines and not str(surface or "").lower().startswith("job_"):
             rows.setdefault("specifications", []).append({
                 "value": SEMANTIC_AGGREGATE_SEPARATOR.join(spec_lines),
                 "source": source,

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re as _re
 import time
 from json import loads as parse_json
@@ -21,6 +22,10 @@ from app.services.acquisition.browser_client import fetch_rendered_html
 from app.services.acquisition.browser_runtime import resolve_browser_runtime_options
 from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
+from app.services.extract.listing_extractor import extract_listing_records
+from app.services.extract.listing_quality import listing_set_quality
+from app.services.extract.service import extract_candidates
+from app.services.knowledge_base.store import get_canonical_fields
 from app.services.pipeline_config import (
     ACQUIRE_HOST_MIN_INTERVAL_MS,
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
@@ -48,6 +53,9 @@ _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset({
 })
 _JS_SHELL_MIN_CONTENT_LEN = 100_000
 _JS_SHELL_VISIBLE_RATIO_MAX = 0.15
+_MIN_DETAIL_FIELD_SIGNAL_COUNT = 2
+
+logger = logging.getLogger(__name__)
 
 
 class ProxyPoolExhausted(RuntimeError):
@@ -85,6 +93,8 @@ class AcquisitionResult:
     artifact_path: str = ""
     diagnostics_path: str = ""
     network_payloads: list[dict] = field(default_factory=list)
+    frame_sources: list[dict] = field(default_factory=list)
+    promoted_sources: list[dict] = field(default_factory=list)
     diagnostics: dict[str, object] = field(default_factory=dict)
 
 
@@ -281,6 +291,8 @@ async def _acquire_once(
                     method="playwright",
                     artifact_path=str(_artifact_path(run_id, url)),
                     network_payloads=browser_network_payloads,
+                    frame_sources=getattr(browser_result, "frame_sources", []),
+                    promoted_sources=getattr(browser_result, "promoted_sources", []),
                     diagnostics={
                         "browser_attempted": True,
                         "browser_challenge_state": browser_result.challenge_state,
@@ -318,6 +330,7 @@ async def _acquire_once(
             content_type="json",
             method="curl_cffi",
             artifact_path=str(_artifact_path(run_id, url)),
+            promoted_sources=[],
             diagnostics=_build_curl_diagnostics(
                 normalized=normalized,
                 blocked=None,
@@ -354,7 +367,21 @@ async def _acquire_once(
     )
     adapter_hint = await _resolve_adapter_hint(url, html)
     platform_family = resolve_platform_family(url, html)
-    
+    extractability = _assess_extractable_html(
+        html,
+        url=url,
+        surface=surface,
+        adapter_hint=adapter_hint,
+    )
+    missing_data_requires_browser = (
+        not extractability["has_extractable_data"]
+        and str(extractability.get("reason") or "") in {
+            "listing_search_shell_without_records",
+            "iframe_shell",
+            "insufficient_detail_candidates",
+        }
+    )
+
     # Determine if we really need a browser.
     needs_browser = bool(
         blocked.is_blocked
@@ -362,13 +389,15 @@ async def _acquire_once(
         or (len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN and content_len < _JS_SHELL_MIN_CONTENT_LEN)
         or gate_phrases
         or (js_shell_detected and adapter_hint is None and platform_family is None and len(visible_text) < 1000)
+        or missing_data_requires_browser
         or normalized.error
     )
     structured_listing_override = (
         needs_browser
         and not blocked.is_blocked
         and not str(surface or "").strip().lower().endswith("detail")
-        and _html_has_extractable_listings_from_soup(soup)
+        and bool(extractability["has_extractable_data"])
+        and str(extractability.get("reason") or "") != "surface_unspecified"
     )
     invalid_surface_page = _is_invalid_surface_page(
         requested_url=url,
@@ -401,8 +430,16 @@ async def _acquire_once(
     )
     curl_diagnostics["curl_final_url"] = normalized.final_url or url
     curl_diagnostics["invalid_surface_page"] = invalid_surface_page or None
+    curl_diagnostics["extractability"] = extractability
+    curl_diagnostics["browser_retry_reason"] = (
+        str(extractability.get("reason") or "") if needs_browser else None
+    )
+    curl_diagnostics["promoted_sources"] = extractability.get("promoted_sources")
     if structured_listing_override:
-        curl_diagnostics["js_shell_overridden"] = "structured_data_found"
+        override_reason = str(extractability.get("reason") or "extractable_data_found")
+        if override_reason in {"structured_listing_markup", "listing_records"}:
+            override_reason = "structured_data_found"
+        curl_diagnostics["js_shell_overridden"] = override_reason
     curl_diagnostics["timings_ms"] = _merge_timing_maps(
         curl_diagnostics.get("timings_ms"),
         {
@@ -416,7 +453,7 @@ async def _acquire_once(
     has_useful_content = (
         html
         and not blocked.is_blocked
-        and len(visible_text) >= BROWSER_FALLBACK_VISIBLE_TEXT_MIN
+        and extractability["has_extractable_data"]
         and normalized.status_code not in {403, 429, 503}
         and not invalid_surface_page
     )
@@ -427,6 +464,7 @@ async def _acquire_once(
             content_type=normalized.content_type,
             method="curl_cffi",
             artifact_path=str(_artifact_path(run_id, url)),
+            promoted_sources=list(extractability.get("promoted_sources") or []),
             diagnostics=curl_diagnostics,
         )
 
@@ -443,6 +481,7 @@ async def _acquire_once(
             content_type=normalized.content_type,
             method="curl_cffi",
             artifact_path=str(_artifact_path(run_id, url)),
+            promoted_sources=list(extractability.get("promoted_sources") or []),
             diagnostics=curl_diagnostics,
         )
 
@@ -508,6 +547,8 @@ async def _acquire_once(
             method="playwright",
             artifact_path=str(_artifact_path(run_id, url)),
             network_payloads=browser_network_payloads,
+            frame_sources=getattr(browser_result, "frame_sources", []),
+            promoted_sources=getattr(browser_result, "promoted_sources", []),
             diagnostics=merged_browser_diagnostics,
         )
 
@@ -565,6 +606,8 @@ async def _acquire_once(
             method="playwright",
             artifact_path=str(_artifact_path(run_id, url)),
             network_payloads=browser_network_payloads,
+            frame_sources=getattr(browser_result, "frame_sources", []),
+            promoted_sources=getattr(browser_result, "promoted_sources", []),
             diagnostics=blocked_diagnostics,
         )
 
@@ -581,6 +624,7 @@ async def _acquire_once(
             content_type=normalized.content_type,
             method="curl_cffi",
             artifact_path=str(_artifact_path(run_id, url)),
+            promoted_sources=list(extractability.get("promoted_sources") or []),
             diagnostics=curl_diagnostics,
         )
 
@@ -738,6 +782,122 @@ def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
             return True
 
     return False
+
+
+def _find_promotable_iframe_sources(html: str, *, surface: str | None) -> list[dict]:
+    normalized_surface = str(surface or "").strip().lower()
+    if "job" not in normalized_surface:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    promoted: list[dict] = []
+    for iframe in soup.select("iframe[src]"):
+        src = str(iframe.get("src") or "").strip()
+        if not src:
+            continue
+        lowered = src.lower()
+        if any(
+            token in lowered
+            for token in ("job", "jobs", "career", "careers", "greenhouse", "icims", "workday", "paycom", "ultipro", "oraclecloud")
+        ):
+            promoted.append({"kind": "iframe", "url": src, "same_origin": False})
+    return promoted
+
+
+def _assess_extractable_html(
+    html: str,
+    *,
+    url: str,
+    surface: str | None,
+    adapter_hint: str | None,
+) -> dict[str, object]:
+    normalized_surface = str(surface or "").strip().lower()
+    if not html:
+        return {"has_extractable_data": False, "reason": "empty_html"}
+    if adapter_hint:
+        return {"has_extractable_data": True, "reason": "adapter_hint", "adapter_hint": adapter_hint}
+
+    if normalized_surface.endswith("listing") or not normalized_surface:
+        promoted_iframes = _find_promotable_iframe_sources(html, surface=surface)
+        canonical_fields = set(get_canonical_fields(surface or ""))
+        try:
+            records = extract_listing_records(
+                html,
+                normalized_surface or "listing",
+                canonical_fields,
+                page_url=url,
+                max_records=3,
+            )
+        except Exception as exc:
+            logger.exception(
+                "extract_listing_records failed while assessing extractable HTML for url=%s surface=%s: %s",
+                url,
+                normalized_surface or "listing",
+                exc,
+            )
+            records = []
+        if records:
+            quality = listing_set_quality(records, surface=normalized_surface or surface or "")
+            return {
+                "has_extractable_data": quality == "meaningful" if normalized_surface == "job_listing" else quality in {"extractable", "meaningful"},
+                "reason": "listing_records",
+                "record_count": len(records),
+                "listing_quality": quality,
+            }
+        if promoted_iframes:
+            return {
+                "has_extractable_data": False,
+                "reason": "iframe_shell",
+                "promoted_sources": promoted_iframes,
+            }
+        soup = BeautifulSoup(html, "html.parser")
+        if _html_has_extractable_listings_from_soup(soup):
+            return {"has_extractable_data": True, "reason": "structured_listing_markup"}
+        html_lower = html.lower()
+        if (
+            "window.searchconfig" in html_lower
+            or "data-jibe-search-version" in html_lower
+            or "window._jibe" in html_lower
+        ):
+            return {"has_extractable_data": False, "reason": "listing_search_shell_without_records"}
+        return {"has_extractable_data": False, "reason": "no_listing_records"}
+
+    if normalized_surface.endswith("detail"):
+        canonical_fields = list(get_canonical_fields(surface or ""))
+        try:
+            candidates, _ = extract_candidates(
+                url=url,
+                surface=normalized_surface,
+                html=html,
+                xhr_payloads=[],
+                additional_fields=[],
+                resolved_fields=canonical_fields,
+            )
+        except Exception as exc:
+            logger.exception(
+                "extract_candidates failed while assessing extractable HTML for url=%s surface=%s: %s",
+                url,
+                normalized_surface,
+                exc,
+            )
+            candidates = {}
+        field_signal_count = sum(
+            1
+            for rows in candidates.values()
+            if isinstance(rows, list) and any(row.get("value") not in (None, "", [], {}) for row in rows)
+        )
+        if field_signal_count >= _MIN_DETAIL_FIELD_SIGNAL_COUNT:
+            return {
+                "has_extractable_data": True,
+                "reason": "detail_candidates",
+                "field_signal_count": field_signal_count,
+            }
+        return {
+            "has_extractable_data": False,
+            "reason": "insufficient_detail_candidates",
+            "field_signal_count": field_signal_count,
+        }
+
+    return {"has_extractable_data": True, "reason": "surface_unspecified"}
 
 
 def _json_ld_listing_count(payload: object, *, _depth: int = 0, _max_depth: int = 3) -> int:

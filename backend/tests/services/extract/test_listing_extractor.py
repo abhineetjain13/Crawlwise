@@ -196,6 +196,90 @@ def test_extract_listing_records_merges_adapter_rows_with_dom_job_cards():
     assert "listing_card" in records[0]["_source"]
 
 
+def test_extract_listing_records_maps_generic_job_ids_without_emitting_sku():
+    manifest = _sources(
+        next_data={
+            "props": {
+                "pageProps": {
+                    "dehydratedState": {
+                        "queries": [
+                            {
+                                "state": {
+                                    "data": {
+                                        "items": [
+                                            {
+                                                "id": "f73230ff-586f-4775-9628-9a88bcde18b9",
+                                                "name": "Chemical Operator",
+                                                "url": "https://ats.rippling.com/inhance-technologies/jobs/f73230ff-586f-4775-9628-9a88bcde18b9",
+                                                "department": {"name": "Operations"},
+                                                "locations": [{"name": "Catoosa"}],
+                                                "language": "en-US",
+                                            },
+                                            {
+                                                "id": "1b410123-0089-4bde-9ab1-9acbe62ecf1b",
+                                                "name": "Production Supervisor",
+                                                "url": "https://ats.rippling.com/inhance-technologies/jobs/1b410123-0089-4bde-9ab1-9acbe62ecf1b",
+                                                "department": {"name": "Operations"},
+                                                "locations": [{"name": "Catoosa"}],
+                                                "language": "en-US",
+                                            },
+                                        ]
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    )
+
+    records = extract_listing_records(
+        "<html><body></body></html>",
+        "job_listing",
+        set(),
+        page_url="https://ats.rippling.com/en-GB/inhance-technologies/jobs",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Chemical Operator"
+    assert records[0]["job_id"] == "f73230ff-586f-4775-9628-9a88bcde18b9"
+    assert records[0]["location"] == "Catoosa"
+    assert records[0]["category"] == "Operations"
+    assert "sku" not in records[0]
+
+
+def test_normalize_generic_item_synthesizes_ultipro_job_links_from_payload_ids():
+    record = listing_extractor._normalize_generic_item(
+        {
+            "Id": "06e69bb8-218d-449d-8864-5105c3f9960d",
+            "Title": "Material Handler - WKND shift",
+            "RequisitionNumber": "MATER002986",
+            "PostedDate": "2026-03-26T21:54:52.59Z",
+            "Locations": [
+                {
+                    "Address": {
+                        "City": "Grafton",
+                        "State": {"Code": "WI", "Name": "Wisconsin"},
+                    }
+                }
+            ],
+        },
+        "job_listing",
+        "https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/?q=&o=postedDateDesc",
+    )
+
+    assert record is not None
+    assert record["job_id"] == "06e69bb8-218d-449d-8864-5105c3f9960d"
+    assert record["url"] == (
+        "https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/OpportunityDetail"
+        "?opportunityId=06e69bb8-218d-449d-8864-5105c3f9960d"
+    )
+    assert record["apply_url"] == record["url"]
+
+
 def test_extract_listing_records_handles_main_entity_itemlist_manifest():
     manifest = _sources(
         json_ld=[
@@ -1105,6 +1189,17 @@ def test_is_meaningful_listing_record_keeps_numeric_title_with_price_or_image():
             }
         )
         is True
+    )
+
+
+def test_is_meaningful_listing_record_rejects_title_only_job_fragment():
+    assert (
+        listing_extractor._is_meaningful_listing_record(
+            {
+                "title": "FeaturedOpportunities",
+            }
+        )
+        is False
     )
 
 

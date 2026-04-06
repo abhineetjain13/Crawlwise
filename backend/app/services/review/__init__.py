@@ -102,7 +102,6 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
             ])),
             deprecated_fields=list(resolved_schema.deprecated_fields),
             source="review",
-            confidence=1.0,
             saved_at=resolved_schema.saved_at,
             stale=False,
         ),
@@ -117,7 +116,6 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
             "new_fields": updated_schema.new_fields,
             "deprecated_fields": updated_schema.deprecated_fields,
             "source": updated_schema.source,
-            "confidence": updated_schema.confidence,
             "saved_at": updated_schema.saved_at,
         },
         field_mapping=mapping,
@@ -186,13 +184,6 @@ def _review_bucket_rows(record: CrawlRecord) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-def _safe_int(value: object, default: int = 0) -> int:
-    try:
-        return int(value) if value is not None else default
-    except (ValueError, TypeError):
-        return default
-
-
 async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, mapping: dict[str, str]) -> None:
     if not mapping:
         return
@@ -223,9 +214,7 @@ async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, ma
                 remaining_rows.append(row)
                 continue
             existing = selected_values.get(output_field)
-            current_confidence = _safe_int(row.get("confidence_score"), 0)
-            existing_confidence = _safe_int(existing.get("confidence_score"), 0) if existing else -1
-            if existing is None or current_confidence > existing_confidence:
+            if existing is None:
                 selected_values[output_field] = row
 
         if not selected_values and len(remaining_rows) == len(review_bucket):

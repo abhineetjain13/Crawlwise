@@ -165,3 +165,30 @@ async def test_reset_application_data_ignores_sqlite_vacuum_failures(
     assert remaining_runs == 0
     assert remaining_records == 0
     assert result["knowledge_base_reset"] is True
+
+
+@pytest.mark.asyncio
+async def test_reset_application_data_does_not_create_missing_legacy_artifacts_dir(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = tmp_path / "backend" / "artifacts"
+    cookie_dir = tmp_path / "backend" / "cookie_store"
+    legacy_artifacts_dir = tmp_path / "backend" / "backend" / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    cookie_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr("app.services.dashboard_service.settings.artifacts_dir", artifacts_dir)
+    monkeypatch.setattr("app.services.dashboard_service.settings.cookie_store_dir", cookie_dir)
+    monkeypatch.setattr("app.services.dashboard_service.PROJECT_ROOT", tmp_path)
+
+    async def _noop_reset_learned_state() -> None:
+        return None
+
+    monkeypatch.setattr("app.services.dashboard_service.reset_learned_state", _noop_reset_learned_state)
+
+    result = await dashboard_service.reset_application_data(db_session)
+
+    assert result["legacy_artifacts_removed"] == 0
+    assert not legacy_artifacts_dir.exists()

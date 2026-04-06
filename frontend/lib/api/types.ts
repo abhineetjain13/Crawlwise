@@ -92,7 +92,6 @@ export type CrawlRecord = {
   review_bucket?: Array<{
     key: string;
     value: unknown;
-    confidence_score: number;
     source: string;
   }>;
   provenance_available?: boolean;
@@ -208,23 +207,6 @@ export type SelectorSuggestion = {
 
 export type SelectorSuggestResponse = {
   suggestions: Record<string, SelectorSuggestion[]>;
-};
-
-export type SiteMemoryPayload = {
-  fields: string[];
-  selectors: Record<string, SelectorSuggestion[]>;
-  selector_suggestions: Record<string, SelectorSuggestion[]>;
-  source_mappings: Record<string, string>;
-  llm_columns: Record<string, unknown>;
-  acquisition: Record<string, unknown>;
-};
-
-export type SiteMemoryRecord = {
-  domain: string;
-  payload: SiteMemoryPayload;
-  last_crawl_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
 };
 
 export type LlmConfigRecord = {

@@ -474,7 +474,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             ) : null}
 
             {outputTab === "markdown" ? (
-              <Card className="relative overflow-hidden">
+              <div className="relative">
                 <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
                   <Button
                     variant="ghost"
@@ -487,15 +487,27 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   </Button>
                 </div>
                 {markdownQuery.isLoading && !markdown ? (
-                  <div className="space-y-2 p-4">
+                  <div className="space-y-2 rounded-[10px] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
                     {Array.from({ length: 8 }, (_, index) => (
                       <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]" />
                     ))}
                   </div>
                 ) : markdown ? (
-                  <div className="max-h-[72vh] overflow-y-auto px-6 pb-8 pt-14">
+                  <div className="max-h-[72vh] overflow-y-auto rounded-[10px] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
                     <article className="markdown-document max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          a: ({ node: _node, ...props }) =>
+                            props.href && isSafeHref(props.href) ? (
+                              <a {...props} target="_blank" rel="noopener noreferrer" />
+                            ) : (
+                              <span>{props.children}</span>
+                            ),
+                        }}
+                      >
+                        {markdown}
+                      </ReactMarkdown>
                     </article>
                   </div>
                 ) : (
@@ -503,7 +515,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     No markdown is available for this run.
                   </div>
                 )}
-              </Card>
+              </div>
             ) : null}
 
             {outputTab === "logs" ? <LogTerminal logs={logs} viewportRef={logViewportRef} /> : null}

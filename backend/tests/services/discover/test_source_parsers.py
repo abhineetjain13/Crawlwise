@@ -179,3 +179,61 @@ def test_parse_page_sources_hydrated_state_from_react_create_element_props():
     """
     page_sources = parse_page_sources(html)
     assert page_sources["hydrated_states"][0]["searchStore"]["works"][0]["title"] == "Book A"
+
+
+def test_parse_page_sources_react_create_element_props_stops_at_current_call():
+    html = """
+    <html><body>
+    <script>
+    ReactDOM.hydrate(
+      React.createElement(App, {
+        "searchStore": {
+          "works": [
+            {"title": "Book A", "meta": {"pages": 120}}
+          ]
+        }
+      }),
+      document.getElementById("root")
+    );
+    React.createElement(Footer, {"footer": true});
+    </script>
+    </body></html>
+    """
+    page_sources = parse_page_sources(html)
+    assert len(page_sources["hydrated_states"]) == 1
+    assert page_sources["hydrated_states"][0]["searchStore"]["works"][0]["title"] == "Book A"
+
+
+def test_parse_page_sources_react_create_element_props_preserves_single_quoted_commas():
+    html = """
+    <html><body>
+    <script>
+    ReactDOM.hydrate(
+      React.createElement(App, {"title": "Widget", "meta": {"ok": true}}, 'Widget, Deluxe'),
+      document.getElementById("root")
+    );
+    </script>
+    </body></html>
+    """
+    page_sources = parse_page_sources(html)
+    assert page_sources["hydrated_states"][0]["title"] == "Widget"
+
+
+def test_parse_page_sources_react_create_element_props_handles_nested_template_expression_braces():
+    html = """
+    <html><body>
+    <script>
+    ReactDOM.hydrate(
+      React.createElement(
+        App,
+        {"title": "Widget"},
+        `price-${formatPrice({ amount: 10, currency: { code: "USD" } })}`,
+        document.body
+      ),
+      document.getElementById("root")
+    );
+    </script>
+    </body></html>
+    """
+    page_sources = parse_page_sources(html)
+    assert page_sources["hydrated_states"][0]["title"] == "Widget"

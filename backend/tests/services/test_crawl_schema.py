@@ -18,7 +18,6 @@ def test_crawl_record_response_exposes_review_bucket_and_hides_manifest_trace():
                 {
                     "key": "wire_gauge",
                     "value": "26 AWG",
-                    "confidence_score": 9,
                     "source": "semantic_spec",
                 }
             ],
@@ -41,7 +40,6 @@ def test_crawl_record_response_exposes_review_bucket_and_hides_manifest_trace():
 
     assert payload.data == {"title": "Example Product"}
     assert payload.review_bucket[0].key == "wire_gauge"
-    assert payload.review_bucket[0].confidence_score == 9
     assert payload.provenance_available is True
     assert "manifest_trace" not in payload.source_trace
     assert payload.source_trace["candidates"]["title"][0]["value"] == "Example Product"
@@ -57,8 +55,8 @@ def test_crawl_record_response_dedupes_review_bucket_case_only_variants():
         "raw_data": {},
         "discovered_data": {
             "review_bucket": [
-                {"key": "brand_family", "value": "Supelco", "confidence_score": 8, "source": "next_data"},
-                {"key": "brand_family", "value": "SUPELCO", "confidence_score": 7, "source": "json_ld"},
+                {"key": "brand_family", "value": "Supelco", "source": "next_data"},
+                {"key": "brand_family", "value": "SUPELCO", "source": "json_ld"},
             ],
         },
         "source_trace": {},

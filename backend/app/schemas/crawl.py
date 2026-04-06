@@ -157,7 +157,6 @@ class LLMCommitResponse(FieldCommitResponse):
 class UnverifiedAttribute(BaseModel):
     key: str
     value: Any
-    confidence_score: int = Field(ge=1, le=10)
     source: str
 
 
@@ -335,7 +334,6 @@ def _normalize_review_bucket(value: object, *, fallback: object | None = None) -
             normalized = _normalize_review_bucket_row({
                 "key": field_name,
                 "value": field_value,
-                "confidence_score": 7 if key == "specifications" else 6,
                 "source": key,
             })
             if normalized is None:
@@ -357,16 +355,10 @@ def _normalize_review_bucket_row(value: object) -> UnverifiedAttribute | None:
     raw_value = value.get("value")
     if raw_value in (None, "", [], {}):
         return None
-    raw_confidence = value.get("confidence_score", value.get("confidence", 5))
-    try:
-        confidence_score = int(raw_confidence)
-    except (TypeError, ValueError):
-        confidence_score = 5
     source = str(value.get("source") or "review_bucket").strip() or "review_bucket"
     return UnverifiedAttribute(
         key=key,
         value=raw_value,
-        confidence_score=max(1, min(10, confidence_score)),
         source=source,
     )
 
