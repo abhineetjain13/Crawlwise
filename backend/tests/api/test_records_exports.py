@@ -151,7 +151,7 @@ async def test_export_csv_includes_all_rows_and_paging_headers(db_session, test_
 
 
 @pytest.mark.asyncio
-async def test_export_markdown_includes_sections_details_and_headers(db_session, test_user):
+async def test_export_markdown_includes_clean_sections_fields_and_headers(db_session, test_user):
     run = CrawlRun(
         user_id=test_user.id,
         run_type="crawl",
@@ -191,14 +191,14 @@ async def test_export_markdown_includes_sections_details_and_headers(db_session,
     payload = await _read_streaming_body(response)
 
     assert "# Sylan 2 Shoe Men's" in payload
-    assert "Source URL: https://example.com/item-1" in payload
+    assert "Source: <https://example.com/item-1>" in payload
     assert "## Description" in payload
     assert "- Stable ride" in payload
     assert "## Materials and care" in payload
-    assert "## Output Fields" in payload
-    assert "- Price: $180" in payload
-    assert "## Details" in payload
-    assert "- Weight: 310 g" in payload
+    assert "## Fields" in payload
+    assert "- **Price:** $180" in payload
+    assert "## Specifications" in payload
+    assert "- **Weight:** 310 g" in payload
     assert response.headers[EXPORT_PAGING_HEADER] == "1"
     assert response.headers[EXPORT_TOTAL_HEADER] == "1"
     assert response.headers[EXPORT_PARTIAL_HEADER] == "false"

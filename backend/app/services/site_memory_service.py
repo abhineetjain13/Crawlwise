@@ -14,6 +14,30 @@ from app.services.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
 _SURFACE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
+_INTERNAL_FIELD_NAMES = frozenset({
+    "candidate",
+    "candidates",
+    "css_selector",
+    "field_name",
+    "manifest_trace",
+    "regex",
+    "sample_value",
+    "selector",
+    "selector_suggestions",
+    "source",
+    "source_trace",
+    "status",
+    "value",
+    "xpath",
+})
+_INTERNAL_FIELD_PREFIXES = (
+    "css_",
+    "llm_",
+    "regex_",
+    "selector_",
+    "source_",
+    "xpath_",
+)
 
 
 def _normalize_surface_key(value: object) -> str:
@@ -21,6 +45,15 @@ def _normalize_surface_key(value: object) -> str:
     if not normalized or not _SURFACE_KEY_RE.match(normalized):
         return ""
     return normalized
+
+
+def is_public_memory_field_name(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized or not _SURFACE_KEY_RE.match(normalized):
+        return False
+    if normalized in _INTERNAL_FIELD_NAMES:
+        return False
+    return not any(normalized.startswith(prefix) for prefix in _INTERNAL_FIELD_PREFIXES)
 
 
 def _empty_payload() -> dict:
@@ -40,7 +73,7 @@ def _normalize_fields(fields: list[str] | None) -> list[str]:
     seen: set[str] = set()
     for field in fields or []:
         value = str(field or "").strip().lower()
-        if not value or value in seen:
+        if not is_public_memory_field_name(value) or value in seen:
             continue
         normalized.append(value)
         seen.add(value)
@@ -122,7 +155,7 @@ def _normalize_selector_map(value: object) -> dict[str, list[dict]]:
     normalized: dict[str, list[dict]] = {}
     for field_name, rows in selectors.items():
         normalized_field = str(field_name or "").strip().lower()
-        if not normalized_field:
+        if not is_public_memory_field_name(normalized_field):
             continue
         selector_rows = _normalize_selector_rows(rows if isinstance(rows, list) else [])
         if selector_rows:
@@ -157,12 +190,12 @@ def _normalize_payload(payload: dict | None) -> dict:
         "source_mappings": {
             str(field_name or "").strip().lower(): str(source or "").strip()
             for field_name, source in source_mappings.items()
-            if str(field_name or "").strip() and str(source or "").strip()
+            if is_public_memory_field_name(field_name) and str(source or "").strip()
         },
         "llm_columns": {
             str(field_name or "").strip().lower(): value
             for field_name, value in llm_columns.items()
-            if str(field_name or "").strip()
+            if is_public_memory_field_name(field_name)
         },
         "acquisition": {
             str(key or "").strip(): deepcopy(value)
@@ -197,7 +230,10 @@ def _is_missing_site_memory_table(exc: OperationalError) -> bool:
 async def list_memory(session: AsyncSession) -> list[SiteMemory]:
     try:
         result = await session.execute(select(SiteMemory).order_by(SiteMemory.updated_at.desc(), SiteMemory.domain.asc()))
-        return list(result.scalars().all())
+        rows = list(result.scalars().all())
+        for row in rows:
+            row.payload = _normalize_payload(row.payload)
+        return rows
     except OperationalError as exc:
         if _is_missing_site_memory_table(exc):
             logger.warning("site_memory table missing; returning empty list")
@@ -210,7 +246,10 @@ async def get_memory(session: AsyncSession, domain: str) -> SiteMemory | None:
     if not normalized_domain:
         return None
     try:
-        return await session.get(SiteMemory, normalized_domain)
+        memory = await session.get(SiteMemory, normalized_domain)
+        if memory is not None:
+            memory.payload = _normalize_payload(memory.payload)
+        return memory
     except OperationalError as exc:
         if _is_missing_site_memory_table(exc):
             logger.warning("site_memory table missing; returning no memory for %s", normalized_domain)

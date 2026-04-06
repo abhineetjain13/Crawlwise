@@ -142,6 +142,69 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   throw lastError ?? new ApiError("Request failed", 500, "");
 }
 
+async function requestText(path: string, init?: RequestInit): Promise<string> {
+  const isFormData = init?.body instanceof FormData;
+  const maxAttempts = 3;
+  const candidateBaseUrls = getApiBaseUrlCandidates();
+  const accessToken = readAccessToken();
+  let lastError: ApiError | null = null;
+  let lastFetchError: Error | null = null;
+
+  for (const baseUrl of candidateBaseUrls) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}${path}`, {
+          ...init,
+          cache: "no-store",
+          credentials: "include",
+          headers: isFormData
+            ? {
+                ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+                ...(init?.headers ?? {}),
+              }
+            : {
+                ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+                ...(init?.headers ?? {}),
+              },
+        });
+      } catch (error) {
+        lastFetchError = error instanceof Error ? error : new Error("Failed to reach API.");
+        if (attempt === maxAttempts) {
+          break;
+        }
+        await delay(200 * 2 ** (attempt - 1));
+        continue;
+      }
+
+      if (response.ok) {
+        resolvedBaseUrl = baseUrl;
+        return await response.text();
+      }
+
+      const body = await readErrorBody(response);
+      const error = new ApiError(body || response.statusText || "Request failed", response.status, body);
+      lastError = error;
+      if (response.status === 401) {
+        storeAccessToken(null);
+      }
+      if (!error.isRetryable || attempt === maxAttempts) {
+        break;
+      }
+
+      await delay(200 * 2 ** (attempt - 1));
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+  if (lastFetchError) {
+    throw new Error(`Failed to reach backend API. Tried: ${candidateBaseUrls.join(", ")}`);
+  }
+  throw new ApiError("Request failed", 500, "");
+}
+
 export function storeAccessToken(token: string | null | undefined) {
   if (typeof window === "undefined") {
     return;
@@ -162,6 +225,7 @@ function readAccessToken() {
 
 export const apiClient = {
   get: <T,>(path: string) => request<T>(path),
+  getText: (path: string) => requestText(path),
   post: <T,>(path: string, body: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
   postForm: <T,>(path: string, body: FormData) =>

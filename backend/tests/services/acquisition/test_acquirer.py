@@ -204,7 +204,7 @@ async def test_acquire_html_auto_mode_keeps_curl_when_structured_listings_are_ex
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://example.com/products/widget", advanced_mode="auto")
+            result = await acquire(1, "https://example.com/products/widget", traversal_mode="auto")
 
     assert result.method == "curl_cffi"
     assert result.diagnostics["js_shell_overridden"] == "structured_data_found"
@@ -212,8 +212,8 @@ async def test_acquire_html_auto_mode_keeps_curl_when_structured_listings_are_ex
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_advanced_mode_tries_curl_then_playwright():
-    """Advanced mode tries curl_cffi first, then escalates to Playwright."""
+async def test_acquire_html_traversal_mode_tries_curl_then_playwright():
+    """Traversal mode tries curl_cffi first, then escalates to Playwright."""
     curl_html = "<html><body>" + "x" * 600 + "</body></html>"
     playwright_html = "<html><body>" + "y" * 600 + "</body></html>"
 
@@ -230,9 +230,9 @@ async def test_acquire_html_advanced_mode_tries_curl_then_playwright():
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_settings.artifacts_dir = Path(tmpdir)
             result_html, method, path, payloads = await acquire_html(
-                1, "https://example.com/spa", advanced_mode="scroll"
+                1, "https://example.com/spa", traversal_mode="scroll"
             )
-    # Playwright is preferred when advanced_mode is set, even though curl worked
+    # Playwright is preferred when traversal mode is set, even though curl worked
     assert method == "playwright"
 
 
@@ -260,14 +260,14 @@ async def test_acquire_html_passes_max_scrolls_to_playwright():
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_settings.artifacts_dir = Path(tmpdir)
-            await acquire_html(1, "https://example.com/spa", advanced_mode="scroll", max_scrolls=23)
+            await acquire_html(1, "https://example.com/spa", traversal_mode="scroll", max_scrolls=23)
 
     assert fetch_rendered_html_mock.await_args.kwargs["max_scrolls"] == 23
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_advanced_mode_falls_back_to_curl_on_playwright_failure():
-    """When advanced mode Playwright crashes, fall back to curl_cffi result."""
+async def test_acquire_html_traversal_mode_falls_back_to_curl_on_playwright_failure():
+    """When traversal mode Playwright crashes, fall back to curl_cffi result."""
     curl_html = "<html><body><h1>Product</h1>" + "x" * 600 + "</body></html>"
 
     from app.services.acquisition.http_client import HttpFetchResult
@@ -283,10 +283,43 @@ async def test_acquire_html_advanced_mode_falls_back_to_curl_on_playwright_failu
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_settings.artifacts_dir = Path(tmpdir)
             result_html, method, path, payloads = await acquire_html(
-                1, "https://example.com/spa", advanced_mode="auto"
+                1, "https://example.com/spa", traversal_mode="auto"
             )
     assert method == "curl_cffi"
     assert "Product" in result_html
+
+
+@pytest.mark.asyncio
+async def test_acquire_listing_page_does_not_escalate_from_text_only_card_count_heuristics():
+    html = """
+    <html><body>
+      <main>
+        <h1>Electronic listings</h1>
+        <p>Browse thousands of seller listings with grading, shipping, and release metadata.</p>
+        <p>This catalog is available without JavaScript and should not require browser escalation.</p>
+        <p>""" + ("Rich catalog copy " * 40) + """</p>
+      </main>
+    </body></html>
+    """
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=html, status_code=200, content_type="html"),
+        ),
+        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://example.com/listings", surface="listing")
+
+    assert result.method == "curl_cffi"
+    browser_mock.assert_not_awaited()
 
 
 def test_is_invalid_job_surface_page_detects_homepage_login_redirect():
@@ -559,7 +592,11 @@ def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
     diagnostics_path = _diagnostics_path(42, url)
     assert html_path.stem == network_path.stem
     assert html_path.stem == diagnostics_path.stem
-    assert html_path.stem.startswith("www-example-com__run-42__products-fancy-chair-color-oak-size-large__")
+    assert html_path.parent == tmp_path / "html"
+    assert network_path.parent == tmp_path / "network"
+    assert diagnostics_path.parent == tmp_path / "diagnostics"
+    assert html_path.stem.startswith("www-example-com-")
+    assert html_path.stem.endswith("-run_42")
 
 
 @pytest.mark.asyncio
@@ -586,6 +623,36 @@ async def test_acquire_uses_memory_prefer_stealth(monkeypatch, tmp_path):
         42,
         "https://example.com/products/widget",
         acquisition_profile={"prefer_stealth": True},
+    )
+
+    assert result.method == "curl_cffi"
+    assert captured == [False]
+
+
+@pytest.mark.asyncio
+async def test_acquire_enables_stealth_only_when_anti_bot_mode_is_enabled(monkeypatch, tmp_path):
+    captured: list[bool] = []
+
+    async def _fake_acquire_once(**kwargs):
+        captured.append(bool(kwargs.get("prefer_stealth")))
+        return type("Result", (), {
+            "html": "<html>ok</html>",
+            "json_data": None,
+            "content_type": "html",
+            "method": "curl_cffi",
+            "artifact_path": "",
+            "diagnostics_path": "",
+            "network_payloads": [],
+            "diagnostics": {},
+        })()
+
+    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    result = await acquire(
+        42,
+        "https://example.com/products/widget",
+        acquisition_profile={"prefer_stealth": True, "anti_bot_enabled": True},
     )
 
     assert result.method == "curl_cffi"

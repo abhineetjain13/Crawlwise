@@ -1,7 +1,7 @@
 # Tests for field normalizers.
 from __future__ import annotations
 
-from app.services.normalizers.field_normalizers import extract_currency_hint, normalize_value
+from app.services.normalizers import extract_currency_hint, normalize_value
 
 
 def test_normalize_price():

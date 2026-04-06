@@ -97,6 +97,7 @@ export const api = {
   },
   getRecordProvenance: (recordId: number) => apiClient.get<CrawlRecordProvenance>(`/api/records/${recordId}/provenance`),
   getCrawlLogs: (runId: number) => apiClient.get<CrawlLog[]>(`/api/crawls/${runId}/logs`),
+  getMarkdown: (runId: number) => apiClient.getText(`/api/crawls/${runId}/export/markdown`),
   exportCsv: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/csv`,
   exportJson: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/json`,
   exportMarkdown: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/markdown`,

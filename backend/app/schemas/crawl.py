@@ -15,7 +15,7 @@ class CrawlCreate(BaseModel):
     urls: list[str] = Field(default_factory=list)
     surface: str  # "ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail", "automobile_listing", "automobile_detail", "tabular"
     settings: dict = Field(default_factory=dict)
-    # settings can include: page_type, proxy_list, advanced_mode, max_pages, max_records, sleep_ms, csv_content
+    # settings can include UI controls such as advanced_enabled/advanced_mode; backend derives traversal_mode separately.
     additional_fields: list[str] = Field(default_factory=list)
 
 

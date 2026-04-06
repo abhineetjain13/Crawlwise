@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services.acquisition.acquirer import acquire
-from app.services.discover.service import discover_sources
+from app.services.discover import discover_sources
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import extract_candidates
 from app.services.semantic_detail_extractor import extract_semantic_detail_data

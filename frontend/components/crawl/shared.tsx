@@ -36,7 +36,7 @@ export type PendingDispatch = {
   additionalFields: string[];
   csvFile: File | null;
 };
-export type OutputTabKey = "table" | "json" | "intelligence" | "logs";
+export type OutputTabKey = "table" | "json" | "markdown" | "logs";
 
 export function parseRequestedCrawlTab(value: string | null): CrawlTab | null {
   return value === "category" || value === "pdp" ? value : null;
@@ -219,6 +219,7 @@ export function PreviewModal({
   const smartExtraction = Boolean(dispatch.settings.llm_enabled);
   const proxyEnabled = Boolean(dispatch.settings.proxy_enabled);
   const advancedMode = String(dispatch.settings.advanced_mode ?? "").trim();
+  const antiBotEnabled = Boolean(dispatch.settings.anti_bot_enabled);
 
   useEffect(() => {
     previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -290,6 +291,7 @@ export function PreviewModal({
           <PreviewRow label="Mode" value={dispatch.runType} />
           <PreviewRow label="Proxy" value={proxyEnabled ? `${proxyCount} configured` : "Inactive"} />
           <PreviewRow label="Smart Extraction" value={smartExtraction ? "On" : "Off"} />
+          <PreviewRow label="Anti-Bot Mode" value={antiBotEnabled ? "On" : "Off"} />
           <PreviewRow label="Advanced Mode" value={advancedMode || "Off"} />
           <PreviewRow label="Max Records" value={String(dispatch.settings.max_records)} />
           <PreviewRow label="Max Pages" value={String(dispatch.settings.max_pages)} />

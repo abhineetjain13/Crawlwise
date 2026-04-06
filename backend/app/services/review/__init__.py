@@ -14,7 +14,7 @@ from app.services.knowledge_base.store import (
     get_selector_defaults,
     save_domain_mapping,
 )
-from app.services.normalizers.field_normalizers import normalize_value
+from app.services.normalizers import normalize_value
 from app.services.pipeline_config import REVIEW_CONTAINER_KEYS
 from app.services.domain_utils import normalize_domain
 from app.services.schema_service import load_resolved_schema, persist_resolved_schema

@@ -133,3 +133,4 @@ def test_salary_range_regex_expands_currency_placeholders():
     assert "(?i:" not in SALARY_RANGE_REGEX
     assert re.search(SALARY_RANGE_REGEX, "¥120,000 - ¥140,000 / month")
     assert re.search(SALARY_RANGE_REGEX, "usd 80k to usd 100k")
+    assert re.search(SALARY_RANGE_REGEX, "C$120k - C$140k / year")

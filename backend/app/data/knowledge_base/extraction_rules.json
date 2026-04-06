@@ -179,7 +179,7 @@
     "script_noise_pattern": "\\b(?:imageloader|document\\.getelementbyid|fallback-image)\\b",
     "promo_only_title_pattern": "^(?:[-–—]?\\s*)?(?:\\d{1,3}%\\s*(?:off)?|sale|new(?:\\s+in)?|view\\s*\\d+|best seller|top seller)\\s*$"
   },
-  "intelligence_cleanup": {
+  "discovered_field_cleanup": {
     "field_noise_tokens": [
       "review",
       "reviews",
@@ -476,6 +476,27 @@
     ],
     "job_error_page_headings": [
       "sorry. the page you requested could not be found."
+    ]
+  },
+  "listing_noise_filters": {
+    "navigation_title_hints": [
+      "home", "login", "log in", "sign in", "sign up", "register",
+      "account", "contact", "contact us", "help", "support",
+      "read more", "learn more", "view more", "view all", "shop all",
+      "next", "previous", "prev", "back", "checkout", "cart", "basket"
+    ],
+    "merchandising_title_prefixes": [
+      "shop ", "discover ", "explore ", "find your ", "save up ", "enjoy ", "get "
+    ],
+    "editorial_title_patterns": [
+      "\\bsponsored\\b",
+      "\\byou are seeing this ad\\b",
+      "\\bpromoted\\b",
+      "\\btrending now\\b"
+    ],
+    "alt_text_title_pattern": "\\b(?:worn|wearing|shown|shot|mid-shot|close-up|detail(?:ed)? view|view of|front view|back view)\\b",
+    "weak_listing_titles": [
+      "new", "sale", "featured", "best seller", "top seller", "top rated"
     ]
   }
 }

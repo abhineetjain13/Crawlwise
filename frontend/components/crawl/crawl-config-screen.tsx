@@ -52,6 +52,7 @@ export function CrawlConfigScreen({
   const [smartExtraction, setSmartExtraction] = useState(false);
   const [advancedEnabled, setAdvancedEnabled] = useState(false);
   const [advancedMode, setAdvancedMode] = useState<AdvancedCrawlMode>("auto");
+  const [antiBotEnabled, setAntiBotEnabled] = useState(false);
   const [requestDelay, setRequestDelay] = useState(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS));
   const [maxRecords, setMaxRecords] = useState(String(CRAWL_DEFAULTS.MAX_RECORDS));
   const [maxPages, setMaxPages] = useState(String(CRAWL_DEFAULTS.MAX_PAGES));
@@ -169,6 +170,7 @@ export function CrawlConfigScreen({
       smart_extraction: smartExtraction,
       advanced_enabled: advancedEnabled,
       advanced_mode: advancedMode,
+      anti_bot_enabled: antiBotEnabled,
       request_delay_ms: clampNumber(
         requestDelay,
         CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
@@ -199,6 +201,7 @@ export function CrawlConfigScreen({
       requestDelay,
       smartExtraction,
       targetUrl,
+      antiBotEnabled,
     ],
   );
 
@@ -299,47 +302,57 @@ export function CrawlConfigScreen({
           <Card className="space-y-5">
             <SectionHeader
               title="Target URL"
-              description="Choose the crawl surface, set your entry point, and define which fields should be captured."
-              action={
-                <Button
-                  variant="accent"
-                  type="button"
-                  disabled={!canPreview(config)}
-                  onClick={() => {
-                    try {
-                      setPendingDispatch(buildDispatch(config));
-                      setPreviewOpen(true);
-                      setConfigError("");
-                    } catch (error) {
-                      setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
-                    }
-                  }}
-                >
-                  Review Before Running
-                </Button>
-              }
+              description="Choose the crawl type, set your entry point, and define which fields should be captured."
             />
-            {crawlTab === "category" ? (
-              <SegmentedMode
-                value={categoryMode}
-                onChange={(value) => setCategoryMode(value as CategoryMode)}
-                options={[
-                  { value: "single", label: "Single" },
-                  { value: "sitemap", label: "Sitemap" },
-                  { value: "bulk", label: "Bulk" },
-                ]}
-              />
-            ) : (
-              <SegmentedMode
-                value={pdpMode}
-                onChange={(value) => setPdpMode(value as PdpMode)}
-                options={[
-                  { value: "single", label: "Single" },
-                  { value: "batch", label: "Batch" },
-                  { value: "csv", label: "CSV Upload" },
-                ]}
-              />
-            )}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <TabBar
+                  value={crawlTab}
+                  onChange={(value) => setCrawlTab(value as CrawlTab)}
+                  options={[
+                    { value: "category", label: "Category Crawl" },
+                    { value: "pdp", label: "PDP Crawl" },
+                  ]}
+                />
+                {crawlTab === "category" ? (
+                  <SegmentedMode
+                    value={categoryMode}
+                    onChange={(value) => setCategoryMode(value as CategoryMode)}
+                    options={[
+                      { value: "single", label: "Single" },
+                      { value: "sitemap", label: "Sitemap" },
+                      { value: "bulk", label: "Bulk" },
+                    ]}
+                  />
+                ) : (
+                  <SegmentedMode
+                    value={pdpMode}
+                    onChange={(value) => setPdpMode(value as PdpMode)}
+                    options={[
+                      { value: "single", label: "Single" },
+                      { value: "batch", label: "Batch" },
+                      { value: "csv", label: "CSV Upload" },
+                    ]}
+                  />
+                )}
+              </div>
+              <Button
+                variant="accent"
+                type="button"
+                disabled={!canPreview(config)}
+                onClick={() => {
+                  try {
+                    setPendingDispatch(buildDispatch(config));
+                    setPreviewOpen(true);
+                    setConfigError("");
+                  } catch (error) {
+                    setConfigError(error instanceof Error ? error.message : "Unable to prepare crawl.");
+                  }
+                }}
+              >
+                Review Before Running
+              </Button>
+            </div>
 
             {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
               <label className="grid gap-1.5">
@@ -431,20 +444,8 @@ export function CrawlConfigScreen({
 
         <div className="space-y-4 xl:sticky xl:top-[68px] xl:self-start">
           <Card className="space-y-4">
-            <SectionHeader title="Run Settings" description="Set crawl behavior, extraction assist, and network controls." />
+            <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
             <div className="space-y-4">
-              <div className="space-y-1.5">
-                <div className="label-caps">Crawl Surface</div>
-                <TabBar
-                  value={crawlTab}
-                  onChange={(value) => setCrawlTab(value as CrawlTab)}
-                  options={[
-                    { value: "category", label: "Category Crawl" },
-                    { value: "pdp", label: "PDP Crawl" },
-                  ]}
-                />
-              </div>
-
               <div className="space-y-2">
                 <SettingSection
                   label="Smart Extraction"
@@ -517,6 +518,13 @@ export function CrawlConfigScreen({
                   </div>
                 </SettingSection>
                 <SettingSection
+                  label="Anti-Bot Browser Mode"
+                  description="Opt in to slower challenge handling and stealth logic for protected sites."
+                  icon={<Shield className="size-4" />}
+                  checked={antiBotEnabled}
+                  onChange={setAntiBotEnabled}
+                />
+                <SettingSection
                   label="Proxy"
                   description="Use a proxy pool."
                   icon={<Shield className="size-4" />}
@@ -561,6 +569,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     llm_enabled: config.smart_extraction,
     advanced_enabled: config.advanced_enabled,
     advanced_mode: config.advanced_enabled ? config.advanced_mode : null,
+    anti_bot_enabled: config.anti_bot_enabled,
     sleep_ms: config.request_delay_ms,
     max_records: config.max_records,
     max_pages: config.max_pages,

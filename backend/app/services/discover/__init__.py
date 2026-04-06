@@ -157,6 +157,8 @@ def _extract_hydrated_states(soup: BeautifulSoup) -> tuple[list[dict | list], se
             parsed = _parse_json_blob(candidate_text) if script_type == "application/json" else None
             if parsed is None:
                 parsed = _parse_hydrated_assignment(candidate_text)
+            if parsed is None:
+                parsed = _parse_react_create_element_props(candidate_text)
             if parsed is not None:
                 parsed_blobs.append(parsed)
 
@@ -355,6 +357,60 @@ def _parse_hydrated_assignment(text: str) -> dict | list | None:
         parsed = _parse_json_blob(candidate)
         if parsed is not None:
             return parsed
+    return None
+
+
+def _parse_react_create_element_props(text: str) -> dict | list | None:
+    markers = (
+        "ReactDOM.hydrate(React.createElement(",
+        "ReactDOM.render(React.createElement(",
+        "React.createElement(",
+    )
+    for marker in markers:
+        search_from = 0
+        while True:
+            start = text.find(marker, search_from)
+            if start == -1:
+                break
+            props_offset = _react_create_element_props_offset(text, start + len(marker))
+            if props_offset is not None:
+                candidate = _extract_assigned_json(text, props_offset)
+                parsed = _parse_json_blob(candidate or "")
+                if parsed is not None:
+                    return parsed
+            search_from = start + len(marker)
+    return None
+
+
+def _react_create_element_props_offset(text: str, offset: int) -> int | None:
+    index = offset
+    depth = 0
+    in_string = False
+    escape = False
+    quote_char = ""
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+        else:
+            if char in {'"', "'"}:
+                in_string = True
+                quote_char = char
+            elif char in "([{":
+                depth += 1
+            elif char in ")]}":
+                depth = max(0, depth - 1)
+            elif char == "," and depth == 0:
+                index += 1
+                while index < len(text) and text[index].isspace():
+                    index += 1
+                return index if index < len(text) and text[index] in "{[" else None
+        index += 1
     return None
 
 

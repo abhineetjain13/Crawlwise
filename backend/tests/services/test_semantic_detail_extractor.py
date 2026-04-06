@@ -90,3 +90,51 @@ def test_extract_semantic_aggregates_do_not_emit_features_specs_when_features_an
     assert "features" in result["aggregates"]
     assert "specifications" in result["aggregates"]
     assert "features_specs" not in result["aggregates"]
+
+
+def test_extract_semantic_detail_data_strips_inline_style_noise_from_sections():
+    html = """
+    <html>
+      <body>
+        <section>
+          <h2>Overview</h2>
+          <style>
+            .css-25meqj-description{max-width:75ch;margin:16px 0 0 0;}
+          </style>
+          <p>Available for you to view and test drive.</p>
+        </section>
+      </body>
+    </html>
+    """
+
+    result = extract_semantic_detail_data(html)
+
+    assert result["sections"]["summary"] == "Available for you to view and test drive."
+
+
+def test_extract_semantic_detail_data_skips_contact_and_share_noise_sections():
+    html = """
+    <html>
+      <body>
+        <section>
+          <h2>Contact Bolton Citroen</h2>
+          <p>Click to reveal phone number</p>
+          <p>This listing is powered by our dealer network partner, MOTORS.</p>
+        </section>
+        <section>
+          <h2>Share</h2>
+          <p>Share this ad on Facebook</p>
+        </section>
+        <section>
+          <h2>Overview</h2>
+          <p>One owner vehicle with full service history.</p>
+        </section>
+      </body>
+    </html>
+    """
+
+    result = extract_semantic_detail_data(html)
+
+    assert "contact_bolton_citroen" not in result["sections"]
+    assert "share" not in result["sections"]
+    assert result["sections"]["summary"] == "One owner vehicle with full service history."

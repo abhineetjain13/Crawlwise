@@ -37,9 +37,8 @@ RECORD_NOT_FOUND_RESPONSE = {
 RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
-REPO_ROOT = Path(__file__).resolve().parents[3]
-INTELLIGENCE_VIEW_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent / "data" / "knowledge_base" / "intelligence-view.json"
+MARKDOWN_VIEW_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "knowledge_base" / "markdown-view.json"
 )
 
 
@@ -291,18 +290,30 @@ def _record_to_markdown(row: CrawlRecord) -> str:
     title = _stringify_markdown_value(data.get("title")) or row.source_url or f"Record {row.id}"
     lines: list[str] = [f"# {title}"]
     if row.source_url:
-        lines.extend(["", f"Source URL: {row.source_url}"])
+        lines.extend(["", f"Source: <{row.source_url}>"])
+    record_url = _stringify_markdown_value(data.get("url"))
+    if record_url and record_url != row.source_url:
+        lines.append(f"Record URL: <{record_url}>")
 
     rendered_section_keys: set[str] = set()
+    scalar_rows: list[tuple[str, object]] = []
     for field_name, raw_value in data.items():
-        if str(field_name).strip().lower() == "title":
+        normalized_field = str(field_name).strip().lower()
+        if normalized_field in {"title", "url"}:
             continue
         rendered_value = _stringify_markdown_value(raw_value)
         if not rendered_value:
             continue
         if _is_markdown_long_form(field_name, rendered_value):
             lines.extend(["", f"## {_humanize_field_name(field_name)}", "", _render_markdown_block(rendered_value)])
-            rendered_section_keys.add(str(field_name).strip().lower())
+            rendered_section_keys.add(normalized_field)
+            continue
+        scalar_rows.append((_humanize_field_name(field_name), raw_value))
+
+    if scalar_rows:
+        lines.extend(["", "## Fields", ""])
+        for label, value in scalar_rows:
+            lines.append(f"- **{label}:** {_render_markdown_inline(value)}")
 
     for field_name, raw_value in semantic_sections.items():
         normalized_field = str(field_name).strip().lower()
@@ -312,28 +323,17 @@ def _record_to_markdown(row: CrawlRecord) -> str:
         if not rendered_value:
             continue
         lines.extend(["", f"## {_humanize_field_name(field_name)}", "", _render_markdown_block(rendered_value)])
+        rendered_section_keys.add(normalized_field)
 
-    scalar_rows: list[tuple[str, str]] = []
-    for field_name, raw_value in data.items():
-        normalized_field = str(field_name).strip().lower()
-        if normalized_field == "title":
-            continue
-        rendered_value = _stringify_markdown_value(raw_value)
-        if not rendered_value or normalized_field in rendered_section_keys:
-            continue
-        scalar_rows.append((_humanize_field_name(field_name), rendered_value))
-
-    if scalar_rows:
-        lines.extend(["", "## Output Fields", ""])
-        for label, value in scalar_rows:
-            lines.append(f"- {label}: {value}")
-
-    if semantic_specs:
-        lines.extend(["", "## Details", ""])
-        for field_name, raw_value in sorted(semantic_specs.items(), key=lambda item: _humanize_field_name(item[0]).lower()):
-            rendered_value = _stringify_markdown_value(raw_value)
-            if rendered_value:
-                lines.append(f"- {_humanize_field_name(field_name)}: {rendered_value}")
+    spec_rows = [
+        (_humanize_field_name(field_name), raw_value)
+        for field_name, raw_value in sorted(semantic_specs.items(), key=lambda item: _humanize_field_name(item[0]).lower())
+        if _stringify_markdown_value(raw_value)
+    ]
+    if spec_rows:
+        lines.extend(["", "## Specifications", ""])
+        for label, value in spec_rows:
+            lines.append(f"- **{label}:** {_render_markdown_inline(value)}")
 
     return "\n".join(lines).strip()
 
@@ -353,9 +353,25 @@ def _stringify_markdown_value(value: object) -> str:
 
 def _is_markdown_long_form(field_name: object, value: str) -> bool:
     normalized = str(field_name or "").strip().lower()
-    if normalized in _intelligence_long_form_fields():
+    if normalized in _markdown_long_form_fields():
         return True
     return "\n" in value or len(value) > 180
+
+
+def _render_markdown_inline(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = _stringify_markdown_value(value)
+        if re.fullmatch(r"https?://\S+", text):
+            return f"<{text}>"
+        return text
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return f"`{text}`"
 
 
 def _render_markdown_block(value: str) -> str:
@@ -383,9 +399,9 @@ def _humanize_field_name(value: object) -> str:
 
 
 @lru_cache(maxsize=1)
-def _intelligence_long_form_fields() -> frozenset[str]:
+def _markdown_long_form_fields() -> frozenset[str]:
     try:
-        payload = json.loads(INTELLIGENCE_VIEW_CONFIG_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(MARKDOWN_VIEW_CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return frozenset()
     rows = payload.get("long_form_fields") if isinstance(payload, dict) else []

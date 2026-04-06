@@ -283,6 +283,7 @@ export type CrawlConfig = {
   smart_extraction: boolean;
   advanced_enabled: boolean;
   advanced_mode: AdvancedCrawlMode;
+  anti_bot_enabled: boolean;
   request_delay_ms: number;
   max_records: number;
   max_pages: number;

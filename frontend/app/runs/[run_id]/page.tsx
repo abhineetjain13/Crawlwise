@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 /**
  * Legacy run detail route — redirects to the crawl studio which has
- * the full two-column view, intelligence tab, and review flow.
+ * the full two-column view, markdown tab, and review flow.
  */
 export default async function RunDetailRedirect({
   params,

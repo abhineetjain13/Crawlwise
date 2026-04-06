@@ -18,21 +18,26 @@ from app.services.pipeline_config import (
     CARD_SELECTORS_JOBS,
     COLLECTION_KEYS,
     FIELD_ALIASES,
+    LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_CATEGORY_PATH_MARKERS,
     LISTING_COLOR_ACTION_PREFIXES,
     LISTING_COLOR_ACTION_VALUES,
     LISTING_DETAIL_PATH_MARKERS,
+    LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_FACET_PATH_FRAGMENTS,
     LISTING_FACET_QUERY_KEYS,
     LISTING_FILTER_OPTION_KEYS,
     LISTING_HUB_PATH_SEGMENTS,
     LISTING_IMAGE_EXCLUDE_TOKENS,
     LISTING_JOB_SIGNAL_FIELDS,
+    LISTING_MERCHANDISING_TITLE_PREFIXES,
     LISTING_MINIMAL_VISUAL_FIELDS,
+    LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_PRODUCT_SIGNAL_FIELDS,
     LISTING_SWATCH_CONTAINER_SELECTORS,
     LISTING_WEAK_METADATA_FIELDS,
+    LISTING_WEAK_TITLES,
     MAX_JSON_RECURSION_DEPTH,
     NESTED_CATEGORY_KEYS,
     NESTED_CURRENCY_KEYS,
@@ -42,11 +47,13 @@ from app.services.pipeline_config import (
     NESTED_URL_KEYS,
     PAGE_URL_CURRENCY_HINTS,
 )
-from app.services.discover.service import DiscoveryManifest, discover_sources
+from app.services.discover import DiscoveryManifest, discover_sources
 from app.services.xpath_service import bs4_tag_to_xpath, simplify_xpath
 _EMPTY_VALUES = (None, "", [], {})
 _NUMERIC_ONLY_RE = re.compile(r"^\s*\(?\s*[\d,]+\s*\)?\s*$")
 _FILTER_COUNT_RE = re.compile(r"^\s*\(\s*\d[\d,]*\s*\)\s*$")
+
+_WEAK_LISTING_TITLES = LISTING_WEAK_TITLES
 
 
 def extract_listing_records(
@@ -109,6 +116,9 @@ def _extract_listing_records_single_page(
     max_records: int = 100,
     manifest: DiscoveryManifest | None = None,
 ) -> list[dict]:
+    if manifest is None:
+        manifest = discover_sources(html=html)
+
     candidate_sets: list[list[dict]] = []
 
     # --- Strategy 1: Structured data sources (from manifest) ---
@@ -148,6 +158,8 @@ def _extract_listing_records_single_page(
         if "commerce" in surface or "ecommerce" in surface
         else CARD_SELECTORS_JOBS
     )
+    if "commerce" in surface or "ecommerce" in surface:
+        selectors = [*selectors, "tr.shortcut_navigable", "tr[class*='listing']", "tr[class*='item']"]
 
     cards: list[Tag] = []
     used_selector = ""
@@ -248,6 +260,12 @@ def _merge_listing_candidate_sets(candidate_sets: list[list[dict]]) -> list[dict
         return merged_records
     if not merged_records:
         return positional_merges
+    if (
+        len(positional_merges) >= 2
+        and len(positional_merges) <= len(merged_records)
+        and _avg_public_field_count(positional_merges) > _avg_public_field_count(merged_records)
+    ):
+        return positional_merges
     if _listing_record_set_sort_key(positional_merges) >= _listing_record_set_sort_key(
         merged_records
     ):
@@ -261,7 +279,7 @@ def _merge_listing_candidate_sets_by_position(
     if len(candidate_sets) < 2:
         return []
     best_records: list[dict] = []
-    best_score: tuple[int, int, int, int, int, float, int] = (0, 0, 0, 0, 0, 0.0, 0)
+    best_score: tuple[int, int, int, int, int, float, int, int] = (0, 0, 0, 0, 0, 0.0, 0, 0)
     for left_index, left in enumerate(candidate_sets):
         for right in candidate_sets[left_index + 1 :]:
             merged = _merge_listing_pair_by_position(left, right)
@@ -1347,8 +1365,59 @@ def _product_search_dimensions(attributes: list[object]) -> str:
     return " | ".join(dimension_rows)
 
 
+def _is_noise_title(title: str) -> bool:
+    """Check if a title is likely navigation, editorial, or UI noise."""
+    t = str(title).strip().lower()
+    if not t:
+        return True
+        
+    # 1. Navigation hints (Home, Login, etc.)
+    if t in LISTING_NAVIGATION_TITLE_HINTS:
+        return True
+        
+    # 2. Merchandising prefixes (Shop All, Discover, etc.)
+    if t.startswith(LISTING_MERCHANDISING_TITLE_PREFIXES):
+        return True
+        
+    # 3. Editorial/Ad patterns
+    if any(p.search(t) for p in LISTING_EDITORIAL_TITLE_PATTERNS):
+        return True
+        
+    # 4. Alt text patterns (Front View, Close-up, etc.)
+    if (
+        LISTING_ALT_TEXT_TITLE_PATTERN
+        and LISTING_ALT_TEXT_TITLE_PATTERN.search(t)
+    ):
+        return True
+        
+    # 5. Weak standalone titles
+    if t in _WEAK_LISTING_TITLES:
+        return True
+        
+    return False
+
+
+def _is_merchandising_record(record: dict) -> bool:
+    """Reject fragments that are clearly merchandising or navigation fragments."""
+    title = str(record.get("title") or "").strip()
+    if not title:
+        has_detail_url = bool(str(record.get("url") or "").strip())
+        has_visual = record.get("image_url") not in (None, "", [], {})
+        has_pricing = record.get("price") not in (None, "", [], {})
+        has_company = record.get("company") not in (None, "", [], {})
+        return not (has_detail_url and (has_visual or has_pricing or has_company))
+        
+    if _is_noise_title(title):
+        return True
+        
+    return False
+
+
 def _is_meaningful_listing_record(record: dict) -> bool:
     """Reject repeated nav/facet links that do not contain any item data."""
+    if _is_merchandising_record(record):
+        return False
+        
     public_fields = {
         key: value
         for key, value in record.items()
@@ -1513,43 +1582,152 @@ def _looks_like_detail_record_url(url_value: str) -> bool:
     return any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS)
 
 
+def _looks_like_navigation_or_action_title(title: str, url: str = "") -> bool:
+    lowered = (title or "").strip().lower()
+    if not lowered:
+        return True
+    if lowered in LISTING_NAVIGATION_TITLE_HINTS:
+        return True
+    if re.fullmatch(r"(?:next|previous|prev|back)(?:\s+\W+)?", lowered):
+        return True
+    if re.fullmatch(r"[a-z0-9.-]+\.(?:com|net|org|io|co|ai|in|uk)", lowered):
+        return True
+    lowered_url = url.lower().strip()
+    if lowered in {"login", "log in", "sign in"} and "/login" in lowered_url:
+        return True
+    return False
+
+
+def _looks_like_alt_text_title(title: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not normalized:
+        return False
+    word_count = len(re.findall(r"[A-Za-z]{2,}", normalized))
+    if word_count >= 12 and LISTING_ALT_TEXT_TITLE_PATTERN and LISTING_ALT_TEXT_TITLE_PATTERN.search(normalized):
+        return True
+    if len(normalized) >= 95 and ("," in normalized or ";" in normalized):
+        return True
+    return False
+
+
+def _looks_like_editorial_or_taxonomy_title(title: str, url: str = "", price: str = "") -> bool:
+    lowered = title.lower().strip()
+    if not lowered:
+        return True
+    if any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS):
+        return True
+    if lowered.startswith(LISTING_MERCHANDISING_TITLE_PREFIXES) and not price:
+        return True
+    if re.search(r"\(\d+\)\s*$", title):  # Category headers with counts like (12)
+        return True
+    return False
+
+
+def _estimate_visible_item_count(soup: BeautifulSoup) -> int:
+    """Fast estimation of visible product items based on common patterns.
+    Used for browser escalation heuristic."""
+    # Count product cards by common selectors
+    card_selectors = (
+        "[class*='product-card']", "[class*='product-item']", 
+        "[class*='listing-card']", "[class*='result-item']",
+        "[data-component-type='s-search-result']",
+        "article[class*='product']", "li[class*='product']"
+    )
+    card_count = 0
+    for sel in card_selectors:
+        matches = soup.select(sel)
+        if len(matches) >= 3:
+            card_count = max(card_count, len(matches))
+    
+    # Also look for price-like blocks
+    price_count = len(soup.select("[class*='price'], [id*='price'], .amount"))
+    
+    return max(card_count, price_count // 2 if price_count > 0 else 0)
+
+
+def is_listing_like_record(record: dict) -> bool:
+    """Soft record-quality signal for choosing among candidate record sets."""
+    title = str(record.get("title") or "").strip()
+    url = str(record.get("url") or "").strip()
+    price = str(record.get("price") or "").strip()
+    image = str(record.get("image_url") or record.get("image") or "").strip()
+    salary = str(record.get("salary") or "").strip()
+    company = str(record.get("company") or "").strip()
+
+    if title and _looks_like_navigation_or_action_title(title, url):
+        return False
+    if title and _looks_like_alt_text_title(title):
+        return False
+    if title and _looks_like_editorial_or_taxonomy_title(title, url, price):
+        return False
+
+    evidence = 0
+    if title:
+        evidence += 1
+    if price or salary:
+        evidence += 2
+    if image:
+        evidence += 1
+    if company:
+        evidence += 1
+    if _looks_like_detail_record_url(url):
+        evidence += 2
+    elif url and not _looks_like_listing_hub_url(url):
+        evidence += 1
+
+    return evidence >= 2
+
+
+from dataclasses import dataclass
+
+@dataclass
+class RecordSetDiagnostics:
+    record_count: int = 0
+    unique_url_count: int = 0
+    strong_identity_count: int = 0
+    priced_count: int = 0
+    imaged_count: int = 0
+    detail_url_count: int = 0
+    avg_field_count: float = 0.0
+    source_bonus: int = 0
+
+
 def _listing_record_set_sort_key(
     records: list[dict],
-) -> tuple[int, int, int, int, int, float, int]:
-    detail_urls = sum(
+) -> tuple[int, int, int, int, int, float, int, int]:
+    diag = RecordSetDiagnostics()
+    diag.record_count = len(records)
+    diag.strong_identity_count = sum(1 for record in records if is_listing_like_record(record))
+    diag.detail_url_count = sum(
+        1 for record in records if _looks_like_detail_record_url(str(record.get("url") or ""))
+    )
+    diag.priced_count = sum(1 for record in records if record.get("price") not in _EMPTY_VALUES)
+    diag.imaged_count = sum(
         1
         for record in records
-        if _looks_like_detail_record_url(str(record.get("url") or ""))
+        if record.get("image_url") not in _EMPTY_VALUES or record.get("image") not in _EMPTY_VALUES
     )
-    priced = sum(
-        1 for record in records if record.get("price") not in (None, "", [], {})
-    )
-    salaried = sum(
-        1
-        for record in records
-        if record.get("salary") not in (None, "", [], {})
-        or record.get("company") not in (None, "", [], {})
-    )
-    reviewed = sum(
-        1 for record in records if record.get("rating") not in (None, "", [], {})
-    )
-    unique_urls = len(
+    diag.unique_url_count = len(
         {
             str(record.get("url") or "").strip()
             for record in records
             if str(record.get("url") or "").strip()
         }
     )
-    # Company names still count toward the job-oriented "salaried" signal. Keep the
-    # existing behavior and use record count as the final tiebreaker to break ties.
+    diag.avg_field_count = _avg_public_field_count(records)
+
+    if records and records[0].get("_source") == "listing_card" and diag.record_count >= 3:
+        diag.source_bonus = 1
+
     return (
-        priced,
-        salaried,
-        detail_urls,
-        reviewed,
-        unique_urls,
-        _avg_public_field_count(records),
-        len(records),
+        diag.priced_count,
+        diag.detail_url_count,
+        diag.imaged_count,
+        diag.strong_identity_count,
+        diag.unique_url_count,
+        diag.avg_field_count,
+        diag.source_bonus,
+        diag.record_count,
     )
 
 
@@ -1711,6 +1889,7 @@ def _extract_from_card(
 
     # Title: prefer itemprop, then class-based, then headings — skip price-like text
     title_selectors = [
+        ".item_description_title",
         "[itemprop='name']",
         ".product-title",
         ".job-title",
@@ -1734,6 +1913,10 @@ def _extract_from_card(
                 record["_xpath_title"] = simplify_xpath(bs4_tag_to_xpath(title_el))
                 record["_selector_title"] = sel
                 break
+    if "title" not in record and "job" not in surface:
+        inferred_title = _infer_listing_title_from_links(card)
+        if inferred_title:
+            record["title"] = inferred_title
 
     url = _best_card_link(card, page_url)
     if url:
@@ -1870,19 +2053,15 @@ def _normalize_listing_value(
         text = str(resolved or "").strip()
         if not text or any(token in text for token in ("[{", "{", "[")):
             return None
-        if (
-            text
-            and page_url
-            and not text.startswith(("http://", "https://", "/"))
-            and _looks_like_product_short_path(text)
-        ):
+        if text and page_url and not text.startswith(("http://", "https://", "/")):
             parsed = urlparse(page_url)
             origin = (
                 f"{parsed.scheme}://{parsed.netloc}/"
                 if parsed.scheme and parsed.netloc
                 else page_url
             )
-            return urljoin(origin, text)
+            if "/" not in text or _looks_like_product_short_path(text):
+                return urljoin(origin, text)
         return urljoin(page_url, text) if text and page_url else text or None
     if canonical == "image_url":
         images = _extract_image_candidates(value, page_url=page_url)
@@ -2175,6 +2354,26 @@ def _infer_job_title_from_links(card: Tag) -> str:
             continue
         if _looks_like_detail_record_url(href):
             return candidate
+    return ""
+
+
+def _infer_listing_title_from_links(card: Tag) -> str:
+    for link_el in card.select("a[href]"):
+        candidate = link_el.get_text(" ", strip=True)
+        if not candidate or len(candidate) < 3:
+            continue
+        if _PRICE_LIKE_RE.match(candidate):
+            continue
+        if _looks_like_navigation_or_action_title(candidate, str(link_el.get("href") or "")):
+            continue
+        return candidate
+    for link_el in card.select("a[aria-label]"):
+        candidate = str(link_el.get("aria-label") or "").strip()
+        if not candidate or len(candidate) < 3:
+            continue
+        if _looks_like_navigation_or_action_title(candidate, str(link_el.get("href") or "")):
+            continue
+        return candidate
     return ""
 
 

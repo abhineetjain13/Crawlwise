@@ -1,6 +1,7 @@
 # Tests for the shared HTTP acquisition provider.
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from unittest.mock import AsyncMock
 
@@ -8,7 +9,7 @@ import pytest
 from curl_cffi.const import CurlOpt
 from app.core.config import settings
 
-from app.services.acquisition.http_client import _build_attempt_order, _retry_backoff_seconds, fetch_html_result
+from app.services.acquisition.http_client import _build_attempt_order, _parse_retry_after, _retry_backoff_seconds, fetch_html_result
 from app.services.acquisition.cookie_store import is_persistable_cookie
 from app.services.url_safety import ValidatedTarget
 
@@ -291,6 +292,15 @@ def test_retry_backoff_seconds_rejects_invalid_bounds(monkeypatch):
 
     with pytest.raises(ValueError, match="HTTP_RETRY_BACKOFF_MAX_MS"):
         _retry_backoff_seconds(1)
+
+
+def test_parse_retry_after_treats_naive_http_dates_as_utc(monkeypatch):
+    retry_at = datetime(2026, 4, 6, 12, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr("app.services.acquisition.http_client.time.time", lambda: retry_at.timestamp() - 30.0)
+
+    delay = _parse_retry_after({"retry-after": "Mon, 06 Apr 2026 12:00:00"})
+
+    assert delay == 30.0
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,11 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRightCircle, ChevronDown, ChevronsDown, Copy, Download } from "lucide-react";
+import { ArrowRightCircle, ChevronsDown, Copy, Download } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { PageHeader, SectionHeader } from "../ui/patterns";
 import { Badge, Button, Card, Input } from "../ui/primitives";
@@ -55,141 +57,6 @@ function isSafeHref(href: string) {
   }
 }
 
-type HybridSection = {
-  key: string;
-  title: string;
-  value: string;
-  source: "output" | "semantic";
-};
-
-type HybridSpec = {
-  key: string;
-  label: string;
-  value: string;
-};
-
-type HybridScalar = {
-  key: string;
-  label: string;
-  value: string;
-};
-
-type HybridRecordGroup = {
-  key: string;
-  recordId: number;
-  recordUrl: string;
-  recordTitle: string;
-  sections: HybridSection[];
-  specifications: HybridSpec[];
-  scalarFields: HybridScalar[];
-};
-
-const LONG_FORM_FIELDS = new Set([
-  "description",
-  "summary",
-  "responsibilities",
-  "qualifications",
-  "requirements",
-  "benefits",
-  "skills",
-  "how_to_apply",
-  "next_steps",
-  "education",
-  "additional_information",
-  "conditions_of_employment",
-  "required_documents",
-  "how_you_will_be_evaluated",
-  "features",
-  "fit_and_sizing",
-  "materials_and_care"
-]);
-const SECTION_BLACKLIST = new Set([
-  "help",
-  "close_this_window"
-]);
-const SECTION_MIN_CHARS = 12;
-const SCALAR_MAX_CHARS = 180;
-
-function normalizeHybridFieldName(value: string) {
-  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
-}
-
-function normalizeHybridText(value: unknown) {
-  return stringifyCell(value).replace(/\r\n/g, "\n").replace(/\u00a0/g, " ").trim();
-}
-
-function hybridTextFingerprint(value: string) {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function isUsefulHybridSection(key: string, value: string) {
-  const normalizedKey = normalizeHybridFieldName(key);
-  const normalizedValue = normalizeHybridText(value);
-  if (!normalizedValue || normalizedValue.length < SECTION_MIN_CHARS) {
-    return false;
-  }
-  if (SECTION_BLACKLIST.has(normalizedKey)) {
-    return false;
-  }
-  if (hybridTextFingerprint(normalizedValue) === "help") {
-    return false;
-  }
-  return true;
-}
-
-function isScalarField(key: string, value: unknown) {
-  const normalizedKey = normalizeHybridFieldName(key);
-  const normalizedValue = normalizeHybridText(value);
-  if (!normalizedValue) {
-    return false;
-  }
-  if (LONG_FORM_FIELDS.has(normalizedKey)) {
-    return false;
-  }
-  if (normalizedKey === "url") {
-    return false;
-  }
-  return normalizedValue.length <= SCALAR_MAX_CHARS && !normalizedValue.includes("\n");
-}
-
-function renderRichText(value: string) {
-  const lines = normalizeHybridText(value)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const blocks: Array<{ type: "p" | "ul"; lines: string[] }> = [];
-
-  for (const line of lines) {
-    const bulletMatch = line.match(/^(?:[•*-]|\d+\.)\s+(.*)$/);
-    if (bulletMatch) {
-      const last = blocks[blocks.length - 1];
-      if (last?.type === "ul") {
-        last.lines.push(bulletMatch[1].trim());
-      } else {
-        blocks.push({ type: "ul", lines: [bulletMatch[1].trim()] });
-      }
-      continue;
-    }
-    blocks.push({ type: "p", lines: [line] });
-  }
-
-  return (
-    <div className="space-y-3 text-[13px] leading-6 text-[var(--text-secondary)]">
-      {blocks.map((block, index) =>
-        block.type === "ul" ? (
-          <ul key={`ul-${index}`} className="list-disc space-y-1 pl-5">
-            {block.lines.map((line, lineIndex) => (
-              <li key={`${index}-${lineIndex}`}>{line}</li>
-            ))}
-          </ul>
-        ) : (
-          <p key={`p-${index}`}>{block.lines[0]}</p>
-        ),
-      )}
-    </div>
-  );
-}
-
 export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -197,11 +64,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
   const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
   const [runActionPending, setRunActionPending] = useState<"pause" | "resume" | "kill" | null>(null);
-  const [expandedIntelligenceGroups, setExpandedIntelligenceGroups] = useState<Record<string, boolean>>({});
   const [runActionError, setRunActionError] = useState("");
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const terminalSyncRef = useRef<string | null>(null);
-  const intelligenceGroupsInitializedRef = useRef(false);
   const runQuery = useQuery({
     queryKey: ["crawl-run", runId],
     queryFn: () => api.getCrawl(runId),
@@ -248,9 +113,21 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         : false;
     },
   });
+  const markdownQuery = useQuery({
+    queryKey: ["crawl-markdown", runId],
+    queryFn: () => api.getMarkdown(runId),
+    enabled: Boolean(run),
+    refetchInterval: () => {
+      const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
+      return latestRun && (latestRun.status === "running" || latestRun.status === "paused")
+        ? POLLING_INTERVALS.RECORDS_MS
+        : false;
+    },
+  });
 
   const records = useMemo(() => recordsQuery.data?.items ?? [], [recordsQuery.data?.items]);
   const logs = useMemo(() => (logsQuery.data ?? []).slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS), [logsQuery.data]);
+  const markdown = markdownQuery.data ?? "";
   const showRunLoadingState = runQuery.isLoading && !run;
 
   useEffect(() => {
@@ -265,8 +142,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     }
     terminalSyncRef.current = syncKey;
 
-    void Promise.allSettled([runQuery.refetch(), recordsQuery.refetch(), logsQuery.refetch()]);
-  }, [logsQuery, recordsQuery, run, runQuery, terminal]);
+    void Promise.allSettled([runQuery.refetch(), recordsQuery.refetch(), logsQuery.refetch(), markdownQuery.refetch()]);
+  }, [logsQuery, markdownQuery, recordsQuery, run, runQuery, terminal]);
 
   useEffect(() => {
     if (!live || !logViewportRef.current) {
@@ -288,109 +165,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [logs, live]);
-
-  const intelligenceRecordGroups = useMemo<HybridRecordGroup[]>(() => {
-    return records
-      .map((record) => {
-        const recordUrl = extractRecordUrl(record) || record.source_url;
-        const recordTitle = stringifyCell(record.data?.title).trim() || recordUrl || `Record ${record.id}`;
-        const sourceTrace = record.source_trace && typeof record.source_trace === "object" ? record.source_trace : {};
-        const semantic = sourceTrace && typeof sourceTrace.semantic === "object" ? sourceTrace.semantic as Record<string, unknown> : {};
-        const sectionPayload = semantic && typeof semantic.sections === "object" ? semantic.sections as Record<string, unknown> : {};
-        const specPayload = semantic && typeof semantic.specifications === "object" ? semantic.specifications as Record<string, unknown> : {};
-        const sectionMap = new Map<string, HybridSection>();
-        const sectionFingerprints = new Set<string>();
-
-        for (const [fieldName, rawValue] of Object.entries(record.data ?? {})) {
-          const normalizedField = normalizeHybridFieldName(fieldName);
-          const value = normalizeHybridText(rawValue);
-          if (!LONG_FORM_FIELDS.has(normalizedField) || !isUsefulHybridSection(fieldName, value)) {
-            continue;
-          }
-          const fingerprint = hybridTextFingerprint(value);
-          if (sectionFingerprints.has(fingerprint)) {
-            continue;
-          }
-          sectionFingerprints.add(fingerprint);
-          sectionMap.set(normalizedField, {
-            key: normalizedField,
-            title: humanizeFieldName(fieldName),
-            value,
-            source: "output",
-          });
-        }
-
-        for (const [fieldName, rawValue] of Object.entries(sectionPayload)) {
-          const normalizedField = normalizeHybridFieldName(fieldName);
-          const value = normalizeHybridText(rawValue);
-          if (!isUsefulHybridSection(fieldName, value)) {
-            continue;
-          }
-          const fingerprint = hybridTextFingerprint(value);
-          if (sectionFingerprints.has(fingerprint)) {
-            continue;
-          }
-          sectionFingerprints.add(fingerprint);
-          sectionMap.set(normalizedField, {
-            key: normalizedField,
-            title: humanizeFieldName(fieldName),
-            value,
-            source: "semantic",
-          });
-        }
-
-        const specifications = Object.entries(specPayload)
-          .map(([fieldName, rawValue]) => ({
-            key: normalizeHybridFieldName(fieldName),
-            label: humanizeFieldName(fieldName),
-            value: normalizeHybridText(rawValue),
-          }))
-          .filter((row) => row.value)
-          .sort((left, right) => left.label.localeCompare(right.label));
-
-        const scalarFields = Object.entries(record.data ?? {})
-          .map(([fieldName, rawValue]) => ({
-            key: normalizeHybridFieldName(fieldName),
-            label: humanizeFieldName(fieldName),
-            value: normalizeHybridText(rawValue),
-          }))
-          .filter((row) => isScalarField(row.key, row.value))
-          .sort((left, right) => left.label.localeCompare(right.label));
-
-        return {
-          key: `${record.id}:${recordUrl}`,
-          recordId: record.id,
-          recordUrl,
-          recordTitle,
-          sections: Array.from(sectionMap.values()),
-          specifications,
-          scalarFields,
-        };
-      })
-      .filter((group) => group.sections.length || group.specifications.length || group.scalarFields.length)
-      .sort((left, right) => left.recordId - right.recordId);
-  }, [records]);
-
-  useEffect(() => {
-    if (!intelligenceRecordGroups.length) {
-      setExpandedIntelligenceGroups({});
-      intelligenceGroupsInitializedRef.current = false;
-      return;
-    }
-    setExpandedIntelligenceGroups((current) => {
-      const next: Record<string, boolean> = {};
-      for (const group of intelligenceRecordGroups) {
-        if (group.key in current) {
-          next[group.key] = current[group.key];
-        }
-      }
-      if (!intelligenceGroupsInitializedRef.current && !(intelligenceRecordGroups[0].key in next)) {
-        next[intelligenceRecordGroups[0].key] = true;
-        intelligenceGroupsInitializedRef.current = true;
-      }
-      return next;
-    });
-  }, [intelligenceRecordGroups]);
 
   const visibleColumns = useMemo(() => {
     const columns = new Set<string>();
@@ -440,7 +214,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       } else {
         await api.killCrawl(runId);
       }
-      await Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch()]);
+      await Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch(), markdownQuery.refetch()]);
     } catch (error) {
       setRunActionError(error instanceof Error ? error.message : `Unable to ${action} crawl.`);
     } finally {
@@ -642,8 +416,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 <OutputTab active={outputTab === "json"} onClick={() => setOutputTab("json")}>
                   JSON
                 </OutputTab>
-                <OutputTab active={outputTab === "intelligence"} onClick={() => setOutputTab("intelligence")}>
-                  Intelligence
+                <OutputTab active={outputTab === "markdown"} onClick={() => setOutputTab("markdown")}>
+                  Markdown
                 </OutputTab>
                 <OutputTab active={outputTab === "logs"} onClick={() => setOutputTab("logs")}>
                   Logs
@@ -699,103 +473,35 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               </div>
             ) : null}
 
-            {outputTab === "intelligence" ? (
-              <Card className="space-y-4 p-4">
-                {intelligenceRecordGroups.length ? (
-                  <div className="space-y-4">
-                    {intelligenceRecordGroups.map((group) => {
-                      const expanded = Boolean(expandedIntelligenceGroups[group.key]);
-                      return (
-                        <div key={group.key} className="space-y-2">
-                          <div className="flex flex-wrap items-center gap-3">
-                            <button
-                              type="button"
-                              aria-expanded={expanded}
-                              onClick={() =>
-                                setExpandedIntelligenceGroups((current) => ({ ...current, [group.key]: !expanded }))
-                              }
-                              className="min-w-0 flex flex-1 items-center gap-3 text-left"
-                            >
-                              <div className="min-w-0 flex flex-1 items-center gap-3 overflow-hidden">
-                                <span className="truncate text-sm font-semibold text-foreground">{group.recordTitle}</span>
-                                <span className="truncate text-xs text-muted">{group.recordUrl}</span>
-                              </div>
-                              <ChevronDown className={cn("size-4 shrink-0 transition-transform", expanded ? "rotate-180" : "")} />
-                            </button>
-                            {group.sections.length ? <Badge tone="accent">{group.sections.length} sections</Badge> : null}
-                            {group.specifications.length ? <Badge tone="neutral">{group.specifications.length} details</Badge> : null}
-                            {group.scalarFields.length ? <Badge tone="neutral">{group.scalarFields.length} output fields</Badge> : null}
-                          </div>
-                          <div
-                            className={cn(
-                              "overflow-hidden transition-[opacity] duration-150 ease-out",
-                              expanded ? "opacity-100" : "opacity-0",
-                            )}
-                          >
-                            <div className={cn("pt-1", expanded ? "block" : "hidden")}>
-                              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.9fr)]">
-                                <div className="space-y-4">
-                                  {group.sections.length ? (
-                                    <div className="space-y-3">
-                                      {group.sections.map((section) => (
-                                        <Card key={section.key} className="space-y-3 p-4">
-                                          <div className="flex items-center gap-2">
-                                            <div className="text-sm font-semibold text-foreground">{section.title}</div>
-                                            <Badge tone={section.source === "output" ? "accent" : "info"}>
-                                              {section.source === "output" ? "Output" : "HTML"}
-                                            </Badge>
-                                          </div>
-                                          {renderRichText(section.value)}
-                                        </Card>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <div className="rounded-[10px] border border-dashed border-border bg-panel/40 p-4 text-sm text-muted">
-                                      No long-form content was extracted for this record.
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="space-y-4">
-                                  {group.scalarFields.length ? (
-                                    <Card className="space-y-3 p-4">
-                                      <div className="text-sm font-semibold text-foreground">Output Fields</div>
-                                      <table className="compact-data-table">
-                                        <tbody>
-                                          {group.scalarFields.map((field) => (
-                                            <tr key={field.key}>
-                                              <td className="w-[40%] text-xs text-muted">{field.label}</td>
-                                              <td className="text-sm text-foreground">{field.value}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </Card>
-                                  ) : null}
-                                  {group.specifications.length ? (
-                                    <Card className="space-y-3 p-4">
-                                      <div className="text-sm font-semibold text-foreground">Details</div>
-                                      <table className="compact-data-table">
-                                        <tbody>
-                                          {group.specifications.map((row) => (
-                                            <tr key={row.key}>
-                                              <td className="w-[40%] text-xs text-muted">{row.label}</td>
-                                              <td className="text-sm text-foreground">{row.value}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </Card>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+            {outputTab === "markdown" ? (
+              <Card className="relative overflow-hidden">
+                <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(markdown)}
+                    disabled={!markdown}
+                  >
+                    <Copy className="size-3.5" />
+                    Copy
+                  </Button>
+                </div>
+                {markdownQuery.isLoading && !markdown ? (
+                  <div className="space-y-2 p-4">
+                    {Array.from({ length: 8 }, (_, index) => (
+                      <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]" />
+                    ))}
+                  </div>
+                ) : markdown ? (
+                  <div className="max-h-[72vh] overflow-y-auto px-6 pb-8 pt-14">
+                    <article className="markdown-document max-w-none">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+                    </article>
                   </div>
                 ) : (
-                  <div className="text-sm text-muted">No field candidates are available for this run.</div>
+                  <div className="grid min-h-40 place-items-center rounded-[10px] border border-dashed border-border bg-panel/60 text-sm text-muted">
+                    No markdown is available for this run.
+                  </div>
                 )}
               </Card>
             ) : null}

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
+from bs4 import BeautifulSoup
 from sqlalchemy import select
 
 from app.core.security import encrypt_secret
@@ -11,6 +13,7 @@ from app.models.llm import LLMConfig, LLMCostLog
 from app.services.llm_integration.page_classifier import (
     _classify_by_heuristics,
     _confidence_from_url,
+    _find_repeating_cards,
     _sanitize_html_snippet_for_prompt,
     classify_page,
 )
@@ -38,6 +41,24 @@ def test_sanitize_html_snippet_for_prompt_strips_scripts_handlers_and_escapes_in
     assert "<iframe" not in sanitized.lower()
     assert "onclick" not in sanitized.lower()
     assert "`ignore` `previous`" in sanitized.lower()
+
+
+def test_find_repeating_cards_css_escapes_special_class_names():
+    soup = BeautifulSoup(
+        """
+        <main>
+          <article class="product tile:featured"><a href="/1">One</a></article>
+          <article class="product tile:featured"><a href="/2">Two</a></article>
+          <article class="product tile:featured"><a href="/3">Three</a></article>
+        </main>
+        """,
+        "html.parser",
+    )
+
+    cards, selector = _find_repeating_cards(soup)
+
+    assert len(cards) == 3
+    assert selector == r"article.product.tile\3a featured"
 
 
 @pytest.mark.asyncio
@@ -75,7 +96,7 @@ async def test_classify_page_uses_sanitized_prompt_variables(db_session, monkeyp
 
 @pytest.mark.asyncio
 async def test_classify_page_caches_timeout_fallback(db_session, monkeypatch: pytest.MonkeyPatch):
-    failing = AsyncMock(side_effect=RuntimeError("boom"))
+    failing = AsyncMock(side_effect=asyncio.TimeoutError())
     monkeypatch.setattr("app.services.llm_integration.page_classifier.run_prompt_task", failing)
 
     first = await classify_page(
@@ -95,6 +116,56 @@ async def test_classify_page_caches_timeout_fallback(db_session, monkeypatch: py
     assert first.reasoning == "timeout"
     assert second.source == "cache"
     assert failing.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_classify_page_caches_generic_error_fallback(db_session, monkeypatch: pytest.MonkeyPatch):
+    failing = AsyncMock(side_effect=RuntimeError("boom"))
+    monkeypatch.setattr("app.services.llm_integration.page_classifier.run_prompt_task", failing)
+
+    first = await classify_page(
+        db_session,
+        url="https://example.com/product-generic-error",
+        html="<html><body><h1>Widget</h1></body></html>",
+        llm_enabled=True,
+    )
+    second = await classify_page(
+        db_session,
+        url="https://example.com/product-generic-error",
+        html="<html><body><h1>Widget</h1></body></html>",
+        llm_enabled=True,
+    )
+
+    assert first.page_type == "unknown"
+    assert first.reasoning == "error: RuntimeError: boom"
+    assert second.source == "cache"
+    assert failing.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_classify_page_sanitizes_cached_error_reasoning(db_session, monkeypatch: pytest.MonkeyPatch):
+    failing = AsyncMock(
+        side_effect=RuntimeError(
+            "boom\ncontact admin@example.com token=abc123 path=C:\\secret\\config.txt"
+        )
+    )
+    monkeypatch.setattr("app.services.llm_integration.page_classifier.run_prompt_task", failing)
+
+    result = await classify_page(
+        db_session,
+        url="https://example.com/product-redacted-error",
+        html="<html><body><h1>Widget</h1></body></html>",
+        llm_enabled=True,
+    )
+
+    assert result.reasoning.startswith("error: RuntimeError:")
+    assert "\n" not in result.reasoning
+    assert "admin@example.com" not in result.reasoning
+    assert "abc123" not in result.reasoning
+    assert "C:\\secret\\config.txt" not in result.reasoning
+    assert "[redacted-email]" in result.reasoning
+    assert "[redacted-secret]" in result.reasoning
+    assert "[redacted-path]" in result.reasoning
 
 
 @pytest.mark.asyncio

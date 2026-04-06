@@ -95,6 +95,25 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
     if "kpsdk" in html_lower and text_len < 200:
         return BlockedPageResult(is_blocked=True, reason="kasada_challenge_script", provider="kasada")
 
+    if (
+        "no treats beyond this point" in visible
+        or (
+            "page error: 403" in visible
+            and "restricted access" in visible
+        )
+    ):
+        chewy_provider = "akamai" if "akamai" in html_lower or "reference error number" in visible else provider
+        reason = (
+            "blocked_phrase:no_treats_beyond_this_point"
+            if "no treats beyond this point" in visible
+            else "blocked_phrase:restricted_access_403"
+        )
+        return BlockedPageResult(
+            is_blocked=True,
+            reason=reason,
+            provider=chewy_provider,
+        )
+
     if active_reason and (title_reason or phrase_reason or structural_signal or not rich_content_signal):
         return BlockedPageResult(is_blocked=True, reason=active_reason, provider=provider)
 

@@ -178,7 +178,7 @@ async def test_merge_memory_preserves_unknown_payload_keys(db_session: AsyncSess
         "interaction_plan_cache": [{"field_name": "reviews"}],
         "quality_history": {"title": {"runs": [{"score": "GOOD"}]}},
         "content_map_cached_at": "2026-04-05T00:00:00Z",
-        "custom_page_intelligence_flag": {"enabled": True},
+        "custom_page_markdown_flag": {"enabled": True},
     }
     await db_session.commit()
 
@@ -188,7 +188,7 @@ async def test_merge_memory_preserves_unknown_payload_keys(db_session: AsyncSess
         fields=["price"],
     )
 
-    assert updated.payload["custom_page_intelligence_flag"] == {"enabled": True}
+    assert updated.payload["custom_page_markdown_flag"] == {"enabled": True}
 
 
 @pytest.mark.asyncio
@@ -208,6 +208,30 @@ async def test_merge_memory_updates_acquisition_payload_without_touching_selecto
         "last_success_method": "playwright",
     }
     assert memory.payload["selectors"]["title"][0]["xpath"] == "//h1/text()"
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_filters_internal_field_names_from_reusable_fields_and_suggestions(db_session: AsyncSession):
+    await merge_memory(
+        db_session,
+        "example.com",
+        fields=["title", "SOURCE", "XPATH_PRICE", "selector"],
+        selector_suggestions={
+            "title": [{"xpath": "//h1/text()", "source": "crawl"}],
+            "source": [{"xpath": "//meta[@name='source']/@content", "source": "crawl"}],
+            "xpath_price": [{"xpath": "//span[@class='price']/text()", "source": "crawl"}],
+        },
+        source_mappings={"title": "dom", "source": "crawl"},
+        llm_columns={"title": ["title"], "xpath_price": ["price"]},
+    )
+
+    memory = await get_memory(db_session, "example.com")
+
+    assert memory is not None
+    assert memory.payload["fields"] == ["title"]
+    assert set(memory.payload["selector_suggestions"]) == {"title"}
+    assert memory.payload["source_mappings"] == {"title": "dom"}
+    assert memory.payload["llm_columns"] == {"title": ["title"]}
 
 
 @pytest.mark.asyncio

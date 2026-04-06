@@ -121,6 +121,27 @@ def test_detect_blocked_page_blocks_active_marker_on_low_content_page():
     assert verdict.provider == "datadome"
 
 
+def test_detect_blocked_page_blocks_chewy_akamai_403_page():
+    html = """
+    <html>
+      <head><title>403 error - No treats beyond this point - Chewy</title></head>
+      <body>
+        <main>
+          <h1>No treats beyond this point</h1>
+          <p>You've stumbled upon a page with restricted access.</p>
+          <div id="Code">Page error: 403</div>
+          <script>window.akamai_ref_error_code = "18.example";</script>
+        </main>
+      </body>
+    </html>
+    """
+
+    verdict = detect_blocked_page(html)
+
+    assert verdict.is_blocked
+    assert verdict.provider == "akamai"
+
+
 def test_detect_blocked_page_allows_normal_page():
     html = """
     <html>

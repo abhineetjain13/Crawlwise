@@ -12,6 +12,7 @@ from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_state import set_control_request
 from app.services.crawl_service import (
+    STAGE_SAVE,
     _build_field_discovery_summary,
     _build_llm_candidate_evidence,
     _merge_record_fields,
@@ -87,7 +88,7 @@ def test_build_llm_candidate_evidence_preserves_legible_multi_source_values():
     assert any(row["source"] == "semantic_section" for row in evidence["polyphony"])
 
 
-def test_build_field_discovery_summary_includes_canonical_and_intelligence_fields():
+def test_build_field_discovery_summary_includes_core_and_extra_fields():
     source_trace = _build_field_discovery_summary(
         {},
         {
@@ -100,11 +101,7 @@ def test_build_field_discovery_summary_includes_canonical_and_intelligence_field
     )
 
     field_discovery = source_trace["field_discovery"]
-    assert field_discovery["title"]["tier"] == "canonical"
-    assert field_discovery["title"]["candidate_count"] == 1
     assert field_discovery["title"]["value"] == "Canonical Title"
-    assert field_discovery["wire_gauge"]["tier"] == "intelligence"
-    assert field_discovery["wire_gauge"]["candidate_count"] == 1
     assert field_discovery["wire_gauge"]["value"] == "26 AWG"
     assert "title" not in source_trace["field_discovery_missing"]
     assert "wire_gauge" not in source_trace["field_discovery_missing"]
@@ -226,6 +223,7 @@ async def test_create_crawl_run_keeps_advanced_mode_empty_without_explicit_trave
     })
 
     assert run.settings["advanced_mode"] is None
+    assert run.settings["traversal_mode"] is None
     assert run.settings["max_scrolls"] == 12
 
 
@@ -416,7 +414,7 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
     await db_session.refresh(run)
     assert run.status == "completed"
     assert run.result_summary["record_count"] >= 1
-    assert run.result_summary["current_stage"] == "PUBLISH"
+    assert run.result_summary["current_stage"] == STAGE_SAVE
     assert run.result_summary["current_url"] == "https://example.com/product"
 
     # Check records
@@ -428,7 +426,7 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
     logs = (await db_session.execute(
         select(CrawlLog).where(CrawlLog.run_id == run.id)
     )).scalars().all()
-    assert any("[UNIFY]" in log.message for log in logs)
+    assert any("[SAVE]" in log.message for log in logs)
 
 
 @pytest.mark.asyncio
@@ -911,7 +909,7 @@ async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession,
         "run_type": "crawl",
         "url": "https://example.com/listing",
         "surface": "ecommerce_listing",
-        "settings": {"advanced_mode": "paginate", "max_pages": 3},
+        "settings": {"advanced_enabled": True, "advanced_mode": "paginate", "max_pages": 3},
     })
 
     with (
@@ -938,7 +936,7 @@ async def test_process_run_does_not_infer_advanced_mode_from_toggle_and_passes_m
     ):
         await process_run(db_session, run.id)
 
-    assert acquire_mock.await_args.kwargs["advanced_mode"] is None
+    assert acquire_mock.await_args.kwargs["traversal_mode"] is None
     assert acquire_mock.await_args.kwargs["max_scrolls"] == 9
 
 

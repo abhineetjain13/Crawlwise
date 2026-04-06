@@ -5,14 +5,15 @@ import html
 import hashlib
 import logging
 import re
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlparse, urlunparse
 
 from bs4 import BeautifulSoup, Tag
+from cachetools import TTLCache
+import httpx
 
-from app.services.acquisition.acquirer import _html_has_extractable_listings
+from app.services.acquisition.acquirer import _html_has_extractable_listings_from_soup
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.llm_runtime import run_prompt_task
 from app.services.pipeline_config import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS, DOM_PATTERNS
@@ -34,8 +35,12 @@ class PageClassification:
     source: str
 
 
-_CLASSIFICATION_CACHE: dict[str, tuple[PageClassification, float]] = {}
 _CACHE_TTL_SECONDS = 300
+_CLASSIFICATION_CACHE_MAXSIZE = 512
+_CLASSIFICATION_CACHE: TTLCache[str, PageClassification] = TTLCache(
+    maxsize=_CLASSIFICATION_CACHE_MAXSIZE,
+    ttl=_CACHE_TTL_SECONDS,
+)
 _ERROR_TEXT_PATTERNS = (
     re.compile(r"\berror\s*404\b", re.IGNORECASE),
     re.compile(r"\bhttp\s*404\b", re.IGNORECASE),
@@ -57,10 +62,34 @@ _PROMPT_INJECTION_PATTERNS = (
     re.compile(r"you are now", re.IGNORECASE),
     re.compile(r"repeat after me", re.IGNORECASE),
 )
+_REASONING_MAX_CHARS = 160
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"\b(?:api[_-]?key|token|secret|password)\b\s*[:=]\s*\S+", re.IGNORECASE)
+_WINDOWS_PATH_RE = re.compile(r"\b[A-Za-z]:\\[^\s]+")
+_POSIX_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])/(?:[^/\s]+/)*[^/\s]+")
 
 
 def _cache_key(url: str, html: str) -> str:
-    return hashlib.sha256((url + html[:300]).encode()).hexdigest()[:16]
+    return hashlib.sha256(f"{url}\0{html}".encode("utf-8")).hexdigest()
+
+
+def css_escape(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    escaped: list[str] = []
+    for index, char in enumerate(text):
+        if char == "\x00":
+            escaped.append("\uFFFD")
+            continue
+        if char.isalnum() or char in {"-", "_"}:
+            if index == 0 and char.isdigit():
+                escaped.append(f"\\{ord(char):x} ")
+            else:
+                escaped.append(char)
+            continue
+        escaped.append(f"\\{ord(char):x} ")
+    return "".join(escaped)
 
 
 def _prune_html_for_llm(html: str, max_chars: int = 3500) -> str:
@@ -85,7 +114,7 @@ def _classify_by_heuristics(html: str, url: str, hint_surface: str | None) -> Pa
     )
     if any(pattern.search(semantic_error_text) for pattern in _ERROR_TEXT_PATTERNS):
         return PageClassification("error", 0.8, False, "", "page error markers present", False, "heuristic")
-    if _html_has_extractable_listings(html):
+    if _html_has_extractable_listings_from_soup(soup):
         return PageClassification("listing", 0.92, False, _derive_wait_selector_hint(html, hint_surface), "structured listing signals", False, "heuristic")
     if _has_detail_signals(html, hint_surface=hint_surface):
         return PageClassification("detail", 0.9, _has_secondary_listing(html), "", "detail html signals", False, "heuristic")
@@ -127,7 +156,9 @@ def _find_repeating_cards(soup: BeautifulSoup) -> tuple[list[Tag], str]:
                 continue
             if len(group) > len(best_cards):
                 best_cards = group
-                best_selector = f"{name}.{'.'.join(classes)}" if classes else name
+                escaped_name = css_escape(name)
+                escaped_classes = ".".join(css_escape(class_name) for class_name in classes if class_name)
+                best_selector = f"{escaped_name}.{escaped_classes}" if escaped_classes else escaped_name
     return best_cards, best_selector
 
 
@@ -198,17 +229,13 @@ def _has_detail_signals(html: str, *, hint_surface: str | None) -> bool:
 
 def _load_cached_classification(url: str, html: str) -> PageClassification | None:
     cached = _CLASSIFICATION_CACHE.get(_cache_key(url, html))
-    if not cached:
+    if cached is None:
         return None
-    classification, expires_at = cached
-    if expires_at <= time.time():
-        _CLASSIFICATION_CACHE.pop(_cache_key(url, html), None)
-        return None
-    return PageClassification(**{**classification.__dict__, "source": "cache"})
+    return PageClassification(**{**cached.__dict__, "source": "cache"})
 
 
 def _store_cached_classification(url: str, html: str, classification: PageClassification) -> PageClassification:
-    _CLASSIFICATION_CACHE[_cache_key(url, html)] = (classification, time.time() + _CACHE_TTL_SECONDS)
+    _CLASSIFICATION_CACHE[_cache_key(url, html)] = classification
     return classification
 
 
@@ -228,16 +255,31 @@ def _escape_for_prompt(text: str) -> str:
 
 
 def _sanitize_html_snippet_for_prompt(html_text: str) -> str:
-    cleaned = re.sub(r"<(script|iframe)\b[^>]*>.*?</\1\s*>", "", html_text, flags=re.IGNORECASE | re.DOTALL)
+    decoded_raw = html.unescape(html_text)
+    cleaned = re.sub(r"<(script|iframe)\b[^>]*>.*?</\1\s*>", "", decoded_raw, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"\son\w+\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s>]+)", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"javascript\s*:", "", cleaned, flags=re.IGNORECASE)
-    decoded = html.unescape(cleaned)
-    return _escape_for_prompt(decoded)
+    return _escape_for_prompt(cleaned)
 
 
 def _prompt_injection_detected(text: str) -> bool:
     normalized = str(text or "")
     return any(pattern.search(normalized) for pattern in _PROMPT_INJECTION_PATTERNS)
+
+
+def _sanitize_exception_reason(exc: Exception) -> str:
+    details = str(exc).strip()
+    sanitized = re.sub(r"[\r\n\t]+", " ", details)
+    sanitized = re.sub(r"\s{2,}", " ", sanitized)
+    sanitized = _EMAIL_RE.sub("[redacted-email]", sanitized)
+    sanitized = _TOKEN_RE.sub("[redacted-secret]", sanitized)
+    sanitized = _WINDOWS_PATH_RE.sub("[redacted-path]", sanitized)
+    sanitized = _POSIX_PATH_RE.sub("[redacted-path]", sanitized)
+    sanitized = sanitized.strip(" :")
+    reason = f"error: {type(exc).__name__}"
+    if sanitized:
+        reason = f"{reason}: {sanitized}"
+    return reason[:_REASONING_MAX_CHARS]
 
 
 async def classify_page(
@@ -286,11 +328,16 @@ async def classify_page(
             max(0.0, min(float(payload.get("confidence", 0.0) or 0.0), 1.0)),
             bool(payload.get("has_secondary_listing")),
             str(payload.get("wait_selector_hint") or "").strip(),
-            str(payload.get("reasoning") or "llm classification").strip()[:160],
+            str(payload.get("reasoning") or "llm classification").strip()[:_REASONING_MAX_CHARS],
             True,
             "llm",
         )
         return _store_cached_classification(url, html, classification)
-    except Exception:
+    except (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException):
+        logger.warning("Page classification LLM timed out for %s", url)
         fallback = PageClassification("unknown", 0.0, False, "", "timeout", True, "llm")
+        return _store_cached_classification(url, html, fallback)
+    except Exception as exc:
+        logger.exception("Page classification LLM failed for %s: %s", url, exc)
+        fallback = PageClassification("unknown", 0.0, False, "", _sanitize_exception_reason(exc), True, "llm")
         return _store_cached_classification(url, html, fallback)

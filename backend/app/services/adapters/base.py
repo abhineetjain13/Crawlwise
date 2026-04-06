@@ -17,7 +17,7 @@ class AdapterResult:
 class BaseAdapter(ABC):
     """All platform adapters implement this interface.
 
-    Adapters are called during the DISCOVER stage and return structured
+    Adapters are called during the ANALYZE stage and return structured
     records extracted from platform-specific API endpoints or embedded
     data structures.  They are separate from the generic DOM/selector
     extraction pipeline.

@@ -5,16 +5,18 @@ import logging
 
 import asyncio
 import ipaddress
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from playwright.async_api import async_playwright
+from playwright.async_api import Error as PlaywrightError, async_playwright
 
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.cookie_store import (
     cookie_policy_for_domain,
     cookie_store_path,
@@ -62,6 +64,11 @@ from app.services.url_safety import validate_public_target
 
 logger = logging.getLogger(__name__)
 
+_RETRYABLE_PAGE_CONTENT_ERROR_RE = re.compile(
+    r"(page is navigating|changing the content)",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class BrowserResult:
@@ -92,11 +99,12 @@ async def fetch_rendered_html(
     url: str,
     proxy: str | None = None,
     surface: str | None = None,
-    advanced_mode: str | None = None,
+    traversal_mode: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = DEFAULT_MAX_SCROLLS,
     prefer_stealth: bool = False,
     request_delay_ms: int = 0,
+    runtime_options: BrowserRuntimeOptions | None = None,
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[dict]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
@@ -106,7 +114,7 @@ async def fetch_rendered_html(
     Args:
         url: Target URL.
         proxy: Optional proxy URL.
-        advanced_mode: None, "paginate", "scroll", "load_more", or "auto".
+        traversal_mode: None, "paginate", "scroll", "load_more", or "auto".
         max_scrolls: Max scroll attempts (for scroll mode).
     """
     target = await validate_public_target(url)
@@ -118,11 +126,12 @@ async def fetch_rendered_html(
             url=url,
             proxy=proxy,
             surface=surface,
-            advanced_mode=advanced_mode,
+            traversal_mode=traversal_mode,
             max_pages=max_pages,
             max_scrolls=max_scrolls,
             prefer_stealth=prefer_stealth,
             request_delay_ms=request_delay_ms,
+            runtime_options=runtime_options or BrowserRuntimeOptions(),
             requested_fields=requested_fields or [],
             requested_field_selectors=requested_field_selectors or {},
             checkpoint=checkpoint,
@@ -136,18 +145,21 @@ async def _fetch_rendered_html_with_fallback(
     url: str,
     proxy: str | None,
     surface: str | None = None,
-    advanced_mode: str | None,
+    traversal_mode: str | None,
     max_pages: int,
     max_scrolls: int,
     prefer_stealth: bool,
     request_delay_ms: int,
+    runtime_options: BrowserRuntimeOptions | None,
     requested_fields: list[str],
     requested_field_selectors: dict[str, list[dict]],
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> BrowserResult:
     last_error: Exception | None = None
     first_profile_failed = False
-    for profile in _browser_launch_profiles():
+    options = runtime_options or BrowserRuntimeOptions()
+    profiles = _browser_launch_profiles(options)
+    for index, profile in enumerate(profiles):
         navigation_strategies = (
             _shortened_navigation_strategies()
             if first_profile_failed
@@ -160,11 +172,12 @@ async def _fetch_rendered_html_with_fallback(
                 url=url,
                 proxy=proxy,
                 surface=surface,
-                advanced_mode=advanced_mode,
+                traversal_mode=traversal_mode,
                 max_pages=max_pages,
                 max_scrolls=max_scrolls,
                 prefer_stealth=prefer_stealth,
                 request_delay_ms=request_delay_ms,
+                runtime_options=options,
                 requested_fields=requested_fields,
                 requested_field_selectors=requested_field_selectors,
                 launch_profile=profile,
@@ -172,6 +185,14 @@ async def _fetch_rendered_html_with_fallback(
                 checkpoint=checkpoint,
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
+            if index < len(profiles) - 1 and _should_retry_launch_profile(result, surface=surface):
+                first_profile_failed = True
+                logger.info(
+                    "Playwright %s produced a low-value result for %s; trying next launch profile",
+                    profile["label"],
+                    url,
+                )
+                continue
             return result
         except Exception as exc:
             last_error = exc
@@ -190,11 +211,12 @@ async def _fetch_rendered_html_attempt(
     url: str,
     proxy: str | None,
     surface: str | None,
-    advanced_mode: str | None,
+    traversal_mode: str | None,
     max_pages: int,
     max_scrolls: int,
     prefer_stealth: bool,
     request_delay_ms: int,
+    runtime_options: BrowserRuntimeOptions,
     requested_fields: list[str],
     requested_field_selectors: dict[str, list[dict]],
     launch_profile: dict[str, str | None],
@@ -239,6 +261,10 @@ async def _fetch_rendered_html_attempt(
         if browser_channel:
             result.origin_warmed = False
             timings_ms["browser_origin_warm_ms"] = 0
+        elif not runtime_options.warm_origin:
+            # Skip origin warming for non-stealth requests to save 2s per domain.
+            result.origin_warmed = False
+            timings_ms["browser_origin_warm_ms"] = 0
         else:
             origin_warm_started_at = time.perf_counter()
             result.origin_warmed = await _maybe_warm_origin(page, url, checkpoint=checkpoint)
@@ -254,18 +280,23 @@ async def _fetch_rendered_html_attempt(
         )
         timings_ms["browser_navigation_ms"] = _elapsed_ms(navigation_started_at)
         await _dismiss_cookie_consent(page, checkpoint=checkpoint)
-        challenge_started_at = time.perf_counter()
-        challenge_ok, challenge_state, reasons = await _wait_for_challenge_resolution(
-            page,
-            surface=surface,
-            checkpoint=checkpoint,
-        )
-        timings_ms["browser_challenge_wait_ms"] = _elapsed_ms(challenge_started_at)
+        if runtime_options.wait_for_challenge:
+            challenge_started_at = time.perf_counter()
+            challenge_ok, challenge_state, reasons = await _wait_for_challenge_resolution(
+                page,
+                surface=surface,
+                checkpoint=checkpoint,
+            )
+            timings_ms["browser_challenge_wait_ms"] = _elapsed_ms(challenge_started_at)
+        else:
+            challenge_ok, challenge_state, reasons = True, "skipped", []
+            timings_ms["browser_challenge_wait_ms"] = 0
         result.challenge_state = challenge_state
         result.diagnostics["challenge_reasons"] = reasons
         result.diagnostics["challenge_ok"] = challenge_ok
+        result.diagnostics["anti_bot_enabled"] = runtime_options.anti_bot_enabled
         if not challenge_ok:
-            await _populate_result(result, page, intercepted)
+            await _populate_result(result, page, intercepted, checkpoint=checkpoint)
             result.diagnostics["final_url"] = page.url or url
             result.diagnostics["html_length"] = len(result.html or "")
             result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
@@ -273,15 +304,29 @@ async def _fetch_rendered_html_attempt(
             result.diagnostics["timings_ms"] = timings_ms
             await _persist_context_cookies(context, page.url or url, original_domain)
             return result
-        readiness_started_at = time.perf_counter()
-        surface_readiness = await _wait_for_surface_readiness(
-            page,
-            surface=surface,
-            checkpoint=checkpoint,
-        )
-        timings_ms["browser_surface_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
-        if surface_readiness is not None:
-            result.diagnostics["surface_readiness"] = surface_readiness
+        if runtime_options.wait_for_readiness and _is_listing_surface(surface):
+            readiness_started_at = time.perf_counter()
+            listing_readiness = await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
+            timings_ms["browser_listing_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
+            if listing_readiness is not None:
+                result.diagnostics["listing_readiness"] = listing_readiness
+                result.diagnostics["surface_readiness"] = listing_readiness
+            if listing_readiness and not bool(listing_readiness.get("ready")) and await _page_looks_low_value(page):
+                await _populate_result(result, page, intercepted, checkpoint=checkpoint)
+                timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
+                result.diagnostics["timings_ms"] = timings_ms
+                await _persist_context_cookies(context, page.url or url, original_domain)
+                return result
+        elif runtime_options.wait_for_readiness:
+            readiness_started_at = time.perf_counter()
+            surface_readiness = await _wait_for_surface_readiness(
+                page,
+                surface=surface,
+                checkpoint=checkpoint,
+            )
+            timings_ms["browser_surface_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
+            if surface_readiness is not None:
+                result.diagnostics["surface_readiness"] = surface_readiness
         await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
         await _expand_accordions(page, checkpoint=checkpoint)
         field_trigger_selectors = await _open_requested_field_sections(
@@ -293,17 +338,12 @@ async def _fetch_rendered_html_attempt(
         if field_trigger_selectors:
             result.diagnostics["field_trigger_selectors"] = field_trigger_selectors
         await _flatten_shadow_dom(page)
-        readiness_started_at = time.perf_counter()
-        readiness = await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
-        timings_ms["browser_listing_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
-        if readiness:
-            result.diagnostics["listing_readiness"] = readiness
 
         traversal_started_at = time.perf_counter()
-        combined_html = await _apply_advanced_mode(
+        combined_html = await _apply_traversal_mode(
             page,
             surface,
-            advanced_mode,
+            traversal_mode,
             max_scrolls,
             max_pages=max_pages,
             request_delay_ms=request_delay_ms,
@@ -313,7 +353,7 @@ async def _fetch_rendered_html_attempt(
         if combined_html is not None:
             result.html = combined_html
             result.network_payloads = intercepted
-            result.diagnostics["pagination_mode"] = advanced_mode
+            result.diagnostics["traversal_mode"] = traversal_mode
             result.diagnostics["max_pages"] = max_pages
             result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") if combined_html else 0
             timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
@@ -321,7 +361,7 @@ async def _fetch_rendered_html_attempt(
             await _persist_context_cookies(context, page.url or url, original_domain)
             return result
 
-        await _populate_result(result, page, intercepted)
+        await _populate_result(result, page, intercepted, checkpoint=checkpoint)
         timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
         result.diagnostics["timings_ms"] = timings_ms
         await _persist_context_cookies(context, page.url or url, original_domain)
@@ -331,11 +371,55 @@ async def _fetch_rendered_html_attempt(
         await browser.close()
 
 
-def _browser_launch_profiles() -> list[dict[str, str | None]]:
-    return [
+def _browser_launch_profiles(runtime_options: BrowserRuntimeOptions) -> list[dict[str, str | None]]:
+    profiles = [
         {"label": "bundled_chromium", "browser_type": "chromium", "channel": None},
         {"label": "system_chrome", "browser_type": "chromium", "channel": "chrome"},
     ]
+    if runtime_options.retry_launch_profiles:
+        return profiles
+    return profiles[:1]
+
+
+def _is_listing_surface(surface: str | None) -> bool:
+    return str(surface or "").strip().lower().endswith("listing")
+
+
+def _should_retry_launch_profile(result: BrowserResult, *, surface: str | None) -> bool:
+    if detect_blocked_page(result.html or "").is_blocked:
+        return True
+    if _is_listing_surface(surface):
+        readiness = result.diagnostics.get("listing_readiness")
+        if isinstance(readiness, dict) and not bool(readiness.get("ready")) and _html_looks_low_value(result.html):
+            return True
+    return False
+
+
+async def _page_looks_low_value(page) -> bool:
+    try:
+        html = await _page_content_with_retry(page)
+    except Exception:
+        logger.debug("Failed to inspect page content for low-value result detection", exc_info=True)
+        return False
+    return _html_looks_low_value(html)
+
+
+def _html_looks_low_value(html: str) -> bool:
+    if not html:
+        return True
+    if detect_blocked_page(html).is_blocked:
+        return True
+    html_lower = html.lower()
+    visible = re.sub(r"<[^>]+>", " ", html_lower)
+    visible = " ".join(visible.split())
+    low_value_phrases = (
+        "sorry, this page is not available",
+        "this page is not available",
+        "page not found",
+        "not available",
+        "just a moment",
+    )
+    return len(html_lower) < 1200 and any(phrase in visible for phrase in low_value_phrases)
 
 
 def _build_launch_kwargs(proxy: str | None, target, *, browser_channel: str | None = None) -> dict:
@@ -409,10 +493,10 @@ async def _pause_after_navigation(
     await _cooperative_sleep_ms(delay_ms, checkpoint=checkpoint)
 
 
-async def _apply_advanced_mode(
+async def _apply_traversal_mode(
     page,
     surface: str | None,
-    advanced_mode: str | None,
+    traversal_mode: str | None,
     max_scrolls: int,
     *,
     max_pages: int,
@@ -422,7 +506,7 @@ async def _apply_advanced_mode(
     normalized_surface = str(surface or "").strip().lower()
     if normalized_surface.endswith("_detail"):
         return None
-    if advanced_mode == "scroll":
+    if traversal_mode == "scroll":
         await _scroll_to_bottom(
             page,
             max_scrolls,
@@ -430,7 +514,7 @@ async def _apply_advanced_mode(
             checkpoint=checkpoint,
         )
         return None
-    if advanced_mode == "load_more":
+    if traversal_mode == "load_more":
         await _click_load_more(
             page,
             max_scrolls,
@@ -438,7 +522,7 @@ async def _apply_advanced_mode(
             checkpoint=checkpoint,
         )
         return None
-    if advanced_mode == "paginate":
+    if traversal_mode == "paginate":
         return await _collect_paginated_html(
             page,
             surface=surface,
@@ -446,7 +530,7 @@ async def _apply_advanced_mode(
             request_delay_ms=request_delay_ms,
             checkpoint=checkpoint,
         )
-    if advanced_mode == "auto":
+    if traversal_mode == "auto":
         await _scroll_to_bottom(
             page,
             max_scrolls,
@@ -488,12 +572,13 @@ async def _collect_paginated_html(
 
     page_limit = max(1, int(max_pages or 1))
     for page_index in range(page_limit):
-        fragments.append(f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{await page.content()}")
+        page_html = await _page_content_with_retry(page, checkpoint=checkpoint)
+        fragments.append(f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}")
         if page_index + 1 >= page_limit:
             break
         current_url = str(page.url or "").strip()
         next_page_url = await _click_and_observe_next_page(page, checkpoint=checkpoint)
-        page_advanced_in_place = str(page.url or "").strip() != current_url or next_page_url == current_url
+        page_advanced_in_place = bool(next_page_url) and str(page.url or "").strip() == current_url and next_page_url == current_url
         if not next_page_url or (next_page_url in visited_urls and not page_advanced_in_place):
             break
         try:
@@ -1019,13 +1104,48 @@ async def _flatten_shadow_dom(page) -> None:
         logger.debug("Shadow DOM flattening failed (non-critical)", exc_info=True)
 
 
-async def _populate_result(result: BrowserResult, page, intercepted: list[dict]) -> None:
-    result.html = await page.content()
+async def _populate_result(
+    result: BrowserResult,
+    page,
+    intercepted: list[dict],
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    result.html = await _page_content_with_retry(page, checkpoint=checkpoint)
     result.network_payloads = intercepted
     result.diagnostics["final_url"] = str(page.url or "").strip() or None
     if result.html:
         result.diagnostics["html_length"] = len(result.html)
         result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
+
+
+async def _page_content_with_retry(
+    page,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+    attempts: int = 4,
+    wait_ms: int = 400,
+) -> str:
+    last_error: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return await page.content()
+        except Exception as exc:
+            last_error = exc
+            retryable_playwright_error = isinstance(exc, PlaywrightError) and bool(
+                _RETRYABLE_PAGE_CONTENT_ERROR_RE.search(str(exc))
+            )
+            if not retryable_playwright_error:
+                raise
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=2000)
+            except Exception:
+                logger.debug("Timed out waiting for domcontentloaded before retrying page.content()", exc_info=True)
+            if attempt + 1 >= max(1, attempts):
+                break
+            await _cooperative_page_wait(page, wait_ms, checkpoint=checkpoint)
+    assert last_error is not None
+    raise last_error
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -1181,11 +1301,28 @@ async def _scroll_to_bottom(
     """Scroll to bottom repeatedly until no new content appears."""
     prev_height = 0
     for _ in range(max_scrolls):
-        current_height = await page.evaluate("document.body.scrollHeight")
+        current_height = await page.evaluate(
+            """
+            () => {
+                const root = document.scrollingElement || document.documentElement || document.body;
+                if (!root) return 0;
+                return Math.max(root.scrollHeight || 0, document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0);
+            }
+            """
+        )
         if current_height == prev_height:
             break
         prev_height = current_height
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await page.evaluate(
+            """
+            (height) => {
+                const root = document.scrollingElement || document.documentElement || document.body;
+                if (!root) return;
+                window.scrollTo(0, height || root.scrollHeight || 0);
+            }
+            """,
+            current_height,
+        )
         await _cooperative_sleep_ms(
             max(request_delay_ms, SCROLL_WAIT_MIN_MS),
             checkpoint=checkpoint,

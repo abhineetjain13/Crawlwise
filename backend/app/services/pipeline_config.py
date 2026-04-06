@@ -37,14 +37,33 @@ def _currency_symbol_class(symbol_map: dict[object, object]) -> str:
     )
     if not symbols:
         return r"[$€£¥₹]"
-    return "[" + "".join(re.escape(symbol) for symbol in symbols) + "]"
+    single_char_symbols = [symbol for symbol in symbols if len(symbol) == 1]
+    multi_char_symbols = sorted(
+        [symbol for symbol in symbols if len(symbol) > 1],
+        key=len,
+        reverse=True,
+    )
+    if multi_char_symbols:
+        alternates = [re.escape(symbol) for symbol in multi_char_symbols]
+        if single_char_symbols:
+            alternates.append("[" + "".join(re.escape(symbol) for symbol in single_char_symbols) + "]")
+        return "(?:" + "|".join(alternates) + ")"
+    return "[" + "".join(re.escape(symbol) for symbol in single_char_symbols) + "]"
 
 
 def _currency_code_alternation(currency_codes: object) -> str:
+    if not currency_codes:
+        normalized_codes: list[object] | tuple[object, ...] | set[object] = []
+    elif isinstance(currency_codes, str):
+        normalized_codes = [currency_codes]
+    elif isinstance(currency_codes, (list, tuple, set)):
+        normalized_codes = currency_codes
+    else:
+        normalized_codes = [currency_codes]
     codes = sorted(
         {
             str(code).strip().upper()
-            for code in (currency_codes or [])
+            for code in normalized_codes
             if str(code).strip()
         }
     )
@@ -100,18 +119,37 @@ _LLM_TUNING: dict = _load("llm_tuning.json", {})  # type: ignore[assignment]
 
 # Acquisition
 HTTP_TIMEOUT_SECONDS: int = _TUNING.get("http_timeout_seconds", 20)
-IMPERSONATION_TARGET: str = _TUNING.get("impersonation_target", "chrome110")
-HTTP_IMPERSONATION_PROFILES: tuple[str, ...] = tuple(
-    profile for profile in _TUNING.get("http_impersonation_profiles", [IMPERSONATION_TARGET, "chrome131"])
-    if str(profile).strip()
-)
-HTTP_STEALTH_IMPERSONATION_PROFILE: str = str(
-    _TUNING.get(
-        "http_stealth_impersonation_profile",
-        HTTP_IMPERSONATION_PROFILES[-1] if HTTP_IMPERSONATION_PROFILES else IMPERSONATION_TARGET,
-    )
-)
-BROWSER_FALLBACK_VISIBLE_TEXT_MIN: int = _TUNING.get("browser_fallback_visible_text_min", 500)
+IMPERSONATION_TARGET: str = _TUNING.get("impersonation_target", "chrome131")
+HTTP_IMPERSONATION_PROFILES: list[str] = _TUNING.get("http_impersonation_profiles", ["chrome110", "chrome116", "chrome123", "chrome131"])
+HTTP_STEALTH_IMPERSONATION_PROFILE: str = _TUNING.get("http_stealth_impersonation_profile", "chrome131")
+BROWSER_FIRST_DOMAINS: list[str] = _TUNING.get("browser_first_domains", [])
+
+# Performance Profiles
+PERFORMANCE_PROFILES = {
+    "ULTRA_FAST": {
+        "browser_fallback_visible_text_min": 1000,
+        "challenge_wait_max_seconds": 3,
+        "origin_warm_pause_ms": 0,
+        "surface_readiness_max_wait_ms": 3000,
+    },
+    "BALANCED": {
+        "browser_fallback_visible_text_min": 500,
+        "challenge_wait_max_seconds": 7,
+        "origin_warm_pause_ms": 500,
+        "surface_readiness_max_wait_ms": 6000,
+    },
+    "STEALTH": {
+        "browser_fallback_visible_text_min": 200,
+        "challenge_wait_max_seconds": 15,
+        "origin_warm_pause_ms": 2000,
+        "surface_readiness_max_wait_ms": 15000,
+    }
+}
+
+DEFAULT_PROFILE = _TUNING.get("performance_profile", "BALANCED")
+_P = PERFORMANCE_PROFILES.get(DEFAULT_PROFILE, PERFORMANCE_PROFILES["BALANCED"])
+
+BROWSER_FALLBACK_VISIBLE_TEXT_MIN: int = _TUNING.get("browser_fallback_visible_text_min", _P["browser_fallback_visible_text_min"])
 BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX: float = _TUNING.get("browser_fallback_visible_text_ratio_max", 0.02)
 BROWSER_FALLBACK_HTML_SIZE_THRESHOLD: int = _TUNING.get("browser_fallback_html_size_threshold", 200000)
 JS_GATE_PHRASES: list[str] = _TUNING.get("js_gate_phrases", [
@@ -159,11 +197,11 @@ PACING_HOST_CACHE_TTL_SECONDS: int = _TUNING.get("pacing_host_cache_ttl_seconds"
 STEALTH_PREFER_TTL_HOURS: int = _TUNING.get("stealth_prefer_ttl_hours", 24)
 
 # Browser runtime (Phase 2 hardening)
-CHALLENGE_WAIT_MAX_SECONDS: int = _TUNING.get("challenge_wait_max_seconds", 12)
-CHALLENGE_POLL_INTERVAL_MS: int = _TUNING.get("challenge_poll_interval_ms", 2000)
-SURFACE_READINESS_MAX_WAIT_MS: int = _TUNING.get("surface_readiness_max_wait_ms", 12000)
+CHALLENGE_WAIT_MAX_SECONDS: int = _TUNING.get("challenge_wait_max_seconds", _P["challenge_wait_max_seconds"])
+CHALLENGE_POLL_INTERVAL_MS: int = _TUNING.get("challenge_poll_interval_ms", 1000)
+SURFACE_READINESS_MAX_WAIT_MS: int = _TUNING.get("surface_readiness_max_wait_ms", _P["surface_readiness_max_wait_ms"])
 SURFACE_READINESS_POLL_MS: int = _TUNING.get("surface_readiness_poll_ms", 500)
-ORIGIN_WARM_PAUSE_MS: int = _TUNING.get("origin_warm_pause_ms", 2000)
+ORIGIN_WARM_PAUSE_MS: int = _TUNING.get("origin_warm_pause_ms", _P["origin_warm_pause_ms"])
 BROWSER_ERROR_RETRY_ATTEMPTS: int = _TUNING.get("browser_error_retry_attempts", 1)
 BROWSER_ERROR_RETRY_DELAY_MS: int = _TUNING.get("browser_error_retry_delay_ms", 1000)
 BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS: int = _TUNING.get("browser_navigation_networkidle_timeout_ms", 30000)
@@ -194,7 +232,12 @@ if HTTP_RETRY_BACKOFF_MAX_MS < HTTP_RETRY_BACKOFF_BASE_MS:
 #    Users can add aliases for new APIs without touching code.
 # ---------------------------------------------------------------------------
 
-FIELD_ALIASES: dict[str, list[str]] = _EXTRACTION_RULES.get("field_aliases", _load("field_aliases.json", {}))  # type: ignore[assignment]
+_FIELD_ALIASES_LEGACY = _EXTRACTION_RULES.get("field_aliases", {})
+_FIELD_ALIASES_FILE = _load("field_aliases.json", {})
+FIELD_ALIASES: dict[str, list[str]] = {  # type: ignore[assignment]
+    **_FIELD_ALIASES_LEGACY,
+    **_FIELD_ALIASES_FILE,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +346,9 @@ CANDIDATE_UI_NOISE_TOKEN_PATTERN: str = str(_CANDIDATE_CLEANUP.get("ui_noise_tok
 CANDIDATE_UI_ICON_TOKEN_PATTERN: str = str(_CANDIDATE_CLEANUP.get("ui_icon_token_pattern", r"(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work)(?=[A-Z]|\b)|place(?=[A-Z])"))
 CANDIDATE_SCRIPT_NOISE_PATTERN: str = str(_CANDIDATE_CLEANUP.get("script_noise_pattern", r"\b(?:imageloader|document\.getelementbyid|fallback-image)\b"))
 CANDIDATE_PROMO_ONLY_TITLE_PATTERN: str = str(_CANDIDATE_CLEANUP.get("promo_only_title_pattern", r"^(?:[-–—]?\s*)?(?:\d{1,3}%\s*(?:off)?|sale|new(?:\s+in)?|view\s*\d+|best seller|top seller)\s*$"))
-_INTELLIGENCE_CLEANUP: dict = _EXTRACTION_RULES.get("intelligence_cleanup", {})  # type: ignore[assignment]
-INTELLIGENCE_FIELD_NOISE_TOKENS: set[str] = set(_INTELLIGENCE_CLEANUP.get("field_noise_tokens", []))
-INTELLIGENCE_VALUE_NOISE_PHRASES: tuple[str, ...] = tuple(_INTELLIGENCE_CLEANUP.get("value_noise_phrases", []))
+_DISCOVERED_FIELD_CLEANUP: dict = _EXTRACTION_RULES.get("discovered_field_cleanup", {})  # type: ignore[assignment]
+DISCOVERED_FIELD_NOISE_TOKENS: set[str] = set(_DISCOVERED_FIELD_CLEANUP.get("field_noise_tokens", []))
+DISCOVERED_VALUE_NOISE_PHRASES: tuple[str, ...] = tuple(_DISCOVERED_FIELD_CLEANUP.get("value_noise_phrases", []))
 _LISTING_EXTRACTION_RULES: dict = _EXTRACTION_RULES.get("listing_extraction", {})  # type: ignore[assignment]
 LISTING_DETAIL_PATH_MARKERS: tuple[str, ...] = tuple(_LISTING_EXTRACTION_RULES.get("detail_path_markers", []))
 LISTING_SWATCH_CONTAINER_SELECTORS: tuple[str, ...] = tuple(_LISTING_EXTRACTION_RULES.get("swatch_container_selectors", []))
@@ -495,3 +538,21 @@ LLM_ANTHROPIC_MAX_TOKENS: int = _LLM_TUNING.get("anthropic_max_tokens", 3000)
 LLM_ANTHROPIC_TEMPERATURE: float = _LLM_TUNING.get("anthropic_temperature", 0.1)
 LLM_NVIDIA_MAX_TOKENS: int = _LLM_TUNING.get("nvidia_max_tokens", 1200)
 LLM_NVIDIA_TEMPERATURE: float = _LLM_TUNING.get("nvidia_temperature", 0.1)
+
+
+# ---------------------------------------------------------------------------
+# 15. Listing noise filters — loaded from extraction_rules.json
+# ---------------------------------------------------------------------------
+
+_NOISE = _EXTRACTION_RULES.get("listing_noise_filters", {})
+LISTING_NAVIGATION_TITLE_HINTS: frozenset[str] = frozenset(_NOISE.get("navigation_title_hints", []))
+LISTING_MERCHANDISING_TITLE_PREFIXES: tuple[str, ...] = tuple(_NOISE.get("merchandising_title_prefixes", []))
+LISTING_EDITORIAL_TITLE_PATTERNS: list[re.Pattern] = [
+    re.compile(p, re.I) for p in _NOISE.get("editorial_title_patterns", [])
+]
+LISTING_ALT_TEXT_TITLE_PATTERN: re.Pattern | None = (
+    re.compile(_NOISE["alt_text_title_pattern"], re.I)
+    if _NOISE.get("alt_text_title_pattern")
+    else None
+)
+LISTING_WEAK_TITLES: frozenset[str] = frozenset(_NOISE.get("weak_listing_titles", []))

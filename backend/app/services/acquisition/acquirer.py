@@ -8,20 +8,22 @@ import re as _re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from datetime import datetime, timezone
-from urllib.parse import parse_qsl, urlparse
+from pathlib import Path
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from app.core.config import settings
 from app.services.adapters.registry import resolve_adapter
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import fetch_rendered_html
+from app.services.acquisition.browser_runtime import resolve_browser_runtime_options
 from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
 from app.services.pipeline_config import (
     ACQUIRE_HOST_MIN_INTERVAL_MS,
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
+    BROWSER_FIRST_DOMAINS,
     DEFAULT_MAX_SCROLLS,
     JOB_ERROR_PAGE_HEADINGS,
     JOB_ERROR_PAGE_TITLES,
@@ -42,8 +44,8 @@ _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset({
     "session expired",
     "account required",
 })
-_JS_SHELL_MIN_CONTENT_LEN = 50_000
-_JS_SHELL_VISIBLE_RATIO_MAX = 0.08
+_JS_SHELL_MIN_CONTENT_LEN = 100_000
+_JS_SHELL_VISIBLE_RATIO_MAX = 0.15
 
 
 class ProxyPoolExhausted(RuntimeError):
@@ -100,7 +102,7 @@ async def acquire_html(
     url: str,
     proxy_list: list[str] | None = None,
     surface: str | None = None,
-    advanced_mode: str | None = None,
+    traversal_mode: str | None = None,
     max_pages: int = 5,
     max_scrolls: int = DEFAULT_MAX_SCROLLS,
     sleep_ms: int = 0,
@@ -115,7 +117,7 @@ async def acquire_html(
         url=url,
         proxy_list=proxy_list,
         surface=surface,
-        advanced_mode=advanced_mode,
+        traversal_mode=traversal_mode,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
         sleep_ms=sleep_ms,
@@ -132,7 +134,7 @@ async def acquire(
     url: str,
     proxy_list: list[str] | None = None,
     surface: str | None = None,
-    advanced_mode: str | None = None,
+    traversal_mode: str | None = None,
     max_pages: int = 5,
     max_scrolls: int = DEFAULT_MAX_SCROLLS,
     sleep_ms: int = 0,
@@ -143,9 +145,13 @@ async def acquire(
 ) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
-    _write_diagnostics_stub(run_id, url, diagnostics_path)
-    prefer_stealth = bool((acquisition_profile or {}).get("prefer_stealth"))
-    browser_first = False
+    runtime_options = resolve_browser_runtime_options(acquisition_profile)
+    prefer_stealth = runtime_options.warm_origin
+    
+    # Domain-based fast track: Skip curl_cffi for known problematic domains
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    browser_first = any(df in domain for df in BROWSER_FIRST_DOMAINS)
+    
     rotator = ProxyRotator(proxy_list)
     proxy_candidates = rotator.cycle_once()
     if proxy_list and not proxy_candidates:
@@ -160,7 +166,7 @@ async def acquire(
             url=url,
             proxy=proxy,
             surface=surface,
-            advanced_mode=advanced_mode,
+            traversal_mode=traversal_mode,
             max_pages=max_pages,
             max_scrolls=max_scrolls,
             prefer_stealth=prefer_stealth,
@@ -169,6 +175,7 @@ async def acquire(
             requested_field_selectors=requested_field_selectors,
             browser_first=browser_first,
             acquisition_profile=acquisition_profile,
+            runtime_options=runtime_options,
             checkpoint=checkpoint,
         )
         if result is not None:
@@ -206,7 +213,7 @@ async def _acquire_once(
     url: str,
     proxy: str | None,
     surface: str | None,
-    advanced_mode: str | None,
+    traversal_mode: str | None,
     max_pages: int,
     max_scrolls: int,
     prefer_stealth: bool,
@@ -215,6 +222,7 @@ async def _acquire_once(
     requested_field_selectors: dict[str, list[dict]] | None,
     browser_first: bool,
     acquisition_profile: dict[str, object] | None,
+    runtime_options,
     checkpoint: Callable[[], Awaitable[None]] | None,
 ) -> AcquisitionResult | None:
     import logging as _logging
@@ -226,7 +234,7 @@ async def _acquire_once(
         checkpoint=checkpoint,
     )
 
-    if browser_first and not advanced_mode:
+    if browser_first:
         await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
         browser_started_at = time.perf_counter()
         try:
@@ -235,10 +243,11 @@ async def _acquire_once(
                 proxy=proxy,
                 surface=surface,
                 prefer_stealth=prefer_stealth,
-                advanced_mode=advanced_mode,
+                traversal_mode=traversal_mode,
                 max_pages=max_pages,
                 max_scrolls=max_scrolls,
                 request_delay_ms=sleep_ms,
+                runtime_options=runtime_options,
                 requested_fields=requested_fields,
                 requested_field_selectors=requested_field_selectors,
                 checkpoint=checkpoint,
@@ -281,6 +290,7 @@ async def _acquire_once(
                         "memory_browser_first": True,
                         "host_wait_seconds": round(host_wait_seconds, 3) if host_wait_seconds > 0 else None,
                         "prefer_stealth": prefer_stealth,
+                        "anti_bot_enabled": runtime_options.anti_bot_enabled,
                         "proxy_used": bool(proxy),
                     },
                 )
@@ -311,17 +321,20 @@ async def _acquire_once(
                 adapter_hint=None,
                 proxy=proxy,
                 prefer_stealth=prefer_stealth,
-                advanced_mode=advanced_mode,
+                traversal_mode=traversal_mode,
                 host_wait_seconds=host_wait_seconds,
                 memory_prefer_stealth=bool((acquisition_profile or {}).get("prefer_stealth")),
+                anti_bot_enabled=runtime_options.anti_bot_enabled,
                 memory_browser_first=browser_first,
             ),
         )
 
     decision_started_at = time.perf_counter()
     blocked = detect_blocked_page(html)
-    visible_text = " ".join(BeautifulSoup(html, "html.parser").get_text(" ", strip=True).lower().split())
+    soup = BeautifulSoup(html, "html.parser")
+    visible_text = " ".join(soup.get_text(" ", strip=True).lower().split())
     gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
+    
     # Detect JS-shell pages: large HTML with very little visible text indicates
     # a SPA/Next.js shell where all real content is JS-rendered.
     content_len = _content_html_length(html)
@@ -332,12 +345,14 @@ async def _acquire_once(
         and (visible_len / content_len) < _JS_SHELL_VISIBLE_RATIO_MAX
     )
     adapter_hint = await _resolve_adapter_hint(url, html)
+    
+    # Determine if we really need a browser.
     needs_browser = bool(
         blocked.is_blocked
         or normalized.status_code in {403, 429, 503}
-        or len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
+        or (len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN and content_len < _JS_SHELL_MIN_CONTENT_LEN)
         or gate_phrases
-        or (js_shell_detected and adapter_hint is None)
+        or (js_shell_detected and adapter_hint is None and len(visible_text) < 1000)
         or _requested_fields_need_browser(
             html,
             visible_text,
@@ -349,7 +364,7 @@ async def _acquire_once(
     structured_listing_override = (
         needs_browser
         and not blocked.is_blocked
-        and _html_has_extractable_listings(html)
+        and _html_has_extractable_listings_from_soup(soup)
     )
     invalid_surface_page = _is_invalid_surface_page(
         requested_url=url,
@@ -373,9 +388,10 @@ async def _acquire_once(
         adapter_hint=adapter_hint,
         proxy=proxy,
         prefer_stealth=prefer_stealth,
-        advanced_mode=advanced_mode,
+        traversal_mode=traversal_mode,
         host_wait_seconds=host_wait_seconds,
         memory_prefer_stealth=bool((acquisition_profile or {}).get("prefer_stealth")),
+        anti_bot_enabled=runtime_options.anti_bot_enabled,
         memory_browser_first=browser_first,
     )
     curl_diagnostics["curl_final_url"] = normalized.final_url or url
@@ -409,7 +425,9 @@ async def _acquire_once(
             diagnostics=curl_diagnostics,
         )
 
-    if not needs_browser and (not advanced_mode or advanced_mode == "auto"):
+    force_browser_for_traversal = _should_force_browser_for_traversal(traversal_mode)
+
+    if not needs_browser and not force_browser_for_traversal:
         curl_diagnostics["timings_ms"] = _merge_timing_maps(
             curl_diagnostics.get("timings_ms"),
             {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
@@ -423,7 +441,7 @@ async def _acquire_once(
             diagnostics=curl_diagnostics,
         )
 
-    # Escalate to Playwright for JS rendering or advanced crawl modes.
+    # Escalate to Playwright only for real browser need or explicit traversal modes.
     await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
     browser_started_at = time.perf_counter()
     try:
@@ -432,10 +450,11 @@ async def _acquire_once(
             proxy=proxy,
             surface=surface,
             prefer_stealth=prefer_stealth,
-            advanced_mode=advanced_mode,
+            traversal_mode=traversal_mode,
             max_pages=max_pages,
             max_scrolls=max_scrolls,
             request_delay_ms=sleep_ms,
+            runtime_options=runtime_options,
             requested_fields=requested_fields,
             requested_field_selectors=requested_field_selectors,
             checkpoint=checkpoint,
@@ -457,7 +476,11 @@ async def _acquire_once(
         html=browser_html,
         surface=surface,
     )
-    if browser_html and not detect_blocked_page(browser_html).is_blocked and not browser_redirect_shell:
+    if (
+        browser_html
+        and not detect_blocked_page(browser_html).is_blocked
+        and not browser_redirect_shell
+    ):
         merged_browser_diagnostics = dict(curl_diagnostics)
         merged_browser_diagnostics.update(
             {
@@ -557,6 +580,11 @@ async def _acquire_once(
         )
 
     return None
+
+
+def _should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
+    normalized_mode = str(traversal_mode or "").strip().lower()
+    return normalized_mode in {"scroll", "load_more", "paginate"}
 
 
 async def _cooperative_sleep_ms(
@@ -685,11 +713,7 @@ _NEXT_DATA_PRODUCT_SIGNALS = (
 )
 
 
-def _html_has_extractable_listings(html: str) -> bool:
-    if not html:
-        return False
-
-    soup = BeautifulSoup(html, "html.parser")
+def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
     product_count = 0
     for node in soup.select("script[type='application/ld+json']"):
         raw = node.string or node.get_text(" ", strip=True) or ""
@@ -795,15 +819,15 @@ def _requested_fields_need_browser(
 
 
 def _artifact_path(run_id: int, url: str) -> Path:
-    return settings.artifacts_dir / "html" / str(run_id) / f"{_artifact_basename(run_id, url)}.html"
+    return settings.artifacts_dir / "html" / f"{_artifact_basename(run_id, url)}.html"
 
 
 def _network_payload_path(run_id: int, url: str) -> Path:
-    return settings.artifacts_dir / "network" / str(run_id) / f"{_artifact_basename(run_id, url)}.json"
+    return settings.artifacts_dir / "network" / f"{_artifact_basename(run_id, url)}.json"
 
 
 def _diagnostics_path(run_id: int, url: str) -> Path:
-    return settings.artifacts_dir / "diagnostics" / str(run_id) / f"{_artifact_basename(run_id, url)}.json"
+    return settings.artifacts_dir / "diagnostics" / f"{_artifact_basename(run_id, url)}.json"
 
 
 def _write_network_payloads(run_id: int, url: str, payloads: list[dict]) -> None:
@@ -812,24 +836,6 @@ def _write_network_payloads(run_id: int, url: str, payloads: list[dict]) -> None
     path = _network_payload_path(run_id, url)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payloads, indent=2), encoding="utf-8")
-
-
-def _write_diagnostics_stub(run_id: int, url: str, diagnostics_path: Path) -> None:
-    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "run_id": run_id,
-        "url": url,
-        "status": "started",
-        "artifact_path": None,
-        "network_payload_path": None,
-        "html_length": 0,
-        "json_kind": None,
-        "network_payloads": 0,
-        "blocked": None,
-        "diagnostics": {},
-    }
-    diagnostics_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
 
 def _write_failed_diagnostics(
@@ -897,9 +903,10 @@ def _build_curl_diagnostics(
     adapter_hint: str | None,
     proxy: str | None,
     prefer_stealth: bool,
-    advanced_mode: str | None,
+    traversal_mode: str | None,
     host_wait_seconds: float,
     memory_prefer_stealth: bool,
+    anti_bot_enabled: bool,
     memory_browser_first: bool,
 ) -> dict[str, object]:
     response_headers = normalized.headers if isinstance(normalized.headers, dict) else {}
@@ -915,9 +922,10 @@ def _build_curl_diagnostics(
         "curl_gate_phrases": gate_phrases,
         "curl_needs_browser": needs_browser,
         "curl_adapter_hint": adapter_hint,
-        "advanced_mode": advanced_mode,
+        "traversal_mode": traversal_mode,
         "proxy_used": bool(proxy),
         "prefer_stealth": prefer_stealth,
+        "anti_bot_enabled": anti_bot_enabled,
         "curl_impersonate_profile": normalized.impersonate_profile or None,
         "curl_attempts": normalized.attempts or None,
         "curl_attempt_log": normalized.attempt_log or None,
@@ -971,16 +979,8 @@ def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bo
 def _artifact_basename(run_id: int, url: str) -> str:
     parsed = urlparse(url)
     host = _slugify(parsed.netloc or "unknown-host")
-    path_slug = _slugify(_artifact_path_hint(parsed)) or "root"
     short_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:10]
-    return f"{host}__run-{run_id}__{path_slug}__{short_hash}"
-
-
-def _artifact_path_hint(parsed) -> str:
-    pieces = [segment for segment in parsed.path.split("/") if segment]
-    query_bits = [f"{key}-{value}" if value else key for key, value in parse_qsl(parsed.query, keep_blank_values=True)]
-    hint = "-".join([*pieces[:4], *query_bits[:3]])
-    return hint or "root"
+    return f"{host}-{short_hash}-run_{run_id}"
 
 
 def _slugify(value: str) -> str:

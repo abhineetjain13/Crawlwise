@@ -1,7 +1,7 @@
 # Tests for the discovery service.
 from __future__ import annotations
 
-from app.services.discover.service import discover_sources
+from app.services.discover import discover_sources
 
 
 def test_discover_json_ld():
@@ -321,3 +321,27 @@ def test_discover_hidden_dom_preserves_text_and_data_attributes():
     assert len(manifest.hidden_dom) == 1
     assert manifest.hidden_dom[0]["text"] == "Hidden specification details"
     assert manifest.hidden_dom[0]["data_attrs"]["data-state"]["sku"] == "ABC-123"
+
+
+def test_discover_hydrated_state_from_react_create_element_props():
+    html = """
+    <html><body>
+    <script>
+    ReactDOM.hydrate(
+      React.createElement(App, {
+        "searchStore": {
+          "works": [
+            {"title": "Book A", "workUrl": "book-a", "buyNowPrice": 4.99},
+            {"title": "Book B", "workUrl": "book-b", "buyNowPrice": 5.99}
+          ]
+        }
+      }),
+      document.getElementById("root")
+    );
+    </script>
+    </body></html>
+    """
+    manifest = discover_sources(html)
+
+    assert len(manifest._hydrated_states) == 1
+    assert manifest._hydrated_states[0]["searchStore"]["works"][0]["title"] == "Book A"

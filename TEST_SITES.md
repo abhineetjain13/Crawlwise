@@ -73,18 +73,16 @@ JS-rendered and complex HTTP listing pages. No aggressive bot protection.
 |---|---|---|---|---|
 | LC01 | `https://www.reverb.com/marketplace?product_type=electric-guitars` | Browser | Medium | Marketplace infinite scroll, condition + price facets, mixed DOM + inline JSON |
 | LC02 | `https://www.discogs.com/sell/list?genre=Electronic` | Browser | Medium | Vinyl marketplace, seller metadata, paginated, release-linked JSON |
-| LC03 | `https://www.musiciansfriend.com/guitars/electric-guitars` | HTTP | Medium | Paginated catalog, JSON-LD ProductList, faceted filters |
-| LC04 | `https://www.adorama.com/catalog.tpl?cat=DLCAM` | HTTP | Medium | Photo/video listing, numbered pagination, inline JSON product arrays |
-
+| LC03 | `https://www.musiciansfriend.com/snare-drum-heads` | HTTP | Medium | Paginated catalog, JSON-LD ProductList, faceted filters |
 | LC06 | `https://www.uline.com/BL_8421/Boxes` | HTTP | Medium | Packaging catalog, table-based layout, variant data in DOM |
 | LC08 | `https://www.autozone.com/filters-and-pcv/oil-filter` | Browser | Medium | Auto parts, vehicle fitment filter, nested window state JSON |
 | LC10 | `https://www.chewy.com/b/dry-dog-food-294` | Browser | Medium | JS-rendered product cards, ingredient previews in listing |
-| LC12 | `https://www.backmarket.com/en-us/l/smartphones/6b74ac09-dc46-4c8e-a5a3-5a2f98e53aec` | Browser | Medium | Refurbished marketplace, grade taxonomy, JSON-LD ProductList |
+| LC12 | https://www.backmarket.com/en-us/l/iphone/e8724fea-197e-4815-85ce-21b8068020cc | Browser | Medium | Refurbished marketplace, grade taxonomy, JSON-LD ProductList |
 | LC13 | `https://www.ifixit.com/Parts` | HTTP | Easy | Repair parts tree, device compatibility hierarchy, clean HTML |
 | LC14 | `https://www.abebooks.com/servlet/SearchResults?kn=python&pt=book` | HTTP | Medium | Used books, multi-seller listing per title, ISBN-keyed |
 | LC15 | `https://www.thriftbooks.com/browse/?b.search=science` | HTTP | Easy | Book reseller, edition + condition variants in card, pagination |
 | LC17 | `https://www.thomann.de/gb/guitars.html` | HTTP | Medium | EU music retailer, numbered pages, JSON-LD structured |
-| LC18 | `https://www.rockler.com/woodworking-tools` | HTTP | Medium | Specialty retail, category facets, inline JSON product data |
+| LC18 | `https://www.rockler.com/wood/exotic-lumber` | HTTP | Medium | Specialty retail, category facets, inline JSON product data |
 | LC19 | `https://www.govplanet.com/for-sale/equipment` | Browser | Hard | Gov't surplus heavy equipment — auction site, JS listing, unusual domain |
 
 ---
@@ -100,11 +98,6 @@ Workable, and independent boards — none in the original corpus.
 | LJ02 | `https://boards.greenhouse.io/embed/job_board?for=shopify` | Greenhouse | Easy | Large board, many departments, clean embed |
 | LJ03 | `https://boards.greenhouse.io/embed/job_board?for=discord` | Greenhouse | Easy | Flat listing, team taxonomy |
 | LJ04 | `https://boards.greenhouse.io/embed/job_board?for=palantir` | Greenhouse | Easy | Unusual role taxonomy, classified-adjacent titles |
-| LJ05 | `https://jobs.lever.co/stripe` | Lever | Easy | New company vs original Lever set |
-| LJ06 | `https://jobs.lever.co/intercom` | Lever | Easy | SaaS mid-size, standard Lever board |
-| LJ07 | `https://jobs.lever.co/brex` | Lever | Easy | Fintech, compact listing |
-| LJ08 | `https://apply.workable.com/deel/` | Workable | Easy | New ATS platform — Workable not in original corpus |
-| LJ09 | `https://apply.workable.com/remote/` | Workable | Easy | Remote.com on Workable — location-free job fields |
 | LJ10 | `https://startup.jobs/` | Custom | Medium | JS-rendered, startup categorisation, equity + stage tags |
 | LJ11 | `https://www.idealist.org/en/jobs` | Custom | Medium | Non-profit sector, cause tags, volunteering vs paid flag |
 | LJ12 | `https://www.usajobs.gov/search/results/?k=software+engineer&p=1` | Government | Hard | JS-rendered, government schema, pay grade, series code |

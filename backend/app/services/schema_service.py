@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse, urlunparse
 
+from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.domain_utils import normalize_domain
@@ -19,6 +22,21 @@ logger = logging.getLogger(__name__)
 _FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
 _NUMERIC_ONLY_RE = re.compile(r"^\d+$")
 _MAX_SCHEMA_AGE = timedelta(days=7)
+_PROMPT_SAFE_SURFACE_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
+_PROMPT_ESCAPE_PATTERNS = (
+    re.compile(r"ignore\s+previous", re.IGNORECASE),
+    re.compile(r"\bsystem\s*:", re.IGNORECASE),
+    re.compile(r"\bassistant\s*:", re.IGNORECASE),
+)
+_PROMPT_INJECTION_PATTERNS = (
+    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
+    re.compile(r"disregard\s+(the\s+)?system", re.IGNORECASE),
+    re.compile(r"you are now", re.IGNORECASE),
+    re.compile(r"repeat after me", re.IGNORECASE),
+)
+_SCHEMA_PROMPT_HTML_MAX_CHARS = 3500
+_SCHEMA_PROMPT_SURFACE_MAX_CHARS = 40
+_SCHEMA_PROMPT_BASELINE_FIELD_LIMIT = 120
 
 
 @dataclass
@@ -111,8 +129,8 @@ def _snapshot_to_resolved(
         baseline_set = set(baseline)
         new_fields = [field for field in fields if field not in baseline_set]
     if not deprecated_fields:
-        field_set = set(fields)
-        deprecated_fields = [field for field in baseline if field not in field_set]
+        stored_field_set = set(stored_fields)
+        deprecated_fields = [field for field in baseline if field not in stored_field_set]
     return ResolvedSchema(
         surface=surface,
         domain=domain,
@@ -212,10 +230,13 @@ def learn_schema_from_record(
     baseline = _dedupe_fields(baseline_fields)
     explicit = _dedupe_fields(explicit_fields)
     record = sample_record if isinstance(sample_record, dict) else {}
+    normalized_record_values: dict[str, object] = {}
     discovered_new_fields: list[str] = []
     baseline_set = set(baseline)
     for key, value in record.items():
         normalized = _normalize_field_name(key)
+        if normalized and normalized not in normalized_record_values:
+            normalized_record_values[normalized] = value
         if (
             not is_valid_schema_field_name(normalized)
             or normalized in baseline_set
@@ -232,7 +253,11 @@ def learn_schema_from_record(
         baseline_fields=baseline,
         fields=fields,
         new_fields=[field for field in fields if field not in baseline_set],
-        deprecated_fields=[field for field in baseline if field not in record or record.get(field) in (None, "", [], {})],
+        deprecated_fields=[
+            field
+            for field in baseline
+            if field not in normalized_record_values or normalized_record_values.get(field) in (None, "", [], {})
+        ],
         source="learned",
         confidence=0.75,
         saved_at=_now_iso(),
@@ -245,6 +270,61 @@ def _prune_html_for_schema_llm(html: str, max_chars: int = 3500) -> str:
     stripped = re.sub(r"<!--.*?-->", "", stripped, flags=re.DOTALL)
     stripped = re.sub(r"\s{3,}", "  ", stripped)
     return stripped[:max_chars]
+
+
+def _escape_for_prompt(text: str, *, max_chars: int) -> str:
+    escaped = str(text or "").strip()
+    for pattern in _PROMPT_ESCAPE_PATTERNS:
+        escaped = pattern.sub(lambda match: " ".join(f"`{part}`" for part in match.group(0).split()), escaped)
+    return escaped[:max_chars]
+
+
+def _prompt_injection_detected(text: str) -> bool:
+    normalized = str(text or "")
+    return any(pattern.search(normalized) for pattern in _PROMPT_INJECTION_PATTERNS)
+
+
+def _normalize_prompt_url(url: str, fallback_domain: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        normalized = parsed._replace(fragment="", netloc=parsed.netloc.lower())
+        return urlunparse(normalized)
+    normalized_domain = normalize_domain(fallback_domain)
+    if normalized_domain:
+        return f"https://{normalized_domain}/"
+    raise ValueError("Invalid schema inference URL")
+
+
+def _sanitize_prompt_surface(surface: str) -> str:
+    normalized = str(surface or "").strip().lower()
+    if not normalized or len(normalized) > _SCHEMA_PROMPT_SURFACE_MAX_CHARS or not _PROMPT_SAFE_SURFACE_RE.match(normalized):
+        raise ValueError("Invalid schema inference surface")
+    if _prompt_injection_detected(normalized):
+        raise ValueError("Unsafe schema inference surface")
+    return normalized
+
+
+def _sanitize_baseline_fields_json(baseline_fields: list[str]) -> str:
+    sanitized_fields = [
+        field
+        for field in _dedupe_fields(baseline_fields)
+        if is_valid_schema_field_name(field)
+    ][:_SCHEMA_PROMPT_BASELINE_FIELD_LIMIT]
+    return json.dumps(sanitized_fields, separators=(",", ":"))
+
+
+def _sanitize_html_snippet_for_prompt(html_text: str) -> str:
+    soup = BeautifulSoup(html.unescape(str(html_text or "")), "html.parser")
+    for tag in soup.find_all(["script", "style", "svg", "noscript", "iframe", "object", "embed", "meta", "link", "template"]):
+        tag.decompose()
+    for tag in soup.find_all(True):
+        tag.attrs = {}
+    cleaned_text = soup.get_text("\n", strip=True)
+    cleaned_text = re.sub(r"\s{3,}", "  ", cleaned_text)
+    escaped = _escape_for_prompt(cleaned_text, max_chars=_SCHEMA_PROMPT_HTML_MAX_CHARS)
+    if _prompt_injection_detected(escaped):
+        raise ValueError("Unsafe schema inference HTML snippet")
+    return escaped
 
 
 async def _infer_schema_via_llm(
@@ -260,6 +340,10 @@ async def _infer_schema_via_llm(
 ) -> ResolvedSchema | None:
     if not html or surface == "tabular":
         return None
+    normalized_url = _normalize_prompt_url(url, domain)
+    sanitized_surface = _sanitize_prompt_surface(surface)
+    sanitized_baseline_fields_json = _sanitize_baseline_fields_json(baseline_fields)
+    sanitized_html_snippet = _sanitize_html_snippet_for_prompt(_prune_html_for_schema_llm(html))
     result = await asyncio.wait_for(
         run_prompt_task(
             session,
@@ -267,10 +351,10 @@ async def _infer_schema_via_llm(
             run_id=run_id,
             domain=domain,
             variables={
-                "url": url,
-                "surface": surface,
-                "baseline_fields_json": json.dumps(baseline_fields),
-                "html_snippet": _prune_html_for_schema_llm(html),
+                "url": normalized_url,
+                "surface": sanitized_surface,
+                "baseline_fields_json": sanitized_baseline_fields_json,
+                "html_snippet": sanitized_html_snippet,
             },
         ),
         timeout=12.0,

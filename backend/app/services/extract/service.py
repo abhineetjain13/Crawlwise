@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from lxml import etree, html as lxml_html
 
-from app.services.discover.service import DiscoveryManifest
+from app.services.discover import DiscoveryManifest
 from app.services.pipeline_config import (
     CANDIDATE_AVAILABILITY_TOKENS,
     CANDIDATE_CATEGORY_TOKENS,
@@ -377,7 +377,7 @@ def _finalize_candidate_rows(field_name: str, rows: list[dict], *, base_url: str
         filtered.append({**row, "value": value, "source": source, "sources": source_parts})
     filtered.sort(key=lambda row: _candidate_sort_key(field_name, row), reverse=True)
     # Cap candidate rows per field — showing 6+ near-identical variant values is
-    # noise, not intelligence.  Keep top candidates by quality score.
+        # noise, not user-facing output. Keep top candidates by quality score.
     if len(filtered) > MAX_CANDIDATES_PER_FIELD:
         filtered = filtered[:MAX_CANDIDATES_PER_FIELD]
     return filtered
@@ -510,7 +510,7 @@ def _clean_candidate_field_map(
 def _filter_candidate_rows(field_name: str, rows: list[dict], *, target_fields: set[str]) -> list[dict]:
     if field_name not in target_fields and _is_noisy_dynamic_field_name(field_name):
         return []
-    # Drop zero-quality candidates for non-canonical (dynamic/intelligence) fields
+    # Drop zero-quality candidates for non-canonical discovered fields
     if field_name not in target_fields:
         rows = [row for row in rows if _field_quality_score(field_name, row.get("value")) > 0]
     if not rows:

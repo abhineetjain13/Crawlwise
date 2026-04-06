@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import app.services.extract.listing_extractor as listing_extractor
 
-from app.services.discover.service import DiscoveryManifest
+from app.services.discover import DiscoveryManifest
 from app.services.extract.listing_extractor import extract_listing_records
 
 
@@ -192,6 +192,54 @@ def test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by
     assert records[0]["location"] == "Peterborough, Cambridgeshire"
     assert records[0]["url"].endswith("/1511949734")
     assert records[1]["title"] == "Philips lumea prestige"
+
+
+def test_extract_listing_records_handles_react_hydrate_props_payloads():
+    html = """
+    <html><body>
+    <script>
+    ReactDOM.hydrate(
+      React.createElement(DesktopBrowse.Index, {
+        "searchStore": {
+          "works": [
+            {
+              "title": "Breath: The New Science of a Lost Art",
+              "workUrl": "breath-the-new-science-of-a-lost-art_james-nestor",
+              "buyNowPrice": 5.39,
+              "listPrice": 28.0,
+              "imageUrl": "https://img.example.com/a.jpg",
+              "numberOfReviews": 12
+            },
+            {
+              "title": "The Food Lab",
+              "workUrl": "the-food-lab_j-kenji-lopez-alt",
+              "buyNowPrice": 36.98,
+              "imageUrl": "https://img.example.com/b.jpg",
+              "numberOfReviews": 7
+            }
+          ]
+        }
+      }),
+      document.getElementById("react_root")
+    );
+    </script>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.thriftbooks.com/browse/?b.search=science",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Breath: The New Science of a Lost Art"
+    assert records[0]["url"] == "https://www.thriftbooks.com/breath-the-new-science-of-a-lost-art_james-nestor"
+    assert records[0]["price"] == 5.39
+    assert records[0]["original_price"] == 28.0
+    assert records[0]["review_count"] == 12
 
 
 def test_extract_listing_records_splits_paginated_html_and_dedupes_urls():

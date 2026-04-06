@@ -32,6 +32,32 @@ _FEATURE_SKIP_PATTERN = re.compile(
     r"\b(?:shop|review(?:s)?|verified reviewer)\b|read the story",
     re.IGNORECASE,
 )
+_NON_CONTENT_TAGS = ("script", "style", "svg", "noscript", "iframe", "object", "embed", "meta", "link", "template")
+_SECTION_LABEL_SKIP_TOKENS = (
+    "contact",
+    "share",
+    "top searches",
+    "you may also like",
+    "similar",
+    "related",
+)
+_SECTION_KEY_SKIP_PREFIXES = (
+    "contact_",
+    "share",
+    "top_searches",
+    "you_may_also_like",
+    "related",
+    "similar",
+    "ad_id_",
+    "images",
+)
+_SECTION_BODY_SKIP_PHRASES = (
+    "click to reveal phone number",
+    "dealer network partner",
+    "buy report now",
+    "share this ad",
+)
+_IMAGE_COUNTER_RE = re.compile(r"^\d+\s+of\s+\d+$", re.IGNORECASE)
 
 
 def extract_semantic_detail_data(
@@ -48,6 +74,7 @@ def extract_semantic_detail_data(
         return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}, "aggregates": {}, "table_groups": []}
 
     soup = BeautifulSoup(html, "html.parser")
+    _strip_non_content_nodes(soup)
     sections = _extract_sections(soup)
     table_groups = _extract_table_groups(soup)
     specifications = _extract_specifications(soup, table_groups)
@@ -221,6 +248,8 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
         if not key or not _is_section_label(label) or _is_section_label_blocked(label) or _is_ignored_section_node(node):
             continue
         body = _extract_section_content(node, soup)
+        if _should_skip_section(key, label, body):
+            continue
         if body and key not in sections:
             sections[key] = body
 
@@ -232,6 +261,8 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
         if not key or _is_section_label_blocked(label) or _is_ignored_section_node(node):
             continue
         body = _extract_section_content(node, soup)
+        if _should_skip_section(key, label, body):
+            continue
         if body and key not in sections:
             sections[key] = body
 
@@ -252,10 +283,37 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
                 if text:
                     body_parts.append(text)
         body = " ".join(body_parts).strip()
+        if _should_skip_section(key, label, body):
+            continue
         if body and key not in sections:
             sections[key] = body
 
     return sections
+
+
+def _strip_non_content_nodes(soup: BeautifulSoup) -> None:
+    for tag in soup.find_all(_NON_CONTENT_TAGS):
+        tag.decompose()
+
+
+def _should_skip_section(key: str, label: str, body: str) -> bool:
+    normalized_key = normalize_requested_field(key)
+    lowered_label = _clean_text(label).lower()
+    lowered_body = _clean_text(body).lower()
+    if not lowered_body:
+        return True
+    if normalized_key and any(
+        normalized_key == prefix or normalized_key.startswith(prefix)
+        for prefix in _SECTION_KEY_SKIP_PREFIXES
+    ):
+        return True
+    if any(token in lowered_label for token in _SECTION_LABEL_SKIP_TOKENS):
+        return True
+    if any(phrase in lowered_body for phrase in _SECTION_BODY_SKIP_PHRASES):
+        return True
+    if _IMAGE_COUNTER_RE.fullmatch(lowered_body):
+        return True
+    return False
 
 
 def _extract_specifications(soup: BeautifulSoup, table_groups: list[dict]) -> dict[str, str]:

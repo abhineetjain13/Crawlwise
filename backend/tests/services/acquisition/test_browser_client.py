@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.core.config import settings
+from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.browser_client import (
     _assess_challenge_signals,
     _build_launch_kwargs,
@@ -520,11 +521,12 @@ async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypat
         target=object(),
         url="https://example.com/product",
         proxy=None,
-        advanced_mode=None,
+        traversal_mode=None,
         max_pages=1,
         max_scrolls=1,
         prefer_stealth=False,
         request_delay_ms=0,
+        runtime_options=BrowserRuntimeOptions(anti_bot_enabled=True, retry_launch_profiles=True),
         requested_fields=[],
         requested_field_selectors={},
     )
@@ -614,6 +616,44 @@ async def test_collect_paginated_html_rejects_non_public_next_page(monkeypatch, 
     assert "Page 2" not in html
     assert page.goto_calls == []
     assert "Rejected pagination URL" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_collect_paginated_html_allows_in_place_pagination_without_goto(monkeypatch):
+    page = FakePaginationPage()
+    page._pages = {
+        "https://example.com/products?page=1": {
+            "html": "<html><body><div>Page 1</div></body></html>",
+            "next": "",
+        }
+    }
+    in_place_urls = ["https://example.com/products?page=1", "https://example.com/products?page=1", ""]
+    page_state = {"index": 0}
+
+    async def _fake_click_and_observe_next_page(_page, checkpoint=None):
+        _ = checkpoint
+        if in_place_urls:
+            next_url = in_place_urls.pop(0)
+            if next_url:
+                page_state["index"] += 1
+            return next_url
+        return ""
+
+    async def _fake_content():
+        return f"<html><body><div>Page {page_state['index'] + 1}</div></body></html>"
+
+    page.content = _fake_content
+    monkeypatch.setattr("app.services.acquisition.browser_client._click_and_observe_next_page", _fake_click_and_observe_next_page)
+    monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client._expand_accordions", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client._open_requested_field_sections", AsyncMock())
+
+    html = await _collect_paginated_html(page, max_pages=3, request_delay_ms=0)
+
+    assert "Page 1" in html
+    assert "Page 2" in html
+    assert page.goto_calls == []
 
 
 @pytest.mark.asyncio

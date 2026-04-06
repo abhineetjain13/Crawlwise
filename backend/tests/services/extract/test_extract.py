@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from app.services.discover.service import DiscoveryManifest
-from app.services.discover.service import discover_sources
+from app.services.discover import DiscoveryManifest
+from app.services.discover import discover_sources
 from app.services.extract.service import (
     _extract_image_urls,
     _normalize_color_candidate,
@@ -765,7 +765,7 @@ def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholder
     assert semantic["table_groups"][1]["title"] == "Environmental & Export Classifications"
     assert semantic["specifications"]["operating_temperature"] == "-"
     # Placeholder value "-" is preserved in semantic trace but filtered from
-    # intelligence candidates (zero quality score for dynamic fields).
+    # discovered-field candidates (zero quality score for dynamic fields).
     assert "operating_temperature" not in candidates
 
 

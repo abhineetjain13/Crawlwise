@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC
 from email.utils import parsedate_to_datetime
 import time
 from dataclasses import dataclass, field
@@ -261,6 +262,10 @@ def _parse_retry_after(headers: dict[str, str]) -> float | None:
         retry_at = parsedate_to_datetime(raw_value)
     except (TypeError, ValueError, IndexError, OverflowError):
         return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    else:
+        retry_at = retry_at.astimezone(UTC)
     return max(0.0, retry_at.timestamp() - time.time())
 
 
