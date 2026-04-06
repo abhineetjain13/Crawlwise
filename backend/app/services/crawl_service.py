@@ -13,8 +13,10 @@ import re
 import time
 from datetime import UTC, datetime
 from html import unescape
+from urllib.parse import urljoin, urlparse
 
 import regex as regex_lib
+from bs4 import BeautifulSoup, NavigableString, Tag
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +38,7 @@ from app.services.crawl_state import (
 from app.services.discover import DiscoveryManifest, discover_sources
 from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
 from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.service import _field_quality_score, coerce_field_candidate_value, extract_candidates
+from app.services.extract.service import coerce_field_candidate_value, extract_candidates
 from app.services.xpath_service import validate_xpath_syntax
 from app.services.extract.spa_pruner import prune_spa_state
 from app.services.knowledge_base.store import get_canonical_fields, get_selector_defaults
@@ -659,6 +661,7 @@ async def _process_single_url(
                     html="",
                     network_payloads=acq.network_payloads,
                     adapter_records=recovered.records,
+                    evidence_context=_build_browser_evidence_context(acq),
                 )
                 if is_listing:
                     return await _extract_listing(
@@ -721,6 +724,7 @@ async def _process_single_url(
         html=html,
         network_payloads=acq.network_payloads,
         adapter_records=adapter_records,
+        evidence_context=_build_browser_evidence_context(acq),
     )
 
     # ── STAGE 2: ANALYZE ──
@@ -780,6 +784,7 @@ async def _process_single_url(
                 html=browser_html,
                 network_payloads=browser_acq.network_payloads,
                 adapter_records=browser_adapter_records,
+                evidence_context=_build_browser_evidence_context(browser_acq),
             )
             extraction_started_at = time.perf_counter()
             records, verdict, url_metrics = await _extract_listing(
@@ -931,26 +936,97 @@ async def _extract_listing(
     are found, returns an explicit listing_detection_failed verdict.
     """
     adapter_name = adapter_result.adapter_name if adapter_result else None
+    effective_surface = _resolve_listing_surface(surface=surface, url=url, html=html, acq=acq)
+    url_metrics["listing_surface_used"] = effective_surface
+    if effective_surface != surface:
+        url_metrics["listing_surface_corrected"] = True
 
-    if adapter_records:
+    extracted_records = extract_listing_records(
+        html=html,
+        surface=effective_surface,
+        target_fields=set(additional_fields),
+        page_url=url,
+        max_records=max_records,
+        manifest=manifest,
+    )
+    source_label = "listing_extractor"
+    if not extracted_records and adapter_records:
         extracted_records = adapter_records
         source_label = "adapter"
-    else:
-        # Use the enhanced listing extractor (structured-data-first, then DOM cards)
-        extracted_records = extract_listing_records(
-            html=html,
-            surface=surface,
-            target_fields=set(additional_fields),
-            page_url=url,
-            max_records=max_records,
-            manifest=manifest,
-        )
-        source_label = "listing_extractor"
 
     # ── LISTING FALLBACK GUARD ──
-    # If listing extraction found zero or one record, do NOT fall through to
-    # a detail-style single-record path. Mark the run as failed.
+    # If listing extraction found zero records, distinguish actual extraction
+    # misses from anti-bot/interstitial failures before marking the run failed.
     if not extracted_records:
+        if _listing_acquisition_blocked(acq, html):
+            if persist_logs:
+                await _log(
+                    session,
+                    run.id,
+                    "warning",
+                    "[ANALYZE] Listing extraction found 0 records because the acquired page was blocked",
+                )
+            return [], VERDICT_BLOCKED, url_metrics
+        if _looks_like_loading_listing_shell(html, surface=effective_surface):
+            if persist_logs:
+                await _log(
+                    session,
+                    run.id,
+                    "warning",
+                    "[ANALYZE] Listing extraction found 0 records on a loading shell; skipping page fallback so browser retry/failure is explicit",
+                )
+            return [], VERDICT_LISTING_FAILED, url_metrics
+        if effective_surface == "job_listing":
+            if persist_logs:
+                await _log(
+                    session,
+                    run.id,
+                    "warning",
+                    "[ANALYZE] Job listing extraction found 0 records; skipping page fallback so browser retry/failure is explicit",
+                )
+            return [], VERDICT_LISTING_FAILED, url_metrics
+        fallback_record = _build_legible_listing_fallback_record(
+            url=url,
+            html=html,
+            manifest=manifest,
+        )
+        if fallback_record is not None:
+            if update_run_state:
+                await _set_stage(session, run, STAGE_ANALYZE)
+            if persist_logs:
+                await _log(
+                    session,
+                    run.id,
+                    "warning",
+                    "[ANALYZE] Listing extraction found 0 item records but preserved legible page fallback",
+                )
+            db_record = CrawlRecord(
+                run_id=run.id,
+                source_url=url,
+                data=fallback_record["data"],
+                raw_data=fallback_record["raw_data"],
+                discovered_data=_compact_dict({
+                    "requested_field_coverage": _requested_field_coverage(
+                        fallback_record["data"], additional_fields
+                    ) or None,
+                    "fallback_reason": "listing_no_item_records",
+                }),
+                source_trace=_compact_dict({
+                    "type": "listing_fallback",
+                    "source": "legible_page_fallback",
+                    "adapter": adapter_name,
+                    "fallback_kind": "page_markdown",
+                    "fallback_summary": fallback_record["summary"],
+                    "manifest_trace": fallback_record.get("manifest_trace"),
+                    **_build_acquisition_trace(acq),
+                }),
+                raw_html_path=acq.artifact_path,
+            )
+            session.add(db_record)
+            await session.flush()
+            saved = [dict(fallback_record["data"])]
+            _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
+            return saved, VERDICT_PARTIAL, url_metrics
         if persist_logs:
             await _log(session, run.id, "warning",
                         "[ANALYZE] Listing extraction found 0 records — marking as listing_detection_failed")
@@ -984,15 +1060,20 @@ async def _extract_listing(
         )
         current_schema = learned_schema or current_schema
         allowed_fields = set(current_schema.fields)
-        normalized, discovered_fields = _split_detail_output_fields(
+        record_source_label = str(raw_record.get("_source") or source_label).strip() or source_label
+        public_record = _sanitize_listing_record_fields(
             _public_record_fields(raw_record),
+            surface=effective_surface,
+        )
+        normalized, discovered_fields = _split_detail_output_fields(
+            public_record,
             allowed_fields=allowed_fields,
         )
         raw_data = _raw_record_payload(raw_record)
         requested_coverage = _requested_field_coverage(normalized, additional_fields)
         review_bucket = _build_review_bucket(
             discovered_fields,
-            fallback_source=adapter_name or source_label,
+            fallback_source=adapter_name or record_source_label,
         )
         db_record = CrawlRecord(
             run_id=run.id,
@@ -1008,7 +1089,9 @@ async def _extract_listing(
                 "schema_resolution": schema_trace_payload(current_schema),
                 **_build_acquisition_trace(acq),
                 "adapter": adapter_name,
-                "source": source_label,
+                "source": record_source_label,
+                "surface_used": effective_surface,
+                "surface_requested": surface if effective_surface != surface else None,
                 "requested_fields": additional_fields or None,
                 "requested_field_coverage": requested_coverage or None,
                 "manifest_trace": _build_manifest_trace(manifest) or None,
@@ -1037,6 +1120,92 @@ async def _extract_listing(
     await session.flush()
     _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
     return saved, verdict, url_metrics
+
+
+def _listing_acquisition_blocked(acq: AcquisitionResult, html: str) -> bool:
+    if html and detect_blocked_page(html).is_blocked:
+        return True
+    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    if bool(diagnostics.get("browser_blocked")):
+        return True
+    browser_diagnostics = diagnostics.get("browser_diagnostics")
+    if isinstance(browser_diagnostics, dict) and bool(browser_diagnostics.get("blocked")):
+        return True
+    return False
+
+
+def _looks_like_loading_listing_shell(html: str, *, surface: str) -> bool:
+    if not html or "listing" not in str(surface or "").lower():
+        return False
+    lowered = html.lower()
+    if "job" in str(surface or "").lower():
+        return False
+    if lowered.count("product-card-skeleton") >= 4:
+        return True
+    if "data-test-id=\"content-grid\"" in lowered and lowered.count("animate-pulse") >= 8:
+        return True
+    return False
+
+
+def _sanitize_listing_record_fields(record: dict, *, surface: str) -> dict:
+    sanitized = dict(record or {})
+    if not sanitized:
+        return sanitized
+
+    title = str(sanitized.get("title") or "").strip()
+    if title:
+        normalized_title = re.sub(r"\s+([,;:/|])", r"\1", " ".join(title.split())).strip()
+        normalized_title = re.sub(r"\s*[,;/|:-]+\s*$", "", normalized_title).strip()
+        if normalized_title:
+            sanitized["title"] = normalized_title
+
+    if "job" not in str(surface or "").lower():
+        return sanitized
+
+    sanitized.pop("image_url", None)
+    sanitized.pop("additional_images", None)
+
+    description = _summarize_job_listing_description(sanitized.get("description"))
+    if description:
+        sanitized["description"] = description
+    else:
+        sanitized.pop("description", None)
+    return sanitized
+
+
+def _summarize_job_listing_description(value: object) -> str:
+    text = _clean_candidate_text(value, limit=None)
+    if not text:
+        return ""
+    text = " ".join(str(text).split()).strip()
+    if not text:
+        return ""
+    if len(text) <= 180:
+        return text
+
+    parts = [
+        segment.strip(" -|,:;/")
+        for segment in re.split(r"(?<=[.!?])\s+", text)
+        if segment and segment.strip(" -|,:;/")
+    ]
+    if not parts:
+        return text[:180].rstrip(" ,;:-") + "..."
+
+    summary_parts: list[str] = []
+    summary_len = 0
+    for part in parts:
+        projected = summary_len + len(part) + (1 if summary_parts else 0)
+        if projected > 180:
+            break
+        summary_parts.append(part)
+        summary_len = projected
+        if summary_len >= 80 or len(summary_parts) >= 4:
+            break
+
+    summary = " ".join(summary_parts).strip()
+    if len(summary) >= 35:
+        return summary
+    return text[:180].rstrip(" ,;:-") + "..."
 
 
 async def _extract_detail(
@@ -1391,6 +1560,287 @@ def _public_record_fields(record: dict) -> dict:
     }
 
 
+def _build_legible_listing_fallback_record(
+    *,
+    url: str,
+    html: str,
+    manifest: DiscoveryManifest,
+) -> dict[str, dict[str, object] | dict[str, int | bool | str]] | None:
+    soup = BeautifulSoup(html or "", "html.parser")
+    for selector in ("script", "style", "noscript", "svg", "iframe", "header", "footer", "nav", "aside"):
+        for node in soup.select(selector):
+            node.decompose()
+
+    title = _first_non_empty_text(
+        soup.select_one("main h1"),
+        soup.select_one("article h1"),
+        soup.select_one("h1"),
+    )
+    if not title:
+        title = _clean_page_text((soup.title.string if soup.title and soup.title.string else ""))
+    description_meta = soup.select_one("meta[name='description']")
+    description = _clean_page_text(description_meta.get("content", "") if description_meta else "")
+
+    content_root = soup.select_one("main") or soup.select_one("article") or soup.body or soup
+    markdown_lines: list[str] = []
+    fallback_table_rows: list[dict[str, object]] = []
+    total_chars = 0
+    card_lines, card_chars, fallback_table_rows = _render_fallback_card_group(content_root, page_url=url)
+    if card_lines:
+        markdown_lines.extend(card_lines)
+        total_chars += card_chars
+    else:
+        seen_text: set[str] = set()
+        for node in content_root.select("h2, h3, h4, p, li"):
+            if _should_skip_fallback_node(node, page_url=url):
+                continue
+            text = _render_fallback_node_markdown(node, page_url=url)
+            if not text or text in seen_text:
+                continue
+            seen_text.add(text)
+            plain_text = _clean_page_text(node.get_text(" ", strip=True))
+            if node.name in {"h2", "h3", "h4"} and len(plain_text) <= 140:
+                line = f"## {text}"
+            elif node.name == "li":
+                line = f"- {text}"
+            else:
+                line = text
+            markdown_lines.append(line)
+            total_chars += len(plain_text)
+            if total_chars >= 2400 or len(markdown_lines) >= 24:
+                break
+
+    table_markdown = _render_manifest_tables_markdown(manifest.tables)
+    if table_markdown:
+        if markdown_lines:
+            markdown_lines.extend(["## Tables", table_markdown])
+        else:
+            markdown_lines.extend(["## Tables", table_markdown])
+
+    enough_text = total_chars >= 180 and len(markdown_lines) >= 3
+    has_tables = bool(table_markdown)
+    if not enough_text and not has_tables:
+        return None
+
+    page_markdown_lines: list[str] = []
+    if title:
+        page_markdown_lines.append(f"# {title}")
+    if description:
+        page_markdown_lines.extend(["", description])
+    if markdown_lines:
+        page_markdown_lines.extend(["", *markdown_lines] if page_markdown_lines else markdown_lines)
+    page_markdown = "\n".join(line for line in page_markdown_lines if line is not None).strip()
+    if len(page_markdown) < 120 and not has_tables:
+        return None
+
+    data = _compact_dict({
+        "title": title or None,
+        "description": description or None,
+        "page_markdown": page_markdown or None,
+        "table_markdown": table_markdown or None,
+        "record_type": "page_fallback",
+    })
+    raw_data = _compact_dict({
+        "page_text_excerpt": page_markdown or None,
+        "tables": manifest.tables[:3] if manifest.tables else None,
+        "typed_table_rows": fallback_table_rows or None,
+    })
+    summary: dict[str, int | bool | str] = _compact_dict({
+        "title": title or None,
+        "has_description": bool(description),
+        "content_chars": total_chars,
+        "table_count": len(manifest.tables or []),
+        "has_tables": has_tables,
+        "typed_row_count": len(fallback_table_rows),
+    })
+    manifest_tables = list(manifest.tables or [])
+    if fallback_table_rows:
+        manifest_tables.append({
+            "table_index": len(manifest_tables) + 1,
+            "section_title": "Fallback cards",
+            "caption": "Fallback listing rows",
+            "headers": [
+                {"text": "title", "href": None},
+                {"text": "url", "href": None},
+                {"text": "description", "href": None},
+            ],
+            "rows": [
+                {
+                    "row_index": index,
+                    "cells": [
+                        {"text": str(item.get("title") or ""), "href": None},
+                        {"text": str(item.get("url") or ""), "href": None},
+                        {"text": str(item.get("description") or ""), "href": None},
+                    ],
+                }
+                for index, item in enumerate(fallback_table_rows, start=1)
+            ],
+        })
+    return {
+        "data": data,
+        "raw_data": raw_data,
+        "summary": summary,
+        "manifest_trace": _compact_dict({
+            "tables": manifest_tables or None,
+            "fallback_table_rows": fallback_table_rows or None,
+        }),
+    }
+
+
+def _first_non_empty_text(*nodes: object) -> str:
+    for node in nodes:
+        text = ""
+        if node is not None and hasattr(node, "get_text"):
+            text = _clean_page_text(node.get_text(" ", strip=True))
+        if text:
+            return text
+    return ""
+
+
+def _clean_page_text(value: object) -> str:
+    text = unescape(str(value or "")).replace("\u00a0", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _render_fallback_node_markdown(node: Tag, *, page_url: str) -> str:
+    parts: list[str] = []
+    for child in node.children:
+        if isinstance(child, NavigableString):
+            text = _clean_page_text(str(child))
+            if text:
+                parts.append(text)
+            continue
+        if not isinstance(child, Tag):
+            continue
+        if child.name == "a":
+            text = _clean_page_text(child.get_text(" ", strip=True))
+            href = _clean_page_text(child.get("href", ""))
+            resolved_href = urljoin(page_url, href) if href else ""
+            if text and resolved_href:
+                parts.append(f"[{text}]({resolved_href})")
+            elif text:
+                parts.append(text)
+            continue
+        nested = _render_fallback_node_markdown(child, page_url=page_url)
+        if nested:
+            parts.append(nested)
+    return _clean_page_text(" ".join(parts)) if parts else _clean_page_text(node.get_text(" ", strip=True))
+
+
+def _render_fallback_card_group(root: Tag, *, page_url: str) -> tuple[list[str], int, list[dict[str, object]]]:
+    cards = _find_fallback_card_group(root)
+    if not cards:
+        return [], 0, []
+
+    lines: list[str] = []
+    typed_rows: list[dict[str, object]] = []
+    total_chars = 0
+    seen_titles: set[str] = set()
+    for card in cards[:12]:
+        title_node = card.select_one("h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5")
+        title_text = _clean_page_text(title_node.get_text(" ", strip=True)) if title_node else ""
+        if not title_text or title_text.lower() in seen_titles:
+            continue
+        seen_titles.add(title_text.lower())
+        link_node = title_node if isinstance(title_node, Tag) and title_node.name == "a" else card.select_one("a[href]")
+        href = _clean_page_text(link_node.get("href", "")) if isinstance(link_node, Tag) else ""
+        resolved_href = urljoin(page_url, href) if href else ""
+        title_line = f"## [{title_text}]({resolved_href})" if resolved_href else f"## {title_text}"
+        lines.append(title_line)
+        total_chars += len(title_text)
+        typed_row: dict[str, object] = {
+            "title": title_text,
+            "url": resolved_href or None,
+        }
+
+        description_node = card.select_one("p, [class*='description' i], [class*='summary' i], [class*='excerpt' i]")
+        if description_node:
+            description_text = _clean_page_text(description_node.get_text(" ", strip=True))
+            if description_text and description_text.lower() != title_text.lower():
+                lines.append(description_text)
+                total_chars += len(description_text)
+                typed_row["description"] = description_text
+        typed_rows.append(_compact_dict(typed_row))
+        if len(lines) >= 24 or total_chars >= 2400:
+            break
+
+    return lines, total_chars, typed_rows
+
+
+def _find_fallback_card_group(root: Tag) -> list[Tag]:
+    best_group: list[Tag] = []
+    best_score: tuple[int, int] = (0, 0)
+    for container in root.select("main, section, div, ul, ol"):
+        children = [child for child in container.children if isinstance(child, Tag)]
+        if len(children) < 2:
+            continue
+        grouped: dict[tuple[str, tuple[str, ...]], list[Tag]] = {}
+        for child in children:
+            key = (child.name, tuple(sorted(child.get("class", []))))
+            grouped.setdefault(key, []).append(child)
+        for _key, group in grouped.items():
+            if len(group) < 2:
+                continue
+            linked_titles = 0
+            descriptive_cards = 0
+            for card in group[:12]:
+                if card.select_one("h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5") and card.select_one("a[href]"):
+                    linked_titles += 1
+                desc_node = card.select_one("p, [class*='description' i], [class*='summary' i], [class*='excerpt' i]")
+                if desc_node and len(_clean_page_text(desc_node.get_text(" ", strip=True))) >= 40:
+                    descriptive_cards += 1
+            score = (linked_titles, descriptive_cards)
+            if linked_titles >= 2 and score > best_score:
+                best_group = group
+                best_score = score
+    return best_group
+
+
+def _should_skip_fallback_node(node: Tag, *, page_url: str) -> bool:
+    text = _clean_page_text(node.get_text(" ", strip=True))
+    if not text:
+        return True
+    lowered = text.lower()
+    if node.name == "li":
+        if len(text) <= 30:
+            anchor = node.select_one("a[href]")
+            href = _clean_page_text(anchor.get("href", "")) if isinstance(anchor, Tag) else ""
+            resolved_href = urljoin(page_url, href) if href else ""
+            if resolved_href:
+                parsed = urlparse(resolved_href)
+                segments = [segment for segment in parsed.path.split("/") if segment]
+                if len(segments) <= 1:
+                    return True
+            if lowered in {"home", "products", "services", "contact us", "blogs", "news", "grinding advice"}:
+                return True
+    if lowered in {"read more", "learn more", "view more"}:
+        return True
+    return False
+
+
+def _render_manifest_tables_markdown(tables: list[dict] | None) -> str:
+    rendered_tables: list[str] = []
+    for table in list(tables or [])[:3]:
+        rows = table.get("rows") if isinstance(table, dict) else None
+        if not isinstance(rows, list) or not rows:
+            continue
+        table_lines: list[str] = []
+        for row in rows[:8]:
+            cells = row.get("cells") if isinstance(row, dict) else None
+            if not isinstance(cells, list):
+                continue
+            values = [
+                _clean_page_text(cell.get("text", "")) for cell in cells
+                if isinstance(cell, dict) and _clean_page_text(cell.get("text", ""))
+            ]
+            if values:
+                table_lines.append("| " + " | ".join(values) + " |")
+        if table_lines:
+            rendered_tables.append("\n".join(table_lines))
+    return "\n\n".join(rendered_tables).strip()
+
+
 def _normalize_record_fields(record: dict[str, object]) -> dict[str, object]:
     normalized = _compact_dict({
         _normalize_committed_field_name(key): normalize_value(_normalize_committed_field_name(key), value)
@@ -1432,16 +1882,14 @@ def _reconcile_detail_candidate_values(
                     "source": row.get("source"),
                 })
                 continue
-            score = _field_quality_score(field_name, normalized_value)
-            if not _passes_detail_quality_gate(field_name, normalized_value, score):
+            if not _passes_detail_quality_gate(field_name, normalized_value):
                 rejected_rows.append({
                     "value": normalized_value,
                     "reason": "quality_gate_rejected",
-                    "score": score,
                     "source": row.get("source"),
                 })
                 continue
-            accepted_row = {**row, "value": normalized_value, "_score": score}
+            accepted_row = {**row, "value": normalized_value}
             break
 
         if accepted_row is None:
@@ -1454,21 +1902,29 @@ def _reconcile_detail_candidate_values(
             reconciliation[field_name] = _compact_dict({
                 "status": "accepted_with_rejections",
                 "accepted_source": accepted_row.get("source"),
-                "accepted_score": accepted_row.get("_score"),
                 "rejected": rejected_rows[:6],
             })
 
     return reconciled, reconciliation
 
 
-def _passes_detail_quality_gate(field_name: str, value: object, score: int) -> bool:
+def _passes_detail_quality_gate(field_name: str, value: object) -> bool:
     if value in (None, "", [], {}):
         return False
-    if field_name in {"title", "brand", "category"}:
-        return score >= 10
-    if field_name in {"price", "sale_price", "original_price", "currency", "sku", "availability"}:
-        return score > 0
-    return score >= 1
+    if isinstance(value, str):
+        text = " ".join(value.split()).strip()
+        if not text or text.lower() in {"-", "—", "--", "n/a", "na", "none", "null", "undefined"}:
+            return False
+        if field_name in {"title", "brand", "category"}:
+            return len(text) >= 2
+        if field_name in {"price", "sale_price", "original_price", "salary", "review_count", "rating"}:
+            return bool(re.search(r"\d", text))
+        if field_name == "currency":
+            return bool(re.fullmatch(r"[A-Z]{3}", text.upper()) or re.search(r"[€£$¥₹]", text))
+        if field_name in {"sku", "availability"}:
+            return len(text) >= 2
+        return len(text) >= 1
+    return True
 
 
 def _apply_llm_suggestions_to_candidate_values(
@@ -1497,8 +1953,7 @@ def _apply_llm_suggestions_to_candidate_values(
         normalized_value = coerce_field_candidate_value(normalized_field, suggested_value, base_url=url)
         if normalized_value in (None, "", [], {}):
             continue
-        score = _field_quality_score(normalized_field, normalized_value)
-        if not _passes_detail_quality_gate(normalized_field, normalized_value, score):
+        if not _passes_detail_quality_gate(normalized_field, normalized_value):
             continue
 
         source = str(raw_suggestion.get("source") or "llm_cleanup").strip() or "llm_cleanup"
@@ -1507,7 +1962,6 @@ def _apply_llm_suggestions_to_candidate_values(
         promoted[normalized_field] = _compact_dict({
             "value": normalized_value,
             "source": source,
-            "score": score,
             "note": note or None,
         })
 
@@ -1642,11 +2096,113 @@ def _build_manifest_trace(
         "json_ld": manifest.json_ld or None,
         "microdata": manifest.microdata or None,
         "hidden_dom": manifest.hidden_dom or None,
+        "gallery_media": manifest.gallery_media or None,
+        "expanded_sections": manifest.expanded_sections or None,
         "tables": manifest.tables or None,
+        "evidence_graph": _build_evidence_graph(manifest) or None,
+        "evidence_context": manifest.evidence_context or None,
         "semantic": semantic or None,
         **(extra or {}),
     })
     return payload
+
+
+def _build_browser_evidence_context(acq: AcquisitionResult) -> dict[str, object]:
+    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    return _compact_dict({
+        "accordion_summary": diagnostics.get("accordion_summary"),
+        "field_activation": diagnostics.get("field_activation"),
+        "field_trigger_selectors": diagnostics.get("field_trigger_selectors"),
+        "browser_diagnostics": diagnostics.get("browser_diagnostics"),
+    })
+
+
+def _resolve_listing_surface(
+    *,
+    surface: str,
+    url: str,
+    html: str,
+    acq: AcquisitionResult,
+) -> str:
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface != "ecommerce_listing":
+        return surface
+    if _looks_like_job_listing_page(url=url, html=html, acq=acq):
+        return "job_listing"
+    return surface
+
+
+def _looks_like_job_listing_page(*, url: str, html: str, acq: AcquisitionResult) -> bool:
+    lowered_url = str(url or "").lower()
+    if any(token in lowered_url for token in ("/jobs", "/job-", "/job/", "/careers", "/career", "job-search", "search-jobs")):
+        return True
+
+    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    platform_family = str((diagnostics.get("curl_platform_family") or "")).strip().lower()
+    if platform_family in {"workday", "icims", "adp", "generic_jobs", "rippling_ats"}:
+        return True
+
+    lowered_html = str(html or "").lower()
+    job_markers = (
+        "search jobs",
+        "current openings",
+        "open positions",
+        "job openings",
+        "career opportunities",
+        "apply now",
+        "job search",
+        "employment opportunities",
+        "data-automation-id=\"jobtitle\"",
+        "data-testid=\"careers",
+        "careers.js",
+        "job-location-autocomplete",
+        "job-title",
+    )
+    signals = sum(1 for marker in job_markers if marker in lowered_html)
+    return signals >= 2
+
+
+def _build_evidence_graph(manifest: DiscoveryManifest) -> dict[str, object]:
+    nodes: list[dict[str, object]] = []
+    edges: list[dict[str, object]] = []
+
+    def add_node(node_type: str, count: int, **extra: object) -> None:
+        if count <= 0:
+            return
+        node_id = f"{node_type}:{len(nodes) + 1}"
+        nodes.append(_compact_dict({
+            "id": node_id,
+            "type": node_type,
+            "count": count,
+            **extra,
+        }))
+
+    add_node("adapter_records", len(manifest.adapter_data or []))
+    add_node("network_payloads", len(manifest.network_payloads or []))
+    add_node("json_ld", len(manifest.json_ld or []))
+    add_node("microdata", len(manifest.microdata or []))
+    add_node("hidden_dom", len(manifest.hidden_dom or []))
+    add_node("gallery_media", len(manifest.gallery_media or []))
+    add_node("expanded_sections", len(manifest.expanded_sections or []))
+    add_node("tables", len(manifest.tables or []))
+    evidence_context = manifest.evidence_context if isinstance(manifest.evidence_context, dict) else {}
+    activation = evidence_context.get("field_activation") if isinstance(evidence_context.get("field_activation"), dict) else {}
+    activation_rows = sum(
+        len(rows)
+        for key, rows in activation.items()
+        if key != "_plan" and isinstance(rows, list)
+    )
+    activation_plan = activation.get("_plan") if isinstance(activation.get("_plan"), list) else []
+    if activation_rows or activation_plan:
+        add_node("activation", activation_rows or len(activation_plan), plan_fields=[
+            str(row.get("field_name") or "").strip()
+            for row in activation_plan
+            if isinstance(row, dict) and str(row.get("field_name") or "").strip()
+        ] or None)
+    if nodes:
+        for node in nodes:
+            edges.append({"from": "page", "to": node["id"], "relationship": "contains"})
+    return _compact_dict({"nodes": nodes or None, "edges": edges or None})
 
 
 def _review_bucket_source_for_field(field_name: str, candidate_map: object, fallback_source: str) -> str:
@@ -1677,10 +2233,9 @@ def _review_bucket_confidence(field_name: str, value: object, source: str) -> in
         base = 6
     elif normalized_source.startswith("dom"):
         base = 5
-    score = _field_quality_score(field_name, value)
-    if score >= 10:
+    if _passes_detail_quality_gate(field_name, value):
         base += 1
-    elif score <= 1:
+    else:
         base -= 1
     return max(1, min(10, base))
 
@@ -1815,6 +2370,7 @@ async def _save_acquisition_memory(
             "last_success_method": acquisition_result.method,
             "last_content_type": acquisition_result.content_type,
             "last_adapter_hint": str(diagnostics.get("curl_adapter_hint") or "").strip() or None,
+            "last_platform_family": str(diagnostics.get("curl_platform_family") or "").strip() or None,
             "curl_success_count": curl_success_count,
             "browser_success_count": browser_success_count,
             "blocked_count": blocked_count,
@@ -1831,6 +2387,7 @@ def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -
     return _compact_dict({
         "method": acq.method,
         "content_type": acq.content_type,
+        "platform_family": str(diagnostics.get("curl_platform_family") or "").strip() or None,
         "browser_attempted": bool(diagnostics.get("browser_attempted")),
         "browser_used": acq.method == "playwright",
         "memory_browser_first": bool(diagnostics.get("memory_browser_first")),
@@ -1868,9 +2425,14 @@ def _merge_run_acquisition_metrics(existing: object, url_metrics: dict[str, obje
     method = str(url_metrics.get("method") or "").strip()
     if method:
         methods[method] = int(methods.get(method, 0) or 0) + 1
+    platform_families = dict(current.get("platform_families") or {})
+    platform_family = str(url_metrics.get("platform_family") or "").strip()
+    if platform_family:
+        platform_families[platform_family] = int(platform_families.get(platform_family, 0) or 0) + 1
 
     summary = {
         "methods": methods,
+        "platform_families": platform_families,
         "browser_attempted_urls": int(current.get("browser_attempted_urls", 0) or 0) + int(bool(url_metrics.get("browser_attempted"))),
         "browser_used_urls": int(current.get("browser_used_urls", 0) or 0) + int(bool(url_metrics.get("browser_used"))),
         "memory_browser_first_urls": int(current.get("memory_browser_first_urls", 0) or 0) + int(bool(url_metrics.get("memory_browser_first"))),
@@ -1910,6 +2472,7 @@ def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
         "browser_attempted": bool(diagnostics.get("browser_attempted")),
         "acquisition": _compact_dict({
             "final_url": diagnostics.get("curl_final_url") or browser_diagnostics.get("final_url"),
+            "platform_family": str(diagnostics.get("curl_platform_family") or "").strip() or None,
             "browser_attempted": bool(diagnostics.get("browser_attempted")),
             "browser_used": acq.method == "playwright",
             "challenge_state": diagnostics.get("browser_challenge_state"),
@@ -2311,7 +2874,7 @@ def _should_surface_discovered_field(field_name: object, value: object, *, sourc
     if any(token in lowered_source for token in ("review", "reviews", "bazaarvoice", "rating_distribution")):
         return False
 
-    return _field_quality_score(normalized_field, normalized_value) > 0
+    return _passes_detail_quality_gate(normalized_field, normalized_value)
 
 
 def _normalize_detail_candidate_values(candidate_values: dict[str, object], *, url: str) -> dict[str, object]:

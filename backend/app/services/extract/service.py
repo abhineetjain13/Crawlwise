@@ -20,6 +20,7 @@ from app.services.pipeline_config import (
     CANDIDATE_GENERIC_TITLE_VALUES,
     CANDIDATE_IDENTIFIER_TOKENS,
     CANDIDATE_IMAGE_TOKENS,
+    CANDIDATE_PLACEHOLDER_VALUES,
     CANDIDATE_PRICE_TOKENS,
     CANDIDATE_TITLE_NOISE_TOKENS,
     CANDIDATE_SALARY_TOKENS,
@@ -47,7 +48,6 @@ from app.services.pipeline_config import (
     REQUESTED_FIELD_ALIASES,
     SALARY_RANGE_REGEX,
     SEMANTIC_AGGREGATE_SEPARATOR,
-    SOURCE_RANKING,
 )
 from app.services.requested_field_policy import (
     expand_requested_fields,
@@ -73,7 +73,15 @@ def _is_valid_dynamic_field_name(normalized: str) -> bool:
     """Reject field names that are noise: single chars, sentence-like, or JSON-LD types."""
     if len(normalized) <= 1 or len(normalized) > 60:
         return False
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", normalized):
+        return False
     if normalized in JSONLD_TYPE_NOISE:
+        return False
+    tokens = [token for token in normalized.split("_") if token]
+    if len(tokens) > _DYNAMIC_FIELD_NAME_MAX_TOKENS:
+        return False
+    dropped_tokens = sum(1 for token in tokens if token in _DYNAMIC_FIELD_NAME_DROP_TOKENS)
+    if dropped_tokens >= 2 and dropped_tokens >= len(tokens) - 1:
         return False
     # 5+ underscores suggests a sentence heading, not a spec label
     if normalized.count("_") >= 5:
@@ -108,7 +116,6 @@ def extract_candidates(
     soup = BeautifulSoup(html, "html.parser")
     tree = _build_xpath_tree(html)
     candidates: dict[str, list[dict]] = {}
-    source_trace: dict[str, list[dict]] = {}
     target_fields = sorted(set(resolved_fields or get_canonical_fields(surface)) | set(expand_requested_fields(additional_fields)))
     domain = _domain(url)
     contract_by_field = _index_extraction_contract(extraction_contract or [])
@@ -119,12 +126,20 @@ def extract_candidates(
         manifest=manifest,
     )
 
-    for field_name in target_fields:
-        rows: list[dict] = []
+    canonical_target_fields = set(get_canonical_fields(surface))
 
-        # 0. User-provided extraction contract (highest precedence)
+    for field_name in target_fields:
+        def _commit(rows: list[dict]) -> bool:
+            filtered_rows = _finalize_candidate_rows(field_name, rows, base_url=url)
+            if not filtered_rows:
+                return False
+            candidates[field_name] = filtered_rows[:1]
+            return True
+
+        # Explicit contracts remain the highest-precedence override.
         contract_rule = contract_by_field.get(field_name)
         if contract_rule:
+            rows: list[dict] = []
             xpath_value = _extract_xpath_value(tree, contract_rule.get("xpath", ""))
             if xpath_value:
                 rows.append({
@@ -145,13 +160,19 @@ def extract_candidates(
                     "regex": contract_rule.get("regex"),
                     "sample_value": regex_value,
                 })
+            if _commit(rows):
+                continue
 
-        # 1. Adapter data (rank 1)
+        # 1. Platform adapter result
+        rows = []
         for record in manifest.adapter_data:
             if isinstance(record, dict) and field_name in record and record[field_name]:
                 rows.append({"value": record[field_name], "source": "adapter"})
+        if _commit(rows):
+            continue
 
-        # 2. Network payloads (rank 2) — skip tracking/geo/widget payloads
+        # 2. XHR / JSON API payloads
+        rows = []
         for payload in manifest.network_payloads:
             if not isinstance(payload, dict):
                 continue
@@ -161,37 +182,33 @@ def extract_candidates(
             body = payload.get("body", {})
             if isinstance(body, (dict, list)):
                 _append_source_candidates(rows, field_name, body, "network_intercept", base_url=url)
+        if _commit(rows):
+            continue
 
-        # 3. Hydrated app state / __NEXT_DATA__ (rank 3)
-        for state in manifest._hydrated_states:
-            _append_source_candidates(rows, field_name, state, "hydrated_state", base_url=url)
-        for payload in manifest.embedded_json:
-            _append_source_candidates(rows, field_name, payload, "embedded_json", base_url=url)
-        if manifest.open_graph:
-            _append_source_candidates(rows, field_name, manifest.open_graph, "open_graph", base_url=url)
-            if field_name == "company":
-                site_name = manifest.open_graph.get("og:site_name")
-                if site_name not in (None, "", [], {}):
-                    rows.append({"value": site_name, "source": "open_graph"})
-        if manifest.next_data:
-            _append_source_candidates(rows, field_name, manifest.next_data, "next_data", base_url=url)
-        for payload in manifest.hidden_dom:
-            _append_source_candidates(rows, field_name, payload, "hidden_dom", base_url=url)
-        rows.extend(_structured_manifest_candidates(manifest, field_name))
-
-        # 4. JSON-LD (rank 4) — skip non-product blocks for product fields
+        # 3. JSON-LD
+        rows = []
         for payload in manifest.json_ld:
             if isinstance(payload, dict):
                 if _should_skip_jsonld_block(payload, field_name):
                     continue
                 _append_source_candidates(rows, field_name, payload, "json_ld", base_url=url)
+        if _commit(rows):
+            continue
 
-        # 5. Microdata/RDFa (rank 5)
-        for item in manifest.microdata:
-            if isinstance(item, dict):
-                _append_source_candidates(rows, field_name, item, "microdata", base_url=url)
+        # 4. __NEXT_DATA__ / hydrated client state
+        rows = []
+        for payload in manifest.embedded_json:
+            _append_source_candidates(rows, field_name, payload, "embedded_json", base_url=url)
+        if manifest.next_data:
+            _append_source_candidates(rows, field_name, manifest.next_data, "next_data", base_url=url)
+        for state in manifest._hydrated_states:
+            _append_source_candidates(rows, field_name, state, "hydrated_state", base_url=url)
+        rows.extend(_structured_manifest_candidates(manifest, field_name))
+        if _commit(rows):
+            continue
 
-        # 6. Saved domain selectors ("site memory") outrank semantic heuristics.
+        # 5. DOM selectors
+        rows = []
         selectors = get_selector_defaults(domain, field_name)
         for selector in selectors:
             value, count, selector_used = extract_selector_value(
@@ -211,35 +228,33 @@ def extract_candidates(
                     "selector_used": selector_used,
                     "status": selector.get("status") or "validated",
                 })
-
-        # 7. Semantic sections/specifications extracted from page-local HTML
-        semantic_rows = resolve_requested_field_values(
-            [field_name],
-            sections=semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {},
-            specifications=semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {},
-            promoted_fields=semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else {},
-        )
-        semantic_value = semantic_rows.get(field_name)
-        if semantic_value not in (None, "", [], {}):
-            rows.append({"value": semantic_value, "source": "semantic_section"})
-
-        # 8. Deterministic DOM patterns (rank 8)
         dom_row = _dom_pattern(soup, field_name)
         if dom_row:
             rows.append(dom_row)
-
-        # 9. Label-value text extraction (rank 9) — fallback for requested fields
-        #    embedded inside description text as "Label: Value" patterns
-        if not rows:
+        for item in manifest.microdata:
+            if isinstance(item, dict):
+                _append_source_candidates(rows, field_name, item, "microdata", base_url=url)
+        if manifest.open_graph:
+            _append_source_candidates(rows, field_name, manifest.open_graph, "open_graph", base_url=url)
+            if field_name == "company":
+                site_name = manifest.open_graph.get("og:site_name")
+                if site_name not in (None, "", [], {}):
+                    rows.append({"value": site_name, "source": "open_graph"})
+        if field_name in canonical_target_fields or field_name in REQUESTED_FIELD_ALIASES:
+            semantic_rows = resolve_requested_field_values(
+                [field_name],
+                sections=semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {},
+                specifications=semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {},
+                promoted_fields=semantic.get("promoted_fields") if isinstance(semantic.get("promoted_fields"), dict) else {},
+            )
+            semantic_value = semantic_rows.get(field_name)
+            if semantic_value not in (None, "", [], {}):
+                rows.append({"value": semantic_value, "source": "semantic_section"})
+        if field_name in canonical_target_fields or field_name in REQUESTED_FIELD_ALIASES:
             text_value = _extract_label_value_from_text(field_name, label_value_text_sources, html)
             if text_value:
                 rows.append({"value": text_value, "source": "text_pattern"})
-
-        if rows:
-            filtered_rows = _finalize_candidate_rows(field_name, rows, base_url=url)
-            if filtered_rows:
-                candidates[field_name] = filtered_rows
-                source_trace[field_name] = filtered_rows
+        _commit(rows)
 
     dynamic_rows = _build_dynamic_semantic_rows(semantic)
     structured_rows = _build_dynamic_structured_rows(manifest)
@@ -252,12 +267,16 @@ def extract_candidates(
     for field_name, rows in dynamic_rows.items():
         merged_dynamic_rows.setdefault(field_name, []).extend(rows)
     for field_name, rows in merged_dynamic_rows.items():
-        existing_rows = candidates.get(field_name, [])
-        merged_rows = [*existing_rows, *rows]
-        filtered_rows = _finalize_candidate_rows(field_name, merged_rows, base_url=url)
+        if field_name in candidates:
+            continue
+        if field_name not in canonical_target_fields and not _is_valid_dynamic_field_name(field_name):
+            continue
+        filtered_rows = _finalize_candidate_rows(field_name, rows, base_url=url)
         if filtered_rows:
-            candidates[field_name] = filtered_rows
-            source_trace[field_name] = filtered_rows
+            normalized_value = _normalized_candidate_text(filtered_rows[0].get("value")).casefold()
+            if normalized_value in CANDIDATE_PLACEHOLDER_VALUES:
+                continue
+            candidates[field_name] = filtered_rows[:1]
 
     target_fields = set(target_fields)
     if (
@@ -272,13 +291,10 @@ def extract_candidates(
         ]
         if mirrored_rows:
             candidates["additional_images"] = mirrored_rows
-            source_trace["additional_images"] = mirrored_rows
-    candidates = _clean_candidate_field_map(candidates, target_fields=target_fields, surface=surface)
-    source_trace = {field_name: candidates[field_name] for field_name in candidates}
 
     # Apply domain field mappings
     mappings = get_domain_mapping(domain, surface)
-    return candidates, {"candidates": source_trace, "mapping_hint": mappings, "semantic": semantic}
+    return candidates, {"candidates": dict(candidates), "mapping_hint": mappings, "semantic": semantic}
 
 
 def _extract_label_value_from_text(
@@ -379,7 +395,6 @@ def _finalize_candidate_rows(field_name: str, rows: list[dict], *, base_url: str
             for source_part in source_parts:
                 if source_part not in sources:
                     sources.append(source_part)
-            sources.sort(key=lambda item: _SOURCE_RANK.get(item, 0), reverse=True)
             existing["sources"] = sources
             existing["source"] = ", ".join(sources)
             preferred_value = _preferred_display_candidate_value(existing.get("value"), value)
@@ -393,9 +408,6 @@ def _finalize_candidate_rows(field_name: str, rows: list[dict], *, base_url: str
             continue
         filtered_index[normalized] = len(filtered)
         filtered.append({**row, "value": value, "source": source, "sources": source_parts})
-    filtered.sort(key=lambda row: _candidate_sort_key(field_name, row), reverse=True)
-    # Cap candidate rows per field — showing 6+ near-identical variant values is
-        # noise, not user-facing output. Keep top candidates by quality score.
     if len(filtered) > MAX_CANDIDATES_PER_FIELD:
         filtered = filtered[:MAX_CANDIDATES_PER_FIELD]
     return filtered
@@ -472,76 +484,6 @@ def _normalized_candidate_value(value: object) -> object | None:
         cleaned = _normalized_candidate_text(value)
         return cleaned or None
     return value if value not in (None, "", [], {}) else None
-
-
-def _clean_candidate_field_map(
-    candidate_map: dict[str, list[dict]],
-    *,
-    target_fields: set[str],
-    surface: str,
-) -> dict[str, list[dict]]:
-    filtered_map: dict[str, list[dict]] = {}
-    is_job = "job" in str(surface or "").lower()
-    is_ecommerce = "ecommerce" in str(surface or "").lower()
-
-    for field_name, rows in candidate_map.items():
-        # Vertical-specific suppression:
-        # Job boards should never emit commerce prices or currencies
-        if is_job and field_name in {"price", "sale_price", "original_price", "currency"}:
-            continue
-        # Ecommerce sites should never emit job salaries or hiring organizations
-        if is_ecommerce and field_name in {"salary", "hiringOrganization", "hiring_organization"}:
-            continue
-
-        filtered_rows = _filter_candidate_rows(field_name, rows, target_fields=target_fields)
-        if filtered_rows:
-            filtered_map[field_name] = filtered_rows
-
-    value_owners: dict[str, tuple[str, int]] = {}
-    for field_name, rows in filtered_map.items():
-        preference = _field_name_preference(field_name, target_fields=target_fields)
-        for row in rows:
-            comparable = _comparable_candidate_value(row.get("value"))
-            if not comparable:
-                continue
-            existing = value_owners.get(comparable)
-            if existing is None or preference > existing[1]:
-                value_owners[comparable] = (field_name, preference)
-
-    cleaned_map: dict[str, list[dict]] = {}
-    for field_name, rows in filtered_map.items():
-        if field_name in target_fields:
-            cleaned_map[field_name] = rows
-            continue
-        deduped_rows: list[dict] = []
-        for row in rows:
-            comparable = _comparable_candidate_value(row.get("value"))
-            owner = value_owners.get(comparable) if comparable else None
-            if owner and owner[0] != field_name:
-                continue
-            deduped_rows.append(row)
-        if deduped_rows:
-            cleaned_map[field_name] = deduped_rows
-    return cleaned_map
-
-
-def _filter_candidate_rows(field_name: str, rows: list[dict], *, target_fields: set[str]) -> list[dict]:
-    if field_name not in target_fields and _is_noisy_dynamic_field_name(field_name):
-        return []
-    # Drop zero-quality candidates for non-canonical discovered fields
-    if field_name not in target_fields:
-        rows = [row for row in rows if _field_quality_score(field_name, row.get("value")) > 0]
-    if not rows:
-        return []
-    scored_rows = [
-        (row, _field_quality_score(field_name, row.get("value")))
-        for row in rows
-    ]
-    best_score = max(score for _, score in scored_rows)
-    if _is_title_field(field_name) and best_score > 0:
-        floor = max(best_score - 8, 16) if best_score >= 20 else max(best_score - 4, 8)
-        rows = [row for row, score in scored_rows if score >= floor][:6]
-    return rows
 
 
 def _comparable_candidate_value(value: object) -> str:
@@ -891,7 +833,6 @@ def _pick_best_nested_candidate(field_name: str, values: list[object]) -> object
     rows = [{"value": value, "source": "nested"} for value in values if value not in (None, "", [], {})]
     if not rows:
         return None
-    rows.sort(key=lambda row: _candidate_sort_key(field_name, row), reverse=True)
     return rows[0]["value"]
 
 
@@ -999,168 +940,6 @@ def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
 
     _collect(value)
     return urls
-
-
-_SOURCE_RANK = SOURCE_RANKING
-
-
-def _candidate_sort_key(field_name: str, row: dict) -> tuple[int, int]:
-    value = row.get("value")
-    sources = row.get("sources") if isinstance(row.get("sources"), list) else None
-    if sources:
-        source_rank = max(_SOURCE_RANK.get(str(source).strip(), 0) for source in sources)
-    else:
-        source = str(row.get("source") or "").strip()
-        source_rank = max(_SOURCE_RANK.get(part.strip(), 0) for part in source.split(",") if part.strip()) if source else 0
-    return (_field_quality_score(field_name, value), source_rank)
-
-
-def _field_quality_score(field_name: str, value: object) -> int:
-    text = _normalized_candidate_text(value)
-    if not text:
-        return 0
-    if _normalized_field_token(text) == _normalized_field_token(field_name):
-        return 0
-
-    if _is_title_field(field_name):
-        score = 10
-        lowered = text.lower()
-        word_count = len(text.split())
-        if len(text) < 10:
-            score -= 8
-        if 4 <= len(text) <= 120:
-            score += 8
-        if re.search(r"[A-Za-z]", text):
-            score += 6
-        if len(text) <= 80:
-            score += 4
-        if word_count == 1:
-            score -= 12
-        if any(token in lowered for token in ("discover this", "purchase", "shop ", "buy now", "sigma-aldrich.com")):
-            score -= 12
-        if any(token in lowered for token in CANDIDATE_TITLE_NOISE_TOKENS):
-            score -= 22
-        if re.search(r"\.(?:jpg|jpeg|png|webp|gif|svg|avif)\b", lowered):
-            score -= 24
-        if "|" in text:
-            score -= 10
-        if text.count(".") >= 2 or len(text.split()) > 18:
-            score -= 8
-        if lowered in {"wayfair", "home", "department navigation", "collections", "clothing", "store", "parts", "phone"}:
-            score -= 15
-        return score
-
-    if _is_description_field(field_name):
-        score = 10
-        if len(text) >= 60:
-            score += 10
-        if len(text) >= 180:
-            score += 4
-        if "<" in text or ">" in text:
-            score -= 2
-        if len(text.split()) <= 6:
-            score -= 10
-        return score
-
-    if _is_job_text_field(field_name):
-        score = 10
-        lowered = text.lower()
-        word_count = len(text.split())
-        if len(text) >= 40:
-            score += 10
-        if len(text) >= 140:
-            score += 6
-        if any(marker in text for marker in (".", ";", ":", "•")):
-            score += 4
-        if word_count <= 3:
-            score -= 10
-        if any(
-            phrase in lowered
-            for phrase in (
-                "help center",
-                "contact us",
-                "click here",
-                "learn more",
-                "read more",
-                "was this helpful",
-                "faq",
-            )
-        ):
-            score -= 24
-        return score
-
-    if _is_entity_name_field(field_name):
-        score = 10
-        if 2 <= len(text) <= 50:
-            score += 8
-        if len(text.split()) <= 5:
-            score += 4
-        if re.search(r"\.(com|net|org)\b", text.lower()):
-            score -= 8
-        # Penalize URL path fragments
-        if "/" in text:
-            score -= 16
-        return score
-
-    if _is_numeric_field(field_name):
-        return 20 if re.search(r"\d", text) else 0
-
-    if _is_rating_field(field_name):
-        lowered = text.lower()
-        if re.search(r"\d+(?:\.\d+)?", text):
-            return 20
-        if re.search(r"\b(one|two|three|four|five)\b", lowered):
-            return 16
-        return 6 if re.search(r"[a-z]", lowered) else 0
-
-    if _is_currency_field(field_name):
-        return 25 if re.fullmatch(r"[A-Z]{3}", text.upper()) else 0
-
-    if _is_image_primary_field(field_name) or _is_image_collection_field(field_name) or _is_url_field(field_name):
-        return 25 if text.startswith(("http://", "https://")) else 0
-
-    if _is_availability_field(field_name):
-        return 0 if text.lower() == "availability" else (16 if len(text) <= 48 else 6)
-
-    if _is_identifier_field(field_name):
-        score = 12
-        if 2 <= len(text) <= 64:
-            score += 8
-        if " " in text and len(text.split()) > 4:
-            score -= 8
-        if text.startswith(("http://", "https://")):
-            score -= 24
-        if re.fullmatch(r"[A-Z0-9-]{3,12}", text):
-            score += 12
-        if re.search(r"[A-Za-z]", text) and re.search(r"\d", text):
-            score += 8
-        if len(text) > 12:
-            score -= 8
-        return score
-
-    if _is_category_field(field_name):
-        lowered = text.lower()
-        if lowered in CANDIDATE_GENERIC_CATEGORY_VALUES | {
-            "guest",
-            "max_discount",
-            "website",
-            "web site",
-            "youtube", "facebook", "twitter", "instagram", "pinterest",
-            "tiktok", "linkedin", "desktop", "mobile",
-        }:
-            return 0
-        # CamelCase schema.org type names get zero score
-        if re.fullmatch(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+", text):
-            return 0
-        # Penalize namespace-prefixed values (e.g. "food:foodProduct")
-        if ":" in text and not text.startswith("http"):
-            return 0
-        # Penalize URL path fragments
-        if "/" in text:
-            return 0
-        return 12
-
-    return 10 + min(len(text), 80) // 16
 
 
 def _field_in_group(field_name: str, group_name: str) -> bool:

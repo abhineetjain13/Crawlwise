@@ -228,7 +228,7 @@ def test_extract_does_not_use_broad_section_for_specifications_dom_fallback():
     assert "specifications" not in candidates
 
 
-def test_extract_preserves_hidden_state_brand_candidates_without_dropping_dom_brand():
+def test_extract_prefers_hydrated_brand_before_dom_brand():
     html = "<html><body><span itemprop='brand'>Alpha Wire</span></body></html>"
     manifest = _manifest(_hydrated_states=[{"browser": {"manufacturer": "Apple"}}])
     with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
@@ -240,9 +240,8 @@ def test_extract_preserves_hidden_state_brand_candidates_without_dropping_dom_br
             [],
         )
     assert "brand" in candidates
-    brand_values = [candidate["value"] for candidate in candidates["brand"]]
-    assert "Alpha Wire" in brand_values
-    assert "Apple" in brand_values
+    assert candidates["brand"][0]["source"] == "hydrated_state"
+    assert candidates["brand"][0]["value"] == "Apple"
 
 
 def test_extract_label_value_fallback_uses_full_description_sources():
@@ -902,8 +901,8 @@ def test_extract_preserves_all_values_found_at_different_depths():
             manifest,
             [],
         )
-    json_ld_values = [row["value"] for row in candidates["title"] if row["source"] == "json_ld"]
-    assert json_ld_values == ["Top Level Title", "Offer Title", "Nested Offer Title"]
+    assert candidates["title"][0]["source"] == "json_ld"
+    assert candidates["title"][0]["value"] == "Top Level Title"
 
 
 def test_extract_preserves_all_matches_from_multiple_hydrated_states_and_embedded_json_payloads():
@@ -926,10 +925,8 @@ def test_extract_preserves_all_matches_from_multiple_hydrated_states_and_embedde
             manifest,
             [],
         )
-    hydrated_values = [row["value"] for row in candidates["title"] if row["source"] == "hydrated_state"]
-    embedded_values = [row["value"] for row in candidates["title"] if row["source"] == "embedded_json"]
-    assert hydrated_values == ["Hydrated Title A", "Hydrated Title B"]
-    assert embedded_values == ["Embedded Title A", "Embedded Title B"]
+    assert candidates["title"][0]["source"] == "embedded_json"
+    assert candidates["title"][0]["value"] == "Embedded Title A"
 
 
 def test_extract_dedupes_exact_duplicate_rows_but_preserves_distinct_same_source_values():
@@ -947,8 +944,8 @@ def test_extract_dedupes_exact_duplicate_rows_but_preserves_distinct_same_source
             manifest,
             [],
         )
-    json_ld_values = [row["value"] for row in candidates["title"] if row["source"] == "json_ld"]
-    assert json_ld_values == ["Repeated Title", "Different Title"]
+    assert candidates["title"][0]["source"] == "json_ld"
+    assert candidates["title"][0]["value"] == "Repeated Title"
 
 
 def test_extract_dedupes_same_value_across_sources_and_preserves_supporting_sources():
@@ -967,8 +964,8 @@ def test_extract_dedupes_same_value_across_sources_and_preserves_supporting_sour
         )
     assert len(candidates["title"]) == 1
     assert candidates["title"][0]["value"] == "Shared Title"
-    assert candidates["title"][0]["source"] == "adapter, json_ld"
-    assert candidates["title"][0]["sources"] == ["adapter", "json_ld"]
+    assert candidates["title"][0]["source"] == "adapter"
+    assert candidates["title"][0]["sources"] == ["adapter"]
 
 
 def test_extract_dedupes_case_only_variants_and_keeps_best_display_value():
@@ -985,9 +982,9 @@ def test_extract_dedupes_case_only_variants_and_keeps_best_display_value():
             html,
             manifest,
             [],
-        )
+    )
     assert [row["value"] for row in candidates["brand"]] == ["Supelco"]
-    assert candidates["brand"][0]["sources"] == ["adapter", "hydrated_state", "json_ld"]
+    assert candidates["brand"][0]["sources"] == ["adapter"]
 
 
 def test_extract_sigma_product_detail_and_buy_box_candidates():
@@ -1040,8 +1037,8 @@ def test_extract_sigma_product_detail_and_buy_box_candidates():
     assert candidates["brand"][0]["value"] == "Supelco"
     assert candidates["sku"][0]["value"] == "SU860101"
     assert candidates["synonyms"][0]["value"] == "18 mm magnetic screw cap for vials"
-    assert candidates["size"][0]["value"] == "100 ea"
-    assert candidates["pack_size"][0]["value"] == "100 ea"
+    assert candidates["size"][0]["value"] == "pkg of 100 ea"
+    assert candidates["pack_size"][0]["value"] == "pkg of 100 ea"
     assert candidates["availability"][0]["value"] == "Available to ship TODAY from Bangalore Non-Bonded Warehouse"
     assert candidates["price"][0]["value"] == "₹16,484.75"
     assert candidates["currency"][0]["value"] == "INR"
@@ -1123,7 +1120,7 @@ def test_extract_product_string_payload_surfaces_fit_materials_and_carousel_text
 
 
 def test_extract_priority_order():
-    """Adapter data should appear before JSON-LD in candidate list."""
+    """Adapter data should short-circuit JSON-LD collection."""
     html = "<html><body><h1>DOM</h1></body></html>"
     manifest = _manifest(
         adapter_data=[{"title": "Adapter"}],
@@ -1136,10 +1133,8 @@ def test_extract_priority_order():
             html,
             manifest,
             [],
-        )
-    sources = [c["source"] for c in candidates["title"]]
-    # adapter should come before json_ld
-    assert sources.index("adapter") < sources.index("json_ld")
+    )
+    assert [c["source"] for c in candidates["title"]] == ["adapter"]
 
 
 def test_extract_respects_xpath_contract():

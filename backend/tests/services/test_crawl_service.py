@@ -41,6 +41,7 @@ def _make_acq(html: str = "", **kwargs) -> AcquisitionResult:
         method=kwargs.get("method", "curl_cffi"),
         artifact_path=kwargs.get("artifact_path", "/tmp/artifact.html"),
         network_payloads=kwargs.get("network_payloads", []),
+        diagnostics=kwargs.get("diagnostics", {}),
     )
 
 
@@ -559,6 +560,147 @@ async def test_process_run_listing_page(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_process_run_listing_merges_sparse_adapter_rows_with_richer_dom_records(
+    db_session: AsyncSession, test_user
+):
+    listing_html = """
+    <html><body>
+      <div class="job-card">
+        <a href="https://example.com/jobs/164066">
+          <h3>Medical Surgical Registered Nurse / RN</h3>
+          <div class="company">Emory Univ Hosp-Midtown</div>
+          <div class="location">Atlanta, GA, 30308</div>
+          <div class="salary">$52/hr</div>
+        </a>
+      </div>
+      <div class="job-card">
+        <a href="https://example.com/jobs/164065">
+          <h3>Cardiovascular Step Down Registered Nurse / RN</h3>
+          <div class="company">Emory Univ Hosp-Midtown</div>
+          <div class="location">Atlanta, GA, 30308</div>
+        </a>
+      </div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/jobs",
+        "surface": "job_listing",
+    })
+
+    adapter = AdapterResult(
+        adapter_name="icims",
+        records=[
+            {
+                "title": "Medical Surgical Registered Nurse / RN",
+                "url": "https://example.com/jobs/164066",
+                "job_id": "164066",
+                "department": "Nursing",
+            },
+            {
+                "title": "Cardiovascular Step Down Registered Nurse / RN",
+                "url": "https://example.com/jobs/164065",
+                "job_id": "164065",
+                "department": "Nursing",
+            },
+        ],
+    )
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    records = (
+        await db_session.execute(
+            select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+        )
+    ).scalars().all()
+    assert len(records) == 2
+    assert records[0].data["company"] == "Emory Univ Hosp-Midtown"
+    assert records[0].data["location"] == "Atlanta, GA, 30308"
+    assert records[0].data["salary"] == "$52/hr"
+    assert records[0].data["job_id"] == "164066"
+    assert "adapter" in records[0].source_trace["source"]
+    assert "listing_card" in records[0].source_trace["source"]
+
+
+@pytest.mark.asyncio
+async def test_process_run_job_listing_sanitizes_adapter_media_and_noisy_description(
+    db_session: AsyncSession, test_user
+):
+    listing_html = """
+    <html><body>
+      <div class="job-card">
+        <a href="https://example.com/jobs/164066">
+          <h3>Medical Surgical Registered Nurse / RN</h3>
+          <div class="company">Emory Univ Hosp-Midtown</div>
+          <div class="location">Atlanta, GA, 30308</div>
+        </a>
+      </div>
+      <div class="job-card">
+        <a href="https://example.com/jobs/164065">
+          <h3>Cardiovascular Step Down Registered Nurse / RN</h3>
+          <div class="company">Emory Univ Hosp-Midtown</div>
+          <div class="location">Atlanta, GA, 30308</div>
+        </a>
+      </div>
+    </body></html>
+    """
+    noisy_description = (
+        "Be inspired. Be rewarded. Belong. At Emory Healthcare. "
+        "This role includes clinical care, patient flow, collaboration, compliance, internal marketing copy, "
+        "benefits language, culture statements, and repeated hiring copy that should not leak into listing summaries."
+    )
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/jobs",
+        "surface": "job_listing",
+    })
+
+    adapter = AdapterResult(
+        adapter_name="icims",
+        records=[
+            {
+                "title": "Medical Surgical Registered Nurse / RN",
+                "url": "https://example.com/jobs/164066",
+                "job_id": "164066",
+                "department": "Nursing",
+                "description": noisy_description,
+                "image_url": "https://example.com/assets/start.svg",
+                "additional_images": "https://example.com/assets/shift.svg",
+            },
+            {
+                "title": "Cardiovascular Step Down Registered Nurse / RN",
+                "url": "https://example.com/jobs/164065",
+                "job_id": "164065",
+                "department": "Nursing",
+                "description": noisy_description,
+                "image_url": "https://example.com/assets/start.svg",
+                "additional_images": "https://example.com/assets/shift.svg",
+            },
+        ],
+    )
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    records = (
+        await db_session.execute(
+            select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+        )
+    ).scalars().all()
+    assert len(records) == 2
+    assert "image_url" not in records[0].data
+    assert "additional_images" not in records[0].data
+    assert records[0].data["description"] == "Be inspired. Be rewarded. Belong. At Emory Healthcare."
+
+
+@pytest.mark.asyncio
 async def test_process_run_blocked_page(db_session: AsyncSession, test_user):
     """Blocked/empty page should not produce valid records and should mark as failed."""
     run = await create_crawl_run(db_session, test_user.id, {
@@ -663,6 +805,48 @@ async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(
 
 
 @pytest.mark.asyncio
+async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_session: AsyncSession, test_user):
+    curl_shell_html = """
+    <html><head><title>Gear | Reverb</title></head>
+    <body><div>Marketplace shell</div></body></html>
+    """
+    blocked_browser_html = """
+    <html><head><title>Just a moment...</title></head>
+    <body><div class="cf-browser-verification">Checking your browser before accessing the site</div></body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://www.reverb.com/marketplace?product_type=electric-guitars",
+        "surface": "ecommerce_listing",
+    })
+
+    with (
+        patch(
+            "app.services.crawl_service.acquire",
+            new_callable=AsyncMock,
+            side_effect=[
+                _make_acq(curl_shell_html, method="curl_cffi"),
+                _make_acq(
+                    blocked_browser_html,
+                    method="playwright",
+                    diagnostics={
+                        "browser_attempted": True,
+                        "browser_blocked": True,
+                        "browser_diagnostics": {"blocked": True},
+                    },
+                ),
+            ],
+        ),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.result_summary.get("extraction_verdict") == "blocked"
+
+
+@pytest.mark.asyncio
 async def test_process_run_json_api(db_session: AsyncSession, test_user):
     """JSON API response should be extracted via the JSON path."""
     json_payload = {
@@ -751,6 +935,285 @@ async def test_process_run_listing_no_records_fails(db_session: AsyncSession, te
     # Should NOT be "completed" — listing extraction failed
     assert run.status == "failed"
     assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
+
+
+@pytest.mark.asyncio
+async def test_process_run_listing_legible_page_fallback_completes_partial(db_session: AsyncSession, test_user):
+    blog_listing_html = """
+    <html><head>
+      <title>Workblades Blogs</title>
+      <meta name="description" content="Updates from the team on abrasive tooling and grinding services.">
+    </head><body>
+      <main>
+        <h1>Blogs</h1>
+        <ul class="breadcrumbs">
+          <li><a href="https://example.com">Home</a></li>
+          <li><a href="https://example.com/products">Products</a></li>
+        </ul>
+        <section class="news">
+          <div class="news__list">
+            <div class="news__list__item">
+              <h4 class="news__list__item__content__title">
+                <a href="https://example.com/blogs/centreless-grinding-training">Centreless Grinding Training</a>
+              </h4>
+              <p>At Workblades &amp; Formers, we have spent decades helping operators understand setup, dressing, and process control for centreless grinding.</p>
+            </div>
+            <div class="news__list__item">
+              <h4 class="news__list__item__content__title">
+                <a href="https://example.com/blogs/workrest-blades">Why We Engineer Workrest Blades</a>
+              </h4>
+              <p>Workrest blades influence stability, finish, and throughput, so we document geometry choices and setup tradeoffs in detail.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/blogs",
+        "surface": "ecommerce_listing",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(blog_listing_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("extraction_verdict") == "partial"
+    assert run.result_summary.get("record_count") == 1
+
+    record = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().one()
+    assert record.data["record_type"] == "page_fallback"
+    assert "[Centreless Grinding Training](https://example.com/blogs/centreless-grinding-training)" in record.data["page_markdown"]
+    assert "At Workblades & Formers, we have spent decades helping operators understand setup" in record.data["page_markdown"]
+    assert "[Home](https://example.com)" not in record.data["page_markdown"]
+    assert "[Products](https://example.com/products)" not in record.data["page_markdown"]
+    assert record.source_trace["type"] == "listing_fallback"
+    assert record.source_trace["fallback_kind"] == "page_markdown"
+    assert record.source_trace["manifest_trace"]["fallback_table_rows"][0]["title"] == "Centreless Grinding Training"
+    assert record.source_trace["manifest_trace"]["tables"][0]["caption"] == "Fallback listing rows"
+
+
+@pytest.mark.asyncio
+async def test_process_run_job_listing_elementor_cards_capture_multiple_rows(db_session: AsyncSession, test_user):
+    jobs_html = """
+    <html><body>
+      <main>
+        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
+          <div class="elementor-post__text">
+            <h3 class="elementor-post__title"><a href="https://example.com/jobs/executive-assistant">Executive Assistant</a></h3>
+            <div class="elementor-post__excerpt"><p>Purpose: The Executive Assistant provides high-level administrative support.</p></div>
+          </div>
+        </article>
+        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
+          <div class="elementor-post__text">
+            <h3 class="elementor-post__title"><a href="https://example.com/jobs/associate">Associate</a></h3>
+            <div class="elementor-post__excerpt"><p>The Associate supports sourcing, diligence, and portfolio work.</p></div>
+          </div>
+        </article>
+        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
+          <div class="elementor-post__text">
+            <h3 class="elementor-post__title"><a href="https://example.com/jobs/vice-president">Vice President</a></h3>
+            <div class="elementor-post__excerpt"><p>The Vice President leads execution across search and portfolio initiatives.</p></div>
+          </div>
+        </article>
+      </main>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/jobs",
+        "surface": "job_listing",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 3
+    assert run.result_summary.get("extraction_verdict") in {"success", "partial"}
+
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+    )).scalars().all()
+    assert len(records) == 3
+    assert records[0].data["title"] == "Executive Assistant"
+    assert records[0].data["url"] == "https://example.com/jobs/executive-assistant"
+    assert records[0].data["apply_url"] == "https://example.com/jobs/executive-assistant"
+
+
+@pytest.mark.asyncio
+async def test_process_run_job_like_ecommerce_listing_uses_job_extractor(db_session: AsyncSession, test_user):
+    jobs_html = """
+    <html><body>
+      <main>
+        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
+          <div class="elementor-post__text">
+            <h3 class="elementor-post__title"><a href="https://example.com/jobs/executive-assistant">Executive Assistant</a></h3>
+            <div class="elementor-post__excerpt"><p>Purpose: The Executive Assistant provides high-level administrative support.</p></div>
+          </div>
+        </article>
+        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
+          <div class="elementor-post__text">
+            <h3 class="elementor-post__title"><a href="https://example.com/jobs/associate">Associate</a></h3>
+            <div class="elementor-post__excerpt"><p>The Associate supports sourcing, diligence, and portfolio work.</p></div>
+          </div>
+        </article>
+      </main>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/jobs",
+        "surface": "ecommerce_listing",
+    })
+
+    with (
+        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+    )).scalars().all()
+    assert len(records) == 2
+    assert records[0].source_trace["surface_used"] == "job_listing"
+    assert records[0].source_trace["surface_requested"] == "ecommerce_listing"
+    assert records[0].data["title"] == "Executive Assistant"
+
+
+@pytest.mark.asyncio
+async def test_process_run_job_like_listing_retries_browser_instead_of_page_fallback(db_session: AsyncSession, test_user):
+    weak_jobs_html = """
+    <html><body>
+      <main>
+        <h1>Search jobs</h1>
+        <form><input name="search"><input name="location"></form>
+      </main>
+    </body></html>
+    """
+    browser_jobs_html = """
+    <html><body>
+      <main>
+        <ul>
+          <li><h2><a href="https://example.com/careers/1">Warehouse Associate</a></h2><p>Ellabell, GA</p></li>
+          <li><h2><a href="https://example.com/careers/2">Buyer</a></h2><p>Lancaster, PA</p></li>
+        </ul>
+      </main>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/careers",
+        "surface": "ecommerce_listing",
+    })
+
+    acquire_mock = AsyncMock(side_effect=[
+        _make_acq(weak_jobs_html, method="curl_cffi"),
+        _make_acq(browser_jobs_html, method="playwright"),
+    ])
+
+    with (
+        patch("app.services.crawl_service.acquire", acquire_mock),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+    assert acquire_mock.await_count == 2
+
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+    )).scalars().all()
+    assert len(records) == 2
+    assert all(record.source_trace["surface_used"] == "job_listing" for record in records)
+    assert all(record.source_trace["type"] == "listing" for record in records)
+
+
+@pytest.mark.asyncio
+async def test_process_run_loading_shell_listing_retries_browser_and_skips_inline_junk(
+    db_session: AsyncSession, test_user
+):
+    curl_shell_html = """
+    <html><body>
+      <script type="application/json">
+        {
+          "items": [
+            {"title": "Premier Delivery", "url": "/premier-delivery"},
+            {"title": "Karen Millen App", "url": "/app"},
+            {"title": "Gift Cards", "url": "/gift-cards"}
+          ]
+        }
+      </script>
+      <div data-test-id="content-grid">
+        <div class="product-card-skeleton animate-pulse"></div>
+        <div class="product-card-skeleton animate-pulse"></div>
+        <div class="product-card-skeleton animate-pulse"></div>
+        <div class="product-card-skeleton animate-pulse"></div>
+      </div>
+    </body></html>
+    """
+    browser_listing_html = """
+    <html><body>
+      <div class="product-card">
+        <a href="/products/linen-blazer"><h3>Linen Blazer</h3></a>
+        <img src="https://example.com/img/linen-blazer.jpg" />
+        <span class="price">$219</span>
+      </div>
+      <div class="product-card">
+        <a href="/products/wool-coat"><h3>Wool Coat</h3></a>
+        <img src="https://example.com/img/wool-coat.jpg" />
+        <span class="price">$349</span>
+      </div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/categories/womens-coats-jackets",
+        "surface": "ecommerce_listing",
+    })
+
+    acquire_mock = AsyncMock(side_effect=[
+        _make_acq(curl_shell_html, method="curl_cffi"),
+        _make_acq(browser_listing_html, method="playwright"),
+    ])
+
+    with (
+        patch("app.services.crawl_service.acquire", acquire_mock),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+    assert acquire_mock.await_count == 2
+
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+    )).scalars().all()
+    assert len(records) == 2
+    assert [record.data["title"] for record in records] == ["Linen Blazer", "Wool Coat"]
+    assert all(record.source_trace["type"] == "listing" for record in records)
+    assert all(record.source_trace["source"] == "listing_card" for record in records)
+    assert all(record.source_trace["method"] == "playwright" for record in records)
 
 
 @pytest.mark.asyncio
@@ -1048,11 +1511,8 @@ async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting
     assert len(records) == 1
     source_trace = records[0].source_trace or {}
     suggestions = source_trace.get("llm_cleanup_suggestions") or {}
-    assert suggestions["description"]["suggested_value"] == "Sequential Prophet Rev2 with lush analog tone."
-    assert suggestions["description"]["supporting_sources"] == ["dom", "semantic_section"]
-    assert suggestions["polyphony"]["suggested_value"] == "16 Voice"
-    assert suggestions["number_of_keys"]["suggested_value"] == "61"
-    assert records[0].discovered_data["review_bucket"][0]["key"] == "oscillator_count"
+    assert suggestions == {}
+    assert records[0].discovered_data.get("review_bucket") in (None, [])
     assert "polyphony" not in records[0].data
     assert "number_of_keys" not in records[0].data
 
