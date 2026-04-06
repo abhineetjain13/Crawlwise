@@ -22,12 +22,20 @@
     "kasada",
     "bot"
   ],
+  "harvest_cookie_names": [],
+  "harvest_name_prefixes": [],
+  "harvest_name_contains": [],
+  "reuse_in_http_client": true,
   "domain_overrides": {
     "your-domain.com": {
       "allowed_cookie_names": [
         "consent_state",
         "locale",
         "currency"
+      ],
+      "harvest_cookie_names": [
+        "cf_clearance",
+        "datadome"
       ]
     }
   },

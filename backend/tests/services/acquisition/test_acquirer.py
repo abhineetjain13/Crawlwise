@@ -170,6 +170,48 @@ async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_struct
 
 
 @pytest.mark.asyncio
+async def test_acquire_html_auto_mode_keeps_curl_when_structured_listings_are_extractable():
+    js_heavy_html = """
+    <html><body>
+      <div>ok</div>
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          "mainEntity": {
+            "@type": "ItemList",
+            "itemListElement": [
+              {"item": {"@type": "Product", "name": "Filter A", "url": "/p/filter-a"}},
+              {"item": {"@type": "Product", "name": "Filter B", "url": "/p/filter-b"}}
+            ]
+          }
+        }
+      </script>
+    """ + ("<script>var x=1;</script>" * 30000) + "</body></html>"
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=js_heavy_html, status_code=200, content_type="html"),
+        ),
+        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://example.com/products/widget", advanced_mode="auto")
+
+    assert result.method == "curl_cffi"
+    assert result.diagnostics["js_shell_overridden"] == "structured_data_found"
+    browser_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_acquire_html_advanced_mode_tries_curl_then_playwright():
     """Advanced mode tries curl_cffi first, then escalates to Playwright."""
     curl_html = "<html><body>" + "x" * 600 + "</body></html>"
@@ -319,6 +361,46 @@ async def test_acquire_discards_job_redirect_shell_results(tmp_path, monkeypatch
     ):
         with pytest.raises(RuntimeError, match="Unable to acquire content"):
             await acquire(42, "https://www.governmentjobs.com/careers/california/jobs/4817400", surface="job_detail")
+
+
+@pytest.mark.asyncio
+async def test_acquire_discards_commerce_root_redirect_shell_results(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    shell_html = """
+    <html>
+      <head><title>AutoZone - Auto Parts, Accessories, and Advice for Cars & Trucks</title></head>
+      <body><h1>Home</h1></body>
+    </html>
+    """
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(
+                text=shell_html,
+                status_code=200,
+                content_type="html",
+                final_url="https://www.autozone.com/",
+            ),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(
+                html=shell_html,
+                diagnostics={"final_url": "https://www.autozone.com/"},
+            ),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="Unable to acquire content"):
+            await acquire(
+                42,
+                "https://www.autozone.com/p/real-product",
+                surface="ecommerce_detail",
+            )
 
 
 @pytest.mark.asyncio

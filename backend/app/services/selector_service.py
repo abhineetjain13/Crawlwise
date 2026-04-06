@@ -6,7 +6,6 @@ import logging
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from lxml import etree
 import regex as regex_lib
 
 from app.models.selector import Selector
@@ -21,7 +20,11 @@ from app.services.knowledge_base.store import (
 )
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.site_memory_service import clear_all_selector_memory, replace_selector_map
-from app.services.xpath_service import build_deterministic_selector_suggestions, extract_selector_value
+from app.services.xpath_service import (
+    build_deterministic_selector_suggestions,
+    extract_selector_value,
+    validate_xpath_syntax,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -304,10 +307,9 @@ def _normalize_selector_payload(payload: dict) -> dict:
     if not any([normalized["css_selector"], normalized["xpath"], normalized["regex"]]):
         raise ValueError("At least one of css_selector, xpath, or regex is required")
     if normalized["xpath"]:
-        try:
-            etree.XPath(normalized["xpath"])
-        except etree.XPathError as exc:
-            raise ValueError(f"Invalid XPath: {exc}") from exc
+        valid_xpath, xpath_error = validate_xpath_syntax(normalized["xpath"])
+        if not valid_xpath:
+            raise ValueError(f"Invalid XPath: {xpath_error}")
     if normalized["regex"]:
         try:
             regex_lib.compile(normalized["regex"])

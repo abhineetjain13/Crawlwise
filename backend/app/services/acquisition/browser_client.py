@@ -5,7 +5,7 @@ import logging
 
 import asyncio
 import ipaddress
-import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
@@ -15,10 +15,19 @@ from playwright.async_api import async_playwright
 
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.acquisition.cookie_store import (
+    cookie_policy_for_domain,
+    cookie_store_path,
+    filter_persistable_cookies,
+    load_cookies_for_context,
+    save_cookies_payload,
+)
 from app.services.pipeline_config import (
     ACCORDION_EXPAND_MAX,
     ACCORDION_EXPAND_WAIT_MS,
     BLOCK_MIN_HTML_LENGTH,
+    BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS,
+    BLOCK_BROWSER_CHALLENGE_WEAK_MARKERS,
     BROWSER_ERROR_RETRY_ATTEMPTS,
     BROWSER_ERROR_RETRY_DELAY_MS,
     BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
@@ -28,12 +37,13 @@ from app.services.pipeline_config import (
     CHALLENGE_POLL_INTERVAL_MS,
     CHALLENGE_WAIT_MAX_SECONDS,
     COOKIE_CONSENT_POSTCLICK_WAIT_MS,
-    COOKIE_POLICY,
     COOKIE_CONSENT_SELECTORS,
     COOKIE_CONSENT_PREWAIT_MS,
     CARD_SELECTORS_COMMERCE,
     CARD_SELECTORS_JOBS,
     DEFAULT_MAX_SCROLLS,
+    DOM_PATTERNS,
+    INTERRUPTIBLE_WAIT_POLL_MS,
     LISTING_MIN_ITEMS,
     LISTING_READINESS_MAX_WAIT_MS,
     LISTING_READINESS_POLL_MS,
@@ -44,6 +54,8 @@ from app.services.pipeline_config import (
     PAGINATION_NEXT_SELECTORS,
     SCROLL_WAIT_MIN_MS,
     SHADOW_DOM_FLATTEN_MAX_HOSTS,
+    SURFACE_READINESS_MAX_WAIT_MS,
+    SURFACE_READINESS_POLL_MS,
 )
 from app.services.requested_field_policy import requested_field_terms
 from app.services.url_safety import validate_public_target
@@ -87,6 +99,7 @@ async def fetch_rendered_html(
     request_delay_ms: int = 0,
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[dict]] | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> BrowserResult:
     """Render a page with Playwright and intercept XHR/fetch responses.
 
@@ -112,6 +125,7 @@ async def fetch_rendered_html(
             request_delay_ms=request_delay_ms,
             requested_fields=requested_fields or [],
             requested_field_selectors=requested_field_selectors or {},
+            checkpoint=checkpoint,
         )
 
 
@@ -129,6 +143,7 @@ async def _fetch_rendered_html_with_fallback(
     request_delay_ms: int,
     requested_fields: list[str],
     requested_field_selectors: dict[str, list[dict]],
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> BrowserResult:
     last_error: Exception | None = None
     first_profile_failed = False
@@ -154,6 +169,7 @@ async def _fetch_rendered_html_with_fallback(
                 requested_field_selectors=requested_field_selectors,
                 launch_profile=profile,
                 navigation_strategies=navigation_strategies,
+                checkpoint=checkpoint,
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
             return result
@@ -183,16 +199,21 @@ async def _fetch_rendered_html_attempt(
     requested_field_selectors: dict[str, list[dict]],
     launch_profile: dict[str, str | None],
     navigation_strategies: list[tuple[str, int]] | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> BrowserResult:
     result = BrowserResult()
     intercepted: list[dict] = []
+    timings_ms: dict[str, int] = {}
+    browser_started_at = time.perf_counter()
     browser_type = getattr(pw, str(launch_profile.get("browser_type") or "chromium"))
     launch_kwargs = _build_launch_kwargs(
         proxy,
         target,
         browser_channel=str(launch_profile.get("channel") or "").strip() or None,
     )
+    launch_started_at = time.perf_counter()
     browser = await browser_type.launch(**launch_kwargs)
+    timings_ms["browser_launch_ms"] = _elapsed_ms(launch_started_at)
     browser_channel = str(launch_profile.get("channel") or "").strip() or None
     context = await browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel))
     original_domain = _domain(url)
@@ -217,21 +238,42 @@ async def _fetch_rendered_html_attempt(
 
         if browser_channel:
             result.origin_warmed = False
+            timings_ms["browser_origin_warm_ms"] = 0
         else:
-            result.origin_warmed = await _maybe_warm_origin(page, url)
+            origin_warm_started_at = time.perf_counter()
+            result.origin_warmed = await _maybe_warm_origin(page, url, checkpoint=checkpoint)
+            timings_ms["browser_origin_warm_ms"] = _elapsed_ms(origin_warm_started_at)
 
+        navigation_started_at = time.perf_counter()
         await _goto_with_fallback(
             page,
             url,
             strategies=navigation_strategies or _navigation_strategies(browser_channel=browser_channel),
+            checkpoint=checkpoint,
         )
-        await _dismiss_cookie_consent(page)
-        challenge_ok, challenge_state, reasons = await _wait_for_challenge_resolution(page)
+        timings_ms["browser_navigation_ms"] = _elapsed_ms(navigation_started_at)
+        await _dismiss_cookie_consent(page, checkpoint=checkpoint)
+        challenge_started_at = time.perf_counter()
+        challenge_ok, challenge_state, reasons = await _wait_for_challenge_resolution(
+            page,
+            surface=surface,
+            checkpoint=checkpoint,
+        )
+        timings_ms["browser_challenge_wait_ms"] = _elapsed_ms(challenge_started_at)
         result.challenge_state = challenge_state
         result.diagnostics["challenge_reasons"] = reasons
         result.diagnostics["challenge_ok"] = challenge_ok
-        await _pause_after_navigation(request_delay_ms)
-        await _expand_accordions(page)
+        readiness_started_at = time.perf_counter()
+        surface_readiness = await _wait_for_surface_readiness(
+            page,
+            surface=surface,
+            checkpoint=checkpoint,
+        )
+        timings_ms["browser_surface_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
+        if surface_readiness is not None:
+            result.diagnostics["surface_readiness"] = surface_readiness
+        await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
+        await _expand_accordions(page, checkpoint=checkpoint)
         field_trigger_selectors = await _open_requested_field_sections(
             page,
             requested_fields=requested_fields,
@@ -240,10 +282,13 @@ async def _fetch_rendered_html_attempt(
         if field_trigger_selectors:
             result.diagnostics["field_trigger_selectors"] = field_trigger_selectors
         await _flatten_shadow_dom(page)
-        readiness = await _wait_for_listing_readiness(page, surface)
+        readiness_started_at = time.perf_counter()
+        readiness = await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
+        timings_ms["browser_listing_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
         if readiness:
             result.diagnostics["listing_readiness"] = readiness
 
+        traversal_started_at = time.perf_counter()
         combined_html = await _apply_advanced_mode(
             page,
             surface,
@@ -251,17 +296,23 @@ async def _fetch_rendered_html_attempt(
             max_scrolls,
             max_pages=max_pages,
             request_delay_ms=request_delay_ms,
+            checkpoint=checkpoint,
         )
+        timings_ms["browser_traversal_ms"] = _elapsed_ms(traversal_started_at)
         if combined_html is not None:
             result.html = combined_html
             result.network_payloads = intercepted
             result.diagnostics["pagination_mode"] = advanced_mode
             result.diagnostics["max_pages"] = max_pages
             result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") if combined_html else 0
+            timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
+            result.diagnostics["timings_ms"] = timings_ms
             await _persist_context_cookies(context, page.url or url, original_domain)
             return result
 
         await _populate_result(result, page, intercepted)
+        timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
+        result.diagnostics["timings_ms"] = timings_ms
         await _persist_context_cookies(context, page.url or url, original_domain)
         return result
     finally:
@@ -290,17 +341,61 @@ def _build_launch_kwargs(proxy: str | None, target, *, browser_channel: str | No
     return launch_kwargs
 
 
-async def _maybe_warm_origin(page, url: str) -> bool:
+async def _maybe_warm_origin(
+    page,
+    url: str,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> bool:
     origin_url = _origin_url(url)
     if not origin_url or origin_url == url:
         return False
-    await _warm_origin(page, origin_url)
+    await _warm_origin(page, origin_url, checkpoint=checkpoint)
     return True
 
 
-async def _pause_after_navigation(request_delay_ms: int) -> None:
-    delay_seconds = request_delay_ms / 1000 if request_delay_ms > 0 else 0.25
-    await asyncio.sleep(delay_seconds)
+async def _cooperative_sleep_ms(
+    delay_ms: int,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    remaining_ms = max(0, int(delay_ms or 0))
+    poll_ms = max(INTERRUPTIBLE_WAIT_POLL_MS, 50)
+    while remaining_ms > 0:
+        if checkpoint is not None:
+            await checkpoint()
+        current_ms = min(remaining_ms, poll_ms)
+        await asyncio.sleep(current_ms / 1000.0)
+        remaining_ms -= current_ms
+    if checkpoint is not None:
+        await checkpoint()
+
+
+async def _cooperative_page_wait(
+    page,
+    delay_ms: int,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    remaining_ms = max(0, int(delay_ms or 0))
+    poll_ms = max(INTERRUPTIBLE_WAIT_POLL_MS, 50)
+    while remaining_ms > 0:
+        if checkpoint is not None:
+            await checkpoint()
+        current_ms = min(remaining_ms, poll_ms)
+        await page.wait_for_timeout(current_ms)
+        remaining_ms -= current_ms
+    if checkpoint is not None:
+        await checkpoint()
+
+
+async def _pause_after_navigation(
+    request_delay_ms: int,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    delay_ms = request_delay_ms if request_delay_ms > 0 else 250
+    await _cooperative_sleep_ms(delay_ms, checkpoint=checkpoint)
 
 
 async def _apply_advanced_mode(
@@ -311,15 +406,26 @@ async def _apply_advanced_mode(
     *,
     max_pages: int,
     request_delay_ms: int,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> str | None:
     normalized_surface = str(surface or "").strip().lower()
-    if advanced_mode == "auto" and normalized_surface.endswith("_detail"):
+    if normalized_surface.endswith("_detail"):
         return None
     if advanced_mode == "scroll":
-        await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
+        await _scroll_to_bottom(
+            page,
+            max_scrolls,
+            request_delay_ms=request_delay_ms,
+            checkpoint=checkpoint,
+        )
         return None
     if advanced_mode == "load_more":
-        await _click_load_more(page, max_scrolls, request_delay_ms=request_delay_ms)
+        await _click_load_more(
+            page,
+            max_scrolls,
+            request_delay_ms=request_delay_ms,
+            checkpoint=checkpoint,
+        )
         return None
     if advanced_mode == "paginate":
         return await _collect_paginated_html(
@@ -327,11 +433,22 @@ async def _apply_advanced_mode(
             surface=surface,
             max_pages=max_pages,
             request_delay_ms=request_delay_ms,
+            checkpoint=checkpoint,
         )
     if advanced_mode == "auto":
-        await _scroll_to_bottom(page, max_scrolls, request_delay_ms=request_delay_ms)
+        await _scroll_to_bottom(
+            page,
+            max_scrolls,
+            request_delay_ms=request_delay_ms,
+            checkpoint=checkpoint,
+        )
         if await _has_load_more_control(page):
-            await _click_load_more(page, max_scrolls, request_delay_ms=request_delay_ms)
+            await _click_load_more(
+                page,
+                max_scrolls,
+                request_delay_ms=request_delay_ms,
+                checkpoint=checkpoint,
+            )
         next_page_url = await _find_next_page_url(page)
         if next_page_url:
             return await _collect_paginated_html(
@@ -339,6 +456,7 @@ async def _apply_advanced_mode(
                 surface=surface,
                 max_pages=max_pages,
                 request_delay_ms=request_delay_ms,
+                checkpoint=checkpoint,
             )
     return None
 
@@ -349,6 +467,7 @@ async def _collect_paginated_html(
     surface: str | None = None,
     max_pages: int,
     request_delay_ms: int,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> str:
     fragments: list[str] = []
     visited_urls: set[str] = set()
@@ -375,20 +494,25 @@ async def _collect_paginated_html(
             wait_until="domcontentloaded",
             timeout=PAGINATION_NAVIGATION_TIMEOUT_MS,
         )
-        await _dismiss_cookie_consent(page)
-        await _pause_after_navigation(request_delay_ms)
-        await _expand_accordions(page)
+        await _dismiss_cookie_consent(page, checkpoint=checkpoint)
+        await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
+        await _expand_accordions(page, checkpoint=checkpoint)
         await _open_requested_field_sections(
             page,
             requested_fields=[],
             requested_field_selectors={},
         )
         await _flatten_shadow_dom(page)
-        await _wait_for_listing_readiness(page, surface)
+        await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
     return "\n".join(fragments)
 
 
-async def _wait_for_listing_readiness(page, surface: str | None) -> dict[str, object] | None:
+async def _wait_for_listing_readiness(
+    page,
+    surface: str | None,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> dict[str, object] | None:
     normalized_surface = str(surface or "").strip().lower()
     if not normalized_surface.endswith("listing"):
         return None
@@ -428,12 +552,75 @@ async def _wait_for_listing_readiness(page, surface: str | None) -> dict[str, ob
             best_selector = current_best_selector
         if elapsed >= max_wait_ms:
             break
-        await page.wait_for_timeout(poll_ms)
+        await _cooperative_page_wait(page, poll_ms, checkpoint=checkpoint)
         elapsed += poll_ms
     return {
         "ready": False,
         "selector": best_selector or None,
         "count": best_count,
+        "waited_ms": elapsed,
+    }
+
+
+def _detail_readiness_selectors(surface: str | None) -> list[str]:
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface == "job_detail":
+        selectors = [DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("company", ""), DOM_PATTERNS.get("salary", "")]
+    elif normalized_surface == "ecommerce_detail":
+        selectors = [DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("price", ""), DOM_PATTERNS.get("sku", "")]
+    else:
+        selectors = [DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("price", "")]
+    return [selector for selector in selectors if str(selector).strip()]
+
+
+async def _wait_for_surface_readiness(
+    page,
+    *,
+    surface: str | None,
+    max_wait_ms: int | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> dict[str, object] | None:
+    normalized_surface = str(surface or "").strip().lower()
+    if not normalized_surface:
+        return None
+    if normalized_surface.endswith("listing"):
+        if max_wait_ms == 0:
+            selectors = CARD_SELECTORS_JOBS if normalized_surface == "job_listing" else CARD_SELECTORS_COMMERCE
+            for selector in selectors:
+                try:
+                    count = await page.locator(selector).count()
+                except Exception:
+                    continue
+                if count >= LISTING_MIN_ITEMS:
+                    return {"ready": True, "selector": selector, "count": count, "waited_ms": 0}
+            return {"ready": False, "selector": None, "count": 0, "waited_ms": 0}
+        return await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
+    selectors = _detail_readiness_selectors(surface)
+    if not selectors:
+        return None
+    elapsed = 0
+    poll_ms = max(100, SURFACE_READINESS_POLL_MS)
+    max_wait_ms = max(0, SURFACE_READINESS_MAX_WAIT_MS if max_wait_ms is None else max_wait_ms)
+    while elapsed <= max_wait_ms:
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).first
+                if await locator.count():
+                    return {
+                        "ready": True,
+                        "selector": selector,
+                        "waited_ms": elapsed,
+                    }
+            except Exception:
+                logger.debug("Surface readiness check failed for selector %s", selector, exc_info=True)
+                continue
+        if elapsed >= max_wait_ms:
+            break
+        await _cooperative_page_wait(page, poll_ms, checkpoint=checkpoint)
+        elapsed += poll_ms
+    return {
+        "ready": False,
+        "selector": None,
         "waited_ms": elapsed,
     }
 
@@ -472,7 +659,11 @@ async def _find_next_page_url(page) -> str:
     return str(href or "").strip()
 
 
-async def _expand_accordions(page) -> None:
+async def _expand_accordions(
+    page,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     try:
         expanded_count = await page.evaluate(
             """
@@ -500,7 +691,7 @@ async def _expand_accordions(page) -> None:
         )
         if expanded_count:
             logger.debug("Expanded %d accordion/tab sections", expanded_count)
-            await asyncio.sleep(ACCORDION_EXPAND_WAIT_MS / 1000.0)
+            await _cooperative_sleep_ms(ACCORDION_EXPAND_WAIT_MS, checkpoint=checkpoint)
     except Exception:
         logger.debug("Accordion expansion failed (non-critical)", exc_info=True)
 
@@ -637,7 +828,7 @@ async def _open_requested_field_sections(
             plans,
         )
         if clicked_rows:
-            await asyncio.sleep(ACCORDION_EXPAND_WAIT_MS / 1000.0)
+            await _cooperative_sleep_ms(ACCORDION_EXPAND_WAIT_MS)
         selectors: dict[str, list[dict]] = {}
         for row in clicked_rows or []:
             if not isinstance(row, dict):
@@ -740,6 +931,10 @@ async def _populate_result(result: BrowserResult, page, intercepted: list[dict])
         result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
 
 
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int(round((time.perf_counter() - started_at) * 1000)))
+
+
 async def _persist_context_cookies(context, final_url: str, original_domain: str) -> None:
     final_domain = _domain(final_url)
     await _save_cookies(context, final_domain)
@@ -772,6 +967,7 @@ async def _goto_with_fallback(
     url: str,
     *,
     strategies: list[tuple[str, int]] | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Navigate with progressively less strict wait conditions.
 
@@ -790,6 +986,8 @@ async def _goto_with_fallback(
 
     for attempt in range(browser_error_retries + 1):
         try:
+            if checkpoint is not None:
+                await checkpoint()
             # 1. Guarantee domcontentloaded to secure the DOM before background requests time out.
             await page.goto(url, wait_until="domcontentloaded", timeout=max_timeout)
             browser_error_reason = await _retryable_browser_error_reason(page)
@@ -801,7 +999,11 @@ async def _goto_with_fallback(
                     url,
                     browser_error_reason,
                 )
-                await page.wait_for_timeout(BROWSER_ERROR_RETRY_DELAY_MS)
+                await _cooperative_page_wait(
+                    page,
+                    BROWSER_ERROR_RETRY_DELAY_MS,
+                    checkpoint=checkpoint,
+                )
                 continue
 
             # 2. Optimistically wait for stricter states if requested, suppressing timeouts.
@@ -847,14 +1049,19 @@ async def _retryable_browser_error_reason(page) -> str | None:
     return None
 
 
-async def _warm_origin(page, origin_url: str) -> None:
+async def _warm_origin(
+    page,
+    origin_url: str,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     try:
         await page.goto(
             origin_url,
             wait_until="domcontentloaded",
             timeout=BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
         )
-        await page.wait_for_timeout(ORIGIN_WARM_PAUSE_MS)
+        await _cooperative_page_wait(page, ORIGIN_WARM_PAUSE_MS, checkpoint=checkpoint)
         try:
             await page.mouse.move(240, 180)
             await page.evaluate("window.scrollBy(0, 120)")
@@ -865,7 +1072,13 @@ async def _warm_origin(page, origin_url: str) -> None:
         return
 
 
-async def _scroll_to_bottom(page, max_scrolls: int, *, request_delay_ms: int) -> None:
+async def _scroll_to_bottom(
+    page,
+    max_scrolls: int,
+    *,
+    request_delay_ms: int,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     """Scroll to bottom repeatedly until no new content appears."""
     prev_height = 0
     for _ in range(max_scrolls):
@@ -874,10 +1087,19 @@ async def _scroll_to_bottom(page, max_scrolls: int, *, request_delay_ms: int) ->
             break
         prev_height = current_height
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await asyncio.sleep(max(request_delay_ms, SCROLL_WAIT_MIN_MS) / 1000)
+        await _cooperative_sleep_ms(
+            max(request_delay_ms, SCROLL_WAIT_MIN_MS),
+            checkpoint=checkpoint,
+        )
 
 
-async def _click_load_more(page, max_clicks: int, *, request_delay_ms: int) -> None:
+async def _click_load_more(
+    page,
+    max_clicks: int,
+    *,
+    request_delay_ms: int,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     """Click load-more/show-all buttons until exhausted."""
     for _ in range(max_clicks):
         clicked = False
@@ -886,7 +1108,10 @@ async def _click_load_more(page, max_clicks: int, *, request_delay_ms: int) -> N
                 btn = page.locator(sel).first
                 if await btn.is_visible():
                     await btn.click()
-                    await asyncio.sleep(max(request_delay_ms, LOAD_MORE_WAIT_MIN_MS) / 1000)
+                    await _cooperative_sleep_ms(
+                        max(request_delay_ms, LOAD_MORE_WAIT_MIN_MS),
+                        checkpoint=checkpoint,
+                    )
                     clicked = True
                     break
             except Exception:
@@ -907,9 +1132,13 @@ async def _has_load_more_control(page) -> bool:
     return False
 
 
-async def _dismiss_cookie_consent(page) -> None:
+async def _dismiss_cookie_consent(
+    page,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     try:
-        await page.wait_for_timeout(COOKIE_CONSENT_PREWAIT_MS)
+        await _cooperative_page_wait(page, COOKIE_CONSENT_PREWAIT_MS, checkpoint=checkpoint)
     except Exception:
         logger.debug("Cookie consent pre-wait failed", exc_info=True)
         return
@@ -918,7 +1147,11 @@ async def _dismiss_cookie_consent(page) -> None:
             button = page.locator(selector).first
             if await button.is_visible():
                 await button.click()
-                await page.wait_for_timeout(COOKIE_CONSENT_POSTCLICK_WAIT_MS)
+                await _cooperative_page_wait(
+                    page,
+                    COOKIE_CONSENT_POSTCLICK_WAIT_MS,
+                    checkpoint=checkpoint,
+                )
                 return
         except Exception:
             logger.debug("Cookie consent click failed for selector %s", selector, exc_info=True)
@@ -933,6 +1166,8 @@ async def _wait_for_challenge_resolution(
     page,
     max_wait_ms: int = CHALLENGE_WAIT_MAX_SECONDS * 1000,
     poll_interval_ms: int = CHALLENGE_POLL_INTERVAL_MS,
+    surface: str | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[bool, str, list[str]]:
     try:
         html = await page.content()
@@ -948,7 +1183,7 @@ async def _wait_for_challenge_resolution(
 
     elapsed = 0
     while elapsed < max_wait_ms:
-        await page.wait_for_timeout(poll_interval_ms)
+        await _cooperative_page_wait(page, poll_interval_ms, checkpoint=checkpoint)
         elapsed += poll_interval_ms
         try:
             html = await page.content()
@@ -959,6 +1194,14 @@ async def _wait_for_challenge_resolution(
         if assessment.state == "blocked_signal":
             return False, "blocked", assessment.reasons
         if not assessment.should_wait:
+            readiness = await _wait_for_surface_readiness(
+                page,
+                surface=surface,
+                max_wait_ms=0,
+                checkpoint=checkpoint,
+            )
+            if readiness and not bool(readiness.get("ready")):
+                continue
             state = "waiting_resolved" if elapsed > 0 else "none"
             return True, state, assessment.reasons
 
@@ -967,7 +1210,7 @@ async def _wait_for_challenge_resolution(
 
 def _assess_challenge_signals(html: str) -> ChallengeAssessment:
     text = (html or "")[:40_000].lower()
-    strong_markers = {
+    strong_markers = BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS or {
         "captcha": "captcha",
         "verify you are human": "verification_text",
         "checking your browser": "browser_check",
@@ -977,16 +1220,33 @@ def _assess_challenge_signals(html: str) -> ChallengeAssessment:
         "access denied": "access_denied",
         "powered and protected by akamai": "akamai_banner",
     }
-    weak_markers = {
+    weak_markers = BLOCK_BROWSER_CHALLENGE_WEAK_MARKERS or {
         "one more step": "generic_interstitial",
         "oops!! something went wrong": "generic_error_text",
         "error page": "error_page_text",
     }
     strong_hits = [label for marker, label in strong_markers.items() if marker in text]
     weak_hits = [label for marker, label in weak_markers.items() if marker in text]
-    if detect_blocked_page(html).is_blocked:
-        return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits or weak_hits or ["blocked_detector"])
+    blocked_verdict = detect_blocked_page(html)
+    challenge_like_hits = {
+        "captcha",
+        "verification_text",
+        "browser_check",
+        "cloudflare_verification",
+        "challenge_platform",
+        "interstitial_text",
+        "datadome_marker",
+    }
     short_html = len(html or "") < max(BLOCK_MIN_HTML_LENGTH, 2500)
+    if blocked_verdict.is_blocked and challenge_like_hits & set(strong_hits):
+        reasons = strong_hits or weak_hits or ["blocked_detector"]
+        if short_html:
+            reasons.append("short_html")
+        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=reasons)
+    if blocked_verdict.is_blocked and short_html and "access_denied" not in strong_hits:
+        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=strong_hits or weak_hits or ["blocked_detector"])
+    if blocked_verdict.is_blocked:
+        return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits or weak_hits or ["blocked_detector"])
     if short_html and strong_hits:
         return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits + ["short_html"])
     if len(strong_hits) >= 2:
@@ -1040,17 +1300,7 @@ def _origin_url(url: str) -> str:
 
 
 async def _load_cookies(context, domain: str) -> bool:
-    cookie_path = _cookie_store_path(domain)
-    if cookie_path is None or not cookie_path.exists():
-        return False
-    try:
-        payload = json.loads(cookie_path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.debug("Failed to parse cookie file for domain %s", domain, exc_info=True)
-        return False
-    if not isinstance(payload, list):
-        return False
-    cookies = _filter_persistable_cookies(payload, domain=domain)
+    cookies = load_cookies_for_context(domain)
     if not cookies:
         return False
     try:
@@ -1062,78 +1312,24 @@ async def _load_cookies(context, domain: str) -> bool:
 
 
 async def _save_cookies(context, domain: str) -> None:
-    cookie_path = _cookie_store_path(domain)
-    if cookie_path is None:
-        return
     try:
         cookies = await context.cookies()
     except Exception:
         logger.debug("Failed to read cookies from context for domain %s", domain, exc_info=True)
         return
-    filtered = _filter_persistable_cookies(cookies, domain=domain)
-    if not filtered:
-        if cookie_path.exists():
-            cookie_path.unlink(missing_ok=True)
-        return
-    cookie_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = cookie_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(filtered, indent=2), encoding="utf-8")
-    Path(tmp_path).replace(cookie_path)
+    save_cookies_payload(cookies, domain=domain)
 
 
 def _cookie_store_path(domain: str) -> Path | None:
-    normalized = str(domain or "").strip().lower()
-    if not normalized:
-        return None
-    safe = "".join(ch if ch.isalnum() or ch in {".", "-", "_"} else "_" for ch in normalized)
-    if not safe:
-        return None
-    return Path(settings.cookie_store_dir) / f"{safe}.json"
+    return cookie_store_path(domain)
 
 
 def _filter_persistable_cookies(payload: object, *, domain: str) -> list[dict]:
-    if not isinstance(payload, list):
-        return []
-    filtered: list[dict] = []
-    for cookie in payload:
-        if not isinstance(cookie, dict):
-            continue
-        if _is_persistable_cookie(cookie, domain=domain):
-            filtered.append(cookie)
-    return filtered
+    return filter_persistable_cookies(payload, domain=domain)
 
 
 def _is_persistable_cookie(cookie: dict, *, domain: str) -> bool:
-    policy = _cookie_policy_for_domain(domain)
-    name = str(cookie.get("name") or "").strip()
-    if not name:
-        return False
-    cookie_domain = str(cookie.get("domain") or "").strip()
-    cookie_url = str(cookie.get("url") or "").strip()
-    if not cookie_domain and not cookie_url:
-        return False
-    if cookie_domain and not _cookie_domain_matches(cookie_domain, domain):
-        return False
-    if not cookie_domain:
-        try:
-            extracted_domain = str(urlparse(cookie_url).hostname or "").strip().lower()
-        except ValueError:
-            extracted_domain = ""
-        if extracted_domain and not _cookie_domain_matches(extracted_domain, domain):
-            return False
-    name_allowed = _cookie_name_allowed(name, policy)
-    if not name_allowed and _cookie_name_blocked(name, policy):
-        return False
-    expires = _cookie_expiry(cookie)
-    now = time.time()
-    if expires is None:
-        return bool(policy.get("persist_session_cookies", False))
-    if expires <= now:
-        return False
-    max_ttl = int(policy.get("max_persisted_ttl_seconds", 0) or 0)
-    if max_ttl > 0 and expires - now > max_ttl:
-        return False
-    return True
+    return cookie in filter_persistable_cookies([cookie], domain=domain)
 
 
 def _cookie_name_allowed(name: str, policy: dict[str, object]) -> bool:
@@ -1143,13 +1339,28 @@ def _cookie_name_allowed(name: str, policy: dict[str, object]) -> bool:
         for value in policy.get("allowed_cookie_names", [])
         if str(value).strip()
     }
-    return normalized in allowed_names
+    harvest_names = {
+        str(value).strip().lower()
+        for value in policy.get("harvest_cookie_names", [])
+        if str(value).strip()
+    }
+    if normalized in allowed_names or normalized in harvest_names:
+        return True
+    for prefix in policy.get("harvest_name_prefixes", []):
+        if normalized.startswith(str(prefix).strip().lower()):
+            return True
+    for fragment in policy.get("harvest_name_contains", []):
+        if str(fragment).strip().lower() in normalized:
+            return True
+    return False
 
 
 def _cookie_name_blocked(name: str, policy: dict[str, object]) -> bool:
     normalized = str(name or "").strip().lower()
     if not normalized:
         return True
+    if _cookie_name_allowed(name, policy):
+        return False
     blocked_prefixes = [str(value).strip().lower() for value in policy.get("blocked_name_prefixes", []) if str(value).strip()]
     for prefix in blocked_prefixes:
         if normalized.startswith(prefix):
@@ -1162,18 +1373,7 @@ def _cookie_name_blocked(name: str, policy: dict[str, object]) -> bool:
 
 
 def _cookie_policy_for_domain(domain: str) -> dict[str, object]:
-    normalized = str(domain or "").strip().lower().lstrip(".")
-    policy = dict(COOKIE_POLICY)
-    overrides = COOKIE_POLICY.get("domain_overrides", {})
-    if not isinstance(overrides, dict):
-        return policy
-    for override_domain, override_values in overrides.items():
-        candidate = str(override_domain or "").strip().lower().lstrip(".")
-        if not candidate or not isinstance(override_values, dict):
-            continue
-        if normalized == candidate or normalized.endswith(f".{candidate}"):
-            policy.update(override_values)
-    return policy
+    return cookie_policy_for_domain(domain)
 
 
 def _cookie_expiry(cookie: dict) -> float | None:

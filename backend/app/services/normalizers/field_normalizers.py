@@ -13,6 +13,7 @@ from app.services.pipeline_config import (
     CANDIDATE_DESCRIPTION_TOKENS,
     CANDIDATE_FIELD_GROUPS,
     CANDIDATE_GENERIC_CATEGORY_VALUES,
+    CANDIDATE_PLACEHOLDER_VALUES,
     CANDIDATE_GENERIC_TITLE_VALUES,
     CANDIDATE_IMAGE_TOKENS,
     CANDIDATE_PRICE_TOKENS,
@@ -22,78 +23,22 @@ from app.services.pipeline_config import (
     CANDIDATE_UI_NOISE_PHRASES,
     CANDIDATE_UI_NOISE_TOKEN_PATTERN,
     CANDIDATE_URL_SUFFIXES,
+    COLOR_NOISE_TOKENS,
+    CURRENCY_CODES,
+    CURRENCY_SYMBOL_MAP,
     PRICE_FIELDS,
     PRICE_REGEX,
+    SIZE_NOISE_TOKENS,
 )
 
-PLACEHOLDER_VALUES = {"-", "—", "--", "n/a", "na", "none", "null", "undefined"}
 _UI_NOISE_TOKEN_RE = re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_NOISE_TOKEN_PATTERN else None
 _UI_ICON_TOKEN_RE = re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_ICON_TOKEN_PATTERN else None
 _SCRIPT_NOISE_RE = re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE) if CANDIDATE_SCRIPT_NOISE_PATTERN else None
 _PROMO_ONLY_TITLE_RE = re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE) if CANDIDATE_PROMO_ONLY_TITLE_PATTERN else None
-CURRENCY_CODES = {
-    "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
-    "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BOV",
-    "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CAD", "CDF", "CHE", "CHF",
-    "CHW", "CLF", "CLP", "CNY", "COP", "COU", "CRC", "CUP", "CVE", "CZK",
-    "DJF", "DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "EUR", "FJD", "FKP",
-    "GBP", "GEL", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL",
-    "HTG", "HUF", "IDR", "ILS", "INR", "IQD", "IRR", "ISK", "JMD", "JOD",
-    "JPY", "KES", "KGS", "KHR", "KMF", "KPW", "KRW", "KWD", "KYD", "KZT",
-    "LAK", "LBP", "LKR", "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD",
-    "MMK", "MNT", "MOP", "MRU", "MUR", "MVR", "MWK", "MXN", "MXV", "MYR",
-    "MZN", "NAD", "NGN", "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN",
-    "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF",
-    "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SOS", "SRD",
-    "SSP", "STN", "SVC", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP",
-    "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "USD", "USN", "UYI", "UYU",
-    "UYW", "UZS", "VED", "VES", "VND", "VUV", "WST", "XAF", "XAG", "XAU",
-    "XBA", "XBB", "XBC", "XBD", "XCD", "XDR", "XOF", "XPD", "XPF", "XPT",
-    "XSU", "XTS", "XUA", "XXX", "YER", "ZAR", "ZMW", "ZWG",
-}
 _CURRENCY_TOKEN_RE = re.compile(r"\b[A-Z]{3}\b")
 _CURRENCY_AFTER_AMOUNT_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*([A-Z]{3})\b")
 _CURRENCY_BEFORE_AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*\d[\d,]*(?:\.\d+)?\b")
 _HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
-_CURRENCY_SYMBOL_MAP = {
-    "$": "USD",
-    "€": "EUR",
-    "£": "GBP",
-    "¥": "JPY",
-    "₹": "INR",
-}
-_COLOR_NOISE_TOKENS = (
-    "rgb(",
-    "rgba(",
-    "hsl(",
-    "var(",
-    "background",
-    "color:",
-    "border:",
-    "display:",
-    "margin",
-    "padding",
-    "font-family",
-    "font-size",
-    "inherit",
-)
-_SIZE_NOISE_TOKENS = (
-    "max-width",
-    "min-width",
-    "vw",
-    "vh",
-    "sizes=",
-    "srcset",
-    "rem",
-    "em",
-    "px",
-    "padding",
-    "margin",
-    "font-size",
-    "display:",
-    "border:",
-    "auto",
-)
 
 
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
@@ -104,14 +49,14 @@ def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
     return re.compile("|".join(parts), re.IGNORECASE)
 
 
-_COLOR_NOISE_RE = _compile_noise_token_pattern(_COLOR_NOISE_TOKENS)
-_SIZE_NOISE_RE = _compile_noise_token_pattern(_SIZE_NOISE_TOKENS)
+_COLOR_NOISE_RE = _compile_noise_token_pattern(COLOR_NOISE_TOKENS)
+_SIZE_NOISE_RE = _compile_noise_token_pattern(SIZE_NOISE_TOKENS)
 
 
 def normalize_value(field_name: str, value: object) -> object:
     if isinstance(value, str):
         text = " ".join(value.split()).strip()
-        if text.lower() in PLACEHOLDER_VALUES:
+        if text.lower() in CANDIDATE_PLACEHOLDER_VALUES:
             return ""
         if _is_color_field(field_name):
             return _normalize_color_text(text)
@@ -171,7 +116,7 @@ def extract_currency_hint(value: object) -> str:
     ]
     if adjacent_matches:
         return adjacent_matches[0]
-    for symbol, currency in _CURRENCY_SYMBOL_MAP.items():
+    for symbol, currency in CURRENCY_SYMBOL_MAP.items():
         if symbol in text:
             return currency
     valid_tokens = [token for token in _CURRENCY_TOKEN_RE.findall(upper_text) if token in CURRENCY_CODES]

@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from html import unescape
 from urllib.parse import urlparse
@@ -17,7 +18,6 @@ from urllib.parse import urlparse
 import regex as regex_lib
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from lxml import etree
 
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.services.acquisition.acquirer import AcquisitionResult, ProxyPoolExhausted, acquire
@@ -38,6 +38,7 @@ from app.services.discover.service import DiscoveryManifest, discover_sources
 from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import _field_quality_score, coerce_field_candidate_value, extract_candidates
+from app.services.xpath_service import validate_xpath_syntax
 from app.services.extract.spa_pruner import prune_spa_state
 from app.services.knowledge_base.store import get_canonical_fields, get_selector_defaults
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates, snapshot_active_configs
@@ -71,6 +72,12 @@ logger = logging.getLogger(__name__)
 MAX_SELECTOR_ROWS_PER_FIELD = 100
 
 
+class RunControlSignal(RuntimeError):
+    def __init__(self, request: str) -> None:
+        super().__init__(request)
+        self.request = request
+
+
 # ---------------------------------------------------------------------------
 # Run CRUD helpers
 # ---------------------------------------------------------------------------
@@ -89,14 +96,8 @@ async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -
         MIN_REQUEST_DELAY_MS,
         int(settings.get("sleep_ms", MIN_REQUEST_DELAY_MS) or MIN_REQUEST_DELAY_MS),
     )
-    advanced_enabled = bool(settings.get("advanced_enabled"))
     advanced_mode = str(settings.get("advanced_mode") or "").strip() or None
-    if advanced_enabled and not advanced_mode:
-        settings["advanced_mode"] = "auto"
-    elif advanced_mode:
-        settings["advanced_mode"] = advanced_mode
-    else:
-        settings["advanced_mode"] = None
+    settings["advanced_mode"] = advanced_mode or None
     domain_requested_fields = await _load_domain_requested_fields(session, url=primary_url, surface=normalized_surface)
     site_memory_fields = await _load_site_memory_fields(session, url=primary_url)
     requested_fields = expand_requested_fields([
@@ -382,6 +383,15 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         await _log(session, run.id, "info", "Pipeline resumed")
         await session.commit()
 
+    async def _run_control_checkpoint() -> None:
+        await session.refresh(run)
+        current_status = normalize_status(run.status)
+        control_request = get_control_request(run)
+        if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
+            raise RunControlSignal(CONTROL_REQUEST_PAUSE)
+        if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
+            raise RunControlSignal(CONTROL_REQUEST_KILL)
+
     try:
         settings = run.settings or {}
         urls = settings.get("urls", [])
@@ -400,8 +410,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         # Extract crawl settings
         proxy_list = settings.get("proxy_list", [])
         advanced_mode = settings.get("advanced_mode")
-        if settings.get("advanced_enabled") and not advanced_mode:
-            advanced_mode = "auto"
         max_pages = settings.get("max_pages", 5)
         max_scrolls = settings.get("max_scrolls", DEFAULT_MAX_SCROLLS)
         max_records = settings.get("max_records", 100)
@@ -455,6 +463,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 max_scrolls=max_scrolls,
                 max_records=remaining_records,
                 sleep_ms=sleep_ms,
+                checkpoint=_run_control_checkpoint,
             )
             persisted_record_count += len(records)
             if idx < len(url_verdicts):
@@ -504,7 +513,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
             # Sleep between URLs if configured (for rate limiting)
             if sleep_ms > 0 and idx < total_urls - 1:
-                await asyncio.sleep(sleep_ms / 1000)
+                await _sleep_with_checkpoint(sleep_ms, _run_control_checkpoint)
 
         # Compute aggregate extraction verdict
         aggregate_verdict = _aggregate_verdict(url_verdicts)
@@ -543,6 +552,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         run.result_summary = summary
         await _log(session, run.id, "error", str(exc))
         await session.commit()
+    except RunControlSignal as signal:
+        await _handle_run_control_signal(session, run, signal.request)
     except Exception as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
         await _mark_run_failed(session, run_id, error_msg)
@@ -558,6 +569,7 @@ async def _process_single_url(
     max_scrolls: int,
     max_records: int,
     sleep_ms: int,
+    checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
     persist_site_memory: bool = True,
@@ -583,6 +595,7 @@ async def _process_single_url(
         await _set_stage(session, run, "ACQUIRE")
     if persist_logs:
         await _log(session, run.id, "info", f"[ACQUIRE] Fetching {url}")
+    acquisition_started_at = time.perf_counter()
     acq = await acquire(
         run_id=run.id,
         url=url,
@@ -595,7 +608,9 @@ async def _process_single_url(
         requested_fields=additional_fields,
         requested_field_selectors=requested_field_selectors,
         acquisition_profile=acquisition_profile,
+        checkpoint=checkpoint,
     )
+    acquisition_ms = _elapsed_ms(acquisition_started_at)
     if persist_site_memory:
         await _save_acquisition_memory(
             session,
@@ -604,6 +619,7 @@ async def _process_single_url(
             acquisition_result=acq,
         )
     url_metrics = _build_url_metrics(acq, requested_fields=additional_fields)
+    url_metrics["acquisition_ms"] = acquisition_ms
 
     # ── STAGE 1.5: BLOCKED PAGE DETECTION ──
     # For JSON responses, skip blocked detection (APIs don't serve challenge pages)
@@ -650,7 +666,7 @@ async def _process_single_url(
                       "_provider": blocked.provider},
                 raw_data={},
                 discovered_data=blocked.as_dict(),
-                source_trace={"method": acq.method, "blocked": True},
+                source_trace={**_build_acquisition_trace(acq), "blocked": True},
                 raw_html_path=acq.artifact_path,
             )
             session.add(record)
@@ -661,11 +677,14 @@ async def _process_single_url(
     if acq.content_type == "json" and acq.json_data is not None:
         if persist_logs:
             await _log(session, run.id, "info", "[EXTRACT] JSON-first path — API response detected")
-        return await _process_json_response(
+        extraction_started_at = time.perf_counter()
+        records, verdict, url_metrics = await _process_json_response(
             session, run, url, acq, is_listing, max_records, additional_fields, url_metrics,
             update_run_state=update_run_state,
             persist_logs=persist_logs,
         )
+        url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        return records, verdict, url_metrics
 
     html = acq.html
 
@@ -692,7 +711,8 @@ async def _process_single_url(
         await _log(session, run.id, "info", "[EXTRACT] Extracting candidates")
 
     if is_listing:
-        return await _extract_listing(
+        extraction_started_at = time.perf_counter()
+        records, verdict, url_metrics = await _extract_listing(
             session, run, url, html, acq, manifest, adapter_result,
             adapter_records, additional_fields,
             surface, max_records, url_metrics,
@@ -700,8 +720,65 @@ async def _process_single_url(
             persist_logs=persist_logs,
             persist_site_memory=persist_site_memory,
         )
+        url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        if verdict == VERDICT_LISTING_FAILED and acq.method == "curl_cffi":
+            if persist_logs:
+                await _log(
+                    session,
+                    run.id,
+                    "info",
+                    "[EXTRACT] Listing extraction was weak/empty on curl_cffi — retrying with browser rendering",
+                )
+            browser_retry_started_at = time.perf_counter()
+            browser_profile = dict(acquisition_profile or {})
+            browser_profile["prefer_browser"] = True
+            browser_acq = await acquire(
+                run_id=run.id,
+                url=url,
+                surface=surface,
+                proxy_list=proxy_list or None,
+                advanced_mode=advanced_mode,
+                max_pages=max_pages,
+                max_scrolls=max_scrolls,
+                sleep_ms=sleep_ms,
+                requested_fields=additional_fields,
+                requested_field_selectors=requested_field_selectors,
+                acquisition_profile=browser_profile,
+                checkpoint=checkpoint,
+            )
+            browser_retry_ms = _elapsed_ms(browser_retry_started_at)
+            if persist_site_memory:
+                await _save_acquisition_memory(
+                    session,
+                    url=url,
+                    previous_profile=browser_profile,
+                    acquisition_result=browser_acq,
+                )
+            browser_html = browser_acq.html
+            browser_adapter_result = await run_adapter(url, browser_html, surface)
+            browser_adapter_records = browser_adapter_result.records if browser_adapter_result else []
+            browser_manifest = discover_sources(
+                html=browser_html,
+                network_payloads=browser_acq.network_payloads,
+                adapter_records=browser_adapter_records,
+            )
+            extraction_started_at = time.perf_counter()
+            records, verdict, url_metrics = await _extract_listing(
+                session, run, url, browser_html, browser_acq, browser_manifest, browser_adapter_result,
+                browser_adapter_records, additional_fields,
+                surface, max_records, url_metrics,
+                update_run_state=update_run_state,
+                persist_logs=persist_logs,
+                persist_site_memory=persist_site_memory,
+            )
+            url_metrics["listing_browser_retry"] = True
+            url_metrics["listing_browser_retry_method"] = browser_acq.method
+            url_metrics["listing_browser_retry_acquisition_ms"] = browser_retry_ms
+            url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        return records, verdict, url_metrics
     else:
-        return await _extract_detail(
+        extraction_started_at = time.perf_counter()
+        records, verdict, url_metrics = await _extract_detail(
             session, run, url, html, acq, manifest, adapter_result,
             adapter_records, additional_fields, extraction_contract,
             surface, url_metrics,
@@ -709,6 +786,8 @@ async def _process_single_url(
             persist_logs=persist_logs,
             persist_site_memory=persist_site_memory,
         )
+        url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        return records, verdict, url_metrics
 
 
 async def _process_json_response(
@@ -763,6 +842,7 @@ async def _process_json_response(
             source_trace=_compact_dict({
                 "type": "json_api",
                 "method": acq.method,
+                "acquisition": _build_acquisition_trace(acq).get("acquisition"),
                 "requested_fields": requested_fields or None,
                 "requested_field_coverage": requested_coverage or None,
                 "manifest_trace": _build_manifest_trace(
@@ -869,6 +949,7 @@ async def _extract_listing(
             }),
             source_trace=_compact_dict({
                 "type": "listing",
+                **_build_acquisition_trace(acq),
                 "adapter": adapter_name,
                 "source": source_label,
                 "requested_fields": additional_fields or None,
@@ -931,6 +1012,10 @@ async def _extract_detail(
         url=url,
     )
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
+    source_trace = {
+        **_build_acquisition_trace(acq),
+        **source_trace,
+    }
 
     # Build deterministic field discovery summary for all detail fields before any
     # optional LLM suggestion pass. Canonical output still comes strictly from the
@@ -1689,6 +1774,7 @@ async def _save_acquisition_memory(
 
 def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -> dict[str, object]:
     diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    timing_map = diagnostics.get("timings_ms") if isinstance(diagnostics.get("timings_ms"), dict) else {}
     return _compact_dict({
         "method": acq.method,
         "content_type": acq.content_type,
@@ -1699,6 +1785,14 @@ def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -
         "network_payloads": len(acq.network_payloads or []),
         "host_wait_seconds": float(diagnostics.get("host_wait_seconds", 0.0) or 0.0),
         "requested_fields": len(requested_fields or []),
+        "curl_fetch_ms": int(timing_map.get("curl_fetch_ms", 0) or 0),
+        "browser_decision_ms": int(timing_map.get("browser_decision_ms", 0) or 0),
+        "browser_launch_ms": int(timing_map.get("browser_launch_ms", 0) or 0),
+        "browser_origin_warm_ms": int(timing_map.get("browser_origin_warm_ms", 0) or 0),
+        "browser_navigation_ms": int(timing_map.get("browser_navigation_ms", 0) or 0),
+        "browser_challenge_wait_ms": int(timing_map.get("browser_challenge_wait_ms", 0) or 0),
+        "browser_listing_readiness_wait_ms": int(timing_map.get("browser_listing_readiness_wait_ms", 0) or 0),
+        "browser_traversal_ms": int(timing_map.get("browser_traversal_ms", 0) or 0),
     })
 
 
@@ -1731,6 +1825,16 @@ def _merge_run_acquisition_metrics(existing: object, url_metrics: dict[str, obje
         "network_payloads_total": int(current.get("network_payloads_total", 0) or 0) + int(url_metrics.get("network_payloads", 0) or 0),
         "host_wait_seconds_total": round(float(current.get("host_wait_seconds_total", 0.0) or 0.0) + float(url_metrics.get("host_wait_seconds", 0.0) or 0.0), 3),
         "records_total": int(current.get("records_total", 0) or 0) + int(url_metrics.get("record_count", 0) or 0),
+        "acquisition_ms_total": int(current.get("acquisition_ms_total", 0) or 0) + int(url_metrics.get("acquisition_ms", 0) or 0),
+        "extraction_ms_total": int(current.get("extraction_ms_total", 0) or 0) + int(url_metrics.get("extraction_ms", 0) or 0),
+        "curl_fetch_ms_total": int(current.get("curl_fetch_ms_total", 0) or 0) + int(url_metrics.get("curl_fetch_ms", 0) or 0),
+        "browser_decision_ms_total": int(current.get("browser_decision_ms_total", 0) or 0) + int(url_metrics.get("browser_decision_ms", 0) or 0),
+        "browser_launch_ms_total": int(current.get("browser_launch_ms_total", 0) or 0) + int(url_metrics.get("browser_launch_ms", 0) or 0),
+        "browser_origin_warm_ms_total": int(current.get("browser_origin_warm_ms_total", 0) or 0) + int(url_metrics.get("browser_origin_warm_ms", 0) or 0),
+        "browser_navigation_ms_total": int(current.get("browser_navigation_ms_total", 0) or 0) + int(url_metrics.get("browser_navigation_ms", 0) or 0),
+        "browser_challenge_wait_ms_total": int(current.get("browser_challenge_wait_ms_total", 0) or 0) + int(url_metrics.get("browser_challenge_wait_ms", 0) or 0),
+        "browser_listing_readiness_wait_ms_total": int(current.get("browser_listing_readiness_wait_ms_total", 0) or 0) + int(url_metrics.get("browser_listing_readiness_wait_ms", 0) or 0),
+        "browser_traversal_ms_total": int(current.get("browser_traversal_ms_total", 0) or 0) + int(url_metrics.get("browser_traversal_ms", 0) or 0),
     }
     if "requested_fields_total" in url_metrics:
         summary["requested_fields_total"] = int(current.get("requested_fields_total", 0) or 0) + int(url_metrics.get("requested_fields_total", 0) or 0)
@@ -1746,6 +1850,29 @@ def _compact_dict(payload: dict) -> dict:
     }
 
 
+def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
+    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    browser_diagnostics = diagnostics.get("browser_diagnostics") if isinstance(diagnostics.get("browser_diagnostics"), dict) else {}
+    timing_map = diagnostics.get("timings_ms") if isinstance(diagnostics.get("timings_ms"), dict) else {}
+    return _compact_dict({
+        "method": acq.method,
+        "browser_attempted": bool(diagnostics.get("browser_attempted")),
+        "acquisition": _compact_dict({
+            "final_url": diagnostics.get("curl_final_url") or browser_diagnostics.get("final_url"),
+            "browser_attempted": bool(diagnostics.get("browser_attempted")),
+            "browser_used": acq.method == "playwright",
+            "challenge_state": diagnostics.get("browser_challenge_state"),
+            "origin_warmed": diagnostics.get("browser_origin_warmed"),
+            "invalid_surface_page": diagnostics.get("invalid_surface_page"),
+            "timings_ms": timing_map or None,
+        }) or None,
+    })
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int(round((time.perf_counter() - started_at) * 1000)))
+
+
 def _validate_extraction_contract(contract_rows: list[dict]) -> None:
     errors: list[str] = []
     for index, row in enumerate(contract_rows, start=1):
@@ -1755,10 +1882,11 @@ def _validate_extraction_contract(contract_rows: list[dict]) -> None:
         if not field_name:
             errors.append(f"Row {index}: field_name is required")
         if xpath:
-            try:
-                etree.XPath(xpath)
-            except etree.XPathError as exc:
-                errors.append(f"Row {index} ({field_name or 'unnamed'}): invalid XPath ({exc})")
+            valid_xpath, xpath_error = validate_xpath_syntax(xpath)
+            if not valid_xpath:
+                errors.append(
+                    f"Row {index} ({field_name or 'unnamed'}): invalid XPath ({xpath_error})"
+                )
         if regex:
             try:
                 regex_lib.compile(regex)
@@ -2545,6 +2673,36 @@ def _refresh_record_commit_metadata(
     if requested_fields:
         discovered_data["requested_field_coverage"] = _requested_field_coverage(record.data or {}, requested_fields)
     record.discovered_data = _compact_dict(discovered_data)
+
+
+async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
+    remaining_ms = max(0, int(sleep_ms or 0))
+    while remaining_ms > 0:
+        await checkpoint()
+        current_ms = min(remaining_ms, 250)
+        await asyncio.sleep(current_ms / 1000)
+        remaining_ms -= current_ms
+    await checkpoint()
+
+
+async def _handle_run_control_signal(
+    session: AsyncSession,
+    run: CrawlRun,
+    request: str,
+) -> None:
+    await session.refresh(run)
+    if request == CONTROL_REQUEST_PAUSE:
+        if normalize_status(run.status) != CrawlStatus.PAUSED:
+            update_run_status(run, CrawlStatus.PAUSED)
+        set_control_request(run, None)
+        await _log(session, run.id, "warning", "Run paused during in-flight acquisition wait")
+        await session.commit()
+        return
+    if normalize_status(run.status) != CrawlStatus.KILLED:
+        update_run_status(run, CrawlStatus.KILLED)
+    set_control_request(run, None)
+    await _log(session, run.id, "warning", "Run killed during in-flight acquisition wait")
+    await session.commit()
 
 
 # Domain normalisation delegated to app.services.domain_utils.normalize_domain

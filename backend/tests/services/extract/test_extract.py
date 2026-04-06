@@ -309,6 +309,18 @@ def test_coerce_field_candidate_value_joins_description_lists():
     assert coerced == "Paragraph one. Paragraph two. Final details."
 
 
+def test_coerce_field_candidate_value_rejects_asset_font_urls_for_url_fields():
+    assert (
+        coerce_field_candidate_value(
+            "url",
+            "https://cdn.example.com/fonts/inter.woff2",
+            base_url="https://example.com/product",
+        )
+        is None
+    )
+    assert _resolve_candidate_url("https://cdn.example.com/fonts/inter.woff2", "https://example.com") == ""
+
+
 def test_extract_drops_generic_hidden_category_candidates_but_preserves_dom_category():
     html = "<html><body><div itemprop='category'>Audio Cables</div></body></html>"
     manifest = _manifest(_hydrated_states=[{"page": {"type": "detail-page"}}])

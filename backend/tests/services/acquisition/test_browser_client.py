@@ -18,6 +18,7 @@ from app.services.acquisition.browser_client import (
     _find_next_page_url,
     _goto_with_fallback,
     _load_cookies,
+    _pause_after_navigation,
     _retryable_browser_error_reason,
     _save_cookies,
     _wait_for_challenge_resolution,
@@ -37,6 +38,38 @@ class FakePage:
         if len(self._contents) > 1:
             self._contents.pop(0)
 
+    def locator(self, _selector: str):
+        return FakeCountLocator(0)
+
+
+class FakeCountLocator:
+    def __init__(self, count: int):
+        self._count = count
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self):
+        return self._count
+
+
+class FakeSurfaceReadyPage(FakePage):
+    def __init__(self, contents: list[str], readiness_counts: list[int]):
+        super().__init__(contents)
+        self._readiness_counts = readiness_counts
+
+    def locator(self, _selector: str):
+        count = self._readiness_counts[0] if self._readiness_counts else 0
+        return FakeCountLocator(count)
+
+    async def wait_for_timeout(self, value: int):
+        self.timeout_calls.append(value)
+        if len(self._contents) > 1:
+            self._contents.pop(0)
+        if len(self._readiness_counts) > 1:
+            self._readiness_counts.pop(0)
+
 
 @pytest.mark.asyncio
 async def test_wait_for_challenge_resolution_resolves():
@@ -45,6 +78,26 @@ async def test_wait_for_challenge_resolution_resolves():
     page = FakePage([initial, resolved])
 
     ok, state, reasons = await _wait_for_challenge_resolution(page, max_wait_ms=2000, poll_interval_ms=250)
+
+    assert ok
+    assert state == "waiting_resolved"
+    assert page.timeout_calls
+    assert reasons == []
+
+
+@pytest.mark.asyncio
+async def test_wait_for_challenge_resolution_waits_for_surface_readiness_after_interstitial():
+    initial = "<html><body>checking your browser just a moment</body></html>"
+    resolved_shell = "<html><body><div>loading</div></body></html>"
+    ready = "<html><body><h1>Product title</h1><span class='price'>$10</span>" + ("content " * 40) + "</body></html>"
+    page = FakeSurfaceReadyPage([initial, resolved_shell, ready], readiness_counts=[0, 0, 1])
+
+    ok, state, reasons = await _wait_for_challenge_resolution(
+        page,
+        max_wait_ms=1000,
+        poll_interval_ms=250,
+        surface="ecommerce_detail",
+    )
 
     assert ok
     assert state == "waiting_resolved"
@@ -276,6 +329,19 @@ async def test_goto_with_fallback_uses_configured_optimistic_wait(monkeypatch):
     )
 
     assert page.load_state_calls == [("networkidle", 2500), ("load", 2500)]
+
+
+@pytest.mark.asyncio
+async def test_pause_after_navigation_polls_checkpoint_during_long_wait(monkeypatch):
+    checkpoint = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client.INTERRUPTIBLE_WAIT_POLL_MS",
+        100,
+    )
+
+    await _pause_after_navigation(350, checkpoint=checkpoint)
+
+    assert checkpoint.await_count >= 4
 
 
 @pytest.mark.asyncio

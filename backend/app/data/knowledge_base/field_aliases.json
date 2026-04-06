@@ -17,6 +17,7 @@
   "salary": ["salary", "compensation", "pay", "salary_range"],
   "category": ["category", "department", "type", "product_type", "job_type", "employment_type"],
   "sku": ["sku", "product_id", "item_id", "id"],
+  "part_number": ["part_number", "part", "part_no", "partNumber", "mpn", "manufacturer_part_number"],
   "availability": ["availability", "in_stock", "stock_status"],
   "tags": ["tags", "labels", "keywords"],
   "rating": ["rating", "average_rating", "score", "rating_value", "aggregate_rating"],

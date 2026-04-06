@@ -2,7 +2,7 @@
 
 > **Last Updated:** 2026-04-05
 > **Stack:** Python 3.12+, FastAPI, SQLAlchemy 2.0 (async), SQLite, Playwright, curl_cffi
-> **Test Status:** 279 tests passing
+> **Test Status:** 360 tests collected; targeted regression suite green on 2026-04-05
 
 ---
 
@@ -195,7 +195,7 @@ backend/
 │       ├── 20260403_0004_remove_selector_confidence.py
 │       └── 20260405_0005_site_memory.py
 │
-├── tests/                            # Test suite (279 tests)
+├── tests/                            # Test suite
 │   ├── conftest.py
 │   ├── api/
 │   ├── services/
@@ -233,7 +233,7 @@ backend/
 - Polls database every 1 second for `pending` runs
 - Claims runs atomically with `SELECT ... FOR UPDATE SKIP LOCKED`
 - Executes runs concurrently with semaphore-limited concurrency (default: 8)
-- Recovers orphaned `claimed` runs from crashes
+- Recovers only stale `claimed` / `running` runs after a grace window from crashes
 - Invokes `run_crawl_task()` from `app/tasks/crawl_tasks.py`
 
 ---
@@ -367,7 +367,7 @@ acquire(url, settings)
   │   ├── Network XHR/fetch interception
   │   ├── Accordion expansion (configurable max + wait)
   │   ├── Shadow DOM flattening
-  │   └── Advanced modes: scroll, paginate (stub), load_more
+  │   └── Advanced modes: scroll, paginate, load_more
   │
   └── Return AcquisitionResult(html/json, network_payloads, diagnostics)
 ```
@@ -423,7 +423,7 @@ extract_listing(manifest, url, contract_fields)
   │   ├── Auto-detect: score candidate groups by product signal density
   │   └── Extract fields from cards using ordered selectors
   │
-  ├── Filter category/navigation URLs from product URLs
+  ├── Filter category/navigation URLs and title/image-only hub cards from product URLs
   ├── Resolve relative URLs against page URL
   └── Return list of records OR listing_detection_failed verdict
 ```
@@ -563,89 +563,18 @@ All tunable values loaded at startup via `services/pipeline_config.py`. Code MUS
 
 ---
 
-## 11. Code Quality Audit Findings
+## 11. Testing
 
-### 11.1 Critical
-
-| Issue | File | Detail |
-|-------|------|--------|
-| Undefined type `DiscoveryManifest` | `extract/listing_extractor.py:46,96,307` | Type annotation references non-existent import |
-| Undefined function `discover_sources` | `extract/listing_extractor.py:64` | Called but not imported |
-
-### 11.2 High
-
-| Issue | Count | Detail |
-|-------|-------|--------|
-| Unused imports | 15 | Auto-fixable with `ruff check --fix` |
-| Unused variables | 2 | `category_prefixes` (listing_extractor.py:1140), `sections` (service.py:1205) |
-| XPath injection | 4 locations | User-provided XPath passed to `lxml` without sanitization |
-
-### 11.3 Medium
-
-| Issue | Detail |
-|-------|--------|
-| Magic numbers in code | `MAX_SELECTOR_ROWS_PER_FIELD=100` in crawl_service.py, various thresholds in extract/service.py, blocked_detector.py, browser_client.py |
-| Alembic SQL injection | `20260403_0004_remove_selector_confidence.py` uses f-strings in `sa.text()` |
-| Hardcoded API endpoints | LLM provider URLs in llm_runtime.py, adapter base URLs in adapter files |
-| Silent exception handlers | 6 `pass` blocks in production code should log |
-
-### 11.4 Low
-
-| Issue | Detail |
-|-------|--------|
-| Secret defaults in config | `jwt_secret_key="change-me"`, `encryption_key="change-me-32-bytes..."` — guarded by `_check_secret_defaults()` but only warns |
-| CSV decode `errors="ignore"` | Silently drops invalid bytes from uploaded CSVs |
-
----
-
-## 12. Known Gaps & Risks
-
-### 12.1 Architecture
-
-| Gap | Impact |
-|-----|--------|
-| `crawl_service.py` is ~1900 lines | Mixes CRUD, pipeline orchestration, verdict computation, normalization — should be split |
-| No external message queue | Worker polls every 1s; won't scale beyond POC |
-| `pipeline_config.py` is 398 lines | Flat module-level constants; could be structured as a config class |
-| Advanced crawl modes incomplete | `paginate` is stub, `auto` only scrolls — multi-page crawls capture page 1 only |
-
-### 12.2 Extraction
-
-| Gap | Impact |
-|-----|--------|
-| Schema pollution | Site-specific promo labels and 2-underscore heading labels still leak into `record.data` |
-| SPA-rendered listings | Listing extractor can't parse arbitrary React/Angular state shapes |
-| No fallback for content-only pages | `ecommerce_listing` surface assumption blocks extraction of non-commerce repeating data |
-| Detail multi-source contamination | Cross-source contamination (e.g., promo text from embedded JSON into description) may still occur |
-
-### 12.3 Platform Coverage
-
-| Gap | Impact |
-|-----|--------|
-| Adapter recovery: Shopify only | Other platforms (Indeed, Greenhouse, etc.) have no blocked-page recovery |
-| No Lever ATS adapter | Missing common ATS platform |
-
-### 12.4 Review/Commit
-
-| Gap | Impact |
-|-----|--------|
-| Typed values not committed end-to-end | LLM cleanup and field-commit coerce to strings, flattening arrays/objects/numbers |
-| `build_absolute_xpath` generates brittle paths | Pollutes selector memory with non-portable XPaths |
-
----
-
-## 13. Testing
-
-### 13.1 Unit/Integration Tests (279 passing)
+### 11.1 Unit/Integration Tests
 
 ```powershell
 $env:PYTHONPATH='.'
 pytest tests -q
 ```
 
-Coverage: adapters, acquisition, blocked detection, JSON extraction, listing extraction, crawl service, review, normalizers, security, host memory, URL safety, dashboard, discovery.
+The backend test tree currently collects 360 tests. Coverage includes adapters, acquisition, blocked detection, JSON extraction, listing extraction, crawl service, review, normalizers, security, host memory, URL safety, dashboard, discovery, and worker recovery.
 
-### 13.2 Acquire-Only Smoke Tests
+### 11.2 Acquire-Only Smoke Tests
 
 ```powershell
 $env:PYTHONPATH='.'
@@ -659,7 +588,7 @@ python run_acquire_smoke.py specialist # Specialist retailers
 
 Writes reports to `artifacts/acquisition_smoke/` and per-URL diagnostics to `artifacts/diagnostics/<run_id>/`.
 
-### 13.3 Full Extraction Smoke Tests
+### 11.3 Full Extraction Smoke Tests
 
 ```powershell
 $env:PYTHONPATH='.'
@@ -670,7 +599,7 @@ Tests 10 client URLs through complete extraction pipeline. Writes report to `art
 
 ---
 
-## 14. Architecture Invariants
+## 12. Architecture Invariants
 
 These MUST be preserved across all changes:
 
@@ -693,17 +622,6 @@ These MUST be preserved across all changes:
 
 ---
 
-## 15. Preferred Next Steps
+## 13. Backlog Reference
 
-| Priority | Task | Detail |
-|----------|------|--------|
-| 1 | Fix undefined names | `DiscoveryManifest` and `discover_sources` imports in `listing_extractor.py` |
-| 2 | Fix unused imports | `ruff check backend/ --fix` (15 imports) |
-| 3 | Remove unused variables | `category_prefixes`, `sections` |
-| 4 | Schema cleanup for detail pages | Namespace spec-table fields under `specifications` dict |
-| 5 | Implement `paginate` mode | Multi-page HTML collection + dedup in `browser_client.py` |
-| 6 | Add XPath sanitization | Sanitize user-provided XPath before `lxml` evaluation |
-| 7 | Move magic numbers to KB | `MAX_SELECTOR_ROWS_PER_FIELD`, extract thresholds, browser timeouts |
-| 8 | Add Lever ATS adapter | Common ATS platform coverage |
-| 9 | Expand adapter recovery | Beyond Shopify to Indeed, Greenhouse, etc. |
-| 10 | Split `crawl_service.py` | Separate CRUD, pipeline orchestration, verdict computation into distinct modules |
+All active backend bugs, refactors, and follow-up architecture work now live in [backend-pending-items.md](/C:/Projects/pre_poc_ai_crawler/docs/backend-pending-items.md). This architecture document is intended to describe the current implemented system, not to duplicate the backlog.

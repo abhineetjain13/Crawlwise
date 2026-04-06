@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Iterable
 
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -11,6 +12,29 @@ from app.services.pipeline_config import DOM_PATTERNS
 
 logger = logging.getLogger(__name__)
 
+_XPATH_ALLOWED_FUNCTIONS = {
+    "concat",
+    "contains",
+    "last",
+    "normalize-space",
+    "not",
+    "position",
+    "starts-with",
+    "string",
+    "text",
+}
+_XPATH_DISALLOWED_PATTERNS = (
+    (re.compile(r"\|"), "XPath unions are not supported"),
+    (
+        re.compile(
+            r"(?<![\w-])(ancestor|ancestor-or-self|descendant-or-self|following|following-sibling|namespace|preceding|preceding-sibling|self)::"
+        ),
+        "XPath axis is not allowed",
+    ),
+    (re.compile(r"\$[A-Za-z_][\w.-]*"), "XPath variables are not allowed"),
+)
+_XPATH_FUNCTION_PATTERN = re.compile(r"(?<![:\w-])([A-Za-z_][\w.-]*)\s*\(")
+
 
 def extract_selector_value(
     html_text: str,
@@ -19,6 +43,10 @@ def extract_selector_value(
     xpath: str | None = None,
     regex: str | None = None,
 ) -> tuple[str | None, int, str | None]:
+    if xpath:
+        valid_xpath, _ = validate_xpath_syntax(xpath)
+        if not valid_xpath:
+            xpath = None
     if xpath:
         tree = _build_xpath_tree(html_text)
         if tree is not None:
@@ -58,6 +86,9 @@ def validate_xpath_syntax(xpath: str) -> tuple[bool, str | None]:
     candidate = str(xpath or "").strip()
     if not candidate:
         return False, "XPath is empty"
+    policy_error = _validate_xpath_policy(candidate)
+    if policy_error:
+        return False, policy_error
     try:
         etree.XPath(candidate)
     except etree.XPathSyntaxError as exc:
@@ -88,6 +119,9 @@ def validate_xpath_candidate(
         return {"valid": False, "matched_value": None, "count": 0}
     tree = _build_xpath_tree(html_text)
     if tree is None:
+        return {"valid": False, "matched_value": None, "count": 0}
+    valid_xpath, _ = validate_xpath_syntax(xpath)
+    if not valid_xpath:
         return {"valid": False, "matched_value": None, "count": 0}
     try:
         matches = tree.xpath(xpath)
@@ -175,6 +209,18 @@ def _build_xpath_tree(document_html: str):
         return lxml_html.fromstring(document_html)
     except (etree.ParserError, ValueError):
         return None
+
+
+def _validate_xpath_policy(xpath: str) -> str | None:
+    candidate = str(xpath or "").strip()
+    for pattern, message in _XPATH_DISALLOWED_PATTERNS:
+        if pattern.search(candidate):
+            return message
+
+    for function_name in _XPATH_FUNCTION_PATTERN.findall(candidate):
+        if function_name.lower() not in _XPATH_ALLOWED_FUNCTIONS:
+            return f"XPath function '{function_name}' is not allowed"
+    return None
 
 
 def _coerce_xpath_match(results: list[object]) -> str | None:

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from curl_cffi.const import CurlOpt
+from app.core.config import settings
 
 from app.services.acquisition.host_memory import host_prefers_stealth, reset_host_memory
 from app.services.acquisition.http_client import _retry_backoff_seconds, fetch_html_result
@@ -31,6 +32,8 @@ def _reset_memory():
 async def test_fetch_html_result_retries_with_stealth(monkeypatch, tmp_path):
     monkeypatch.setattr("app.services.acquisition.host_memory.settings.artifacts_dir", tmp_path)
     monkeypatch.setattr("app.services.acquisition.http_client.HTTP_MAX_RETRIES", 0)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110", "chrome131"))
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_STEALTH_IMPERSONATION_PROFILE", "chrome131")
 
     calls: list[str] = []
 
@@ -66,6 +69,7 @@ async def test_fetch_html_result_retries_with_stealth(monkeypatch, tmp_path):
     assert result.stealth_used
     assert calls == ["chrome110", "chrome131"]
     assert host_prefers_stealth("https://example.com/product")
+    assert result.impersonate_profile == "chrome131"
 
 
 @pytest.mark.asyncio
@@ -116,6 +120,8 @@ async def test_fetch_html_result_pins_dns_without_rewriting_hostname(monkeypatch
 @pytest.mark.asyncio
 async def test_fetch_html_result_stops_retrying_same_impersonation_when_page_is_blocked(monkeypatch):
     monkeypatch.setattr("app.services.acquisition.http_client.HTTP_MAX_RETRIES", 2)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110", "chrome131"))
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_STEALTH_IMPERSONATION_PROFILE", "chrome131")
 
     calls: list[str] = []
 
@@ -144,6 +150,102 @@ async def test_fetch_html_result_stops_retrying_same_impersonation_when_page_is_
     assert result.status_code == 429
     assert calls == ["chrome110", "chrome131"]
     assert result.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_rotates_across_configured_profiles(monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_MAX_RETRIES", 0)
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES",
+        ("chrome110", "chrome116", "chrome123", "chrome131"),
+    )
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_STEALTH_IMPERSONATION_PROFILE", "chrome131")
+    monkeypatch.setattr("app.services.acquisition.http_client.IMPERSONATION_TARGET", "chrome110")
+
+    calls: list[str] = []
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            profile = kwargs["impersonate"]
+            calls.append(profile)
+            if profile == "chrome131":
+                return FakeResponse(
+                    status_code=200,
+                    text="<html><body><h1>Product</h1>" + ("x" * 300) + "</body></html>",
+                    headers={"content-type": "text/html; charset=utf-8"},
+                )
+            return FakeResponse(
+                status_code=429,
+                text="<html><body>rate limited</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+
+    result = await fetch_html_result("https://example.com/product")
+
+    assert result.status_code == 200
+    assert result.stealth_used
+    assert result.impersonate_profile == "chrome131"
+    assert calls == ["chrome110", "chrome116", "chrome123", "chrome131"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_attaches_harvested_cookies(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "cookie_store_dir", tmp_path)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+    cookie_file = tmp_path / "example.com.json"
+    cookie_file.write_text(
+        '[{"name":"datadome","value":"token","domain":"example.com","path":"/","expires":4102444800}]',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.cookie_store.COOKIE_POLICY",
+        {
+            "persist_session_cookies": False,
+            "max_persisted_ttl_seconds": 0,
+            "blocked_name_prefixes": ["cf_", "dd_", "px"],
+            "blocked_name_contains": ["challenge"],
+            "harvest_cookie_names": ["datadome"],
+            "reuse_in_http_client": True,
+            "domain_overrides": {},
+        },
+    )
+    captured: dict[str, object] = {}
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            captured["cookies"] = kwargs.get("cookies")
+            return FakeResponse(
+                status_code=200,
+                text="<html><body>ok</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+
+    result = await fetch_html_result("https://example.com/product", allow_stealth_retry=False)
+
+    assert result.status_code == 200
+    assert captured["cookies"] == {"datadome": "token"}
 
 
 def test_retry_backoff_seconds_is_bounded(monkeypatch):

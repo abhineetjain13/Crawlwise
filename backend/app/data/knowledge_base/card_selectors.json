@@ -10,6 +10,8 @@
     ".grid-item[data-product-id]",
     ".product_pod",
     ".collection-product-card",
+    "[data-testid='grid-view-products'] > article",
+    "[data-testid='list-view-products'] > article",
     "li.grid__item",
     ".plp-card",
     ".search-result-gridview-item",
@@ -25,7 +27,7 @@
   ],
   "jobs": [
     "[data-qa-id='search-result']",
-    "#search-results > div",
+    "#search-results > div.border.border-gray-lighter.bg-white.p-4",
     ".job_seen_beacon",
     ".base-card",
     ".job-card",
@@ -38,5 +40,8 @@
     "tr.job-row",
     "div[data-job-id]",
     ".opening"
+  ],
+  "_jobs_selector_notes": [
+    "USAJobs search result cards render as direct children of #search-results with classes border border-gray-lighter bg-white p-4; see backend/tests/services/extract/test_listing_extractor_urls.py."
   ]
 }

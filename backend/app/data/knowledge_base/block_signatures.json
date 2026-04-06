@@ -22,6 +22,24 @@
     "please turn javascript on",
     "why do i have to complete a captcha"
   ],
+  "active_provider_markers": [
+    {"marker": "px-captcha", "provider": "perimeterx"},
+    {"marker": "cf-challenge", "provider": "cloudflare"},
+    {"marker": "cf-browser-verification", "provider": "cloudflare"},
+    {"marker": "dd-modal", "provider": "datadome"},
+    {"marker": "incapsula", "provider": "incapsula"},
+    {"marker": "distil", "provider": "distil"},
+    {"marker": "shape security", "provider": "shape security"},
+    {"marker": "arkose", "provider": "arkose"}
+  ],
+  "cdn_provider_markers": [
+    {"marker": "perimeterx", "provider": "perimeterx"},
+    {"marker": "cloudflare", "provider": "cloudflare"},
+    {"marker": "akamai", "provider": "akamai"},
+    {"marker": "akamaized", "provider": "akamai"},
+    {"marker": "datadome", "provider": "datadome"},
+    {"marker": "kasada", "provider": "kasada"}
+  ],
   "provider_markers": [
     "perimeterx",
     "px-captcha",
@@ -42,6 +60,22 @@
     "funcaptcha",
     "arkose"
   ],
+  "browser_challenge_strong_markers": {
+    "captcha": "captcha",
+    "verify you are human": "verification_text",
+    "checking your browser": "browser_check",
+    "cf-browser-verification": "cloudflare_verification",
+    "challenge-platform": "challenge_platform",
+    "just a moment": "interstitial_text",
+    "access denied": "access_denied",
+    "powered and protected by akamai": "akamai_banner",
+    "datadome": "datadome_marker"
+  },
+  "browser_challenge_weak_markers": {
+    "one more step": "generic_interstitial",
+    "oops!! something went wrong": "generic_error_text",
+    "error page": "error_page_text"
+  },
   "title_regexes": [
     "access\\s+denied",
     "robot\\s+or\\s+human",

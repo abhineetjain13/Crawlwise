@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
@@ -82,6 +84,7 @@ async def acquire_html(
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[dict]] | None = None,
     acquisition_profile: dict[str, object] | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[str, str, str, list[dict]]:
     """Acquire HTML for a URL using the waterfall strategy."""
     result = await acquire(
@@ -96,6 +99,7 @@ async def acquire_html(
         requested_fields=requested_fields,
         requested_field_selectors=requested_field_selectors,
         acquisition_profile=acquisition_profile,
+        checkpoint=checkpoint,
     )
     return result.html, result.method, result.artifact_path, result.network_payloads
 
@@ -112,6 +116,7 @@ async def acquire(
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[dict]] | None = None,
     acquisition_profile: dict[str, object] | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
@@ -141,6 +146,7 @@ async def acquire(
             requested_field_selectors=requested_field_selectors,
             browser_first=browser_first,
             acquisition_profile=acquisition_profile,
+            checkpoint=checkpoint,
         )
         if result is None and not prefer_stealth and host_prefers_stealth(url):
             result = await _acquire_once(
@@ -157,6 +163,7 @@ async def acquire(
                 requested_field_selectors=requested_field_selectors,
                 browser_first=browser_first,
                 acquisition_profile=acquisition_profile,
+                checkpoint=checkpoint,
             )
         if result is not None:
             break
@@ -202,14 +209,20 @@ async def _acquire_once(
     requested_field_selectors: dict[str, list[dict]] | None,
     browser_first: bool,
     acquisition_profile: dict[str, object] | None,
+    checkpoint: Callable[[], Awaitable[None]] | None,
 ) -> AcquisitionResult | None:
     import logging as _logging
     _log = _logging.getLogger(__name__)
-    host_wait_seconds = await wait_for_host_slot(urlparse(url).netloc.lower(), ACQUIRE_HOST_MIN_INTERVAL_MS)
+    acquisition_started_at = time.perf_counter()
+    host_wait_seconds = await wait_for_host_slot(
+        urlparse(url).netloc.lower(),
+        ACQUIRE_HOST_MIN_INTERVAL_MS,
+        checkpoint=checkpoint,
+    )
 
     if browser_first and not advanced_mode:
-        if sleep_ms > 0:
-            await asyncio.sleep(sleep_ms / 1000)
+        await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
+        browser_started_at = time.perf_counter()
         try:
             browser_result = await fetch_rendered_html(
                 url,
@@ -222,6 +235,7 @@ async def _acquire_once(
                 request_delay_ms=sleep_ms,
                 requested_fields=requested_fields,
                 requested_field_selectors=requested_field_selectors,
+                checkpoint=checkpoint,
             )
         except Exception as exc:
             _log.warning("Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi", url, exc)
@@ -230,7 +244,7 @@ async def _acquire_once(
             if (
                 browser_result.html
                 and not detect_blocked_page(browser_result.html).is_blocked
-                and not _is_invalid_job_surface_page(
+                and not _is_invalid_surface_page(
                     requested_url=url,
                     final_url=browser_final_url,
                     html=browser_result.html,
@@ -249,6 +263,11 @@ async def _acquire_once(
                         "browser_origin_warmed": browser_result.origin_warmed,
                         "browser_network_payloads": len(browser_result.network_payloads or []),
                         "browser_diagnostics": browser_result.diagnostics,
+                        "timings_ms": _merge_timing_maps(
+                            {"browser_total_ms": _elapsed_ms(browser_started_at)},
+                            browser_result.diagnostics.get("timings_ms"),
+                            {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
+                        ),
                         "memory_prefer_stealth": bool((acquisition_profile or {}).get("prefer_stealth")),
                         "memory_browser_first": True,
                         "host_wait_seconds": round(host_wait_seconds, 3) if host_wait_seconds > 0 else None,
@@ -258,9 +277,10 @@ async def _acquire_once(
                 )
 
     # Always try curl_cffi first — it's faster and more resilient to HTTP/2 issues.
-    if sleep_ms > 0:
-        await asyncio.sleep(sleep_ms / 1000)
+    await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
+    curl_started_at = time.perf_counter()
     fetch_result = await _fetch_with_content_type(url, proxy)
+    curl_fetch_ms = _elapsed_ms(curl_started_at)
     normalized = _normalize_fetch_result(fetch_result)
     html = normalized.text
     curl_result: AcquisitionResult | None = None
@@ -288,6 +308,7 @@ async def _acquire_once(
             ),
         )
 
+    decision_started_at = time.perf_counter()
     blocked = detect_blocked_page(html)
     visible_text = " ".join(BeautifulSoup(html, "html.parser").get_text(" ", strip=True).lower().split())
     gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
@@ -321,11 +342,20 @@ async def _acquire_once(
         and not blocked.is_blocked
         and _html_has_extractable_listings(html)
     )
+    invalid_surface_page = _is_invalid_surface_page(
+        requested_url=url,
+        final_url=str(normalized.final_url or url).strip() or url,
+        html=html,
+        surface=surface,
+    )
     if structured_listing_override:
         needs_browser = False
+    if invalid_surface_page:
+        needs_browser = True
     if blocked.is_blocked:
         remember_stealth_host(url)
         prefer_stealth = True
+    decision_ms = _elapsed_ms(decision_started_at)
 
     curl_diagnostics = _build_curl_diagnostics(
         normalized=normalized,
@@ -342,8 +372,16 @@ async def _acquire_once(
         memory_browser_first=browser_first,
     )
     curl_diagnostics["curl_final_url"] = normalized.final_url or url
+    curl_diagnostics["invalid_surface_page"] = invalid_surface_page or None
     if structured_listing_override:
         curl_diagnostics["js_shell_overridden"] = "structured_data_found"
+    curl_diagnostics["timings_ms"] = _merge_timing_maps(
+        curl_diagnostics.get("timings_ms"),
+        {
+            "curl_fetch_ms": curl_fetch_ms,
+            "browser_decision_ms": decision_ms,
+        },
+    )
 
     # Keep the curl_cffi result as a fallback even if we escalate to browser,
     # but only when the content is substantive enough to be useful for extraction.
@@ -352,6 +390,7 @@ async def _acquire_once(
         and not blocked.is_blocked
         and len(visible_text) >= BROWSER_FALLBACK_VISIBLE_TEXT_MIN
         and normalized.status_code not in {403, 429, 503}
+        and not invalid_surface_page
     )
     if has_useful_content:
         curl_result = AcquisitionResult(
@@ -363,7 +402,11 @@ async def _acquire_once(
             diagnostics=curl_diagnostics,
         )
 
-    if not needs_browser and not advanced_mode:
+    if not needs_browser and (not advanced_mode or advanced_mode == "auto"):
+        curl_diagnostics["timings_ms"] = _merge_timing_maps(
+            curl_diagnostics.get("timings_ms"),
+            {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
+        )
         return curl_result or AcquisitionResult(
             html=html,
             json_data=normalized.json_data,
@@ -374,8 +417,8 @@ async def _acquire_once(
         )
 
     # Escalate to Playwright for JS rendering or advanced crawl modes.
-    if sleep_ms > 0:
-        await asyncio.sleep(sleep_ms / 1000)
+    await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
+    browser_started_at = time.perf_counter()
     try:
         browser_result = await fetch_rendered_html(
             url,
@@ -388,6 +431,7 @@ async def _acquire_once(
             request_delay_ms=sleep_ms,
             requested_fields=requested_fields,
             requested_field_selectors=requested_field_selectors,
+            checkpoint=checkpoint,
         )
     except Exception as exc:
         _log.warning("Playwright failed for %s: %s — falling back to curl_cffi result", url, exc)
@@ -397,7 +441,7 @@ async def _acquire_once(
         return curl_result
 
     browser_final_url = str((browser_result.diagnostics or {}).get("final_url") or url).strip() or url
-    browser_redirect_shell = _is_invalid_job_surface_page(
+    browser_redirect_shell = _is_invalid_surface_page(
         requested_url=url,
         final_url=browser_final_url,
         html=browser_result.html,
@@ -412,6 +456,12 @@ async def _acquire_once(
                 "browser_origin_warmed": browser_result.origin_warmed,
                 "browser_network_payloads": len(browser_result.network_payloads or []),
                 "browser_diagnostics": browser_result.diagnostics,
+                "timings_ms": _merge_timing_maps(
+                    curl_diagnostics.get("timings_ms"),
+                    {"browser_total_ms": _elapsed_ms(browser_started_at)},
+                    browser_result.diagnostics.get("timings_ms"),
+                    {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
+                ),
             }
         )
         return AcquisitionResult(
@@ -434,8 +484,14 @@ async def _acquire_once(
             browser_result.html and detect_blocked_page(browser_result.html).is_blocked
         )
         curl_result.diagnostics["browser_redirect_shell"] = browser_redirect_shell or None
+        curl_result.diagnostics["timings_ms"] = _merge_timing_maps(
+            curl_result.diagnostics.get("timings_ms"),
+            {"browser_total_ms": _elapsed_ms(browser_started_at)},
+            browser_result.diagnostics.get("timings_ms"),
+            {"acquisition_total_ms": _elapsed_ms(acquisition_started_at)},
+        )
         _log.info("Playwright returned blocked/empty for %s — using curl_cffi fallback", url)
-        if _is_invalid_job_surface_page(
+        if _is_invalid_surface_page(
             requested_url=url,
             final_url=str(normalized.final_url or url).strip() or url,
             html=curl_result.html,
@@ -446,6 +502,46 @@ async def _acquire_once(
         return curl_result
 
     return None
+
+
+async def _cooperative_sleep_ms(
+    delay_ms: int,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    remaining_ms = max(0, int(delay_ms or 0))
+    if remaining_ms <= 0:
+        if checkpoint is not None:
+            await checkpoint()
+        return
+    poll_ms = 250
+    while remaining_ms > 0:
+        if checkpoint is not None:
+            await checkpoint()
+        current_ms = min(remaining_ms, poll_ms)
+        await asyncio.sleep(current_ms / 1000)
+        remaining_ms -= current_ms
+    if checkpoint is not None:
+        await checkpoint()
+
+
+def _is_invalid_surface_page(
+    *,
+    requested_url: str,
+    final_url: str,
+    html: str,
+    surface: str | None,
+) -> bool:
+    return _is_invalid_job_surface_page(
+        requested_url=requested_url,
+        final_url=final_url,
+        html=html,
+        surface=surface,
+    ) or _is_invalid_commerce_surface_page(
+        requested_url=requested_url,
+        final_url=final_url,
+        surface=surface,
+    )
 
 
 def _is_invalid_job_surface_page(
@@ -482,6 +578,25 @@ def _is_invalid_job_surface_page(
     error_title_match = title_text in JOB_ERROR_PAGE_TITLES
     error_heading_match = any(heading in JOB_ERROR_PAGE_HEADINGS for heading in headings)
     return (redirected_to_root and (title_match or canonical_match or heading_match)) or error_title_match or error_heading_match
+
+
+def _is_invalid_commerce_surface_page(
+    *,
+    requested_url: str,
+    final_url: str,
+    surface: str | None,
+) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface not in {"ecommerce_detail", "ecommerce_listing"}:
+        return False
+    requested = urlparse(requested_url)
+    final = urlparse(final_url or requested_url)
+    return bool(
+        final_url
+        and requested.netloc.lower() == final.netloc.lower()
+        and requested.path.rstrip("/") != final.path.rstrip("/")
+        and final.path.rstrip("/") == ""
+    )
 
 
 async def _fetch_with_content_type(url: str, proxy: str | None) -> HttpFetchResult:
@@ -729,13 +844,34 @@ def _build_curl_diagnostics(
         "advanced_mode": advanced_mode,
         "proxy_used": bool(proxy),
         "prefer_stealth": prefer_stealth,
+        "curl_impersonate_profile": normalized.impersonate_profile or None,
         "curl_attempts": normalized.attempts or None,
         "curl_attempt_log": normalized.attempt_log or None,
         "host_wait_seconds": round(host_wait_seconds, 3) if host_wait_seconds > 0 else None,
         "memory_prefer_stealth": memory_prefer_stealth or None,
         "memory_browser_first": memory_browser_first or None,
+        "timings_ms": {},
     }
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int(round((time.perf_counter() - started_at) * 1000)))
+
+
+def _merge_timing_maps(*maps: object) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for item in maps:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            try:
+                int_value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if int_value >= 0:
+                merged[str(key)] = int_value
+    return merged
 
 
 def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bool:

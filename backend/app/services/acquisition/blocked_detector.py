@@ -6,61 +6,15 @@
 from __future__ import annotations
 
 import re
+from app.services.pipeline_config import (
+    BLOCK_ACTIVE_PROVIDER_MARKERS,
+    BLOCK_CDN_PROVIDER_MARKERS,
+    BLOCK_PHRASES,
+    BLOCK_TITLE_REGEXES,
+)
 
 
-_BLOCK_PHRASES = [
-    "access denied",
-    "access to this page has been denied",
-    "robot or human",
-    "are you a robot",
-    "are you human",
-    "please verify you are a human",
-    "verify you are human",
-    "complete the security check",
-    "please complete the captcha",
-    "enable javascript to view",
-    "enable javascript and cookies",
-    "you have been blocked",
-    "this request was blocked",
-    "sorry, you have been blocked",
-    "checking your browser",
-    "checking if the site connection is secure",
-    "just a moment",
-    "attention required",
-    "pardon our interruption",
-    "please turn javascript on",
-    "why do i have to complete a captcha",
-]
-
-_ACTIVE_BLOCK_MARKERS = [
-    ("px-captcha", "perimeterx"),
-    ("cf-challenge", "cloudflare"),
-    ("cf-browser-verification", "cloudflare"),
-    ("dd-modal", "datadome"),
-    ("incapsula", "incapsula"),
-    ("distil", "distil"),
-    ("shape security", "shape security"),
-    ("arkose", "arkose"),
-]
-
-_CDN_PROVIDER_MARKERS = [
-    ("perimeterx", "perimeterx"),
-    ("cloudflare", "cloudflare"),
-    ("akamai", "akamai"),
-    ("akamaized", "akamai"),
-    ("datadome", "datadome"),
-    ("kasada", "kasada"),
-]
-
-_BLOCK_TITLE_PATTERNS = [
-    re.compile(r"access\s+denied", re.I),
-    re.compile(r"robot\s+or\s+human", re.I),
-    re.compile(r"just\s+a\s+moment", re.I),
-    re.compile(r"attention\s+required", re.I),
-    re.compile(r"you\s+have\s+been\s+blocked", re.I),
-    re.compile(r"security\s+check", re.I),
-    re.compile(r"pardon\s+our\s+interruption", re.I),
-]
+_BLOCK_TITLE_PATTERNS = [re.compile(pattern, re.I) for pattern in BLOCK_TITLE_REGEXES]
 
 
 class BlockedPageResult:
@@ -112,17 +66,21 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
                 title_reason = f"blocked_title:{title_text[:60]}"
                 break
 
-    phrase_reason = next((f"blocked_phrase:{phrase}" for phrase in _BLOCK_PHRASES if phrase in visible), "")
+    phrase_reason = next((f"blocked_phrase:{phrase}" for phrase in BLOCK_PHRASES if phrase in visible), "")
 
     active_reason = ""
-    for marker, marker_provider in _ACTIVE_BLOCK_MARKERS:
-        if marker in html_lower:
+    for item in BLOCK_ACTIVE_PROVIDER_MARKERS:
+        marker = str(item.get("marker") or "")
+        marker_provider = str(item.get("provider") or "")
+        if marker and marker in html_lower:
             active_reason = f"active_block_marker:{marker}"
             provider = marker_provider
             break
 
     provider_marker = ""
-    for marker, marker_provider in _CDN_PROVIDER_MARKERS:
+    for item in BLOCK_CDN_PROVIDER_MARKERS:
+        marker = str(item.get("marker") or "")
+        marker_provider = str(item.get("provider") or "")
         if marker in html_lower:
             provider_marker = marker
             provider = marker_provider

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -10,7 +11,10 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.services.crawl_state import CrawlStatus, WORKER_PICKUP_STATUSES, update_run_status
-from app.services.pipeline_config import WORKER_MAX_CONCURRENT_JOBS
+from app.services.pipeline_config import (
+    WORKER_MAX_CONCURRENT_JOBS,
+    WORKER_ORPHAN_RECOVERY_GRACE_SECONDS,
+)
 from app.tasks.crawl_tasks import run_crawl_task
 
 logger = logging.getLogger("app.worker")
@@ -48,13 +52,24 @@ async def _recover_orphan_runs() -> int:
     """
     async with SessionLocal() as session:
         orphan_statuses = (CrawlStatus.CLAIMED.value, CrawlStatus.RUNNING.value)
-        result = await session.execute(select(CrawlRun).where(CrawlRun.status.in_(orphan_statuses)))
+        cutoff = datetime.now(UTC) - timedelta(
+            seconds=max(0, WORKER_ORPHAN_RECOVERY_GRACE_SECONDS)
+        )
+        result = await session.execute(
+            select(CrawlRun).where(
+                CrawlRun.status.in_(orphan_statuses),
+                CrawlRun.updated_at < cutoff,
+            )
+        )
         runs = list(result.scalars().all())
         for run in runs:
             previous_status = run.status
             update_run_status(run, CrawlStatus.FAILED)
             summary = dict(run.result_summary or {})
-            summary["error"] = f"Worker restarted - job was orphaned in {previous_status} state"
+            summary["error"] = (
+                "Worker restarted - job appeared orphaned after "
+                f"{WORKER_ORPHAN_RECOVERY_GRACE_SECONDS}s grace window in {previous_status} state"
+            )
             summary["extraction_verdict"] = "error"
             run.result_summary = summary
         if runs:

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.crawl import CrawlLog, CrawlRecord, ReviewPromotion
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
+from app.services.crawl_state import set_control_request
 from app.services.crawl_service import (
     _build_field_discovery_summary,
     _build_llm_candidate_evidence,
@@ -203,7 +204,7 @@ async def test_create_crawl_run_coerces_max_pages_to_int(db_session: AsyncSessio
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_maps_advanced_enabled_to_auto_and_coerces_max_scrolls(db_session: AsyncSession, test_user):
+async def test_create_crawl_run_keeps_advanced_mode_empty_without_explicit_traversal_and_coerces_max_scrolls(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com",
@@ -211,7 +212,7 @@ async def test_create_crawl_run_maps_advanced_enabled_to_auto_and_coerces_max_sc
         "settings": {"advanced_enabled": True, "max_scrolls": "12"},
     })
 
-    assert run.settings["advanced_mode"] == "auto"
+    assert run.settings["advanced_mode"] is None
     assert run.settings["max_scrolls"] == 12
 
 
@@ -415,6 +416,31 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
         select(CrawlLog).where(CrawlLog.run_id == run.id)
     )).scalars().all()
     assert any("[UNIFY]" in log.message for log in logs)
+
+
+@pytest.mark.asyncio
+async def test_process_run_applies_kill_during_inflight_acquire_wait(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/product",
+        "surface": "ecommerce_detail",
+    })
+
+    async def fake_acquire(*_args, checkpoint=None, **_kwargs):
+        current = await db_session.get(type(run), run.id)
+        assert current is not None
+        set_control_request(current, "kill")
+        await db_session.commit()
+        assert checkpoint is not None
+        await checkpoint()
+        raise AssertionError("checkpoint should have interrupted acquire")
+
+    with patch("app.services.crawl_service.acquire", new=fake_acquire):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "killed"
+    assert run.result_summary.get("control_requested") is None
 
 
 @pytest.mark.asyncio
@@ -688,6 +714,55 @@ async def test_process_run_listing_no_records_fails(db_session: AsyncSession, te
 
 
 @pytest.mark.asyncio
+async def test_process_run_listing_retries_with_browser_after_weak_curl_listing(db_session: AsyncSession, test_user):
+    weak_listing_html = """
+    <html><body>
+      <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"CollectionPage","mainEntity":{
+        "@type":"ItemList",
+        "itemListElement":[
+          {"@type":"ListItem","position":1,"url":"https://example.com/p/one"},
+          {"@type":"ListItem","position":2,"url":"https://example.com/p/two"}
+        ]
+      }}
+      </script>
+    </body></html>
+    """
+    browser_listing_html = """
+    <html><body>
+      <div class="product-card"><h3><a href="/p/1">Product A</a></h3><span class="price">$10</span></div>
+      <div class="product-card"><h3><a href="/p/2">Product B</a></h3><span class="price">$20</span></div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/category",
+        "surface": "ecommerce_listing",
+    })
+
+    acquire_mock = AsyncMock(side_effect=[
+        _make_acq(weak_listing_html, method="curl_cffi"),
+        _make_acq(browser_listing_html, method="playwright"),
+    ])
+
+    with (
+        patch("app.services.crawl_service.acquire", acquire_mock),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+    assert acquire_mock.await_count == 2
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )).scalars().all()
+    assert len(records) == 2
+    assert {record.data["title"] for record in records} == {"Product A", "Product B"}
+
+
+@pytest.mark.asyncio
 async def test_extraction_verdict_in_summary(db_session: AsyncSession, test_user):
     """Successful runs should have extraction_verdict=success in result_summary."""
     run = await create_crawl_run(db_session, test_user.id, {
@@ -764,7 +839,7 @@ async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession,
 
 
 @pytest.mark.asyncio
-async def test_process_run_maps_advanced_enabled_to_auto_and_passes_max_scrolls_to_acquire(db_session: AsyncSession, test_user):
+async def test_process_run_does_not_infer_advanced_mode_from_toggle_and_passes_max_scrolls_to_acquire(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/listing",
@@ -778,7 +853,7 @@ async def test_process_run_maps_advanced_enabled_to_auto_and_passes_max_scrolls_
     ):
         await process_run(db_session, run.id)
 
-    assert acquire_mock.await_args.kwargs["advanced_mode"] == "auto"
+    assert acquire_mock.await_args.kwargs["advanced_mode"] is None
     assert acquire_mock.await_args.kwargs["max_scrolls"] == 9
 
 

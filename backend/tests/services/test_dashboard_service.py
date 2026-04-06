@@ -89,3 +89,78 @@ async def test_reset_application_data_clears_rows_and_artifacts(
     assert list(artifacts_dir.iterdir()) == []
     assert list(cookie_dir.iterdir()) == []
     assert list(legacy_artifacts_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_reset_application_data_ignores_sqlite_vacuum_failures(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = tmp_path / "backend" / "artifacts"
+    cookie_dir = tmp_path / "backend" / "cookie_store"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    cookie_dir.mkdir(parents=True, exist_ok=True)
+
+    user = User(email="vacuum@example.com", hashed_password="hashed", role="admin")
+    db_session.add(user)
+    await db_session.flush()
+
+    run = CrawlRun(
+        user_id=user.id,
+        run_type="crawl",
+        url="https://example.com",
+        status="completed",
+        surface="product_detail",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+    db_session.add(CrawlRecord(run_id=run.id, source_url="https://example.com", data={}, raw_data={}, discovered_data={}, source_trace={}))
+    await db_session.commit()
+
+    monkeypatch.setattr("app.services.dashboard_service.settings.artifacts_dir", artifacts_dir)
+    monkeypatch.setattr("app.services.dashboard_service.settings.cookie_store_dir", cookie_dir)
+    monkeypatch.setattr("app.services.dashboard_service.PROJECT_ROOT", tmp_path)
+
+    async def _noop_reset_learned_state() -> None:
+        return None
+
+    monkeypatch.setattr("app.services.dashboard_service.reset_learned_state", _noop_reset_learned_state)
+
+    real_connect = type(db_session.bind).connect
+
+    class _FailingVacuumConnection:
+        def __init__(self, connection) -> None:
+            self._connection = connection
+
+        async def __aenter__(self):
+            await self._connection.__aenter__()
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            await self._connection.__aexit__(exc_type, exc, tb)
+
+        async def execute(self, statement, *args, **kwargs):
+            if str(statement) == "VACUUM":
+                raise RuntimeError("vacuum failed")
+            return await self._connection.execute(statement, *args, **kwargs)
+
+        async def commit(self) -> None:
+            await self._connection.commit()
+
+    def _connect_with_failing_vacuum(engine):
+        return _FailingVacuumConnection(real_connect(engine))
+
+    monkeypatch.setattr(type(db_session.bind), "connect", _connect_with_failing_vacuum)
+
+    result = await dashboard_service.reset_application_data(db_session)
+
+    remaining_runs = await db_session.scalar(select(func.count()).select_from(CrawlRun))
+    remaining_records = await db_session.scalar(select(func.count()).select_from(CrawlRecord))
+
+    assert remaining_runs == 0
+    assert remaining_records == 0
+    assert result["knowledge_base_reset"] is True

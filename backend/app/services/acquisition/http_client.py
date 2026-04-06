@@ -10,18 +10,19 @@ from curl_cffi.const import CurlOpt
 from curl_cffi import requests
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.acquisition.cookie_store import load_cookies_for_http
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host
 from app.services.pipeline_config import (
     HTTP_MAX_RETRIES,
+    HTTP_IMPERSONATION_PROFILES,
     HTTP_RETRY_BACKOFF_BASE_MS,
     HTTP_RETRY_BACKOFF_MAX_MS,
     HTTP_RETRY_STATUS_CODES,
+    HTTP_STEALTH_IMPERSONATION_PROFILE,
     HTTP_TIMEOUT_SECONDS,
     IMPERSONATION_TARGET,
 )
 from app.services.url_safety import ValidatedTarget, validate_public_target
-
-STEALTH_IMPERSONATE = "chrome131"
 
 
 def _validate_retry_backoff_config() -> None:
@@ -42,6 +43,7 @@ class HttpFetchResult:
     content_type: str = "html"
     json_data: dict | list | None = None
     stealth_used: bool = False
+    impersonate_profile: str = ""
     attempts: int = 0
     error: str = ""
     attempt_log: list[dict[str, object]] = field(default_factory=list)
@@ -86,11 +88,20 @@ async def fetch_html_result(
 
 def _build_attempt_order(*, url: str, allow_stealth_retry: bool, force_stealth: bool) -> list[str]:
     prefer_stealth = force_stealth or host_prefers_stealth(url)
+    profiles = [profile for profile in HTTP_IMPERSONATION_PROFILES if profile]
+    if not profiles:
+        profiles = [IMPERSONATION_TARGET]
+    stealth_profile = HTTP_STEALTH_IMPERSONATION_PROFILE or profiles[-1]
+    if stealth_profile not in profiles:
+        profiles.append(stealth_profile)
     if force_stealth:
-        return [STEALTH_IMPERSONATE]
+        return [stealth_profile]
     if prefer_stealth:
-        return [STEALTH_IMPERSONATE] if not allow_stealth_retry else [STEALTH_IMPERSONATE, IMPERSONATION_TARGET]
-    return [IMPERSONATION_TARGET] if not allow_stealth_retry else [IMPERSONATION_TARGET, STEALTH_IMPERSONATE]
+        ordered = [stealth_profile, *[profile for profile in profiles if profile != stealth_profile]]
+        return ordered[:1] if not allow_stealth_retry else ordered
+    primary = IMPERSONATION_TARGET if IMPERSONATION_TARGET in profiles else profiles[0]
+    ordered = [primary, *[profile for profile in profiles if profile != primary]]
+    return ordered[:1] if not allow_stealth_retry else ordered
 
 
 def _remember_successful_fetch(url: str, result: HttpFetchResult) -> None:
@@ -100,7 +111,10 @@ def _remember_successful_fetch(url: str, result: HttpFetchResult) -> None:
 
 async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) -> HttpFetchResult:
     attempts = max(1, HTTP_MAX_RETRIES + 1)
-    last_result = HttpFetchResult(stealth_used=impersonate == STEALTH_IMPERSONATE)
+    last_result = HttpFetchResult(
+        stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+        impersonate_profile=impersonate,
+    )
     attempt_log: list[dict[str, object]] = []
 
     for attempt in range(1, attempts + 1):
@@ -159,13 +173,17 @@ async def _fetch_once(url: str, proxy: str | None, *, impersonate: str) -> HttpF
         session_kwargs["curl_options"] = _resolve_options(target)
     if proxy:
         kwargs["proxies"] = {"http": proxy, "https": proxy}
+    cookies = load_cookies_for_http(target.hostname)
+    if cookies:
+        kwargs["cookies"] = cookies
     try:
         async with requests.AsyncSession(**session_kwargs) as session:
             response = await session.get(request_url, **kwargs)
     except Exception as exc:
         return HttpFetchResult(
             error=str(exc),
-            stealth_used=impersonate == STEALTH_IMPERSONATE,
+            stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+            impersonate_profile=impersonate,
         )
 
     headers = {str(key).lower(): str(value) for key, value in getattr(response, "headers", {}).items()}
@@ -182,7 +200,8 @@ async def _fetch_once(url: str, proxy: str | None, *, impersonate: str) -> HttpF
         final_url=str(getattr(response, "url", url)),
         content_type=content_type,
         json_data=json_data,
-        stealth_used=impersonate == STEALTH_IMPERSONATE,
+        stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+        impersonate_profile=impersonate,
         attempts=1,
         error=error,
     )

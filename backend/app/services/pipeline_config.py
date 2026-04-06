@@ -52,6 +52,16 @@ _LLM_TUNING: dict = _load("llm_tuning.json", {})  # type: ignore[assignment]
 # Acquisition
 HTTP_TIMEOUT_SECONDS: int = _TUNING.get("http_timeout_seconds", 20)
 IMPERSONATION_TARGET: str = _TUNING.get("impersonation_target", "chrome110")
+HTTP_IMPERSONATION_PROFILES: tuple[str, ...] = tuple(
+    profile for profile in _TUNING.get("http_impersonation_profiles", [IMPERSONATION_TARGET, "chrome131"])
+    if str(profile).strip()
+)
+HTTP_STEALTH_IMPERSONATION_PROFILE: str = str(
+    _TUNING.get(
+        "http_stealth_impersonation_profile",
+        HTTP_IMPERSONATION_PROFILES[-1] if HTTP_IMPERSONATION_PROFILES else IMPERSONATION_TARGET,
+    )
+)
 BROWSER_FALLBACK_VISIBLE_TEXT_MIN: int = _TUNING.get("browser_fallback_visible_text_min", 500)
 BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX: float = _TUNING.get("browser_fallback_visible_text_ratio_max", 0.02)
 BROWSER_FALLBACK_HTML_SIZE_THRESHOLD: int = _TUNING.get("browser_fallback_html_size_threshold", 200000)
@@ -65,6 +75,7 @@ MIN_REQUEST_DELAY_MS: int = _TUNING.get("min_request_delay_ms", 100)
 DEFAULT_MAX_SCROLLS: int = _TUNING.get("default_max_scrolls", 10)
 BATCH_URL_CONCURRENCY: int = _TUNING.get("batch_url_concurrency", 8)
 WORKER_MAX_CONCURRENT_JOBS: int = _TUNING.get("worker_max_concurrent_jobs", 8)
+WORKER_ORPHAN_RECOVERY_GRACE_SECONDS: int = _TUNING.get("worker_orphan_recovery_grace_seconds", 900)
 
 # Extraction tuning
 MAX_CANDIDATES_PER_FIELD: int = _TUNING.get("max_candidates_per_field", 5)
@@ -101,6 +112,8 @@ STEALTH_PREFER_TTL_HOURS: int = _TUNING.get("stealth_prefer_ttl_hours", 24)
 # Browser runtime (Phase 2 hardening)
 CHALLENGE_WAIT_MAX_SECONDS: int = _TUNING.get("challenge_wait_max_seconds", 12)
 CHALLENGE_POLL_INTERVAL_MS: int = _TUNING.get("challenge_poll_interval_ms", 2000)
+SURFACE_READINESS_MAX_WAIT_MS: int = _TUNING.get("surface_readiness_max_wait_ms", 12000)
+SURFACE_READINESS_POLL_MS: int = _TUNING.get("surface_readiness_poll_ms", 500)
 ORIGIN_WARM_PAUSE_MS: int = _TUNING.get("origin_warm_pause_ms", 2000)
 BROWSER_ERROR_RETRY_ATTEMPTS: int = _TUNING.get("browser_error_retry_attempts", 1)
 BROWSER_ERROR_RETRY_DELAY_MS: int = _TUNING.get("browser_error_retry_delay_ms", 1000)
@@ -108,6 +121,7 @@ BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS: int = _TUNING.get("browser_navigation
 BROWSER_NAVIGATION_LOAD_TIMEOUT_MS: int = _TUNING.get("browser_navigation_load_timeout_ms", 15000)
 BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS: int = _TUNING.get("browser_navigation_domcontentloaded_timeout_ms", 15000)
 BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS: int = _TUNING.get("browser_navigation_optimistic_wait_ms", 3000)
+INTERRUPTIBLE_WAIT_POLL_MS: int = _TUNING.get("interruptible_wait_poll_ms", 250)
 PAGINATION_NAVIGATION_TIMEOUT_MS: int = _TUNING.get("pagination_navigation_timeout_ms", 20000)
 LISTING_READINESS_MAX_WAIT_MS: int = _TUNING.get("listing_readiness_max_wait_ms", 12000)
 LISTING_READINESS_POLL_MS: int = _TUNING.get("listing_readiness_poll_ms", 500)
@@ -177,7 +191,15 @@ _NORM_RULES: dict = _load("normalization_rules.json", {})  # type: ignore[assign
 PRICE_FIELDS: set[str] = set(_NORM_RULES.get("price_fields", ["price", "sale_price"]))
 PRICE_REGEX: str = _NORM_RULES.get("price_regex", r"\d[\d,.]*")
 SALARY_FIELDS: set[str] = set(_NORM_RULES.get("salary_fields", ["salary", "compensation"]))
-SALARY_RANGE_REGEX: str = _NORM_RULES.get("salary_range_regex", r"\d.*")
+SALARY_RANGE_REGEX: str = _NORM_RULES.get(
+    "salary_range_regex",
+    r"(?:(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?\s*\d[\d,.]*[kKmMbB]?\s*(?:[-–—]|to|until)\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?\s*\d[\d,.]*[kKmMbB]?\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR))?(?:\s*/\s*[a-zA-Z]+)?|(?:[$€£₹]|(?i:USD|EUR|GBP|INR))\s*\d[\d,.]*[kKmMbB]?(?:\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR)))?(?:\s*/\s*[a-zA-Z]+)?|\d[\d,.]*[kKmMbB]?(?:\s*(?:[$€£₹]|(?i:USD|EUR|GBP|INR)))?(?:\s*/\s*[a-zA-Z]+)?)",
+)
+CURRENCY_CODES: set[str] = set(_NORM_RULES.get("currency_codes", []))
+CURRENCY_SYMBOL_MAP: dict[str, str] = dict(_NORM_RULES.get("currency_symbol_map", {}))
+COLOR_NOISE_TOKENS: tuple[str, ...] = tuple(_NORM_RULES.get("color_noise_tokens", []))
+SIZE_NOISE_TOKENS: tuple[str, ...] = tuple(_NORM_RULES.get("size_noise_tokens", []))
+PAGE_URL_CURRENCY_HINTS: dict[str, str] = dict(_NORM_RULES.get("page_url_currency_hints", {}))
 _NESTED_OBJECT_KEYS: dict = _NORM_RULES.get("nested_object_keys", {})  # type: ignore[assignment]
 NESTED_TEXT_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("text_fields", ["name", "label", "title", "text", "value", "content", "description", "alt"]))
 NESTED_URL_KEYS: tuple[str, ...] = tuple(_NESTED_OBJECT_KEYS.get("url_fields", ["href", "url", "link", "canonical_url"]))
@@ -210,6 +232,8 @@ _CANDIDATE_CLEANUP: dict = _EXTRACTION_RULES.get("candidate_cleanup", {})  # typ
 CANDIDATE_PLACEHOLDER_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("placeholder_values", ["-", "—", "--", "n/a", "na", "none", "null", "undefined"]))
 CANDIDATE_GENERIC_CATEGORY_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("generic_category_values", ["detail-page", "detail_page", "product", "page", "pdp"]))
 CANDIDATE_GENERIC_TITLE_VALUES: set[str] = set(_CANDIDATE_CLEANUP.get("generic_title_values", ["chrome", "firefox", "safari", "edge", "home"]))
+CANDIDATE_TITLE_NOISE_TOKENS: tuple[str, ...] = tuple(_CANDIDATE_CLEANUP.get("title_noise_tokens", []))
+GA_DATA_LAYER_KEYS: frozenset[str] = frozenset(_CANDIDATE_CLEANUP.get("ga_data_layer_keys", []))
 _CANDIDATE_FIELD_GROUPS: dict = _CANDIDATE_CLEANUP.get("field_groups", {})  # type: ignore[assignment]
 CANDIDATE_FIELD_GROUPS: dict[str, set[str]] = {
     str(group): {str(field) for field in fields}
@@ -246,6 +270,12 @@ LISTING_FILTER_OPTION_KEYS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES
 LISTING_MINIMAL_VISUAL_FIELDS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("minimal_visual_fields", []))
 LISTING_PRODUCT_SIGNAL_FIELDS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("product_signal_fields", []))
 LISTING_JOB_SIGNAL_FIELDS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("job_signal_fields", []))
+LISTING_NON_LISTING_PATH_TOKENS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("non_listing_path_tokens", []))
+LISTING_HUB_PATH_SEGMENTS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("hub_path_segments", []))
+LISTING_WEAK_METADATA_FIELDS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("weak_metadata_fields", []))
+LISTING_FACET_QUERY_KEYS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("facet_query_keys", []))
+LISTING_FACET_PATH_FRAGMENTS: tuple[str, ...] = tuple(_LISTING_EXTRACTION_RULES.get("facet_path_fragments", []))
+LISTING_CATEGORY_PATH_MARKERS: frozenset[str] = frozenset(_LISTING_EXTRACTION_RULES.get("category_path_markers", []))
 _ACQUISITION_GUARDS: dict = _EXTRACTION_RULES.get("acquisition_guards", {})  # type: ignore[assignment]
 JOB_REDIRECT_SHELL_TITLES: frozenset[str] = frozenset(_ACQUISITION_GUARDS.get("job_redirect_shell_titles", []))
 JOB_REDIRECT_SHELL_CANONICAL_URLS: frozenset[str] = frozenset(_ACQUISITION_GUARDS.get("job_redirect_shell_canonical_urls", []))
@@ -326,6 +356,10 @@ PROVIDER_MARKERS: list[str] = _BLOCK_SIG.get("provider_markers", [
     "funcaptcha",
     "arkose",
 ])
+BLOCK_ACTIVE_PROVIDER_MARKERS: list[dict[str, str]] = _BLOCK_SIG.get("active_provider_markers", [])  # type: ignore[assignment]
+BLOCK_CDN_PROVIDER_MARKERS: list[dict[str, str]] = _BLOCK_SIG.get("cdn_provider_markers", [])  # type: ignore[assignment]
+BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS: dict[str, str] = _BLOCK_SIG.get("browser_challenge_strong_markers", {})  # type: ignore[assignment]
+BLOCK_BROWSER_CHALLENGE_WEAK_MARKERS: dict[str, str] = _BLOCK_SIG.get("browser_challenge_weak_markers", {})  # type: ignore[assignment]
 
 BLOCK_TITLE_REGEXES: list[str] = _BLOCK_SIG.get("title_regexes", [
     r"access\s+denied",

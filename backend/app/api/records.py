@@ -359,11 +359,13 @@ def _is_markdown_long_form(field_name: object, value: str) -> bool:
 
 
 def _render_markdown_block(value: str) -> str:
-    lines = [line.strip() for line in value.split("\n") if line.strip()]
-    if not lines:
-        return ""
     rendered: list[str] = []
-    for line in lines:
+    for raw_line in value.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            if rendered and rendered[-1] != "":
+                rendered.append("")
+            continue
         bullet_match = re.match(r"^(?:[•*-]|\d+\.)\s+(.*)$", line)
         if bullet_match:
             rendered.append(f"- {bullet_match.group(1).strip()}")

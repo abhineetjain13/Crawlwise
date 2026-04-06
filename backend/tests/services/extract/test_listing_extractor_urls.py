@@ -53,6 +53,8 @@ def test_extract_listing_records_prefers_detail_links_over_first_card_anchor():
 
 
 def test_extract_listing_records_uses_usajobs_card_selector():
+    # USAJobs search pages render job cards as direct #search-results children with
+    # these utility classes, which keeps pagination/filter chrome out of the card set.
     html = """
     <html><body>
       <div id="search-results">

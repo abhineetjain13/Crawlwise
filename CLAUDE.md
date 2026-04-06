@@ -8,6 +8,12 @@ CrawlerAI is a POC crawler stack with:
 - `frontend/`: Next.js app for crawl submission, run inspection, review, selectors, admin views.
 - `docs/`: product notes and implementation planning docs.
 
+## Documentation Map
+
+- `docs/backend-architecture.md`: current backend architecture and invariants only.
+- `docs/backend-pending-items.md`: the single consolidated backend backlog for bugs, refactors, and follow-up architecture work.
+- Root audit files are historical inputs, not the canonical backlog.
+
 ## Current Crawl Contract
 
 ### Submission modes
@@ -35,7 +41,9 @@ Category is the default page type in the UI.
 - `settings.llm_enabled`
 - `settings.extraction_contract`: row-wise `field_name`, `xpath`, `regex`
 
-Advanced crawl is a single toggle-backed mode. There is no separate Spacraler implementation.
+`advanced_mode` is listing traversal only. It governs `paginate`, `scroll`, `load_more`, and legacy `auto` traversal behavior on listing pages. It does not control automatic browser rendering.
+
+Automatic browser escalation is system-owned and independent of `advanced_mode`. The acquisition layer may still escalate from `curl_cffi` to Playwright for both listing and detail pages when curl output is blocked, redirected, empty, or structurally unusable.
 
 ## Frontend State
 
@@ -72,6 +80,7 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
 - `blocked_detector.py`: Post-acquisition blocked/challenge page detection with deterministic signatures for WAFs (PerimeterX, Cloudflare, Akamai, Datadome), CAPTCHA pages, access-denied pages
 - `host_memory.py`: TTL-aware, file-backed memory of which hosts need stealth TLS
 - `browser_client.py`: Stealth context, challenge wait, origin warming, cookie consent dismissal, network XHR/fetch interception
+- Detail pages never run traversal helpers (`paginate` / `scroll` / `load_more`) even if `advanced_mode` is present; traversal is listing-only policy.
 
 #### Acquisition hardening rules
 
@@ -85,6 +94,21 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
 - Persisted cookies are optional runtime state, never committed source data. Cookie reuse must be policy-filtered: anti-bot/challenge cookies are not persisted, expired cookies are ignored, and session cookies remain in-memory unless explicitly enabled by policy.
 - Cookie policy can now carry domain-specific overrides from `data/knowledge_base/cookie_policy.json`; use explicit allowlists for benign cookies rather than widening the global persistence rules.
 - Acquisition pacing and retry behavior are knowledge-base driven. Preventive backoff and host-spacing must come from `pipeline_tuning.json`, not hardcoded sleeps scattered across the codebase.
+- Commerce redirect shells are invalid acquisition results. Same-host redirects from a requested commerce URL to `/` must not be accepted as success merely because the redirected page contains structured data.
+- Acquisition diagnostics should expose per-URL timing phases when available: curl fetch, browser decision, browser launch, origin warm-up, navigation, challenge wait, listing readiness wait, traversal, acquisition total, and extraction total.
+- Detail-page UI should surface acquisition metadata from `source_trace` so audits can see method, browser attempt status, challenge state, and final URL without opening raw diagnostics artifacts.
+
+#### Acquisition hardening backlog
+
+- **Intelligent Wait**
+  - Extend browser challenge handling so the crawler waits for real page readiness after DataDome / Cloudflare interstitials, not just disappearance of challenge text.
+  - Prefer readiness signals tied to the requested surface, such as product title, product price, or listing card selectors.
+- **Shared Cookie Store**
+  - Harvest policy-approved anti-bot/session-adjacent cookies from successful browser sessions and make them available to same-domain `curl_cffi` follow-up requests where policy permits.
+  - Persistence must stay domain-scoped and policy-driven; challenge cookies remain deny-by-default unless explicitly approved.
+- **TLS Fingerprint Rotation**
+  - Expand HTTP impersonation beyond a fixed pair and support bounded browser-fingerprint rotation for repeated 403/429/503 style soft blocks.
+  - Record the selected fingerprint in diagnostics for later analysis.
 
 #### Discovery layer (`services/discover/`)
 
@@ -101,7 +125,7 @@ The crawl pipeline follows: ACQUIRE → BLOCKED DETECT → DISCOVER → EXTRACT 
   4. Network payloads (XHR/fetch intercepted JSON)
   5. DOM card detection (CSS selectors + auto-detect heuristic)
   - All structured sources are collected and ranked by field richness — sparse JSON-LD no longer short-circuits richer hydrated state data
-  - `_extract_items_from_json` reads `max_json_recursion_depth` from `pipeline_tuning.json` (default `4`) to find deeply nested product arrays
+  - `_extract_items_from_json` reads `max_json_recursion_depth` from `pipeline_tuning.json` (default `8`) to find deeply nested product arrays
   - Card title extraction uses ordered selectors (`[itemprop='name']` → `.title` → headings) and skips price-like text to prevent price/title confusion
   - Card auto-detect scores candidate groups by product signal density (link + image + price) instead of pure element count, preventing nav lists from winning over product tiles
   - Price text is cleaned via regex to strip surrounding UI text (e.g. "In stock Add to basket")
@@ -149,6 +173,7 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - `record.discovered_data`: Raw manifest containers (adapter_data, json_ld, network_payloads, etc.) are stripped from API responses. Only logical metadata (content_type, source, requested_field_coverage) is exposed.
 - `record.raw_data`: Full raw extraction data, available for review/promote resolution but not shown in default views.
 - `record.source_trace.field_discovery`: Deterministic field-level discovery summary for requested/additional fields. This is the primary backend contract for intelligence/review display: chosen value, contributing sources, candidate counts, and missing fields.
+- `record.source_trace.acquisition`: Lightweight acquisition summary for UI/review use: final URL, browser attempt/use flags, challenge state, invalid-surface marker, and timing diagnostics.
 - Requested field coverage is tracked in `discovered_data.requested_field_coverage` — it does NOT affect the extraction verdict.
 - Review/LLM-oriented workflows should consume cleaned logical candidates plus preserved raw source evidence; do not throw away source-specific data during acquisition/discovery just because it is hidden from the default API view.
 
@@ -197,6 +222,9 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 - Card extraction now prefers `[itemprop='image']` for image_url before falling back to generic `<img>` selectors
 - JS-shell page detection: acquisition now triggers Playwright fallback when HTML is large (>=200KB) but visible text ratio is below 2% — catches Next.js/SPA shell pages like Sigma Aldrich where `curl_cffi` returns full HTML skeleton but no rendered product data
 - Listing extractor now detects and filters category/navigation URLs (paths like `/products/cell-culture`) from product URLs (paths like `/product/sigma/nuc101`) — prevents category hub links from being extracted as product records
+- Listing record quality guards now reject weak promo/category hub rows that only contain navigation metadata such as title + URL + publication date, and shared URL normalization drops asset links such as `.woff2`
+- iFixit-style listing grids that render products as `article` children under `data-testid` containers are now covered by generic card selectors
+- Acquisition timing summaries now roll up curl fetch, browser decision, browser launch/origin/navigation/challenge/readiness/traversal, acquisition total, and extraction total into run-level `acquisition_summary`
 - LLM runtime calls are fire-and-forget with no retry — 429 rate limit errors fail immediately (retry/backoff removed to avoid blocking the pipeline on free-tier API limits)
 - Dynamic field name validation rejects single-character keys, keys longer than 60 chars, sentence-like keys with 5+ underscores, and JSON-LD schema type names (AggregateRating, BreadcrumbList, etc.) from leaking into `record.data`
 - Specification aggregate fields (`specifications`, `dimensions`) now require at least 2 real spec entries from the semantic extractor before being emitted — prevents phantom "specifications" on pages without actual spec tables
@@ -222,14 +250,14 @@ All tunable values (field aliases, collection keys, DOM patterns, card selectors
 
 ## Tests
 
-Backend tests currently pass with:
+Run backend tests with:
 
 ```powershell
 $env:PYTHONPATH='.'
 pytest tests -q
 ```
 
-279 tests covering: adapters, acquisition, blocked detection, JSON extraction, listing extraction (title/price separation, itemprop, auto-detect scoring, microdata cards, price cleanup, category URL filtering), crawl service orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, discovery.
+The backend test tree currently collects 360 tests covering adapters, acquisition, blocked detection, JSON extraction, listing extraction, crawl service orchestration, review service, normalizers, security, host memory, requested field policy, URL safety, dashboard service, discovery, and worker recovery.
 
 Acquire-only smoke checks can be run without the full crawl pipeline:
 
@@ -277,27 +305,6 @@ These MUST be preserved across all changes:
 15. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to `spec_drop_labels` in `extraction_rules.json`, not hardcoded.
 16. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
 
-## Known Gaps / Risks
+## Backlog Reference
 
-- LLM integration is configuration-only today. The pipeline still behaves deterministically.
-- XPath and regex rules are currently first-pass extraction helpers; there is no full selector authoring validation UI yet.
-- The backend does not currently emit a first-class `degraded` run status; clients should read `result_summary.extraction_verdict` for partial/listing/schema-miss distinctions.
-- `try_blocked_adapter_recovery()` currently only supports Shopify — other platform recovery paths not yet implemented.
-- Typed reviewed values are not yet committed end-to-end: LLM cleanup suggestions and field-commit payloads still coerce values to strings, which can flatten arrays/objects/numbers discovered during cleanup.
-- `build_absolute_xpath` generates brittle absolute paths that pollute selector memory.
-- **Schema pollution in `record.data`** (partially addressed): Dynamic field name validation now filters single-char keys, sentence-like labels (5+ underscores), JSON-LD type names, and day-of-week patterns. However, site-specific promo labels (e.g. `add_adorama_protect`) and 2-underscore heading labels from job pages (e.g. `deep_learning_mastery`) still leak through. Full spec namespacing under a `specifications` dict remains TODO.
-- **Advanced crawl modes incomplete**: `paginate` in `browser_client.py` is a POC stub (line 113 comment: "For pagination we'd collect multi-page HTML; for POC return first page"). `auto` mode only scrolls, never paginates. Multi-page listing crawls only capture page 1.
-- **Detail extraction pipeline shares the same candidate system as listing** — candidates from multiple sources (JSON-LD, embedded JSON, DOM, tables, semantic sections) are all flattened into a single candidates dict. JSON-LD `@type` leakage into category is now fixed, but other cross-source contamination (e.g. promo text from embedded JSON leaking into description) may still occur.
-- **SPA-rendered listing pages** (Oxylabs sandbox, practicesoftwaretesting.com): hydrated state arrays found in discovery but listing extractor can't parse arbitrary React/Angular state shapes into records. `_extract_items_from_json` only matches arrays with known collection keys or recurses for the largest array, missing component-level state.
-- **Listing card extraction has no fallback for content-only pages** (quotes, country lists) where repeating items don't match product card patterns (no price, no product URL). The `ecommerce_listing` surface assumption blocks extraction of non-commerce repeating data.
-
-## Preferred Next Steps
-
-1. **Schema cleanup for detail pages**: Finish namespacing spec-table fields under `specifications` dict, and add surface-aware filtering (job page headings should not become spec fields).
-2. **Implement `paginate` advanced mode**: Collect multi-page HTML in `browser_client.py`, feed concatenated results through listing extraction with deduplication. Wire the existing `max_pages` setting.
-3. **Detail page multi-source reconciliation**: Add a quality gate between `extract_candidates()` and final record assembly so JSON-LD structural artifacts don't contaminate business fields.
-4. Surface extraction verdict distinctions in the run detail UI.
-5. Add Lever ATS adapter.
-6. Expand `try_blocked_adapter_recovery()` to additional platforms.
-7. Switch `build_absolute_xpath` to semantic relative XPaths.
-8. Finish the typed review/commit path for arrays, objects, booleans, and numeric values.
+Open backend bugs, architecture gaps, and refactoring work are tracked in `docs/backend-pending-items.md`. Keep this file focused on the current implemented contract and invariants.

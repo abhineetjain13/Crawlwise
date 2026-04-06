@@ -1,6 +1,6 @@
 {
-  "ecommerce_listing": ["title", "brand", "price", "sale_price", "original_price", "availability", "image_url", "additional_images", "color", "size", "dimensions", "rating", "review_count", "url"],
-  "ecommerce_detail": ["title", "brand", "sku", "price", "sale_price", "original_price", "currency", "availability", "image_url", "additional_images", "description", "rating", "review_count", "category", "color", "size", "materials", "care"],
+  "ecommerce_listing": ["title", "brand", "sku", "part_number", "price", "sale_price", "original_price", "currency", "availability", "image_url", "additional_images", "color", "size", "dimensions", "rating", "review_count", "url"],
+  "ecommerce_detail": ["title", "brand", "sku", "part_number", "price", "sale_price", "original_price", "currency", "availability", "image_url", "additional_images", "description", "rating", "review_count", "category", "color", "size", "materials", "care"],
   "job_listing": ["title", "company", "location", "salary", "job_type", "posted_date", "url", "apply_url"],
   "job_detail": ["title", "company", "location", "salary", "job_type", "posted_date", "apply_url", "description", "requirements", "responsibilities", "qualifications", "benefits", "skills", "remote"],
   "automobile_listing": ["title", "price", "url", "image_url", "make", "model", "year", "mileage", "location", "dealer_name"],

@@ -131,10 +131,6 @@ spec tables + inline JSON simultaneously — the hardest multi-source extraction
 | DC02 | `https://www.thomann.de/gb/akg_k702.htm` | HTTP | Medium | Headphone FR data in DOM, tabbed specs, multi-warehouse stock |
 | DC03 | `https://www.discogs.com/release/1529440` | HTTP | Medium | Daft Punk RAM — track listing, multi-edition, MusicBrainz-linked JSON-LD |
 | DC04 | `https://www.discogs.com/release/249504` | HTTP | Medium | Classic release — label / barcode / matrix / pressing data, multi-format |
-| DC05 | `https://www.parts-express.com/dayton-audio-dc28f-8-1-1-8-silk-dome-tweeter-8-ohm/275-010` | HTTP | Medium | Thiele-Small params table (Fs, Qts, Xmax), JSON-LD, linked datasheet PDF |
-| DC06 | `https://www.parts-express.com/dayton-audio-rs150-4-6-reference-woofer-4-ohm/295-315` | HTTP | Medium | Speaker T/S params, mounting template tab, alt SKU variants |
-| DC07 | `https://www.sweetwater.com/store/detail/ATH-M50x--audio-technica-ath-m50x-professional-studio-monitor-headphones` | Browser | Medium | Awards, gear notes, Q&A section, rich JSON-LD, JS-rendered reviews |
-| DC08 | `https://www.webstaurantstore.com/avantco-ice-e80-ahc-half-dice-undercounter-ice-machine/19E80AHC.html` | HTTP | Medium | NSF/UL certs, capacity spec table, installation dimensions, alt SKUs |
 | DC09 | `https://www.autozone.com/motor-oil-and-transmission-fluid/motor-oil/mobil-1/mobil-1-extended-performance-full-synthetic-motor-oil-5w-30-5-quart/881036_0_0` | Browser | Medium | Fitment data, API spec in DOM, store availability from JSON |
 | DC10 | `https://www.ifixit.com/products/iphone-14-battery` | HTTP | Easy | Repair part — compatibility list, teardown links, schema.org Product |
 | DC11 | `https://www.ifixit.com/products/macbook-pro-15-inch-retina-display-mid-2015-battery` | HTTP | Easy | Version compatibility matrix in DOM, conditional specs |
@@ -144,7 +140,6 @@ spec tables + inline JSON simultaneously — the hardest multi-source extraction
 | DC15 | `https://www.abebooks.com/9780132350884/Clean-Code-Handbook-Agile-Software-0132350882/plp` | HTTP | Medium | Multi-seller table, shipping region data, condition descriptions |
 | DC16 | `https://www.adorama.com/ib5dviii.html` | Browser | Medium | Camera body — bundle options, rebate data in DOM, multi-source pricing |
 | DC17 | `https://www.rockler.com/jessem-mast-r-lift-ii-excel-router-lift` | HTTP | Medium | Compatibility chart, video embed, spec table, router size matrix |
-| DC18 | `https://www.globalindustrial.com/p/rubbermaid-fg454000bla-brute-tote-storage-container-40-gal` | HTTP | Easy | Industrial product — weight/volume specs, compliance certifications |
 | DC19 | `https://www.swappa.com/buy/apple-iphone-15-pro` | Browser | Medium | Live marketplace — condition grades, seller ratings, pricing distribution |
 | DC20 | `https://www.backmarket.com/en-us/p/iphone-14-128-gb-midnight/dba71a89-1e8e-4278-967e-0ef1c0d05f31` | Browser | Medium | Refurbished grade taxonomy, warranty terms, JSON-LD Product† |
 
@@ -160,9 +155,6 @@ spec tables + inline JSON simultaneously — the hardest multi-source extraction
 |---|---|---|---|---|
 | DJ01 | `https://www.usajobs.gov/job/836178100` | USAJOBS | High | Gov job schema, salary bands, OPM series code, duty station |
 | DJ02 | `https://www.usajobs.gov/job/836402700` | USAJOBS | High | Federal — grade range, clearance level, travel requirement |
-| DJ03 | `https://www.governmentjobs.com/careers/california/jobs/4817400` | NeoGov | High | State — bargaining unit, benefits table, bilingual flag |
-| DJ04 | `https://www.higheredjobs.com/jobs/details.cfm?JobCode=178200990` | HigherEdJobs | High | Academic — rank, tenure track, department, review date |
-| DJ06 | `https://jobicy.com/jobs/senior-fullstack-engineer-remote` | Jobicy | Medium | JSON-LD JobPosting, salary range, timezone requirement† |
 | DJ07 | `https://www.themuse.com/jobs/airbnb/software-engineer-backend` | The Muse | Medium | Company profile + role merged, JSON-LD, perks section† |
 | DJ08 | `https://www.themuse.com/jobs/shopify/senior-software-engineer` | The Muse | Medium | Benefits accordion, culture tags, video embed† |
 | DJ10 | `https://startup.jobs/senior-backend-engineer-at-vercel` | Startup.jobs | Medium | Equity range, company stage, team size structured† |
@@ -186,16 +178,8 @@ parallel arrays, and non-standard schema patterns that stress-test normalisation
 | # | URL | Format | Nesting Depth | What to Extract |
 |---|---|---|---|---|
 | RD01 | `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson` | GeoJSON | Deep | Geometry coords, nested `properties`, magnitude type variants |
-| RD02 | `https://api.fda.gov/drug/label.json?search=openfda.brand_name:tylenol&limit=3` | JSON API | Very deep | `openfda` nested object, warning arrays, multi-section text blocks |
 | RD03 | `https://clinicaltrials.gov/api/query/full_studies?expr=diabetes&min_rnk=1&max_rnk=3&fmt=JSON` | JSON API | Extreme | 100+ fields per study, eligibility criteria, arm descriptions |
-| RD04 | `https://musicbrainz.org/ws/2/recording/?query=bohemian+rhapsody&fmt=json` | JSON API | Deep | Disambiguation strings, relations array, area nesting |
-| RD05 | `https://openlibrary.org/api/books?bibkeys=ISBN:0451526538&jscmd=details&format=json` | JSON API | Medium | Key-wrapped response object, bibkey-indexed, subject arrays |
-| RD06 | `https://www.wikidata.org/wiki/Special:EntityData/Q42.json` | JSON-LD / JSON | Extreme | Entity graph — mainsnak, qualifiers, references, sitelinks |
-| RD07 | `https://api.crossref.org/works/10.1038/nature12373` | JSON API | Deep | Academic — funder array, affiliation, ORCID, assertion fields |
-| RD08 | `https://api.semanticscholar.org/graph/v1/paper/649def34f8be52c8b66281af98ae884c09aef38d?fields=title,abstract,authors,year,citationCount,references` | JSON API | Deep | Citation graph, author disambiguation, reference list |
-| RD09 | `https://api.github.com/repos/vercel/next.js` | JSON API | Medium | 60+ top-level fields, nested owner / license / topics |
-| RD10 | `https://openalex.org/works/W2741809807` | JSON API | Deep | Concepts, institutions array, locations, open-access status |
-| RD11 | `https://api.coingecko.com/api/v3/coins/bitcoin` | JSON API | Deep | market_data nested 3 levels, community_data, developer_data |
+|| RD11 | `https://api.coingecko.com/api/v3/coins/bitcoin` | JSON API | Deep | market_data nested 3 levels, community_data, developer_data |
 | RD12 | `https://restcountries.com/v3.1/name/germany` | JSON API | Medium | Currency object, languages, translations, demonyms, flags map |
 | RD13 | `https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,precipitation` | JSON API | Medium | Time-series parallel arrays, hourly units, timezone metadata |
 | RD14 | `https://apis.scryfall.com/cards/named?exact=Black+Lotus` | JSON API | Medium | Legalities map, image_uris, prices object, keywords array |

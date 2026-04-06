@@ -5,7 +5,12 @@ import pytest
 
 from app.schemas.selector import SelectorCreate, SelectorTestRequest
 from app.services.selector_service import _normalize_selector_payload
-from app.services.xpath_service import build_absolute_xpath, extract_selector_value
+from app.services.xpath_service import (
+    build_absolute_xpath,
+    extract_selector_value,
+    validate_xpath_candidate,
+    validate_xpath_syntax,
+)
 
 
 def test_selector_create_requires_one_selector():
@@ -103,3 +108,25 @@ def test_build_absolute_xpath_uses_relative_anchor_instead_of_full_dom_path():
     assert xpath is not None
     assert xpath.startswith("//main[@data-testid='product-page']/")
     assert "/html" not in xpath
+
+
+def test_validate_xpath_syntax_rejects_disallowed_axis():
+    valid, error = validate_xpath_syntax("//div/ancestor::section")
+
+    assert valid is False
+    assert error == "XPath axis is not allowed"
+
+
+def test_normalize_selector_payload_rejects_disallowed_xpath_function():
+    with pytest.raises(ValueError, match="XPath function 'document' is not allowed"):
+        _normalize_selector_payload({
+            "domain": "example.com",
+            "field_name": "title",
+            "xpath": "document('https://example.com')",
+        })
+
+
+def test_validate_xpath_candidate_rejects_unsafe_xpath():
+    result = validate_xpath_candidate("<html><body><h1>Title</h1></body></html>", "//h1 | //title")
+
+    assert result == {"valid": False, "matched_value": None, "count": 0}

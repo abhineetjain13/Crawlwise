@@ -3,8 +3,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 
-from app.services.pipeline_config import PACING_HOST_CACHE_MAX_ENTRIES, PACING_HOST_CACHE_TTL_SECONDS
+from app.services.pipeline_config import (
+    INTERRUPTIBLE_WAIT_POLL_MS,
+    PACING_HOST_CACHE_MAX_ENTRIES,
+    PACING_HOST_CACHE_TTL_SECONDS,
+)
 
 
 _LOCKS: OrderedDict[str, asyncio.Lock] = OrderedDict()
@@ -64,11 +69,33 @@ def _set_next_allowed_at(normalized_host: str, value: float, now: float) -> None
     _touch_host(normalized_host, now)
 
 
-async def wait_for_host_slot(host: str, minimum_interval_ms: int) -> float:
+async def _cooperative_delay(
+    delay_seconds: float,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    remaining = max(0.0, float(delay_seconds or 0.0))
+    poll_seconds = max(INTERRUPTIBLE_WAIT_POLL_MS, 50) / 1000.0
+    while remaining > 0:
+        if checkpoint is not None:
+            await checkpoint()
+        current_sleep = min(remaining, poll_seconds)
+        await asyncio.sleep(current_sleep)
+        remaining -= current_sleep
+    if checkpoint is not None:
+        await checkpoint()
+
+
+async def wait_for_host_slot(
+    host: str,
+    minimum_interval_ms: int,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> float:
     normalized_host = str(host or "").strip().lower()
     if not normalized_host or minimum_interval_ms <= 0:
         return 0.0
     while True:
+        if checkpoint is not None:
+            await checkpoint()
         now = time.monotonic()
         if normalized_host in _LOCKS:
             _touch_host(normalized_host, now)
@@ -81,7 +108,7 @@ async def wait_for_host_slot(host: str, minimum_interval_ms: int) -> float:
             next_allowed = _get_next_allowed_at(normalized_host, now)
             delay = max(0.0, next_allowed - now)
             if delay > 0:
-                await asyncio.sleep(delay)
+                await _cooperative_delay(delay, checkpoint=checkpoint)
             current_time = time.monotonic()
             _set_next_allowed_at(normalized_host, current_time + (minimum_interval_ms / 1000), current_time)
             return delay

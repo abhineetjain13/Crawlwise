@@ -18,15 +18,21 @@ from app.services.pipeline_config import (
     CARD_SELECTORS_JOBS,
     COLLECTION_KEYS,
     FIELD_ALIASES,
+    LISTING_CATEGORY_PATH_MARKERS,
     LISTING_COLOR_ACTION_PREFIXES,
     LISTING_COLOR_ACTION_VALUES,
     LISTING_DETAIL_PATH_MARKERS,
+    LISTING_FACET_PATH_FRAGMENTS,
+    LISTING_FACET_QUERY_KEYS,
     LISTING_FILTER_OPTION_KEYS,
+    LISTING_HUB_PATH_SEGMENTS,
     LISTING_IMAGE_EXCLUDE_TOKENS,
     LISTING_JOB_SIGNAL_FIELDS,
     LISTING_MINIMAL_VISUAL_FIELDS,
+    LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_PRODUCT_SIGNAL_FIELDS,
     LISTING_SWATCH_CONTAINER_SELECTORS,
+    LISTING_WEAK_METADATA_FIELDS,
     MAX_JSON_RECURSION_DEPTH,
     NESTED_CATEGORY_KEYS,
     NESTED_CURRENCY_KEYS,
@@ -34,36 +40,9 @@ from app.services.pipeline_config import (
     NESTED_PRICE_KEYS,
     NESTED_TEXT_KEYS,
     NESTED_URL_KEYS,
+    PAGE_URL_CURRENCY_HINTS,
 )
 from app.services.discover.service import DiscoveryManifest, discover_sources
-
-_NON_LISTING_PATH_TOKENS = frozenset(
-    {
-        "hiring",
-        "employers",
-        "recruiter",
-        "recruiters",
-        "postjobs",
-        "demo",
-        "pricing",
-        "plans",
-        "about",
-        "aboutus",
-        "contact",
-        "contactus",
-        "privacy",
-        "terms",
-        "faq",
-        "help",
-        "support",
-        "careers",
-        "press",
-        "news",
-        "blog",
-        "legal",
-        "sitemap",
-    }
-)
 _EMPTY_VALUES = (None, "", [], {})
 _NUMERIC_ONLY_RE = re.compile(r"^\s*\(?\s*[\d,]+\s*\)?\s*$")
 _FILTER_COUNT_RE = re.compile(r"^\s*\(\s*\d[\d,]*\s*\)\s*$")
@@ -281,7 +260,7 @@ def _merge_listing_candidate_sets_by_position(
     if len(candidate_sets) < 2:
         return []
     best_records: list[dict] = []
-    best_score: tuple[int, int, int, float, int] = (0, 0, 0, 0.0, 0)
+    best_score: tuple[int, int, int, int, int, float, int] = (0, 0, 0, 0, 0, 0.0, 0)
     for left_index, left in enumerate(candidate_sets):
         for right in candidate_sets[left_index + 1 :]:
             merged = _merge_listing_pair_by_position(left, right)
@@ -386,6 +365,7 @@ def _extract_from_structured_sources(
     for payload in manifest.json_ld:
         if isinstance(payload, dict):
             ld_records.extend(_extract_ld_records_from_payload(payload, surface, page_url))
+    ld_records = [record for record in ld_records if _is_meaningful_structured_listing_record(record)]
 
     if ld_records:
         candidates.append(ld_records)
@@ -393,6 +373,7 @@ def _extract_from_structured_sources(
     # __NEXT_DATA__: search for product/job arrays in page props
     if manifest.next_data:
         next_records = _extract_from_next_data(manifest.next_data, surface, page_url)
+        next_records = [record for record in next_records if _is_meaningful_structured_listing_record(record)]
         if next_records:
             candidates.append(next_records)
 
@@ -408,7 +389,11 @@ def _extract_from_structured_sources(
             if state_records:
                 for r in state_records:
                     r["_source"] = "hydrated_state"
-                candidates.append(state_records)
+                filtered_state_records = [
+                    record for record in state_records if _is_meaningful_structured_listing_record(record)
+                ]
+                if filtered_state_records:
+                    candidates.append(filtered_state_records)
 
     # Network payloads: look for JSON arrays of items
     for payload in manifest.network_payloads:
@@ -424,7 +409,11 @@ def _extract_from_structured_sources(
         if net_records:
             for r in net_records:
                 r["_source"] = "network_payload"
-            candidates.append(net_records)
+            filtered_net_records = [
+                record for record in net_records if _is_meaningful_structured_listing_record(record)
+            ]
+            if filtered_net_records:
+                candidates.append(filtered_net_records)
 
     if not candidates:
         return ld_records  # may be 0-1 records
@@ -522,7 +511,7 @@ def _extract_from_json_ld(
                 continue
             records.extend(_extract_ld_records_from_payload(payload, surface, page_url))
 
-    return records
+    return [record for record in records if _is_meaningful_structured_listing_record(record)]
 
 
 def _extract_ld_records_from_payload(
@@ -631,6 +620,7 @@ def _normalize_ld_item(item: dict, surface: str, page_url: str) -> dict | None:
             record["availability"] = offers.get("availability") or ""
         record["brand"] = _nested_name(item.get("brand"))
         record["sku"] = item.get("sku") or ""
+        record["part_number"] = item.get("mpn") or item.get("partNumber") or ""
         record["description"] = item.get("description") or ""
         record["rating"] = _nested_value(item.get("aggregateRating"), "ratingValue")
 
@@ -1390,10 +1380,14 @@ def _is_meaningful_listing_record(record: dict) -> bool:
         return False
 
     product_signal_keys = meaningful_keys & LISTING_PRODUCT_SIGNAL_FIELDS
+    job_signal_keys = meaningful_keys & LISTING_JOB_SIGNAL_FIELDS
 
     # Reject records that are just category/navigation links with only a title
     # (no price, sku, brand, rating, or other product signals)
     if url_value and _looks_like_category_url(url_value):
+        if not product_signal_keys:
+            return False
+    if url_value and _looks_like_facet_or_filter_url(url_value):
         if not product_signal_keys:
             return False
 
@@ -1411,10 +1405,18 @@ def _is_meaningful_listing_record(record: dict) -> bool:
             return False
         # Reject known B2B / employer / site-nav path tokens that are never listing items
         path_token_set = {s.lower().replace("-", "") for s in segments}
-        if path_token_set & _NON_LISTING_PATH_TOKENS:
+        if path_token_set & LISTING_NON_LISTING_PATH_TOKENS:
             return False
+        if not _looks_like_detail_record_url(url_value) and _looks_like_listing_hub_url(url_value):
+            return False
+    if (
+        url_value
+        and not product_signal_keys
+        and meaningful_keys.issubset(LISTING_WEAK_METADATA_FIELDS)
+        and _looks_like_listing_hub_url(url_value)
+    ):
+        return False
 
-    job_signal_keys = meaningful_keys & LISTING_JOB_SIGNAL_FIELDS
     if job_signal_keys and not record.get("title") and not record.get("salary"):
         return False
 
@@ -1424,27 +1426,30 @@ def _is_meaningful_listing_record(record: dict) -> bool:
     return False
 
 
+def _is_meaningful_structured_listing_record(record: dict) -> bool:
+    if not _is_meaningful_listing_record(record):
+        return False
+    public_fields = {
+        key: value
+        for key, value in record.items()
+        if not str(key).startswith("_") and value not in (None, "", [], {})
+    }
+    field_names = set(public_fields)
+    if field_names in ({"title"}, {"url"}, {"title", "url"}):
+        return False
+    return True
+
+
 def _looks_like_facet_or_filter_url(url_value: str) -> bool:
     parsed = urlparse(url_value)
     query_keys = {
         key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
     }
-    facet_keys = {
-        "sv",
-        "facet",
-        "filter",
-        "filters",
-        "color",
-        "size",
-        "material",
-        "sort",
-    }
-    if query_keys & facet_keys:
+    if query_keys & LISTING_FACET_QUERY_KEYS:
         return True
 
     path = parsed.path.lower()
-    facet_fragments = ("/see-all", "/filter", "/filters", "/facet")
-    return any(fragment in path for fragment in facet_fragments) and bool(parsed.query)
+    return any(fragment in path for fragment in LISTING_FACET_PATH_FRAGMENTS) and bool(parsed.query)
 
 
 def _looks_like_category_url(url_value: str) -> bool:
@@ -1455,24 +1460,7 @@ def _looks_like_category_url(url_value: str) -> bool:
         return False
     # Paths like /products/cell-culture, /categories/electronics are category hubs.
     # Paths like /product/sigma/nuc101 or /products/detail/123 are NOT.
-    category_prefixes = (
-        "/products/",
-        "/categories/",
-        "/category/",
-        "/collections/",
-        "/departments/",
-        "/browse/",
-        "/c/",
-        "/b/",
-    )
-    detail_overrides = (
-        "/product/",
-        "/pdp/",
-        "/dp/",
-        "/detail/",
-        "/item/",
-    )
-    for prefix in detail_overrides:
+    for prefix in LISTING_DETAIL_PATH_MARKERS:
         if prefix in path:
             return False
     segments = [s for s in path.split("/") if s]
@@ -1481,20 +1469,32 @@ def _looks_like_category_url(url_value: str) -> bool:
         return False
     # Check if any segment is a category directory marker and has a
     # human-readable sub-category slug after it (no SKU/ID patterns).
-    category_markers = {
-        "products",
-        "categories",
-        "category",
-        "collections",
-        "departments",
-        "browse",
-    }
     last = segments[-1]
     for i, seg in enumerate(segments[:-1]):
-        if seg in category_markers and i + 1 < len(segments):
+        if seg in LISTING_CATEGORY_PATH_MARKERS and i + 1 < len(segments):
             # The segment after the marker should be a readable slug, not an item ID
             if re.fullmatch(r"[a-z][a-z0-9\-]+", last) and len(last) < 60:
                 return True
+    return False
+
+
+def _looks_like_listing_hub_url(url_value: str) -> bool:
+    parsed = urlparse(str(url_value or "").strip())
+    path = parsed.path.lower().rstrip("/")
+    if not path:
+        return bool(parsed.query)
+    if _looks_like_facet_or_filter_url(url_value) or _looks_like_category_url(url_value):
+        return True
+    if _looks_like_detail_record_url(url_value):
+        return False
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        return True
+    normalized_segments = [segment.lower().replace("-", "") for segment in segments]
+    if any(segment in LISTING_HUB_PATH_SEGMENTS for segment in normalized_segments):
+        return True
+    if len(segments) <= 2 and parsed.query:
+        return True
     return False
 
 
@@ -1506,20 +1506,7 @@ def _looks_like_detail_record_url(url_value: str) -> bool:
         return False
     if _looks_like_category_url(lowered):
         return False
-    detail_markers = (
-        "/pdp/",
-        "/product/",
-        "/dp/",
-        "/p/",
-        "piid=",
-        "/item/",
-        "/job-detail/",
-        "/job/",
-        "/jobs/detail/",
-        "/position/",
-        "/opening/",
-    )
-    return any(marker in lowered for marker in detail_markers)
+    return any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS)
 
 
 def _listing_record_set_sort_key(
@@ -1770,6 +1757,10 @@ def _extract_from_card(
         )
 
     card_text_lines = _card_text_lines(card)
+    identifier_fields = _extract_card_identifiers(card, card_text_lines)
+    for field_name, value in identifier_fields.items():
+        if value:
+            record[field_name] = value
     if "ecommerce" in surface:
         color_text = _extract_card_color(card, card_text_lines)
         if color_text:
@@ -1830,12 +1821,25 @@ def _normalize_listing_value(
     if value in (None, "", [], {}):
         return None
     if canonical == "url":
+        if isinstance(value, list):
+            valid_urls: list[str] = []
+            for item in value:
+                normalized_item = _normalize_listing_value(
+                    canonical, item, page_url=page_url
+                )
+                text = str(normalized_item or "").strip()
+                if text and not any(token in text for token in ("[{", "{", "[")):
+                    valid_urls.append(text)
+            deduped_urls = list(dict.fromkeys(valid_urls))
+            return deduped_urls[0] if len(deduped_urls) == 1 else None
         resolved = (
             _coerce_nested_text(value, keys=NESTED_URL_KEYS)
             if isinstance(value, dict)
             else value
         )
         text = str(resolved or "").strip()
+        if not text or any(token in text for token in ("[{", "{", "[")):
+            return None
         if (
             text
             and page_url
@@ -1914,6 +1918,10 @@ def _extract_image_candidates(value: object, *, page_url: str = "") -> list[str]
         if not candidate:
             continue
         resolved = urljoin(page_url, candidate) if page_url else candidate
+        if urlparse(resolved).path.lower().endswith(
+            (".woff", ".woff2", ".ttf", ".otf", ".eot", ".css", ".js", ".map")
+        ):
+            continue
         if resolved in seen:
             continue
         seen.add(resolved)
@@ -2255,6 +2263,8 @@ def _extract_color_label_from_node(node: Tag) -> str:
         lowered = text.lower()
         if lowered in {"color", "colors", "select color", "choose color"}:
             continue
+        if "fits your vehicle" in lowered:
+            continue
         if lowered in LISTING_COLOR_ACTION_VALUES or any(
             lowered.startswith(prefix) for prefix in LISTING_COLOR_ACTION_PREFIXES
         ):
@@ -2265,27 +2275,47 @@ def _extract_color_label_from_node(node: Tag) -> str:
     return ""
 
 
+def _extract_card_identifiers(card: Tag, lines: list[str]) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    selector_map = {
+        "part_number": (
+            "[data-testid='product-part-number']",
+            "[data-testid*='part-number' i]",
+        ),
+        "sku": (
+            "[data-testid='product-sku-number']",
+            "[data-testid*='sku-number' i]",
+            "[itemprop='sku']",
+        ),
+    }
+    for field_name, selectors in selector_map.items():
+        for selector in selectors:
+            node = card.select_one(selector)
+            if node is None:
+                continue
+            text = " ".join(node.get_text(" ", strip=True).split())
+            match = re.search(r"#\s*([A-Z0-9-]+)\b", text, re.I)
+            if match:
+                identifiers[field_name] = match.group(1)
+                break
+
+    joined_lines = " ".join(lines)
+    if not identifiers.get("part_number"):
+        match = re.search(r"(?i)\bpart\s*#\s*([A-Z0-9-]+)\b", joined_lines)
+        if match:
+            identifiers["part_number"] = match.group(1)
+    if not identifiers.get("sku"):
+        match = re.search(r"(?i)\bsku\s*#\s*([A-Z0-9-]+)\b", joined_lines)
+        if match:
+            identifiers["sku"] = match.group(1)
+    return identifiers
+
+
 def _infer_currency_from_page_url(page_url: str) -> str:
     lowered = str(page_url or "").strip().lower()
     if not lowered:
         return ""
-    locale_hints = (
-        ("/en-us/", "USD"),
-        ("/en-ca/", "CAD"),
-        ("/fr-ca/", "CAD"),
-        ("/en-gb/", "GBP"),
-        ("/en-eu/", "EUR"),
-        ("/de-de/", "EUR"),
-        ("/fr-fr/", "EUR"),
-        ("/es-es/", "EUR"),
-        ("/it-it/", "EUR"),
-        ("/nl-nl/", "EUR"),
-        ("/en-au/", "AUD"),
-        ("/en-nz/", "NZD"),
-        ("/en-in/", "INR"),
-        ("/ja-jp/", "JPY"),
-    )
-    for token, currency in locale_hints:
+    for token, currency in PAGE_URL_CURRENCY_HINTS.items():
         if token in lowered:
             return currency
     return ""

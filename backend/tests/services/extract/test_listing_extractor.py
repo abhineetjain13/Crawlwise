@@ -439,6 +439,38 @@ def test_extract_listing_prefers_next_flight_records_over_breadcrumb_json_ld():
     assert records_by_url["https://example.com/pdp/arnott"]["review_count"] == "648"
 
 
+def test_extract_listing_rejects_weak_collection_json_ld_without_item_fields():
+    html = """
+    <html><body>
+      <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[
+        {"item":{"@id":"https://example.com/","name":"Home"}},
+        {"item":{"@id":"https://example.com/hardware","name":"Hardware"}}
+      ]}
+      </script>
+      <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"CollectionPage","mainEntity":{
+        "@type":"ItemList",
+        "itemListElement":[
+          {"@type":"ListItem","position":1,"url":"https://example.com/p/one"},
+          {"@type":"ListItem","position":2,"url":"https://example.com/p/two"}
+        ]
+      }}
+      </script>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        max_records=10,
+    )
+
+    assert records == []
+
+
 def test_extract_listing_prefers_rich_product_array_over_category_links():
     html = "<html><body></body></html>"
     manifest = type("Manifest", (), {
@@ -799,6 +831,88 @@ def test_extract_color_label_from_node_skips_action_buttons():
     assert listing_extractor._extract_color_label_from_node(soup.button) == ""
 
 
+def test_extract_color_label_from_node_skips_fitment_copy():
+    html = '<button><span>Check</span> if this fits your vehicle.</button>'
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+
+    assert listing_extractor._extract_color_label_from_node(soup.button) == ""
+
+
+def test_extract_product_cards_read_identifiers_and_skip_fitment_icons():
+    html = """
+    <html><body>
+    <ul>
+      <li class="product-card">
+        <img src="https://images.example.com/filter-main.jpg" />
+        <div data-testid="product-part-number"><span>Part #</span><span> S6607XL</span></div>
+        <div data-testid="product-sku-number"><span>SKU #</span><span> 663653</span></div>
+        <button><img src="/images/vehicle-new.svg" />Check if this fits your vehicle.</button>
+        <h3><a href="/p/filter-1">STP Extended Life Engine Oil Filter S6607XL</a></h3>
+        <span class="price">$10.49</span>
+      </li>
+      <li class="product-card">
+        <img src="https://images.example.com/filter-two.jpg" />
+        <div data-testid="product-part-number"><span>Part #</span><span> S9972XL</span></div>
+        <div data-testid="product-sku-number"><span>SKU #</span><span> 663650</span></div>
+        <h3><a href="/p/filter-2">STP Extended Life Engine Oil Filter S9972XL</a></h3>
+        <span class="price">$16.99</span>
+      </li>
+    </ul>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.autozone.com/filters-and-pcv/oil-filter",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["part_number"] == "S6607XL"
+    assert records[0]["sku"] == "663653"
+    assert "color" not in records[0]
+    assert "additional_images" not in records[0]
+
+
+def test_extract_listing_ignores_stringified_url_lists_from_inline_arrays():
+    html = """
+    <html><body>
+      <script>
+      window.__STATE__ = {
+        "productResults": [
+          {
+            "title": "Electrical & Lighting",
+            "href": [
+              {"title": "Electrical & Lighting", "href": "/parts/electrical-and-lighting"},
+              {"title": "Brakes & Traction Control", "href": "/parts/brakes-and-traction-control"}
+            ]
+          },
+          {
+            "title": "Collision, Body Parts and Hardware",
+            "href": [
+              {"title": "Collision, Body Parts and Hardware", "href": "/parts/collision-body-parts-and-hardware"},
+              {"title": "Filters and PCV", "href": "/parts/filters-and-pcv"}
+            ]
+          }
+        ]
+      };
+      </script>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.autozone.com/filters-and-pcv/oil-filter",
+        max_records=10,
+    )
+
+    assert records == []
+
+
 def test_extract_listing_records_ignores_filter_option_inline_arrays():
     html = """
     <html><body>
@@ -827,6 +941,71 @@ def test_extract_listing_records_ignores_filter_option_inline_arrays():
 def test_is_meaningful_listing_record_rejects_numeric_titles_and_filter_counts():
     assert listing_extractor._is_meaningful_listing_record({"title": 1, "price": 0}) is False
     assert listing_extractor._is_meaningful_listing_record({"title": "(1353)", "url": ""}) is False
+
+
+def test_is_meaningful_listing_record_rejects_category_hub_url_with_only_visual_fields():
+    record = {
+        "title": "Air Filters",
+        "image_url": "https://cdn.example.com/filter.jpg",
+        "url": "https://example.com/collections/air-filters",
+    }
+
+    assert listing_extractor._is_meaningful_listing_record(record) is False
+
+
+def test_is_meaningful_listing_record_rejects_weak_hub_row_with_publication_date_only():
+    record = {
+        "title": "Default PLP",
+        "url": "https://example.com/deals/",
+        "publication_date": "2024-07-10T15:43:06.029Z",
+    }
+
+    assert listing_extractor._is_meaningful_listing_record(record) is False
+
+
+def test_is_meaningful_listing_record_keeps_detail_like_url_with_only_visual_fields():
+    record = {
+        "title": "Cabin Air Filter",
+        "image_url": "https://cdn.example.com/filter.jpg",
+        "url": "https://example.com/product/cabin-air-filter-123",
+    }
+
+    assert listing_extractor._is_meaningful_listing_record(record) is True
+
+
+def test_extract_listing_records_handles_article_cards_inside_testid_grid():
+    html = """
+    <html><body>
+      <div data-testid="grid-view-products">
+        <article>
+          <img src="https://cdn.example.com/a.jpg" />
+          <div>Genuine Steam Deck Part</div>
+          <a href="/products/steam-deck-ac-adapter-us"><h3>Steam Deck AC Adapter</h3></a>
+          <span>221</span>
+          <span>$34.99</span>
+        </article>
+        <article>
+          <img src="https://cdn.example.com/b.jpg" />
+          <div>Nintendo Part</div>
+          <a href="/products/nintendo-switch-console-battery"><h3>Nintendo Switch Console Battery</h3></a>
+          <span>413</span>
+          <span>$39.99</span>
+        </article>
+      </div>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.ifixit.com/Parts",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Steam Deck AC Adapter"
+    assert records[0]["url"] == "https://www.ifixit.com/products/steam-deck-ac-adapter-us"
 
 
 def test_extract_listing_records_uses_usajobs_network_payload_aliases():

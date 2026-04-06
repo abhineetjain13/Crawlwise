@@ -20,6 +20,7 @@ from app.services.pipeline_config import (
     CANDIDATE_IDENTIFIER_TOKENS,
     CANDIDATE_IMAGE_TOKENS,
     CANDIDATE_PRICE_TOKENS,
+    CANDIDATE_TITLE_NOISE_TOKENS,
     CANDIDATE_SALARY_TOKENS,
     CANDIDATE_PROMO_ONLY_TITLE_PATTERN,
     CANDIDATE_RATING_TOKENS,
@@ -34,6 +35,7 @@ from app.services.pipeline_config import (
     DYNAMIC_FIELD_NAME_DROP_TOKENS,
     DYNAMIC_FIELD_NAME_MAX_TOKENS,
     FIELD_ALIASES,
+    GA_DATA_LAYER_KEYS,
     JSONLD_NON_PRODUCT_BLOCK_TYPES,
     JSONLD_STRUCTURAL_KEYS,
     JSONLD_TYPE_NOISE,
@@ -56,26 +58,12 @@ _UI_ICON_TOKEN_RE = re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE) i
 _SCRIPT_NOISE_RE = re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE) if CANDIDATE_SCRIPT_NOISE_PATTERN else None
 _PROMO_ONLY_TITLE_RE = re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE) if CANDIDATE_PROMO_ONLY_TITLE_PATTERN else None
 
-_GA_DATA_LAYER_KEYS = frozenset({
-    "event", "ecommerce", "gtm.start", "gtm.uniqueEventId",
-    "pageType", "pageName", "visitorType",
-})
-
 
 def _looks_like_ga_data_layer(payload: object) -> bool:
     """Return True if the payload looks like a Google Analytics data layer push."""
     if not isinstance(payload, dict):
         return False
-    return bool(_GA_DATA_LAYER_KEYS & set(payload.keys()))
-
-
-# Penalize cookie consent, account, and generic nav modal titles
-_TITLE_NOISE_TOKENS = (
-    "cookie", "cookies", "privacy", "consent", "preferences",
-    "sign in", "log in", "login", "register", "my account",
-    "newsletter", "subscribe", "terms", "conditions",
-    "gdpr", "ccpa",
-)
+    return bool(GA_DATA_LAYER_KEYS & set(payload.keys()))
 def _is_valid_dynamic_field_name(normalized: str) -> bool:
     """Reject field names that are noise: single chars, sentence-like, or JSON-LD types."""
     if len(normalized) <= 1 or len(normalized) > 60:
@@ -916,12 +904,30 @@ def _resolve_candidate_url(value: str, base_url: str) -> str:
     if not candidate:
         return ""
     if candidate.startswith("//"):
-        return f"https:{candidate}"
+        resolved = f"https:{candidate}"
+        return "" if _looks_like_asset_url(resolved) else resolved
     if candidate.startswith(("http://", "https://")):
-        return candidate
+        return "" if _looks_like_asset_url(candidate) else candidate
     if candidate.startswith("/"):
-        return urljoin(base_url, candidate) if base_url else candidate
-    return urljoin(base_url, candidate) if re.search(r"^[A-Za-z0-9][^ ]*/[^ ]+$", candidate) and base_url else ""
+        resolved = urljoin(base_url, candidate) if base_url else candidate
+        return "" if _looks_like_asset_url(resolved) else resolved
+    resolved = urljoin(base_url, candidate) if re.search(r"^[A-Za-z0-9][^ ]*/[^ ]+$", candidate) and base_url else ""
+    return "" if _looks_like_asset_url(resolved) else resolved
+
+
+def _looks_like_asset_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    path = parsed.path.lower()
+    return path.endswith((
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".eot",
+        ".css",
+        ".js",
+        ".map",
+    ))
 
 
 def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
@@ -1008,7 +1014,7 @@ def _field_quality_score(field_name: str, value: object) -> int:
             score -= 12
         if any(token in lowered for token in ("discover this", "purchase", "shop ", "buy now", "sigma-aldrich.com")):
             score -= 12
-        if any(token in lowered for token in _TITLE_NOISE_TOKENS):
+        if any(token in lowered for token in CANDIDATE_TITLE_NOISE_TOKENS):
             score -= 22
         if re.search(r"\.(?:jpg|jpeg|png|webp|gif|svg|avif)\b", lowered):
             score -= 24

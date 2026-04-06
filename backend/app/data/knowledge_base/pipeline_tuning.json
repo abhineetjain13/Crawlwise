@@ -1,6 +1,8 @@
 {
   "http_timeout_seconds": 20,
   "impersonation_target": "chrome110",
+  "http_impersonation_profiles": ["chrome110", "chrome116", "chrome123", "chrome131"],
+  "http_stealth_impersonation_profile": "chrome131",
   "browser_fallback_visible_text_min": 500,
   "browser_fallback_visible_text_ratio_max": 0.02,
   "browser_fallback_html_size_threshold": 200000,
@@ -31,6 +33,8 @@
   "stealth_prefer_ttl_hours": 24,
   "challenge_wait_max_seconds": 12,
   "challenge_poll_interval_ms": 2000,
+  "surface_readiness_max_wait_ms": 12000,
+  "surface_readiness_poll_ms": 500,
   "origin_warm_pause_ms": 2000,
   "browser_error_retry_attempts": 1,
   "browser_error_retry_delay_ms": 1000,
