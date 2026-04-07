@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import SessionLocal
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.services.acquisition.acquirer import AcquisitionResult, ProxyPoolExhausted, acquire
 from app.services.acquisition.blocked_detector import detect_blocked_page
@@ -78,9 +79,26 @@ VERDICT_EMPTY = "empty"
 logger = logging.getLogger(__name__)
 MAX_SELECTOR_ROWS_PER_FIELD = 100
 _TRAVERSAL_MODES = {"auto", "scroll", "load_more", "paginate"}
+_ECOMMERCE_ONLY_JOB_LISTING_FIELDS = frozenset(
+    {
+        "price",
+        "sale_price",
+        "original_price",
+        "currency",
+        "sku",
+        "part_number",
+        "color",
+        "availability",
+        "rating",
+        "review_count",
+        "image_url",
+        "additional_images",
+    }
+)
 STAGE_FETCH = "FETCH"
 STAGE_ANALYZE = "ANALYZE"
 STAGE_SAVE = "SAVE"
+DEFAULT_URL_BATCH_CONCURRENCY = 4
 
 
 class RunControlSignal(RuntimeError):
@@ -431,6 +449,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         max_scrolls = settings.get("max_scrolls", DEFAULT_MAX_SCROLLS)
         max_records = settings.get("max_records", 100)
         sleep_ms = settings.get("sleep_ms", 0)
+        url_batch_concurrency = max(1, int(settings.get("url_batch_concurrency", DEFAULT_URL_BATCH_CONCURRENCY) or DEFAULT_URL_BATCH_CONCURRENCY))
 
         total_urls = len(url_list)
         persisted_summary = dict(run.result_summary or {})
@@ -438,77 +457,11 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         persisted_record_count = await _count_run_records(session, run.id)
         url_verdicts: list[str] = list(persisted_summary.get("url_verdicts") or [])[:start_index]
         verdict_counts: dict[str, int] = dict(persisted_summary.get("verdict_counts") or {})
-        for idx in range(start_index, total_urls):
-            url = url_list[idx]
-            await session.refresh(run)
-            current_status = normalize_status(run.status)
-            control_request = get_control_request(run)
-            if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
-                update_run_status(run, CrawlStatus.PAUSED)
-                set_control_request(run, None)
-                await _log(session, run.id, "warning", "Run paused by user")
-                await session.commit()
-                return
-            if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
-                update_run_status(run, CrawlStatus.KILLED)
-                set_control_request(run, None)
-                await _log(session, run.id, "warning", "Run killed by user")
-                await session.commit()
-                return
-            remaining_records = max(max_records - persisted_record_count, 0)
-            if remaining_records <= 0:
-                await _log(session, run.id, "info", f"Reached max_records ceiling ({max_records})")
-                break
+        pending_items = list(enumerate(url_list[start_index:], start=start_index))
+        completed_count = start_index
+        acquisition_summary = run.result_summary.get("acquisition_summary") if isinstance(run.result_summary, dict) else {}
 
-            await _log(session, run.id, "info", f"Processing URL {idx + 1}/{total_urls}: {url}")
-            await _set_stage(
-                session,
-                run,
-                STAGE_FETCH,
-                current_url=url,
-                current_url_index=idx + 1,
-                total_urls=total_urls,
-            )
-
-            records, verdict, url_metrics = await _process_single_url(
-                session=session,
-                run=run,
-                url=url,
-                proxy_list=proxy_list,
-                traversal_mode=traversal_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                max_records=remaining_records,
-                sleep_ms=sleep_ms,
-                checkpoint=_run_control_checkpoint,
-            )
-            persisted_record_count += len(records)
-            if idx < len(url_verdicts):
-                url_verdicts[idx] = verdict
-            else:
-                url_verdicts.append(verdict)
-            verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
-            acquisition_summary = _merge_run_acquisition_metrics(
-                run.result_summary.get("acquisition_summary") if isinstance(run.result_summary, dict) else {},
-                url_metrics,
-            )
-
-            # Update progress
-            progress = int(((idx + 1) / total_urls) * 100)
-            run.result_summary = {
-                **(run.result_summary or {}),
-                "url_count": total_urls,
-                "record_count": persisted_record_count,
-                "domain": _domain(url),
-                "progress": progress,
-                "processed_urls": idx + 1,
-                "completed_urls": idx + 1,
-                "remaining_urls": max(total_urls - (idx + 1), 0),
-                "url_verdicts": url_verdicts,
-                "verdict_counts": verdict_counts,
-                "acquisition_summary": acquisition_summary,
-            }
-            await session.commit()
+        async def _checkpoint_after_progress_update() -> None:
             await session.refresh(run)
             current_status = normalize_status(run.status)
             control_request = get_control_request(run)
@@ -517,20 +470,240 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 set_control_request(run, None)
                 await _log(session, run.id, "warning", "Run paused after checkpoint; partial output preserved")
                 await session.commit()
-                return
+                raise RunControlSignal(CONTROL_REQUEST_PAUSE)
             if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
                 update_run_status(run, CrawlStatus.KILLED)
                 set_control_request(run, None)
                 await _log(session, run.id, "warning", "Run killed after checkpoint; partial output preserved")
                 await session.commit()
-                return
-            if persisted_record_count >= max_records:
-                await _log(session, run.id, "info", f"Stopped after reaching max_records={max_records}")
-                break
+                raise RunControlSignal(CONTROL_REQUEST_KILL)
 
-            # Sleep between URLs if configured (for rate limiting)
-            if sleep_ms > 0 and idx < total_urls - 1:
-                await _sleep_with_checkpoint(sleep_ms, _run_control_checkpoint)
+        async def _apply_url_result(idx: int, url: str, records_count: int, verdict: str, url_metrics: dict) -> None:
+            nonlocal persisted_record_count, completed_count, acquisition_summary
+            persisted_record_count += records_count
+            completed_count += 1
+            if idx < len(url_verdicts):
+                url_verdicts[idx] = verdict
+            else:
+                url_verdicts.append(verdict)
+            verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+            acquisition_summary = _merge_run_acquisition_metrics(acquisition_summary, url_metrics)
+            progress = int((completed_count / total_urls) * 100)
+            run.result_summary = {
+                **(run.result_summary or {}),
+                "url_count": total_urls,
+                "record_count": persisted_record_count,
+                "domain": _domain(url),
+                "progress": progress,
+                "processed_urls": completed_count,
+                "completed_urls": completed_count,
+                "remaining_urls": max(total_urls - completed_count, 0),
+                "url_verdicts": url_verdicts,
+                "verdict_counts": verdict_counts,
+                "acquisition_summary": acquisition_summary,
+                "current_url": url,
+                "current_url_index": idx + 1,
+            }
+            await session.commit()
+            await _checkpoint_after_progress_update()
+
+        async def _cancel_tasks(tasks: list[asyncio.Task]) -> None:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        if pending_items and url_batch_concurrency > 1 and len(pending_items) > 1 and _supports_parallel_batch_sessions(session):
+            await _log(
+                session,
+                run.id,
+                "info",
+                f"Processing {len(pending_items)} URLs with batch sub-concurrency={url_batch_concurrency}",
+            )
+            await _set_stage(
+                session,
+                run,
+                STAGE_FETCH,
+                current_url=pending_items[0][1],
+                current_url_index=pending_items[0][0] + 1,
+                total_urls=total_urls,
+            )
+            active_tasks: dict[asyncio.Task, tuple[int, str]] = {}
+
+            def _spawn_url_task(idx: int, url: str, remaining_records: int) -> asyncio.Task:
+                return asyncio.create_task(
+                    _process_single_url_in_isolated_session(
+                        run_id=run.id,
+                        url=url,
+                        idx=idx,
+                        total_urls=total_urls,
+                        proxy_list=proxy_list,
+                        traversal_mode=traversal_mode,
+                        max_pages=max_pages,
+                        max_scrolls=max_scrolls,
+                        max_records=remaining_records,
+                        sleep_ms=sleep_ms,
+                    )
+                )
+
+            while pending_items or active_tasks:
+                while pending_items and len(active_tasks) < url_batch_concurrency:
+                    await _run_control_checkpoint()
+                    remaining_records = max(max_records - persisted_record_count, 0)
+                    if remaining_records <= 0:
+                        pending_items.clear()
+                        await _log(session, run.id, "info", f"Reached max_records ceiling ({max_records})")
+                        break
+                    idx, url = pending_items.pop(0)
+                    task = _spawn_url_task(idx, url, remaining_records)
+                    active_tasks[task] = (idx, url)
+                if not active_tasks:
+                    break
+                done, _ = await asyncio.wait(active_tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    idx, url = active_tasks.pop(task)
+                    try:
+                        records_count, verdict, url_metrics = await task
+                    except Exception:
+                        for active_task in active_tasks:
+                            active_task.cancel()
+                        if active_tasks:
+                            await asyncio.gather(*active_tasks.keys(), return_exceptions=True)
+                        raise
+                    await _apply_url_result(idx, url, records_count, verdict, url_metrics)
+                    if persisted_record_count >= max_records:
+                        pending_items.clear()
+                        await _log(session, run.id, "info", f"Stopped after reaching max_records={max_records}")
+                        break
+        elif pending_items and url_batch_concurrency > 1 and len(pending_items) > 1 and _supports_sqlite_prefetch(session):
+            await _log(
+                session,
+                run.id,
+                "info",
+                f"Processing {len(pending_items)} URLs with SQLite acquisition prefetch={url_batch_concurrency}",
+            )
+            await _set_stage(
+                session,
+                run,
+                STAGE_FETCH,
+                current_url=pending_items[0][1],
+                current_url_index=pending_items[0][0] + 1,
+                total_urls=total_urls,
+            )
+            prefetch_tasks: dict[int, asyncio.Task] = {}
+            spawn_cursor = 0
+            process_cursor = 0
+            try:
+                while process_cursor < len(pending_items):
+                    while spawn_cursor < len(pending_items) and len(prefetch_tasks) < url_batch_concurrency:
+                        await _run_control_checkpoint()
+                        remaining_records = max(max_records - persisted_record_count, 0)
+                        if remaining_records <= 0:
+                            await _log(session, run.id, "info", f"Reached max_records ceiling ({max_records})")
+                            break
+                        idx, url = pending_items[spawn_cursor]
+                        prefetch_tasks[idx] = asyncio.create_task(
+                            _prefetch_single_url_acquisition(
+                                run_id=run.id,
+                                surface=run.surface,
+                                requested_fields=run.requested_fields or [],
+                                run_settings=run.settings or {},
+                                url=url,
+                                proxy_list=proxy_list,
+                                traversal_mode=traversal_mode,
+                                max_pages=max_pages,
+                                max_scrolls=max_scrolls,
+                                sleep_ms=sleep_ms,
+                            )
+                        )
+                        spawn_cursor += 1
+                    idx, url = pending_items[process_cursor]
+                    task = prefetch_tasks.pop(idx, None)
+                    if task is None:
+                        break
+                    try:
+                        prefetched_acquisition = await task
+                    except Exception:
+                        await _cancel_tasks(list(prefetch_tasks.values()))
+                        raise
+
+                    await _run_control_checkpoint()
+                    remaining_records = max(max_records - persisted_record_count, 0)
+                    if remaining_records <= 0:
+                        await _log(session, run.id, "info", f"Reached max_records ceiling ({max_records})")
+                        await _cancel_tasks(list(prefetch_tasks.values()))
+                        break
+
+                    await _log(session, run.id, "info", f"Processing URL {idx + 1}/{total_urls}: {url}")
+                    await _set_stage(
+                        session,
+                        run,
+                        STAGE_FETCH,
+                        current_url=url,
+                        current_url_index=idx + 1,
+                        total_urls=total_urls,
+                    )
+
+                    records, verdict, url_metrics = await _process_single_url(
+                        session=session,
+                        run=run,
+                        url=url,
+                        proxy_list=proxy_list,
+                        traversal_mode=traversal_mode,
+                        max_pages=max_pages,
+                        max_scrolls=max_scrolls,
+                        max_records=remaining_records,
+                        sleep_ms=sleep_ms,
+                        checkpoint=_run_control_checkpoint,
+                        prefetched_acquisition=prefetched_acquisition,
+                    )
+                    await _apply_url_result(idx, url, len(records), verdict, url_metrics)
+                    process_cursor += 1
+                    if persisted_record_count >= max_records:
+                        await _log(session, run.id, "info", f"Stopped after reaching max_records={max_records}")
+                        await _cancel_tasks(list(prefetch_tasks.values()))
+                        break
+                await _cancel_tasks(list(prefetch_tasks.values()))
+            except Exception:
+                await _cancel_tasks(list(prefetch_tasks.values()))
+                raise
+        else:
+            for idx, url in pending_items:
+                await _run_control_checkpoint()
+                remaining_records = max(max_records - persisted_record_count, 0)
+                if remaining_records <= 0:
+                    await _log(session, run.id, "info", f"Reached max_records ceiling ({max_records})")
+                    break
+
+                await _log(session, run.id, "info", f"Processing URL {idx + 1}/{total_urls}: {url}")
+                await _set_stage(
+                    session,
+                    run,
+                    STAGE_FETCH,
+                    current_url=url,
+                    current_url_index=idx + 1,
+                    total_urls=total_urls,
+                )
+
+                records, verdict, url_metrics = await _process_single_url(
+                    session=session,
+                    run=run,
+                    url=url,
+                    proxy_list=proxy_list,
+                    traversal_mode=traversal_mode,
+                    max_pages=max_pages,
+                    max_scrolls=max_scrolls,
+                    max_records=remaining_records,
+                    sleep_ms=sleep_ms,
+                    checkpoint=_run_control_checkpoint,
+                )
+                await _apply_url_result(idx, url, len(records), verdict, url_metrics)
+                if persisted_record_count >= max_records:
+                    await _log(session, run.id, "info", f"Stopped after reaching max_records={max_records}")
+                    break
+
+                if sleep_ms > 0 and idx < total_urls - 1:
+                    await _sleep_with_checkpoint(sleep_ms, _run_control_checkpoint)
 
         # Compute aggregate extraction verdict
         aggregate_verdict = _aggregate_verdict(url_verdicts)
@@ -545,12 +718,12 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             "url_count": total_urls,
             "record_count": persisted_record_count,
             "domain": _domain(url_list[0]) if url_list else "",
-            "progress": 100,
+            "progress": int((completed_count / total_urls) * 100) if total_urls else 100,
             "extraction_verdict": aggregate_verdict,
             "url_verdicts": url_verdicts,
-            "processed_urls": total_urls,
-            "completed_urls": total_urls,
-            "remaining_urls": 0,
+            "processed_urls": completed_count,
+            "completed_urls": completed_count,
+            "remaining_urls": max(total_urls - completed_count, 0),
             "verdict_counts": verdict_counts,
         }
         await _log(session, run.id, "info",
@@ -589,6 +762,7 @@ async def _process_single_url(
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
+    prefetched_acquisition: AcquisitionResult | None = None,
 ) -> tuple[list[dict], str, dict]:
     """Run the single-URL pipeline.
 
@@ -610,22 +784,26 @@ async def _process_single_url(
         await _set_stage(session, run, STAGE_FETCH)
     if persist_logs:
         await _log(session, run.id, "info", f"[FETCH] Fetching {url}")
-    acquisition_started_at = time.perf_counter()
-    acq = await acquire(
-        run_id=run.id,
-        url=url,
-        surface=surface,
-        proxy_list=proxy_list or None,
-        traversal_mode=traversal_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        sleep_ms=sleep_ms,
-        requested_fields=additional_fields,
-        requested_field_selectors=requested_field_selectors,
-        acquisition_profile=acquisition_profile,
-        checkpoint=checkpoint,
-    )
-    acquisition_ms = _elapsed_ms(acquisition_started_at)
+    if prefetched_acquisition is None:
+        acquisition_started_at = time.perf_counter()
+        acq = await acquire(
+            run_id=run.id,
+            url=url,
+            surface=surface,
+            proxy_list=proxy_list or None,
+            traversal_mode=traversal_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            sleep_ms=sleep_ms,
+            requested_fields=additional_fields,
+            requested_field_selectors=requested_field_selectors,
+            acquisition_profile=acquisition_profile,
+            checkpoint=checkpoint,
+        )
+        acquisition_ms = _elapsed_ms(acquisition_started_at)
+    else:
+        acq = prefetched_acquisition
+        acquisition_ms = 0
     url_metrics = _build_url_metrics(acq, requested_fields=additional_fields)
     url_metrics["acquisition_ms"] = acquisition_ms
 
@@ -769,6 +947,105 @@ async def _process_single_url(
         return records, verdict, url_metrics
 
 
+async def _process_single_url_in_isolated_session(
+    *,
+    run_id: int,
+    url: str,
+    idx: int,
+    total_urls: int,
+    proxy_list: list[str],
+    traversal_mode: str | None,
+    max_pages: int,
+    max_scrolls: int,
+    max_records: int,
+    sleep_ms: int,
+) -> tuple[int, str, dict]:
+    async with SessionLocal() as worker_session:
+        worker_run = await worker_session.get(CrawlRun, run_id)
+        if worker_run is None:
+            raise ValueError(f"Run {run_id} no longer exists")
+
+        async def _worker_checkpoint() -> None:
+            await worker_session.refresh(worker_run)
+            current_status = normalize_status(worker_run.status)
+            control_request = get_control_request(worker_run)
+            if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
+                raise RunControlSignal(CONTROL_REQUEST_PAUSE)
+            if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
+                raise RunControlSignal(CONTROL_REQUEST_KILL)
+
+        await _log(worker_session, run_id, "info", f"Processing URL {idx + 1}/{total_urls}: {url}")
+        records, verdict, url_metrics = await _process_single_url(
+            session=worker_session,
+            run=worker_run,
+            url=url,
+            proxy_list=proxy_list,
+            traversal_mode=traversal_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            max_records=max_records,
+            sleep_ms=sleep_ms,
+            checkpoint=_worker_checkpoint,
+            update_run_state=False,
+        )
+        await worker_session.commit()
+        return len(records), verdict, url_metrics
+
+
+async def _prefetch_single_url_acquisition(
+    *,
+    run_id: int,
+    surface: str,
+    requested_fields: list[str],
+    run_settings: dict,
+    url: str,
+    proxy_list: list[str],
+    traversal_mode: str | None,
+    max_pages: int,
+    max_scrolls: int,
+    sleep_ms: int,
+) -> AcquisitionResult:
+    additional_fields = expand_requested_fields(requested_fields or [])
+    requested_field_selectors = {
+        field_name: get_selector_defaults(normalize_domain(url), field_name)
+        for field_name in additional_fields
+        if field_name
+    }
+    acquisition_profile = _build_acquisition_profile(run_settings or {})
+    return await acquire(
+        run_id=run_id,
+        url=url,
+        surface=surface,
+        proxy_list=proxy_list or None,
+        traversal_mode=traversal_mode,
+        max_pages=max_pages,
+        max_scrolls=max_scrolls,
+        sleep_ms=sleep_ms,
+        requested_fields=additional_fields,
+        requested_field_selectors=requested_field_selectors,
+        acquisition_profile=acquisition_profile,
+        checkpoint=None,
+    )
+
+
+def _supports_parallel_batch_sessions(session: AsyncSession) -> bool:
+    bind = session.bind
+    if bind is None:
+        return False
+    if bind.dialect.name == "sqlite":
+        return False
+    return True
+
+
+def _supports_sqlite_prefetch(session: AsyncSession) -> bool:
+    bind = session.bind
+    if bind is None:
+        return False
+    if bind.dialect.name != "sqlite":
+        return False
+    return ":memory:" not in str(bind.url)
+
+
 async def _process_json_response(
     session: AsyncSession,
     run: CrawlRun,
@@ -833,7 +1110,7 @@ async def _process_json_response(
         )
         db_record = CrawlRecord(
             run_id=run.id,
-            source_url=raw_record.get("url", url),
+            source_url=raw_record.get("source_url") or raw_record.get("url", url),
             data=normalized,
             raw_data=raw_data,
             discovered_data=_compact_dict({
@@ -1025,6 +1302,7 @@ async def _extract_listing(
         public_record = _sanitize_listing_record_fields(
             _public_record_fields(raw_record),
             surface=effective_surface,
+            page_base_url=url,
         )
         normalized, discovered_fields = _split_detail_output_fields(
             public_record,
@@ -1039,7 +1317,7 @@ async def _extract_listing(
         )
         db_record = CrawlRecord(
             run_id=run.id,
-            source_url=raw_record.get("url", url),
+            source_url=raw_record.get("source_url") or raw_record.get("url", url),
             data=normalized,
             raw_data=raw_data,
             discovered_data=_compact_dict({
@@ -1102,7 +1380,7 @@ def _looks_like_loading_listing_shell(html: str, *, surface: str) -> bool:
     return False
 
 
-def _sanitize_listing_record_fields(record: dict, *, surface: str) -> dict:
+def _sanitize_listing_record_fields(record: dict, *, surface: str, page_base_url: str = "") -> dict:
     sanitized = dict(record or {})
     if not sanitized:
         return sanitized
@@ -1114,25 +1392,18 @@ def _sanitize_listing_record_fields(record: dict, *, surface: str) -> dict:
         if normalized_title:
             sanitized["title"] = normalized_title
 
+    for url_field in ("url", "apply_url"):
+        raw_url = str(sanitized.get(url_field) or "").strip()
+        if raw_url and not raw_url.startswith(("http://", "https://")):
+            sanitized[url_field] = urljoin(page_base_url, raw_url) if page_base_url else raw_url
+
     if "job" not in str(surface or "").lower():
         return sanitized
 
     if sanitized.get("price") not in (None, "", [], {}) and sanitized.get("salary") in (None, "", [], {}):
         sanitized["salary"] = sanitized.get("price")
-    for field_name in (
-        "price",
-        "sale_price",
-        "original_price",
-        "currency",
-        "sku",
-        "part_number",
-        "availability",
-        "rating",
-        "review_count",
-    ):
+    for field_name in _ECOMMERCE_ONLY_JOB_LISTING_FIELDS:
         sanitized.pop(field_name, None)
-    sanitized.pop("image_url", None)
-    sanitized.pop("additional_images", None)
 
     description = _summarize_job_listing_description(sanitized.get("description"))
     if description:
@@ -1448,7 +1719,6 @@ def _aggregate_verdict(verdicts: list[str]) -> str:
 
 async def _log(session: AsyncSession, run_id: int, level: str, message: str) -> None:
     session.add(CrawlLog(run_id=run_id, level=level, message=message))
-    await session.flush()
 
 
 async def _set_stage(
@@ -1469,7 +1739,7 @@ async def _set_stage(
     if total_urls is not None:
         result_summary["total_urls"] = total_urls
     run.result_summary = result_summary
-    await session.commit()
+    await session.flush()
 
 
 async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -> None:
@@ -1491,21 +1761,19 @@ async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -
     except Exception:
         logger.debug("Original session unusable for failure recovery; falling back to SessionLocal", exc_info=True)
 
-    from app.core.database import SessionLocal
-
-    async with SessionLocal() as recovery:
-        run = await recovery.get(CrawlRun, run_id)
-        if run is None:
-            return
-        result_summary = dict(run.result_summary or {})
-        result_summary["error"] = error_msg
-        result_summary["progress"] = result_summary.get("progress", 0)
-        result_summary["extraction_verdict"] = "error"
-        if normalize_status(run.status) not in TERMINAL_STATUSES:
-            update_run_status(run, CrawlStatus.FAILED)
-        run.result_summary = result_summary
-        recovery.add(CrawlLog(run_id=run.id, level="error", message=f"Pipeline failed: {error_msg}"))
-        await recovery.commit()
+        async with SessionLocal() as recovery:
+            run = await recovery.get(CrawlRun, run_id)
+            if run is None:
+                return
+            result_summary = dict(run.result_summary or {})
+            result_summary["error"] = error_msg
+            result_summary["progress"] = result_summary.get("progress", 0)
+            result_summary["extraction_verdict"] = "error"
+            if normalize_status(run.status) not in TERMINAL_STATUSES:
+                update_run_status(run, CrawlStatus.FAILED)
+            run.result_summary = result_summary
+            recovery.add(CrawlLog(run_id=run.id, level="error", message=f"Pipeline failed: {error_msg}"))
+            await recovery.commit()
 
 
 async def _persist_failure_state(session: AsyncSession, run_id: int, error_msg: str) -> None:
@@ -2005,7 +2273,6 @@ def _apply_llm_suggestions_to_candidate_values(
         updated_suggestion = dict(raw_suggestion)
         updated_suggestion["status"] = "auto_promoted"
         updated_suggestion["accepted_value"] = normalized_value
-        updated_suggestion["score"] = score
         suggestions[normalized_field] = _compact_dict(updated_suggestion)
 
     if promoted:
@@ -2150,13 +2417,11 @@ def _looks_like_job_listing_page(*, url: str, html: str, acq: AcquisitionResult)
         return True
 
     lowered_html = str(html or "").lower()
-    job_markers = (
+    strong_job_markers = (
         "search jobs",
         "current openings",
         "open positions",
         "job openings",
-        "career opportunities",
-        "apply now",
         "job search",
         "employment opportunities",
         "data-automation-id=\"jobtitle\"",
@@ -2165,8 +2430,17 @@ def _looks_like_job_listing_page(*, url: str, html: str, acq: AcquisitionResult)
         "job-location-autocomplete",
         "job-title",
     )
-    signals = sum(1 for marker in job_markers if marker in lowered_html)
-    return signals >= 2
+    if sum(1 for marker in strong_job_markers if marker in lowered_html) >= 2:
+        return True
+
+    generic_job_markers = (
+        "career opportunities",
+        "apply now",
+    )
+    if not any(marker in lowered_html for marker in generic_job_markers):
+        return False
+
+    return any(marker in lowered_html for marker in strong_job_markers)
 
 
 
@@ -2928,7 +3202,7 @@ def _normalize_llm_review_bucket_item(value: object) -> dict[str, object] | None
 
 
 async def _load_domain_requested_fields(session: AsyncSession, *, url: str, surface: str) -> list[str]:
-    resolved = await load_resolved_schema(session, surface, url)
+    resolved = await load_resolved_schema(session, surface, normalize_domain(url))
     return expand_requested_fields(list(resolved.new_fields))
 
 

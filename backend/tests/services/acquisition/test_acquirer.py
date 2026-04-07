@@ -11,6 +11,7 @@ from app.services.acquisition.acquirer import (
     _artifact_path,
     _diagnostics_path,
     _json_ld_listing_count,
+    _requires_browser_first,
     _is_invalid_job_surface_page,
     _network_payload_path,
     acquire,
@@ -49,6 +50,15 @@ class TestProxyRotator:
 def test_json_ld_listing_count_handles_type_arrays_and_empty_itemlists():
     assert _json_ld_listing_count({"@type": ["Thing", "Product"]}) == 1
     assert _json_ld_listing_count({"@type": ["ItemList"], "itemListElement": []}) == 0
+
+
+def test_requires_browser_first_for_confirmed_job_boards():
+    assert _requires_browser_first(
+        "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant",
+        "job_listing",
+    )
+    assert _requires_browser_first("https://careers.clarkassociatesinc.biz/", "job_listing")
+    assert not _requires_browser_first("https://example.com/jobs", "job_listing")
 
 
 @pytest.mark.asyncio

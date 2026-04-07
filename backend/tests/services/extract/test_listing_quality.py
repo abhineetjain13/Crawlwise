@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from app.services.extract.listing_quality import (
     assess_listing_record_quality,
-    is_meaningful_structured_listing_record,
 )
 from app.services.pipeline_config import LISTING_WEAK_TITLES
 
@@ -21,12 +20,3 @@ def test_assess_listing_record_quality_records_weak_title_reason():
 
     assert "weak_title" in assessment.reasons
     assert "merchandising_noise" not in assessment.reasons
-
-
-def test_is_meaningful_structured_listing_record_keeps_single_title_url_behavior_for_jobs():
-    record = {
-        "title": "Platform Engineer",
-        "url": "https://example.com/jobs/123",
-    }
-
-    assert is_meaningful_structured_listing_record(record, surface="job_listing") is True

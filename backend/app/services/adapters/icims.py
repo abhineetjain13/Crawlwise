@@ -41,6 +41,7 @@ class ICIMSAdapter(BaseAdapter):
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         if "detail" in str(surface or "").lower() or self._looks_like_detail_url(url):
+            html = await self._follow_embedded_content_url(url, html)
             record = self._extract_detail(url, html)
             return AdapterResult(
                 records=[record] if record else [],
@@ -60,19 +61,8 @@ class ICIMSAdapter(BaseAdapter):
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         embedded_board_url = self._discover_embedded_board_url(url, html)
-        if embedded_board_url and curl_requests is not None:
-            try:
-                response = await asyncio.to_thread(
-                    curl_requests.get,
-                    embedded_board_url,
-                    impersonate="chrome110",
-                    timeout=15,
-                )
-            except Exception:
-                logger.exception("Failed to fetch embedded iCIMS board URL: %s", embedded_board_url)
-                response = None
-            if response is not None and response.status_code == 200 and response.text:
-                html = response.text
+        if embedded_board_url:
+            html = await self._fetch_embedded_content(url=embedded_board_url, fallback_html=html)
 
         inline_records = self._extract_from_listing_html(html, base_url)
         if inline_records:
@@ -130,6 +120,34 @@ class ICIMSAdapter(BaseAdapter):
         if not src:
             return None
         return urljoin(url, src)
+
+    async def _follow_embedded_content_url(self, url: str, html: str) -> str:
+        soup = BeautifulSoup(html, "html.parser")
+        iframe = soup.select_one("iframe[src*='in_iframe=1'], iframe[src*='icims.com/jobs/']")
+        if iframe is None:
+            return html
+        src = str(iframe.get("src") or "").strip()
+        if not src:
+            return html
+        embedded_url = urljoin(url, src)
+        return await self._fetch_embedded_content(url=embedded_url, fallback_html=html)
+
+    async def _fetch_embedded_content(self, *, url: str, fallback_html: str) -> str:
+        if curl_requests is None:
+            return fallback_html
+        try:
+            response = await asyncio.to_thread(
+                curl_requests.get,
+                url,
+                impersonate="chrome110",
+                timeout=15,
+            )
+        except Exception:
+            logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
+            return fallback_html
+        if response.status_code == 200 and response.text:
+            return response.text
+        return fallback_html
 
     def _paginate_endpoint(self, endpoint: str, offset: int) -> str:
         page_url = re.sub(r"offset=\d+", f"offset={offset}", endpoint) if "offset=" in endpoint else f"{endpoint}{'&' if '?' in endpoint else '?'}offset={offset}"

@@ -1,4 +1,14 @@
 .env
+.vscode/
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite3
+
 backend/.venv/
 backend/__pycache__/
 backend/.pytest_cache/
@@ -21,15 +31,17 @@ frontend/tsconfig.tsbuildinfo
 backend/cookie_store/
 backend/prune_test_out.txt
 
-*.pyc
-*.pyo
 *.log
+.coverage
+.coverage.*
 .DS_Store
 
 # Debug artifacts
 candidates.json
 test_*.html
 test_*.json
+tmp_*.html
+tmp_*.json
 
 # Old knowledge dir
 knowledge/

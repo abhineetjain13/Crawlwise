@@ -445,7 +445,7 @@ def test_oracle_hcm_extract_cx_config_accepts_single_quoted_json_fallback():
     html = """
     <html><body>
       <script>
-        var CX_CONFIG = {'app': {'siteNumber': 'CX_1', 'siteLang': 'en', 'siteName': 'Brookdale Senior Living Inc.'}};
+        var CX_CONFIG = {'app': {'siteNumber': 'CX_1', 'siteLang': 'en', 'siteName': 'Brookdale Senior Living Inc.', 'enabled': true}};
       </script>
     </body></html>
     """
@@ -475,10 +475,11 @@ async def test_oracle_hcm_listing_paginates_based_on_raw_response_count_not_filt
     first_response = Mock()
     first_response.status_code = 200
     first_response.json.return_value = {
-        "items": [
-            {"requisitionList": [{"Id": "1", "Title": "Role 1"}]},
-            {"requisitionList": [{"Id": "2", "Title": "Role 2"}]},
-        ]
+        "items": (
+            [{"requisitionList": [{"Id": "1", "Title": "Role 1"}]}]
+            + [{"requisitionList": [{"Id": "2", "Title": "Role 2"}]}]
+            + [{"requisitionList": [{"Id": "2", "Title": "Role 2 duplicate"}]} for _ in range(98)]
+        )
     }
     second_response = Mock()
     second_response.status_code = 200

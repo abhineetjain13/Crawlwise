@@ -132,3 +132,42 @@ async def test_icims_extracts_detail_record() -> None:
     assert result.records[0]["title"] == "Senior Data Engineer"
     assert result.records[0]["location"] == "Remote"
     assert result.records[0]["description"] == "Build ingestion systems."
+
+
+@pytest.mark.asyncio
+async def test_icims_extracts_detail_record_from_embedded_iframe() -> None:
+    adapter = ICIMSAdapter()
+    shell_html = """
+    <html><body>
+      <div id="icims_iframe">
+        <iframe src="/jobs/123/senior-data-engineer/job?in_iframe=1"></iframe>
+      </div>
+      <h1>Careers at Example Health</h1>
+    </body></html>
+    """
+    response = Mock()
+    response.status_code = 200
+    response.text = """
+    <html><body>
+      <h1>Senior Data Engineer</h1>
+      <div class="iCIMS_JobLocation">Remote</div>
+      <div class="iCIMS_JobContent">Build ingestion systems.</div>
+      <div class="iCIMS_JobHeaderTag">
+        <dt class="iCIMS_JobHeaderField">Job Number</dt>
+        <dd class="iCIMS_JobHeaderData"><span>123</span></dd>
+      </div>
+    </body></html>
+    """
+
+    with patch("app.services.adapters.icims.curl_requests.get", return_value=response):
+        result = await adapter.extract(
+            "https://example.icims.com/jobs/123/senior-data-engineer/job",
+            shell_html,
+            "job_detail",
+        )
+
+    assert len(result.records) == 1
+    assert result.records[0]["title"] == "Senior Data Engineer"
+    assert result.records[0]["location"] == "Remote"
+    assert result.records[0]["description"] == "Build ingestion systems."
+    assert result.records[0]["job_id"] == "123"

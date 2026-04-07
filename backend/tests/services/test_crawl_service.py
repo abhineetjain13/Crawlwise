@@ -15,9 +15,11 @@ from app.services.crawl_service import (
     STAGE_SAVE,
     _build_field_discovery_summary,
     _build_llm_candidate_evidence,
+    _looks_like_job_listing_page,
     _merge_record_fields,
     _normalize_record_fields,
     _normalize_detail_candidate_values,
+    _sanitize_listing_record_fields,
     active_jobs,
     commit_selected_fields,
     create_crawl_run,
@@ -122,6 +124,81 @@ def test_build_field_discovery_summary_tolerates_candidate_rows_without_value_ke
 
     assert source_trace["field_discovery"]["title"]["status"] == "found"
     assert source_trace["field_discovery"]["title"].get("value") is None
+
+
+def test_sanitize_listing_record_fields_resolves_relative_urls_against_page_url():
+    sanitized = _sanitize_listing_record_fields(
+        {
+            "title": "  Example role  ",
+            "url": "/jobs/12345",
+            "apply_url": "jobs/12345/apply",
+        },
+        surface="job_listing",
+        page_base_url="https://example.com/careers",
+    )
+
+    assert sanitized["url"] == "https://example.com/jobs/12345"
+    assert sanitized["apply_url"] == "https://example.com/jobs/12345/apply"
+
+
+def test_sanitize_listing_record_fields_strips_ecommerce_only_fields_from_job_records():
+    sanitized = _sanitize_listing_record_fields(
+        {
+            "title": "Senior Engineer | ",
+            "salary": "",
+            "price": "$120,000",
+            "sale_price": "$110,000",
+            "original_price": "$130,000",
+            "currency": "USD",
+            "sku": "ABC-123",
+            "part_number": "PN-42",
+            "color": "Blue",
+            "availability": "InStock",
+            "rating": "4.9",
+            "review_count": "81",
+            "image_url": "https://example.com/job.jpg",
+            "additional_images": "https://example.com/job-2.jpg",
+        },
+        surface="job_listing",
+    )
+
+    assert sanitized["title"] == "Senior Engineer"
+    assert sanitized["salary"] == "$120,000"
+    assert "price" not in sanitized
+    assert "sale_price" not in sanitized
+    assert "original_price" not in sanitized
+    assert "currency" not in sanitized
+    assert "sku" not in sanitized
+    assert "part_number" not in sanitized
+    assert "color" not in sanitized
+    assert "availability" not in sanitized
+    assert "rating" not in sanitized
+    assert "review_count" not in sanitized
+    assert "image_url" not in sanitized
+    assert "additional_images" not in sanitized
+
+
+def test_looks_like_job_listing_page_ignores_generic_ecommerce_marketing_copy():
+    html = """
+    <html><body>
+      <main>
+        <section class="hero">
+          <h2>Career Opportunities</h2>
+          <a href="/rewards/apply">Apply now</a>
+        </section>
+        <ul class="product-grid">
+          <li><a href="/products/widget-1">Widget 1</a></li>
+          <li><a href="/products/widget-2">Widget 2</a></li>
+        </ul>
+      </main>
+    </body></html>
+    """
+
+    assert _looks_like_job_listing_page(
+        url="https://example.com/products",
+        html=html,
+        acq=_make_acq(html),
+    ) is False
 
 
 def test_normalize_detail_candidate_values_dedupes_primary_image_from_additional_images():

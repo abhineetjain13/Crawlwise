@@ -2029,6 +2029,10 @@ def _extract_from_card(
         ".item_description_title",
         "[itemprop='name']",
         ".product-title",
+        ".pro-title .text",
+        ".pro-title",
+        ".name [data-field='description']",
+        ".productDescription [data-field='description']",
         ".job-title",
         ".card-title",
         "a.title",
@@ -2039,6 +2043,7 @@ def _extract_from_card(
         "h2",
         "h3",
         "h4",
+        "a img[alt]",
         "a[title]",
     ]
     for sel in title_selectors:

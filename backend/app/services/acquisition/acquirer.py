@@ -162,7 +162,11 @@ async def acquire(
     # Domain-based fast track: known problematic domains should use the
     # hardened browser runtime, not the minimal default browser settings.
     domain = urlparse(url).netloc.lower().replace("www.", "")
-    browser_first = any(df in domain for df in BROWSER_FIRST_DOMAINS) or _memory_prefers_browser(profile)
+    browser_first = (
+        any(df in domain for df in BROWSER_FIRST_DOMAINS)
+        or _memory_prefers_browser(profile)
+        or _requires_browser_first(url, surface)
+    )
     if browser_first and "anti_bot_enabled" not in profile:
         profile["anti_bot_enabled"] = True
     runtime_options = resolve_browser_runtime_options(profile)
@@ -1124,6 +1128,22 @@ def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bo
     browser_successes = int(acquisition_profile.get("browser_success_count", 0) or 0)
     curl_successes = int(acquisition_profile.get("curl_success_count", 0) or 0)
     return browser_successes >= 2 and curl_successes == 0
+
+
+def _requires_browser_first(url: str, surface: str | None) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface not in {"job_listing", "job_detail"}:
+        return False
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    return any(
+        token in domain
+        for token in (
+            "workforcenow.adp.com",
+            "myjobs.adp.com",
+            "recruiting.adp.com",
+            "careers.clarkassociatesinc.biz",
+        )
+    )
 
 
 def _artifact_basename(run_id: int, url: str) -> str:

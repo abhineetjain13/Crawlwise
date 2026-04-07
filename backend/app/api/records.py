@@ -492,7 +492,7 @@ def _record_to_markdown(row: CrawlRecord) -> str:
     scalar_rows: list[tuple[str, object]] = []
     for field_name, raw_value in data.items():
         normalized_field = str(field_name).strip().lower()
-        if normalized_field in {"title", "url"}:
+        if normalized_field in {"title", "url", "source_url"}:
             continue
         rendered_value = _stringify_markdown_value(raw_value)
         if not rendered_value:

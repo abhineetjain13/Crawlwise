@@ -1732,6 +1732,51 @@ def test_card_itemprop_image():
     assert records[0]["image_url"] == "https://example.com/img/product.jpg"
 
 
+def test_extract_listing_records_reads_titles_from_pro_title_text():
+    html = """
+    <html><body>
+    <div class="searchResultContainer">
+        <div class="productRow">
+            <div class="productBox productBox__modules-lnwdropship-browser-components-ProductBox customerView hasDiscountTag">
+                <a class="linkProductBox" title="NIRUN (นิรัน)" href="/product/nirun-นิรัน/1"></a>
+                <div class="productContent">
+                    <div class="productImage">
+                        <img src="/img/nirun.webp" alt="NIRUN (นิรัน)" />
+                    </div>
+                    <div class="productDescription">
+                        <div class="pro-title name"><div data-field="description" class="text">NIRUN (นิรัน)</div></div>
+                        <div class="price"><div class="realprice">฿2,500</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="productBox productBox__modules-lnwdropship-browser-components-ProductBox customerView hasDiscountTag">
+                <a class="linkProductBox" title="JARIX 1.0 (จาริกซ์)" href="/product/jarix-10-จาริกซ์/2"></a>
+                <div class="productContent">
+                    <div class="productImage">
+                        <img src="/img/jarix.webp" alt="JARIX 1.0 (จาริกซ์)" />
+                    </div>
+                    <div class="productDescription">
+                        <div class="pro-title name"><div data-field="description" class="text">JARIX 1.0 (จาริกซ์)</div></div>
+                        <div class="price"><div class="realprice">฿1,944</div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    </body></html>
+    """
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+    card = soup.select_one(".productBox")
+    assert card is not None
+
+    record = listing_extractor._extract_from_card(
+        card, set(), "ecommerce_listing", "https://www.shop.ving.run/search"
+    )
+    assert record["title"] == "NIRUN (นิรัน)"
+    assert record["price"] == "2,500"
+    assert record["url"] == "https://www.shop.ving.run/product/nirun-นิรัน/1"
+
+
 # -----------------------------------------------------------------------
 # Price text cleanup
 # -----------------------------------------------------------------------
