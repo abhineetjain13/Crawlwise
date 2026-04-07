@@ -28,6 +28,13 @@ class BlockedPageResult:
         reason: str = "",
         provider: str = "",
     ):
+        """Initialize a blocked-state object with status, reason, and provider information.
+        Parameters:
+            - is_blocked (bool): Indicates whether the item is blocked.
+            - reason (str): The reason for the blocked status.
+            - provider (str): The provider associated with the blocked status.
+        Returns:
+            - None: This initializer does not return a value."""
         self.is_blocked = is_blocked
         self.reason = reason
         self.provider = provider

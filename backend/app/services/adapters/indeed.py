@@ -7,6 +7,18 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 
 
 class IndeedAdapter(BaseAdapter):
+    """
+    Indeed job page adapter for extracting records from job detail and job listing pages.
+    Parameters:
+        - url (str): Source page URL used for domain matching and record links.
+        - html (str): Raw HTML content of the Indeed page.
+        - surface (str): Page type selector indicating whether to parse a job detail or job listing view.
+    Processing Logic:
+        - Matches only Indeed domains before extraction is attempted.
+        - Uses page surface to switch between single-job and multi-job parsing.
+        - Returns None for detail pages when no job title is found.
+        - Normalizes relative listing links to an Indeed absolute URL when needed.
+    """
     name = "indeed"
     domains = ["indeed.com", "indeed.co.uk", "indeed.ca", "indeed.com.au", "indeed.co.in"]
 
@@ -14,6 +26,13 @@ class IndeedAdapter(BaseAdapter):
         return any(d in url for d in self.domains)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        """Extract job records from Indeed HTML based on the page surface.
+        Parameters:
+            - url (str): The source page URL.
+            - html (str): The HTML content to parse.
+            - surface (str): The page type to extract from, such as "job_detail" or "job_listing".
+        Returns:
+            - AdapterResult: An object containing extracted records, source type, and adapter name."""
         soup = BeautifulSoup(html, "html.parser")
         records = []
         if surface in ("job_detail",):
@@ -29,6 +48,12 @@ class IndeedAdapter(BaseAdapter):
         )
 
     def _extract_detail(self, soup: BeautifulSoup, url: str) -> dict | None:
+        """Extract job detail information from a BeautifulSoup page and return it as a dictionary.
+        Parameters:
+            - soup (BeautifulSoup): Parsed HTML document containing job detail elements.
+            - url (str): Source URL for the job posting.
+        Returns:
+            - dict | None: A dictionary with keys such as title, company, location, salary, description, apply_url, and url; returns None if no title is found."""
         title_el = soup.select_one(".jobsearch-JobInfoHeader-title, h1")
         company_el = soup.select_one("[data-company-name] a, .jobsearch-InlineCompanyRating div a")
         location_el = soup.select_one(".jobsearch-JobInfoHeader-subtitle div:last-child, [data-testid='job-location']")
@@ -47,6 +72,13 @@ class IndeedAdapter(BaseAdapter):
         }
 
     def _extract_listing(self, soup: BeautifulSoup, url: str, html: str) -> list[dict]:
+        """Extract job listing details from an Indeed job search page.
+        Parameters:
+            - soup (BeautifulSoup): Parsed HTML document used to locate job listing elements.
+            - url (str): The page URL, included for context and link handling.
+            - html (str): Raw HTML content of the page.
+        Returns:
+            - list[dict]: A list of job listing records containing title, company, location, salary, and apply URL."""
         records = []
         # Try embedded JSON data first (window._initialData)
         cards = soup.select(".job_seen_beacon, .tapItem, [data-jk]")

@@ -57,6 +57,14 @@ function isSafeHref(href: string) {
   }
 }
 
+/**
+ * Renders the crawl run workspace, showing live progress for active runs and tabbed results for completed runs.
+ * @example
+ * CrawlRunScreen({ runId: 123 })
+ * <CrawlRunScreen runId={123} />
+ * @param {Readonly<CrawlRunScreenProps>} runId - The crawl run screen props containing the run identifier.
+ * @returns {JSX.Element} The crawl run screen UI.
+ **/
 export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -203,6 +211,14 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       : formatDuration(new Date(startMs).toISOString(), new Date(startMs + (Number(run?.result_summary?.elapsed_ms) || (localNow - startMs))).toISOString()),
   };
 
+  /**
+   * Pauses, resumes, or kills the current crawl run and refreshes related data.
+   * @example
+   * runControl("pause")
+   * undefined
+   * @param {"pause" | "resume" | "kill"} action - The crawl control action to perform.
+   * @returns {Promise<void>} Resolves after the action is processed and related queries are refreshed.
+   */
   async function runControl(action: "pause" | "resume" | "kill") {
     setRunActionPending(action);
     setRunActionError("");
@@ -226,6 +242,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     router.replace("/crawl?module=pdp&mode=single");
   }
 
+  /**
+   * Triggers a batch crawl workflow using URLs collected from results and stores them in session storage before navigating to the crawl page.
+   * @example
+   * triggerBatchCrawlFromResults()
+   * undefined
+   * @returns {void} No value is returned.
+   */
   function triggerBatchCrawlFromResults() {
     const urls = batchFromResultsUrls;
     if (!urls.length) {

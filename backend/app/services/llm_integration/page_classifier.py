@@ -52,6 +52,11 @@ def _cache_key(url: str, html: str) -> str:
 
 
 def css_escape(value: str) -> str:
+    """Escape a string so it is safe to use as a CSS identifier.
+    Parameters:
+        - value (str): Input string to escape for CSS usage.
+    Returns:
+        - str: CSS-escaped string, with null characters replaced and special characters escaped."""
     text = str(value or "")
     if not text:
         return ""
@@ -78,6 +83,11 @@ def _sanitize_html_snippet_for_prompt(html_text: str) -> str:
 
 
 def _find_repeating_cards(soup: BeautifulSoup) -> tuple[list[Tag], str]:
+    """Finds a repeating group of card-like sibling tags and returns them with a CSS selector.
+    Parameters:
+        - soup (BeautifulSoup): Parsed HTML document to inspect.
+    Returns:
+        - tuple[list[Tag], str]: A list of matching repeating tags and the CSS selector for their shared tag/class pattern."""
     best_cards: list[Tag] = []
     best_selector = ""
     for container in soup.select("main, section, ul, ol, div"):
@@ -102,6 +112,12 @@ def _find_repeating_cards(soup: BeautifulSoup) -> tuple[list[Tag], str]:
 
 
 def _derive_wait_selector_hint(html: str, hint_surface: str | None) -> str:
+    """Derive a CSS selector hint for repeated card-like elements in HTML.
+    Parameters:
+        - html (str): HTML content to inspect.
+        - hint_surface (str | None): Optional surface hint used to choose the selector set.
+    Returns:
+        - str: The first matching selector with at least two elements, or an empty string if none is found."""
     soup = BeautifulSoup(html, "html.parser")
     selectors = CARD_SELECTORS_JOBS if hint_surface == "job_listing" else CARD_SELECTORS_COMMERCE
     for selector in selectors:
@@ -116,6 +132,12 @@ def _derive_wait_selector_hint(html: str, hint_surface: str | None) -> str:
 
 
 def _url_matches_hint(url: str, hint_surface: str | None) -> bool:
+    """Determine whether a URL matches a given hint surface category.
+    Parameters:
+        - url (str): The URL to evaluate.
+        - hint_surface (str | None): The surface hint to match against, such as a listing or detail category.
+    Returns:
+        - bool: True if the URL matches the provided hint surface; otherwise, False."""
     parsed = urlparse(url)
     tokens = "/".join([parsed.path.lower(), parsed.query.lower()])
     listing_hits = sum(token in tokens for token in ("/search", "/category", "page=", "sort=", "filter=", "results"))
@@ -152,6 +174,12 @@ def _has_secondary_listing(html: str) -> bool:
 
 
 def _url_surface(url: str, hint_surface: str | None) -> str | None:
+    """Infer the most likely page surface type from a URL and optional hint.
+    Parameters:
+        - url (str): The URL to analyze.
+        - hint_surface (str | None): An optional surface hint to validate and return if it matches the URL.
+    Returns:
+        - str | None: A detected surface label such as "job_detail", "job_listing", "ecommerce_detail", or "ecommerce_listing", or None if no match is found."""
     parsed = urlparse(url)
     path = parsed.path.lower()
     query_keys = {
@@ -181,6 +209,12 @@ def _url_surface(url: str, hint_surface: str | None) -> str | None:
 
 
 def _json_ld_surface(soup: BeautifulSoup, hint_surface: str | None) -> str | None:
+    """Determine a page surface from JSON-LD structured data.
+    Parameters:
+        - soup (BeautifulSoup): Parsed HTML document to inspect for JSON-LD payloads.
+        - hint_surface (str | None): Optional surface hint used to disambiguate listing pages.
+    Returns:
+        - str | None: A normalized surface name such as "ecommerce_detail", "job_detail", "job_listing", or "ecommerce_listing", or None if no match is found."""
     for payload in extract_json_ld(soup):
         types = payload.get("@type")
         type_values = types if isinstance(types, list) else [types]
@@ -197,6 +231,12 @@ def _json_ld_surface(soup: BeautifulSoup, hint_surface: str | None) -> str | Non
 
 
 def _dom_surface(soup: BeautifulSoup, hint_surface: str | None) -> str | None:
+    """Infer the likely page surface from visible text and HTML structure.
+    Parameters:
+        - soup (BeautifulSoup): Parsed HTML document to inspect.
+        - hint_surface (str | None): Optional hint used to bias listing classification.
+    Returns:
+        - str | None: Inferred surface label such as "ecommerce_detail", "job_detail", "job_listing", or "ecommerce_listing", or None if no match is found."""
     visible_text = " ".join(soup.get_text(" ", strip=True).split())
     if _ADD_TO_CART_RE.search(visible_text):
         return "ecommerce_detail"
@@ -217,6 +257,11 @@ def _dom_surface(soup: BeautifulSoup, hint_surface: str | None) -> str | None:
 
 
 def _surface_to_page_type(surface: str | None) -> str:
+    """Convert a surface string into a normalized page type.
+    Parameters:
+        - surface (str | None): Input surface name to classify.
+    Returns:
+        - str: The normalized page type, one of "listing", "detail", or "unknown"."""
     if surface == "unknown" or surface is None:
         return "unknown"
     if surface.endswith("_listing"):
@@ -227,6 +272,13 @@ def _surface_to_page_type(surface: str | None) -> str:
 
 
 def _classify_by_heuristics(html: str, url: str, hint_surface: str | None) -> PageClassification | None:
+    """Classify a page using deterministic heuristics from HTML, URL, and optional hints.
+    Parameters:
+        - html (str): Raw HTML content of the page to inspect.
+        - url (str): Page URL used for URL-based classification heuristics.
+        - hint_surface (str | None): Optional surface hint to improve classification.
+    Returns:
+        - PageClassification | None: A classification result when heuristics match; otherwise None."""
     block = detect_blocked_page(html)
     if block.is_blocked and block.provider:
         return PageClassification("challenge", False, "", f"blocked by {block.provider}", False, "deterministic")
@@ -275,6 +327,17 @@ async def classify_page(
     content_type: str = "html",
     llm_enabled: bool = False,
 ) -> PageClassification:
+    """Classify a page into a PageClassification using cached results, content-type checks, and heuristic rules.
+    Parameters:
+        - session: Unused session object kept for interface compatibility.
+        - url (str): Page URL used as a cache key and for classification context.
+        - html (str): Page HTML content used for classification.
+        - run_id (int | None): Unused run identifier.
+        - hint_surface (str | None): Optional hint to improve heuristic classification.
+        - content_type (str): Content type indicator; if "json", returns an unknown classification.
+        - llm_enabled (bool): Unused flag indicating whether LLM-based classification is enabled.
+    Returns:
+        - PageClassification: The resulting page classification, loaded from cache or determined heuristically."""
     del session, run_id, llm_enabled
     cached = _load_cached_classification(url, html)
     if cached is not None:

@@ -28,6 +28,14 @@ type RowMessage = {
   message: string;
 };
 
+/**
+ * Renders the selector management page for loading a URL, generating selector suggestions, testing XPath/CSS/regex selectors, and saving accepted selectors.
+ * @example
+ * SelectorsPage()
+ * <SelectorsPage />
+ * @param {void} Argument - This component does not accept any arguments.
+ * @returns {JSX.Element} The selector page UI.
+ */
 export default function SelectorsPage() {
   const [url, setUrl] = useState("");
   const [loadedUrl, setLoadedUrl] = useState("");
@@ -43,6 +51,13 @@ export default function SelectorsPage() {
   const parsedColumns = parseExpectedColumns(expectedColumns);
   const domain = normalizeDomain(loadedUrl);
 
+  /**
+  * Loads selector suggestions for a page URL and populates the rows with the returned results.
+  * @example
+  * loadPageAndSuggestions()
+  * undefined
+  * @returns {Promise<void>} Resolves when suggestions are loaded and state is updated, or an error state is set.
+  **/
   async function loadPageAndSuggestions() {
     const targetUrl = url.trim();
     if (!targetUrl) {
@@ -92,6 +107,14 @@ export default function SelectorsPage() {
     });
   }
 
+  /**
+   * Refreshes the selector suggestion for a row based on the loaded URL and field name.
+   * @example
+   * redetectRow(row)
+   * "Suggested selector refreshed."
+   * @param {SelectorRow} row - The selector row to re-detect.
+   * @returns {Promise<void>} Resolves when the selector suggestion request completes.
+   */
   async function redetectRow(row: SelectorRow) {
     if (!loadedUrl || !row.fieldName.trim()) {
       setRowMessages((current) => ({
@@ -136,6 +159,14 @@ export default function SelectorsPage() {
     }
   }
 
+  /**
+   * Tests a selector row against the loaded URL and updates the row with the matched value and status message.
+   * @example
+   * testRow(row)
+   * undefined
+   * @param {SelectorRow} row - The selector row to test.
+   * @returns {Promise<void>} Resolves when the selector test completes and row state has been updated.
+   */
   async function testRow(row: SelectorRow) {
     if (!loadedUrl || !row.selectorValue.trim()) {
       setRowMessages((current) => ({
@@ -172,6 +203,13 @@ export default function SelectorsPage() {
     }
   }
 
+  /**
+   * Saves all accepted selector rows to the backend and updates row state based on the result.
+   * @example
+   * await saveAcceptedRows()
+   * undefined
+   * @returns {Promise<void>} Resolves after attempting to save all accepted rows and clearing the saving state.
+   **/
   async function saveAcceptedRows() {
     const acceptedRows = rows.filter((row) => row.state === "accepted" && row.fieldName.trim() && row.selectorValue.trim());
     if (!acceptedRows.length || !domain) {
@@ -465,6 +503,15 @@ function nextEditedState(state: RowState): RowState {
   return state;
 }
 
+/**
+* Builds a selector row from an optional suggestion, preferring xpath, then CSS selector, then regex, and falling back to a manual empty row.
+* @example
+* buildRowFromSuggestion("price", { xpath: "//span[@class='price']", sample_value: "$19.99" })
+* { key: "row_1", fieldName: "price", kind: "xpath", selectorValue: "//span[@class='price']", extractedValue: "$19.99", source: "llm_xpath", state: "idle" }
+* @param {string} fieldName - The name of the field the selector row is being built for.
+* @param {SelectorSuggestion | undefined} suggestion - Optional suggested selector data used to populate the row.
+* @returns {SelectorRow} A selector row populated from the best available suggestion or a default manual row.
+**/
 function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggestion): SelectorRow {
   if (suggestion?.xpath) {
     return {

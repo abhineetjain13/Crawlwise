@@ -59,6 +59,14 @@ const navGroups = [
 
 const navItemCount = navGroups.reduce((total, group) => total + group.items.length, 0);
 
+/**
+* Renders the authenticated app shell, auth pages, and session-loading/error states while handling unauthorized redirects.
+* @example
+* AppShell({ children: <Dashboard /> })
+* <AppShell>{children}</AppShell>
+* @param {{children: React.ReactNode}} children - The content to render inside the shell layout or auth page container.
+* @returns {JSX.Element} The appropriate layout, loading skeleton, or error/redirect state for the current route and session status.
+**/
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
   const router = useRouter();

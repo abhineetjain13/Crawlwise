@@ -17,6 +17,14 @@ type TopBarStore = {
 
 const TopBarContext = createContext<TopBarStore | null>(null);
 
+/**
+ * Provides a top bar context store to descendants and manages header state subscriptions.
+ * @example
+ * TopBarProvider({ children })
+ * <TopBarContext.Provider value={store}>{children}</TopBarContext.Provider>
+ * @param {{ children: ReactNode }} children - The child React nodes to render within the provider.
+ * @returns {JSX.Element} The context provider wrapping the supplied children.
+ **/
 export function TopBarProvider({
   children,
 }: Readonly<{ children: ReactNode }>) {

@@ -1,5 +1,12 @@
 import { Card } from "../../../components/ui/primitives";
 
+/**
+ * Renders a loading skeleton for the run detail page while content is being fetched.
+ * @example
+ * LoadingRunDetailPage()
+ * <div className="space-y-4" aria-busy="true">...</div>
+ * @returns {JSX.Element} The loading placeholder UI for the run detail page.
+ */
 export default function LoadingRunDetailPage() {
   return (
     <div className="space-y-4" aria-busy="true">

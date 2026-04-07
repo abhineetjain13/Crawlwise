@@ -112,6 +112,13 @@ class RunControlSignal(RuntimeError):
 # ---------------------------------------------------------------------------
 
 async def create_crawl_run(session: AsyncSession, user_id: int, payload: dict) -> CrawlRun:
+    """Create and persist a new crawl run with normalized targets and validated settings.
+    Parameters:
+        - session (AsyncSession): Active database session used to create and save the crawl run.
+        - user_id (int): ID of the user initiating the crawl run.
+        - payload (dict): Input crawl configuration, including URLs, settings, and requested fields.
+    Returns:
+        - CrawlRun: The newly created crawl run in pending status."""
     payload = dict(payload or {})
     settings = dict(payload.get("settings", {}))
     payload["url"] = _normalize_target_url(payload.get("url"))
@@ -167,6 +174,17 @@ async def list_runs(
     url_search: str = "",
     user_id: int | None = None,
 ) -> tuple[list[CrawlRun], int]:
+    """List crawl runs with optional filtering and pagination.
+    Parameters:
+        - session (AsyncSession): Database session used to execute the queries.
+        - page (int): Page number to retrieve.
+        - limit (int): Maximum number of runs per page.
+        - status (str): Optional run status filter.
+        - run_type (str): Optional run type filter.
+        - url_search (str): Optional case-insensitive URL substring filter.
+        - user_id (int | None): Optional user ID filter.
+    Returns:
+        - tuple[list[CrawlRun], int]: A tuple containing the list of matching crawl runs and the total count."""
     query = select(CrawlRun)
     count_query = select(func.count()).select_from(CrawlRun)
     if user_id is not None:
@@ -203,6 +221,14 @@ async def delete_run(session: AsyncSession, run: CrawlRun) -> None:
 async def get_run_records(
     session: AsyncSession, run_id: int, page: int, limit: int
 ) -> tuple[list[CrawlRecord], int]:
+    """Retrieve paginated crawl records for a specific run along with the total count.
+    Parameters:
+        - session (AsyncSession): Database session used to execute the queries.
+        - run_id (int): Identifier of the run whose records should be fetched.
+        - page (int): Page number for pagination.
+        - limit (int): Maximum number of records to return per page.
+    Returns:
+        - tuple[list[CrawlRecord], int]: A tuple containing the list of matching CrawlRecord objects for the requested page and the total number of records for the run."""
     total = int(
         (
             await session.execute(
@@ -234,6 +260,13 @@ async def commit_selected_fields(
     run: CrawlRun,
     items: list[dict],
 ) -> tuple[int, int]:
+    """Commit selected field values to crawl records for a run.
+    Parameters:
+        - session (AsyncSession): Active async database session used to load and persist records.
+        - run (CrawlRun): The crawl run whose records should be updated.
+        - items (list[dict]): List of selected field updates, each expected to include record_id, field_name, and value.
+    Returns:
+        - tuple[int, int]: A tuple of (updated_records, updated_fields), representing the number of distinct records updated and the total number of field values committed."""
     if not items:
         return 0, 0
     valid_record_ids: list[int] = []
@@ -305,6 +338,14 @@ async def commit_llm_suggestions(
 
 
 async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
+    """Pause a running crawl by setting a pause control request and logging the action.
+    Parameters:
+        - session (AsyncSession): The database session used to persist the pause request and log entry.
+        - run (CrawlRun): The crawl run to pause.
+    Returns:
+        - CrawlRun: The refreshed crawl run after the pause request is committed.
+    Raises:
+        - ValueError: If the run is not currently in the RUNNING state."""
     current = normalize_status(run.status)
     if current != CrawlStatus.RUNNING:
         raise ValueError(f"Cannot pause run in state: {run.status}")
@@ -316,6 +357,14 @@ async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
 
 
 async def resume_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
+    """Resume a paused crawl run by setting it back to running and clearing any control request.
+    Parameters:
+        - session (AsyncSession): Database session used to persist the update and log the action.
+        - run (CrawlRun): The crawl run to resume; must currently be in the paused state.
+    Returns:
+        - CrawlRun: The refreshed crawl run after the status update is committed.
+    Raises:
+        - ValueError: If the run is not currently paused."""
     current = normalize_status(run.status)
     if current != CrawlStatus.PAUSED:
         raise ValueError(f"Cannot resume run in state: {run.status}")
@@ -328,6 +377,14 @@ async def resume_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
 
 
 async def kill_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
+    """Kill a crawl run by marking it for termination or setting it to a killed state.
+    Parameters:
+        - session (AsyncSession): Database session used to persist and refresh the run.
+        - run (CrawlRun): The crawl run to be killed.
+    Returns:
+        - CrawlRun: The updated run after the kill operation is committed and refreshed.
+    Raises:
+        - ValueError: If the run is already in a terminal state."""
     current = normalize_status(run.status)
     if current in TERMINAL_STATUSES:
         raise ValueError(f"Cannot kill run in terminal state: {run.status}")
@@ -348,6 +405,12 @@ async def cancel_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
 
 
 async def active_jobs(session: AsyncSession, *, user_id: int | None = None) -> list[dict]:
+    """Retrieve active crawl jobs, optionally filtered by user ID.
+    Parameters:
+        - session (AsyncSession): Database session used to execute the query.
+        - user_id (int | None): Optional user ID to filter active jobs by.
+    Returns:
+        - list[dict]: A list of dictionaries containing active job details such as run ID, status, progress, start time, URL, type, and user ID."""
     query = (
         select(CrawlRun)
         .where(CrawlRun.status.in_([status.value for status in ACTIVE_STATUSES]))
@@ -417,6 +480,11 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         await session.commit()
 
     async def _run_control_checkpoint() -> None:
+        """Check the current run state and raise a control signal if pause or kill has been requested.
+        Parameters:
+            - None: This function does not accept any parameters.
+        Returns:
+            - None: This function does not return a value; it raises RunControlSignal when a pause or kill condition is detected."""
         await session.refresh(run)
         current_status = normalize_status(run.status)
         control_request = get_control_request(run)
@@ -960,6 +1028,20 @@ async def _process_single_url_in_isolated_session(
     max_records: int,
     sleep_ms: int,
 ) -> tuple[int, str, dict]:
+    """Process a single URL in an isolated database session and return crawl results.
+    Parameters:
+        - run_id (int): Identifier of the crawl run to load and validate.
+        - url (str): URL to process.
+        - idx (int): Zero-based index of the URL within the batch.
+        - total_urls (int): Total number of URLs being processed.
+        - proxy_list (list[str]): List of proxy addresses available for crawling.
+        - traversal_mode (str | None): Optional traversal mode to use while crawling.
+        - max_pages (int): Maximum number of pages to visit.
+        - max_scrolls (int): Maximum number of scroll actions to perform.
+        - max_records (int): Maximum number of records to collect.
+        - sleep_ms (int): Delay in milliseconds between crawl actions.
+    Returns:
+        - tuple[int, str, dict]: A tuple containing the number of records collected, the crawl verdict, and URL metrics."""
     async with SessionLocal() as worker_session:
         worker_run = await worker_session.get(CrawlRun, run_id)
         if worker_run is None:
@@ -1005,6 +1087,20 @@ async def _prefetch_single_url_acquisition(
     max_scrolls: int,
     sleep_ms: int,
 ) -> AcquisitionResult:
+    """Prefetches a single URL acquisition by preparing field selectors and acquisition settings, then invoking the acquisition process.
+    Parameters:
+        - run_id (int): Identifier for the acquisition run.
+        - surface (str): Target surface or environment name.
+        - requested_fields (list[str]): Fields to request during acquisition.
+        - run_settings (dict): Configuration used to build the acquisition profile.
+        - url (str): URL to acquire data from.
+        - proxy_list (list[str]): List of proxy URLs to use, if any.
+        - traversal_mode (str | None): Optional traversal strategy for the acquisition.
+        - max_pages (int): Maximum number of pages to fetch.
+        - max_scrolls (int): Maximum number of scroll actions to perform.
+        - sleep_ms (int): Delay in milliseconds between actions.
+    Returns:
+        - AcquisitionResult: The result of the asynchronous acquisition operation."""
     additional_fields = expand_requested_fields(requested_fields or [])
     requested_field_selectors = {
         field_name: get_selector_defaults(normalize_domain(url), field_name)
@@ -1356,6 +1452,12 @@ async def _extract_listing(
 
 
 def _listing_acquisition_blocked(acq: AcquisitionResult, html: str) -> bool:
+    """Determine whether a listing acquisition was blocked.
+    Parameters:
+        - acq (AcquisitionResult): The acquisition result containing diagnostics information.
+        - html (str): The HTML content to inspect for blocked-page indicators.
+    Returns:
+        - bool: True if the acquisition appears to be blocked; otherwise False."""
     if html and detect_blocked_page(html).is_blocked:
         return True
     diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
@@ -1368,6 +1470,12 @@ def _listing_acquisition_blocked(acq: AcquisitionResult, html: str) -> bool:
 
 
 def _looks_like_loading_listing_shell(html: str, *, surface: str) -> bool:
+    """Detect whether an HTML page appears to be a loading state for a listing surface.
+    Parameters:
+        - html (str): HTML content to inspect.
+        - surface (str): Surface name used to determine whether the page is a listing view.
+    Returns:
+        - bool: True if the HTML looks like a loading listing shell; otherwise False."""
     if not html or "listing" not in str(surface or "").lower():
         return False
     lowered = html.lower()
@@ -1381,6 +1489,13 @@ def _looks_like_loading_listing_shell(html: str, *, surface: str) -> bool:
 
 
 def _sanitize_listing_record_fields(record: dict, *, surface: str, page_base_url: str = "") -> dict:
+    """Sanitize and normalize listing record fields, with special handling for job listings.
+    Parameters:
+        - record (dict): Input listing record to sanitize.
+        - surface (str): Source surface name used to determine job-listing-specific cleanup.
+        - page_base_url (str): Base URL used to resolve relative URLs, if provided.
+    Returns:
+        - dict: Sanitized copy of the input record with normalized title, resolved URLs, and job-specific fields cleaned."""
     sanitized = dict(record or {})
     if not sanitized:
         return sanitized
@@ -1414,6 +1529,11 @@ def _sanitize_listing_record_fields(record: dict, *, surface: str, page_base_url
 
 
 def _summarize_job_listing_description(value: object) -> str:
+    """Summarize a job listing description into a concise plain-text preview.
+    Parameters:
+        - value (object): Input value containing the job description text.
+    Returns:
+        - str: A cleaned and shortened description, or an empty string if no usable text is found."""
     text = _clean_candidate_text(value, limit=None)
     if not text:
         return ""
@@ -1672,6 +1792,12 @@ def _compute_verdict(records: list[dict], surface: str) -> str:
 
 
 def _passes_core_verdict(record: dict, surface: str) -> bool:
+    """Determine whether a record passes the core quality verdict for a given surface.
+    Parameters:
+        - record (dict): Input record containing extracted fields such as title, URL, price, image URL, company, and description.
+        - surface (str): Surface type used to decide which core fields are required.
+    Returns:
+        - bool: True if the record meets the minimum required fields for the surface; otherwise False."""
     normalized_surface = str(surface or "").strip().lower()
     if "listing" in normalized_surface:
         return assess_listing_record_quality(record, surface=normalized_surface).meaningful
@@ -1730,6 +1856,16 @@ async def _set_stage(
     current_url_index: int | None = None,
     total_urls: int | None = None,
 ) -> None:
+    """Update the crawl run's current stage and optional progress metadata, then flush changes to the database.
+    Parameters:
+        - session (AsyncSession): Database session used to persist the updated run state.
+        - run (CrawlRun): Crawl run object whose result summary will be updated.
+        - stage (str): Current stage name to store in the run summary.
+        - current_url (str | None, optional): Current URL being processed.
+        - current_url_index (int | None, optional): Zero-based index of the current URL.
+        - total_urls (int | None, optional): Total number of URLs in the crawl.
+    Returns:
+        - None: This function does not return a value."""
     result_summary = dict(run.result_summary or {})
     result_summary["current_stage"] = stage
     if current_url is not None:
@@ -1793,6 +1929,12 @@ async def _persist_failure_state(session: AsyncSession, run_id: int, error_msg: 
 
 
 def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
+    """Collect and normalize target URLs from the payload and settings.
+    Parameters:
+        - payload (dict): Input data containing optional "url" and "urls" entries.
+        - settings (dict): Configuration data containing optional "urls" and "csv_content" entries.
+    Returns:
+        - list[str]: A deduplicated list of normalized target URLs in discovery order."""
     candidates: list[str] = []
     direct_url = _normalize_target_url(payload.get("url"))
     if direct_url:
@@ -1812,6 +1954,12 @@ def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
 
 
 async def _count_run_records(session: AsyncSession, run_id: int) -> int:
+    """Count the number of crawl records associated with a given run ID.
+    Parameters:
+        - session (AsyncSession): The async database session used to execute the query.
+        - run_id (int): The ID of the run whose crawl records are being counted.
+    Returns:
+        - int: The total number of crawl records for the specified run ID."""
     return int(
         (
             await session.execute(
@@ -1837,6 +1985,14 @@ def _build_legible_listing_fallback_record(
     xhr_payloads: list[dict],
     adapter_records: list[dict],
 ) -> dict[str, dict[str, object] | dict[str, int | bool | str]] | None:
+    """Build a fallback record for a page by extracting readable text, metadata, and table data from HTML.
+    Parameters:
+        - url (str): The page URL used for context and filtering.
+        - html (str): The HTML content to parse and summarize.
+        - xhr_payloads (list[dict]): Collected network/XHR payload metadata for traceability.
+        - adapter_records (list[dict]): Adapter-provided records to include in the manifest trace.
+    Returns:
+        - dict[str, dict[str, object] | dict[str, int | bool | str]] | None: A structured fallback record containing extracted data, raw excerpts, summary stats, and manifest trace information, or None if the page does not contain enough usable content."""
     page_sources = parse_page_sources(html)
     tables = list(page_sources.get("tables") or [])
     soup = BeautifulSoup(html or "", "html.parser")
@@ -1969,6 +2125,11 @@ def _build_legible_listing_fallback_record(
 
 
 def _first_non_empty_text(*nodes: object) -> str:
+    """Return the first non-empty cleaned text extracted from the provided nodes.
+    Parameters:
+        - nodes (object): One or more node-like objects to inspect for text content.
+    Returns:
+        - str: The first non-empty cleaned text found, or an empty string if none is available."""
     for node in nodes:
         text = ""
         if node is not None and hasattr(node, "get_text"):
@@ -1985,6 +2146,12 @@ def _clean_page_text(value: object) -> str:
 
 
 def _render_fallback_node_markdown(node: Tag, *, page_url: str) -> str:
+    """Render a BeautifulSoup tag tree into fallback Markdown text.
+    Parameters:
+        - node (Tag): The HTML node to render.
+        - page_url (str): Base page URL used to resolve relative links.
+    Returns:
+        - str: Cleaned fallback Markdown representation of the node content."""
     parts: list[str] = []
     for child in node.children:
         if isinstance(child, NavigableString):
@@ -2010,6 +2177,12 @@ def _render_fallback_node_markdown(node: Tag, *, page_url: str) -> str:
 
 
 def _render_fallback_card_group(root: Tag, *, page_url: str) -> tuple[list[str], int, list[dict[str, object]]]:
+    """Render a fallback card-group summary from an HTML root element.
+    Parameters:
+        - root (Tag): Parsed HTML root element to search for card content.
+        - page_url (str): Base page URL used to resolve relative links.
+    Returns:
+        - tuple[list[str], int, list[dict[str, object]]]: A tuple containing formatted output lines, the total character count of extracted text, and structured card տվյալs with title, URL, and optional description."""
     cards = _find_fallback_card_group(root)
     if not cards:
         return [], 0, []
@@ -2050,6 +2223,11 @@ def _render_fallback_card_group(root: Tag, *, page_url: str) -> tuple[list[str],
 
 
 def _find_fallback_card_group(root: Tag) -> list[Tag]:
+    """Find the most likely fallback group of repeated card-like elements in a page tree.
+    Parameters:
+        - root (Tag): The root BeautifulSoup tag to search within.
+    Returns:
+        - list[Tag]: A list of tags representing the best matching card group, or an empty list if none is found."""
     best_group: list[Tag] = []
     best_score: tuple[int, int] = (0, 0)
     for container in root.select("main, section, div, ul, ol"):
@@ -2079,6 +2257,12 @@ def _find_fallback_card_group(root: Tag) -> list[Tag]:
 
 
 def _should_skip_fallback_node(node: Tag, *, page_url: str) -> bool:
+    """Determine whether a fallback HTML node should be skipped based on its text and link target.
+    Parameters:
+        - node (Tag): The HTML node to evaluate.
+        - page_url (str): The base page URL used to resolve relative links.
+    Returns:
+        - bool: True if the node should be skipped; otherwise False."""
     text = _clean_page_text(node.get_text(" ", strip=True))
     if not text:
         return True
@@ -2108,6 +2292,11 @@ def _normalize_target_url(value: object) -> str:
 
 
 def _render_manifest_tables_markdown(tables: list[dict] | None) -> str:
+    """Render up to three tables as compact Markdown text.
+    Parameters:
+        - tables (list[dict] | None): A list of table objects containing row and cell data, or None.
+    Returns:
+        - str: A Markdown-formatted string of up to three tables, or an empty string if no valid table content is found."""
     rendered_tables: list[str] = []
     for table in list(tables or [])[:3]:
         rows = table.get("rows") if isinstance(table, dict) else None
@@ -2130,6 +2319,12 @@ def _render_manifest_tables_markdown(tables: list[dict] | None) -> str:
 
 
 def _normalize_record_fields(record: dict[str, object], *, surface: str = "") -> dict[str, object]:
+    """Normalize and validate record fields, optionally inferring currency from pricing values.
+    Parameters:
+        - record (dict[str, object]): Input record containing raw field names and values.
+        - surface (str, optional): Context string used to adjust normalization behavior, especially for job-related records.
+    Returns:
+        - dict[str, object]: A compact dictionary of normalized, validated, and filtered fields."""
     normalized: dict[str, object] = {}
     normalized_surface = str(surface or "").strip().lower()
     for key, value in record.items():
@@ -2159,6 +2354,13 @@ def _reconcile_detail_candidate_values(
     allowed_fields: set[str],
     url: str,
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    """Reconcile candidate field values by selecting the first valid value for each allowed field and recording rejected candidates.
+    Parameters:
+        - candidates (dict[str, list[dict]]): Candidate values grouped by field name.
+        - allowed_fields (set[str]): Field names eligible for reconciliation.
+        - url (str): Base URL used when normalizing URL-like values.
+    Returns:
+        - tuple[dict[str, object], dict[str, dict[str, object]]]: A tuple containing the reconciled field values and per-field reconciliation details, including rejected candidates when applicable."""
     reconciled: dict[str, object] = {}
     reconciliation: dict[str, dict[str, object]] = {}
 
@@ -2206,6 +2408,12 @@ def _reconcile_detail_candidate_values(
 
 
 def _passes_detail_quality_gate(field_name: str, value: object) -> bool:
+    """Check whether a field value passes the detail quality gate.
+    Parameters:
+        - field_name (str): Name of the field being validated.
+        - value (object): Value to evaluate for quality and validity.
+    Returns:
+        - bool: True if the value is non-empty and validated as meaningful; otherwise False."""
     if value in (None, "", [], {}):
         return False
     validated = validate_value(field_name, value)
@@ -2224,6 +2432,14 @@ def _apply_llm_suggestions_to_candidate_values(
     source_trace: dict,
     url: str,
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    """Apply LLM cleanup suggestions to candidate field values when they are valid and allowed.
+    Parameters:
+        - candidate_values (dict[str, object]): Current candidate values to inspect and update in place.
+        - allowed_fields (set[str]): Field names eligible for promotion from LLM suggestions.
+        - source_trace (dict): Trace data containing LLM suggestions and candidate history.
+        - url (str): Base URL used to normalize suggested field values.
+    Returns:
+        - tuple[dict[str, object], dict[str, dict[str, object]]]: Updated candidate values and a mapping of promoted fields to their metadata."""
     suggestions = source_trace.get("llm_cleanup_suggestions")
     if not isinstance(suggestions, dict):
         return candidate_values, {}
@@ -2287,6 +2503,13 @@ def _split_detail_output_fields(
     allowed_fields: set[str],
     surface: str = "",
 ) -> tuple[dict[str, object], dict[str, object]]:
+    """Split normalized record fields into canonical and discovered groups.
+    Parameters:
+        - record (dict[str, object]): Input record containing raw detail fields.
+        - allowed_fields (set[str]): Field names that should be kept in the canonical output.
+        - surface (str): Optional surface name used during field normalization.
+    Returns:
+        - tuple[dict[str, object], dict[str, object]]: A tuple containing the canonical fields and the discovered fields, in that order."""
     normalized = _normalize_record_fields(record, surface=surface)
     canonical: dict[str, object] = {}
     discovered: dict[str, object] = {}
@@ -2304,6 +2527,13 @@ def _build_review_bucket(
     source_trace: dict | None = None,
     fallback_source: str = "deterministic_extraction",
 ) -> list[dict[str, object]]:
+    """Build a deduplicated review bucket from discovered fields for downstream review or display.
+    Parameters:
+        - discovered_fields (dict[str, object]): Mapping of field names to extracted values.
+        - source_trace (dict | None): Optional trace data containing candidate sources.
+        - fallback_source (str): Default source label used when no source is found in trace data.
+    Returns:
+        - list[dict[str, object]]: A list of compact review entries containing key, value, and source."""
     candidate_map = source_trace.get("candidates") if isinstance(source_trace, dict) else {}
     rows: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
@@ -2328,6 +2558,11 @@ def _build_review_bucket(
 
 
 def _merge_review_bucket_entries(*groups: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Merge review bucket entries from multiple groups into a deduplicated, sorted list.
+    Parameters:
+        - groups (list[dict[str, object]]): One or more lists of review bucket row dictionaries to merge.
+    Returns:
+        - list[dict[str, object]]: A sorted list of unique, compacted review bucket entries filtered for valid surfaced fields."""
     merged: dict[tuple[str, str], dict[str, object]] = {}
     for group in groups:
         for row in group:
@@ -2366,6 +2601,15 @@ def _build_manifest_trace(
     semantic: dict | None = None,
     extra: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    """Build a compact manifest trace from page HTML, XHR payloads, adapter records, and optional semantic/extra data.
+    Parameters:
+        - html (str): HTML content used to extract page sources.
+        - xhr_payloads (list[dict]): Network payload records to include in the trace.
+        - adapter_records (list[dict]): Adapter records to include in the trace.
+        - semantic (dict | None): Optional semantic metadata to attach.
+        - extra (dict[str, object] | None): Optional extra fields to merge into the result.
+    Returns:
+        - dict[str, object]: A compact dictionary containing extracted page sources and supplied trace data."""
     page_sources = parse_page_sources(html)
     payload = _compact_dict({
         "adapter_data": adapter_records or None,
@@ -2398,6 +2642,14 @@ def _resolve_listing_surface(
     html: str,
     acq: AcquisitionResult,
 ) -> str:
+    """Resolve a listing surface label, remapping ecommerce listings to job listings when applicable.
+    Parameters:
+        - surface (str): The original surface label to evaluate.
+        - url (str): The page URL used to help detect the page type.
+        - html (str): The page HTML used to help detect the page type.
+        - acq (AcquisitionResult): Acquisition metadata used to help detect the page type.
+    Returns:
+        - str: The original surface, or "job_listing" when an ecommerce listing is determined to be a job listing."""
     normalized_surface = str(surface or "").strip().lower()
     if normalized_surface != "ecommerce_listing":
         return surface
@@ -2407,6 +2659,13 @@ def _resolve_listing_surface(
 
 
 def _looks_like_job_listing_page(*, url: str, html: str, acq: AcquisitionResult) -> bool:
+    """Determine whether a page appears to be a job listing page.
+    Parameters:
+        - url (str): Page URL used to check for job-related path patterns.
+        - html (str): Page HTML content used to detect job listing markers.
+        - acq (AcquisitionResult): Acquisition result containing diagnostic metadata.
+    Returns:
+        - bool: True if the page looks like a job listing page; otherwise False."""
     lowered_url = str(url or "").lower()
     if any(token in lowered_url for token in ("/jobs", "/job-", "/job/", "/careers", "/career", "job-search", "search-jobs")):
         return True
@@ -2446,6 +2705,13 @@ def _looks_like_job_listing_page(*, url: str, html: str, acq: AcquisitionResult)
 
 
 def _review_bucket_source_for_field(field_name: str, candidate_map: object, fallback_source: str) -> str:
+    """Return the first non-empty source found for a field from a candidate map, or a fallback source.
+    Parameters:
+        - field_name (str): The field name used to look up candidate rows.
+        - candidate_map (object): A mapping expected to contain field names mapped to lists of row dictionaries.
+        - fallback_source (str): The source to return if no valid source is found.
+    Returns:
+        - str: The first non-empty source value found, or the fallback source if none is available."""
     if isinstance(candidate_map, dict):
         rows = candidate_map.get(field_name)
         if isinstance(rows, list):
@@ -2467,6 +2733,11 @@ def _review_bucket_fingerprint(value: object) -> str:
 
 
 def _normalize_committed_field_name(value: object) -> str:
+    """Normalize a field name into a lowercase, underscore-separated string.
+    Parameters:
+        - value (object): Input value to normalize.
+    Returns:
+        - str: Normalized field name, or an empty string if the input is empty or blank."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -2485,6 +2756,12 @@ def _raw_record_payload(record: dict) -> dict:
 
 
 def _merge_record_fields(primary: dict, secondary: dict) -> dict:
+    """Merge two record dictionaries, preferring secondary fields when appropriate.
+    Parameters:
+        - primary (dict): The base dictionary whose values are used as the initial merged result.
+        - secondary (dict): The dictionary providing fallback or preferred field values.
+    Returns:
+        - dict: A merged dictionary containing fields from primary, updated with eligible values from secondary."""
     merged = dict(primary)
     for key, value in secondary.items():
         if key.startswith("_"):
@@ -2495,6 +2772,13 @@ def _merge_record_fields(primary: dict, secondary: dict) -> dict:
 
 
 def _should_prefer_secondary_field(field_name: str, existing: object, candidate: object) -> bool:
+    """Determine whether a secondary field value should replace an existing value.
+    Parameters:
+        - field_name (str): Name of the field being compared.
+        - existing (object): Current value stored for the field.
+        - candidate (object): New value being evaluated as a replacement.
+    Returns:
+        - bool: True if the candidate should be preferred over the existing value; otherwise, False."""
     if candidate in (None, "", [], {}):
         return False
     if existing in (None, "", [], {}):
@@ -2509,6 +2793,12 @@ def _should_prefer_secondary_field(field_name: str, existing: object, candidate:
 
 
 def _requested_field_coverage(record: dict, requested_fields: list[str]) -> dict:
+    """Calculate coverage of requested fields present in a record.
+    Parameters:
+        - record (dict): Mapping of field names to values to inspect.
+        - requested_fields (list[str]): List of field names requested for coverage checks.
+    Returns:
+        - dict: A summary containing the number of requested fields, the number found, and a list of missing fields."""
     if not requested_fields:
         return {}
     normalized_requested = [field for field in requested_fields if field]
@@ -2533,6 +2823,11 @@ def _build_acquisition_profile(run_settings: dict | None) -> dict[str, object]:
 
 
 def _resolve_traversal_mode(settings: dict | None) -> str | None:
+    """Resolve the traversal mode from advanced settings.
+    Parameters:
+        - settings (dict | None): Settings dictionary containing advanced traversal options.
+    Returns:
+        - str | None: The normalized traversal mode if enabled and valid; otherwise None."""
     if not isinstance(settings, dict):
         return None
     if not bool(settings.get("advanced_enabled")):
@@ -2544,6 +2839,12 @@ def _resolve_traversal_mode(settings: dict | None) -> str | None:
 
 
 def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -> dict[str, object]:
+    """Build a compact metrics dictionary for an acquisition result.
+    Parameters:
+        - acq (AcquisitionResult): Acquisition result containing method, content type, diagnostics, and source metadata.
+        - requested_fields (list[str]): Fields requested for the response, used to report count-based metrics.
+    Returns:
+        - dict[str, object]: Compact dictionary of URL/acquisition metrics with missing or empty values removed."""
     diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
     timing_map = diagnostics.get("timings_ms") if isinstance(diagnostics.get("timings_ms"), dict) else {}
     return _compact_dict({
@@ -2571,6 +2872,13 @@ def _build_url_metrics(acq: AcquisitionResult, *, requested_fields: list[str]) -
 
 
 def _finalize_url_metrics(url_metrics: dict[str, object], *, records: list[dict], requested_fields: list[str]) -> dict[str, object]:
+    """Finalize URL metrics by aggregating record counts and requested field coverage.
+    Parameters:
+        - url_metrics (dict[str, object]): Metrics dictionary to update and return.
+        - records (list[dict]): List of record dictionaries used to compute coverage and counts.
+        - requested_fields (list[str]): Fields requested for coverage calculation.
+    Returns:
+        - dict[str, object]: Updated metrics dictionary with record count and optional requested field coverage statistics."""
     found_counts = [
         int((_requested_field_coverage(record, requested_fields) or {}).get("found", 0) or 0)
         for record in records
@@ -2584,6 +2892,12 @@ def _finalize_url_metrics(url_metrics: dict[str, object], *, records: list[dict]
 
 
 def _merge_run_acquisition_metrics(existing: object, url_metrics: dict[str, object]) -> dict[str, object]:
+    """Merge per-URL acquisition metrics into a cumulative summary.
+    Parameters:
+        - existing (object): Previous aggregated metrics, typically a dict-like object.
+        - url_metrics (dict[str, object]): Metrics collected for a single URL acquisition.
+    Returns:
+        - dict[str, object]: Updated summary with counts, timing totals, and metric breakdowns merged in."""
     current = dict(existing) if isinstance(existing, dict) else {}
     methods = dict(current.get("methods") or {})
     method = str(url_metrics.get("method") or "").strip()
@@ -2630,6 +2944,11 @@ def _compact_dict(payload: dict) -> dict:
         if value not in (None, "", [], {})
     }
 def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
+    """Build a compact acquisition trace from an AcquisitionResult for diagnostics reporting.
+    Parameters:
+        - acq (AcquisitionResult): Acquisition result containing method, diagnostics, and source information.
+    Returns:
+        - dict[str, object]: A compact dictionary with acquisition metadata, browser usage, and timing details."""
     diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
     browser_diagnostics = diagnostics.get("browser_diagnostics") if isinstance(diagnostics.get("browser_diagnostics"), dict) else {}
     timing_map = diagnostics.get("timings_ms") if isinstance(diagnostics.get("timings_ms"), dict) else {}
@@ -2657,6 +2976,11 @@ def _elapsed_ms(started_at: float) -> int:
 
 
 def _validate_extraction_contract(contract_rows: list[dict]) -> None:
+    """Validate extraction contract rows for required fields, XPath syntax, and regex syntax.
+    Parameters:
+        - contract_rows (list[dict]): List of row dictionaries containing extraction contract fields such as field_name, xpath, and regex.
+    Returns:
+        - None: Raises ValueError if any row contains validation errors."""
     errors: list[str] = []
     for index, row in enumerate(contract_rows, start=1):
         field_name = str(row.get("field_name") or "").strip()
@@ -2692,6 +3016,21 @@ async def _collect_detail_llm_suggestions(
     source_trace: dict,
     resolved_schema: ResolvedSchema,
 ) -> tuple[dict, list[dict[str, object]]]:
+    """Collect and validate LLM-assisted field suggestions for crawl detail extraction.
+    Parameters:
+        - session (AsyncSession): Database session used for logging and LLM workflow calls.
+        - run (CrawlRun): Current crawl run context.
+        - url (str): Page URL being analyzed.
+        - surface (str): Extraction surface identifier.
+        - html (str): HTML content used to discover and validate candidates.
+        - xhr_payloads (list[dict]): XHR payloads available as additional evidence.
+        - additional_fields (list[str]): Extra field names to include in canonical extraction.
+        - adapter_records (list[dict]): Existing extracted records used as a preview baseline.
+        - candidate_values (dict): Candidate values already discovered for the page.
+        - source_trace (dict): Mutable trace object updated with suggestions and status.
+        - resolved_schema (ResolvedSchema): Canonical schema describing expected fields.
+    Returns:
+        - tuple[dict, list[dict[str, object]]]: Updated source trace and a list of LLM review payloads."""
     trace_candidates = source_trace.setdefault("candidates", {})
     llm_cleanup_suggestions: dict[str, dict] = source_trace.get("llm_cleanup_suggestions", {})
     llm_cleanup_status: dict[str, object] = dict(source_trace.get("llm_cleanup_status") or {})
@@ -2875,6 +3214,12 @@ async def _collect_detail_llm_suggestions(
 
 
 def _build_llm_candidate_evidence(trace_candidates: dict, preview_record: dict) -> dict[str, list[dict]]:
+    """Build a compact evidence mapping for LLM candidate fields from trace candidates and a preview record.
+    Parameters:
+        - trace_candidates (dict): Mapping of field names to candidate row lists, used as evidence sources.
+        - preview_record (dict): Mapping of field names to the current extracted values.
+    Returns:
+        - dict[str, list[dict]]: A mapping of field names to deduplicated evidence rows, including the current output and up to 8 candidate entries per field."""
     evidence: dict[str, list[dict]] = {}
     field_names = sorted({
         str(field_name or "").strip()
@@ -2924,6 +3269,14 @@ def _build_llm_discovered_sources(
     xhr_payloads: list[dict],
     target_fields: list[str] | None = None,
 ) -> dict[str, object]:
+    """Build a compact LLM-ready summary of discovered page sources and semantic extraction data.
+    Parameters:
+        - source_trace (dict): Trace data containing semantic extraction details.
+        - html (str): The page HTML used to parse embedded and structured sources.
+        - xhr_payloads (list[dict]): A list of network payloads to include in the summary.
+        - target_fields (list[str] | None): Optional field names used to filter semantic data.
+    Returns:
+        - dict[str, object]: A compact dictionary containing semantic and manifest snapshots of discovered sources."""
     page_sources = parse_page_sources(html)
     semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
     relevant_fields = {field for field in (target_fields or []) if field}
@@ -2975,6 +3328,15 @@ def _snapshot_for_llm(
     max_items: int = 150,
     text_limit: int = 2000,
 ) -> object:
+    """Create a lightweight, LLM-friendly snapshot of a nested value by removing empty content and limiting depth, size, and text length.
+    Parameters:
+        - value (object): The input value to normalize and snapshot.
+        - depth (int): Current recursion depth used internally to enforce the maximum nesting limit.
+        - max_depth (int): Maximum recursion depth before values are converted to cleaned text.
+        - max_items (int): Maximum number of dictionary items or list elements to inspect.
+        - text_limit (int): Maximum length of text returned for non-container values.
+    Returns:
+        - object: A simplified snapshot of the input value, or None if the value is empty or contains no meaningful content."""
     if value in (None, "", [], {}):
         return None
     if depth >= max_depth:
@@ -3002,6 +3364,12 @@ def _snapshot_for_llm(
 
 
 def _clean_candidate_text(value: object, *, limit: int | None = LLM_CLEAN_CANDIDATE_TEXT_LIMIT) -> str:
+    """Clean and normalize a candidate value into a compact text string.
+    Parameters:
+        - value (object): Input value to clean; may be a string, list, dict, or other object.
+        - limit (int | None): Maximum output length; if exceeded, the text is truncated with an ellipsis.
+    Returns:
+        - str: Cleaned, flattened text representation of the input value, or an empty string for blank input."""
     if value in (None, "", [], {}):
         return ""
     if isinstance(value, list):
@@ -3027,6 +3395,13 @@ def _clean_candidate_text(value: object, *, limit: int | None = LLM_CLEAN_CANDID
 
 
 def _should_surface_discovered_field(field_name: object, value: object, *, source: str = "") -> bool:
+    """Determine whether a discovered field/value pair should be surfaced.
+    Parameters:
+        - field_name (object): Candidate field name to evaluate.
+        - value (object): Candidate field value to evaluate.
+        - source (str): Optional source label used to filter noisy review-related fields.
+    Returns:
+        - bool: True if the field/value pair passes all filtering and quality checks; otherwise False."""
     normalized_field = _normalize_committed_field_name(field_name)
     if not normalized_field or normalized_field.startswith("_"):
         return False
@@ -3053,6 +3428,12 @@ def _should_surface_discovered_field(field_name: object, value: object, *, sourc
 
 
 def _normalize_detail_candidate_values(candidate_values: dict[str, object], *, url: str) -> dict[str, object]:
+    """Normalize candidate detail field values and remove empty or duplicate image entries.
+    Parameters:
+        - candidate_values (dict[str, object]): Raw field values to normalize.
+        - url (str): Base URL used when coercing field values.
+    Returns:
+        - dict[str, object]: Normalized field values with empty values removed and image fields deduplicated."""
     normalized: dict[str, object] = {}
     for field_name, value in candidate_values.items():
         coerced = coerce_field_candidate_value(field_name, value, base_url=url)
@@ -3084,6 +3465,11 @@ def _normalize_detail_candidate_values(candidate_values: dict[str, object], *, u
 
 
 def _normalize_review_value(value: object) -> object | None:
+    """Normalize a review value by recursively cleaning strings, lists, and dictionaries.
+    Parameters:
+        - value (object): The input value to normalize.
+    Returns:
+        - object | None: The normalized value, or None if the input is empty or cannot be cleaned."""
     if value in (None, "", [], {}):
         return None
     if isinstance(value, str):
@@ -3115,6 +3501,12 @@ def _normalize_review_value(value: object) -> object | None:
 
 
 def _review_values_equal(left: object, right: object) -> bool:
+    """Compare two review values for equality after normalization.
+    Parameters:
+        - left (object): The left-hand value to compare.
+        - right (object): The right-hand value to compare.
+    Returns:
+        - bool: True if the normalized values are considered equal; otherwise, False."""
     normalized_left = _normalize_review_value(left)
     normalized_right = _normalize_review_value(right)
     if normalized_left is None or normalized_right is None:
@@ -3128,6 +3520,13 @@ def _review_values_equal(left: object, right: object) -> bool:
 
 
 def _normalize_llm_cleanup_review(field_name: object, raw_review: object, *, current_value: object) -> dict | None:
+    """Normalize an LLM cleanup review into a compact pending-review record.
+    Parameters:
+        - field_name (object): Field name to normalize; ignored if empty or private-prefixed.
+        - raw_review (object): Raw suggested review value or a dict containing review metadata.
+        - current_value (object): Current field value used to suppress unchanged suggestions.
+    Returns:
+        - dict | None: Normalized review dict with field name, suggested value, source, and status, or None if invalid or unchanged."""
     normalized_field = str(field_name or "").strip()
     if not normalized_field or normalized_field.startswith("_"):
         return None
@@ -3164,6 +3563,11 @@ def _normalize_llm_cleanup_review(field_name: object, raw_review: object, *, cur
 
 
 def _split_llm_cleanup_payload(payload: object) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Split and normalize an LLM cleanup payload into canonical and review bucket data.
+    Parameters:
+        - payload (object): Input payload to parse and normalize.
+    Returns:
+        - tuple[dict[str, object], list[dict[str, object]]]: A tuple containing the canonical data dictionary and a merged list of review bucket entries."""
     if not isinstance(payload, dict):
         return {}, []
     if "canonical" not in payload and "review_bucket" not in payload:
@@ -3186,6 +3590,11 @@ def _split_llm_cleanup_payload(payload: object) -> tuple[dict[str, object], list
 
 
 def _normalize_llm_review_bucket_item(value: object) -> dict[str, object] | None:
+    """Normalize a raw LLM review bucket item into a compact dictionary.
+    Parameters:
+        - value (object): Input object expected to be a dictionary containing review item fields.
+    Returns:
+        - dict[str, object] | None: Normalized item with key, value, and source, or None if invalid."""
     if not isinstance(value, dict):
         return None
     key = str(value.get("key") or "").strip()
@@ -3214,6 +3623,15 @@ async def _refresh_schema_from_record(
     base_schema: ResolvedSchema,
     sample_record: dict | None,
 ) -> ResolvedSchema | None:
+    """Refresh and persist a learned schema from a sample record when supported.
+    Parameters:
+        - session (AsyncSession): Active async database session used to persist the updated schema.
+        - surface (str): Identifier for the source surface used to determine record-learning support.
+        - url (str): Source URL used to infer the domain when needed.
+        - base_schema (ResolvedSchema): Existing resolved schema used as the baseline for learning.
+        - sample_record (dict | None): Sample record used to infer schema changes.
+    Returns:
+        - ResolvedSchema | None: The persisted learned schema if it changed, otherwise None."""
     if not isinstance(sample_record, dict) or not sample_record:
         return None
     if not _supports_record_learning(surface):
@@ -3241,6 +3659,13 @@ def _select_llm_review_candidates(
     preview_record: dict,
     target_fields: list[str],
 ) -> dict[str, list[dict]]:
+    """Select candidate evidence rows for LLM review based on field values and evidence diversity.
+    Parameters:
+        - candidate_evidence (dict[str, list[dict]]): Mapping of field names to candidate evidence rows.
+        - preview_record (dict): Record containing current field values to compare against candidates.
+        - target_fields (list[str]): Field names to evaluate for review selection.
+    Returns:
+        - dict[str, list[dict]]: Filtered mapping of fields to up to six candidate rows requiring LLM review."""
     selected: dict[str, list[dict]] = {}
     for field_name in target_fields:
         rows = candidate_evidence.get(field_name) or []
@@ -3322,6 +3747,15 @@ def _refresh_record_commit_metadata(
     value: object,
     source_label: str = "user_commit",
 ) -> None:
+    """Refresh commit metadata for a record after a field is user-committed.
+    Parameters:
+        - record (CrawlRecord): The record to update.
+        - run (CrawlRun): The current crawl run, used to determine canonical and requested fields.
+        - field_name (str): The field being committed.
+        - value (object): The committed value to store.
+        - source_label (str): Label identifying the source of the commit. Defaults to "user_commit".
+    Returns:
+        - None: This function updates the provided record in place."""
     source_trace = dict(record.source_trace or {})
     field_discovery = dict(source_trace.get("field_discovery") or {})
     existing_entry = dict(field_discovery.get(field_name) or {})
@@ -3371,6 +3805,12 @@ def _refresh_record_commit_metadata(
 
 
 async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
+    """Sleep asynchronously in small intervals while invoking a checkpoint callback between chunks.
+    Parameters:
+        - sleep_ms (int): Total sleep duration in milliseconds.
+        - checkpoint (callable): Async callable invoked before each sleep chunk and once after completion.
+    Returns:
+        - None: This function does not return a value."""
     remaining_ms = max(0, int(sleep_ms or 0))
     while remaining_ms > 0:
         await checkpoint()
@@ -3385,6 +3825,13 @@ async def _handle_run_control_signal(
     run: CrawlRun,
     request: str,
 ) -> None:
+    """Handle an in-flight control request for a crawl run and persist the resulting state change.
+    Parameters:
+        - session (AsyncSession): Database session used to refresh, log, and commit updates.
+        - run (CrawlRun): The crawl run being updated.
+        - request (str): The control request to apply, such as pause or kill.
+    Returns:
+        - None: This function does not return a value."""
     await session.refresh(run)
     if request == CONTROL_REQUEST_PAUSE:
         if normalize_status(run.status) != CrawlStatus.PAUSED:

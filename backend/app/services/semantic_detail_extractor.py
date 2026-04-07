@@ -99,6 +99,15 @@ def resolve_requested_field_values(
     specifications: dict[str, str] | None = None,
     promoted_fields: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    """Resolve missing requested field values from promoted fields, sections, and specifications.
+    Parameters:
+        - requested_fields (list[str] | None): Fields to resolve.
+        - existing_record (dict[str, Any] | None): Current record used to skip fields that already have values.
+        - sections (dict[str, str] | None): Section-based values to search first.
+        - specifications (dict[str, str] | None): Specification-based values to search next.
+        - promoted_fields (dict[str, str] | None): Promoted values used as a fallback source.
+    Returns:
+        - dict[str, str]: A mapping of normalized field names to resolved values."""
     if not requested_fields:
         return {}
 
@@ -136,6 +145,13 @@ def _promote_semantic_fields(
     specifications: dict[str, str],
     requested_fields: list[str],
 ) -> dict[str, str]:
+    """Promote requested semantic fields from sections or specifications.
+    Parameters:
+        - sections (dict[str, str]): Mapping of section names to their values.
+        - specifications (dict[str, str]): Mapping of specification names to their values.
+        - requested_fields (list[str]): List of field names to normalize and look up.
+    Returns:
+        - dict[str, str]: Dictionary of promoted normalized field names and their found values."""
     promoted: dict[str, str] = {}
     for field in requested_fields:
         normalized = normalize_requested_field(field)
@@ -157,6 +173,14 @@ def _build_coverage(
     specifications: dict[str, str],
     promoted_fields: dict[str, str],
 ) -> dict[str, int]:
+    """Calculate coverage counts for requested fields against available data sources.
+    Parameters:
+        - requested_fields (list[str]): Fields to evaluate for coverage.
+        - sections (dict[str, str]): Section data used to look up semantic values.
+        - specifications (dict[str, str]): Specification data used to look up semantic values.
+        - promoted_fields (dict[str, str]): Pre-promoted fields considered as found when non-empty.
+    Returns:
+        - dict[str, int]: A dictionary containing the number of requested fields and the number found."""
     if not requested_fields:
         return {"requested": 0, "found": 0}
     normalized_fields = [normalize_requested_field(field) for field in requested_fields]
@@ -178,6 +202,12 @@ def _build_semantic_aggregates(
     sections: dict[str, str],
     specifications: dict[str, str],
 ) -> dict[str, str]:
+    """Build semantic aggregate strings from section and specification mappings.
+    Parameters:
+        - sections (dict[str, str]): Mapping of section names to section text used to collect feature values.
+        - specifications (dict[str, str]): Mapping of specification labels to values used to build aggregate text.
+    Returns:
+        - dict[str, str]: Dictionary of aggregated semantic strings, including specifications, dimensions, and features when available."""
     aggregates: dict[str, str] = {}
     spec_lines = [f"{label}: {value}" for label, value in specifications.items() if label and value]
     if spec_lines:
@@ -196,6 +226,11 @@ def _build_semantic_aggregates(
 
 
 def _collect_feature_values(sections: dict[str, str]) -> list[str]:
+    """Collect feature-like text values from section mappings, using explicit feature aliases first and falling back to inferred candidates.
+    Parameters:
+        - sections (dict[str, str]): Mapping of section names to their text content.
+    Returns:
+        - list[str]: A list of feature values extracted or inferred from the provided sections."""
     feature_values = [
         body
         for key, body in sections.items()
@@ -224,6 +259,11 @@ def _collect_feature_values(sections: dict[str, str]) -> list[str]:
 
 
 def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
+    """Extract section headings and their associated text content from a BeautifulSoup document.
+    Parameters:
+        - soup (BeautifulSoup): Parsed HTML document to inspect for section-like elements.
+    Returns:
+        - dict[str, str]: Mapping of normalized section labels to extracted section text."""
     sections: dict[str, str] = {}
 
     selectors = [
@@ -297,6 +337,13 @@ def _strip_non_content_nodes(soup: BeautifulSoup) -> None:
 
 
 def _should_skip_section(key: str, label: str, body: str) -> bool:
+    """Determine whether a section should be skipped based on its key, label, and body.
+    Parameters:
+        - key (str): Section key used to check skip prefixes.
+        - label (str): Section label used to check for skip tokens.
+        - body (str): Section body used to check for empty or skip-worthy content.
+    Returns:
+        - bool: True if the section should be skipped; otherwise, False."""
     normalized_key = normalize_requested_field(key)
     lowered_label = _clean_text(label).lower()
     lowered_body = _clean_text(body).lower()
@@ -317,6 +364,12 @@ def _should_skip_section(key: str, label: str, body: str) -> bool:
 
 
 def _extract_specifications(soup: BeautifulSoup, table_groups: list[dict]) -> dict[str, str]:
+    """Extract specifications from a BeautifulSoup document and table-derived groups.
+    Parameters:
+        - soup (BeautifulSoup): Parsed HTML document to scan for specification data.
+        - table_groups (list[dict]): List of table group dictionaries containing row label/value pairs.
+    Returns:
+        - dict[str, str]: Mapping of cleaned specification labels to their extracted values."""
     specs: dict[str, str] = {}
 
     for dl in soup.find_all("dl"):
@@ -357,6 +410,11 @@ def _extract_specifications(soup: BeautifulSoup, table_groups: list[dict]) -> di
 
 
 def _extract_table_groups(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    """Extract structured row groups from HTML tables in a BeautifulSoup document.
+    Parameters:
+        - soup (BeautifulSoup): Parsed HTML document to scan for table elements.
+    Returns:
+        - list[dict[str, Any]]: A list of table group dictionaries containing table metadata and extracted row data."""
     groups: list[dict[str, Any]] = []
     for table_index, table in enumerate(soup.find_all("table"), start=1):
         if _is_ignored_section_node(table):
@@ -408,6 +466,11 @@ def _extract_table_groups(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
 
 def _extract_inline_spec_pair(node: Tag) -> tuple[str, str] | None:
+    """Extract a short inline specification label-value pair from an HTML tag.
+    Parameters:
+        - node (Tag): HTML element to inspect for an inline spec pair.
+    Returns:
+        - tuple[str, str] | None: A (label, value) pair if valid, otherwise None."""
     text = _clean_text(node.get_text(" ", strip=True))
     if not text or len(text) < 4:
         return None
@@ -444,6 +507,13 @@ _DAY_TIME_KEY_RE = re.compile(
 
 
 def _should_keep_specification(key: str, value: str, *, preserve_visible: bool = False) -> bool:
+    """Determine whether a specification key-value pair should be kept.
+    Parameters:
+        - key (str): The specification label to evaluate.
+        - value (str): The associated specification value.
+        - preserve_visible (bool): Whether to keep entries with an empty value if they are visible.
+    Returns:
+        - bool: True if the specification should be retained; otherwise, False."""
     lowered_key = key.lower()
     lowered_value = value.lower()
     if not lowered_key or (not value and not preserve_visible):
@@ -471,6 +541,11 @@ def _should_keep_specification(key: str, value: str, *, preserve_visible: bool =
 
 
 def _table_cell_payload(cell: Tag) -> dict[str, str | None]:
+    """Extract the cleaned text and optional first hyperlink from an HTML table cell.
+    Parameters:
+        - cell (Tag): HTML table cell element to process.
+    Returns:
+        - dict[str, str | None]: Dictionary containing the cell text and href, each as a string or None when unavailable."""
     text = _clean_text(cell.get_text(" ", strip=True))
     link = cell.find("a", href=True)
     href = ""
@@ -483,6 +558,11 @@ def _table_cell_payload(cell: Tag) -> dict[str, str | None]:
 
 
 def _nearest_table_heading(table: Tag) -> str:
+    """Find the nearest preceding heading text for an HTML table.
+    Parameters:
+        - table (Tag): The table element to inspect.
+    Returns:
+        - str: The closest heading text found before the table, or an empty string if none is found."""
     for sibling in table.previous_siblings:
         if not isinstance(sibling, Tag):
             continue
@@ -515,6 +595,11 @@ def _heading_text_from_node(node: Tag) -> str:
 
 
 def _collect_section_body(heading: Tag) -> str:
+    """Collect the text content of the section associated with a heading element.
+    Parameters:
+        - heading (Tag): The heading tag whose section body should be collected.
+    Returns:
+        - str: The concatenated section text, or an empty string if no body text is found."""
     parts: list[str] = []
     heading_level = _heading_level(heading.name or "")
     parent = heading.parent
@@ -536,6 +621,12 @@ def _collect_section_body(heading: Tag) -> str:
 
 
 def _extract_section_content(node: Tag, soup: BeautifulSoup) -> str:
+    """Extract section text content from a heading- or control-related HTML node.
+    Parameters:
+        - node (Tag): The HTML element that identifies the section, such as a heading, summary, or control node.
+        - soup (BeautifulSoup): The parsed HTML document used to locate referenced or related content.
+    Returns:
+        - str: The extracted section text, or an empty string if no usable content is found."""
     target_id = _clean_text(node.get("aria-controls"))
     if target_id:
         target = soup.find(id=target_id)
@@ -581,6 +672,11 @@ def _heading_level(tag_name: str) -> int:
 
 
 def _find_wrapped_section_content(node: Tag) -> str:
+    """Extract text content from a wrapped section within a DOM node.
+    Parameters:
+        - node (Tag): The HTML node to search for wrapped section content.
+    Returns:
+        - str: The extracted section text, or an empty string if no suitable content is found."""
     label = _label_text(node)
     container = node
     steps = 0
@@ -605,6 +701,11 @@ def _find_wrapped_section_content(node: Tag) -> str:
 
 
 def _collect_labeled_sibling_body(node: Tag) -> str:
+    """Collects and concatenates text from labeled sibling body elements following a node.
+    Parameters:
+        - node (Tag): The starting HTML tag whose following sibling content will be collected.
+    Returns:
+        - str: Cleaned text gathered from relevant sibling elements up to a heading, summary, major section break, or step limit."""
     parts: list[str] = []
     sibling = node.find_next_sibling()
     steps = 0
@@ -631,6 +732,11 @@ def _section_text(node: Tag, *, label: str) -> str:
 
 
 def _is_prominent_section_label_node(node: Tag) -> bool:
+    """Determine whether a node is a prominent section label.
+    Parameters:
+        - node (Tag): BeautifulSoup tag to evaluate as a possible section label.
+    Returns:
+        - bool: True if the node appears to be a prominent section label, otherwise False."""
     text = _clean_text(node.get_text(" ", strip=True))
     lowered = text.lower()
     if not text or len(text) > 80:
@@ -655,6 +761,12 @@ def _is_major_section_break(node: Tag) -> bool:
 
 
 def _lookup_semantic_value(field: str, source: dict[str, str]) -> str | None:
+    """Lookup a semantic value in a source dictionary using a field name and its aliases.
+    Parameters:
+        - field (str): The requested field name to look up.
+        - source (dict[str, str]): Dictionary containing potential field values and aliases.
+    Returns:
+        - str | None: The matching value if found; otherwise None."""
     if not source:
         return None
     normalized = normalize_requested_field(field)
@@ -698,6 +810,11 @@ def _label_text(node: Tag) -> str:
 
 
 def _is_section_label(text: str) -> bool:
+    """Determine whether a string is a valid section label candidate.
+    Parameters:
+        - text (str): Input text to evaluate as a possible section label.
+    Returns:
+        - bool: True if the text is non-empty, reasonably short, contains at least one letter, and does not match any skip patterns; otherwise False."""
     lowered = text.lower()
     if not text or len(text) > 80:
         return False
@@ -709,6 +826,11 @@ def _is_section_label(text: str) -> bool:
 
 
 def _is_ignored_section_node(node: Tag) -> bool:
+    """Determine whether a node belongs to an ignored section by checking its ancestors.
+    Parameters:
+        - node (Tag): The starting HTML node to inspect.
+    Returns:
+        - bool: True if the node is within a section that should be ignored, otherwise False."""
     current: Tag | None = node
     steps = 0
     while isinstance(current, Tag) and steps < 8:

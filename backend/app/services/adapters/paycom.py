@@ -19,10 +19,28 @@ _JOB_ID_RE = re.compile(r"/jobs/(\d+)", re.IGNORECASE)
 
 
 class PaycomAdapter(BaseAdapter):
+    """
+    Paycom ATS adapter for detecting Paycom job pages and extracting job listings or detailed job records from embedded configuration and public API endpoints.
+    Parameters:
+        - url (str): Page URL used to identify the page, build request headers, and derive job detail identifiers.
+        - html (str): Page HTML used to detect Paycom content and extract embedded host/API configuration.
+        - surface (str): Surface/context string used to decide whether to fetch listing or detail data.
+    Processing Logic:
+        - Uses embedded page configuration to obtain the ATS service base URL, auth token, and locale before making requests.
+        - Fetches paginated job previews for listing pages and deduplicates results by job ID.
+        - Fetches a single job posting for detail pages when a job ID can be extracted from the URL.
+        - Normalizes returned records by cleaning text fields and removing empty values.
+    """
     name = "paycom"
     domains = ["paycomonline.net"]
 
     async def can_handle(self, url: str, html: str) -> bool:
+        """Determine whether the given URL or HTML content matches a Paycom-related page.
+        Parameters:
+            - url (str): The page URL to inspect.
+            - html (str): The page HTML content to inspect.
+        Returns:
+            - bool: True if the URL or HTML indicates a Paycom-related page; otherwise, False."""
         lowered_url = str(url or "").lower()
         lowered_html = str(html or "").lower()
         return (
@@ -48,6 +66,15 @@ class PaycomAdapter(BaseAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
+        """Try a public endpoint to fetch job listing or detail records.
+        Parameters:
+            - self (object): Instance providing helper methods and host configuration extraction.
+            - url (str): Page URL used to build request headers and identify job details.
+            - html (str): HTML content used to extract service configuration.
+            - surface (str): Surface type used to determine whether to fetch listing or detail data.
+            - proxy (str | None): Optional proxy URL for HTTP and HTTPS requests.
+        Returns:
+            - list[dict]: A list of fetched records, or an empty list if the endpoint cannot be used or no data is found."""
         if curl_requests is None or "job" not in str(surface or "").lower():
             return []
         host_config = self._extract_host_config(html)
@@ -103,6 +130,15 @@ class PaycomAdapter(BaseAdapter):
         page_url: str,
         locale: str,
     ) -> list[dict]:
+        """Fetches paginated job posting previews from the ATS search API and returns unique normalized records.
+        Parameters:
+            - self (object): Instance used to normalize preview data.
+            - service_base (str): Base URL of the service hosting the API.
+            - request_kwargs (dict): Additional keyword arguments passed to the HTTP request.
+            - page_url (str): Source page URL used for preview normalization.
+            - locale (str): Locale associated with the request.
+        Returns:
+            - list[dict]: A list of unique normalized job preview records."""
         endpoint = f"{service_base}/api/ats/job-posting-previews/search"
         records: list[dict] = []
         seen_ids: set[str] = set()
@@ -165,6 +201,15 @@ class PaycomAdapter(BaseAdapter):
         locale: str,
         job_id: str,
     ) -> dict | None:
+        """Fetch detailed job posting data from the ATS API.
+        Parameters:
+            - service_base (str): Base URL of the ATS service.
+            - request_kwargs (dict): Keyword arguments passed to the HTTP request.
+            - page_url (str): URL of the job posting page.
+            - locale (str): Locale for the request.
+            - job_id (str): Job posting identifier.
+        Returns:
+            - dict | None: A cleaned job posting record, or None if the request fails or the data is invalid."""
         endpoint = f"{service_base}/api/ats/job-postings/{job_id}"
         try:
             response = await asyncio.to_thread(curl_requests.get, endpoint, **request_kwargs)
@@ -192,6 +237,11 @@ class PaycomAdapter(BaseAdapter):
         return {key: value for key, value in record.items() if value not in (None, "", [], {})}
 
     def _extract_host_config(self, html: str) -> dict[str, str]:
+        """Extract host configuration values from HTML by parsing embedded JSON payloads.
+        Parameters:
+            - html (str): HTML content to search for the configuration payload.
+        Returns:
+            - dict[str, str]: A dictionary containing the extracted "auth_token", "service_base", and "locale" values, or an empty dictionary if parsing fails or no config is found."""
         match = _CONFIG_RE.search(str(html or ""))
         if not match:
             return {}
@@ -211,6 +261,12 @@ class PaycomAdapter(BaseAdapter):
         }
 
     def _normalize_preview(self, preview: object, *, page_url: str) -> dict | None:
+        """Normalize a job preview object into a cleaned job record dictionary.
+        Parameters:
+            - preview (object): Raw preview data to normalize; must be a dictionary with job details.
+            - page_url (str): Base page URL used to build job and apply links.
+        Returns:
+            - dict | None: A normalized job record with empty values removed, or None if the input is invalid or required fields are missing."""
         if not isinstance(preview, dict):
             return None
         title = self._clean_text(preview.get("jobTitle"))

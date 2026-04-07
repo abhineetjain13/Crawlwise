@@ -5,6 +5,14 @@ from enum import StrEnum
 
 
 class CrawlStatus(StrEnum):
+    """Enum representing the lifecycle and terminal states of a crawl job.
+    Parameters:
+        - None: This enum does not accept initialization parameters; it defines fixed string status values.
+    Processing Logic:
+        - Provides a standardized set of crawl states for tracking job progress.
+        - Includes both active states and terminal failure states.
+        - Uses string-backed values for easy serialization and comparison.
+    """
     PENDING = "pending"
     RUNNING = "running"
     PAUSED = "paused"
@@ -60,6 +68,12 @@ def normalize_status(value: str | CrawlStatus) -> CrawlStatus:
 
 
 def transition_status(current: str | CrawlStatus, target: str | CrawlStatus) -> CrawlStatus:
+    """Transition a crawl status from the current state to a valid target state.
+    Parameters:
+        - current (str | CrawlStatus): The current crawl status.
+        - target (str | CrawlStatus): The desired target crawl status.
+    Returns:
+        - CrawlStatus: The normalized target status after validating the transition."""
     current_status = normalize_status(current)
     target_status = normalize_status(target)
     if current_status == target_status:

@@ -20,6 +20,11 @@ class _KnowledgeBaseCache:
 
 
 def _load_prompt_files() -> dict[str, str]:
+    """Load all prompt files from the prompts directory into a dictionary.
+    Parameters:
+        - None
+    Returns:
+        - dict[str, str]: A mapping of relative file paths to their UTF-8 file contents; returns an empty dictionary if the prompts directory does not exist."""
     if not PROMPTS_DIR.exists():
         return {}
     prompt_files: dict[str, str] = {}
@@ -44,6 +49,12 @@ def get_canonical_fields(surface: str) -> list[str]:
 
 
 async def save_canonical_fields(surface: str, fields: list[str]) -> list[str]:
+    """Save and merge canonical field names for a given surface.
+    Parameters:
+        - surface (str): The surface name used as the cache key.
+        - fields (list[str]): Field names to merge into the cached canonical schema.
+    Returns:
+        - list[str]: The merged list of unique, normalized field names in insertion order."""
     async with _CACHE_LOCK:
         existing = list(_CACHE.canonical_schemas.get(surface, []))
         merged: list[str] = []
@@ -85,6 +96,13 @@ def get_selector_defaults(domain: str, field_name: str) -> list[dict]:
 
 
 async def save_selector_defaults(domain: str, field_name: str, values: list[dict]) -> None:
+    """Save or remove default selector rows for a domain and field.
+    Parameters:
+        - domain (str): The domain whose selector defaults should be updated.
+        - field_name (str): The selector field to store defaults under.
+        - values (list[dict]): Selector rows to normalize and persist; empty or invalid rows are removed.
+    Returns:
+        - None: This function updates the in-memory cache and returns nothing."""
     async with _CACHE_LOCK:
         next_defaults = deepcopy(_CACHE.selector_defaults)
         domain_rows = next_defaults.setdefault(domain, {})
@@ -99,6 +117,12 @@ async def save_selector_defaults(domain: str, field_name: str, values: list[dict
 
 
 async def save_domain_selector_defaults(domain: str, values_by_field: dict[str, list[dict]]) -> None:
+    """Save normalized selector defaults for a domain in the shared cache.
+    Parameters:
+        - domain (str): Domain key whose selector defaults should be stored.
+        - values_by_field (dict[str, list[dict]]): Mapping of field names to raw selector row values.
+    Returns:
+        - None: This function does not return a value."""
     async with _CACHE_LOCK:
         next_defaults = deepcopy(_CACHE.selector_defaults)
         normalized_domain_rows: dict[str, list[dict]] = {}
@@ -138,6 +162,11 @@ async def reset_learned_state() -> None:
 
 
 def _normalize_selector_row(value: object) -> dict | None:
+    """Normalize a selector row dictionary into a standard selector mapping.
+    Parameters:
+        - value (object): Input value expected to be a dictionary containing selector fields.
+    Returns:
+        - dict | None: A normalized selector dictionary with xpath, css_selector, regex, status, sample_value, and source, or None if no valid selector is present."""
     if not isinstance(value, dict):
         return None
     css_selector = str(value.get("css_selector") or "").strip() or None

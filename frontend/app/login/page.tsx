@@ -7,6 +7,14 @@ import { FormEvent, useState } from "react";
 import { Button, Field, Input, Subtitle, Title } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 
+/**
+ * Renders the sign-in page and handles user login submission.
+ * @example
+ * LoginPage()
+ * React element for the login page
+ * @param {void} -
+ * @returns {JSX.Element} The login page UI.
+ **/
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");

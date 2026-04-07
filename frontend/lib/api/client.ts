@@ -25,6 +25,13 @@ export class ApiError extends Error {
   }
 }
 
+/**
+* Gets the base URL for the API, using a configured environment value, the current browser origin in development, or a localhost fallback.
+* @example
+* getApiBaseUrl()
+* "http://127.0.0.1:8000"
+* @returns {string} The resolved API base URL.
+**/
 export function getApiBaseUrl() {
   if (resolvedBaseUrl) {
     return resolvedBaseUrl;
@@ -49,6 +56,13 @@ export function getApiBaseUrl() {
   return resolvedBaseUrl;
 }
 
+/**
+* Returns a prioritized list of possible API base URLs based on configuration and runtime environment.
+* @example
+* getApiBaseUrlCandidates()
+* ["http://127.0.0.1:8000", "http://localhost:8000"]
+* @returns {string[]} Array of candidate API base URLs in fallback order.
+**/
 function getApiBaseUrlCandidates() {
   const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configured) {
@@ -66,6 +80,15 @@ function getApiBaseUrlCandidates() {
   return Array.from(new Set(candidates.map(normalizeBaseUrl)));
 }
 
+/**
+ * Sends a request to the backend API with retry and base URL fallback support.
+ * @example
+ * request<User>("/users/me", { method: "GET" })
+ * { id: 1, name: "Alice" }
+ * @param {string} path - API path to request.
+ * @param {RequestInit} [init] - Optional fetch configuration for the request.
+ * @returns {Promise<T>} A promise that resolves with the parsed JSON response, or `undefined` for no-content responses.
+ **/
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData;
   const maxAttempts = 3;
@@ -142,6 +165,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   throw lastError ?? new ApiError("Request failed", 500, "");
 }
 
+/**
+ * Requests text content from the API with retry and failover across candidate base URLs.
+ * @example
+ * requestText("/api/health")
+ * "OK"
+ * @param {string} path - Request path to append to the selected API base URL.
+ * @param {RequestInit} [init] - Optional fetch initialization options.
+ * @returns {Promise<string>} Resolves with the response text when the request succeeds.
+ */
 async function requestText(path: string, init?: RequestInit): Promise<string> {
   const isFormData = init?.body instanceof FormData;
   const maxAttempts = 3;
@@ -244,6 +276,14 @@ export const apiClient = {
   delete: <T,>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
+/**
+ * Reads and returns a human-readable error message from an HTTP response body.
+ * @example
+ * readErrorBody(response)
+ * "Invalid request"
+ * @param {Response} response - The fetch Response object to extract the error body from.
+ * @returns {Promise<string>} A promise that resolves to the extracted error text, JSON string, or the response status text.
+ */
 async function readErrorBody(response: Response) {
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {

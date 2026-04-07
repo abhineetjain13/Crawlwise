@@ -13,6 +13,11 @@ class BrowserRuntimeOptions:
 
 
 def resolve_browser_runtime_options(acquisition_profile: dict[str, object] | None) -> BrowserRuntimeOptions:
+    """Resolve browser runtime options from an acquisition profile.
+    Parameters:
+        - acquisition_profile (dict[str, object] | None): Optional profile containing browser/runtime flags such as anti-bot and stealth preferences.
+    Returns:
+        - BrowserRuntimeOptions: Configured runtime options derived from the provided profile."""
     profile = acquisition_profile if isinstance(acquisition_profile, dict) else {}
     anti_bot_enabled = bool(profile.get("anti_bot_enabled"))
     return BrowserRuntimeOptions(

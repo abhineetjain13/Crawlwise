@@ -25,10 +25,28 @@ logger = logging.getLogger(__name__)
 
 
 class ICIMSAdapter(BaseAdapter):
+    """
+    ICIMSAdapter extracts job listings and job detail records from iCIMS career pages, including inline HTML, embedded iframes, and AJAX-loaded listings.
+    Parameters:
+        - url (str): Page URL used to detect page type and resolve relative links.
+        - html (str): HTML content to inspect and parse.
+        - surface (str): Page-type hint used to route extraction as detail or listing.
+    Processing Logic:
+        - Detects iCIMS pages using domain markers, page structure, or AJAX job listing paths.
+        - Resolves embedded board/iframe content before extracting detail or listing data.
+        - Falls back to paginated AJAX requests when listing records are not present in the initial HTML.
+        - Normalizes job URLs and maps common header metadata into standard record fields.
+    """
     name = "icims"
     domains = ["icims.com"]
 
     async def can_handle(self, url: str, html: str) -> bool:
+        """Determine whether the handler can process the given URL or HTML content.
+        Parameters:
+            - url (str): The URL to inspect for supported patterns or domains.
+            - html (str): The HTML content to inspect for iCIMS-specific markers.
+        Returns:
+            - bool: True if the URL or HTML matches supported criteria; otherwise False."""
         lowered_url = str(url or "").lower()
         lowered_html = str(html or "").lower()
         return (
@@ -40,6 +58,13 @@ class ICIMSAdapter(BaseAdapter):
         )
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        """Extract records from either a detail page or a listing page.
+        Parameters:
+            - url (str): The page URL used to determine page type and to resolve embedded content.
+            - html (str): The HTML content to parse and extract data from.
+            - surface (str): A hint indicating the page type; if it contains "detail", the page is treated as a detail page.
+        Returns:
+            - AdapterResult: An object containing the extracted records, source type, and adapter name."""
         if "detail" in str(surface or "").lower() or self._looks_like_detail_url(url):
             html = await self._follow_embedded_content_url(url, html)
             record = self._extract_detail(url, html)
@@ -57,6 +82,13 @@ class ICIMSAdapter(BaseAdapter):
         )
 
     async def _extract_listing(self, url: str, html: str) -> list[dict]:
+        """Extract listing records from inline HTML or paginated AJAX content.
+        Parameters:
+            - self (object): Instance used to access helper methods and fetch content.
+            - url (str): The listing page URL.
+            - html (str): The HTML content to parse.
+        Returns:
+            - list[dict]: A list of extracted listing records, or an empty list if none are found."""
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
@@ -101,6 +133,12 @@ class ICIMSAdapter(BaseAdapter):
         return records
 
     def _discover_ajax_endpoint(self, url: str, html: str) -> str | None:
+        """Discover the AJAX job listing endpoint from a page URL and HTML content.
+        Parameters:
+            - url (str): The page URL used to build an absolute endpoint when needed.
+            - html (str): The HTML content to search for the AJAX job listing path.
+        Returns:
+            - str | None: The discovered AJAX endpoint as an absolute URL, or None if not found."""
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
         match = re.search(r"(/ajax/joblisting/\?[^\"']+)", html, flags=re.IGNORECASE)
@@ -112,6 +150,12 @@ class ICIMSAdapter(BaseAdapter):
         return None
 
     def _discover_embedded_board_url(self, url: str, html: str) -> str | None:
+        """Discover an embedded iCIMS board URL from HTML content.
+        Parameters:
+            - url (str): Base URL used to resolve relative iframe sources.
+            - html (str): HTML content to search for an embedded job board iframe.
+        Returns:
+            - str | None: The resolved iframe URL if found; otherwise None."""
         soup = BeautifulSoup(html, "html.parser")
         iframe = soup.select_one("iframe[src*='icims.com/jobs/search'], iframe[src*='in_iframe=1']")
         if iframe is None:
@@ -122,6 +166,12 @@ class ICIMSAdapter(BaseAdapter):
         return urljoin(url, src)
 
     async def _follow_embedded_content_url(self, url: str, html: str) -> str:
+        """Follow an embedded iframe URL and fetch its content when present.
+        Parameters:
+            - url (str): The base URL used to resolve relative iframe sources.
+            - html (str): The HTML content to inspect for an embedded iframe.
+        Returns:
+            - str: The fetched embedded HTML content if an iframe source is found; otherwise, the original HTML."""
         soup = BeautifulSoup(html, "html.parser")
         iframe = soup.select_one("iframe[src*='in_iframe=1'], iframe[src*='icims.com/jobs/']")
         if iframe is None:
@@ -133,6 +183,12 @@ class ICIMSAdapter(BaseAdapter):
         return await self._fetch_embedded_content(url=embedded_url, fallback_html=html)
 
     async def _fetch_embedded_content(self, *, url: str, fallback_html: str) -> str:
+        """Fetch embedded content from a URL, falling back to provided HTML on failure.
+        Parameters:
+            - url (str): The URL to fetch embedded content from.
+            - fallback_html (str): HTML content to return if the fetch fails or yields no valid response.
+        Returns:
+            - str: The fetched response text if successful; otherwise, the fallback HTML."""
         if curl_requests is None:
             return fallback_html
         try:
@@ -156,6 +212,12 @@ class ICIMSAdapter(BaseAdapter):
         return page_url
 
     def _extract_from_listing_html(self, html: str, base_url: str) -> list[dict]:
+        """Extract job listing records from HTML and deduplicate them by URL.
+        Parameters:
+            - html (str): Raw HTML content containing job listings.
+            - base_url (str): Base URL used to resolve relative links.
+        Returns:
+            - list[dict]: A list of unique job listing records extracted from the HTML."""
         soup = BeautifulSoup(html, "html.parser")
         rows = soup.select(
             ".iCIMS_JobsTable > .row, .iCIMS_JobsTable tr, .iCIMS_Job, [class*='job-card'], [class*='job-listing'], [class*='search-result'], .listitem"
@@ -174,6 +236,12 @@ class ICIMSAdapter(BaseAdapter):
         return records
 
     def _parse_ajax_rows(self, html_fragment: str, base_url: str) -> list[dict]:
+        """Parse AJAX-loaded job listing rows from an HTML fragment.
+        Parameters:
+            - html_fragment (str): Raw HTML fragment containing listing rows.
+            - base_url (str): Base URL used to resolve relative links.
+        Returns:
+            - list[dict]: A list of extracted job records, or an empty list if none are found."""
         soup = BeautifulSoup(html_fragment, "html.parser")
         jobs = self._extract_from_listing_html(str(soup), base_url)
         if jobs:
@@ -194,6 +262,12 @@ class ICIMSAdapter(BaseAdapter):
         return fallback_jobs
 
     def _extract_row_from_soup(self, row: Tag, base_url: str) -> dict | None:
+        """Extract a job listing row from a BeautifulSoup Tag into a normalized record.
+        Parameters:
+            - row (Tag): The HTML row element containing job listing data.
+            - base_url (str): Base URL used to normalize relative job links.
+        Returns:
+            - dict | None: A dictionary with extracted job fields such as title, url, location, department, posted_date, and description, or None if the row is invalid or missing a usable title."""
         link = row.select_one("a[href]")
         if link is None:
             return None
@@ -231,6 +305,13 @@ class ICIMSAdapter(BaseAdapter):
         return record
 
     def _extract_row_from_html(self, row_html: str, base_url: str) -> dict | None:
+        """Extract a job listing record from an HTML row.
+        Parameters:
+            - self: The instance used to normalize URLs and clean text.
+            - row_html (str): HTML content for a single job row.
+            - base_url (str): Base URL used to resolve relative job links.
+        Returns:
+            - dict | None: A dictionary containing the job title, URL, and any found location, department, or posted date; returns None if no valid job link or title is found."""
         link_match = re.search(
             r'<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
             row_html,
@@ -260,6 +341,12 @@ class ICIMSAdapter(BaseAdapter):
         return record
 
     def _extract_detail(self, url: str, html: str) -> dict | None:
+        """Extract job detail information from HTML and return it as a dictionary.
+        Parameters:
+            - url (str): The job page URL.
+            - html (str): The HTML content of the job detail page.
+        Returns:
+            - dict | None: A dictionary containing extracted job details such as title, URL, location, and description, or None if no title is found."""
         soup = BeautifulSoup(html, "html.parser")
         title = soup.select_one("h1, .iCIMS_JobHeader h1, [class*='jobtitle'], [class*='JobTitle']")
         if title is None:
@@ -283,6 +370,11 @@ class ICIMSAdapter(BaseAdapter):
         return record
 
     def _extract_header_fields(self, node: BeautifulSoup | Tag) -> dict[str, str]:
+        """Extract header fields from a job posting node into a normalized dictionary.
+        Parameters:
+            - node (BeautifulSoup | Tag): The HTML node containing job header field elements.
+        Returns:
+            - dict[str, str]: A dictionary mapping normalized header labels to cleaned field values."""
         fields: dict[str, str] = {}
         for tag in node.select(".iCIMS_JobHeaderTag"):
             label = tag.select_one(".iCIMS_JobHeaderField, dt")
@@ -294,6 +386,12 @@ class ICIMSAdapter(BaseAdapter):
         return fields
 
     def _apply_metadata_fields(self, record: dict[str, str], fields: dict[str, str]) -> None:
+        """Apply selected metadata fields from a source mapping to a record.
+        Parameters:
+            - record (dict[str, str]): The target record to update with metadata values.
+            - fields (dict[str, str]): Source metadata fields used to populate missing record values.
+        Returns:
+            - None: Updates record in place and returns nothing."""
         metadata_mapping = {
             "campus_location": "location",
             "location": "location",

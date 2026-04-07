@@ -19,6 +19,12 @@ from app.services.schema_service import load_resolved_schema, persist_resolved_s
 
 
 async def build_review_payload(session: AsyncSession, run_id: int) -> dict | None:
+    """Build a review payload for a crawl run, including records and field mappings.
+    Parameters:
+        - session (AsyncSession): Database session used to load the crawl run and related records.
+        - run_id (int): Identifier of the crawl run to build the payload for.
+    Returns:
+        - dict | None: A payload containing the run, records, normalized fields, discovered fields, canonical fields, domain mapping, and suggested mapping, or None if the run is not found."""
     run = await session.get(CrawlRun, run_id)
     if run is None:
         return None
@@ -67,6 +73,13 @@ async def load_review_html(session: AsyncSession, run_id: int) -> str:
 
 
 async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dict]) -> dict:
+    """Persist a review’s selected field mappings and promote the resolved schema.
+    Parameters:
+        - session (AsyncSession): Database session used to load, update, and commit schema data.
+        - run (CrawlRun): The crawl run associated with the review and target domain.
+        - selections (list[dict]): Review rows containing source and output field mappings, with optional selection flags.
+    Returns:
+        - dict: A summary containing the run ID, domain, surface, selected fields, canonical fields, and saved field mapping."""
     selected_rows = [
         row
         for row in selections
@@ -150,6 +163,11 @@ def _load_review_html(records: list[CrawlRecord]) -> str:
 
 
 def _load_record_html(record: CrawlRecord) -> str:
+    """Load the raw HTML content for a crawl record from disk.
+    Parameters:
+        - record (CrawlRecord): The crawl record containing the path to the raw HTML file.
+    Returns:
+        - str: The file contents as a string, or an empty string if the path is missing, invalid, or unreadable."""
     raw_path = str(record.raw_html_path or "").strip()
     if not raw_path:
         return ""
@@ -163,6 +181,11 @@ def _load_record_html(record: CrawlRecord) -> str:
 
 
 def _serialize_record(record: CrawlRecord) -> dict:
+    """Serialize a CrawlRecord instance into a JSON-serializable dictionary.
+    Parameters:
+        - record (CrawlRecord): The crawl record to serialize.
+    Returns:
+        - dict: A dictionary containing the record's fields and safely converted nested data."""
     return {
         "id": record.id,
         "run_id": record.run_id,
@@ -185,6 +208,13 @@ def _review_bucket_rows(record: CrawlRecord) -> list[dict]:
 
 
 async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, mapping: dict[str, str]) -> None:
+    """Promote selected review bucket fields into a record's committed data and update review metadata.
+    Parameters:
+        - session (AsyncSession): Database session used to load and persist crawl records.
+        - run (CrawlRun): The crawl run whose records will be processed.
+        - mapping (dict[str, str]): Mapping of source field names in the review bucket to target committed field names.
+    Returns:
+        - None: This function updates records in place and returns nothing."""
     if not mapping:
         return
     normalized_mapping = {

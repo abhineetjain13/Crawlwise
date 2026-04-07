@@ -9,6 +9,18 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 
 
 class AmazonAdapter(BaseAdapter):
+    """
+    Amazon HTML adapter for extracting product and listing data from Amazon pages.
+    Parameters:
+        - url (str): Source page URL used to associate extracted data with the page.
+        - html (str): HTML content to parse for product or listing information.
+        - surface (str): Extraction mode indicating detail or listing page handling.
+    Processing Logic:
+        - Identifies Amazon pages by checking whether the URL contains a supported Amazon domain.
+        - On detail pages, extracts a single product record only when a title element is present.
+        - Parses rating and review counts from text using regular expressions.
+        - On listing pages, iterates through search result cards and normalizes relative product links to absolute Amazon URLs.
+    """
     name = "amazon"
     domains = ["amazon.com", "amazon.co.uk", "amazon.de", "amazon.fr",
                "amazon.it", "amazon.es", "amazon.ca", "amazon.in",
@@ -18,6 +30,13 @@ class AmazonAdapter(BaseAdapter):
         return any(d in url for d in self.domains)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        """Extract product records from Amazon detail or listing page HTML.
+        Parameters:
+            - url (str): The page URL used to associate extracted records with the source page.
+            - html (str): The HTML content to parse and extract records from.
+            - surface (str): The extraction mode, such as "ecommerce_detail" or "ecommerce_listing".
+        Returns:
+            - AdapterResult: An object containing the extracted records, source type, and adapter name."""
         soup = BeautifulSoup(html, "html.parser")
         records = []
         if surface in ("ecommerce_detail",):
@@ -33,6 +52,12 @@ class AmazonAdapter(BaseAdapter):
         )
 
     def _extract_detail(self, soup: BeautifulSoup, url: str) -> dict | None:
+        """Extract detailed product information from an Amazon product page HTML soup.
+        Parameters:
+            - soup (BeautifulSoup): Parsed HTML content of the product page.
+            - url (str): Source URL of the product page.
+        Returns:
+            - dict | None: A dictionary containing product details such as title, price, brand, rating, review count, image URL, description, availability, and URL; returns None if no title is found."""
         title_el = soup.select_one("#productTitle")
         price_el = soup.select_one(".a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice")
         brand_el = soup.select_one("#bylineInfo, .po-brand .a-span9 .a-size-base")
@@ -60,6 +85,12 @@ class AmazonAdapter(BaseAdapter):
         }
 
     def _extract_listing(self, soup: BeautifulSoup, url: str) -> list[dict]:
+        """Extract listing details from Amazon search result cards.
+        Parameters:
+            - soup (BeautifulSoup): Parsed HTML containing search result cards.
+            - url (str): Source page URL. 
+        Returns:
+            - list[dict]: A list of dictionaries with listing fields such as title, price, image_url, url, and rating."""
         records = []
         cards = soup.select("[data-component-type='s-search-result']")
         for card in cards:

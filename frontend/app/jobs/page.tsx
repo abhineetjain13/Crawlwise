@@ -11,6 +11,14 @@ import { cn } from "../../lib/utils";
 import { Badge, Button, Card } from "../../components/ui/primitives";
 import { PageHeader, SectionHeader } from "../../components/ui/patterns";
 
+/**
+ * Displays the live jobs dashboard with auto-refreshing worker status and controls to pause, resume, or hard kill active crawls.
+ * @example
+ * JobsPage()
+ * <JobsPage />
+ * @param {undefined} - This component does not accept any arguments.
+ * @returns {JSX.Element} The jobs page UI element.
+ **/
 export default function JobsPage() {
   const [lastRefreshed, setLastRefreshed] = useState<string>("--");
   const [pendingAction, setPendingAction] = useState<string>("");
@@ -29,6 +37,15 @@ export default function JobsPage() {
 
   const jobs = jobsQuery.data ?? [];
 
+  /**
+   * Executes a job action (pause, resume, or kill) for the specified run and refreshes the jobs list.
+   * @example
+   * runAction(123, "pause")
+   * undefined
+   * @param {number} runId - The ID of the run to perform the action on.
+   * @param {"pause" | "resume" | "kill"} action - The action to execute for the run.
+   * @returns {Promise<void>} A promise that resolves when the action has completed.
+   **/
   async function runAction(runId: number, action: "pause" | "resume" | "kill") {
     setPendingAction(`${action}:${runId}`);
     try {
@@ -158,6 +175,14 @@ function statusTone(status: ActiveJob["status"]) {
   return "neutral" as const;
 }
 
+/**
+ * Renders a small action button with an icon, label, and optional danger styling.
+ * @example
+ * ActionButton({ icon: Icon, label: "Delete", disabled: false, danger: true, onClick: handleDelete })
+ * <Button>Delete</Button>
+ * @param {Readonly<{ icon: ComponentType<{ className?: string }>; label: string; disabled?: boolean; danger?: boolean; onClick?: () => void; }>} props - Button configuration including icon, label, state, and click handler.
+ * @returns {JSX.Element} The rendered action button component.
+ **/
 function ActionButton({
   icon: Icon,
   label,
@@ -197,6 +222,14 @@ function ProgressBar({ value }: Readonly<{ value: number }>) {
   );
 }
 
+/**
+ * Formats an ISO date string into a short, localized month/day and time representation.
+ * @example
+ * formatTimestamp("2024-06-01T14:30:00Z")
+ * "Jun 1, 02:30 PM"
+ * @param {string} value - The timestamp string to format.
+ * @returns {string} The formatted date/time string, or the original value if formatting fails.
+ **/
 function formatTimestamp(value: string) {
   try {
     return new Date(value).toLocaleString([], {

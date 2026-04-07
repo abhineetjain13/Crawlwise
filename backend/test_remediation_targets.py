@@ -27,6 +27,12 @@ TARGETS = [
 ]
 
 async def test_target(client: httpx.AsyncClient, target: dict):
+    """Tests a target by submitting a crawl request to the sync API endpoint and reporting the result.
+    Parameters:
+        - client (httpx.AsyncClient): HTTP client used to send the crawl request.
+        - target (dict): Target metadata containing at least a name, URL, and schema.
+    Returns:
+        - dict: Summary of the test result, including target name, status, duration, record count, acquisition method, and diagnostics; or an error record if the request fails."""
     print(f"\n--- Testing {target['name']} ---")
     print(f"URL: {target['url']}")
     
@@ -84,6 +90,11 @@ async def test_target(client: httpx.AsyncClient, target: dict):
         return {"name": target["name"], "status": "failed", "error": str(e)}
 
 async def main():
+    """Run asynchronous tests against configured targets and print a summary of the results.
+    Parameters:
+        - None: This function takes no arguments.
+    Returns:
+        - None: Prints the final test summary to stdout and does not return a value."""
     async with httpx.AsyncClient() as client:
         results = []
         for target in TARGETS:

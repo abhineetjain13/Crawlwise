@@ -21,6 +21,18 @@ except ImportError:
 
 
 class GreenhouseAdapter(BaseAdapter):
+    """
+    Adapter for extracting job postings from Greenhouse-hosted career pages, preferring the JSON API and falling back to HTML parsing when needed.
+    Parameters:
+        - url (str): Page URL used to detect Greenhouse boards and derive the company slug.
+        - html (str): HTML content used for embedded-board detection and fallback extraction.
+        - surface (str): Extraction context passed through to the adapter result.
+    Processing Logic:
+        - Detects Greenhouse pages from direct board URLs or embedded Greenhouse markup on company sites.
+        - Attempts the Greenhouse JSON API first for more reliable job data.
+        - Falls back to scraping common Greenhouse HTML board layouts if the API is unavailable or empty.
+        - Normalizes basic fields such as title, URL, location, and company before returning records.
+    """
     name = "greenhouse"
     greenhouse_board_host = "boards.greenhouse.io"
     domains = [greenhouse_board_host, "boards-api.greenhouse.io"]
@@ -34,6 +46,13 @@ class GreenhouseAdapter(BaseAdapter):
         return False
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        """Extract records from a Greenhouse page using the JSON API first, then fall back to HTML parsing.
+        Parameters:
+            - url (str): The page URL used to identify the company and as a fallback source.
+            - html (str): The HTML content to parse if the API is unavailable or returns no records.
+            - surface (str): The surface context for extraction.
+        Returns:
+            - AdapterResult: An object containing the extracted records, source type, and adapter name."""
         records: list[dict] = []
 
         # Try JSON API first (most reliable)

@@ -140,6 +140,14 @@ export default function DashboardPage() {
     }
   }
 
+  /**
+  * Resets all application data after user confirmation, handling loading, errors, and authentication redirects.
+  * @example
+  * handleResetData()
+  * undefined
+  * @param {void}  - This function takes no arguments.
+  * @returns {Promise<void>} A promise that resolves when the reset flow completes.
+  **/
   async function handleResetData() {
     const confirmed = globalThis.confirm(
       "Delete and reset all app data? This clears runs, records, logs, artifacts, cookies, selectors, and domain mappings.",

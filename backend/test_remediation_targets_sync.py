@@ -23,6 +23,11 @@ TARGETS = [
 ]
 
 def test_target(target):
+    """Test a crawl target by sending a synchronous crawl request and reporting the result.
+    Parameters:
+        - target (dict): Target information containing at least 'name', 'url', and 'schema'.
+    Returns:
+        - dict: A result summary with the target name, crawl status, timing, record count, and acquisition method, or error details if the request fails."""
     print(f"\n--- Testing {target['name']} ---")
     print(f"URL: {target['url']}")
     
@@ -69,6 +74,11 @@ def test_target(target):
         return {"name": target["name"], "status": "exception", "error": str(e)}
 
 def main():
+    """Run tests for each target, collect results, and print a final summary.
+    Parameters:
+        - None: This function does not take any parameters.
+    Returns:
+        - None: This function does not return a value."""
     results = []
     for target in TARGETS:
         res = test_target(target)

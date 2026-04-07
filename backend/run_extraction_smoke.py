@@ -104,6 +104,12 @@ TEST_SITES: list[dict] = [
 
 
 async def _run_one(site: dict, run_id: int) -> dict:
+    """Run a single site crawl/extraction workflow and summarize the outcome.
+    Parameters:
+        - site (dict): Site configuration containing keys such as name, url, surface, page_type, and optional expectations.
+        - run_id (int): Identifier for the current run, passed to the acquisition step.
+    Returns:
+        - dict: A result summary containing crawl metadata, extraction counts, success status, timing, and any issue or error details."""
     name = site["name"]
     url = site["url"]
     surface = site["surface"]
@@ -203,6 +209,11 @@ async def _run_one(site: dict, run_id: int) -> dict:
 
 
 async def main():
+    """Run extraction smoke tests for configured sites, print a summary, and write a JSON report.
+    Parameters:
+        - None: This async function takes no explicit parameters.
+    Returns:
+        - None: Prints per-site results and summary output, writes a report to artifacts/extraction_smoke, and exits with code 1 if any tests fail."""
     print(f"Running extraction smoke tests for {len(TEST_SITES)} sites...")
     print("=" * 70)
     results = []

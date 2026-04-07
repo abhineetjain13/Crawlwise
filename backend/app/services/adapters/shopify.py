@@ -17,10 +17,28 @@ except ImportError:
 
 
 class ShopifyAdapter(BaseAdapter):
+    """
+    ShopifyAdapter detects Shopify storefronts and extracts product data from embedded page JSON or Shopify’s public product endpoints.
+    Parameters:
+        - url (str): Page URL used to identify Shopify patterns and build endpoint requests.
+        - html (str): Raw HTML used to detect Shopify signals and embedded product metadata.
+        - surface (str): Page type hint that helps choose between listing and detail extraction paths.
+    Processing Logic:
+        - Uses lightweight signals like Shopify assets, theme markers, and myshopify.com URLs to confirm Shopify pages.
+        - Prefers embedded product data when available, especially on detail pages.
+        - Falls back to Shopify public JSON endpoints, using collection-scoped endpoints for listings when possible.
+        - Normalizes extracted product fields such as price, image URLs, availability, and tags into a consistent record shape.
+    """
     name = "shopify"
     domains: list[str] = []  # any domain can be Shopify; detected by signals
 
     async def can_handle(self, url: str, html: str) -> bool:
+        """Determine whether the given URL and HTML indicate a Shopify site.
+        Parameters:
+            - url (str): The page URL to inspect for Shopify-specific domains.
+            - html (str): The page HTML content to search for Shopify-related signals.
+        Returns:
+            - bool: True if any Shopify indicators are found; otherwise, False."""
         signals = [
             "Shopify.theme" in html,
             "cdn.shopify.com" in html,
@@ -30,6 +48,13 @@ class ShopifyAdapter(BaseAdapter):
         return any(signals)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        """Extract product records from embedded HTML data and, when needed, a public Shopify endpoint.
+        Parameters:
+            - url (str): The page URL being processed.
+            - html (str): The raw HTML content to inspect for embedded product data.
+            - surface (str): The page surface type, such as "ecommerce_listing" or "ecommerce_detail".
+        Returns:
+            - AdapterResult: An object containing extracted records, source type, and adapter name."""
         records: list[dict] = []
         embedded = self._extract_embedded_product(html, url)
         if embedded:
@@ -160,6 +185,11 @@ class ShopifyAdapter(BaseAdapter):
         return value
 
     def _normalize_price(self, value: object) -> str | None:
+        """Normalize a price-like value to a two-decimal string.
+        Parameters:
+            - value (object): The input value to normalize; may be an int, float, Decimal, str, or None.
+        Returns:
+            - str | None: The normalized price as a string with two decimal places, or None if the value is invalid or empty."""
         if value is None:
             return None
         if isinstance(value, int):

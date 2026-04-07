@@ -55,6 +55,11 @@ _TRACKING_QUERY_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "ref", "ref_src")
 
 
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
+    """Compile a case-insensitive regular expression that matches any of the given noise tokens.
+    Parameters:
+        - tokens (tuple[str, ...]): A tuple of token strings to match exactly, using word boundaries for alphanumeric tokens.
+    Returns:
+        - re.Pattern[str]: A compiled regular expression pattern matching any token, or a pattern that matches nothing when tokens is empty."""
     if not tokens:
         return re.compile(r"(?!x)x", re.IGNORECASE)
     parts: list[str] = []
@@ -69,6 +74,12 @@ _SIZE_NOISE_RE = _compile_noise_token_pattern(SIZE_NOISE_TOKENS)
 
 
 def normalize_value(field_name: str, value: object) -> object:
+    """Normalize a field value based on its field type and content.
+    Parameters:
+        - field_name (str): Name of the field used to determine normalization rules.
+        - value (object): Input value to normalize.
+    Returns:
+        - object: Normalized value, or the original value when no string normalization applies."""
     if isinstance(value, str):
         text = " ".join(value.split()).strip()
         if text.lower() in CANDIDATE_PLACEHOLDER_VALUES:
@@ -117,6 +128,12 @@ def normalize_value(field_name: str, value: object) -> object:
 
 
 def validate_value(field_name: str, value: object) -> object | None:
+    """Validate and normalize a field value based on the field name.
+    Parameters:
+        - field_name (str): Name of the field used to determine validation rules.
+        - value (object): Input value to validate and normalize.
+    Returns:
+        - object | None: Normalized value if valid, otherwise None."""
     if value in (None, "", [], {}):
         return None
     if isinstance(value, str):
@@ -161,6 +178,11 @@ def validate_value(field_name: str, value: object) -> object | None:
 
 
 def extract_currency_hint(value: object) -> str:
+    """Extracts a likely currency code from a text value.
+    Parameters:
+        - value (object): Input value to inspect for a currency hint.
+    Returns:
+        - str: The detected currency code, or an empty string if none is found."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -183,6 +205,11 @@ def extract_currency_hint(value: object) -> str:
 
 
 def _strip_tracking_params(value: str) -> str:
+    """Remove tracking query parameters from a URL string.
+    Parameters:
+        - value (str): Input string to normalize and strip tracking parameters from.
+    Returns:
+        - str: The cleaned URL string, or the original trimmed text if it is not an HTTP or HTTPS URL."""
     text = str(value or "").strip()
     if not text.startswith(("http://", "https://")):
         return text
@@ -196,6 +223,11 @@ def _strip_tracking_params(value: str) -> str:
 
 
 def _is_valid_http_url(value: str) -> bool:
+    """Check whether a string is a valid HTTP or HTTPS URL.
+    Parameters:
+        - value (str): Input value to validate as a URL.
+    Returns:
+        - bool: True if the value starts with http:// or https:// and is not a known noise or generic platform URL; otherwise False."""
     text = str(value or "").strip()
     if not text.startswith(("http://", "https://")):
         return False
@@ -208,6 +240,11 @@ def _is_valid_http_url(value: str) -> bool:
 
 
 def _extract_positive_number(value: str) -> float | None:
+    """Extract the first positive numeric value from a string-like input.
+    Parameters:
+        - value (str): Input text to search for a numeric value.
+    Returns:
+        - float | None: The extracted number as a float, or None if no valid number is found."""
     match = re.search(PRICE_REGEX, str(value or ""))
     if not match:
         return None
@@ -228,6 +265,11 @@ def _normalize_additional_images(value: str) -> str:
 
 
 def _split_image_values(value: str) -> list[str]:
+    """Split a delimited string into a unique list of image URLs.
+    Parameters:
+        - value (str): Input string containing image URLs separated by pipes or commas.
+    Returns:
+        - list[str]: Ordered list of unique, valid http/https URLs extracted from the input."""
     if not value:
         return []
     parts = re.split(r"\s*\|\s*|\s*,\s*(?=https?://)", value)
@@ -245,6 +287,12 @@ def _split_image_values(value: str) -> list[str]:
 
 
 def _strip_html(value: str, *, preserve_paragraphs: bool = False) -> str:
+    """Remove HTML tags from a string and optionally preserve paragraph breaks.
+    Parameters:
+        - value (str): Input text that may contain HTML markup.
+        - preserve_paragraphs (bool): If True, retain line breaks around paragraph-like tags.
+    Returns:
+        - str: The cleaned text with HTML removed and whitespace normalized."""
     if "<" not in value or ">" not in value:
         return unescape(value).strip()
     soup = BeautifulSoup(value, "html.parser")
@@ -260,6 +308,11 @@ def _strip_html(value: str, *, preserve_paragraphs: bool = False) -> str:
 
 
 def _clean_title_text(value: str) -> str:
+    """Clean and normalize a title string by removing HTML/UI noise and filtering generic or promo-only values.
+    Parameters:
+        - value (str): Raw title text to clean.
+    Returns:
+        - str: Cleaned title string, or an empty string if the input is invalid or non-informative."""
     cleaned = _strip_ui_noise(_strip_html(value))
     if not cleaned:
         return ""
@@ -277,6 +330,11 @@ def _clean_description_text(value: str) -> str:
 
 
 def _normalize_color_text(value: str) -> str:
+    """Normalize color text by stripping UI noise and extracting hex color codes when present.
+    Parameters:
+        - value (str): Raw color text to normalize.
+    Returns:
+        - str: The normalized color string, a hex color code if found, or an empty string when the text contains only color noise."""
     cleaned = _strip_ui_noise(_strip_html(value))
     lowered = cleaned.lower()
 
@@ -293,6 +351,11 @@ def _normalize_color_text(value: str) -> str:
 
 
 def _normalize_size_text(value: str) -> str:
+    """Normalize and clean size text extracted from UI or HTML content.
+    Parameters:
+        - value (str): The input size text to normalize.
+    Returns:
+        - str: The cleaned size text, or an empty string when the text is considered noise."""
     cleaned = _strip_ui_noise(_strip_html(value))
     lowered = cleaned.lower()
 
@@ -307,6 +370,11 @@ def _normalize_size_text(value: str) -> str:
 
 
 def _normalize_availability(value: str) -> str:
+    """Normalize an availability string into a canonical status when possible.
+    Parameters:
+        - value (str): Raw availability text to normalize.
+    Returns:
+        - str: Canonical availability label such as "in_stock", "out_of_stock", "preorder", or "limited_availability"; otherwise the cleaned original text."""
     text = unescape(value).strip()
     lowered = text.lower()
     if lowered.endswith("/instock"):
@@ -321,6 +389,12 @@ def _normalize_availability(value: str) -> str:
 
 
 def _strip_ui_noise(value: str, *, preserve_newlines: bool = False) -> str:
+    """Remove UI-related noise tokens, icons, and script artifacts from a string.
+    Parameters:
+        - value (str): Input text to clean.
+        - preserve_newlines (bool): Whether to keep line breaks while normalizing whitespace. Defaults to False.
+    Returns:
+        - str: Cleaned text with UI noise removed and whitespace normalized."""
     text = unescape(value).strip()
     if not text:
         return ""

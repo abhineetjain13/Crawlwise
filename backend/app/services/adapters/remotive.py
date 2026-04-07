@@ -9,6 +9,16 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 
 
 class RemotiveAdapter(BaseAdapter):
+    """Adapter for normalizing Remotive and RemoteOK job listings from HTML fallback pages.
+    Parameters:
+        - url (str): Page URL used to determine which supported site-specific extractor to use.
+        - html (str): Raw HTML content that may contain embedded JSON job data.
+        - surface (str): Target extraction surface or context.
+    Processing Logic:
+        - Uses domain matching to route extraction to the correct site-specific parser.
+        - Skips non-job metadata entries when parsing RemoteOK payloads.
+        - Normalizes salary ranges into a readable string when range fields are available.
+        - Returns only records with a populated title field."""
     name = "remotive"
     domains = ["remotive.com", "remoteok.com"]
 
@@ -24,6 +34,13 @@ class RemotiveAdapter(BaseAdapter):
         # extract_json_listing() which handles the field normalization.
         # The adapter here handles the HTML fallback case where the
         # response was rendered as an HTML page containing JSON.
+        """Extract and normalize listing records from HTML fallback pages for supported job sites.
+        Parameters:
+            - url (str): The page URL used to identify the source site and select the appropriate extractor.
+            - html (str): The HTML content to parse when the response is not handled by the JSON-first pipeline.
+            - surface (str): The target surface or context for extraction.
+        Returns:
+            - AdapterResult: Normalized extraction result containing records, source type, and adapter name."""
         records: list[dict] = []
 
         if "remotive.com" in url:
@@ -107,6 +124,11 @@ class RemotiveAdapter(BaseAdapter):
 
     @staticmethod
     def _format_salary(job: dict) -> str:
+        """Format a job's salary range as a human-readable string.
+        Parameters:
+            - job (dict): Job data containing optional "salary_min" and "salary_max" fields.
+        Returns:
+            - str: Formatted salary range such as "$50,000-$70,000", "$50,000+", or an empty string if no salary is available."""
         min_sal = _safe_int(job.get("salary_min"))
         max_sal = _safe_int(job.get("salary_max"))
         if min_sal and max_sal:

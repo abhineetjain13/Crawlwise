@@ -7,6 +7,14 @@ import { FormEvent, useState } from "react";
 import { Button, Field, Input, Subtitle, Title } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 
+/**
+ * Renders a registration page that creates a new account, logs the user in, and redirects to the dashboard.
+ * @example
+ * RegisterPage()
+ * <RegisterPage />
+ * @param {void} - This function does not accept any arguments.
+ * @returns {JSX.Element} The registration page UI.
+ **/
 export default function RegisterPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");

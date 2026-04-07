@@ -8,6 +8,14 @@ import { cn } from "../../lib/utils";
 type ThemeMode = "light" | "dark";
 const THEME_STORAGE_KEY = "crawlerai-theme";
 
+/**
+ * Renders a button that toggles the application's color theme between light and dark modes.
+ * @example
+ * ThemeToggle({ compact: true })
+ * <button />
+ * @param {{ compact?: boolean }} compact - When true, renders a smaller compact button size.
+ * @returns {JSX.Element} A theme toggle button component.
+ */
 export function ThemeToggle({ compact }: Readonly<{ compact?: boolean }>) {
   const theme = useSyncExternalStore(subscribeTheme, readTheme, () => "light");
 
@@ -50,6 +58,15 @@ function applyTheme(value: string | null | undefined) {
   window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
 }
 
+/**
+* Subscribes to theme changes from DOM mutations and cross-tab storage events.
+* @example
+* subscribeTheme(() => {
+*   console.log("theme changed");
+* })
+* @param {() => void} onStoreChange - Callback invoked whenever the theme store changes.
+* @returns {() => void} Cleanup function that disconnects listeners and observers.
+**/
 function subscribeTheme(onStoreChange: () => void) {
   if (typeof window === "undefined") {
     return () => undefined;

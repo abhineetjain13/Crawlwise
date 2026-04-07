@@ -16,6 +16,13 @@ const TASK_OPTIONS = [
   { value: "field_cleanup_review", label: "Cleanup Review" },
 ] as const;
 
+/**
+ * Admin page for configuring the active LLM provider, model, API key, budgets, and reviewing recent usage.
+ * @example
+ * AdminLlmPage()
+ * <div>LLM configuration UI</div>
+ * @returns {JSX.Element} The rendered admin LLM configuration page.
+ */
 export default function AdminLlmPage() {
   const queryClient = useQueryClient();
   const catalogQuery = useQuery({ queryKey: ["llm-catalog"], queryFn: api.listLlmCatalog });
@@ -105,6 +112,13 @@ export default function AdminLlmPage() {
     },
   });
 
+  /**
+   * Validates budget inputs and triggers configuration creation when all requirements are met.
+   * @example
+   * handleCreateConfig()
+   * undefined
+   * @returns {void} No return value.
+   */
   function handleCreateConfig() {
     const dailyBudgetValue = Number(dailyBudget.trim());
     const sessionBudgetValue = Number(sessionBudget.trim());

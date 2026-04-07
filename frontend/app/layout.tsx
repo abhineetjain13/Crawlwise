@@ -25,6 +25,14 @@ const themeScript = `
   })();
 `;
 
+/**
+ * Defines the root HTML layout for the application and wraps the app with providers and theme initialization.
+ * @example
+ * RootLayout({ children: <App /> })
+ * <html>...</html>
+ * @param {{React.ReactNode}} children - The React node tree to render inside the application shell.
+ * @returns {JSX.Element} The root layout element for the app.
+ **/
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">

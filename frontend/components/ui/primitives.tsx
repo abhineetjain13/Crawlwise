@@ -352,6 +352,15 @@ export function TableBody({ children, className }: Readonly<{ children: ReactNod
   return <tbody className={cn("[&_tr:last-child]:border-0", className)}>{children}</tbody>;
 }
 
+/**
+* Renders a styled table row element with optional custom classes and HTML table row attributes.
+* @example
+* TableRow({ children: <td>Cell</td>, className: "custom-row" })
+* <tr>...</tr>
+* @param {{ReactNode}} children - Content to render inside the table row.
+* @param {{string | undefined}} className - Optional additional CSS class names to apply.
+* @returns {JSX.Element} A styled table row element.
+**/
 export function TableRow({
   children,
   className,
@@ -370,6 +379,14 @@ export function TableRow({
   );
 }
 
+/**
+ * Renders a table header cell with consistent styling and optional custom classes.
+ * @example
+ * TableHead({ children: "Title", className: "bg-gray-100" })
+ * <th>Title</th>
+ * @param {{children: ReactNode; className?: string}} props - Component props containing the header content and optional CSS class name.
+ * @returns {JSX.Element} A styled <th> element wrapping the provided children.
+ **/
 export function TableHead({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
     <th

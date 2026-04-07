@@ -10,10 +10,26 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 
 
 class ADPAdapter(BaseAdapter):
+    """
+    ADP recruitment page adapter for extracting job listings and job details from ADP-powered career sites.
+    Parameters:
+        - self (ADPAdapter): Adapter instance used to inspect pages and build extracted job records.
+    Processing Logic:
+        - Detects detail pages using URL, HTML markers, or surface hints before choosing extraction strategy.
+        - Parses listing cards to collect unique jobs, including title, location, posting date, and job-specific anchors.
+        - Extracts detail-page fields such as requisition ID, salary, description, and apply URL when available.
+        - Normalizes text and filters out incomplete records to reduce duplicates and low-quality entries.
+    """
     name = "adp"
     domains = ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com"]
 
     async def can_handle(self, url: str, html: str) -> bool:
+        """Determine whether the given URL or HTML matches supported recruitment page patterns.
+        Parameters:
+            - url (str): The URL to inspect.
+            - html (str): The HTML content to inspect.
+        Returns:
+            - bool: True if the URL or HTML contains a supported domain or page marker; otherwise False."""
         lowered_url = str(url or "").lower()
         lowered_html = str(html or "").lower()
         return (
@@ -24,6 +40,13 @@ class ADPAdapter(BaseAdapter):
         )
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        """Extract records from a detail or listing page based on the provided URL, HTML, and surface.
+        Parameters:
+            - url (str): The URL of the page to analyze.
+            - html (str): The page HTML content to extract data from.
+            - surface (str): The surface or context used to determine extraction behavior.
+        Returns:
+            - AdapterResult: An AdapterResult containing the extracted records, source type, and adapter name."""
         if self._looks_like_detail(url, html, surface):
             records = [self._extract_detail(url, html)] if html else []
         else:
@@ -35,6 +58,12 @@ class ADPAdapter(BaseAdapter):
         )
 
     def _extract_listing(self, url: str, html: str) -> list[dict]:
+        """Extract job listing records from an HTML page.
+        Parameters:
+            - url (str): Source page URL used to populate listing links and source metadata.
+            - html (str): HTML content containing job listing cards to parse.
+        Returns:
+            - list[dict]: A list of unique job listing dictionaries with fields such as title, url, source_url, job_id, location, additional_locations, and posted_date."""
         soup = BeautifulSoup(html, "html.parser")
         records: list[dict] = []
         seen_keys: set[str] = set()
@@ -84,6 +113,13 @@ class ADPAdapter(BaseAdapter):
         return records
 
     def _extract_detail(self, url: str, html: str) -> dict | None:
+        """Extract structured job detail data from HTML content.
+        Parameters:
+            - self (object): Instance used to access helper methods for cleaning text and extracting fields.
+            - url (str): The job detail page URL.
+            - html (str): Raw HTML content of the job detail page.
+        Returns:
+            - dict | None: A dictionary containing extracted job fields such as title, url, job_id, location, posted_date, requisition_id, salary, description, and apply_url; or None if no valid title is found."""
         soup = BeautifulSoup(html, "html.parser")
         title_node = soup.select_one("h1, .job-details-title, .job-description-title")
         title = self._clean_text(title_node.get_text(" ", strip=True) if title_node is not None else "")
@@ -137,6 +173,11 @@ class ADPAdapter(BaseAdapter):
         return " | ".join(details[:4])
 
     def _extract_detail_description(self, body_text: str) -> str:
+        """Extracts and cleans a job detail description from the provided body text.
+        Parameters:
+            - body_text (str): The raw text to search for a detail description.
+        Returns:
+            - str: The cleaned detail description if found; otherwise, an empty string."""
         patterns = [
             r"Apply\s+Salary\s+Range:.*?\s(.*?)(?:BackApply|Copyright)",
             r"Apply\s+(.*?)(?:BackApply|Copyright)",
@@ -151,6 +192,12 @@ class ADPAdapter(BaseAdapter):
         return ""
 
     def _build_apply_url(self, url: str, job_id: str | None) -> str | None:
+        """Builds a URL with the given job ID added as a query parameter.
+        Parameters:
+            - url (str): The base URL to update.
+            - job_id (str | None): The job ID to append; if not provided, no URL is built.
+        Returns:
+            - str | None: The updated URL containing the jobId query parameter, or None if job_id is not provided."""
         if not job_id:
             return None
         parsed = urlparse(url)
@@ -160,6 +207,11 @@ class ADPAdapter(BaseAdapter):
         return urlunparse(parsed._replace(query=next_query))
 
     def _extract_job_dom_id(self, card: BeautifulSoup) -> str | None:
+        """Extract the first job DOM ID matching a digit-and-underscore pattern from a card or its descendants.
+        Parameters:
+            - card (BeautifulSoup): The BeautifulSoup element representing a job card to inspect.
+        Returns:
+            - str | None: The matched DOM ID string if found; otherwise None."""
         candidates = [
             str(card.get("id") or "").strip(),
         ]
@@ -179,6 +231,13 @@ class ADPAdapter(BaseAdapter):
         return value or None
 
     def _looks_like_detail(self, url: str, html: str, surface: str) -> bool:
+        """Determine whether a page appears to be a job detail page based on URL, HTML, or surface text.
+        Parameters:
+            - url (str): The page URL to inspect for detail-page indicators.
+            - html (str): The page HTML content to search for detail-related markers.
+            - surface (str): A surface or label string used to detect detail-page context.
+        Returns:
+            - bool: True if the input appears to represent a detail page; otherwise False."""
         lowered_surface = str(surface or "").lower()
         lowered_url = str(url or "").lower()
         lowered_html = str(html or "").lower()

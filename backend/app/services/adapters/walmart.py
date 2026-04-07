@@ -10,6 +10,16 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 
 
 class WalmartAdapter(BaseAdapter):
+    """Adapter for extracting Walmart product data from detail and listing pages.
+    Parameters:
+        - url (str): Source page URL used to populate record links and identify the page.
+        - html (str): Raw HTML content to parse for embedded JSON and fallback DOM data.
+        - surface (str): Page type indicating whether to extract a single product detail or a listing page.
+    Processing Logic:
+        - Prefers Walmart's embedded __NEXT_DATA__ JSON for product and search result extraction.
+        - Falls back to basic DOM selectors for detail pages when structured JSON is unavailable.
+        - Filters listing results to include only product items and builds canonical Walmart URLs.
+    """
     name = "walmart"
     domains = ["walmart.com", "walmart.ca"]
 
@@ -17,6 +27,13 @@ class WalmartAdapter(BaseAdapter):
         return any(d in url for d in self.domains)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        """Extract product records from Walmart HTML for detail or listing pages.
+        Parameters:
+            - url (str): The source page URL.
+            - html (str): The raw HTML content to parse.
+            - surface (str): The page type to extract from, such as "ecommerce_detail" or "ecommerce_listing".
+        Returns:
+            - AdapterResult: An object containing extracted records, source type, and adapter name."""
         soup = BeautifulSoup(html, "html.parser")
         records = []
         # Walmart embeds __NEXT_DATA__ with product info
@@ -34,6 +51,11 @@ class WalmartAdapter(BaseAdapter):
         )
 
     def _get_next_data(self, soup: BeautifulSoup) -> dict:
+        """Extract the JSON data embedded in the page's __NEXT_DATA__ script tag.
+        Parameters:
+            - soup (BeautifulSoup): Parsed HTML document to search for the Next.js data script.
+        Returns:
+            - dict: Parsed JSON data from the script tag, or an empty dictionary if the tag is missing or invalid."""
         node = soup.select_one("script#__NEXT_DATA__")
         if node and node.string:
             try:
@@ -44,6 +66,14 @@ class WalmartAdapter(BaseAdapter):
 
     def _extract_detail(self, soup: BeautifulSoup, next_data: dict, url: str) -> dict | None:
         # Try __NEXT_DATA__ first
+        """Extract product details from Next.js data or the page DOM.
+        Parameters:
+            - self (object): Instance of the containing class.
+            - soup (BeautifulSoup): Parsed HTML used as a fallback source.
+            - next_data (dict): Parsed __NEXT_DATA__ JSON payload from the page.
+            - url (str): Product page URL.
+        Returns:
+            - dict | None: A dictionary of product details such as title, brand, price, image URL, description, rating, review count, availability, category, and URL; or None if no product data is found."""
         props = next_data.get("props", {}).get("pageProps", {})
         initial_data = props.get("initialData", {}).get("data", {})
         product = initial_data.get("product", {})
@@ -73,6 +103,14 @@ class WalmartAdapter(BaseAdapter):
         return None
 
     def _extract_listing(self, soup: BeautifulSoup, next_data: dict, url: str) -> list[dict]:
+        """Extract product listing data from Walmart search result page data.
+        Parameters:
+            - self (object): The instance of the class containing this method.
+            - soup (BeautifulSoup): Parsed HTML document; included for interface consistency.
+            - next_data (dict): Parsed __NEXT_DATA__ JSON containing search result information.
+            - url (str): The source page URL; included for interface consistency.
+        Returns:
+            - list[dict]: A list of product records with title, price, image URL, canonical URL, rating, and review count."""
         records = []
         # Try __NEXT_DATA__ search results
         props = next_data.get("props", {}).get("pageProps", {})

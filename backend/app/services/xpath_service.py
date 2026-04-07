@@ -48,6 +48,14 @@ def extract_selector_value(
     xpath: str | None = None,
     regex: str | None = None,
 ) -> tuple[str | None, int, str | None]:
+    """Extract a value from HTML using XPath, CSS selector, or regex, in that order of precedence.
+    Parameters:
+        - html_text (str): HTML content to search.
+        - css_selector (str | None): CSS selector used to locate the target element.
+        - xpath (str | None): XPath expression used to locate the target element.
+        - regex (str | None): Regular expression used to extract a matching value.
+    Returns:
+        - tuple[str | None, int, str | None]: A tuple containing the extracted value, number of matches found, and the selector/pattern used; returns (None, 0, None) if no match is found."""
     if xpath:
         valid_xpath, _ = validate_xpath_syntax(xpath)
         if not valid_xpath:
@@ -88,6 +96,11 @@ def extract_selector_value(
 
 
 def validate_xpath_syntax(xpath: str) -> tuple[bool, str | None]:
+    """Validate an XPath expression for basic policy and syntax correctness.
+    Parameters:
+        - xpath (str): The XPath expression to validate.
+    Returns:
+        - tuple[bool, str | None]: A tuple containing a boolean indicating validity and an error message if invalid, otherwise None."""
     candidate = str(xpath or "").strip()
     if not candidate:
         return False, "XPath is empty"
@@ -104,6 +117,11 @@ def validate_xpath_syntax(xpath: str) -> tuple[bool, str | None]:
 
 
 def validate_regex_syntax(pattern: str) -> tuple[bool, str | None]:
+    """Validate whether a regex pattern has valid syntax.
+    Parameters:
+        - pattern (str): The regex pattern to validate.
+    Returns:
+        - tuple[bool, str | None]: A tuple containing a boolean indicating validity and an error message if invalid, otherwise None."""
     candidate = str(pattern or "").strip()
     if not candidate:
         return False, "Regex is empty"
@@ -120,6 +138,13 @@ def validate_xpath_candidate(
     *,
     expected_value: str | None = None,
 ) -> dict:
+    """Validate an XPath candidate against HTML and optionally compare the first match to an expected value.
+    Parameters:
+        - html_text (str): HTML content to evaluate.
+        - xpath (str): XPath expression to validate and execute.
+        - expected_value (str | None): Optional value to loosely compare against the first matched result.
+    Returns:
+        - dict: A dictionary with keys `valid` (bool), `matched_value` (str | None), and `count` (int)."""
     if not xpath.strip():
         return {"valid": False, "matched_value": None, "count": 0}
     tree = _build_xpath_tree(html_text)
@@ -147,6 +172,14 @@ def build_deterministic_selector_suggestions(
     existing_candidates: dict[str, list[dict]] | None = None,
     selector_defaults: dict[str, list[dict]] | None = None,
 ) -> dict[str, list[dict]]:
+    """Build deterministic selector suggestions for the given fields from HTML and optional candidates.
+    Parameters:
+        - html_text (str): HTML content to search for matching elements.
+        - field_names (Iterable[str]): Field names to generate selector suggestions for.
+        - existing_candidates (dict[str, list[dict]] | None): Optional precomputed candidate suggestions to normalize and include.
+        - selector_defaults (dict[str, list[dict]] | None): Optional default selector suggestions to normalize and include.
+    Returns:
+        - dict[str, list[dict]]: A mapping of field names to deduplicated selector suggestion dictionaries."""
     soup = BeautifulSoup(html_text, "html.parser")
     suggestions: dict[str, list[dict]] = {}
     existing_candidates = existing_candidates or {}
@@ -182,6 +215,11 @@ def build_deterministic_selector_suggestions(
 
 
 def build_absolute_xpath(node: Tag | NavigableString) -> str | None:
+    """Build an absolute XPath for a BeautifulSoup node.
+    Parameters:
+        - node (Tag | NavigableString): The BeautifulSoup tag or text node to convert into an XPath.
+    Returns:
+        - str | None: An absolute XPath string when one can be constructed, otherwise None."""
     if isinstance(node, NavigableString):
         node = node.parent
     if not isinstance(node, Tag):
@@ -252,6 +290,11 @@ def _build_xpath_tree(document_html: str):
 
 
 def _validate_xpath_policy(xpath: str) -> str | None:
+    """Validate an XPath expression against disallowed patterns and allowed functions.
+    Parameters:
+        - xpath (str): The XPath expression to validate.
+    Returns:
+        - str | None: An error message if the XPath is invalid, otherwise None."""
     candidate = str(xpath or "").strip()
     for pattern, message in _XPATH_DISALLOWED_PATTERNS:
         if pattern.search(candidate):
@@ -264,6 +307,11 @@ def _validate_xpath_policy(xpath: str) -> str | None:
 
 
 def _coerce_xpath_match(results: list[object]) -> str | None:
+    """Coerce the first XPath match result into a cleaned string or None.
+    Parameters:
+        - results (list[object]): List of XPath match results to inspect.
+    Returns:
+        - str | None: The first match as a stripped string, or None if no usable value is found."""
     if not results:
         return None
     first = results[0]
@@ -277,6 +325,11 @@ def _coerce_xpath_match(results: list[object]) -> str | None:
 
 
 def _node_value(node: Tag) -> str | None:
+    """Extract a meaningful value from a BeautifulSoup tag based on its element type.
+    Parameters:
+        - node (Tag): The BeautifulSoup tag to inspect.
+    Returns:
+        - str | None: The extracted value from the tag, or None if no usable value is found."""
     if node.name == "meta":
         return str(node.get("content") or "").strip() or None
     if node.name == "img":
@@ -288,6 +341,11 @@ def _node_value(node: Tag) -> str | None:
 
 
 def _normalize_suggestion(value: dict) -> dict | None:
+    """Normalize a suggestion dictionary and discard empty suggestions.
+    Parameters:
+        - value (dict): Input suggestion data containing optional selector and metadata fields.
+    Returns:
+        - dict | None: A normalized suggestion dictionary, or None if no xpath, css_selector, or regex is provided."""
     xpath = str(value.get("xpath") or "").strip() or None
     css_selector = str(value.get("css_selector") or "").strip() or None
     regex = str(value.get("regex") or "").strip() or None
@@ -306,6 +364,11 @@ def _normalize_suggestion(value: dict) -> dict | None:
 
 
 def _dedupe_suggestions(rows: list[dict]) -> list[dict]:
+    """Remove duplicate suggestion rows based on xpath, css_selector, and regex.
+    Parameters:
+        - rows (list[dict]): List of suggestion dictionaries to deduplicate.
+    Returns:
+        - list[dict]: Deduplicated list of suggestion dictionaries, preserving first occurrences."""
     seen: set[tuple[str | None, str | None, str | None]] = set()
     deduped: list[dict] = []
     for row in rows:
@@ -318,6 +381,11 @@ def _dedupe_suggestions(rows: list[dict]) -> list[dict]:
 
 
 def _normalize_css_selector(selector: str) -> str:
+    """Normalize a CSS selector string by stripping whitespace and replacing deprecated deep-combinator syntax.
+    Parameters:
+        - selector (str): The CSS selector string to normalize.
+    Returns:
+        - str: The normalized selector string, or an empty string if the input is empty or falsy."""
     normalized = str(selector or "").strip()
     if not normalized:
         return normalized
@@ -328,6 +396,13 @@ def _normalize_css_selector(selector: str) -> str:
 
 
 def _unique_anchor_xpath(node: Tag, root: BeautifulSoup | Tag, *, allow_class: bool = True) -> str | None:
+    """Generate a unique XPath for a node using stable attributes or class name.
+    Parameters:
+        - node (Tag): The target BeautifulSoup tag to build an XPath for.
+        - root (BeautifulSoup | Tag): The document or subtree used to verify XPath uniqueness.
+        - allow_class (bool): Whether class-based matching is allowed if no stable attribute is unique.
+    Returns:
+        - str | None: A unique XPath string if one can be determined; otherwise, None."""
     attr_candidates = [
         "id",
         "data-testid",
@@ -356,6 +431,11 @@ def _unique_anchor_xpath(node: Tag, root: BeautifulSoup | Tag, *, allow_class: b
 
 
 def _relative_segment(node: Tag) -> str:
+    """Build a relative XPath-like selector segment for a BeautifulSoup tag node.
+    Parameters:
+        - node (Tag): The target tag to generate a selector segment for.
+    Returns:
+        - str: A selector segment using a unique class when available, otherwise a positional index."""
     class_value = _stable_class_value(node.get("class"))
     if class_value and _is_unique_class_among_siblings(node, class_value):
         class_literal = _xpath_literal(f" {class_value} ")
@@ -370,6 +450,12 @@ def _relative_segment(node: Tag) -> str:
 
 
 def _is_unique_xpath(root: BeautifulSoup | Tag, xpath: str) -> bool:
+    """Check whether an XPath expression matches exactly one element within the given BeautifulSoup or Tag root.
+    Parameters:
+        - root (BeautifulSoup | Tag): The HTML root used to build the XPath tree.
+        - xpath (str): The XPath expression to evaluate.
+    Returns:
+        - bool: True if the XPath resolves to exactly one node; otherwise False."""
     html_text = str(root)
     tree = _build_xpath_tree(html_text)
     if tree is None:
@@ -388,6 +474,12 @@ def _document_root(node: Tag) -> BeautifulSoup | Tag:
 
 
 def _is_unique_class_among_siblings(node: Tag, class_value: str) -> bool:
+    """Check whether a class value appears only once among a node's siblings of the same tag.
+    Parameters:
+        - node (Tag): The current BeautifulSoup tag to inspect.
+        - class_value (str): The class name to test for uniqueness among sibling tags.
+    Returns:
+        - bool: True if the class appears exactly once among sibling tags of the same name, or if the node has no tag parent; otherwise False."""
     if not isinstance(node.parent, Tag):
         return True
     sibling_matches = 0
@@ -410,6 +502,11 @@ def _stable_attr_value(value: object) -> str | None:
 
 
 def _stable_class_value(value: object) -> str | None:
+    """Extract the first valid stable class name from a value.
+    Parameters:
+        - value (object): Input value that may be a list, string, or other object containing class names.
+    Returns:
+        - str | None: The first non-empty, non-numeric class name with at least 3 characters, or None if no valid class is found."""
     classes = value if isinstance(value, list) else str(value or "").split()
     for class_name in classes:
         candidate = str(class_name or "").strip()
@@ -420,6 +517,11 @@ def _stable_class_value(value: object) -> str | None:
 
 
 def _xpath_literal(value: str) -> str:
+    """Build a safe XPath string literal from a Python string.
+    Parameters:
+        - value (str): The input string to convert into an XPath-compatible literal.
+    Returns:
+        - str: An XPath expression representing the input string, using quotes or concat() as needed."""
     if "'" not in value:
         return f"'{value}'"
     if '"' not in value:
@@ -435,6 +537,12 @@ def _xpath_literal(value: str) -> str:
 
 
 def _loose_text_match(actual: str, expected: str) -> bool:
+    """Compare two text values with loose normalization and substring matching.
+    Parameters:
+        - actual (str): The actual text value to compare.
+        - expected (str): The expected text value to compare against.
+    Returns:
+        - bool: True if both normalized texts are non-empty and match exactly or one contains the other; otherwise False."""
     def normalize(value: object) -> str:
         return " ".join(str(value or "").split()).strip().lower()
 

@@ -31,6 +31,14 @@ from app.services.config.selectors import (
 
 
 def _compile_extraction_rule_pattern(pattern: object, *, setting_name: str) -> re.Pattern[str]:
+    """Compile and validate a case-insensitive regular expression pattern for an extraction rule.
+    Parameters:
+        - pattern (object): The pattern value to convert to a string, strip, validate, and compile.
+        - setting_name (str): The configuration setting name used in error messages.
+    Returns:
+        - re.Pattern[str]: A compiled regular expression pattern.
+    Raises:
+        - RuntimeError: If the pattern is empty or cannot be compiled as a valid regex."""
     raw_pattern = str(pattern or "").strip()
     if not raw_pattern:
         raise RuntimeError(f"Invalid empty regex for '{setting_name}' in extraction_rules.py")
@@ -49,6 +57,11 @@ def _compile_extraction_rule_patterns(patterns: object, *, setting_name: str) ->
 
 
 def _currency_symbol_class(symbol_map: dict[object, object]) -> str:
+    """Build a regex pattern that matches currency symbols from a mapping.
+    Parameters:
+        - symbol_map (dict[object, object]): Mapping whose keys are examined for currency symbols.
+    Returns:
+        - str: A regular expression string matching the detected symbols, or a default currency character class if none are found."""
     symbols = sorted({str(symbol).strip() for symbol in symbol_map.keys() if str(symbol).strip()})
     if not symbols:
         return r"[$€£¥₹]"
@@ -63,6 +76,11 @@ def _currency_symbol_class(symbol_map: dict[object, object]) -> str:
 
 
 def _currency_code_alternation(currency_codes: object) -> str:
+    """Build a regex alternation for one or more currency codes.
+    Parameters:
+        - currency_codes (object): A single code or an iterable of codes to normalize and include in the pattern.
+    Returns:
+        - str: A regex pattern matching the provided currency codes, or a generic 3-letter currency code pattern if none are provided."""
     if not currency_codes:
         normalized_codes: list[object] | tuple[object, ...] | set[object] = []
     elif isinstance(currency_codes, str):
@@ -78,6 +96,11 @@ def _currency_code_alternation(currency_codes: object) -> str:
 
 
 def _expand_salary_range_regex(rules: dict[str, object]) -> str:
+    """Expand a salary-range regex template using currency symbols and codes from rules.
+    Parameters:
+        - rules (dict[str, object]): Configuration containing optional salary_range_regex, currency_symbol_map, and currency_codes entries.
+    Returns:
+        - str: The expanded, case-insensitive regular expression pattern."""
     raw_pattern = str(rules.get("salary_range_regex") or "").strip()
     if not raw_pattern:
         raw_pattern = (

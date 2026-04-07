@@ -26,10 +26,26 @@ _DEFAULT_FACETS = "LOCATIONS;WORK_LOCATIONS;WORKPLACE_TYPES;TITLES;CATEGORIES;OR
 
 
 class OracleHCMAdapter(BaseAdapter):
+    """Oracle HCM job-board adapter that detects Oracle candidate experience pages and extracts job requisitions from the public recruiting API.
+    Parameters:
+        - url (str): Page URL used to identify the Oracle HCM site, language, and job ID.
+        - html (str): Page HTML used to detect Oracle CX config and site metadata.
+        - surface (str): Page surface indicator used to distinguish listing vs. detail extraction.
+    Processing Logic:
+        - Uses Oracle-specific URL and HTML patterns to decide whether the adapter can handle the page.
+        - Queries the public recruitingCEJobRequisitions endpoint and paginates through results.
+        - Normalizes requisitions into cleaned job records with generated job and apply URLs.
+        - Deduplicates jobs by job ID and short-circuits when a specific detail-page job is found."""
     name = "oracle_hcm"
     domains = ["fa.ocs.oraclecloud.com"]
 
     async def can_handle(self, url: str, html: str) -> bool:
+        """Determine whether the given URL or HTML indicates an Oracle candidate experience page.
+        Parameters:
+            - url (str): The page URL to inspect.
+            - html (str): The HTML content to inspect.
+        Returns:
+            - bool: True if the URL or HTML matches known Oracle candidate experience patterns; otherwise, False."""
         lowered_url = str(url or "").lower()
         lowered_html = str(html or "").lower()
         return any((
@@ -56,6 +72,15 @@ class OracleHCMAdapter(BaseAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
+        """Fetch job requisitions from a public endpoint and normalize the results.
+        Parameters:
+            - self: The instance used to access helper methods and state.
+            - url (str): The job-related page URL used to derive site and job identifiers.
+            - html (str): The page HTML used to extract site metadata.
+            - surface (str): A surface label indicating whether the page is a job listing or detail page.
+            - proxy (str | None): Optional proxy URL to route requests through.
+        Returns:
+            - list[dict]: A list of normalized job records, or an empty list if no public endpoint is available or no records are found."""
         if curl_requests is None or "job" not in str(surface or "").lower():
             return []
 
@@ -130,6 +155,14 @@ class OracleHCMAdapter(BaseAdapter):
         return records
 
     def _build_endpoint(self, *, base_url: str, site_number: str, limit: int, offset: int) -> str:
+        """Builds the recruiting job requisitions endpoint URL with query parameters.
+        Parameters:
+            - base_url (str): Base API URL used as the endpoint prefix.
+            - site_number (str): Site number used in the finder query.
+            - limit (int): Maximum number of records to request.
+            - offset (int): Starting index for pagination.
+        Returns:
+            - str: Fully constructed endpoint URL for fetching job requisitions."""
         finder = (
             f"findReqs;siteNumber={site_number},facetsList={_DEFAULT_FACETS},"
             f"offset={offset},limit={limit},sortBy=POSTING_DATES_DESC"
@@ -152,6 +185,15 @@ class OracleHCMAdapter(BaseAdapter):
         site_number: str,
         company: str,
     ) -> dict | None:
+        """Normalize a requisition record into a cleaned job posting dictionary.
+        Parameters:
+            - requisition (object): Raw requisition data expected to be a dictionary-like object.
+            - base_url (str): Base URL used to build the job and apply URLs.
+            - site_lang (str): Site language code used in the generated URLs.
+            - site_number (str): Site number used in the generated URLs.
+            - company (str): Company name to include in the normalized record.
+        Returns:
+            - dict | None: A normalized job posting dictionary with empty values removed, or None if the input is invalid or missing required fields."""
         if not isinstance(requisition, dict):
             return None
         title = self._clean_text(requisition.get("Title"))
@@ -211,6 +253,11 @@ class OracleHCMAdapter(BaseAdapter):
         return self._clean_text(app.get("siteLang"))
 
     def _extract_site_name(self, html: str) -> str:
+        """Extracts a site name from HTML using config data, meta tags, or the page title.
+        Parameters:
+            - html (str): The HTML content to inspect.
+        Returns:
+            - str: The extracted and cleaned site name, or an empty string if none is found."""
         config = self._extract_cx_config(html)
         app = config.get("app") if isinstance(config.get("app"), dict) else {}
         site_name = self._clean_text(app.get("siteName"))
@@ -223,6 +270,11 @@ class OracleHCMAdapter(BaseAdapter):
         return self._clean_text(soup.title.get_text(" ", strip=True) if soup.title is not None else "")
 
     def _extract_cx_config(self, html: str) -> dict:
+        """Extract the CX configuration dictionary from an HTML string.
+        Parameters:
+            - html (str): HTML content to search for the embedded CX configuration.
+        Returns:
+            - dict: The extracted configuration dictionary, or an empty dictionary if no valid config is found."""
         match = _CX_CONFIG_RE.search(str(html or ""))
         if not match:
             return {}
@@ -245,6 +297,11 @@ class OracleHCMAdapter(BaseAdapter):
         return self._clean_text(match.group(1)) if match else ""
 
     def _join_locations(self, requisition: dict) -> str:
+        """Join and deduplicate location fields from a requisition dictionary into a single string.
+        Parameters:
+            - requisition (dict): Requisition data containing primary and secondary location fields.
+        Returns:
+            - str: A pipe-separated string of unique location names and addresses."""
         values: list[str] = []
         primary = self._clean_text(requisition.get("PrimaryLocation"))
         if primary:
@@ -269,6 +326,11 @@ class OracleHCMAdapter(BaseAdapter):
         return " | ".join(values)
 
     def _html_to_text(self, value: object) -> str:
+        """Convert an HTML string or object to cleaned plain text.
+        Parameters:
+            - value (object): The input value to convert; it is coerced to a string and may contain HTML.
+        Returns:
+            - str: The cleaned plain-text representation of the input, or an empty string if the input is empty."""
         html = str(value or "").strip()
         if not html:
             return ""

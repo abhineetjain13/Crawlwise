@@ -10,6 +10,14 @@ import { EmptyPanel, PageHeader, SectionHeader } from "../../../components/ui/pa
 
 type StatusFilter = "all" | "active" | "inactive";
 
+/**
+ * Renders the admin users management page with search, status filtering, role changes, and activation controls.
+ * @example
+ * AdminUsersPage()
+ * <AdminUsersPage />
+ * @param {undefined} Argument - This component does not accept any arguments.
+ * @returns {JSX.Element} The admin users management page UI.
+ */
 export default function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
@@ -34,6 +42,15 @@ export default function AdminUsersPage() {
     [users, usersQuery.data?.meta?.total],
   );
 
+  /**
+  * Updates a user's role or active status, refreshes the users list, and manages loading/error state.
+  * @example
+  * updateUser(123, { role: "admin", is_active: true })
+  * undefined
+  * @param {number} userId - The ID of the user to update.
+  * @param {Partial<Pick<User, "role" | "is_active">>} payload - An object containing the user fields to update.
+  * @returns {Promise<void>} A promise that resolves when the update and refetch operations complete.
+  **/
   async function updateUser(userId: number, payload: Partial<Pick<User, "role" | "is_active">>) {
     setPendingUserId(userId);
     try {
@@ -152,6 +169,14 @@ function MetricCard({ label, value }: Readonly<{ label: string; value: number }>
   );
 }
 
+/**
+ * Formats a date string into a localized, human-readable date and time, or returns the original value if invalid.
+ * @example
+ * formatDate("2024-01-15T10:30:00Z")
+ * "Jan 15, 2024, 10:30 AM"
+ * @param {string} value - The date string to format.
+ * @returns {string} The formatted date string, or the original value if it cannot be parsed as a valid date.
+ */
 function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {

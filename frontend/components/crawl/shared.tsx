@@ -128,6 +128,15 @@ export function readRecordValue(record: CrawlRecord, field: string) {
   return "";
 }
 
+/**
+* Formats a duration between two timestamps into a compact minutes-and-seconds string.
+* @example
+* formatDuration("2024-01-01T10:00:00Z", "2024-01-01T10:02:15Z")
+* "2m 15s"
+* @param {string | null | undefined} start - Start timestamp in ISO date string format.
+* @param {string | null | undefined} end - End timestamp in ISO date string format; if omitted, uses the current UTC-synced time.
+* @returns {string} A formatted duration string like "Xm Ys", or "--" when input timestamps are missing or invalid.
+**/
 export function formatDuration(start?: string | null, end?: string | null) {
   if (!start) return "--";
   const started = new Date(start).getTime();
@@ -187,6 +196,14 @@ export function scrollViewportToBottom(ref: RefObject<HTMLDivElement | null>) {
   });
 }
 
+/**
+ * Renders a horizontal progress bar with a percentage label.
+ * @example
+ * ProgressBar({ percent: 75 })
+ * <div>...</div>
+ * @param {{ percent: number }} props - Component props containing the completion percentage.
+ * @returns {JSX.Element} A progress bar UI element showing the current progress.
+ */
 export function ProgressBar({ percent }: Readonly<{ percent: number }>) {
   return (
     <div className="space-y-1">
@@ -201,6 +218,14 @@ export function ProgressBar({ percent }: Readonly<{ percent: number }>) {
   );
 }
 
+/**
+ * Renders a scrollable terminal-style log viewer for crawl output.
+ * @example
+ * LogTerminal({ logs, live, viewportRef })
+ * <div>Waiting for log output...</div>
+ * @param {{ logs: Array<{ id: number; level: string; message: string; created_at: string }>; live?: boolean; viewportRef?: RefObject<HTMLDivElement | null> }} props - Component props containing log entries, live mode flag, and an optional viewport ref.
+ * @returns {JSX.Element} A terminal-like log container displaying formatted log entries or a placeholder message.
+ **/
 export const LogTerminal = memo(function LogTerminal({
   logs,
   live = false,
@@ -241,6 +266,21 @@ export const LogTerminal = memo(function LogTerminal({
   );
 });
 
+/**
+ * Renders a segmented tab bar for selecting one of several options.
+ * @example
+ * TabBar({
+ *   value: "daily",
+ *   onChange: (nextValue) => console.log(nextValue),
+ *   options: [
+ *     { value: "daily", label: "Daily" },
+ *     { value: "weekly", label: "Weekly" },
+ *   ],
+ * })
+ * // "weekly"
+ * @param {{ value: string, onChange: (value: string) => void, options: Array<{ value: string, label: string }> }} props - Tab bar configuration including the current value, change handler, and available options.
+ * @returns {JSX.Element} A tab bar element containing selectable buttons for each option.
+ **/
 export function TabBar({
   value,
   onChange,
@@ -271,6 +311,14 @@ export function TabBar({
   );
 }
 
+/**
+* Renders a segmented button control for selecting one option from a list.
+* @example
+* SegmentedMode({ value: "list", onChange: (v) => console.log(v), options: [{ value: "list", label: "List" }] })
+* "list"
+* @param {Readonly<{ value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }>} props - Component props containing the selected value, change handler, and available options.
+* @returns {JSX.Element} A segmented control UI element.
+**/
 export function SegmentedMode({
   value,
   onChange,
@@ -301,6 +349,14 @@ export function SegmentedMode({
   );
 }
 
+/**
+ * Renders a two-column mode picker with selectable options and an active state.
+ * @example
+ * AdvancedModePicker({ value: "mode1", onChange: setMode, options: [{ value: "mode1", label: "Mode 1", description: "Description" }] })
+ * undefined
+ * @param {Readonly<{ value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string; description: string }> }>} props - Component props containing the current value, change handler, and available options.
+ * @returns {JSX.Element} The rendered mode picker UI.
+ */
 export function AdvancedModePicker({
   value,
   onChange,
@@ -347,6 +403,27 @@ export function AdvancedModePicker({
   );
 }
 
+/**
+ * Renders a collapsible settings section with an icon, label, description, and toggle.
+ * @example
+ * SettingSection({
+ *   label: "Notifications",
+ *   description: "Enable or disable alerts",
+ *   icon: <BellIcon />,
+ *   checked: true,
+ *   onChange: (value) => console.log(value),
+ *   children: <div>Additional settings</div>
+ * })
+ * returns a settings section UI element
+ * @param {object} props - Component props for the settings section.
+ * @param {string} props.label - Title text displayed for the setting.
+ * @param {string} props.description - Supporting description shown under the label.
+ * @param {ReactNode} props.icon - Icon displayed in the section header.
+ * @param {boolean} props.checked - Whether the section is enabled and expanded.
+ * @param {(value: boolean) => void} props.onChange - Callback invoked when the toggle changes.
+ * @param {ReactNode} [props.children] - Optional content shown when the section is expanded.
+ * @returns {JSX.Element} The rendered settings section component.
+ **/
 export function SettingSection({
   label,
   description,
@@ -404,6 +481,14 @@ export function SettingSection({
   );
 }
 
+/**
+ * Renders a labeled slider input row with a numeric text field, reset control, and optional suffix.
+ * @example
+ * SliderRow({ label: "Speed", value: "5", min: 0, max: 10, step: 1, onChange: handleChange, onReset: handleReset, suffix: "px" })
+ * // returns a slider row UI for editing the speed value
+ * @param {Readonly<{ label: string; value: string; min: number; max: number; step: number; onChange: (value: string) => void; onReset: () => void; suffix?: string; }>} props - Component props for configuring the slider row.
+ * @returns {JSX.Element} The rendered slider row component.
+ **/
 export function SliderRow({
   label,
   value,
@@ -459,6 +544,19 @@ export function SliderRow({
   );
 }
 
+/**
+ * Renders an input for managing a comma-separated list of additional fields, with removable field chips and commit-on-blur behavior.
+ * @example
+ * AdditionalFieldInput({
+ *   value: "price, sku",
+ *   fields: ["brand"],
+ *   onChange: (value) => console.log(value),
+ *   onCommit: (value) => console.log("commit", value),
+ *   onRemove: (value) => console.log("remove", value),
+ * })
+ * @param {Readonly<{ value: string; fields: string[]; onChange: (value: string) => void; onCommit: (value: string) => void; onRemove: (value: string) => void; }>} props - Component props containing the current input value, existing fields, and change/commit/remove handlers.
+ * @returns {JSX.Element} The rendered additional fields input UI.
+ */
 export function AdditionalFieldInput({
   value,
   fields,
@@ -519,6 +617,14 @@ export function AdditionalFieldInput({
   );
 }
 
+/**
+ * Renders an editable manual field row with inputs for field name, XPath, and regex, plus delete action.
+ * @example
+ * ManualFieldEditor({ row, onChange, onDelete })
+ * undefined
+ * @param {{ row: FieldRow; onChange: (patch: Partial<FieldRow>) => void; onDelete: () => void; }} props - Component props containing the field row data and callbacks for updates and deletion.
+ * @returns {JSX.Element} The rendered manual field editor UI.
+ */
 export function ManualFieldEditor({
   row,
   onChange,
@@ -567,6 +673,20 @@ export function ManualFieldEditor({
   );
 }
 
+/**
+ * Renders a selectable table of crawl records with dynamically visible columns.
+ * @example
+ * RecordsTable({
+ *   records: [],
+ *   visibleColumns: ['id', 'url'],
+ *   selectedIds: [],
+ *   onSelectAll: (checked) => {},
+ *   onToggleRow: (id, checked) => {},
+ * })
+ * undefined
+ * @param {Readonly<{records: CrawlRecord[], visibleColumns: string[], selectedIds: number[], onSelectAll: (checked: boolean) => void, onToggleRow: (id: number, checked: boolean) => void}>} props - Table data, column visibility, selection state, and selection handlers.
+ * @returns {JSX.Element} A table element displaying the provided records with row and select-all checkboxes.
+ **/
 export const RecordsTable = memo(function RecordsTable({
   records,
   visibleColumns,
@@ -622,6 +742,14 @@ export const RecordsTable = memo(function RecordsTable({
   );
 });
 
+/**
+ * Renders a small action button with optional danger and disabled states.
+ * @example
+ * ActionButton({ label: "Delete", danger: true, onClick: () => {} })
+ * <Button />
+ * @param {{ label: string; danger?: boolean; disabled?: boolean; onClick?: () => void }} props - Button configuration and click handler.
+ * @returns {JSX.Element} The rendered button element.
+ */
 export function ActionButton({
   label,
   danger,
@@ -641,6 +769,14 @@ export function ActionButton({
   );
 }
 
+/**
+ * Renders a clickable tab button with active and inactive visual states.
+ * @example
+ * OutputTab({ active: true, children: "Output", onClick: () => {} })
+ * <button>Output</button>
+ * @param {{ active?: boolean; children: ReactNode; onClick: () => void }} props - Tab properties including active state, content, and click handler.
+ * @returns {JSX.Element} A button element representing the output tab.
+ **/
 export function OutputTab({
   active = false,
   children,
@@ -671,6 +807,14 @@ export function PreviewRow({ label, value, mono }: Readonly<{ label: string; val
   );
 }
 
+/**
+* Infers the crawl tab/module from a run's settings, mode, or surface.
+* @example
+* inferRunModule(run)
+* "category"
+* @param {CrawlRun | undefined} run - Crawl run data used to determine the module.
+* @returns {CrawlTab | null} The inferred crawl tab, or null if it cannot be determined.
+**/
 function inferRunModule(run?: CrawlRun): CrawlTab | null {
   if (!run) {
     return null;
@@ -754,6 +898,14 @@ function getFocusableElements(container: HTMLDivElement | null) {
   ).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
 }
 
+/**
+* Renders an accessible toggle button that switches between checked and unchecked states.
+* @example
+* Toggle({ checked: true, onChange: (value) => console.log(value), ariaLabel: "Enable feature" })
+* void
+* @param {{ checked: boolean; onChange: (value: boolean) => void; ariaLabel?: string }} Argument - Toggle props including current state, change handler, and optional aria label.
+* @returns {JSX.Element} A button element representing the toggle control.
+**/
 function Toggle({
   checked,
   onChange,
@@ -777,6 +929,20 @@ function Toggle({
   );
 }
 
+/**
+ * Renders a labeled input field with validation state feedback.
+ * @example
+ * ValidatedField({
+ *   label: "Email",
+ *   value: "user@example.com",
+ *   state: "valid",
+ *   placeholder: "Enter your email",
+ *   onChange: (value) => console.log(value),
+ *   onBlur: (value) => console.log(value),
+ * })
+ * @param {{ label: string, value: string, state: ValidationState, placeholder: string, onChange: (value: string) => void, onBlur: (value: string) => void }} props - Props for configuring the validated field input.
+ * @returns {JSX.Element} A labeled input element that displays validation icons based on the current state.
+ **/
 function ValidatedField({
   label,
   value,

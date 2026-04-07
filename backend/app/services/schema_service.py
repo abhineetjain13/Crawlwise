@@ -20,6 +20,23 @@ _MAX_SCHEMA_AGE = timedelta(days=7)
 
 @dataclass
 class ResolvedSchema:
+    """
+    Represents a resolved schema snapshot, including current, baseline, new, and deprecated fields.
+    Parameters:
+        - surface (str): The surface or entity the schema applies to.
+        - domain (str): The domain associated with the schema.
+        - baseline_fields (list[str]): The original field set used for comparison.
+        - fields (list[str]): The current resolved field list.
+        - new_fields (list[str]): Fields newly introduced in the resolved schema.
+        - deprecated_fields (list[str]): Fields no longer present in the resolved schema.
+        - source (str): The source from which the schema was resolved.
+        - saved_at (str | None): Timestamp indicating when the schema was saved, if available.
+        - stale (bool): Indicates whether the schema snapshot is outdated.
+    Processing Logic:
+        - Tracks schema changes by comparing current fields against a baseline.
+        - Preserves metadata needed to identify the schema source and recency.
+        - Marks whether the schema should be treated as stale.
+    """
     surface: str
     domain: str
     baseline_fields: list[str]
@@ -32,6 +49,11 @@ class ResolvedSchema:
 
 
 def is_valid_schema_field_name(name: str) -> bool:
+    """Check whether a string is a valid schema field name.
+    Parameters:
+        - name (str): The field name to validate.
+    Returns:
+        - bool: True if the name is non-empty, matches the allowed pattern, is not numeric-only, does not contain double underscores, and does not start with an underscore; otherwise False."""
     normalized = str(name or "").strip().lower()
     return bool(
         normalized
@@ -43,6 +65,11 @@ def is_valid_schema_field_name(name: str) -> bool:
 
 
 def _normalize_field_name(value: object) -> str:
+    """Normalize a value into a lowercase, snake_case field name.
+    Parameters:
+        - value (object): The input value to normalize into a field name.
+    Returns:
+        - str: A normalized snake_case string, or an empty string if the input is blank."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -54,6 +81,11 @@ def _normalize_field_name(value: object) -> str:
 
 
 def _dedupe_fields(values: list[str] | None) -> list[str]:
+    """Deduplicate and normalize a list of string values.
+    Parameters:
+        - values (list[str] | None): Input list of values to deduplicate; None is treated as an empty list.
+    Returns:
+        - list[str]: A list of unique, lowercased, stripped string values in their original order."""
     deduped: list[str] = []
     seen: set[str] = set()
     for value in values or []:
@@ -75,6 +107,11 @@ def _now_iso() -> str:
 
 
 def _parse_saved_at(value: object) -> datetime | None:
+    """Parse a saved-at value into a datetime object.
+    Parameters:
+        - value (object): Input value to parse, typically a string-like timestamp.
+    Returns:
+        - datetime | None: Parsed datetime if the value is a valid ISO-formatted timestamp, otherwise None."""
     text = str(value or "").strip()
     if not text:
         return None
@@ -92,6 +129,15 @@ def _snapshot_to_resolved(
     snapshot: dict | None,
     explicit_fields: list[str],
 ) -> ResolvedSchema:
+    """Resolve a schema snapshot into a normalized ResolvedSchema object.
+    Parameters:
+        - surface (str): Surface name for the schema.
+        - domain (str): Domain name for the schema.
+        - baseline_fields (list[str]): Default baseline field names.
+        - snapshot (dict | None): Stored snapshot data, or None if unavailable.
+        - explicit_fields (list[str]): Additional fields to include explicitly.
+    Returns:
+        - ResolvedSchema: Normalized schema data including fields, new/deprecated fields, source, saved time, and staleness."""
     payload = snapshot if isinstance(snapshot, dict) else {}
     saved_at = str(payload.get("saved_at") or "").strip() or None
     saved_at_dt = _parse_saved_at(saved_at)
@@ -121,6 +167,11 @@ def _snapshot_to_resolved(
 
 
 def _schema_payload(schema: ResolvedSchema) -> dict:
+    """Build a dictionary payload from a resolved schema's field metadata.
+    Parameters:
+        - schema (ResolvedSchema): The resolved schema to serialize into a payload dictionary.
+    Returns:
+        - dict: A dictionary containing baseline, current, new, deprecated fields, source, and saved timestamp."""
     return {
         "baseline_fields": list(schema.baseline_fields),
         "fields": list(schema.fields),
@@ -138,6 +189,14 @@ async def load_resolved_schema(
     *,
     explicit_fields: list[str] | None = None,
 ) -> ResolvedSchema:
+    """Resolve and return a schema for a given surface and domain.
+    Parameters:
+        - session (AsyncSession): Database session parameter, unused in this implementation.
+        - surface (str): The surface name used to look up canonical fields.
+        - domain (str): The domain to normalize and resolve the schema for.
+        - explicit_fields (list[str] | None): Optional additional fields to include in the resolved schema.
+    Returns:
+        - ResolvedSchema: The resolved schema object for the specified surface and domain."""
     del session
     baseline_fields = _dedupe_fields(get_canonical_fields(surface))
     normalized_domain = normalize_domain(domain)
@@ -179,6 +238,15 @@ def learn_schema_from_record(
     explicit_fields: list[str] | None = None,
     sample_record: dict | None = None,
 ) -> ResolvedSchema:
+    """Learn and resolve a schema from baseline fields, optional explicit fields, and an optional sample record.
+    Parameters:
+        - surface (str): The target surface used to determine whether record-based learning is allowed.
+        - domain (str): The schema domain for the resolved schema.
+        - baseline_fields (list[str]): The initial set of fields to preserve and compare against.
+        - explicit_fields (list[str] | None): Additional fields to include explicitly, if provided.
+        - sample_record (dict | None): Optional record used to discover new fields and mark deprecated ones.
+    Returns:
+        - ResolvedSchema: A resolved schema containing merged fields, newly discovered fields, deprecated fields, and metadata."""
     baseline = _dedupe_fields(baseline_fields)
     explicit = _dedupe_fields(explicit_fields)
     record = sample_record if isinstance(sample_record, dict) else {}
@@ -231,6 +299,19 @@ async def resolve_schema(
     sample_record: dict | None = None,
     llm_enabled: bool = False,
 ) -> ResolvedSchema:
+    """Resolve and optionally enrich a schema for a given surface and domain.
+    Parameters:
+        - session (AsyncSession): Database session used to load and persist schema data.
+        - surface (str): The target surface for schema resolution.
+        - domain (str): The target domain for schema resolution.
+        - run_id (int | None): Unused; accepted for compatibility.
+        - explicit_fields (list[str] | None): Optional list of fields to force into the resolved schema.
+        - html (str): Unused; accepted for compatibility.
+        - url (str): Unused; accepted for compatibility.
+        - sample_record (dict | None): Optional record used to learn and enrich the schema.
+        - llm_enabled (bool): Deprecated flag; if True, emits a warning and falls back to deterministic resolution.
+    Returns:
+        - ResolvedSchema: The resolved schema, optionally enriched and persisted based on the sample record."""
     del run_id, html, url
     if llm_enabled:
         warnings.warn(
@@ -270,6 +351,11 @@ async def resolve_schema(
 
 
 def schema_trace_payload(schema: ResolvedSchema) -> dict:
+    """Create a dictionary representation of a resolved schema trace payload.
+    Parameters:
+        - schema (ResolvedSchema): The resolved schema object to serialize.
+    Returns:
+        - dict: A dictionary containing surface, domain, field lists, source, saved_at, and stale status."""
     return {
         "surface": schema.surface,
         "domain": schema.domain,

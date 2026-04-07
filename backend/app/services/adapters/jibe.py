@@ -21,10 +21,26 @@ _SEARCH_CONFIG_RE = re.compile(r"window\.searchConfig\s*=\s*(\{.*?\});", re.DOTA
 
 
 class JibeAdapter(BaseAdapter):
+    """Adapter for detecting and extracting job listings from Jibe-powered career pages.
+    Parameters:
+        - url (str): Page URL used to detect Jibe signals and derive API/job identifiers.
+        - html (str): Page HTML used to find embedded search config and normalize job data.
+        - surface (str): Page type indicator used to adjust query defaults and filter detail pages.
+    Processing Logic:
+        - Detects Jibe pages using URL/domain checks and common Jibe-specific HTML markers.
+        - Pulls jobs from the public `/api/jobs` endpoint and normalizes fields into a consistent record format.
+        - Merges URL query parameters with embedded search config, adding listing defaults when needed.
+        - Filters detail-page results to the matching job ID when one can be extracted from the URL."""
     name = "jibe"
     domains = ["jibeapply.com"]
 
     async def can_handle(self, url: str, html: str) -> bool:
+        """Determine whether the given URL or HTML appears to belong to a Jibe-powered job search page.
+        Parameters:
+            - url (str): The page URL to inspect.
+            - html (str): The HTML content to inspect.
+        Returns:
+            - bool: True if Jibe-specific markers are found in the URL or HTML; otherwise, False."""
         lowered_url = str(url or "").lower()
         lowered_html = str(html or "").lower()
         return any((
@@ -52,6 +68,14 @@ class JibeAdapter(BaseAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
+        """Try the public jobs API endpoint for a given page and return normalized job records.
+        Parameters:
+            - url (str): The page URL used to derive the API endpoint and base URL.
+            - html (str): The page HTML used to build the query parameters.
+            - surface (str): The page surface identifier, used to filter detail-page results.
+            - proxy (str | None): Optional proxy URL to route the request through.
+        Returns:
+            - list[dict]: A list of normalized job records, or an empty list if the request fails or no jobs are found."""
         if curl_requests is None:
             return []
         parsed = urlparse(url)
@@ -80,6 +104,13 @@ class JibeAdapter(BaseAdapter):
         return records
 
     def _build_query(self, url: str, html: str, surface: str) -> list[tuple[str, str]]:
+        """Build a merged list of query parameters from a URL, page HTML, and surface type.
+        Parameters:
+            - url (str): The source URL containing existing query parameters.
+            - html (str): HTML content used to extract additional search configuration.
+            - surface (str): Surface name used to apply listing-specific defaults.
+        Returns:
+            - list[tuple[str, str]]: A list of non-empty query parameter key-value pairs."""
         parsed = urlparse(url)
         query_params = parse_qsl(parsed.query, keep_blank_values=False)
         merged: dict[str, str] = {}
@@ -98,6 +129,11 @@ class JibeAdapter(BaseAdapter):
         return [(key, value) for key, value in merged.items() if value]
 
     def _extract_search_config(self, html: str) -> dict:
+        """Extract the search configuration JSON object from HTML content.
+        Parameters:
+            - html (str): HTML text to search for the embedded search configuration.
+        Returns:
+            - dict: Parsed search configuration dictionary, or an empty dictionary if no valid configuration is found."""
         match = _SEARCH_CONFIG_RE.search(str(html or ""))
         if not match:
             return {}
@@ -112,6 +148,12 @@ class JibeAdapter(BaseAdapter):
         return unescape(text)
 
     def _normalize_job(self, row: object, *, base_url: str) -> dict | None:
+        """Normalize a raw job row into a cleaned job record.
+        Parameters:
+            - row (object): Input row expected to be a dictionary containing a "data" payload.
+            - base_url (str): Base URL used to build a job URL when a canonical URL is not provided.
+        Returns:
+            - dict | None: A normalized job dictionary with empty values removed, or None if the input is invalid or missing a usable title."""
         payload = row.get("data") if isinstance(row, dict) else None
         if not isinstance(payload, dict):
             return None
@@ -153,6 +195,11 @@ class JibeAdapter(BaseAdapter):
         return {key: value for key, value in record.items() if value not in (None, "", [], {})}
 
     def _join_names(self, values: object) -> str:
+        """Join unique cleaned names from a list of values into a pipe-separated string.
+        Parameters:
+            - values (object): A list of items or dictionaries containing a "name" field.
+        Returns:
+            - str: A string of unique cleaned names joined by " | ", or an empty string if input is not a list."""
         if not isinstance(values, list):
             return ""
         names: list[str] = []

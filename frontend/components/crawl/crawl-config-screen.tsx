@@ -35,6 +35,14 @@ type CrawlConfigScreenProps = {
   requestedPdpMode: PdpMode | null;
 };
 
+/**
+ * Renders the crawl configuration screen and manages crawl type, mode, field settings, and launch behavior.
+ * @example
+ * CrawlConfigScreen({ requestedTab: "pdp", requestedCategoryMode: "single", requestedPdpMode: "batch" })
+ * <CrawlConfigScreen />
+ * @param {Readonly<CrawlConfigScreenProps>} props - Initial crawl tab and mode values derived from routing.
+ * @returns {JSX.Element} The crawl configuration UI.
+ */
 export function CrawlConfigScreen({
   requestedTab,
   requestedCategoryMode,
@@ -158,6 +166,14 @@ export function CrawlConfigScreen({
     ],
   );
 
+  /**
+  * Starts a crawl by validating the current configuration, submitting the appropriate crawl request, and redirecting to the crawl status page.
+  * @example
+  * startCrawl(event)
+  * void
+  * @param {FormEvent} event - The form submission event used to prevent the default browser behavior.
+  * @returns {Promise<void>} A promise that resolves when the crawl request is submitted and navigation/error handling completes.
+  **/
   async function startCrawl(event: FormEvent) {
     event.preventDefault();
     setConfigError("");
@@ -191,6 +207,13 @@ export function CrawlConfigScreen({
     }
   }
 
+  /**
+  * Adds a new manual field row to the field list with default empty values and idle states.
+  * @example
+  * addManualField()
+  * { id: "1700000000000-0", fieldName: "", xpath: "", regex: "", xpathState: "idle", regexState: "idle" }
+  * @returns {void} No return value.
+  **/
   function addManualField() {
     setFieldRows((current) => [
       ...current,
@@ -468,6 +491,14 @@ export function CrawlConfigScreen({
   );
 }
 
+/**
+* Builds a dispatch payload from crawl configuration, validating required inputs based on the selected mode and module.
+* @example
+* buildDispatch(config)
+* { runType: "crawl", surface: "web", url: "https://example.com", settings: { ... }, additionalFields: [], csvFile: null }
+* @param {CrawlConfig} config - Crawl configuration used to construct the pending dispatch payload.
+* @returns {PendingDispatch} A validated pending dispatch object for starting the crawl.
+**/
 function buildDispatch(config: CrawlConfig): PendingDispatch {
   const additionalFields = uniqueFields(config.additional_fields);
   const commonSettings = {
@@ -561,6 +592,14 @@ function inferDispatchSurface(config: CrawlConfig) {
   return config.module === "category" ? "job_listing" : "job_detail";
 }
 
+/**
+* Determines whether a string looks like a job posting URL based on known host and path patterns.
+* @example
+* looksLikeJobUrl("https://www.linkedin.com/jobs/view/123456789")
+* true
+* @param {string} value - URL string to evaluate.
+* @returns {boolean} Returns true if the URL appears to be a job listing URL; otherwise false.
+**/
 function looksLikeJobUrl(value: string) {
   try {
     const url = new URL(value);
