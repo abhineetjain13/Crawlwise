@@ -1,12 +1,26 @@
 # Crawl run route handlers.
 from __future__ import annotations
 
-from typing import Annotated
+import logging
+from typing import Annotated, NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    UploadFile,
+    File,
+    Form,
+    status,
+)
+from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import SessionLocal
 from app.core.dependencies import get_current_user, get_db
+from app.core.security import decode_access_token
+from app.models.crawl import CrawlLog
 from app.models.user import User
 from app.schemas.common import LogEntryResponse, PaginatedResponse, PaginationMeta
 from app.schemas.crawl import (
@@ -17,21 +31,31 @@ from app.schemas.crawl import (
     LLMCommitRequest,
     LLMCommitResponse,
 )
-from app.services.crawl_service import (
+from app.services.crawl_crud import (
     commit_llm_suggestions,
     commit_selected_fields,
     create_crawl_run,
     delete_run,
     get_run,
     get_run_logs,
-    kill_run,
     list_runs,
     parse_csv_urls,
+)
+from app.services.crawl_events import (
+    serialize_log_event,
+    serialize_run_snapshot,
+)
+from app.services.crawl_state import TERMINAL_STATUSES, normalize_status
+from app.services.db_utils import with_retry
+from app.services.crawl_service import (
+    kill_run,
     pause_run,
     resume_run,
 )
 
 router = APIRouter(prefix="/api/crawls", tags=["crawls"])
+
+logger = logging.getLogger("app.api.crawls")
 
 RUN_NOT_FOUND_DETAIL = "Run not found"
 RUN_CONFLICT_DETAIL = "Run cannot be cancelled in its current state"
@@ -44,6 +68,13 @@ RUN_CONFLICT_RESPONSE = {
 }
 
 
+def _raise_http_from_value_error(
+    *, status_code: int, exc: ValueError
+) -> NoReturn:
+    """Translate validation/business ValueError into HTTPException preserving cause."""
+    raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
 @router.post(
     "",
     responses={status.HTTP_400_BAD_REQUEST: {"description": "Invalid crawl request"}},
@@ -54,19 +85,52 @@ async def crawls_create(
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     data = payload.model_dump()
-    # For batch runs, store URLs in settings so worker can access them
+    # For batch runs, store URLs in settings so in-process runner can access them
     if payload.run_type == "batch" and payload.urls:
         data.setdefault("settings", {})["urls"] = payload.urls
     try:
         run = await create_crawl_run(session, user.id, data)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        _raise_http_from_value_error(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            exc=exc,
+        )
     return {"run_id": run.id}
+
+
+async def _mark_run_failed_with_retry(
+    *,
+    run_id: int,
+    error_message: str,
+    session_factory=SessionLocal,
+) -> None:
+    """Best-effort failure marking that retries status + summary mutation together."""
+    from app.models.crawl import CrawlRun
+    from app.services.crawl_state import CrawlStatus, update_run_status
+
+    async with session_factory() as error_session:
+        async def _mutation(retry_session: AsyncSession) -> None:
+            failed_run = await retry_session.get(CrawlRun, run_id)
+            if failed_run is None:
+                return
+            if normalize_status(failed_run.status) in TERMINAL_STATUSES:
+                return
+            update_run_status(failed_run, CrawlStatus.FAILED)
+            summary = dict(failed_run.result_summary or {})
+            summary["error"] = str(error_message or "background_crawl_error")
+            summary["extraction_verdict"] = "error"
+            failed_run.result_summary = summary
+
+        await with_retry(error_session, _mutation)
 
 
 @router.post(
     "/csv",
-    responses={status.HTTP_400_BAD_REQUEST: {"description": "Invalid CSV crawl request or no valid URLs found"}},
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "Invalid CSV crawl request or no valid URLs found"
+        }
+    },
 )
 async def crawls_create_csv(
     file: Annotated[UploadFile, File(...)],
@@ -106,7 +170,10 @@ async def crawls_create_csv(
     try:
         run = await create_crawl_run(session, user.id, data)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        _raise_http_from_value_error(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            exc=exc,
+        )
     return {"run_id": run.id, "url_count": len(urls)}
 
 
@@ -121,9 +188,13 @@ async def crawls_list(
     url_search: str = "",
 ) -> PaginatedResponse[CrawlRunResponse]:
     user_id = user.id if user.role != "admin" else None
-    rows, total = await list_runs(session, page, limit, status_value, run_type, url_search, user_id=user_id)
+    rows, total = await list_runs(
+        session, page, limit, status_value, run_type, url_search, user_id=user_id
+    )
     return PaginatedResponse(
-        items=[CrawlRunResponse.model_validate(row, from_attributes=True) for row in rows],
+        items=[
+            CrawlRunResponse.model_validate(row, from_attributes=True) for row in rows
+        ],
         meta=PaginationMeta(page=page, limit=limit, total=total),
     )
 
@@ -136,11 +207,15 @@ async def crawls_detail(
 ) -> CrawlRunResponse:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     return CrawlRunResponse.model_validate(run, from_attributes=True)
 
 
-@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT, responses=RUN_CONFLICT_RESPONSE)
+@router.delete(
+    "/{run_id}", status_code=status.HTTP_204_NO_CONTENT, responses=RUN_CONFLICT_RESPONSE
+)
 async def crawls_delete(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -148,11 +223,16 @@ async def crawls_delete(
 ) -> None:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     try:
         await delete_run(session, run)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        _raise_http_from_value_error(
+            status_code=status.HTTP_409_CONFLICT,
+            exc=exc,
+        )
 
 
 @router.post("/{run_id}/pause", responses=RUN_CONFLICT_RESPONSE)
@@ -163,11 +243,16 @@ async def crawls_pause(
 ) -> dict:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     try:
         updated = await pause_run(session, run)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        _raise_http_from_value_error(
+            status_code=status.HTTP_409_CONFLICT,
+            exc=exc,
+        )
     return {"run_id": updated.id, "status": updated.status}
 
 
@@ -180,13 +265,17 @@ async def crawls_llm_commit(
 ) -> LLMCommitResponse:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     updated_records, updated_fields = await commit_llm_suggestions(
         session,
         run=run,
         items=[item.model_dump() for item in payload.items],
     )
-    return LLMCommitResponse(run_id=run.id, updated_records=updated_records, updated_fields=updated_fields)
+    return LLMCommitResponse(
+        run_id=run.id, updated_records=updated_records, updated_fields=updated_fields
+    )
 
 
 @router.post("/{run_id}/commit-fields", responses=RUN_NOT_FOUND_RESPONSE)
@@ -198,13 +287,17 @@ async def crawls_commit_fields(
 ) -> FieldCommitResponse:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     updated_records, updated_fields = await commit_selected_fields(
         session,
         run=run,
         items=[item.model_dump() for item in payload.items],
     )
-    return FieldCommitResponse(run_id=run.id, updated_records=updated_records, updated_fields=updated_fields)
+    return FieldCommitResponse(
+        run_id=run.id, updated_records=updated_records, updated_fields=updated_fields
+    )
 
 
 @router.post("/{run_id}/resume", responses=RUN_CONFLICT_RESPONSE)
@@ -215,11 +308,16 @@ async def crawls_resume(
 ) -> dict:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     try:
         updated = await resume_run(session, run)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        _raise_http_from_value_error(
+            status_code=status.HTTP_409_CONFLICT,
+            exc=exc,
+        )
     return {"run_id": updated.id, "status": updated.status}
 
 
@@ -227,7 +325,9 @@ async def crawls_resume(
     "/{run_id}/kill",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
-        status.HTTP_409_CONFLICT: {"description": "Run cannot be killed in its current state"},
+        status.HTTP_409_CONFLICT: {
+            "description": "Run cannot be killed in its current state"
+        },
     },
 )
 async def crawls_kill(
@@ -237,11 +337,16 @@ async def crawls_kill(
 ) -> dict:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     try:
         updated = await kill_run(session, run)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        _raise_http_from_value_error(
+            status_code=status.HTTP_409_CONFLICT,
+            exc=exc,
+        )
     return {"run_id": updated.id, "status": updated.status}
 
 
@@ -257,7 +362,19 @@ async def crawls_cancel(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    return await crawls_kill(run_id, session, user)
+    run = await get_run(session, run_id)
+    if run is None or (user.role != "admin" and run.user_id != user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
+    try:
+        updated = await kill_run(session, run)
+    except ValueError as exc:
+        _raise_http_from_value_error(
+            status_code=status.HTTP_409_CONFLICT,
+            exc=exc,
+        )
+    return {"run_id": updated.id, "status": updated.status}
 
 
 @router.get("/{run_id}/logs", responses=RUN_NOT_FOUND_RESPONSE)
@@ -268,6 +385,8 @@ async def crawls_logs(
 ) -> list[LogEntryResponse]:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     rows = await get_run_logs(session, run_id)
     return [LogEntryResponse.model_validate(row, from_attributes=True) for row in rows]

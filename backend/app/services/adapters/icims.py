@@ -83,7 +83,7 @@ class ICIMSAdapter(BaseAdapter):
                     impersonate="chrome110",
                     timeout=15,
                 )
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError):
                 break
             if response.status_code != 200 or not response.text:
                 break
@@ -142,7 +142,7 @@ class ICIMSAdapter(BaseAdapter):
                 impersonate="chrome110",
                 timeout=15,
             )
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError):
             logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
             return fallback_html
         if response.status_code == 200 and response.text:

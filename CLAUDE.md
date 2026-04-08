@@ -177,73 +177,16 @@ Code should continue to import from `pipeline_config.py`, not duplicate config v
 - Only business-level fields with actual values from `record.data` and `record.raw_data` appear as review candidates
 - Reviewed values can be persisted through `POST /api/crawls/{run_id}/commit-fields`; the old LLM commit path now delegates to the same backend write flow
 
-### Recent fixes
+### Current status snapshot
 
-- Single-page frontend contract now uses `run_type="crawl"`
-- Listing extractor now resolves relative URLs against the page URL
-- Review payload now exposes extracted fields instead of raw source containers
-- Password hashing now uses `pbkdf2_sha256` instead of the broken bcrypt runtime path
-- Shopify PDP adapter now scopes detail acquisition to `/products/<handle>.js`
-- Extraction contract rows now feed XPath and regex candidate extraction
-- Shopify adapter HTTP calls now use `asyncio.to_thread()` to avoid blocking the event loop
-- Cookie consent selectors imported from `pipeline_config` (not hardcoded in browser_client)
-- Verdict logic no longer downgrades to PARTIAL based on missing requested fields
-- Acquisition always tries curl_cffi first, keeps result as Playwright fallback (fixes ERR_HTTP2_PROTOCOL_ERROR on Windows)
-- Blocked detector splits provider markers into active (high confidence) vs CDN (low confidence) tiers — prevents false positives on Akamai-served pages
-- URL safety now uses fail-closed public-host validation with an `nslookup` fallback on Windows systems where `socket.getaddrinfo()` intermittently fails for public hosts
-- `curl_cffi` SSRF pinning now uses session-level `CurlOpt.RESOLVE` while keeping the original hostname URL, which preserves TLS/SNI and fixes false acquisition failures on CDN-backed sites
-- Playwright no longer injects a `Host` header into browser contexts; this fixes `net::ERR_INVALID_ARGUMENT` on sites like Under Armour and Hatch
-- Blocked-page detection no longer treats dormant DataDome modal markup alone as a hard block when the page clearly contains rich usable content
-- FastAPI startup no longer marks queued `pending` crawl runs as failed; only actual in-flight orphan recovery should change run state
-- Cookie persistence now runs through a shared policy in `data/knowledge_base/cookie_policy.json`; challenge/anti-bot cookies are filtered out on both load and save, and stale cookie jars are removed automatically when nothing policy-safe remains
-- Acquisition now records observed HTTP attempt logs and applies bounded retry backoff plus per-host spacing from `pipeline_tuning.json`; diagnostics should reflect only real attempts and actual failures, never inferred failure reasons that did not occur
-- Kasada challenge detection (KPSDK script + short page)
-- Playwright `_goto_with_fallback` catches all exceptions, not just TimeoutError
-- Listing extractor ranks structured sources by field richness instead of short-circuiting on first source with >=2 records
-- `_extract_items_from_json` now uses `pipeline_tuning.json:max_json_recursion_depth` (default `4`) for deeply nested product arrays (e.g. Myntra `searchData.results.products`)
-- Hydrated state patterns expanded: `__myx`, `__STORE__`, `__APP_STATE__`
-- Field aliases expanded: `landingPageUrl`, `searchImage`, `discountedPrice`, `mrp`
-- Detail runs now persist deterministic `field_discovery` summaries for requested fields so intelligence/review UIs can show discovered values and source provenance instead of raw source blobs alone
-- Manual reviewed-field commits now use a generic `commit-fields` API route rather than LLM-only naming
-- API auth now accepts either the session cookie or `Authorization: Bearer <token>` for the same protected endpoints
-- Listing card title extraction now uses ordered selectors (`[itemprop='name']` → `.title` → headings) and skips price-like headings — fixes webscraper.io where price `<h4>` preceded title `<h4>`
-- Card auto-detect now scores candidate groups by product signal density (link + image + price presence) instead of pure element count — fixes nav lists being preferred over product tiles on ThriftBooks, iFixit, Under Armour
-- Card selectors expanded with new generic patterns including: `[itemscope][itemtype*='Product']`, `[class*='ProductCard']`, `[class*='SearchResultTile']`, `[class*='product-tile']`, etc.
-- Price text in card extraction now cleaned via regex to strip surrounding UI text ("£51.77 In stock Add to basket" → "£51.77")
-- `collection_keys.json` expanded from 15 to 37 keys (added `drinks`, `books`, `categories`, `collections`, `articles`, `content`, etc.)
-- JSON extractor now falls back to preserving scalar fields under original keys when no canonical alias matches — prevents empty records from APIs with non-standard naming (e.g. CocktailDB `strDrink`)
-- Card extraction now prefers `[itemprop='image']` for image_url before falling back to generic `<img>` selectors
-- JS-shell page detection: acquisition now triggers Playwright fallback when HTML is large (>=200KB) but visible text ratio is below 2% — catches Next.js/SPA shell pages like Sigma Aldrich where `curl_cffi` returns full HTML skeleton but no rendered product data
-- Listing extractor now detects and filters category/navigation URLs (paths like `/products/cell-culture`) from product URLs (paths like `/product/sigma/nuc101`) — prevents category hub links from being extracted as product records
-- Listing record quality guards now reject weak promo/category hub rows that only contain navigation metadata such as title + URL + publication date, and shared URL normalization drops asset links such as `.woff2`
-- iFixit-style listing grids that render products as `article` children under `data-testid` containers are now covered by generic card selectors
-- Acquisition timing summaries now roll up curl fetch, browser decision, browser launch/origin/navigation/challenge/readiness/traversal, acquisition total, and extraction total into run-level `acquisition_summary`
-- LLM runtime calls are fire-and-forget with no retry — 429 rate limit errors fail immediately (retry/backoff removed to avoid blocking the pipeline on free-tier API limits)
-- Dynamic field name validation rejects single-character keys, keys longer than 60 chars, sentence-like keys with 5+ underscores, and JSON-LD schema type names (AggregateRating, BreadcrumbList, etc.) from leaking into `record.data`
-- Specification aggregate fields (`specifications`, `dimensions`) now require at least 2 real spec entries from the semantic extractor before being emitted — prevents phantom "specifications" on pages without actual spec tables
-- `spec_drop_labels` expanded with JSON-LD type names, day-of-week patterns, and structural artifacts
-- Extraction smoke runner (`run_extraction_smoke.py`) tests the full acquire→discover→extract pipeline without a database, validated against 5 client URLs (Adorama, Dice, SSENSE, Arc'teryx)
-- Network payload noise filtering: geo/tracking/widget API responses (geolocation, analytics, Klarna, Affirm, livechat, etc.) are now filtered by URL pattern before entering the candidate pipeline — prevents ISP names, tracking IDs, and payment widget data from polluting title/category/brand candidates
-- JSON-LD `@type` values no longer leak as category candidates: `_deep_get_all_aliases` now skips JSON-LD structural keys (`@type`, `@context`, `@id`, `@graph`), and a CamelCase schema type pattern filter catches remaining type names (e.g. IndividualProduct, PeopleAudience)
-- `generic_category_values` expanded with 30+ additional schema.org type names (IndividualProduct, PeopleAudience, PostalAddress, QuantitativeValue, etc.)
-- Dynamic field underscore threshold relaxed from >=3 to >=5 to preserve legitimate multi-word fields (job qualifications, accordion section headings)
-- LLM retry/backoff removed — 429 errors now fail fast instead of blocking the pipeline with 5-10s sleeps per retry
-- Text pattern extraction fallback: when a requested additional field has no candidates from structured sources, the pipeline now searches description text and HTML for "Label: Value" patterns matching the field name (e.g. "Supplier color: Black/Jet" inside SSENSE description)
-- `_deep_get_all_aliases` now skips non-product container keys (`review`, `reviews`, `author`, `publisher`, `breadcrumb`, etc.) during traversal — prevents review titles from leaking as product title candidates
-- JSON-LD blocks with non-product `@type` (Organization, WebSite, WebPage, BreadcrumbList, etc.) are now skipped for product-identity fields (title, price, brand, etc.) — fixes site name "SparkFun Electronics" appearing as product title
-- Candidate rows per field capped at 5 — prevents intelligence tab from showing 13+ variant SKUs or size values
-- Zero-quality candidates filtered from dynamic/intelligence fields — placeholder values like "-" no longer appear
-- Category quality score now rejects social media names (youtube, facebook, etc.), namespace-prefixed values (food:foodProduct), and URL path fragments
-- Brand quality score penalizes URL path fragments (e.g. "facets/brands/coca-cola")
-- Extraction smoke runner expanded to 9 sites covering: ecommerce PDPs (Adorama, SSENSE, Arc'teryx, Adafruit, SparkFun, OpenFoodFacts), job listings (Dice), ecommerce listings (AutoZone, Puma)
-- Config modules were collapsed from runtime JSON files into typed Python config modules consumed through `pipeline_config.py`
-- Browser field-activation planning was removed in favor of unconditional `expand_all_interactive_elements(page)` during Playwright capture
-- Site memory and selector CRUD subsystems were removed; site-specific extraction rules live in versioned adapter code
-- Discovery manifest and evidence bucket abstractions were removed; plain extraction inputs replaced them
-- Restored first-class iCIMS adapter coverage for ATS boards, including branded shell pages that embed the real iCIMS job board in an iframe
-- Restored first-class Workday adapter coverage for ATS listing/detail pages using rendered `data-automation-id` DOM
-- Restored first-class ADP WorkForceNow adapter coverage for ATS listing/detail pages using hydrated recruitment DOM
-- Added typed artifact exports: `tables.csv`, `artifacts.json`, and CSV fallback to typed table rows when structured records are empty
+- Unified crawl contract is live: single-page submit flow with `run_type="crawl"`, user-owned controls, and explicit traversal-only advanced modes.
+- Crawl runtime is DB-backed lease processing (`services/workers.py`) with stale lease recovery at startup; API no longer owns in-memory background orchestration.
+- Extraction pipeline is ACQUIRE → EXTRACT → UNIFY → PUBLISH with listing fallback guard and deterministic first-match field resolution.
+- Config is typed Python modules behind `pipeline_config.py`; no runtime selector CRUD/site-memory fallback subsystems in the active extraction path.
+- Generic crawler paths are policy-driven: no tenant/site hardcodes; platform behavior is family-based and minimized to the required families.
+- Browser-first policy is family-driven (`PLATFORM_BROWSER_POLICIES`), ATS URL classification uses known family domains (no loose host token guessing).
+- Acquisition hardening remains active: curl-first waterfall, TLS-safe hostname pinning, fail-closed URL safety, observational diagnostics artifacts, policy-driven cookies.
+- LLM/runtime behavior remains fail-fast on 429; dynamic field quality gates and JSON-LD structural filtering remain enforced.
 
 ## Tests
 

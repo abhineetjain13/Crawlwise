@@ -17,10 +17,11 @@
 
 1. **Sandboxes first** — baseline your extractor against deterministic fixtures: `§0`
 2. **Rich data APIs** — pure JSON/structured paths: `§RD`
-3. **Listing commerce** — static + JS listing extraction: `§LC`
-4. **Listing jobs (ATS boards)** — board-level extraction: `§LJ`
-5. **Detail commerce** — multi-source PDP extraction: `§DC`
-6. **Detail jobs** — job posting schema extraction: `§DJ`
+3. **Traversal canaries** — pagination + infinite scroll + mixed traversal baseline: `§TC`
+4. **Listing commerce** — static + JS listing extraction: `§LC`
+5. **Listing jobs (ATS boards)** — board-level extraction: `§LJ`
+6. **Detail commerce** — multi-source PDP extraction: `§DC`
+7. **Detail jobs** — job posting schema extraction: `§DJ`
 
 ---
 
@@ -62,6 +63,20 @@ touching real-world targets.
 | S28 | `https://the-internet.herokuapp.com/infinite_scroll` | Infinite scroll | Pure infinite scroll test |
 | S29 | `https://crawler-test.com/` | Multi-pattern | Meta tags, encoding, redirects, robots.txt behaviour |
 | S30 | `https://demo.opencart.com/` | Full e-commerce | OpenCart demo — listing + detail + cart state, no auth needed |
+
+---
+
+## Section TC — Traversal Canaries
+
+Small, high-signal set to validate traversal behavior before interpreting broader extraction failures.
+
+| # | URL | Surface | Traversal Mode Focus | What It Tests |
+|---|---|---|---|---|
+| TC01 | `https://web-scraping.dev/products` | Listing | `paginate` | Deterministic product listing with clear next-page behavior |
+| TC02 | `https://www.myntra.com/hand-towels` | Listing | `paginate` | Real commerce pagination, duplicate-page suppression, stable card counting |
+| TC03 | `https://in.puma.com/in/en/classics-collection?filter_gender=%3E{unisex;unisex_0_adults;male;unisex0_kids}&offset=96` | Listing | `scroll` | Real infinite scroll, async settling, item-growth stop conditions |
+| TC04 | `https://quotes.toscrape.com/scroll` | Infinite scroll | `scroll` | Low-noise infinite scroll baseline |
+| TC05 | `https://webscraper.io/test-sites/e-commerce/scroll/computers/laptops` | Infinite scroll | `scroll` / `load_more` | Scroll-triggered growth with repeatable sandbox behavior |
 
 ---
 
@@ -169,16 +184,16 @@ parallel arrays, and non-standard schema patterns that stress-test normalisation
 | # | URL | Format | Nesting Depth | What to Extract |
 |---|---|---|---|---|
 | RD01 | `https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson` | GeoJSON | Deep | Geometry coords, nested `properties`, magnitude type variants |
-|| RD11 | `https://api.coingecko.com/api/v3/coins/bitcoin` | JSON API | Deep | market_data nested 3 levels, community_data, developer_data |
-| RD12 | `https://restcountries.com/v3.1/name/germany` | JSON API | Medium | Currency object, languages, translations, demonyms, flags map |
-| RD13 | `https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,precipitation` | JSON API | Medium | Time-series parallel arrays, hourly units, timezone metadata |
-| RD14 | `https://apis.scryfall.com/cards/named?exact=Black+Lotus` | JSON API | Medium | Legalities map, image_uris, prices object, keywords array |
-| RD15 | `https://pokeapi.co/api/v2/pokemon/charizard` | JSON API | Deep | 20+ nested arrays, sprites map, abilities / moves / types schema |
-| RD16 | `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/aspirin/JSON` | JSON API | Deep | Chemical props — SMILES, InChI, computed descriptors, CID |
-| RD17 | `https://openfarm.cc/api/v1/crops/?q=tomato` | JSON:API | Medium | JSONAPI spec format (data/relationships/included), growing conditions |
-| RD18 | `https://api.worldbank.org/v2/country/us/indicator/NY.GDP.MKTP.CD?format=json` | JSON API | Medium | Page-meta + data wrapped array, indicator + country nested |
-| RD19 | `https://openlibrary.org/subjects/science.json` | JSON API | Medium | Subject listing — works array, author facets, edition count |
-| RD20 | `https://www.thecocktaildb.com/api/json/v1/1/search.php?s=margarita` | JSON API | Medium | Denormalised — ingredient1–15 + measure1–15 as flat columns |
+| RD02 | `https://api.coingecko.com/api/v3/coins/bitcoin` | JSON API | Deep | market_data nested 3 levels, community_data, developer_data |
+| RD03 | `https://restcountries.com/v3.1/name/germany` | JSON API | Medium | Currency object, languages, translations, demonyms, flags map |
+| RD04 | `https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m,relativehumidity_2m,windspeed_10m,precipitation` | JSON API | Medium | Time-series parallel arrays, hourly units, timezone metadata |
+| RD05 | `https://apis.scryfall.com/cards/named?exact=Black+Lotus` | JSON API | Medium | Legalities map, image_uris, prices object, keywords array |
+| RD06 | `https://pokeapi.co/api/v2/pokemon/charizard` | JSON API | Deep | 20+ nested arrays, sprites map, abilities / moves / types schema |
+| RD07 | `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/aspirin/JSON` | JSON API | Deep | Chemical props — SMILES, InChI, computed descriptors, CID |
+| RD08 | `https://openfarm.cc/api/v1/crops/?q=tomato` | JSON:API | Medium | JSONAPI spec format (data/relationships/included), growing conditions |
+| RD09 | `https://api.worldbank.org/v2/country/us/indicator/NY.GDP.MKTP.CD?format=json` | JSON API | Medium | Page-meta + data wrapped array, indicator + country nested |
+| RD10 | `https://openlibrary.org/subjects/science.json` | JSON API | Medium | Subject listing — works array, author facets, edition count |
+| RD11 | `https://www.thecocktaildb.com/api/json/v1/1/search.php?s=margarita` | JSON API | Medium | Denormalised — ingredient1–15 + measure1–15 as flat columns |
 
 ---
 

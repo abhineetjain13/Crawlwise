@@ -2,8 +2,24 @@ function normalizeBaseUrl(value: string) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+function parseConfiguredApiBaseUrl(configured: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(configured);
+  } catch {
+    throw new Error(
+      "NEXT_PUBLIC_API_BASE_URL must be a valid absolute URL (for example, http://127.0.0.1:8000).",
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      "NEXT_PUBLIC_API_BASE_URL must use http:// or https://.",
+    );
+  }
+  return normalizeBaseUrl(parsed.toString());
+}
+
 let resolvedBaseUrl: string | null = null;
-const ACCESS_TOKEN_KEY = "crawlerai-access-token";
 
 export class ApiError extends Error {
   status: number;
@@ -31,7 +47,7 @@ export function getApiBaseUrl() {
   }
   const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configured) {
-    resolvedBaseUrl = normalizeBaseUrl(configured);
+    resolvedBaseUrl = parseConfiguredApiBaseUrl(configured);
     return resolvedBaseUrl;
   }
   if (typeof window !== "undefined") {
@@ -49,10 +65,21 @@ export function getApiBaseUrl() {
   return resolvedBaseUrl;
 }
 
+export function getApiWebSocketBaseUrl() {
+  const httpBase = getApiBaseUrl();
+  if (httpBase.startsWith("https://")) {
+    return `wss://${httpBase.slice("https://".length)}`;
+  }
+  if (httpBase.startsWith("http://")) {
+    return `ws://${httpBase.slice("http://".length)}`;
+  }
+  return httpBase;
+}
+
 function getApiBaseUrlCandidates() {
   const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configured) {
-    return [normalizeBaseUrl(configured)];
+    return [parseConfiguredApiBaseUrl(configured)];
   }
   if (typeof window === "undefined") {
     return ["http://127.0.0.1:8000", "http://localhost:8000"];
@@ -73,7 +100,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let lastFetchError: Error | null = null;
   const candidateBaseUrls = getApiBaseUrlCandidates();
   const hasConfiguredBaseUrl = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || candidateBaseUrls.length === 1;
-  const accessToken = readAccessToken();
 
   for (const baseUrl of candidateBaseUrls) {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -85,12 +111,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
           credentials: "include",
           headers: isFormData
             ? {
-                ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
                 ...(init?.headers ?? {}),
               }
             : {
                 "Content-Type": "application/json",
-                ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
                 ...(init?.headers ?? {}),
               },
         });
@@ -108,15 +132,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         if (response.status === 204) {
           return undefined as T;
         }
+        const contentLength = response.headers.get("content-length");
+        if (contentLength === "0") {
+          return undefined as T;
+        }
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.includes("application/json")) {
+          const text = await response.text();
+          if (!text.trim()) {
+            return undefined as T;
+          }
+          throw new ApiError("Expected JSON response from API.", response.status, text);
+        }
         return response.json() as Promise<T>;
       }
 
       const body = await readErrorBody(response);
       const message = body || response.statusText || "Request failed";
       const error = new ApiError(message, response.status, body);
-      if (response.status === 401) {
-        storeAccessToken(null);
-      }
       lastError = error;
 
       if (response.status === 404 && hasConfiguredBaseUrl) {
@@ -147,7 +180,6 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
   const maxAttempts = 3;
   const candidateBaseUrls = getApiBaseUrlCandidates();
   const hasConfiguredBaseUrl = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || candidateBaseUrls.length === 1;
-  const accessToken = readAccessToken();
   let lastError: ApiError | null = null;
   let lastFetchError: Error | null = null;
 
@@ -161,11 +193,9 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
           credentials: "include",
           headers: isFormData
             ? {
-                ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
                 ...(init?.headers ?? {}),
               }
             : {
-                ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
                 ...(init?.headers ?? {}),
               },
         });
@@ -186,9 +216,6 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
       const body = await readErrorBody(response);
       const error = new ApiError(body || response.statusText || "Request failed", response.status, body);
       lastError = error;
-      if (response.status === 401) {
-        storeAccessToken(null);
-      }
       if (response.status === 404 && hasConfiguredBaseUrl) {
         throw error;
       }
@@ -210,24 +237,6 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
     throw new Error(`Failed to reach backend API. Tried: ${candidateBaseUrls.join(", ")}`);
   }
   throw new ApiError("Request failed", 500, "");
-}
-
-export function storeAccessToken(token: string | null | undefined) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  if (!token) {
-    window.localStorage.removeItem(ACCESS_TOKEN_KEY);
-    return;
-  }
-  window.localStorage.setItem(ACCESS_TOKEN_KEY, token);
-}
-
-function readAccessToken() {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  return window.localStorage.getItem(ACCESS_TOKEN_KEY) ?? "";
 }
 
 export const apiClient = {

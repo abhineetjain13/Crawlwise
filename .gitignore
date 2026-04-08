@@ -1,6 +1,7 @@
 .env
 .vscode/
 
+.hypothesis/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -8,8 +9,11 @@ __pycache__/
 *.py[cod]
 *.sqlite
 *.sqlite3
+*.db
+*.db-*
 
 backend/.venv/
+backend/.hypothesis/
 backend/__pycache__/
 backend/.pytest_cache/
 backend/.mypy_cache/
@@ -19,8 +23,11 @@ crawlerai.db
 crawlerai.db-*
 backend/crawlerai.db
 backend/crawlerai.db-*
+backend/crawler.db
+backend/crawler.db-*
 backend/artifacts/
 backend/.coverage
+backend/.tmp_project_requirements.txt
 
 frontend/.next/
 frontend/node_modules/

@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
-from app.services.crawl_service import _normalize_committed_field_name, _refresh_record_commit_metadata
+from app.services.crawl_metadata import refresh_record_commit_metadata
+from app.services.crawl_utils import normalize_committed_field_name
 from app.services.knowledge_base.store import (
     get_domain_mapping,
     save_domain_mapping,
@@ -16,6 +17,7 @@ from app.services.normalizers import normalize_value
 from app.services.pipeline_config import REVIEW_CONTAINER_KEYS
 from app.services.domain_utils import normalize_domain
 from app.services.schema_service import load_resolved_schema, persist_resolved_schema
+from app.services.db_utils import with_retry
 
 
 async def build_review_payload(session: AsyncSession, run_id: int) -> dict | None:
@@ -106,23 +108,28 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
             stale=False,
         ),
     )
-    promotion = ReviewPromotion(
-        run_id=run.id,
-        domain=domain,
-        surface=run.surface,
-        approved_schema={
-            "fields": updated_schema.fields,
-            "baseline_fields": updated_schema.baseline_fields,
-            "new_fields": updated_schema.new_fields,
-            "deprecated_fields": updated_schema.deprecated_fields,
-            "source": updated_schema.source,
-            "saved_at": updated_schema.saved_at,
-        },
-        field_mapping=mapping,
-    )
-    session.add(promotion)
-    await _promote_review_bucket_fields(session, run, mapping)
-    await session.commit()
+    async def _operation(retry_session: AsyncSession) -> None:
+        retry_run = await retry_session.get(CrawlRun, run.id)
+        if retry_run is None:
+            raise RuntimeError(f"CrawlRun not found for review save: run_id={run.id}")
+        promotion = ReviewPromotion(
+            run_id=retry_run.id,
+            domain=domain,
+            surface=retry_run.surface,
+            approved_schema={
+                "fields": updated_schema.fields,
+                "baseline_fields": updated_schema.baseline_fields,
+                "new_fields": updated_schema.new_fields,
+                "deprecated_fields": updated_schema.deprecated_fields,
+                "source": updated_schema.source,
+                "saved_at": updated_schema.saved_at,
+            },
+            field_mapping=mapping,
+        )
+        retry_session.add(promotion)
+        await _promote_review_bucket_fields(retry_session, retry_run, mapping)
+
+    await with_retry(session, _operation)
     return {
         "run_id": run.id,
         "domain": domain,
@@ -188,9 +195,9 @@ async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, ma
     if not mapping:
         return
     normalized_mapping = {
-        _normalize_committed_field_name(source_field): _normalize_committed_field_name(target_field)
+        normalize_committed_field_name(source_field): normalize_committed_field_name(target_field)
         for source_field, target_field in mapping.items()
-        if _normalize_committed_field_name(source_field) and _normalize_committed_field_name(target_field)
+        if normalize_committed_field_name(source_field) and normalize_committed_field_name(target_field)
     }
     if not normalized_mapping:
         return
@@ -204,7 +211,7 @@ async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, ma
         selected_values: dict[str, dict] = {}
         remaining_rows: list[dict] = []
         for row in review_bucket:
-            source_field = _normalize_committed_field_name(row.get("key"))
+            source_field = normalize_committed_field_name(row.get("key"))
             output_field = normalized_mapping.get(source_field)
             if not source_field or not output_field:
                 remaining_rows.append(row)
@@ -234,8 +241,8 @@ async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, ma
         }
         discovered_data["review_bucket"] = [
             row for row in remaining_rows
-            if _normalize_committed_field_name(row.get("key")) not in mapped_source_fields
-            or _safe_dict(record.data).get(normalized_mapping.get(_normalize_committed_field_name(row.get("key")), ""))
+            if normalize_committed_field_name(row.get("key")) not in mapped_source_fields
+            or _safe_dict(record.data).get(normalized_mapping.get(normalize_committed_field_name(row.get("key")), ""))
             not in (None, "", [], {})
         ]
         record.discovered_data = {
@@ -245,7 +252,7 @@ async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, ma
         }
 
         for output_field, row in selected_values.items():
-            _refresh_record_commit_metadata(
+            refresh_record_commit_metadata(
                 record,
                 run=run,
                 field_name=output_field,

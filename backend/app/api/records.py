@@ -18,7 +18,7 @@ from app.models.crawl import CrawlRecord
 from app.models.user import User
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.crawl import CrawlRecordProvenanceResponse, CrawlRecordResponse
-from app.services.crawl_service import get_run_records
+from app.services.crawl_crud import get_run, get_run_records
 from app.services.pipeline_config import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
 
 router = APIRouter(tags=["records"])
@@ -37,7 +37,9 @@ RECORD_NOT_FOUND_RESPONSE = {
 RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
-_FALLBACK_INTERNAL_FIELDS = frozenset({"page_markdown", "table_markdown", "record_type"})
+_FALLBACK_INTERNAL_FIELDS = frozenset(
+    {"page_markdown", "table_markdown", "record_type"}
+)
 
 
 @router.get("/api/crawls/{run_id}/records", responses=RUN_NOT_FOUND_RESPONSE)
@@ -48,26 +50,29 @@ async def records_list(
     page: Annotated[int, Query(ge=1)] = 1,
     limit: Annotated[int, Query(ge=1, le=MAX_RECORD_PAGE_SIZE)] = 20,
 ) -> PaginatedResponse[CrawlRecordResponse]:
-    from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (current_user.role != "admin" and run.user_id != current_user.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
 
     rows, total = await get_run_records(session, run_id, page, limit)
     return PaginatedResponse(
-        items=[CrawlRecordResponse.model_validate(row, from_attributes=True) for row in rows],
+        items=[
+            CrawlRecordResponse.model_validate(row, from_attributes=True)
+            for row in rows
+        ],
         meta=PaginationMeta(page=page, limit=limit, total=total),
     )
 
 
-@router.get("/api/records/{record_id}/provenance", responses=RECORD_PROVENANCE_NOT_FOUND_RESPONSE)
+@router.get(
+    "/api/records/{record_id}/provenance",
+    responses=RECORD_PROVENANCE_NOT_FOUND_RESPONSE,
+)
 async def record_provenance(
     record_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> CrawlRecordProvenanceResponse:
-    from app.services.crawl_service import get_run
-
     record = await session.get(CrawlRecord, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail=RECORD_NOT_FOUND_DETAIL)
@@ -83,7 +88,6 @@ async def export_json(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
-    from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
@@ -104,7 +108,6 @@ async def export_csv(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
-    from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
@@ -125,7 +128,6 @@ async def export_tables_csv(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
-    from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
@@ -146,7 +148,6 @@ async def export_markdown(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
-    from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
@@ -161,13 +162,14 @@ async def export_markdown(
     )
 
 
-@router.get("/api/crawls/{run_id}/export/artifacts.json", responses=RUN_NOT_FOUND_RESPONSE)
+@router.get(
+    "/api/crawls/{run_id}/export/artifacts.json", responses=RUN_NOT_FOUND_RESPONSE
+)
 async def export_artifacts_json(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
-    from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
@@ -188,7 +190,6 @@ async def export_discoverist(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> StreamingResponse:
-    from app.services.crawl_service import get_run
     run = await get_run(session, run_id)
     if run is None or (_.role != "admin" and run.user_id != _.id):
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
@@ -203,13 +204,17 @@ async def export_discoverist(
     )
 
 
-async def _collect_export_rows(session: AsyncSession, run_id: int) -> tuple[list, dict[str, int | bool]]:
+async def _collect_export_rows(
+    session: AsyncSession, run_id: int
+) -> tuple[list, dict[str, int | bool]]:
     rows = []
     page = 1
     total = 0
 
     while True:
-        page_rows, total = await get_run_records(session, run_id, page, MAX_RECORD_PAGE_SIZE)
+        page_rows, total = await get_run_records(
+            session, run_id, page, MAX_RECORD_PAGE_SIZE
+        )
         rows.extend(page_rows)
         if not page_rows or len(rows) >= total:
             break
@@ -223,11 +228,17 @@ async def _collect_export_rows(session: AsyncSession, run_id: int) -> tuple[list
     }
 
 
-async def _collect_export_metadata(session: AsyncSession, run_id: int) -> dict[str, int | bool]:
+async def _collect_export_metadata(
+    session: AsyncSession, run_id: int
+) -> dict[str, int | bool]:
     _, total = await get_run_records(session, run_id, 1, 1)
-    pages_used = max(1, (int(total) + MAX_RECORD_PAGE_SIZE - 1) // MAX_RECORD_PAGE_SIZE)
+    pages_used = (
+        (int(total) + MAX_RECORD_PAGE_SIZE - 1) // MAX_RECORD_PAGE_SIZE
+        if total > 0
+        else 0
+    )
     return {
-        "pages_used": pages_used,
+        "pages_used": max(1, pages_used),
         "total": int(total),
         "returned": int(total),
         "truncated": False,
@@ -237,7 +248,9 @@ async def _collect_export_metadata(session: AsyncSession, run_id: int) -> dict[s
 async def _stream_export_rows(session: AsyncSession, run_id: int):
     page = 1
     while True:
-        page_rows, total = await get_run_records(session, run_id, page, MAX_RECORD_PAGE_SIZE)
+        page_rows, total = await get_run_records(
+            session, run_id, page, MAX_RECORD_PAGE_SIZE
+        )
         if not page_rows:
             return
         for row in page_rows:
@@ -260,7 +273,10 @@ async def _stream_export_json(session: AsyncSession, run_id: int):
 
 async def _stream_export_csv(session: AsyncSession, run_id: int):
     rows, _ = await _collect_export_rows(session, run_id)
-    cleaned_records = [_clean_export_data(row.data if isinstance(row.data, dict) else {}) for row in rows]
+    cleaned_records = [
+        _clean_export_data(row.data if isinstance(row.data, dict) else {})
+        for row in rows
+    ]
     structured_rows = [row for row in cleaned_records if row]
     if not structured_rows:
         return
@@ -269,7 +285,9 @@ async def _stream_export_csv(session: AsyncSession, run_id: int):
         fieldnames.update(row.keys())
     ordered_fieldnames = sorted(fieldnames)
     buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=ordered_fieldnames, extrasaction="ignore")
+    writer = csv.DictWriter(
+        buffer, fieldnames=ordered_fieldnames, extrasaction="ignore"
+    )
     writer.writeheader()
     yield buffer.getvalue()
     buffer.seek(0)
@@ -287,13 +305,15 @@ async def _stream_export_tables_csv(session: AsyncSession, run_id: int):
         yield chunk
 
 
-async def _stream_table_rows_csv(table_rows: list[dict]) :
+async def _stream_table_rows_csv(table_rows: list[dict]):
     fieldnames: set[str] = set()
     for row in table_rows:
         fieldnames.update(row.keys())
     ordered_fieldnames = sorted(fieldnames)
     buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=ordered_fieldnames, extrasaction="ignore")
+    writer = csv.DictWriter(
+        buffer, fieldnames=ordered_fieldnames, extrasaction="ignore"
+    )
     writer.writeheader()
     yield buffer.getvalue()
     buffer.seek(0)
@@ -314,10 +334,14 @@ async def _stream_export_discoverist(session: AsyncSession, run_id: int):
     buffer.seek(0)
     buffer.truncate(0)
     async for row in _stream_export_rows(session, run_id):
-        writer.writerow([
-            row.source_url if field_name == "source_url" else (row.data or {}).get(field_name, "")
-            for field_name in fieldnames
-        ])
+        writer.writerow(
+            [
+                row.source_url
+                if field_name == "source_url"
+                else (row.data or {}).get(field_name, "")
+                for field_name in fieldnames
+            ]
+        )
         yield buffer.getvalue()
         buffer.seek(0)
         buffer.truncate(0)
@@ -341,7 +365,8 @@ async def _stream_export_artifacts_json(session: AsyncSession, run_id: int):
 def _clean_export_data(data: dict) -> dict:
     """Strip empty/null values and internal keys from export data."""
     return {
-        k: v for k, v in data.items()
+        k: v
+        for k, v in data.items()
         if (
             v not in (None, "", [], {})
             and not str(k).startswith("_")
@@ -363,21 +388,34 @@ def _artifact_table_rows(row: CrawlRecord) -> list[dict]:
     if legacy_rows:
         return legacy_rows
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    manifest_trace = source_trace.get("manifest_trace") if isinstance(source_trace.get("manifest_trace"), dict) else {}
-    tables = manifest_trace.get("tables") if isinstance(manifest_trace.get("tables"), list) else []
+    manifest_trace = (
+        source_trace.get("manifest_trace")
+        if isinstance(source_trace.get("manifest_trace"), dict)
+        else {}
+    )
+    tables = (
+        manifest_trace.get("tables")
+        if isinstance(manifest_trace.get("tables"), list)
+        else []
+    )
     flattened: list[dict] = []
     for table in tables:
         if not isinstance(table, dict):
             continue
         headers = table.get("headers") if isinstance(table.get("headers"), list) else []
         header_labels = [
-            str((cell.get("text") if isinstance(cell, dict) else "") or "").strip() or f"column_{index + 1}"
+            str((cell.get("text") if isinstance(cell, dict) else "") or "").strip()
+            or f"column_{index + 1}"
             for index, cell in enumerate(headers)
         ]
         for row_index, table_row in enumerate(table.get("rows") or [], start=1):
             if not isinstance(table_row, dict):
                 continue
-            cells = table_row.get("cells") if isinstance(table_row.get("cells"), list) else []
+            cells = (
+                table_row.get("cells")
+                if isinstance(table_row.get("cells"), list)
+                else []
+            )
             payload: dict[str, object] = {
                 "record_id": row.id,
                 "source_url": row.source_url,
@@ -389,9 +427,15 @@ def _artifact_table_rows(row: CrawlRecord) -> list[dict]:
             for index, cell in enumerate(cells):
                 if not isinstance(cell, dict):
                     continue
-                label = header_labels[index] if index < len(header_labels) else f"column_{index + 1}"
+                label = (
+                    header_labels[index]
+                    if index < len(header_labels)
+                    else f"column_{index + 1}"
+                )
                 payload[label] = cell.get("text")
-            flattened.append({k: v for k, v in payload.items() if v not in (None, "", [], {})})
+            flattened.append(
+                {k: v for k, v in payload.items() if v not in (None, "", [], {})}
+            )
     return flattened
 
 
@@ -431,29 +475,45 @@ def _legacy_fallback_markdown_rows(row: CrawlRecord) -> list[dict]:
 def _record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
     raw_data = row.data if isinstance(row.data, dict) else {}
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    manifest_trace = source_trace.get("manifest_trace") if isinstance(source_trace.get("manifest_trace"), dict) else {}
+    manifest_trace = (
+        source_trace.get("manifest_trace")
+        if isinstance(source_trace.get("manifest_trace"), dict)
+        else {}
+    )
     cleaned = _clean_export_data(raw_data)
     page_summary = {
         "record_id": row.id,
         "source_url": row.source_url,
         "title": cleaned.get("title") or raw_data.get("title"),
         "fallback_type": source_trace.get("type"),
-        "markdown_excerpt": _stringify_markdown_value(raw_data.get("page_markdown"))[:500] or None,
+        "markdown_excerpt": _stringify_markdown_value(raw_data.get("page_markdown"))[
+            :500
+        ]
+        or None,
     }
     evidence_refs = {
-        "json_ld_count": len(manifest_trace.get("json_ld") or []) if isinstance(manifest_trace.get("json_ld"), list) else 0,
-        "table_count": len(manifest_trace.get("tables") or []) if isinstance(manifest_trace.get("tables"), list) else 0,
+        "json_ld_count": len(manifest_trace.get("json_ld") or [])
+        if isinstance(manifest_trace.get("json_ld"), list)
+        else 0,
+        "table_count": len(manifest_trace.get("tables") or [])
+        if isinstance(manifest_trace.get("tables"), list)
+        else 0,
     }
     return {
         "record_id": row.id,
         "source_url": row.source_url,
         "structured_record": cleaned or None,
         "table_rows": _artifact_table_rows(row) or None,
-        "page_summary": {k: v for k, v in page_summary.items() if v not in (None, "", [], {})} or None,
+        "page_summary": {
+            k: v for k, v in page_summary.items() if v not in (None, "", [], {})
+        }
+        or None,
         "markdown": {
             "page_markdown": raw_data.get("page_markdown"),
             "table_markdown": raw_data.get("table_markdown"),
-        } if raw_data.get("page_markdown") or raw_data.get("table_markdown") else None,
+        }
+        if raw_data.get("page_markdown") or raw_data.get("table_markdown")
+        else None,
         "evidence_refs": evidence_refs,
     }
 
@@ -470,17 +530,39 @@ def _record_to_markdown(row: CrawlRecord) -> str:
     raw_data = row.data if isinstance(row.data, dict) else {}
     data = _clean_export_data(raw_data)
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    semantic = source_trace.get("semantic") if isinstance(source_trace.get("semantic"), dict) else {}
-    semantic_sections = semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
-    semantic_specs = semantic.get("specifications") if isinstance(semantic.get("specifications"), dict) else {}
+    semantic = (
+        source_trace.get("semantic")
+        if isinstance(source_trace.get("semantic"), dict)
+        else {}
+    )
+    semantic_sections = (
+        semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
+    )
+    semantic_specs = (
+        semantic.get("specifications")
+        if isinstance(semantic.get("specifications"), dict)
+        else {}
+    )
 
     if str(source_trace.get("type") or "") == "listing_fallback":
-        title = _stringify_markdown_value(raw_data.get("title")) or row.source_url or f"Record {row.id}"
+        title = (
+            _stringify_markdown_value(raw_data.get("title"))
+            or row.source_url
+            or f"Record {row.id}"
+        )
         page_markdown = _stringify_markdown_value(raw_data.get("page_markdown"))
         if page_markdown:
-            return page_markdown if page_markdown.lstrip().startswith("#") else f"# {title}\n\n{page_markdown}"
+            return (
+                page_markdown
+                if page_markdown.lstrip().startswith("#")
+                else f"# {title}\n\n{page_markdown}"
+            )
 
-    title = _stringify_markdown_value(data.get("title")) or row.source_url or f"Record {row.id}"
+    title = (
+        _stringify_markdown_value(data.get("title"))
+        or row.source_url
+        or f"Record {row.id}"
+    )
     lines: list[str] = [f"# {title}"]
     if row.source_url:
         lines.extend(["", f"Source: <{row.source_url}>"])
@@ -498,7 +580,14 @@ def _record_to_markdown(row: CrawlRecord) -> str:
         if not rendered_value:
             continue
         if _is_markdown_long_form(field_name, rendered_value):
-            lines.extend(["", f"## {_humanize_field_name(field_name)}", "", _render_markdown_block(rendered_value)])
+            lines.extend(
+                [
+                    "",
+                    f"## {_humanize_field_name(field_name)}",
+                    "",
+                    _render_markdown_block(rendered_value),
+                ]
+            )
             rendered_section_keys.add(normalized_field)
             continue
         scalar_rows.append((_humanize_field_name(field_name), raw_value))
@@ -516,12 +605,22 @@ def _record_to_markdown(row: CrawlRecord) -> str:
         rendered_value = _stringify_markdown_value(raw_value)
         if not rendered_value:
             continue
-        lines.extend(["", f"## {_humanize_field_name(field_name)}", "", _render_markdown_block(rendered_value)])
+        lines.extend(
+            [
+                "",
+                f"## {_humanize_field_name(field_name)}",
+                "",
+                _render_markdown_block(rendered_value),
+            ]
+        )
         rendered_section_keys.add(normalized_field)
 
     spec_rows = [
         (_humanize_field_name(field_name), raw_value)
-        for field_name, raw_value in sorted(semantic_specs.items(), key=lambda item: _humanize_field_name(item[0]).lower())
+        for field_name, raw_value in sorted(
+            semantic_specs.items(),
+            key=lambda item: _humanize_field_name(item[0]).lower(),
+        )
         if _stringify_markdown_value(raw_value)
     ]
     if spec_rows:
@@ -594,7 +693,9 @@ def _humanize_field_name(value: object) -> str:
 
 @lru_cache(maxsize=1)
 def _markdown_long_form_fields() -> frozenset[str]:
-    rows = MARKDOWN_VIEW.get("long_form_fields") if isinstance(MARKDOWN_VIEW, dict) else []
+    rows = (
+        MARKDOWN_VIEW.get("long_form_fields") if isinstance(MARKDOWN_VIEW, dict) else []
+    )
     return frozenset(
         str(value).strip().lower()
         for value in (rows if isinstance(rows, list) else [])
@@ -604,4 +705,6 @@ def _markdown_long_form_fields() -> frozenset[str]:
 
 @lru_cache(maxsize=1)
 def _discoverist_schema() -> tuple[str, ...]:
-    return tuple(str(field_name) for field_name in DISCOVERIST_SCHEMA if str(field_name).strip())
+    return tuple(
+        str(field_name) for field_name in DISCOVERIST_SCHEMA if str(field_name).strip()
+    )

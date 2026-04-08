@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from app.services.pipeline_config import DNS_RESOLUTION_RETRIES, DNS_RESOLUTION_RETRY_DELAY_MS
 
 _ALLOWED_SCHEMES = {"http", "https"}
+_ALLOWED_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
 _BLOCKED_HOSTNAMES = {
     "localhost",
     "localhost.localdomain",
@@ -73,6 +74,53 @@ async def validate_public_target(url: str) -> ValidatedTarget:
         validated_ips.append(ip_text)
     if not validated_ips:
         raise ValueError(f"Target host could not be resolved to a valid IP address: {hostname}")
+    return ValidatedTarget(
+        hostname=hostname,
+        scheme=scheme,
+        port=port,
+        resolved_ips=tuple(validated_ips),
+    )
+
+
+async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
+    parsed = urlparse(str(proxy_url or "").strip())
+    scheme = str(parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_PROXY_SCHEMES:
+        raise ValueError(
+            "Only http://, https://, socks5://, and socks5h:// proxy endpoints are allowed"
+        )
+    hostname = str(parsed.hostname or "").strip().lower()
+    if not hostname:
+        raise ValueError("Proxy URL must include a hostname")
+    if hostname in _BLOCKED_HOSTNAMES or any(
+        hostname.endswith(suffix) for suffix in _BLOCKED_SUFFIXES
+    ):
+        raise ValueError(f"Proxy host is not allowed: {hostname}")
+
+    literal_ip = _parse_ip(hostname)
+    if literal_ip is not None:
+        _raise_if_non_public_ip(literal_ip, hostname)
+        return ValidatedTarget(
+            hostname=hostname,
+            scheme=scheme,
+            port=_target_port(parsed),
+            resolved_ips=(hostname,),
+            dns_resolved=False,
+        )
+
+    port = _target_port(parsed)
+    resolved_ips = await _resolve_host_ips(hostname, port)
+    validated_ips: list[str] = []
+    for ip_text in resolved_ips:
+        ip_value = _parse_ip(ip_text)
+        if ip_value is None:
+            continue
+        _raise_if_non_public_ip(ip_value, hostname)
+        validated_ips.append(ip_text)
+    if not validated_ips:
+        raise ValueError(
+            f"Proxy host could not be resolved to a valid IP address: {hostname}"
+        )
     return ValidatedTarget(
         hostname=hostname,
         scheme=scheme,
@@ -207,4 +255,7 @@ def _target_port(parsed) -> int:
 
 
 def _default_port(scheme: str) -> int:
-    return 443 if str(scheme or "").lower() == "https" else 80
+    normalized = str(scheme or "").lower()
+    if normalized in {"socks5", "socks5h"}:
+        return 1080
+    return 443 if normalized == "https" else 80

@@ -66,7 +66,7 @@ class JibeAdapter(BaseAdapter):
             if response.status_code != 200:
                 return []
             payload = response.json()
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
             return []
         jobs = payload.get("jobs") if isinstance(payload, dict) else []
         if not isinstance(jobs, list):

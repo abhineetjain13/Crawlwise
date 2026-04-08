@@ -17,14 +17,17 @@ import {
   Search,
   Settings2,
   ShieldCheck,
+  Trash2,
   X,
   Zap,
 } from "lucide-react";
 
 import { api } from "../../lib/api";
 import { ApiError } from "../../lib/api/client";
+import type { User } from "../../lib/api/types";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { cn } from "../../lib/utils";
+import { getAuthSessionQueryOptions, isAuthRoute } from "./auth-session-query";
 import { Button } from "../ui/primitives";
 import type { TopBarState } from "./top-bar-context";
 import { TopBarProvider, useTopBarHeader } from "./top-bar-context";
@@ -63,23 +66,17 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   const pathname = usePathname();
   const router = useRouter();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const isAuthRoute = pathname === "/login" || pathname === "/register";
+  const authRoute = isAuthRoute(pathname);
 
-  const authQuery = useQuery({
-    queryKey: ["me"],
-    queryFn: api.me,
-    enabled: !isAuthRoute,
-    retry: false,
-    refetchOnWindowFocus: false,
-  });
+  const authQuery = useQuery(getAuthSessionQueryOptions(pathname));
 
   useEffect(() => {
-    if (!isAuthRoute && authQuery.error instanceof ApiError && authQuery.error.isUnauthorized) {
+    if (!authRoute && authQuery.error instanceof ApiError && authQuery.error.isUnauthorized) {
       router.replace("/login");
     }
-  }, [authQuery.error, isAuthRoute, router]);
+  }, [authQuery.error, authRoute, router]);
 
-  if (isAuthRoute) {
+  if (authRoute) {
     return (
       <div className="min-h-screen bg-[var(--bg-base)] text-[var(--text-primary)]">
         <header
@@ -174,7 +171,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
         </div>
         <div className="min-h-screen lg:grid lg:grid-cols-[auto_minmax(0,1fr)]">
           <Sidebar pathname={pathname} />
-          <ShellContent pathname={pathname} onOpenMobileNav={() => setMobileNavOpen(true)}>
+          <ShellContent me={authQuery.data} pathname={pathname} onOpenMobileNav={() => setMobileNavOpen(true)}>
             {children}
           </ShellContent>
         </div>
@@ -295,12 +292,43 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
 
 /* ─── Shell content ──────────────────────────────────────────────────────── */
 function ShellContent({
+  me,
   children,
   pathname,
   onOpenMobileNav,
-}: Readonly<{ children: React.ReactNode; pathname: string; onOpenMobileNav: () => void }>) {
+}: Readonly<{ me: User | undefined; children: React.ReactNode; pathname: string; onOpenMobileNav: () => void }>) {
   const header = useTopBarHeader();
   const topBar = header ?? getFallbackHeader(pathname);
+  const router = useRouter();
+  const [isResetting, setIsResetting] = useState(false);
+
+  async function handleResetData() {
+    if (!confirm("Delete and reset all app data? This clears runs, records, logs, artifacts, cookies, selectors, and domain mappings.")) {
+      return;
+    }
+    setIsResetting(true);
+    try {
+      await api.resetApplicationData();
+      globalThis.location.reload();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      if (error instanceof ApiError && error.status === 403) {
+        globalThis.alert("Reset is admin-only.");
+        return;
+      }
+      const message = error instanceof Error ? error.message : "Failed to reset application data.";
+      globalThis.alert(message);
+    } finally {
+      setIsResetting(false);
+    }
+  }
+
+  const isAdmin = me?.role === "admin";
+  const resetDisabled = isResetting || !isAdmin;
+  const resetTitle = !isAdmin ? "Reset is admin-only." : undefined;
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -326,6 +354,22 @@ function ShellContent({
             {topBar.actions && (
               <div className="flex flex-wrap items-center gap-2">{topBar.actions}</div>
             )}
+            <Button
+              type="button"
+              onClick={() => {
+                if (!isAdmin) return;
+                void handleResetData();
+              }}
+              disabled={resetDisabled}
+              aria-disabled={resetDisabled}
+              title={resetTitle}
+              variant="danger"
+              size="sm"
+              className="h-8"
+            >
+              <Trash2 className="size-3.5" />
+              {isResetting ? "Resetting..." : "Reset"}
+            </Button>
             <ThemeToggle compact />
           </div>
         </div>

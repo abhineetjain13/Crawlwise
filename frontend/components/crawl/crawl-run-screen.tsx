@@ -1,18 +1,18 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRightCircle, ChevronsDown, Copy, Download } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { PageHeader, SectionHeader } from "../ui/patterns";
+import { InlineAlert, PageHeader, SectionHeader } from "../ui/patterns";
 import { Badge, Button, Card, Input } from "../ui/primitives";
 import { api } from "../../lib/api";
-import type { CrawlRecord, CrawlRun } from "../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun } from "../../lib/api/types";
 import { CRAWL_DEFAULTS } from "../../lib/constants/crawl-defaults";
-import { ACTIVE_STATUSES, TERMINAL_STATUSES } from "../../lib/constants/crawl-statuses";
+import { ACTIVE_STATUSES } from "../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { POLLING_INTERVALS } from "../../lib/constants/timing";
 import { cn } from "../../lib/utils";
@@ -24,8 +24,10 @@ import {
   extractionVerdict,
   extractionVerdictTone,
   formatDuration,
+  estimateDataQuality,
   humanizeVerdict,
   humanizeFieldName,
+  humanizeQuality,
   isListingRun,
   LogTerminal,
   OutputTab,
@@ -33,19 +35,21 @@ import {
   PreviewRow,
   progressPercent,
   ProgressBar,
+  qualityTone,
   RecordsTable,
   scrollViewportToBottom,
   stringifyCell,
   uniqueNumbers,
   uniqueStrings,
 } from "./shared";
+import { useRunStatusFlags, useTerminalSync } from "./use-run-polling";
 
 type CrawlRunScreenProps = {
   runId: number;
 };
 
 const exportLinkClassName =
-  "focus-ring no-underline inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-[13px] font-medium !text-white shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)] hover:!text-white";
+  "focus-ring no-underline inline-flex h-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--accent)] px-3.5 text-sm font-medium !text-white shadow-[var(--shadow-xs)] transition-all hover:bg-[var(--accent-hover)] hover:!text-white";
 
 function isSafeHref(href: string) {
   try {
@@ -59,27 +63,37 @@ function isSafeHref(href: string) {
 
 export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const router = useRouter();
-  const queryClient = useQueryClient();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [outputTab, setOutputTab] = useState<OutputTabKey>("table");
   const [liveJumpAvailable, setLiveJumpAvailable] = useState(false);
-  const [runActionPending, setRunActionPending] = useState<"pause" | "resume" | "kill" | null>(null);
+  const [runActionPending, setRunActionPending] = useState<"kill" | null>(null);
   const [runActionError, setRunActionError] = useState("");
+  const [tableVisibleCount, setTableVisibleCount] = useState(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
+  const [jsonVisibleCount, setJsonVisibleCount] = useState(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
   const logViewportRef = useRef<HTMLDivElement | null>(null);
-  const terminalSyncRef = useRef<string | null>(null);
+  const sessionStartMsRef = useRef<number>(Date.now());
+  
   const runQuery = useQuery({
     queryKey: ["crawl-run", runId],
     queryFn: () => api.getCrawl(runId),
     refetchInterval: (query) =>
-      query.state.data && ACTIVE_STATUSES.has(query.state.data.status) ? POLLING_INTERVALS.ACTIVE_JOB_MS : false,
+      query.state.data && ACTIVE_STATUSES.has(query.state.data.status)
+        ? POLLING_INTERVALS.ACTIVE_JOB_MS
+        : false,
   });
   const run = runQuery.data;
-  const live = Boolean(run && ACTIVE_STATUSES.has(run.status));
-  const terminal = run ? TERMINAL_STATUSES.has(run.status) : false;
+  const { live, terminal } = useRunStatusFlags(run);
+  const shouldFetchRecords = Boolean(run) && (outputTab === "table" || outputTab === "json");
+  const shouldFetchLogs = Boolean(run) && (live || outputTab === "logs");
+  const shouldFetchMarkdown = Boolean(run) && terminal && outputTab === "markdown";
 
   const runCreatedMs = run?.created_at ? new Date(run.created_at).getTime() : null;
-  const [startMs] = useState(() => runCreatedMs ?? Date.now());
+  const effectiveStartMs = runCreatedMs ?? sessionStartMsRef.current;
   const [localNow, setLocalNow] = useState(Date.now());
+  const recordsFetchLimit = Math.min(
+    800,
+    Math.max(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 2, outputTab === "json" ? jsonVisibleCount : tableVisibleCount),
+  );
 
   useEffect(() => {
     if (!live) return;
@@ -87,63 +101,76 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => clearInterval(interval);
   }, [live]);
 
-  const relativeOffsetMs = run?.created_at ? Math.max(0, Date.now() - new Date(run.created_at).getTime()) : 0;
-  // If IST shift is ~5.5h, relativeOffsetMs will be huge. We need to clamp to session relative for active jobs.
-  const activeDurationMs = localNow - startMs;
-
   const recordsQuery = useQuery({
-    queryKey: ["crawl-records", runId],
-    queryFn: () => api.getRecords(runId, { limit: 1000 }),
-    enabled: Boolean(run),
-    refetchInterval: () => {
-      const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
-      return latestRun && (latestRun.status === "running" || latestRun.status === "paused")
-        ? POLLING_INTERVALS.RECORDS_MS
-        : false;
-    },
+    queryKey: ["crawl-records", runId, recordsFetchLimit],
+    queryFn: () => api.getRecords(runId, { limit: recordsFetchLimit }),
+    enabled: shouldFetchRecords,
+    refetchInterval: live && shouldFetchRecords ? POLLING_INTERVALS.RECORDS_MS : false,
   });
 
   const logsQuery = useQuery({
     queryKey: ["crawl-logs", runId],
     queryFn: () => api.getCrawlLogs(runId),
-    refetchInterval: () => {
-      const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
-      return latestRun && (latestRun.status === "running" || latestRun.status === "paused")
-        ? POLLING_INTERVALS.LOGS_MS
-        : false;
-    },
+    enabled: shouldFetchLogs,
+    refetchInterval: live && shouldFetchLogs ? POLLING_INTERVALS.LOGS_MS : false,
   });
   const markdownQuery = useQuery({
     queryKey: ["crawl-markdown", runId],
     queryFn: () => api.getMarkdown(runId),
-    enabled: Boolean(run),
-    refetchInterval: () => {
-      const latestRun = queryClient.getQueryData<CrawlRun>(["crawl-run", runId]);
-      return latestRun && (latestRun.status === "running" || latestRun.status === "paused")
-        ? POLLING_INTERVALS.RECORDS_MS
-        : false;
-    },
+    enabled: shouldFetchMarkdown,
+    refetchInterval: false,
   });
 
   const records = useMemo(() => recordsQuery.data?.items ?? [], [recordsQuery.data?.items]);
-  const logs = useMemo(() => (logsQuery.data ?? []).slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS), [logsQuery.data]);
+  const recordsFetchCapReached = useMemo(
+    () => records.length >= recordsFetchLimit && recordsFetchLimit >= 800,
+    [records, recordsFetchLimit],
+  );
+  const recordsTotal = recordsQuery.data?.meta?.total ?? records.length;
+  const tableRecords = useMemo(
+    () => records.slice(0, Math.min(records.length, tableVisibleCount)),
+    [records, tableVisibleCount],
+  );
+  const jsonRecords = useMemo(
+    () => records.slice(0, Math.min(records.length, jsonVisibleCount)),
+    [records, jsonVisibleCount],
+  );
+  const hasMoreTableRecords =
+    tableRecords.length < records.length || (records.length < recordsTotal && !recordsFetchCapReached);
+  const hasMoreJsonRecords =
+    jsonRecords.length < records.length || (records.length < recordsTotal && !recordsFetchCapReached);
+  const logs = useMemo(
+    () => (logsQuery.data ?? []).slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS),
+    [logsQuery.data],
+  );
   const markdown = markdownQuery.data ?? "";
+  const recordsJson = useMemo(
+    () => (outputTab === "json" ? JSON.stringify(jsonRecords.map(cleanRecord), null, 2) : ""),
+    [outputTab, jsonRecords],
+  );
   const showRunLoadingState = runQuery.isLoading && !run;
+  const panelRefreshErrors = [
+    {
+      key: "records",
+      label: "records",
+      error: recordsQuery.error,
+      refetch: recordsQuery.refetch,
+    },
+    {
+      key: "logs",
+      label: "logs",
+      error: logsQuery.error,
+      refetch: logsQuery.refetch,
+    },
+    {
+      key: "markdown",
+      label: "markdown",
+      error: markdownQuery.error,
+      refetch: markdownQuery.refetch,
+    },
+  ].filter((panel) => panel.error);
 
-  useEffect(() => {
-    if (!run || !terminal) {
-      terminalSyncRef.current = null;
-      return;
-    }
-
-    const syncKey = `${run.id}:${run.status}:${run.completed_at ?? ""}:${run.updated_at}`;
-    if (terminalSyncRef.current === syncKey) {
-      return;
-    }
-    terminalSyncRef.current = syncKey;
-
-    void Promise.allSettled([runQuery.refetch(), recordsQuery.refetch(), logsQuery.refetch(), markdownQuery.refetch()]);
-  }, [logsQuery, markdownQuery, recordsQuery, run, runQuery, terminal]);
+  useTerminalSync(run, terminal, [runQuery, recordsQuery, logsQuery, markdownQuery]);
 
   useEffect(() => {
     if (!live || !logViewportRef.current) {
@@ -166,9 +193,20 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => window.cancelAnimationFrame(frame);
   }, [logs, live]);
 
+  useEffect(() => {
+    setTableVisibleCount(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
+    setJsonVisibleCount(CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
+  }, [runId]);
+
+  useEffect(() => {
+    const availableRecordIds = new Set(records.map((record) => record.id));
+    setSelectedIds((current) => current.filter((id) => availableRecordIds.has(id)));
+  }, [records]);
+
+  const recordsForAnalysis = outputTab === "table" ? tableRecords : records.slice(0, CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
   const visibleColumns = useMemo(() => {
     const columns = new Set<string>();
-    for (const record of records) {
+    for (const record of recordsForAnalysis) {
       Object.keys(record.data ?? {}).forEach((key) => {
         if (!key.startsWith("_")) {
           columns.add(key);
@@ -176,7 +214,24 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       });
     }
     return Array.from(columns);
-  }, [records]);
+  }, [recordsForAnalysis]);
+  const fieldQualityScores = useMemo(() => {
+    const scores: Record<string, number> = {};
+    if (!recordsForAnalysis.length || !visibleColumns.length) {
+      return scores;
+    }
+    for (const column of visibleColumns) {
+      let populated = 0;
+      for (const record of recordsForAnalysis) {
+        const value = record.data?.[column] ?? record.raw_data?.[column];
+        if (value !== null && value !== undefined && String(value).trim() !== "") {
+          populated += 1;
+        }
+      }
+      scores[column] = populated / recordsForAnalysis.length;
+    }
+    return scores;
+  }, [recordsForAnalysis, visibleColumns]);
 
   const selectedRecords = useMemo(
     () => records.filter((record) => selectedIds.includes(record.id)),
@@ -189,6 +244,10 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   );
   const listingRun = useMemo(() => isListingRun(run), [run]);
   const verdict = extractionVerdict(run);
+  const quality = useMemo(
+    () => estimateDataQuality(recordsForAnalysis, visibleColumns),
+    [recordsForAnalysis, visibleColumns],
+  );
   const batchFromResultsUrls = selectedResultUrls.length ? selectedResultUrls : resultUrls;
   const batchFromResultsLabel = selectedResultUrls.length
     ? `Batch Crawl Selected (${selectedResultUrls.length})`
@@ -198,32 +257,43 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     records: Number(run?.result_summary?.record_count ?? records.length) || 0,
     pages: Number(run?.result_summary?.processed_urls ?? run?.result_summary?.completed_urls ?? 0) || 0,
     fields: visibleColumns.length,
-    duration: terminal 
-      ? formatDuration(run?.created_at, run?.completed_at)
-      : formatDuration(new Date(startMs).toISOString(), new Date(startMs + (Number(run?.result_summary?.elapsed_ms) || (localNow - startMs))).toISOString()),
+    duration: formatDuration(
+      new Date(effectiveStartMs).toISOString(),
+      terminal ? run?.completed_at : new Date(localNow).toISOString(),
+    ),
   };
+  const lastRunUpdateMs = run?.updated_at
+    ? new Date(run.updated_at).getTime()
+    : run?.created_at
+      ? new Date(run.created_at).getTime()
+      : null;
+  const showStuckRunWarning =
+    live &&
+    Boolean(lastRunUpdateMs) &&
+    localNow - (lastRunUpdateMs ?? localNow) > POLLING_INTERVALS.STUCK_RUN_WARNING_MS;
 
-  async function runControl(action: "pause" | "resume" | "kill") {
-    setRunActionPending(action);
+  async function runControl() {
+    setRunActionPending("kill");
     setRunActionError("");
     try {
-      if (action === "pause") {
-        await api.pauseCrawl(runId);
-      } else if (action === "resume") {
-        await api.resumeCrawl(runId);
-      } else {
-        await api.killCrawl(runId);
-      }
+      await api.killCrawl(runId);
       await Promise.all([runQuery.refetch(), logsQuery.refetch(), recordsQuery.refetch(), markdownQuery.refetch()]);
     } catch (error) {
-      setRunActionError(error instanceof Error ? error.message : `Unable to ${action} crawl.`);
+      setRunActionError(error instanceof Error ? error.message : "Unable to kill crawl.");
     } finally {
       setRunActionPending(null);
     }
   }
 
   function resetToConfig() {
-    router.replace("/crawl?module=pdp&mode=single");
+    router.replace("/crawl?module=category&mode=single");
+  }
+
+  async function retryFailedPanels() {
+    if (!panelRefreshErrors.length) {
+      return;
+    }
+    await Promise.allSettled(panelRefreshErrors.map((panel) => panel.refetch()));
   }
 
   function triggerBatchCrawlFromResults() {
@@ -279,6 +349,34 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         </Card>
       ) : null}
 
+      {panelRefreshErrors.length ? (
+        <Card className="space-y-3 border-danger/30 bg-danger/5">
+          <SectionHeader
+            title="Some live panels failed to refresh"
+            description="Data may be stale until these requests recover."
+          />
+          <div className="space-y-1 text-sm text-danger">
+            {panelRefreshErrors.map((panel) => (
+              <div key={panel.key}>
+                Unable to refresh {panel.label}:{" "}
+                {panel.error instanceof Error ? panel.error.message : "Unknown error."}
+              </div>
+            ))}
+          </div>
+          <div>
+            <Button variant="secondary" type="button" onClick={() => void retryFailedPanels()}>
+              Retry failed panels
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+      {showStuckRunWarning ? (
+        <InlineAlert
+          tone="warning"
+          message="This run appears to be active but has not updated for a while. Check logs, or use Hard Kill if it is stuck."
+        />
+      ) : null}
+
       {!showRunLoadingState && !terminal ? (
         <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.32fr)_minmax(0,0.68fr)]">
           <Card className="space-y-4">
@@ -297,31 +395,20 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 </Badge>
               }
             />
+            <PreviewRow
+              label="Data Quality"
+              value={
+                <Badge tone={qualityTone(quality.level)}>
+                  {humanizeQuality(quality.level)} ({Math.round(quality.score * 100)}%)
+                </Badge>
+              }
+            />
             <ProgressBar percent={progressPercent(run)} />
-            {run?.status === "paused" ? (
-              <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-foreground">
-                Job paused. Output so far is preserved.
-              </div>
-            ) : null}
-            {runActionError ? (
-              <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">
-                {runActionError}
-              </div>
-            ) : null}
+            {runActionError ? <InlineAlert message={runActionError} /> : null}
             <div className="flex flex-wrap gap-2">
               <ActionButton
-                label={runActionPending === "pause" ? "Pausing..." : "Pause"}
-                onClick={() => void runControl("pause")}
-                disabled={!run || run.status !== "running" || runActionPending !== null}
-              />
-              <ActionButton
-                label={runActionPending === "resume" ? "Resuming..." : "Resume"}
-                onClick={() => void runControl("resume")}
-                disabled={!run || run.status !== "paused" || runActionPending !== null}
-              />
-              <ActionButton
                 label={runActionPending === "kill" ? "Killing..." : "Hard Kill"}
-                onClick={() => void runControl("kill")}
+                onClick={() => void runControl()}
                 disabled={!run || !ACTIVE_STATUSES.has(run.status) || runActionPending !== null}
                 danger
               />
@@ -362,12 +449,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   href={run.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="block truncate text-[13px] font-medium text-accent underline-offset-2 hover:underline"
+                  className="block truncate text-sm font-medium text-accent underline-offset-2 hover:underline"
                 >
                   {run.url}
                 </a>
               ) : (
-                <p className="text-[13px] text-muted">Waiting for completed run data.</p>
+                <p className="text-sm text-muted">Waiting for completed run data.</p>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -428,6 +515,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 {" • "}
                 Verdict:{" "}
                 <span className="font-semibold text-foreground">{humanizeVerdict(verdict)}</span>
+                {" • "}
+                Data Quality:{" "}
+                <span className="font-semibold text-foreground">{humanizeQuality(quality.level)}</span>
               </div>
             </div>
 
@@ -440,19 +530,42 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     ))}
                   </div>
                 ) : records.length ? (
-                  <RecordsTable
-                    records={records}
-                    visibleColumns={visibleColumns}
-                    selectedIds={selectedIds}
-                    onSelectAll={(checked) => setSelectedIds(checked ? records.map((record) => record.id) : [])}
-                    onToggleRow={(id, checked) =>
-                      setSelectedIds((current) =>
-                        checked ? uniqueNumbers([...current, id]) : current.filter((value) => value !== id),
-                      )
-                    }
-                  />
+                  <div className="space-y-3">
+                    <RecordsTable
+                      records={tableRecords}
+                      visibleColumns={visibleColumns}
+                      fieldQualityScores={fieldQualityScores}
+                      selectedIds={selectedIds}
+                      onSelectAll={(checked) => setSelectedIds(checked ? tableRecords.map((record) => record.id) : [])}
+                      onToggleRow={(id, checked) =>
+                        setSelectedIds((current) =>
+                          checked ? uniqueNumbers([...current, id]) : current.filter((value) => value !== id),
+                        )
+                      }
+                    />
+                    {hasMoreTableRecords ? (
+                      <div className="flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2 text-xs text-muted">
+                        <span>
+                          Showing {tableRecords.length} of {recordsTotal} records
+                        </span>
+                        <Button
+                          variant="secondary"
+                          type="button"
+                          onClick={() => setTableVisibleCount((current) => current + CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)}
+                        >
+                          Load More
+                        </Button>
+                      </div>
+                    ) : null}
+                    {records.length < recordsTotal && recordsFetchCapReached ? (
+                      <InlineAlert
+                        tone="warning"
+                        message={`Preview capped at ${records.length} records for performance. Export JSON/CSV for the full ${recordsTotal} records.`}
+                      />
+                    ) : null}
+                  </div>
                 ) : (
-                  <div className="grid min-h-40 place-items-center rounded-[10px] border border-dashed border-border bg-panel/60 text-sm text-muted">
+                  <div className="grid min-h-40 place-items-center rounded-[var(--radius-lg)] border border-dashed border-border bg-panel text-sm text-muted">
                     No records captured yet.
                   </div>
                 )}
@@ -467,9 +580,29 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     Copy
                   </Button>
                 </div>
-                <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto px-4 pb-4 pt-14 text-[12px]">
-                  {JSON.stringify(records.map(cleanRecord), null, 2)}
+                <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto px-4 pb-4 pt-14 text-xs">
+                  {recordsJson}
                 </pre>
+                {hasMoreJsonRecords ? (
+                  <div className="mt-2 flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2 text-xs text-muted">
+                    <span>
+                      JSON previewing {jsonRecords.length} of {recordsTotal} records
+                    </span>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      onClick={() => setJsonVisibleCount((current) => current + CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4)}
+                    >
+                      Load More JSON
+                    </Button>
+                  </div>
+                ) : null}
+                {records.length < recordsTotal && recordsFetchCapReached ? (
+                  <InlineAlert
+                    tone="warning"
+                    message={`JSON preview capped at ${records.length} records for performance. Use JSON export for all ${recordsTotal} records.`}
+                  />
+                ) : null}
               </div>
             ) : null}
 
@@ -487,13 +620,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   </Button>
                 </div>
                 {markdownQuery.isLoading && !markdown ? (
-                  <div className="space-y-2 rounded-[10px] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
+                  <div className="space-y-2 rounded-[var(--radius-lg)] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
                     {Array.from({ length: 8 }, (_, index) => (
                       <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]" />
                     ))}
                   </div>
                 ) : markdown ? (
-                  <div className="max-h-[72vh] overflow-y-auto rounded-[10px] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
+                  <div className="max-h-[72vh] overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
                     <article className="markdown-document max-w-none">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
@@ -511,7 +644,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     </article>
                   </div>
                 ) : (
-                  <div className="grid min-h-40 place-items-center rounded-[10px] border border-dashed border-border bg-panel/60 text-sm text-muted">
+                  <div className="grid min-h-40 place-items-center rounded-[var(--radius-lg)] border border-dashed border-border bg-panel text-sm text-muted">
                     No markdown is available for this run.
                   </div>
                 )}

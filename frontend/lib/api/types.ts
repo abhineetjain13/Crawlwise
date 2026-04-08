@@ -19,9 +19,10 @@ export type RunStatus =
 export type CrawlPhase = "config" | "running" | "complete";
 
 export type CrawlModule = "category" | "pdp";
+export type CrawlSurface = "ecommerce_listing" | "ecommerce_detail";
 
 export type CrawlMode = "single" | "sitemap" | "bulk" | "batch" | "csv";
-export type AdvancedCrawlMode = "auto" | "scroll" | "load_more" | "paginate";
+export type AdvancedCrawlMode = "auto" | "scroll" | "load_more" | "paginate" | "view_all";
 
 export type ResultSummary = {
   extraction_verdict?: string;
@@ -251,13 +252,18 @@ export type CrawlCreatePayload = {
   run_type: "crawl" | "batch" | "csv";
   url?: string;
   urls?: string[];
-  surface: string;
+  surface: CrawlSurface;
   settings?: Record<string, unknown>;
   additional_fields?: string[];
 };
 
+export type LoginResponse = {
+  user: User;
+};
+
 export type CrawlConfig = {
   module: CrawlModule;
+  surface: CrawlSurface;
   mode: CrawlMode;
   target_url: string;
   bulk_urls: string;

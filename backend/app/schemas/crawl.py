@@ -17,7 +17,7 @@ class CrawlCreate(BaseModel):
     urls: list[str] = Field(default_factory=list)
     surface: str  # "ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail", "automobile_listing", "automobile_detail", "tabular"
     settings: dict = Field(default_factory=dict)
-    # settings can include UI controls such as advanced_enabled/advanced_mode; backend derives traversal_mode separately.
+    # settings may include traversal controls; backend preserves user-selected controls.
     additional_fields: list[str] = Field(default_factory=list)
 
 

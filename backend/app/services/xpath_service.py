@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Iterable
-
 from bs4 import BeautifulSoup, NavigableString, Tag
 from lxml import etree, html as lxml_html
 import regex as regex_lib
-
-from app.services.pipeline_config import DOM_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -140,47 +136,6 @@ def validate_xpath_candidate(
     return {"valid": True, "matched_value": matched_value, "count": len(matches)}
 
 
-def build_deterministic_selector_suggestions(
-    html_text: str,
-    field_names: Iterable[str],
-    *,
-    existing_candidates: dict[str, list[dict]] | None = None,
-    selector_defaults: dict[str, list[dict]] | None = None,
-) -> dict[str, list[dict]]:
-    soup = BeautifulSoup(html_text, "html.parser")
-    suggestions: dict[str, list[dict]] = {}
-    existing_candidates = existing_candidates or {}
-    selector_defaults = selector_defaults or {}
-
-    for field_name in field_names:
-        rows: list[dict] = []
-        for candidate in existing_candidates.get(field_name, []):
-            row = _normalize_suggestion(candidate)
-            if row:
-                rows.append(row)
-        for selector in selector_defaults.get(field_name, []):
-            row = _normalize_suggestion(selector)
-            if row:
-                rows.append(row)
-        if not rows:
-            dom_selector = DOM_PATTERNS.get(field_name)
-            if dom_selector:
-                node = soup.select_one(dom_selector)
-                if node:
-                    rows.append({
-                        "field_name": field_name,
-                        "xpath": build_absolute_xpath(node),
-                        "css_selector": dom_selector,
-                        "regex": None,
-                        "status": "deterministic",
-                        "sample_value": _node_value(node),
-                        "source": "deterministic_dom",
-                    })
-        if rows:
-            suggestions[field_name] = _dedupe_suggestions(rows)
-    return suggestions
-
-
 def build_absolute_xpath(node: Tag | NavigableString) -> str | None:
     if isinstance(node, NavigableString):
         node = node.parent
@@ -285,36 +240,6 @@ def _node_value(node: Tag) -> str | None:
         return str(node.get("href") or "").strip() or None
     text = node.get_text(" ", strip=True)
     return text or None
-
-
-def _normalize_suggestion(value: dict) -> dict | None:
-    xpath = str(value.get("xpath") or "").strip() or None
-    css_selector = str(value.get("css_selector") or "").strip() or None
-    regex = str(value.get("regex") or "").strip() or None
-    if not any([xpath, css_selector, regex]):
-        return None
-    normalized_css_selector = _normalize_css_selector(css_selector) if css_selector else None
-    return {
-        "field_name": str(value.get("field_name") or "").strip() or None,
-        "xpath": xpath,
-        "css_selector": normalized_css_selector if normalized_css_selector else None,
-        "regex": regex,
-        "status": str(value.get("status") or "validated"),
-        "sample_value": str(value.get("sample_value") or value.get("value") or "").strip() or None,
-        "source": str(value.get("source") or "selector_memory"),
-    }
-
-
-def _dedupe_suggestions(rows: list[dict]) -> list[dict]:
-    seen: set[tuple[str | None, str | None, str | None]] = set()
-    deduped: list[dict] = []
-    for row in rows:
-        key = (row.get("xpath"), row.get("css_selector"), row.get("regex"))
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(row)
-    return deduped
 
 
 def _normalize_css_selector(selector: str) -> str:

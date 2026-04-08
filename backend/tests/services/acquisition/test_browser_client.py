@@ -9,22 +9,26 @@ import pytest
 
 from app.core.config import settings
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
+from app.services.acquisition.traversal import TraversalResult, apply_traversal_mode
 from app.services.acquisition.browser_client import (
     _assess_challenge_signals,
     _build_launch_kwargs,
     _collect_frame_sources,
     _click_and_observe_next_page,
     _collect_paginated_html,
+    _click_load_more,
     _context_kwargs,
     _cookie_policy_for_domain,
     _fetch_rendered_html_with_fallback,
     _flatten_shadow_dom,
     _find_next_page_url,
     _goto_with_fallback,
+    _is_public_browser_request_target,
     _load_cookies,
     _pause_after_navigation,
     _retryable_browser_error_reason,
     _save_cookies,
+    _scroll_to_bottom,
     _wait_for_challenge_resolution,
     _wait_for_listing_readiness,
     expand_all_interactive_elements,
@@ -46,6 +50,20 @@ class FakePage:
 
     def locator(self, _selector: str):
         return FakeCountLocator(0)
+
+
+@pytest.mark.asyncio
+async def test_is_public_browser_request_target_allows_non_http_scheme():
+    allowed, reason = await _is_public_browser_request_target("data:text/plain,ok")
+    assert allowed is True
+    assert reason == "non_http_scheme"
+
+
+@pytest.mark.asyncio
+async def test_is_public_browser_request_target_rejects_private_http_target():
+    allowed, reason = await _is_public_browser_request_target("http://127.0.0.1/internal")
+    assert allowed is False
+    assert reason.startswith("non_public_target:")
 
 
 class FakeCountLocator:
@@ -348,6 +366,9 @@ class FakeClickableLocator:
     async def count(self):
         return 1 if self._exists else 0
 
+    async def is_visible(self):
+        return self._exists
+
     async def click(self, timeout: int | None = None):
         self._page.click_calls.append(timeout or 0)
         if self._click_callback is not None:
@@ -382,6 +403,56 @@ class FakeClickObservePage:
 
     async def wait_for_timeout(self, value: int):
         self.wait_calls.append(value)
+
+
+class FakeScrollPage:
+    def __init__(self, heights: list[int], metrics: list[dict[str, int]]):
+        self._heights = heights
+        self._metrics = metrics
+        self.scroll_calls: list[int] = []
+        self.wait_calls: list[int] = []
+
+    async def evaluate(self, script: str, *args):
+        if "scrollHeight" in script:
+            if "window.scrollTo" in script:
+                self.scroll_calls.append(int(args[0] or 0))
+                if len(self._heights) > 1:
+                    self._heights.pop(0)
+                if len(self._metrics) > 1:
+                    self._metrics.pop(0)
+                return None
+            return self._heights[0]
+        return self._metrics[0] if self._metrics else {}
+
+    async def wait_for_timeout(self, value: int):
+        self.wait_calls.append(value)
+
+
+class FakeLoadMorePage:
+    def __init__(self, metrics: list[dict[str, int]]):
+        self._metrics = metrics
+        self.click_calls: list[int] = []
+        self.wait_calls: list[int] = []
+
+    def locator(self, selector: str):
+        if selector == "[data-load-more]":
+            async def _after_click():
+                if len(self._metrics) > 1:
+                    self._metrics.pop(0)
+
+            return FakeClickableLocator(self, exists=True, click_callback=_after_click)
+        return FakeClickableLocator(self, exists=False)
+
+    async def evaluate(self, _script: str, *_args):
+        return self._metrics[0] if self._metrics else {}
+
+    async def wait_for_timeout(self, value: int):
+        self.wait_calls.append(value)
+
+
+class FakeAutoTraversalPage:
+    def __init__(self):
+        self.url = "https://example.com/products?page=1"
 
 
 @pytest.mark.asyncio
@@ -574,7 +645,7 @@ async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypat
     async def fake_attempt(*_args, launch_profile, navigation_strategies=None, **_kwargs):
         attempt_calls.append((str(launch_profile["label"]), navigation_strategies))
         if launch_profile["label"] == "bundled_chromium":
-            raise RuntimeError("net::ERR_HTTP2_PROTOCOL_ERROR")
+            raise RuntimeError("browser_navigation_error:dns_name_not_resolved")
         return type("Result", (), {"diagnostics": {}})()
 
     monkeypatch.setattr(
@@ -603,6 +674,40 @@ async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypat
         [("domcontentloaded", 12000), ("commit", 8000)],
     )
     assert result.diagnostics["browser_launch_profile"] == "system_chrome"
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_html_with_fallback_keeps_default_navigation_after_generic_profile_error(monkeypatch):
+    attempt_calls: list[tuple[str, list[tuple[str, int]] | None]] = []
+
+    async def fake_attempt(*_args, launch_profile, navigation_strategies=None, **_kwargs):
+        attempt_calls.append((str(launch_profile["label"]), navigation_strategies))
+        if launch_profile["label"] == "bundled_chromium":
+            raise RuntimeError("net::ERR_HTTP2_PROTOCOL_ERROR")
+        return type("Result", (), {"diagnostics": {}})()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_client._fetch_rendered_html_attempt",
+        fake_attempt,
+    )
+
+    await _fetch_rendered_html_with_fallback(
+        object(),
+        target=object(),
+        url="https://example.com/product",
+        proxy=None,
+        traversal_mode=None,
+        max_pages=1,
+        max_scrolls=1,
+        prefer_stealth=False,
+        request_delay_ms=0,
+        runtime_options=BrowserRuntimeOptions(anti_bot_enabled=True, retry_launch_profiles=True),
+        requested_fields=[],
+        requested_field_selectors={},
+    )
+
+    assert attempt_calls[0][0] == "bundled_chromium"
+    assert attempt_calls[1] == ("system_chrome", [("domcontentloaded", 15000), ("commit", 15000)])
 
 
 @pytest.mark.asyncio
@@ -656,12 +761,13 @@ async def test_collect_paginated_html_stops_at_max_pages(monkeypatch):
     monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
     monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
 
-    html = await _collect_paginated_html(page, max_pages=2, request_delay_ms=0)
+    result = await _collect_paginated_html(page, max_pages=2, request_delay_ms=0)
 
-    assert "Page 1" in html
-    assert "Page 2" in html
-    assert "Page 3" not in html
+    assert "Page 1" in result.html
+    assert "Page 2" in result.html
+    assert "Page 3" not in result.html
     assert page.goto_calls == ["https://example.com/products?page=2"]
+    assert result.summary["page_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -676,12 +782,13 @@ async def test_collect_paginated_html_rejects_non_public_next_page(monkeypatch, 
     monkeypatch.setattr("app.services.acquisition.browser_client.validate_public_target", _reject_target)
 
     with caplog.at_level("WARNING"):
-        html = await _collect_paginated_html(page, max_pages=3, request_delay_ms=0)
+        result = await _collect_paginated_html(page, max_pages=3, request_delay_ms=0)
 
-    assert "Page 1" in html
-    assert "Page 2" not in html
+    assert "Page 1" in result.html
+    assert "Page 2" not in result.html
     assert page.goto_calls == []
     assert "Rejected pagination URL" in caplog.text
+    assert result.summary["stop_reason"] == "rejected_next_page"
 
 
 @pytest.mark.asyncio
@@ -714,11 +821,144 @@ async def test_collect_paginated_html_allows_in_place_pagination_without_goto(mo
     monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
     monkeypatch.setattr("app.services.acquisition.browser_client.expand_all_interactive_elements", AsyncMock())
 
-    html = await _collect_paginated_html(page, max_pages=3, request_delay_ms=0)
+    result = await _collect_paginated_html(page, max_pages=3, request_delay_ms=0)
 
-    assert "Page 1" in html
-    assert "Page 2" in html
+    assert "Page 1" in result.html
+    assert "Page 2" in result.html
     assert page.goto_calls == []
+    assert result.summary["page_count"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_scroll_to_bottom_stops_when_listing_progress_stalls(monkeypatch):
+    page = FakeScrollPage(
+        heights=[1000, 1200, 1200],
+        metrics=[
+            {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600},
+            {"link_count": 14, "cardish_count": 16, "text_length": 1000, "html_length": 2200},
+            {"link_count": 14, "cardish_count": 16, "text_length": 1000, "html_length": 2200},
+        ],
+    )
+    monkeypatch.setattr("app.services.acquisition.browser_client.SCROLL_WAIT_MIN_MS", 1)
+
+    summary = await _scroll_to_bottom(page, 5, request_delay_ms=0)
+
+    assert summary["mode"] == "scroll"
+    assert summary["attempt_count"] >= 1
+    assert summary["stop_reason"] in {"no_progress_before_scroll", "no_progress_after_scroll", "height_only_progress_exhausted", "max_scrolls_reached"}
+    assert "progressed" in summary["steps"][0]
+
+
+@pytest.mark.asyncio
+async def test_click_load_more_stops_when_click_adds_no_new_listing_progress(monkeypatch):
+    page = FakeLoadMorePage([
+        {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600},
+        {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600},
+    ])
+    monkeypatch.setattr("app.services.acquisition.browser_client.LOAD_MORE_SELECTORS", ["[data-load-more]"])
+    monkeypatch.setattr("app.services.acquisition.browser_client.LOAD_MORE_WAIT_MIN_MS", 1)
+
+    summary = await _click_load_more(page, 3, request_delay_ms=0)
+
+    assert summary["mode"] == "load_more"
+    assert summary["attempt_count"] == 1
+    assert summary["stop_reason"] == "no_progress_after_click"
+    assert summary["steps"][0]["progressed"] is False
+
+
+@pytest.mark.asyncio
+async def test_apply_traversal_mode_auto_combines_scroll_and_paginate_steps(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.scroll_to_bottom",
+        AsyncMock(return_value={"mode": "scroll", "stop_reason": "max_scrolls_reached"}),
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.click_load_more",
+        AsyncMock(return_value={"mode": "load_more", "stop_reason": "no_load_more_control"}),
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.collect_paginated_html",
+        AsyncMock(return_value=TraversalResult(
+        html="<!-- PAGE BREAK:1:https://example.com/products?page=1 -->",
+        summary={"mode": "paginate", "steps": [{"action": "capture_page"}], "stop_reason": "no_next_page"},
+    )),
+    )
+
+    result = await apply_traversal_mode(
+        FakeAutoTraversalPage(),
+        "ecommerce_listing",
+        "auto",
+        5,
+        max_pages=3,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(),
+        wait_for_surface_readiness=AsyncMock(),
+        wait_for_listing_readiness=AsyncMock(),
+        click_and_observe_next_page=AsyncMock(return_value="https://example.com/products?page=2"),
+        has_load_more_control=AsyncMock(return_value=False),
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+        cooperative_sleep_ms=AsyncMock(),
+        snapshot_listing_page_metrics=AsyncMock(),
+    )
+
+    assert result.summary["mode"] == "paginate"
+    assert result.summary["steps"][0]["mode"] == "scroll"
+    assert result.summary["steps"][1]["action"] == "capture_page"
+
+
+@pytest.mark.asyncio
+async def test_apply_traversal_mode_auto_stops_without_pagination_when_no_next_page(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.scroll_to_bottom",
+        AsyncMock(return_value={"mode": "scroll", "stop_reason": "max_scrolls_reached"}),
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.click_load_more",
+        AsyncMock(return_value={"mode": "load_more", "stop_reason": "no_progress_after_click"}),
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.collect_paginated_html",
+        AsyncMock(return_value=TraversalResult()),
+    )
+
+    result = await apply_traversal_mode(
+        FakeAutoTraversalPage(),
+        "ecommerce_listing",
+        "auto",
+        5,
+        max_pages=3,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(),
+        wait_for_surface_readiness=AsyncMock(),
+        wait_for_listing_readiness=AsyncMock(),
+        click_and_observe_next_page=AsyncMock(return_value=""),
+        has_load_more_control=AsyncMock(return_value=True),
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+        cooperative_sleep_ms=AsyncMock(),
+        snapshot_listing_page_metrics=AsyncMock(),
+    )
+
+    assert result.summary["mode"] == "auto"
+    assert result.summary["stop_reason"] == "no_pagination_after_scroll_or_load_more"
+    assert len(result.summary["steps"]) == 2
+
+
+def test_resolve_traversal_mode_prefers_traversal_mode():
+    from app.services._batch_runtime import _resolve_traversal_mode
+
+    assert _resolve_traversal_mode({"traversal_mode": "auto"}) is None
+    assert (
+        _resolve_traversal_mode(
+            {"advanced_enabled": True, "advanced_mode": "paginate"}
+        )
+        == "paginate"
+    )
 
 
 @pytest.mark.asyncio

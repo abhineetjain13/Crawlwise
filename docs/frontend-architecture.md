@@ -147,7 +147,7 @@ Dispatch payload construction happens in `buildDispatch(config)`.
 The current backend contract used by the active page is:
 
 - `llm_enabled`
-- `advanced_enabled`
+- `traversal_mode`
 - `sleep_ms`
 - `max_records`
 - `max_pages`

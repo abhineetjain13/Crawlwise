@@ -23,6 +23,17 @@ class CrawlRun(Base):
     settings: Mapped[dict] = mapped_column(JSON, default=dict)
     requested_fields: Mapped[list] = mapped_column(JSON, default=list)
     result_summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    queue_owner: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    claim_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

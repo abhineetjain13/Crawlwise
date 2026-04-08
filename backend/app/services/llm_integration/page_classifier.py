@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -9,8 +10,8 @@ from urllib.parse import parse_qsl, urlparse
 from bs4 import BeautifulSoup, Tag
 from cachetools import TTLCache
 
-from app.services.acquisition.acquirer import _html_has_extractable_listings_from_soup
 from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.config.extraction_rules import KNOWN_ATS_PLATFORMS
 from app.services.extract.source_parsers import extract_json_ld
 from app.services.pipeline_config import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS
 
@@ -45,6 +46,87 @@ _COMMERCE_LISTING_QUERY_KEYS = frozenset({"query", "search", "q", "category"})
 _LISTING_CARD_CLASS_RE = re.compile(r"(?:product|job|result|listing|item)[-_ ]?(?:card|tile|item)", re.IGNORECASE)
 _ADD_TO_CART_RE = re.compile(r"\b(?:add to cart|buy now|add to bag)\b", re.IGNORECASE)
 _APPLY_NOW_RE = re.compile(r"\b(?:apply now|submit application)\b", re.IGNORECASE)
+
+_NEXT_DATA_PRODUCT_SIGNALS = (
+    '"productId"', '"partNumber"', '"displayName"', '"sku"', '"skuId"', '"price"', '"salePrice"',
+    '"listPrice"', '"imageUrl"', '"imageURL"', '"image_url"', '"availability"', '"inStock"',
+    '"slug"', '"handle"', '"jobId"', '"jobTitle"', '"companyName"',
+)
+
+
+def _json_ld_listing_count(payload: object, *, _depth: int = 0, _max_depth: int = 3) -> int:
+    if _depth > _max_depth:
+        return 0
+    if isinstance(payload, list):
+        return sum(
+            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
+            for item in payload
+        )
+    if not isinstance(payload, dict):
+        return 0
+
+    count = 0
+    raw_ld_type = payload.get("@type", "")
+    if isinstance(raw_ld_type, str):
+        ld_types = {raw_ld_type.lower()}
+    elif isinstance(raw_ld_type, (list, tuple, set)):
+        ld_types = {
+            str(item).lower()
+            for item in raw_ld_type
+            if isinstance(item, str) and item.strip()
+        }
+    else:
+        ld_types = set()
+
+    if ld_types & {"product", "jobposting"}:
+        count += 1
+    if "itemlist" in ld_types or "itemListElement" in payload:
+        count += len(payload.get("itemListElement", []))
+
+    graph = payload.get("@graph")
+    if isinstance(graph, list):
+        count += sum(
+            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
+            for item in graph
+        )
+
+    main_entity = payload.get("mainEntity")
+    if isinstance(main_entity, dict):
+        count += _json_ld_listing_count(
+            main_entity,
+            _depth=_depth + 1,
+            _max_depth=_max_depth,
+        )
+
+    offers = payload.get("offers")
+    if isinstance(offers, dict):
+        item_offered = offers.get("itemOffered")
+        if isinstance(item_offered, list):
+            count += sum(1 for item in item_offered if isinstance(item, dict))
+
+    return count
+
+
+def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
+    product_count = 0
+    for node in soup.select("script[type='application/ld+json']"):
+        raw = node.string or node.get_text(" ", strip=True) or ""
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        product_count += _json_ld_listing_count(payload)
+        if product_count >= 2:
+            return True
+
+    next_data_node = soup.select_one("script#__NEXT_DATA__")
+    if next_data_node is not None:
+        raw_next_data = next_data_node.string or next_data_node.get_text(" ", strip=True) or ""
+        signal_hits = sum(raw_next_data.count(key) for key in _NEXT_DATA_PRODUCT_SIGNALS)
+        if signal_hits >= 4:
+            return True
+
+    return False
 
 
 def _cache_key(url: str, html: str) -> str:
@@ -108,7 +190,7 @@ def _derive_wait_selector_hint(html: str, hint_surface: str | None) -> str:
         try:
             if len(soup.select(selector)) >= 2:
                 return selector
-        except Exception:
+        except (TypeError, ValueError):
             logger.debug("selector %s failed", selector, exc_info=True)
             continue
     cards, selector = _find_repeating_cards(soup)
@@ -160,11 +242,14 @@ def _url_surface(url: str, hint_surface: str | None) -> str | None:
         if str(key or "").strip()
     }
     host = parsed.netloc.lower()
+    host_matches_known_ats = any(
+        host == pattern or host.endswith(f".{pattern}") for pattern in KNOWN_ATS_PLATFORMS
+    )
 
     if _JOB_DETAIL_PATH_RE.search(path) or "jobid" in query_keys:
         return "job_detail"
     if any(token in path for token in ("/search-jobs", "/jobs", "/careers")) and (
-        any(key in _JOB_LISTING_QUERY_KEYS for key in query_keys) or "ats" in host or "workday" in host or "greenhouse" in host
+        any(key in _JOB_LISTING_QUERY_KEYS for key in query_keys) or host_matches_known_ats
     ):
         return "job_listing"
     if any(token in path for token in ("/product/", "/products/", "/p/", "/dp/", "/item/")) or any(
@@ -265,17 +350,13 @@ def _classify_by_heuristics(html: str, url: str, hint_surface: str | None) -> Pa
     )
 
 
-async def classify_page(
-    session,
+def classify_page(
     *,
     url: str,
     html: str,
-    run_id: int | None = None,
     hint_surface: str | None = None,
     content_type: str = "html",
-    llm_enabled: bool = False,
 ) -> PageClassification:
-    del session, run_id, llm_enabled
     cached = _load_cached_classification(url, html)
     if cached is not None:
         return cached

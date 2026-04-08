@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from sqlalchemy import delete, func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import PROJECT_ROOT, settings
@@ -15,6 +16,7 @@ from app.models.llm import LLMCostLog
 from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import reset_learned_state
+from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +93,9 @@ async def reset_application_data(session: AsyncSession) -> dict:
                 async with session.bind.connect() as connection:
                     connection = await connection.execution_options(isolation_level="AUTOCOMMIT")
                     await connection.execute(text("VACUUM"))
-            except Exception:
+            except (SQLAlchemyError, RuntimeError):
                 logger.exception("SQLite VACUUM failed after application data reset")
-    except Exception:
+    except SQLAlchemyError:
         await session.rollback()
         raise
 
@@ -136,7 +138,7 @@ def _reset_directory(path, *, create_if_missing: bool = True) -> int:
                 logger.warning("Failed to remove path during reset: %s", child)
         except FileNotFoundError:
             removed += 1
-        except Exception:
+        except OSError:
             logger.exception("Failed to remove path during reset: %s", child)
     if create_if_missing:
         path.mkdir(parents=True, exist_ok=True)
@@ -172,3 +174,90 @@ def _legacy_artifact_paths() -> list[Path]:
         if resolved not in results:
             results.append(resolved)
     return results
+
+
+async def build_operational_metrics(session: AsyncSession) -> dict:
+    """Build lightweight runtime + DB-backed operational metrics."""
+    runtime = runtime_metrics_snapshot()
+    long_run_threshold_seconds = 30 * 60
+    stalled_run_threshold_seconds = 2 * 60
+    run_duration_rows = await session.execute(
+        select(
+            CrawlRun.created_at,
+            CrawlRun.completed_at,
+            CrawlRun.status,
+            CrawlRun.updated_at,
+            CrawlRun.result_summary,
+        )
+    )
+    durations_seconds: list[float] = []
+    long_running_count = 0
+    active_without_stage_count = 0
+    active_stalled_no_progress_count = 0
+    active_status_values = {status.value for status in ACTIVE_STATUSES}
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    for created_at, completed_at, status, updated_at, result_summary in run_duration_rows:
+        if not created_at:
+            continue
+        summary = result_summary if isinstance(result_summary, dict) else {}
+        created_ts = (
+            created_at.replace(tzinfo=UTC)
+            if getattr(created_at, "tzinfo", None) is None
+            else created_at.astimezone(UTC)
+        )
+        completed_ts = (
+            completed_at.replace(tzinfo=UTC)
+            if completed_at is not None and getattr(completed_at, "tzinfo", None) is None
+            else completed_at.astimezone(UTC)
+            if completed_at is not None
+            else None
+        )
+        end_time = completed_ts or now
+        duration = max(0.0, (end_time - created_ts).total_seconds())
+        durations_seconds.append(duration)
+        is_active = status in active_status_values
+        current_stage = str(summary.get("current_stage") or "").strip()
+        if is_active and not current_stage:
+            active_without_stage_count += 1
+        if is_active and updated_at is not None:
+            updated_ts = (
+                updated_at.replace(tzinfo=UTC)
+                if getattr(updated_at, "tzinfo", None) is None
+                else updated_at.astimezone(UTC)
+            )
+            seconds_since_update = max(0.0, (now - updated_ts).total_seconds())
+            if seconds_since_update >= stalled_run_threshold_seconds and not current_stage:
+                active_stalled_no_progress_count += 1
+        if (
+            completed_at is None
+            and duration >= long_run_threshold_seconds
+            and is_active
+        ):
+            long_running_count += 1
+    avg_duration = (
+        round(sum(durations_seconds) / len(durations_seconds), 2)
+        if durations_seconds
+        else 0.0
+    )
+    return {
+        "runtime_counters": {
+            "db_lock_errors_total": int(runtime.get("db_lock_errors_total", 0)),
+            "db_lock_retries_total": int(runtime.get("db_lock_retries_total", 0)),
+            "browser_launch_failures_total": int(
+                runtime.get("browser_launch_failures_total", 0)
+            ),
+            "proxy_exhaustion_total": int(runtime.get("proxy_exhaustion_total", 0)),
+        },
+        "run_duration": {
+            "active_long_running_threshold_seconds": long_run_threshold_seconds,
+            "active_long_running_count": long_running_count,
+            "average_duration_seconds": avg_duration,
+        },
+        "active_health": {
+            "stalled_run_threshold_seconds": stalled_run_threshold_seconds,
+            "active_without_stage_count": active_without_stage_count,
+            "active_stalled_no_progress_count": active_stalled_no_progress_count,
+        },
+    }

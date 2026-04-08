@@ -106,6 +106,7 @@ async def test_fetch_html_result_pins_dns_without_rewriting_hostname(monkeypatch
     assert result.status_code == 200
     assert captured["url"] == "https://example.com/product"
     assert "headers" not in captured["kwargs"]
+    assert captured["session_kwargs"]["trust_env"] is False
     assert captured["session_kwargs"]["curl_options"][CurlOpt.RESOLVE] == ["example.com:443:93.184.216.34"]
 
 
@@ -346,3 +347,95 @@ async def test_fetch_html_result_honors_retry_after_header(monkeypatch):
 
     assert result.status_code == 200
     assert sleeps == [7.0]
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_revalidates_redirect_targets(monkeypatch):
+    calls: list[str] = []
+    validated_urls: list[str] = []
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            calls.append(str(url))
+            if str(url).endswith("/start"):
+                return FakeResponse(
+                    status_code=302,
+                    text="",
+                    headers={"location": "/next", "content-type": "text/html"},
+                    url=str(url),
+                )
+            return FakeResponse(
+                status_code=200,
+                text="<html><body>ok</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+                url=str(url),
+            )
+
+    async def _fake_validate(url: str) -> ValidatedTarget:
+        validated_urls.append(url)
+        return ValidatedTarget(
+            hostname="example.com",
+            scheme="https",
+            port=443,
+            resolved_ips=("93.184.216.34",),
+        )
+
+    monkeypatch.setattr("app.services.acquisition.http_client.validate_public_target", _fake_validate)
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+
+    result = await fetch_html_result("https://example.com/start", allow_stealth_retry=False)
+
+    assert result.status_code == 200
+    assert calls == ["https://example.com/start", "https://example.com/next"]
+    assert validated_urls == ["https://example.com/start", "https://example.com/next"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_rejects_non_http_redirect_targets(monkeypatch):
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            _ = kwargs
+            return FakeResponse(
+                status_code=302,
+                text="",
+                headers={"location": "file:///etc/passwd", "content-type": "text/html"},
+                url=str(url),
+            )
+
+    validate_mock = AsyncMock(
+        return_value=ValidatedTarget(
+            hostname="example.com",
+            scheme="https",
+            port=443,
+            resolved_ips=("93.184.216.34",),
+        )
+    )
+    monkeypatch.setattr("app.services.acquisition.http_client.validate_public_target", validate_mock)
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+
+    result = await fetch_html_result("https://example.com/start", allow_stealth_retry=False)
+
+    assert result.error == "invalid_redirect_target"
+    assert result.status_code == 302
+    # validate_public_target should only run for the initial request URL.
+    assert validate_mock.await_count == 1

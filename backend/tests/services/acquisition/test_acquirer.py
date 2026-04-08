@@ -8,9 +8,13 @@ import pytest
 
 from app.services.acquisition.acquirer import (
     ProxyRotator,
+    _PROXY_FAILURE_STATE,
+    _mark_proxy_failed,
+    _mark_proxy_succeeded,
     _artifact_path,
     _diagnostics_path,
     _json_ld_listing_count,
+    _write_network_payloads,
     _requires_browser_first,
     _is_invalid_job_surface_page,
     _network_payload_path,
@@ -46,6 +50,40 @@ class TestProxyRotator:
         r = ProxyRotator(["  http://proxy:8080  ", ""])
         assert r.next() == "http://proxy:8080"
 
+    @pytest.mark.asyncio
+    async def test_cycle_once_skips_proxies_in_cooldown(self):
+        _PROXY_FAILURE_STATE.clear()
+        await _mark_proxy_failed("http://p2:8080")
+        r = ProxyRotator(["http://p1:8080", "http://p2:8080"])
+        try:
+            candidates = await r.cycle_once(use_cooldown=True)
+            assert candidates == ["http://p1:8080"]
+        finally:
+            _PROXY_FAILURE_STATE.clear()
+
+    @pytest.mark.asyncio
+    async def test_cycle_once_returns_candidates_when_cooldown_disabled(self):
+        _PROXY_FAILURE_STATE.clear()
+        await _mark_proxy_failed("http://p2:8080")
+        r = ProxyRotator(["http://p1:8080", "http://p2:8080"])
+        try:
+            candidates = await r.cycle_once(use_cooldown=False)
+            assert sorted(candidates) == sorted(["http://p1:8080", "http://p2:8080"])
+        finally:
+            _PROXY_FAILURE_STATE.clear()
+
+
+@pytest.mark.asyncio
+async def test_mark_proxy_succeeded_clears_failure_state():
+    _PROXY_FAILURE_STATE.clear()
+    try:
+        await _mark_proxy_failed("http://p1:8080")
+        assert "http://p1:8080" in _PROXY_FAILURE_STATE
+        await _mark_proxy_succeeded("http://p1:8080")
+        assert "http://p1:8080" not in _PROXY_FAILURE_STATE
+    finally:
+        _PROXY_FAILURE_STATE.clear()
+
 
 def test_json_ld_listing_count_handles_type_arrays_and_empty_itemlists():
     assert _json_ld_listing_count({"@type": ["Thing", "Product"]}) == 1
@@ -57,7 +95,10 @@ def test_requires_browser_first_for_confirmed_job_boards():
         "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant",
         "job_listing",
     )
-    assert _requires_browser_first("https://careers.clarkassociatesinc.biz/", "job_listing")
+    assert not _requires_browser_first(
+        "https://careers.clarkassociatesinc.biz/",
+        "job_listing",
+    )
     assert not _requires_browser_first("https://example.com/jobs", "job_listing")
 
 
@@ -355,7 +396,14 @@ async def test_acquire_detail_requested_fields_are_not_overridden_by_listing_str
         patch(
             "app.services.acquisition.acquirer.fetch_rendered_html",
             new_callable=AsyncMock,
-            return_value=BrowserResult(html="<html><body><details open><summary>Returns</summary><p>30 day returns</p></details></body></html>"),
+            return_value=BrowserResult(
+                html=(
+                    "<html><body><main><details open><summary>Returns</summary>"
+                    "<p>30 day returns on unused items with original packaging and proof of purchase.</p>"
+                    "<p>Customers may start a return online or contact support for assisted processing.</p>"
+                    "</details></main></body></html>"
+                )
+            ),
         ) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
@@ -607,6 +655,7 @@ async def test_acquire_with_proxy():
     with (
         patch("app.services.acquisition.acquirer._fetch_with_content_type",
               new_callable=AsyncMock, return_value=HttpFetchResult(text=html, status_code=200, content_type="html")) as mock_fetch,
+        patch("app.services.acquisition.acquirer.validate_proxy_endpoint", new_callable=AsyncMock),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         from pathlib import Path
@@ -617,6 +666,52 @@ async def test_acquire_with_proxy():
     mock_fetch.assert_called_once()
     call_args = mock_fetch.call_args
     assert call_args.args[0] == "https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_acquire_rejects_private_proxy_endpoint():
+    with pytest.raises(ValueError, match="non-public IP"):
+        await acquire_html(
+            1,
+            "https://example.com",
+            proxy_list=["http://10.0.0.5:8080"],
+        )
+
+
+@pytest.mark.asyncio
+async def test_acquire_rejects_browser_non_public_final_url_and_keeps_curl_fallback(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    short_html = "<html><body>tiny</body></html>"
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(
+                text=short_html,
+                status_code=200,
+                content_type="html",
+                final_url="https://example.com/product",
+            ),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(
+                html="<html><body><h1>Rendered</h1>" + ("x" * 500) + "</body></html>",
+                diagnostics={"final_url": "http://127.0.0.1/internal"},
+            ),
+        ),
+    ):
+        result = await acquire(42, "https://example.com/product", surface="ecommerce_detail")
+
+    assert result.method == "curl_cffi"
+    assert result.diagnostics.get("browser_non_public_target") is True
 
 
 @pytest.mark.asyncio
@@ -671,6 +766,30 @@ async def test_acquire_writes_diagnostics_artifact(tmp_path, monkeypatch):
         {"attempt": 1, "impersonate": "chrome110", "status_code": 200, "content_type": "html", "blocked": False}
     ]
     assert payload["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_acquire_scrubs_sensitive_network_payloads_before_artifact_write(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    payloads = [
+        {
+            "url": "https://api.example.com/data",
+            "headers": {"authorization": "Bearer abcdefghijklmnopqrstuvwxyz0123456789"},
+            "body": {
+                "email": "person@example.com",
+                "token": "abcdefghijklmnopqrstuvwxyz0123456789",
+                "note": "contact person@example.com with Bearer abcdefghijklmnopqrstuvwxyz0123456789",
+            },
+        }
+    ]
+    _write_network_payloads(42, "https://example.com/product", payloads)
+
+    payload_path = _network_payload_path(42, "https://example.com/product")
+    persisted = json.loads(payload_path.read_text(encoding="utf-8"))
+    assert persisted[0]["headers"]["authorization"] == "[REDACTED]"
+    assert persisted[0]["body"]["email"] == "[REDACTED]"
+    assert persisted[0]["body"]["token"] == "[REDACTED]"
+    assert "[REDACTED]" in persisted[0]["body"]["note"]
 
 
 @pytest.mark.asyncio
@@ -768,6 +887,18 @@ def test_host_memory_persists_preference(tmp_path, monkeypatch):
     assert host_prefers_stealth("https://example.com/path")
 
 
+def test_host_memory_survives_process_cache_reset(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.host_memory.settings.artifacts_dir", tmp_path)
+    remember_stealth_host("https://example.com/path", ttl_hours=1)
+
+    import app.services.acquisition.host_memory as host_memory_module
+
+    host_memory_module._STEALTH_CACHE.clear()
+    host_memory_module._CACHE_PATH = None
+
+    assert host_prefers_stealth("https://example.com/path")
+
+
 def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
     url = "https://www.example.com/products/fancy-chair?color=oak&size=large"
@@ -844,7 +975,9 @@ async def test_acquire_enables_stealth_only_when_anti_bot_mode_is_enabled(monkey
 
 
 @pytest.mark.asyncio
-async def test_acquire_browser_first_domain_enables_anti_bot_runtime(monkeypatch, tmp_path):
+async def test_acquire_browser_first_platform_family_enables_anti_bot_runtime(
+    monkeypatch, tmp_path
+):
     captured: list[bool] = []
 
     async def _fake_acquire_once(**kwargs):
@@ -866,7 +999,42 @@ async def test_acquire_browser_first_domain_enables_anti_bot_runtime(monkeypatch
 
     result = await acquire(
         42,
-        "https://www.reverb.com/marketplace?product_type=electric-guitars",
+        "https://myjobs.adp.com/cx/search-jobs",
+        surface="job_listing",
+    )
+
+    assert result.method == "playwright"
+    assert captured == [True]
+
+
+@pytest.mark.asyncio
+async def test_acquire_browser_first_platform_family_overrides_explicit_anti_bot_false(
+    monkeypatch, tmp_path
+):
+    captured: list[bool] = []
+
+    async def _fake_acquire_once(**kwargs):
+        runtime_options = kwargs.get("runtime_options")
+        captured.append(bool(getattr(runtime_options, "anti_bot_enabled", False)))
+        return type("Result", (), {
+            "html": "<html>ok</html>",
+            "json_data": None,
+            "content_type": "html",
+            "method": "playwright",
+            "artifact_path": "",
+            "diagnostics_path": "",
+            "network_payloads": [],
+            "diagnostics": {},
+        })()
+
+    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _fake_acquire_once)
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    result = await acquire(
+        42,
+        "https://myjobs.adp.com/cx/search-jobs",
+        surface="job_listing",
+        acquisition_profile={"anti_bot_enabled": False},
     )
 
     assert result.method == "playwright"

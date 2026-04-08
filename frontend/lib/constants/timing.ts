@@ -2,6 +2,7 @@ export const POLLING_INTERVALS = {
   ACTIVE_JOB_MS: 2000,
   RECORDS_MS: 2000,
   LOGS_MS: 2000,
+  STUCK_RUN_WARNING_MS: 120000,
 } as const;
 
 export const UI_DELAYS = {

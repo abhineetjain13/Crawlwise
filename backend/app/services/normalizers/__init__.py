@@ -33,30 +33,53 @@ from app.services.pipeline_config import (
     SIZE_NOISE_TOKENS,
 )
 
-_UI_NOISE_TOKEN_RE = re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_NOISE_TOKEN_PATTERN else None
-_UI_ICON_TOKEN_RE = re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE) if CANDIDATE_UI_ICON_TOKEN_PATTERN else None
-_SCRIPT_NOISE_RE = re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE) if CANDIDATE_SCRIPT_NOISE_PATTERN else None
-_PROMO_ONLY_TITLE_RE = re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE) if CANDIDATE_PROMO_ONLY_TITLE_PATTERN else None
+_UI_NOISE_TOKEN_RE = (
+    re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE)
+    if CANDIDATE_UI_NOISE_TOKEN_PATTERN
+    else None
+)
+_UI_ICON_TOKEN_RE = (
+    re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE)
+    if CANDIDATE_UI_ICON_TOKEN_PATTERN
+    else None
+)
+_SCRIPT_NOISE_RE = (
+    re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE)
+    if CANDIDATE_SCRIPT_NOISE_PATTERN
+    else None
+)
+_PROMO_ONLY_TITLE_RE = (
+    re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE)
+    if CANDIDATE_PROMO_ONLY_TITLE_PATTERN
+    else None
+)
 _CURRENCY_TOKEN_RE = re.compile(r"\b[A-Z]{3}\b")
 _CURRENCY_AFTER_AMOUNT_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*([A-Z]{3})\b")
 _CURRENCY_BEFORE_AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*\d[\d,]*(?:\.\d+)?\b")
 _HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 _NUMERIC_ONLY_RE = re.compile(r"^\d+$")
-_TITLE_NOISE_WORDS = {"home", "cart", "sign in", "search results", "access denied", "loading..."}
-_SALARY_NOISE_PATTERN = re.compile(r"\b(?:competitive|depends on experience|doe)\b", re.IGNORECASE)
-_IMAGE_NOISE_PATTERN = re.compile(r"\b(?:icon|logo|sprite|placeholder|avatar)\b", re.IGNORECASE)
-_NOISE_URL_SUFFIXES = (".js", ".css", ".woff", ".woff2", ".svg", "spinner.gif")
-_GENERIC_PLATFORM_URLS = {
-    "https://www.shopify.com",
-    "https://www.linkedin.com/jobs",
+_TITLE_NOISE_WORDS = {
+    "home",
+    "cart",
+    "sign in",
+    "search results",
+    "access denied",
+    "loading...",
 }
-_LOWERCASED_GENERIC_PLATFORM_URL_PREFIXES = tuple(url.lower() for url in _GENERIC_PLATFORM_URLS)
+_SALARY_NOISE_PATTERN = re.compile(
+    r"\b(?:competitive|depends on experience|doe)\b", re.IGNORECASE
+)
+_IMAGE_NOISE_PATTERN = re.compile(
+    r"\b(?:icon|logo|sprite|placeholder|avatar)\b", re.IGNORECASE
+)
+_NOISE_URL_SUFFIXES = (".js", ".css", ".woff", ".woff2", ".svg", "spinner.gif")
 _TRACKING_QUERY_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "ref", "ref_src")
+_HTTP_URL_PREFIXES = ("http://", "https://")
 
 
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
     if not tokens:
-        return re.compile(r"(?!x)x", re.IGNORECASE)
+        return re.compile(r"(?!.*)", re.IGNORECASE)
     parts: list[str] = []
     for token in tokens:
         escaped = re.escape(token)
@@ -88,7 +111,10 @@ def normalize_value(field_name: str, value: object) -> object:
             return _clean_description_text(text)
         if _is_availability_field(field_name):
             return _normalize_availability(text)
-        if _is_category_field(field_name) and text.lower() in CANDIDATE_GENERIC_CATEGORY_VALUES:
+        if (
+            _is_category_field(field_name)
+            and text.lower() in CANDIDATE_GENERIC_CATEGORY_VALUES
+        ):
             return ""
         if _is_title_field(field_name):
             cleaned = _clean_title_text(text)
@@ -108,7 +134,11 @@ def normalize_value(field_name: str, value: object) -> object:
             ]
             if adjacent_matches:
                 return adjacent_matches[0]
-            valid_tokens = [token for token in _CURRENCY_TOKEN_RE.findall(upper_text) if token in CURRENCY_CODES]
+            valid_tokens = [
+                token
+                for token in _CURRENCY_TOKEN_RE.findall(upper_text)
+                if token in CURRENCY_CODES
+            ]
             return valid_tokens[0] if valid_tokens else text
         if text.lower() in CANDIDATE_GENERIC_TITLE_VALUES:
             return ""
@@ -141,15 +171,17 @@ def validate_value(field_name: str, value: object) -> object | None:
             normalized_urls = [
                 normalized_url
                 for normalized_url in (
-                    _strip_tracking_params(url)
-                    for url in _split_image_values(text)
+                    _strip_tracking_params(url) for url in _split_image_values(text)
                 )
-                if _is_valid_http_url(normalized_url) and not _IMAGE_NOISE_PATTERN.search(normalized_url)
+                if _is_valid_http_url(normalized_url)
+                and not _IMAGE_NOISE_PATTERN.search(normalized_url)
             ]
             return ", ".join(normalized_urls) if normalized_urls else None
         if _is_image_primary_field(field_name):
             normalized_url = _strip_tracking_params(text)
-            if not _is_valid_http_url(normalized_url) or _IMAGE_NOISE_PATTERN.search(normalized_url):
+            if not _is_valid_http_url(normalized_url) or _IMAGE_NOISE_PATTERN.search(
+                normalized_url
+            ):
                 return None
             return normalized_url
         if _is_url_field(field_name):
@@ -178,31 +210,38 @@ def extract_currency_hint(value: object) -> str:
     for symbol, currency in CURRENCY_SYMBOL_MAP.items():
         if symbol in text:
             return currency
-    valid_tokens = [token for token in _CURRENCY_TOKEN_RE.findall(upper_text) if token in CURRENCY_CODES]
+    valid_tokens = [
+        token
+        for token in _CURRENCY_TOKEN_RE.findall(upper_text)
+        if token in CURRENCY_CODES
+    ]
     return valid_tokens[0] if valid_tokens else ""
 
 
 def _strip_tracking_params(value: str) -> str:
     text = str(value or "").strip()
-    if not text.startswith(("http://", "https://")):
+    if not text.startswith(_HTTP_URL_PREFIXES):
         return text
     parsed = urlsplit(text)
     filtered = [
         (key, val)
         for key, val in parse_qsl(parsed.query, keep_blank_values=True)
-        if key and not any(key.lower().startswith(prefix) for prefix in _TRACKING_QUERY_PREFIXES)
+        if key
+        and all(
+            not key.lower().startswith(prefix) for prefix in _TRACKING_QUERY_PREFIXES
+        )
     ]
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(filtered, doseq=True), ""))
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(filtered, doseq=True), "")
+    )
 
 
 def _is_valid_http_url(value: str) -> bool:
     text = str(value or "").strip()
-    if not text.startswith(("http://", "https://")):
+    if not text.startswith(_HTTP_URL_PREFIXES):
         return False
     lowered = text.lower()
     if any(lowered.endswith(suffix) for suffix in _NOISE_URL_SUFFIXES):
-        return False
-    if any(lowered.startswith(prefix) for prefix in _LOWERCASED_GENERIC_PLATFORM_URL_PREFIXES):
         return False
     return True
 
@@ -235,7 +274,7 @@ def _split_image_values(value: str) -> list[str]:
     seen: set[str] = set()
     for part in parts:
         candidate = unescape(part).strip()
-        if not candidate or not candidate.startswith(("http://", "https://")):
+        if not candidate or not candidate.startswith(_HTTP_URL_PREFIXES):
             continue
         if candidate in seen:
             continue
@@ -300,7 +339,9 @@ def _normalize_size_text(value: str) -> str:
         return ""
 
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
-    tokens = [token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()]
+    tokens = [
+        token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()
+    ]
     if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):
         return ", ".join(tokens)
     return cleaned
@@ -357,12 +398,15 @@ def _field_has_any_token(field_name: str, tokens: tuple[str, ...]) -> bool:
 
 def _is_image_collection_field(field_name: str) -> bool:
     normalized = _field_token(field_name)
-    return _field_in_group(field_name, "image_collection") or any(token in normalized for token in ("images", "gallery", "photos", "media"))
+    return _field_in_group(field_name, "image_collection") or any(
+        token in normalized for token in ("images", "gallery", "photos", "media")
+    )
 
 
 def _is_image_primary_field(field_name: str) -> bool:
     return _field_in_group(field_name, "image_primary") or (
-        _field_has_any_token(field_name, CANDIDATE_IMAGE_TOKENS) and not _is_image_collection_field(field_name)
+        _field_has_any_token(field_name, CANDIDATE_IMAGE_TOKENS)
+        and not _is_image_collection_field(field_name)
     )
 
 
@@ -370,38 +414,62 @@ def _is_url_field(field_name: str) -> bool:
     normalized = _field_token(field_name)
     if _is_image_primary_field(field_name) or _is_image_collection_field(field_name):
         return False
-    return _field_in_group(field_name, "url") or any(normalized.endswith(_field_token(suffix)) for suffix in CANDIDATE_URL_SUFFIXES)
+    return _field_in_group(field_name, "url") or any(
+        normalized.endswith(_field_token(suffix)) for suffix in CANDIDATE_URL_SUFFIXES
+    )
 
 
 def _is_numeric_field(field_name: str) -> bool:
-    return field_name in PRICE_FIELDS or _field_in_group(field_name, "numeric") or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS)
+    return (
+        field_name in PRICE_FIELDS
+        or _field_in_group(field_name, "numeric")
+        or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS)
+    )
 
 
 def _is_price_like_field(field_name: str) -> bool:
     normalized = _field_token(field_name)
-    return field_name in PRICE_FIELDS or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS) or "price" in normalized
+    return (
+        field_name in PRICE_FIELDS
+        or _field_has_any_token(field_name, CANDIDATE_PRICE_TOKENS)
+        or "price" in normalized
+    )
 
 
 def _is_description_field(field_name: str) -> bool:
-    return _field_in_group(field_name, "description") or _field_has_any_token(field_name, CANDIDATE_DESCRIPTION_TOKENS)
+    return _field_in_group(field_name, "description") or _field_has_any_token(
+        field_name, CANDIDATE_DESCRIPTION_TOKENS
+    )
 
 
 def _is_availability_field(field_name: str) -> bool:
-    return _field_in_group(field_name, "availability") or _field_has_any_token(field_name, CANDIDATE_AVAILABILITY_TOKENS)
+    return _field_in_group(field_name, "availability") or _field_has_any_token(
+        field_name, CANDIDATE_AVAILABILITY_TOKENS
+    )
 
 
 def _is_category_field(field_name: str) -> bool:
-    return _field_in_group(field_name, "category") or _field_has_any_token(field_name, CANDIDATE_CATEGORY_TOKENS)
+    return _field_in_group(field_name, "category") or _field_has_any_token(
+        field_name, CANDIDATE_CATEGORY_TOKENS
+    )
 
 
 def _is_color_field(field_name: str) -> bool:
     normalized = _field_token(field_name)
-    return normalized in {_field_token("color"), _field_token("colors"), _field_token("color_name")}
+    return normalized in {
+        _field_token("color"),
+        _field_token("colors"),
+        _field_token("color_name"),
+    }
 
 
 def _is_size_field(field_name: str) -> bool:
     normalized = _field_token(field_name)
-    return normalized in {_field_token("size"), _field_token("sizes"), _field_token("variant_size")}
+    return normalized in {
+        _field_token("size"),
+        _field_token("sizes"),
+        _field_token("variant_size"),
+    }
 
 
 def _is_title_field(field_name: str) -> bool:
@@ -413,8 +481,12 @@ def _is_entity_name_field(field_name: str) -> bool:
 
 
 def _is_currency_field(field_name: str) -> bool:
-    return _field_in_group(field_name, "currency") or _field_has_any_token(field_name, CANDIDATE_CURRENCY_TOKENS)
+    return _field_in_group(field_name, "currency") or _field_has_any_token(
+        field_name, CANDIDATE_CURRENCY_TOKENS
+    )
 
 
 def _is_salary_field(field_name: str) -> bool:
-    return _field_in_group(field_name, "salary") or _field_has_any_token(field_name, CANDIDATE_SALARY_TOKENS)
+    return _field_in_group(field_name, "salary") or _field_has_any_token(
+        field_name, CANDIDATE_SALARY_TOKENS
+    )

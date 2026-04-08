@@ -8,11 +8,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 
-import { Badge, Button, Input, Textarea } from "../ui/primitives";
-import type { CrawlRecord, CrawlRun } from "../../lib/api/types";
+import { Badge, Button, Input, Textarea, Toggle as PrimitiveToggle } from "../ui/primitives";
+import type { CrawlRecord, CrawlRun, CrawlSurface } from "../../lib/api/types";
 import { cn } from "../../lib/utils";
 
 export type CrawlTab = "category" | "pdp";
@@ -29,7 +29,7 @@ export type FieldRow = {
 };
 export type PendingDispatch = {
   runType: "crawl" | "batch" | "csv";
-  surface: string;
+  surface: CrawlSurface;
   url?: string;
   urls?: string[];
   settings: Record<string, unknown>;
@@ -64,6 +64,57 @@ export function uniqueStrings(values: string[]) {
 
 export function normalizeField(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+const SCHEMA_TYPE_FIELD_NAMES = new Set([
+  "aggregaterating",
+  "breadcrumblist",
+  "individualproduct",
+  "organization",
+  "peopleaudience",
+  "postaladdress",
+  "quantitativevalue",
+  "webpage",
+  "website",
+]);
+
+const DAY_OF_WEEK_FIELD_NAMES = new Set([
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+]);
+
+export function validateAdditionalFieldName(value: string) {
+  const normalized = normalizeField(value);
+  if (!normalized) {
+    return "Field name cannot be empty.";
+  }
+  if (normalized.length < 2) {
+    return "Field name must be at least 2 characters.";
+  }
+  if (normalized.length > 60) {
+    return "Field name must be 60 characters or fewer.";
+  }
+  if (!/^[a-z0-9_]+$/.test(normalized)) {
+    return "Use only letters, numbers, and underscores.";
+  }
+  if ((normalized.match(/_/g) ?? []).length >= 5) {
+    return "Field name is too sentence-like. Keep it concise.";
+  }
+  if (/^[a-z]+(?:[A-Z][a-z0-9]*)+$/.test(value.trim())) {
+    return "Use snake_case instead of schema-style type names.";
+  }
+  if (SCHEMA_TYPE_FIELD_NAMES.has(normalized)) {
+    return "Field name looks like a schema type. Use a business field.";
+  }
+  if (DAY_OF_WEEK_FIELD_NAMES.has(normalized)) {
+    return "Field name looks like a day label. Use a business field.";
+  }
+  return null;
 }
 
 export function parseLines(value: string) {
@@ -165,6 +216,75 @@ export function humanizeVerdict(verdict: string) {
   return verdict.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+export type QualityLevel = "high" | "medium" | "low" | "unknown";
+
+export type QualitySnapshot = {
+  level: QualityLevel;
+  score: number;
+  populatedCells: number;
+  totalCells: number;
+};
+
+export function estimateDataQuality(records: CrawlRecord[], visibleColumns: string[]): QualitySnapshot {
+  if (!records.length || !visibleColumns.length) {
+    return {
+      level: "unknown",
+      score: 0,
+      populatedCells: 0,
+      totalCells: records.length * visibleColumns.length,
+    };
+  }
+
+  const totalCells = records.length * visibleColumns.length;
+  let populatedCells = 0;
+  let recordsWithMinimumShape = 0;
+
+  for (const record of records) {
+    let populatedForRecord = 0;
+    for (const column of visibleColumns) {
+      const value = readRecordValue(record, column);
+      if (!isEmptyCandidateValue(value)) {
+        populatedCells += 1;
+        populatedForRecord += 1;
+      }
+    }
+    if (populatedForRecord >= 2) {
+      recordsWithMinimumShape += 1;
+    }
+  }
+
+  const completenessRatio = populatedCells / totalCells;
+  const shapeRatio = recordsWithMinimumShape / records.length;
+  const score = completenessRatio * 0.7 + shapeRatio * 0.3;
+
+  if (score >= 0.75) {
+    return { level: "high", score, populatedCells, totalCells };
+  }
+  if (score >= 0.45) {
+    return { level: "medium", score, populatedCells, totalCells };
+  }
+  return { level: "low", score, populatedCells, totalCells };
+}
+
+export function qualityTone(level: QualityLevel) {
+  if (level === "high") return "success";
+  if (level === "medium") return "warning";
+  if (level === "low") return "danger";
+  return "neutral";
+}
+
+export function humanizeQuality(level: QualityLevel) {
+  if (level === "unknown") return "Unknown";
+  return level.charAt(0).toUpperCase() + level.slice(1);
+}
+
+export function qualityLevelFromScore(score: number): QualityLevel {
+  if (!Number.isFinite(score)) return "unknown";
+  if (score >= 0.75) return "high";
+  if (score >= 0.45) return "medium";
+  return "low";
+}
+
 export function copyJson(records: CrawlRecord[]) {
   void navigator.clipboard.writeText(JSON.stringify(records.map(cleanRecord), null, 2));
 }
@@ -221,11 +341,11 @@ export const LogTerminal = memo(function LogTerminal({
     >
       {logs.length ? (
         logs.map((log) => (
-          <div key={log.id} className="font-mono text-[12px] leading-6">
+          <div key={log.id} className="font-mono text-xs leading-6">
             <span className="text-muted">[{formatTimestamp(log.created_at)}]</span>{" "}
             <span
               className={cn(
-                "inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.08em]",
+                "inline-flex items-center px-1.5 py-0.5 text-xs font-semibold tracking-[0.08em]",
                 logTone(log.level),
               )}
             >
@@ -251,14 +371,14 @@ export function TabBar({
   options: Array<{ value: string; label: string }>;
 }>) {
   return (
-    <div className="inline-flex min-h-[38px] items-center rounded-[var(--radius-lg)] border border-border bg-[var(--segmented-bg)] p-1 shadow-[var(--segmented-shadow)]">
+    <div className="inline-flex h-8 items-center rounded-[var(--radius-md)] border border-border bg-[var(--segmented-bg)] p-0.5 shadow-[var(--segmented-shadow)]">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
           className={cn(
-            "rounded-[8px] px-3 py-1.5 text-sm font-medium transition-all",
+            "h-7 rounded-[var(--radius-md)] px-3 text-sm font-medium transition-all",
             value === option.value
               ? "segmented-active"
               : "text-muted hover:bg-[var(--segmented-item-hover-bg)] hover:text-foreground",
@@ -280,25 +400,7 @@ export function SegmentedMode({
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
 }>) {
-  return (
-    <div className="inline-flex min-h-[38px] flex-wrap items-center rounded-[var(--radius-lg)] border border-border bg-[var(--segmented-bg)] p-1 shadow-[var(--segmented-shadow)]">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "rounded-[8px] px-3 py-1.5 text-sm font-medium transition-all",
-            value === option.value
-              ? "segmented-active"
-              : "text-muted hover:bg-[var(--segmented-item-hover-bg)] hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <TabBar value={value} onChange={onChange} options={options} />;
 }
 
 export function AdvancedModePicker({
@@ -332,14 +434,14 @@ export function AdvancedModePicker({
               </span>
               <span
                 className={cn(
-                  "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]",
+                  "rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-[0.08em]",
                   active ? "bg-accent text-[var(--accent-fg)]" : "bg-[var(--bg-elevated)] text-muted",
                 )}
               >
                 {active ? "Active" : "Mode"}
               </span>
             </div>
-            <p className="mt-1.5 text-[11px] leading-4 text-muted">{option.description}</p>
+            <p className="mt-1.5 text-xs leading-4 text-muted">{option.description}</p>
           </button>
         );
       })}
@@ -384,11 +486,11 @@ export function SettingSection({
             {icon}
           </div>
           <div className="min-w-0">
-            <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--text-primary)]">{label}</div>
-            <div className="text-[13px] leading-5 text-[var(--text-secondary)]">{description}</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--text-primary)]">{label}</div>
+            <div className="text-sm leading-5 text-[var(--text-secondary)]">{description}</div>
           </div>
         </div>
-        <Toggle checked={checked} onChange={onChange} ariaLabel={label} />
+        <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
       </div>
       {children ? (
         <div
@@ -427,7 +529,7 @@ export function SliderRow({
     <div className="rounded-[var(--radius-lg)] border border-border bg-[var(--slider-row-bg)] px-3 py-1.5 shadow-[var(--slider-row-highlight)]">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <div className="text-[12px] font-semibold text-[var(--text-secondary)]">{label}</div>
+          <div className="text-xs font-semibold text-[var(--text-secondary)]">{label}</div>
           <button type="button" onClick={onReset} aria-label={`Reset ${label}`} className="text-muted hover:text-foreground">
             <RotateCcw className="size-3" />
           </button>
@@ -447,9 +549,9 @@ export function SliderRow({
               value={value}
               onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
               onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
-              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right font-mono text-[12px] tabular-nums text-[var(--accent)] focus:ring-0"
+              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right font-mono text-xs tabular-nums text-[var(--accent)] focus:ring-0"
             />
-            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-[10px] lowercase text-[var(--accent)] opacity-60">
+            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-xs lowercase text-[var(--accent)] opacity-60">
               {suffix ?? ""}
             </span>
           </div>
@@ -473,19 +575,32 @@ export function AdditionalFieldInput({
   onRemove: (value: string) => void;
 }>) {
   const chips = uniqueFields([...fields, ...parseLines(value.replace(/,/g, "\n"))]);
+  const [validationHint, setValidationHint] = useState<string | null>(null);
+
+  function commitField(candidate: string) {
+    const normalized = normalizeField(candidate);
+    if (!normalized) {
+      return;
+    }
+    const validationError = validateAdditionalFieldName(normalized);
+    if (validationError) {
+      setValidationHint(`Skipped "${normalized}": ${validationError}`);
+      return;
+    }
+    onCommit(normalized);
+  }
 
   function handleChange(next: string) {
     const parts = next.split(",");
     parts
       .slice(0, -1)
-      .map((part) => normalizeField(part))
-      .filter(Boolean)
-      .forEach(onCommit);
+      .forEach(commitField);
+    setValidationHint(null);
     onChange(parts.at(-1) ?? "");
   }
 
   function handleBlur() {
-    parseLines(value).map(normalizeField).filter(Boolean).forEach(onCommit);
+    parseLines(value).forEach(commitField);
     onChange("");
   }
 
@@ -499,6 +614,8 @@ export function AdditionalFieldInput({
         placeholder="price, sku, availability, brand"
         className="font-mono text-sm"
       />
+      <p className="text-xs text-muted">Use short snake_case names (2-60 chars).</p>
+      {validationHint ? <p className="text-xs text-danger">{validationHint}</p> : null}
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
           {chips.map((field) => (
@@ -570,18 +687,20 @@ export function ManualFieldEditor({
 export const RecordsTable = memo(function RecordsTable({
   records,
   visibleColumns,
+  fieldQualityScores,
   selectedIds,
   onSelectAll,
   onToggleRow,
 }: Readonly<{
   records: CrawlRecord[];
   visibleColumns: string[];
+  fieldQualityScores?: Record<string, number>;
   selectedIds: number[];
   onSelectAll: (checked: boolean) => void;
   onToggleRow: (id: number, checked: boolean) => void;
 }>) {
   return (
-    <div className="overflow-auto rounded-[10px] border border-border">
+    <div className="overflow-auto rounded-[var(--radius-lg)] border border-border">
       <table className="compact-data-table min-w-[960px]">
         <thead>
           <tr>
@@ -592,9 +711,20 @@ export const RecordsTable = memo(function RecordsTable({
                 onChange={(event) => onSelectAll(event.target.checked)}
               />
             </th>
-            {visibleColumns.map((col) => (
-              <th key={col}>{col}</th>
-            ))}
+            {visibleColumns.map((col) => {
+              const score = fieldQualityScores?.[col];
+              const level = qualityLevelFromScore(score ?? Number.NaN);
+              return (
+                <th key={col}>
+                  <div className="flex items-center gap-2">
+                    <span>{col}</span>
+                    {Number.isFinite(score) ? (
+                      <Badge tone={qualityTone(level)}>{humanizeQuality(level)}</Badge>
+                    ) : null}
+                  </div>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -737,8 +867,10 @@ function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null
   const targetRef = ref ?? internalRef;
 
   useEffect(() => {
-    scrollViewportToBottom(targetRef);
-  }, [_logCount, targetRef]);
+    if (!ref) {
+      scrollViewportToBottom(internalRef);
+    }
+  }, [_logCount, ref]);
 
   return targetRef;
 }
@@ -752,29 +884,6 @@ function getFocusableElements(container: HTMLDivElement | null) {
       'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
     ),
   ).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
-}
-
-function Toggle({
-  checked,
-  onChange,
-  ariaLabel,
-}: Readonly<{ checked: boolean; onChange: (value: boolean) => void; ariaLabel?: string }>) {
-  return (
-    <button
-      type="button"
-      aria-label={ariaLabel}
-      aria-pressed={checked}
-      onClick={() => onChange(!checked)}
-      className={cn("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", checked ? "bg-accent" : "bg-border")}
-    >
-      <span
-        className={cn(
-          "inline-block size-4 rounded-full shadow-sm transition-transform",
-          checked ? "translate-x-4 bg-[var(--accent-fg)]" : "translate-x-0.5 bg-[var(--bg-panel-strong)]",
-        )}
-      />
-    </button>
-  );
 }
 
 function ValidatedField({

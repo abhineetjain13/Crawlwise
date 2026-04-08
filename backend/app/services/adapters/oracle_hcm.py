@@ -88,7 +88,7 @@ class OracleHCMAdapter(BaseAdapter):
                 if response.status_code != 200:
                     break
                 payload = response.json()
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
                 break
 
             items = payload.get("items") if isinstance(payload, dict) else []

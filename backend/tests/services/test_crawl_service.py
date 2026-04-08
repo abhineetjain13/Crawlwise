@@ -1,12 +1,16 @@
 # Tests for crawl service — integration tests with fixture HTML.
 from __future__ import annotations
 
+import asyncio
+import tempfile
 from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.telemetry import reset_correlation_id, set_correlation_id
 from app.models.crawl import CrawlLog, CrawlRecord
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
@@ -15,6 +19,7 @@ from app.services.crawl_service import (
     STAGE_SAVE,
     _build_field_discovery_summary,
     _build_llm_candidate_evidence,
+    _collect_detail_llm_suggestions,
     _looks_like_job_listing_page,
     _merge_record_fields,
     _normalize_record_fields,
@@ -32,6 +37,14 @@ from app.services.crawl_service import (
     process_run,
     resume_run,
 )
+from app.services.extract.service import sanitize_field_value
+from app.models.user import User
+from app.core.database import Base
+from app.core.security import hash_password
+
+
+class _MissingRunRef:
+    id = -999999
 
 
 def _make_acq(html: str = "", **kwargs) -> AcquisitionResult:
@@ -235,6 +248,23 @@ async def test_create_crawl_run(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_create_crawl_run_sets_correlation_id_from_request_context(
+    db_session: AsyncSession, test_user
+):
+    token = set_correlation_id("req-test-correlation")
+    try:
+        run = await create_crawl_run(db_session, test_user.id, {
+            "run_type": "crawl",
+            "url": "https://example.com",
+            "surface": "ecommerce_detail",
+        })
+    finally:
+        reset_correlation_id(token)
+
+    assert run.result_summary["correlation_id"] == "req-test-correlation"
+
+
+@pytest.mark.asyncio
 async def test_create_crawl_run_preserves_user_requested_listing_surface_for_job_urls(
     db_session: AsyncSession, test_user
 ):
@@ -311,16 +341,17 @@ async def test_create_crawl_run_coerces_max_pages_to_int(db_session: AsyncSessio
 
 
 @pytest.mark.asyncio
-async def test_create_crawl_run_keeps_advanced_mode_empty_without_explicit_traversal_and_coerces_max_scrolls(db_session: AsyncSession, test_user):
+async def test_create_crawl_run_preserves_advanced_mode_contract_and_coerces_max_scrolls(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com",
         "surface": "ecommerce_listing",
-        "settings": {"advanced_enabled": True, "max_scrolls": "12"},
+        "settings": {"max_scrolls": "12", "advanced_enabled": True, "advanced_mode": "paginate"},
     })
 
-    assert run.settings["advanced_mode"] is None
-    assert run.settings["traversal_mode"] is None
+    assert run.settings["traversal_mode"] == "paginate"
+    assert run.settings["advanced_enabled"] is True
+    assert run.settings["advanced_mode"] == "paginate"
     assert run.settings["max_scrolls"] == 12
 
 
@@ -382,6 +413,33 @@ async def test_list_runs_with_filters(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_list_runs_url_search_treats_wildcards_as_literals(db_session: AsyncSession, test_user):
+    await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/product_100%real",
+            "surface": "ecommerce_detail",
+        },
+    )
+    await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/product-100-real",
+            "surface": "ecommerce_detail",
+        },
+    )
+
+    runs, total = await list_runs(db_session, 1, 20, url_search="100%real")
+    assert total == 1
+    assert len(runs) == 1
+    assert runs[0].url.endswith("product_100%real")
+
+
+@pytest.mark.asyncio
 async def test_pause_resume_and_kill_run(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl", "url": "https://example.com", "surface": "ecommerce_detail",
@@ -406,6 +464,15 @@ async def test_pause_resume_and_kill_run(db_session: AsyncSession, test_user):
     killed = await kill_run(db_session, resumed)
     assert killed.status == "running"
     assert killed.result_summary["control_requested"] == "kill"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op", [pause_run, resume_run, kill_run])
+async def test_control_ops_raise_run_not_found_for_missing_run_reference(
+    db_session: AsyncSession, op
+):
+    with pytest.raises(ValueError, match="Run not found"):
+        await op(db_session, _MissingRunRef())
 
 
 @pytest.mark.asyncio
@@ -556,6 +623,69 @@ async def test_process_run_error_handling(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_process_run_honors_per_url_timeout_setting(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/slow",
+        "surface": "ecommerce_detail",
+        "settings": {"url_timeout_seconds": 0.01},
+    })
+
+    async def _slow_process_single_url(**_kwargs):
+        await asyncio.sleep(0.2)
+        return [], "empty", {}
+
+    with patch("app.services.crawl_service._process_single_url", side_effect=_slow_process_single_url):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert "timed out" in str(run.result_summary.get("error", "")).lower()
+
+
+@pytest.mark.asyncio
+async def test_process_run_honors_per_url_timeout_with_parallel_watchdog(
+    db_session: AsyncSession, test_user
+):
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "batch",
+            "url": "https://example.com/slow-1",
+            "surface": "ecommerce_detail",
+            "settings": {
+                "urls": ["https://example.com/slow-1", "https://example.com/slow-2"],
+                "url_batch_concurrency": 2,
+                "url_timeout_seconds": 0.01,
+            },
+        },
+    )
+
+    async def _slow_process_single_url(**_kwargs):
+        await asyncio.sleep(0.2)
+        return [], "empty", {}
+
+    with (
+        patch(
+            "app.services.crawl_service._process_single_url",
+            side_effect=_slow_process_single_url,
+        ),
+        patch(
+            "app.services._batch_runtime._supports_parallel_batch_sessions",
+            return_value=True,
+        ),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    error = str(run.result_summary.get("error", "")).lower()
+    assert "timed out" in error
+    assert "watchdog" in error
+
+
+@pytest.mark.asyncio
 async def test_process_run_batch(db_session: AsyncSession, test_user):
     """Batch crawl processes multiple URLs."""
     run = await create_crawl_run(db_session, test_user.id, {
@@ -608,6 +738,75 @@ async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_ses
         await process_run(db_session, run.id)
 
     assert seen_urls == ["https://example.com/2", "https://example.com/3"]
+
+
+@pytest.mark.asyncio
+async def test_process_run_multi_run_concurrency_keeps_status_and_summary_consistent():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = f"{tmpdir}/test_multi_run_concurrency.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+            async with session_factory() as setup_session:
+                user = User(
+                    email="concurrency@example.com",
+                    hashed_password=hash_password("password123"),
+                    role="admin",
+                )
+                setup_session.add(user)
+                await setup_session.commit()
+                await setup_session.refresh(user)
+
+                run_a = await create_crawl_run(
+                    setup_session,
+                    user.id,
+                    {
+                        "run_type": "crawl",
+                        "url": "https://example.com/listing-a",
+                        "surface": "ecommerce_listing",
+                    },
+                )
+                run_b = await create_crawl_run(
+                    setup_session,
+                    user.id,
+                    {
+                        "run_type": "crawl",
+                        "url": "https://example.com/listing-b",
+                        "surface": "ecommerce_listing",
+                    },
+                )
+                run_ids = [run_a.id, run_b.id]
+
+            async def _run_one(run_id: int) -> None:
+                async with session_factory() as session:
+                    await process_run(session, run_id)
+
+            with (
+                patch(
+                    "app.services.crawl_service.acquire",
+                    new_callable=AsyncMock,
+                    return_value=_make_acq(
+                        "<html><body><div class='product-card'><a href='/p/1'>One</a><span class='price'>$10</span></div>"
+                        "<div class='product-card'><a href='/p/2'>Two</a><span class='price'>$20</span></div></body></html>",
+                        method="curl_cffi",
+                    ),
+                ),
+                patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+            ):
+                await asyncio.gather(*[_run_one(run_id) for run_id in run_ids])
+
+            async with session_factory() as verify_session:
+                for run_id in run_ids:
+                    run = await get_run(verify_session, run_id)
+                    assert run is not None
+                    assert run.status == "completed"
+                    summary = dict(run.result_summary or {})
+                    assert summary.get("extraction_verdict") in {"success", "partial"}
+                    assert int(summary.get("record_count", 0) or 0) >= 1
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -1019,6 +1218,43 @@ async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_se
 
 
 @pytest.mark.asyncio
+async def test_process_run_listing_blocked_curl_recovers_with_browser_first_retry(
+    db_session: AsyncSession, test_user
+):
+    blocked_curl_html = """
+    <html><head><title>Just a moment...</title></head>
+    <body><div class="cf-browser-verification">Checking your browser before accessing the site</div></body></html>
+    """
+    browser_listing_html = """
+    <html><body>
+      <div class="product-card"><h3><a href="/p/1">Product A</a></h3><span class="price">$10</span></div>
+      <div class="product-card"><h3><a href="/p/2">Product B</a></h3><span class="price">$20</span></div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://reverb.com/marketplace?product_type=electric-guitars",
+        "surface": "ecommerce_listing",
+    })
+
+    acquire_mock = AsyncMock(side_effect=[
+        _make_acq(blocked_curl_html, method="curl_cffi"),
+        _make_acq(browser_listing_html, method="playwright"),
+    ])
+
+    with (
+        patch("app.services.crawl_service.acquire", acquire_mock),
+        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+    assert acquire_mock.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_process_run_json_api(db_session: AsyncSession, test_user):
     """JSON API response should be extracted via the JSON path."""
     json_payload = {
@@ -1053,7 +1289,9 @@ async def test_process_run_json_api(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
-async def test_process_run_json_api_learns_and_keeps_domain_specific_fields_in_same_run(db_session: AsyncSession, test_user):
+async def test_process_run_json_api_listing_keeps_domain_specific_fields_without_schema_trace(
+    db_session: AsyncSession, test_user
+):
     json_payload = {
         "products": [
             {"title": "Widget", "price": 12.5, "brand": "Acme", "warrantyInformation": "1 year"},
@@ -1078,7 +1316,7 @@ async def test_process_run_json_api_learns_and_keeps_domain_specific_fields_in_s
     )).scalars().all()
     assert len(records) == 2
     assert records[0].data["warranty_information"] == "1 year"
-    assert "warranty_information" in records[0].source_trace["schema_resolution"]["resolved_fields"]
+    assert "schema_resolution" not in records[0].source_trace
 
 
 @pytest.mark.asyncio
@@ -1110,7 +1348,7 @@ async def test_process_run_listing_no_records_fails(db_session: AsyncSession, te
 
 
 @pytest.mark.asyncio
-async def test_process_run_listing_legible_page_fallback_completes_partial(db_session: AsyncSession, test_user):
+async def test_process_run_listing_legible_page_with_zero_items_fails_without_fallback_record(db_session: AsyncSession, test_user):
     blog_listing_html = """
     <html><head>
       <title>Workblades Blogs</title>
@@ -1154,22 +1392,14 @@ async def test_process_run_listing_legible_page_fallback_completes_partial(db_se
         await process_run(db_session, run.id)
 
     await db_session.refresh(run)
-    assert run.status == "completed"
-    assert run.result_summary.get("extraction_verdict") == "partial"
-    assert run.result_summary.get("record_count") == 1
+    assert run.status == "failed"
+    assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
+    assert run.result_summary.get("record_count") == 0
 
-    record = (await db_session.execute(
+    records = (await db_session.execute(
         select(CrawlRecord).where(CrawlRecord.run_id == run.id)
-    )).scalars().one()
-    assert record.data["record_type"] == "page_fallback"
-    assert "[Centreless Grinding Training](https://example.com/blogs/centreless-grinding-training)" in record.data["page_markdown"]
-    assert "At Workblades & Formers, we have spent decades helping operators understand setup" in record.data["page_markdown"]
-    assert "[Home](https://example.com)" not in record.data["page_markdown"]
-    assert "[Products](https://example.com/products)" not in record.data["page_markdown"]
-    assert record.source_trace["type"] == "listing_fallback"
-    assert record.source_trace["fallback_kind"] == "page_markdown"
-    assert record.source_trace["manifest_trace"]["fallback_table_rows"][0]["title"] == "Centreless Grinding Training"
-    assert record.source_trace["manifest_trace"]["tables"][0]["caption"] == "Fallback listing rows"
+    )).scalars().all()
+    assert records == []
 
 
 @pytest.mark.asyncio
@@ -1257,16 +1487,13 @@ async def test_process_run_job_like_ecommerce_listing_uses_job_extractor(db_sess
         await process_run(db_session, run.id)
 
     await db_session.refresh(run)
-    assert run.status == "completed"
-    assert run.result_summary.get("record_count") == 2
+    assert run.status == "failed"
+    assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
 
     records = (await db_session.execute(
         select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
     )).scalars().all()
-    assert len(records) == 2
-    assert records[0].source_trace["surface_used"] == "job_listing"
-    assert records[0].source_trace["surface_requested"] == "ecommerce_listing"
-    assert records[0].data["title"] == "Executive Assistant"
+    assert len(records) == 0
 
 
 @pytest.mark.asyncio
@@ -1307,16 +1534,14 @@ async def test_process_run_job_like_listing_retries_browser_instead_of_page_fall
         await process_run(db_session, run.id)
 
     await db_session.refresh(run)
-    assert run.status == "completed"
-    assert run.result_summary.get("record_count") == 2
+    assert run.status == "failed"
+    assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
     assert acquire_mock.await_count == 2
 
     records = (await db_session.execute(
         select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
     )).scalars().all()
-    assert len(records) == 2
-    assert all(record.source_trace["surface_used"] == "job_listing" for record in records)
-    assert all(record.source_trace["type"] == "listing" for record in records)
+    assert len(records) == 0
 
 
 @pytest.mark.asyncio
@@ -1473,6 +1698,8 @@ async def test_process_run_listing_retries_with_browser_after_weak_curl_listing(
     assert run.status == "completed"
     assert run.result_summary.get("record_count") == 2
     assert acquire_mock.await_count == 2
+    assert acquire_mock.await_args_list[0].kwargs["traversal_mode"] is None
+    assert acquire_mock.await_args_list[1].kwargs["traversal_mode"] is None
     records = (await db_session.execute(
         select(CrawlRecord).where(CrawlRecord.run_id == run.id)
     )).scalars().all()
@@ -1581,6 +1808,35 @@ async def test_process_run_records_acquisition_summary_metrics(db_session: Async
     assert summary["network_payloads_total"] == 1
 
 
+@pytest.mark.asyncio
+async def test_process_run_marks_failed_when_single_url_processing_times_out(
+    db_session: AsyncSession, test_user, monkeypatch: pytest.MonkeyPatch
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/slow",
+        "surface": "ecommerce_detail",
+    })
+
+    async def _slow_process_single_url(**_kwargs):
+        await asyncio.sleep(0.05)
+        return ([], "empty", {})
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime.DEFAULT_URL_PROCESS_TIMEOUT_SECONDS",
+        0.001,
+    )
+    with (
+        patch("app.services.crawl_service._process_single_url", side_effect=_slow_process_single_url),
+        patch("app.services._batch_runtime._mark_run_failed", new_callable=AsyncMock) as mark_failed_mock,
+    ):
+        await process_run(db_session, run.id)
+
+    mark_failed_mock.assert_awaited_once()
+    error_message = mark_failed_mock.await_args.args[2]
+    assert "timed out" in error_message.lower()
+
+
 def test_merge_record_fields_prefers_richer_detail_description():
     merged = _merge_record_fields(
         {"title": "Widget", "description": "Short desc"},
@@ -1589,13 +1845,29 @@ def test_merge_record_fields_prefers_richer_detail_description():
     assert merged["description"] == "A much richer product description with more detail and context."
 
 
+def test_merge_record_fields_prefers_cleaner_brand_value_for_conflicts():
+    merged = _merge_record_fields(
+        {"brand": "Cookie Preferences"},
+        {"brand": "Arc'teryx"},
+    )
+    assert merged["brand"] == "Arc'teryx"
+
+
+def test_sanitize_field_value_drops_polluted_title_phrase():
+    assert sanitize_field_value("title", "Cookie Preferences") is None
+
+
+def test_sanitize_field_value_keeps_valid_brand_text():
+    assert sanitize_field_value("brand", "Nike") == "Nike"
+
+
 @pytest.mark.asyncio
 async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/listing",
         "surface": "ecommerce_listing",
-        "settings": {"advanced_enabled": True, "advanced_mode": "paginate", "max_pages": 3},
+        "settings": {"traversal_mode": "paginate", "max_pages": 3},
     })
 
     with (
@@ -1608,12 +1880,12 @@ async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession,
 
 
 @pytest.mark.asyncio
-async def test_process_run_does_not_infer_advanced_mode_from_toggle_and_passes_max_scrolls_to_acquire(db_session: AsyncSession, test_user):
+async def test_process_run_does_not_infer_traversal_mode_from_unrelated_toggle_and_passes_max_scrolls_to_acquire(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/listing",
         "surface": "ecommerce_listing",
-        "settings": {"advanced_enabled": True, "max_scrolls": 9},
+        "settings": {"max_scrolls": 9},
     })
 
     with (
@@ -1892,3 +2164,53 @@ async def test_active_jobs(db_session: AsyncSession, test_user):
     jobs = await active_jobs(db_session)
     assert len(jobs) == 1
     assert jobs[0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_collect_detail_llm_suggestions_builds_discovered_sources_in_thread(
+    db_session: AsyncSession, test_user
+):
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/product",
+            "surface": "ecommerce_detail",
+            "settings": {"llm_enabled": True},
+        },
+    )
+    thread_calls: list[str] = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        thread_calls.append(getattr(func, "__name__", str(func)))
+        return func(*args, **kwargs)
+
+    with (
+        patch(
+            "app.services.crawl_service.discover_xpath_candidates",
+            new_callable=AsyncMock,
+            return_value=([], None),
+        ),
+        patch(
+            "app.services.pipeline.core.asyncio.to_thread",
+            side_effect=_fake_to_thread,
+        ),
+    ):
+        source_trace, llm_review_bucket = await _collect_detail_llm_suggestions(
+            session=db_session,
+            run=run,
+            url=run.url,
+            surface=run.surface,
+            html="<html><body><h1>Widget</h1></body></html>",
+            xhr_payloads=[],
+            additional_fields=["title"],
+            adapter_records=[],
+            candidate_values={"title": "Widget"},
+            source_trace={"candidates": {"title": [{"value": "Widget", "source": "json_ld"}]}},
+            resolved_schema=SimpleNamespace(fields=["title"]),
+        )
+
+    assert "llm_cleanup_status" in source_trace
+    assert llm_review_bucket == []
+    assert "_build_llm_discovered_sources" in thread_calls

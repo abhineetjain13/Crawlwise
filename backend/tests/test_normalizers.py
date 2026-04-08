@@ -71,6 +71,6 @@ def test_validate_image_collection_filters_each_url_individually():
     )
 
 
-def test_validate_http_url_rejects_generic_platform_prefixes_with_paths():
-    assert validate_value("url", "https://www.shopify.com/pricing") is None
-    assert validate_value("url", "https://www.linkedin.com/jobs/view/123") is None
+def test_validate_http_url_accepts_valid_http_urls_without_site_hacks():
+    assert validate_value("url", "https://www.shopify.com/pricing") == "https://www.shopify.com/pricing"
+    assert validate_value("url", "https://www.linkedin.com/jobs/view/123") == "https://www.linkedin.com/jobs/view/123"

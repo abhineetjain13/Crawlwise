@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from enum import StrEnum
+
+from app.services.crawl_events import clear_url_progress_counter
 
 
 class CrawlStatus(StrEnum):
@@ -10,7 +13,6 @@ class CrawlStatus(StrEnum):
     PAUSED = "paused"
     COMPLETED = "completed"
     KILLED = "killed"
-    CLAIMED = "claimed"
     FAILED = "failed"
     PROXY_EXHAUSTED = "proxy_exhausted"
 
@@ -23,12 +25,8 @@ TERMINAL_STATUSES = {
 }
 ACTIVE_STATUSES = {
     CrawlStatus.PENDING,
-    CrawlStatus.CLAIMED,
     CrawlStatus.RUNNING,
     CrawlStatus.PAUSED,
-}
-WORKER_PICKUP_STATUSES = {
-    CrawlStatus.PENDING,
 }
 CONTROL_REQUEST_KEY = "control_requested"
 CONTROL_REQUEST_PAUSE = "pause"
@@ -39,8 +37,7 @@ _LEGACY_STATUS_MAP = {
     "degraded": CrawlStatus.FAILED,
 }
 _ALLOWED_TRANSITIONS = {
-    CrawlStatus.PENDING: {CrawlStatus.CLAIMED, CrawlStatus.RUNNING, CrawlStatus.KILLED},
-    CrawlStatus.CLAIMED: {CrawlStatus.RUNNING, CrawlStatus.KILLED, CrawlStatus.FAILED},
+    CrawlStatus.PENDING: {CrawlStatus.RUNNING, CrawlStatus.KILLED},
     CrawlStatus.RUNNING: {CrawlStatus.PAUSED, CrawlStatus.COMPLETED, CrawlStatus.KILLED, CrawlStatus.FAILED, CrawlStatus.PROXY_EXHAUSTED},
     CrawlStatus.PAUSED: {CrawlStatus.RUNNING, CrawlStatus.KILLED},
     CrawlStatus.COMPLETED: set(),
@@ -70,11 +67,19 @@ def transition_status(current: str | CrawlStatus, target: str | CrawlStatus) -> 
 
 
 def update_run_status(run, target: str | CrawlStatus) -> CrawlStatus:
+    """Update run status.
+    
+    # TODO: implement event publishing
+    """
     previous_status = str(run.status)
     next_status = transition_status(run.status, target)
     run.status = next_status.value
     if next_status in TERMINAL_STATUSES and (next_status.value != previous_status or run.completed_at is None):
         run.completed_at = datetime.now(UTC)
+        run_id = getattr(run, "id", None)
+        if isinstance(run_id, int):
+            clear_url_progress_counter(run_id)
+    
     return next_status
 
 

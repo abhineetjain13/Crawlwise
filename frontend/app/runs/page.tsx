@@ -6,26 +6,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Plus, Trash2 } from "lucide-react";
 
 import { Badge, Button, Input } from "../../components/ui/primitives";
-import { EmptyPanel, PageHeader, SkeletonRows } from "../../components/ui/patterns";
+import { EmptyPanel, InlineAlert, PageHeader, SkeletonRows } from "../../components/ui/patterns";
 import { api } from "../../lib/api";
 import type { CrawlRun, RunStatus } from "../../lib/api/types";
+import { formatRunsDate as formatDate } from "../../lib/format/date";
+import { getDomain } from "../../lib/format/domain";
+import { runsStatusDot as statusDot, runsStatusTone as statusTone } from "../../lib/ui/status";
 import { cn } from "../../lib/utils";
 
 type StatusFilter = "" | RunStatus;
 
-/* ─── Status config (single source of truth for this page) ──────────────── */
-const STATUS_CONFIG: Record<string, { tone: "success" | "warning" | "danger" | "accent" | "neutral"; dot: string }> = {
-  completed:       { tone: "success", dot: "var(--success)" },
-  running:         { tone: "accent",  dot: "var(--accent)"  },
-  paused:          { tone: "warning", dot: "var(--warning)" },
-  failed:          { tone: "danger",  dot: "var(--danger)"  },
-  killed:          { tone: "danger",  dot: "var(--danger)"  },
-  proxy_exhausted: { tone: "danger",  dot: "var(--danger)"  },
-  pending:         { tone: "neutral", dot: "var(--text-muted)" },
-};
-
-function statusTone(s: string) { return STATUS_CONFIG[s]?.tone ?? "neutral"; }
-function statusDot(s: string)  { return STATUS_CONFIG[s]?.dot ?? "var(--text-muted)"; }
 
 /* ─── Run row ────────────────────────────────────────────────────────────── */
 function RunRow({
@@ -213,11 +203,7 @@ export default function RunsPage() {
         </div>
       </div>
 
-      {actionError ? (
-        <div className="rounded-[var(--radius-lg)] border border-[var(--danger-bg)] bg-[var(--danger-bg)] px-4 py-3 text-[13px] text-[var(--danger)]">
-          {actionError}
-        </div>
-      ) : null}
+      {actionError ? <InlineAlert message={actionError} /> : null}
 
       {/* ── Table ── */}
       <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] overflow-hidden shadow-[var(--shadow-card-value)]">
@@ -275,10 +261,6 @@ export default function RunsPage() {
   );
 }
 
-function getDomain(url: string) {
-  try { return new URL(url).hostname; } catch { return url; }
-}
-
 function formatRunType(value: string) {
   if (value === "crawl")  return "Single";
   if (value === "batch")  return "Batch";
@@ -286,13 +268,3 @@ function formatRunType(value: string) {
   return value;
 }
 
-function formatDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString([], {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}

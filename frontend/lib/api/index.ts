@@ -1,4 +1,4 @@
-import { apiClient, getApiBaseUrl, storeAccessToken } from "./client";
+import { apiClient, getApiBaseUrl } from "./client";
 import type {
   ActiveJob,
   CrawlCreatePayload,
@@ -6,13 +6,11 @@ import type {
   CrawlRecord,
   CrawlRecordProvenance,
   CrawlRun,
+  CrawlSurface,
   Dashboard,
   FieldCommitPayload,
   FieldCommitResponse,
-  LlmConfigRecord,
-  LlmConnectionTestResponse,
-  LlmCostLogRecord,
-  LlmProviderCatalogItem,
+  LoginResponse,
   Paginated,
   ReviewPayload,
   ReviewSelectorPreview,
@@ -34,8 +32,7 @@ export const api = {
   register: (email: string, password: string) =>
     apiClient.post<User>("/api/auth/register", { email, password }),
   login: async (email: string, password: string) => {
-    const response = await apiClient.post<{ access_token: string; user: User }>("/api/auth/login", { email, password });
-    storeAccessToken(response.access_token);
+    const response = await apiClient.post<LoginResponse>("/api/auth/login", { email, password });
     return response;
   },
   me: () => apiClient.get<User>("/api/auth/me"),
@@ -44,7 +41,7 @@ export const api = {
   createCrawl: (payload: CrawlCreatePayload) => apiClient.post<{ run_id: number }>("/api/crawls", payload),
   createCsvCrawl: (payload: {
     file: File;
-    surface: string;
+    surface: CrawlSurface;
     additionalFields: string[];
     settings: Record<string, unknown>;
   }) => {
@@ -72,21 +69,7 @@ export const api = {
   commitSelectedFields: async (
     runId: number,
     items: FieldCommitPayload[],
-  ) => {
-    try {
-      return await apiClient.post<FieldCommitResponse>(`/api/crawls/${runId}/commit-fields`, { items });
-    } catch (error) {
-      const status = error instanceof Error && "status" in error ? Number((error as { status?: unknown }).status) : undefined;
-      if (status !== 404) {
-        throw error;
-      }
-      return await apiClient.post<FieldCommitResponse>(`/api/crawls/${runId}/llm-commit`, { items });
-    }
-  },
-  commitLlmSuggestions: (
-    runId: number,
-    items: Array<{ record_id: number; field_name: string; value: unknown }>,
-  ) => apiClient.post<{ run_id: number; updated_records: number; updated_fields: number }>(`/api/crawls/${runId}/llm-commit`, { items }),
+  ) => apiClient.post<FieldCommitResponse>(`/api/crawls/${runId}/commit-fields`, { items }),
   getRecords: (runId: number, params?: { page?: number; limit?: number }) => {
     const query = new URLSearchParams();
     if (params?.page !== undefined) query.set("page", String(params.page));
@@ -129,36 +112,6 @@ export const api = {
   testSelector: (payload: { url: string; css_selector?: string | null; xpath?: string | null; regex?: string | null }) =>
     apiClient.post<SelectorTestResponse>("/api/selectors/test", payload),
   listJobs: () => apiClient.get<ActiveJob[]>("/api/jobs/active"),
-  listLlmCatalog: () => apiClient.get<LlmProviderCatalogItem[]>("/api/llm/catalog"),
-  listLlmConfigs: () => apiClient.get<LlmConfigRecord[]>("/api/llm/config"),
-  createLlmConfig: (payload: {
-    provider: string;
-    model: string;
-    api_key?: string;
-    task_type: string;
-    per_domain_daily_budget_usd: number;
-    global_session_budget_usd: number;
-  }) => apiClient.post<LlmConfigRecord>("/api/llm/config", payload),
-  updateLlmConfig: (
-    configId: number,
-    payload: Partial<{
-      provider: string;
-      model: string;
-      api_key: string;
-      task_type: string;
-      per_domain_daily_budget_usd: number;
-      global_session_budget_usd: number;
-      is_active: boolean;
-    }>,
-  ) => apiClient.put<LlmConfigRecord>(`/api/llm/config/${configId}`, payload),
-  testLlmConnection: (payload: { provider: string; model: string; api_key?: string }) =>
-    apiClient.post<LlmConnectionTestResponse>("/api/llm/test", payload),
-  listLlmCostLog: (params?: { page?: number; limit?: number }) => {
-    const query = new URLSearchParams();
-    if (params?.page !== undefined) query.set("page", String(params.page));
-    if (params?.limit !== undefined) query.set("limit", String(params.limit));
-    return apiClient.get<Paginated<LlmCostLogRecord>>(withQuery("/api/llm/cost-log", query));
-  },
 };
 
 // Named exports for easier consumption in components

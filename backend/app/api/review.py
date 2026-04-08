@@ -16,7 +16,7 @@ from app.schemas.crawl import (
     ReviewSaveRequest,
     ReviewSaveResponse,
 )
-from app.services.crawl_service import get_run
+from app.services.crawl_crud import get_run
 from app.services.review import build_review_payload, load_review_html, save_review
 
 router = APIRouter(prefix="/api/review", tags=["review"])
@@ -84,4 +84,3 @@ async def review_save(
         })
     result = await save_review(session, run, selections)
     return ReviewSaveResponse.model_validate(result)
-

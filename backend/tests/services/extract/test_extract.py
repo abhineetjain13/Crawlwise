@@ -5,7 +5,10 @@ import json
 from unittest.mock import patch
 
 from app.services.extract.service import (
+    _dispatch_string_field_coercer,
     _extract_image_urls,
+    _label_value_pattern,
+    _normalize_html_rich_text,
     _normalize_color_candidate,
     _normalize_size_candidate,
     _resolve_candidate_url,
@@ -37,6 +40,7 @@ def extract_candidates(
         "json_ld": sources.get("json_ld") or [],
         "microdata": sources.get("microdata") or [],
         "tables": sources.get("tables") or [],
+        "datalayer": sources.get("datalayer") or {},
     }
     if any(page_sources.values()):
         with patch("app.services.extract.service.parse_page_sources", return_value=page_sources):
@@ -300,6 +304,18 @@ def test_extract_label_value_fallback_uses_full_description_sources():
     assert candidates["brand"][0]["value"] == "Acme Corp"
 
 
+def test_label_value_pattern_cache_reuses_compiled_regex_for_same_variant():
+    _label_value_pattern.cache_clear()
+    before = _label_value_pattern.cache_info()
+    first = _label_value_pattern("Brand")
+    second = _label_value_pattern("Brand")
+    after = _label_value_pattern.cache_info()
+
+    assert first is second
+    assert after.hits == before.hits + 1
+    assert after.misses == before.misses + 1
+
+
 def test_extract_job_company_from_open_graph_site_name():
     html = "<html><body><h1>Supervisor Food and Beverage</h1></body></html>"
     manifest = _manifest(open_graph={"og:site_name": "Woodbine Entertainment"})
@@ -347,6 +363,18 @@ def test_coerce_field_candidate_value_joins_description_lists():
     )
 
     assert coerced == "Paragraph one. Paragraph two. Final details."
+
+
+def test_dispatch_string_field_coercer_prefers_image_collection_over_url_suffix_match():
+    coerced = _dispatch_string_field_coercer(
+        "product_images_url",
+        "/img/a.jpg, /img/b.jpg",
+        base_url="https://example.com/product/1",
+    )
+    assert (
+        coerced
+        == "https://example.com/img/a.jpg, https://example.com/img/b.jpg"
+    )
 
 
 def test_coerce_field_candidate_value_rejects_asset_font_urls_for_url_fields():
@@ -979,7 +1007,7 @@ def test_extract_prefers_real_title_and_cleans_size_color_option_text():
             [],
         )
     assert candidates["title"][0]["value"] == "Chaz Kangeroo Hoodie"
-    assert candidates["size"][0]["value"] == "XS, S, M, L, XL"
+    assert candidates["size"][0]["value"] == "XS/S/M/L/XL"
     assert candidates["color"][0]["value"] == "Black Gray Orange"
 
 
@@ -1040,6 +1068,31 @@ def test_extract_preserves_all_values_found_at_different_depths():
         )
     assert candidates["title"][0]["source"] == "json_ld"
     assert candidates["title"][0]["value"] == "Top Level Title"
+
+
+def test_coerce_availability_normalizes_known_states_and_drops_ui_noise():
+    assert coerce_field_candidate_value("availability", "In stock") == "In stock"
+    assert coerce_field_candidate_value("availability", "Sold out") == "Sold out"
+    assert coerce_field_candidate_value("availability", "Pre-order now") == "Pre-order now"
+    assert coerce_field_candidate_value("availability", "Only 2 left in stock") == "Only 2 left in stock"
+    assert coerce_field_candidate_value("availability", "Add to cart") is None
+
+
+def test_coerce_category_rejects_nav_breadcrumb_noise():
+    assert coerce_field_candidate_value("category", "Home > Men > Shirts > Tops") is None
+    assert coerce_field_candidate_value("category", "Men > Shirts") == "Men > Shirts"
+
+
+def test_coerce_title_rejects_account_and_cookie_noise():
+    assert coerce_field_candidate_value("title", "Cookie preferences and privacy policy") is None
+    assert coerce_field_candidate_value("title", "Sign in to your account") is None
+    assert coerce_field_candidate_value("title", "Trail Running Shoe") == "Trail Running Shoe"
+
+
+def test_normalize_color_candidate_rejects_overlong_or_ui_phrases():
+    assert _normalize_color_candidate("Choose options") is None
+    assert _normalize_color_candidate("Black Gray Orange") == "Black Gray Orange"
+    assert _normalize_color_candidate("Super extra premium metallic reflective carbon black and silver") is None
 
 
 def test_extract_preserves_all_matches_from_multiple_hydrated_states_and_embedded_json_payloads():
@@ -1346,7 +1399,160 @@ def test_normalize_color_candidate_rejects_css_noise():
     ) is None
 
 
+def test_normalize_color_candidate_rejects_variant_count_labels():
+    assert _normalize_color_candidate("12 colors") is None
+
+
 def test_normalize_size_candidate_rejects_css_noise():
     assert _normalize_size_candidate(
         "12px;font-weight:330;-webkit-transition:0.1s ease;transition:0.1s ease;}"
     ) is None
+
+
+def test_normalize_html_rich_text_handles_block_tags_without_crashing():
+    assert _normalize_html_rich_text("<div>Alpha</div><p>Beta</p><br><li>Gamma</li>") == "Alpha\nBeta\nGamma"
+
+
+
+# Property 3: Extraction Hierarchy Order Preservation
+def test_extraction_hierarchy_order_preservation_datalayer_before_network():
+    """Feature: extraction-pipeline-improvements, Property 3: Extraction Hierarchy Order Preservation
+    
+    **Validates: Requirements 1.6, 2.3, 2.5**
+    
+    For any HTML containing the same field value in multiple sources (adapter, dataLayer, 
+    JSON-LD, DOM), the extraction pipeline SHALL resolve the field using the first source 
+    in hierarchy order, and SHALL NOT consult subsequent sources once a valid value is found.
+    
+    This test verifies that dataLayer (step 2) is consulted before Network Intercept (step 3).
+    """
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 29.99,
+                    "currency": "USD"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+    
+    # Network payload has different price
+    manifest = _manifest(
+        network_payloads=[
+            {
+                "url": "https://api.example.com/product",
+                "body": {"price": "39.99", "currency": "EUR"}
+            }
+        ]
+    )
+    
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    
+    # Should use dataLayer price (29.99), not network payload price (39.99)
+    assert "price" in candidates
+    assert len(candidates["price"]) == 1
+    assert candidates["price"][0]["source"] == "datalayer"
+    assert candidates["price"][0]["value"] == 29.99
+
+
+def test_extraction_hierarchy_order_preservation_adapter_before_datalayer():
+    """Feature: extraction-pipeline-improvements, Property 3: Extraction Hierarchy Order Preservation
+    
+    **Validates: Requirements 1.6, 2.3, 2.5**
+    
+    This test verifies that Adapter (step 1) is consulted before dataLayer (step 2).
+    """
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 29.99,
+                    "currency": "USD"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+    
+    # Adapter has different price
+    manifest = _manifest(
+        adapter_data=[{"price": "19.99", "currency": "GBP"}]
+    )
+    
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    
+    # Should use adapter price (19.99), not dataLayer price (29.99)
+    assert "price" in candidates
+    assert len(candidates["price"]) == 1
+    assert candidates["price"][0]["source"] == "adapter"
+    assert candidates["price"][0]["value"] == "19.99"
+
+
+def test_extraction_hierarchy_order_preservation_datalayer_before_jsonld():
+    """Feature: extraction-pipeline-improvements, Property 3: Extraction Hierarchy Order Preservation
+    
+    **Validates: Requirements 1.6, 2.3, 2.5**
+    
+    This test verifies that dataLayer (step 2) is consulted before JSON-LD (step 4).
+    """
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 29.99,
+                    "currency": "USD"
+                }
+            ]
+        }
+    });
+    </script>
+    <script type="application/ld+json">
+    {"@type": "Product", "price": "39.99", "priceCurrency": "EUR"}
+    </script>
+    </body></html>
+    """
+    
+    # Don't use manifest - let parse_page_sources extract both dataLayer and JSON-LD from HTML
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            None,  # No manifest - parse from HTML
+            [],
+        )
+    
+    # Should use dataLayer price (29.99), not JSON-LD price (39.99)
+    assert "price" in candidates
+    assert len(candidates["price"]) == 1
+    assert candidates["price"][0]["source"] == "datalayer"
+    assert candidates["price"][0]["value"] == 29.99

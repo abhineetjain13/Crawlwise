@@ -1,6 +1,7 @@
 # Playwright browser acquisition client with optional proxy and network interception.
 from __future__ import annotations
 
+import atexit
 import logging
 
 import asyncio
@@ -12,11 +13,28 @@ from pathlib import Path
 import time
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from playwright.async_api import Error as PlaywrightError, async_playwright
+from playwright.async_api import (
+    Error as PlaywrightError,
+    TimeoutError as PlaywrightTimeoutError,
+    async_playwright,
+)
 
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
+from app.services.acquisition.traversal import (
+    TraversalResult,
+    TraversalConfig,
+    apply_traversal_mode as _apply_traversal_mode_shared,
+    click_and_observe_next_page as _click_and_observe_next_page_shared,
+    click_load_more as _click_load_more_shared,
+    collect_paginated_html as _collect_paginated_html_shared,
+    find_next_page_url_anchor_only as _find_next_page_url_anchor_only_shared,
+    has_load_more_control as _has_load_more_control_shared,
+    pagination_state_changed as _pagination_state_changed_shared,
+    scroll_to_bottom as _scroll_to_bottom_shared,
+    snapshot_pagination_state as _snapshot_pagination_state_shared,
+)
 from app.services.acquisition.cookie_store import (
     cookie_policy_for_domain,
     cookie_store_path,
@@ -65,6 +83,21 @@ _RETRYABLE_PAGE_CONTENT_ERROR_RE = re.compile(
     r"(page is navigating|changing the content)",
     re.IGNORECASE,
 )
+_BROWSER_POOL_MAX_SIZE = 6
+_BROWSER_POOL_IDLE_TTL_SECONDS = 300
+_BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS = 60
+
+
+@dataclass
+class _PooledBrowser:
+    browser: object
+    last_used_monotonic: float
+
+
+_BROWSER_POOL: dict[str, _PooledBrowser] = {}
+_BROWSER_POOL_LOCK = asyncio.Lock()
+_BROWSER_POOL_TASK_LOCK = asyncio.Lock()
+_BROWSER_POOL_CLEANUP_TASK: asyncio.Task | None = None
 
 
 @dataclass
@@ -155,13 +188,13 @@ async def _fetch_rendered_html_with_fallback(
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> BrowserResult:
     last_error: Exception | None = None
-    first_profile_failed = False
+    first_profile_failure_reason: str | None = None
     options = runtime_options or BrowserRuntimeOptions()
     profiles = _browser_launch_profiles(options)
     for index, profile in enumerate(profiles):
         navigation_strategies = (
             _shortened_navigation_strategies()
-            if first_profile_failed
+            if _should_shorten_navigation_after_profile_failure(first_profile_failure_reason)
             else _navigation_strategies(browser_channel=str(profile.get("channel") or "").strip() or None)
         )
         try:
@@ -185,7 +218,7 @@ async def _fetch_rendered_html_with_fallback(
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
             if index < len(profiles) - 1 and _should_retry_launch_profile(result, surface=surface):
-                first_profile_failed = True
+                first_profile_failure_reason = "low_value_result"
                 logger.info(
                     "Playwright %s produced a low-value result for %s; trying next launch profile",
                     profile["label"],
@@ -193,9 +226,9 @@ async def _fetch_rendered_html_with_fallback(
                 )
                 continue
             return result
-        except Exception as exc:
+        except (PlaywrightError, RuntimeError, ValueError, TypeError, OSError) as exc:
             last_error = exc
-            first_profile_failed = True
+            first_profile_failure_reason = _classify_profile_failure_reason(exc)
             logger.warning("Playwright %s failed for %s: %s", profile["label"], url, exc)
             continue
     if last_error is not None:
@@ -224,6 +257,7 @@ async def _fetch_rendered_html_attempt(
 ) -> BrowserResult:
     result = BrowserResult()
     intercepted: list[dict] = []
+    blocked_non_public_requests: list[dict[str, str]] = []
     timings_ms: dict[str, int] = {}
     browser_started_at = time.perf_counter()
     browser_type = getattr(pw, str(launch_profile.get("browser_type") or "chromium"))
@@ -233,14 +267,52 @@ async def _fetch_rendered_html_attempt(
         browser_channel=str(launch_profile.get("channel") or "").strip() or None,
     )
     launch_started_at = time.perf_counter()
-    browser = await browser_type.launch(**launch_kwargs)
+    browser, browser_reused = await _acquire_browser(
+        browser_type=browser_type,
+        launch_kwargs=launch_kwargs,
+        browser_pool_key=_browser_pool_key(launch_profile, proxy),
+    )
     timings_ms["browser_launch_ms"] = _elapsed_ms(launch_started_at)
+    timings_ms["browser_reused"] = int(browser_reused)
     browser_channel = str(launch_profile.get("channel") or "").strip() or None
-    context = await browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel))
+    try:
+        context = await browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel))
+    except PlaywrightError:
+        # Browser in pool may have died; evict and retry once.
+        await _evict_browser(_browser_pool_key(launch_profile, proxy), browser)
+        browser, _ = await _acquire_browser(
+            browser_type=browser_type,
+            launch_kwargs=launch_kwargs,
+            browser_pool_key=_browser_pool_key(launch_profile, proxy),
+            force_new=True,
+        )
+        context = await browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel))
     original_domain = _domain(url)
     try:
         await _load_cookies(context, original_domain)
         page = await context.new_page()
+
+        async def _guard_non_public_request(route, request) -> None:
+            request_url = str(getattr(request, "url", "") or "").strip()
+            allowed, reason = await _is_public_browser_request_target(request_url)
+            if allowed:
+                await route.continue_()
+                return
+            blocked_non_public_requests.append(
+                {
+                    "url": request_url,
+                    "resource_type": str(getattr(request, "resource_type", "") or ""),
+                    "reason": reason,
+                }
+            )
+            try:
+                await route.abort("blockedbyclient")
+            except PlaywrightError:
+                await route.abort()
+
+        route_fn = getattr(page, "route", None)
+        if callable(route_fn):
+            await route_fn("**/*", _guard_non_public_request)
 
         async def _on_response(response):
             content_type = response.headers.get("content-type", "")
@@ -252,7 +324,7 @@ async def _fetch_rendered_html_attempt(
                         "status": response.status,
                         "body": body,
                     })
-                except Exception:
+                except PlaywrightError:
                     logger.debug("Failed to parse intercepted JSON response from %s", response.url, exc_info=True)
 
         page.on("response", _on_response)
@@ -333,16 +405,60 @@ async def _fetch_rendered_html_attempt(
         await _flatten_shadow_dom(page)
 
         traversal_started_at = time.perf_counter()
-        combined_html = await _apply_traversal_mode(
-            page,
-            surface,
-            traversal_mode,
-            max_scrolls,
-            max_pages=max_pages,
-            request_delay_ms=request_delay_ms,
-            checkpoint=checkpoint,
-        )
+        try:
+            traversal_result = await _apply_traversal_mode(
+                page,
+                surface,
+                traversal_mode,
+                max_scrolls,
+                max_pages=max_pages,
+                request_delay_ms=request_delay_ms,
+                checkpoint=checkpoint,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[traversal] fallback to single-page, reason=exception:%s, url=%s",
+                type(exc).__name__,
+                url,
+            )
+            result.diagnostics["traversal_fallback_used"] = True
+            result.diagnostics["traversal_fallback_reason"] = (
+                f"exception:{type(exc).__name__}"
+            )
+            traversal_result = TraversalResult(
+                html=None,
+                summary={
+                    "mode": traversal_mode,
+                    "attempted": True,
+                    "fallback_used": True,
+                    "stop_reason": f"exception:{type(exc).__name__}",
+                },
+            )
         timings_ms["browser_traversal_ms"] = _elapsed_ms(traversal_started_at)
+        combined_html = traversal_result.html
+        traversal_summary = _normalize_traversal_summary(
+            traversal_result.summary if isinstance(traversal_result.summary, dict) else {},
+            traversal_mode=traversal_mode,
+            combined_html=combined_html,
+        )
+        if traversal_summary:
+            result.diagnostics["traversal_summary"] = traversal_summary
+        if (
+            traversal_mode
+            and traversal_summary.get("attempted")
+            and int(traversal_summary.get("pages_collected", 0) or 0) <= 0
+            and combined_html is None
+        ):
+            fallback_reason = str(
+                traversal_summary.get("stop_reason") or "no_pages_collected"
+            )
+            logger.warning(
+                "[traversal] fallback to single-page, reason=%s, url=%s",
+                fallback_reason,
+                url,
+            )
+            result.diagnostics["traversal_fallback_used"] = True
+            result.diagnostics["traversal_fallback_reason"] = fallback_reason
         if combined_html is not None:
             result.html = combined_html
             result.network_payloads = intercepted
@@ -364,11 +480,153 @@ async def _fetch_rendered_html_attempt(
         await _populate_result(result, page, intercepted, checkpoint=checkpoint)
         timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
         result.diagnostics["timings_ms"] = timings_ms
+        if blocked_non_public_requests:
+            result.diagnostics["blocked_non_public_requests"] = blocked_non_public_requests[
+                :10
+            ]
+            result.diagnostics["blocked_non_public_request_count"] = len(
+                blocked_non_public_requests
+            )
         await _persist_context_cookies(context, page.url or url, original_domain)
         return result
     finally:
         await context.close()
+
+
+def _browser_pool_key(launch_profile: dict[str, str | None], proxy: str | None) -> str:
+    browser_type = str(launch_profile.get("browser_type") or "chromium").strip()
+    channel = str(launch_profile.get("channel") or "").strip() or "default"
+    proxy_key = str(proxy or "").strip() or "direct"
+    return f"{browser_type}|{channel}|{proxy_key}"
+
+
+async def _is_public_browser_request_target(request_url: str) -> tuple[bool, str]:
+    parsed = urlparse(str(request_url or "").strip())
+    scheme = str(parsed.scheme or "").lower()
+    if scheme in {"http", "https"}:
+        try:
+            await validate_public_target(request_url)
+        except ValueError as exc:
+            return False, f"non_public_target:{exc}"
+        return True, "public_target"
+    if scheme in {"data", "blob"}:
+        return True, f"non_http_scheme:allowed_{scheme}"
+    disallowed = scheme or "missing_scheme"
+    return False, f"non_http_scheme:disallowed_{disallowed}_scheme"
+
+
+def _browser_is_connected(browser: object) -> bool:
+    checker = getattr(browser, "is_connected", None)
+    if not callable(checker):
+        return True
+    try:
+        return bool(checker())
+    except Exception:
+        return False
+
+
+async def _close_browser_safe(browser: object) -> None:
+    try:
         await browser.close()
+    except PlaywrightError:
+        logger.debug("Failed to close pooled browser", exc_info=True)
+    except Exception:
+        logger.debug("Unexpected pooled browser close failure", exc_info=True)
+
+
+async def _evict_idle_or_dead_browsers() -> None:
+    now = time.monotonic()
+    to_close: list[object] = []
+    async with _BROWSER_POOL_LOCK:
+        stale_keys = [
+            key
+            for key, entry in _BROWSER_POOL.items()
+            if (now - entry.last_used_monotonic) >= _BROWSER_POOL_IDLE_TTL_SECONDS
+            or not _browser_is_connected(entry.browser)
+        ]
+        for key in stale_keys:
+            entry = _BROWSER_POOL.pop(key, None)
+            if entry is not None:
+                to_close.append(entry.browser)
+    for browser in to_close:
+        await _close_browser_safe(browser)
+
+
+async def _shutdown_browser_pool() -> None:
+    to_close: list[object] = []
+    async with _BROWSER_POOL_LOCK:
+        for entry in _BROWSER_POOL.values():
+            to_close.append(entry.browser)
+        _BROWSER_POOL.clear()
+    for browser in to_close:
+        await _close_browser_safe(browser)
+
+
+def _shutdown_browser_pool_sync() -> None:
+    try:
+        asyncio.run(_shutdown_browser_pool())
+    except RuntimeError:
+        # Event loop may already be running/interpreter may be shutting down.
+        pass
+
+
+async def _browser_pool_healthcheck_loop() -> None:
+    while True:
+        await asyncio.sleep(_BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS)
+        await _evict_idle_or_dead_browsers()
+
+
+async def _ensure_browser_pool_maintenance_task() -> None:
+    global _BROWSER_POOL_CLEANUP_TASK
+    async with _BROWSER_POOL_TASK_LOCK:
+        loop = asyncio.get_running_loop()
+        if _BROWSER_POOL_CLEANUP_TASK is None or _BROWSER_POOL_CLEANUP_TASK.done():
+            _BROWSER_POOL_CLEANUP_TASK = loop.create_task(_browser_pool_healthcheck_loop())
+
+
+async def _acquire_browser(
+    *,
+    browser_type,
+    launch_kwargs: dict[str, object],
+    browser_pool_key: str,
+    force_new: bool = False,
+):
+    await _ensure_browser_pool_maintenance_task()
+    await _evict_idle_or_dead_browsers()
+    to_close: list[object] = []
+    async with _BROWSER_POOL_LOCK:
+        now = time.monotonic()
+        if not force_new:
+            pooled = _BROWSER_POOL.get(browser_pool_key)
+            if pooled is not None and _browser_is_connected(pooled.browser):
+                pooled.last_used_monotonic = now
+                return pooled.browser, True
+            _BROWSER_POOL.pop(browser_pool_key, None)
+        browser = await browser_type.launch(**launch_kwargs)
+        _BROWSER_POOL[browser_pool_key] = _PooledBrowser(
+            browser=browser,
+            last_used_monotonic=now,
+        )
+        if len(_BROWSER_POOL) > _BROWSER_POOL_MAX_SIZE:
+            lru_key = min(
+                _BROWSER_POOL,
+                key=lambda key: _BROWSER_POOL[key].last_used_monotonic,
+            )
+            if lru_key != browser_pool_key:
+                entry = _BROWSER_POOL.pop(lru_key, None)
+                if entry is not None:
+                    to_close.append(entry.browser)
+    for stale_browser in to_close:
+        await _close_browser_safe(stale_browser)
+    return browser, False
+
+
+async def _evict_browser(browser_pool_key: str, browser) -> None:
+    async with _BROWSER_POOL_LOCK:
+        pooled = _BROWSER_POOL.get(browser_pool_key)
+        if pooled is not None and pooled.browser is browser:
+            _BROWSER_POOL.pop(browser_pool_key, None)
+    await _close_browser_safe(browser)
 
 
 def _browser_launch_profiles(runtime_options: BrowserRuntimeOptions) -> list[dict[str, str | None]]:
@@ -400,7 +658,7 @@ def _should_retry_launch_profile(result: BrowserResult, *, surface: str | None) 
 async def _page_looks_low_value(page) -> bool:
     try:
         html = await _page_content_with_retry(page)
-    except Exception:
+    except PlaywrightError:
         logger.debug("Failed to inspect page content for low-value result detection", exc_info=True)
         return False
     return _html_looks_low_value(html)
@@ -409,7 +667,7 @@ async def _page_looks_low_value(page) -> bool:
 async def _collect_frame_sources(page) -> tuple[str, list[dict], list[dict]]:
     try:
         main_html = await _page_content_with_retry(page)
-    except Exception:
+    except PlaywrightError:
         logger.debug("Failed to read main page content while collecting frame sources", exc_info=True)
         return "", [], []
 
@@ -426,7 +684,7 @@ async def _collect_frame_sources(page) -> tuple[str, list[dict], list[dict]]:
         frame_entry = {"url": frame_url, "same_origin": same_origin}
         try:
             frame_html = await frame.content()
-        except Exception:
+        except PlaywrightError:
             frame_html = ""
         if frame_html:
             frame_entry["html_length"] = len(frame_html)
@@ -550,58 +808,34 @@ async def _apply_traversal_mode(
     max_pages: int,
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> str | None:
-    normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface.endswith("_detail"):
-        return None
-    if traversal_mode == "scroll":
-        await _scroll_to_bottom(
-            page,
-            max_scrolls,
-            request_delay_ms=request_delay_ms,
-            checkpoint=checkpoint,
-        )
-        return None
-    if traversal_mode == "load_more":
-        await _click_load_more(
-            page,
-            max_scrolls,
-            request_delay_ms=request_delay_ms,
-            checkpoint=checkpoint,
-        )
-        return None
-    if traversal_mode == "paginate":
-        return await _collect_paginated_html(
-            page,
-            surface=surface,
-            max_pages=max_pages,
-            request_delay_ms=request_delay_ms,
-            checkpoint=checkpoint,
-        )
-    if traversal_mode == "auto":
-        await _scroll_to_bottom(
-            page,
-            max_scrolls,
-            request_delay_ms=request_delay_ms,
-            checkpoint=checkpoint,
-        )
-        if await _has_load_more_control(page):
-            await _click_load_more(
-                page,
-                max_scrolls,
-                request_delay_ms=request_delay_ms,
-                checkpoint=checkpoint,
-            )
-        next_page_url = await _click_and_observe_next_page(page, checkpoint=checkpoint)
-        if next_page_url:
-            return await _collect_paginated_html(
-                page,
-                surface=surface,
-                max_pages=max_pages,
-                request_delay_ms=request_delay_ms,
-                checkpoint=checkpoint,
-            )
-    return None
+) -> TraversalResult:
+    return await _apply_traversal_mode_shared(
+        page,
+        surface,
+        traversal_mode,
+        max_scrolls,
+        config=TraversalConfig(),
+        max_pages=max_pages,
+        request_delay_ms=request_delay_ms,
+        page_content_with_retry=_page_content_with_retry,
+        wait_for_surface_readiness=_wait_for_surface_readiness,
+        wait_for_listing_readiness=_wait_for_listing_readiness,
+        click_and_observe_next_page=_click_and_observe_next_page,
+        has_load_more_control=lambda p, _cfg: _has_load_more_control(p),
+        dismiss_cookie_consent=_dismiss_cookie_consent,
+        pause_after_navigation=_pause_after_navigation,
+        expand_all_interactive_elements=expand_all_interactive_elements,
+        flatten_shadow_dom=_flatten_shadow_dom,
+        cooperative_sleep_ms=_cooperative_sleep_ms,
+        snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
+        checkpoint=checkpoint,
+    )
+
+
+@dataclass
+class _PaginatedHtmlResult:
+    html: str
+    summary: dict[str, object]
 
 
 async def _collect_paginated_html(
@@ -611,54 +845,31 @@ async def _collect_paginated_html(
     max_pages: int,
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> str:
-    fragments: list[str] = []
-    visited_urls: set[str] = set()
-    current_url = str(page.url or "").strip()
-    if current_url:
-        visited_urls.add(current_url)
-
-    page_limit = max(1, int(max_pages or 1))
-    for page_index in range(page_limit):
-        page_html = await _page_content_with_retry(page, checkpoint=checkpoint)
-        fragments.append(f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}")
-        if page_index + 1 >= page_limit:
-            break
-        current_url = str(page.url or "").strip()
-        next_page_url = await _click_and_observe_next_page(page, checkpoint=checkpoint)
-        page_advanced_in_place = bool(next_page_url) and str(page.url or "").strip() == current_url and next_page_url == current_url
-        if not next_page_url or (next_page_url in visited_urls and not page_advanced_in_place):
-            break
-        try:
-            await validate_public_target(next_page_url)
-        except ValueError as exc:
-            logger.warning("Rejected pagination URL %s from %s: %s", next_page_url, page.url, exc)
-            break
-        visited_urls.add(next_page_url)
-        if not page_advanced_in_place:
-            await page.goto(
-                next_page_url,
-                wait_until="domcontentloaded",
-                timeout=PAGINATION_NAVIGATION_TIMEOUT_MS,
-            )
-            try:
-                await page.wait_for_load_state(
-                    "load",
-                    timeout=BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
-                )
-            except Exception:
-                pass
-            await _wait_for_surface_readiness(
-                page,
-                surface=surface,
-                checkpoint=checkpoint,
-            )
-        await _dismiss_cookie_consent(page, checkpoint=checkpoint)
-        await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
-        await expand_all_interactive_elements(page, checkpoint=checkpoint)
-        await _flatten_shadow_dom(page)
-        await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
-    return "\n".join(fragments)
+) -> _PaginatedHtmlResult:
+    traversal_result = await _collect_paginated_html_shared(
+        page,
+        config=TraversalConfig(
+            pagination_next_selectors=list(PAGINATION_NEXT_SELECTORS),
+            validate_public_target=validate_public_target,
+        ),
+        surface=surface,
+        max_pages=max_pages,
+        request_delay_ms=request_delay_ms,
+        page_content_with_retry=_page_content_with_retry,
+        wait_for_surface_readiness=_wait_for_surface_readiness,
+        wait_for_listing_readiness=_wait_for_listing_readiness,
+        click_and_observe_next_page=_click_and_observe_next_page,
+        dismiss_cookie_consent=_dismiss_cookie_consent,
+        pause_after_navigation=_pause_after_navigation,
+        expand_all_interactive_elements=expand_all_interactive_elements,
+        flatten_shadow_dom=_flatten_shadow_dom,
+        checkpoint=checkpoint,
+    )
+    html = traversal_result.html or ""
+    return _PaginatedHtmlResult(
+        html=html,
+        summary=dict(traversal_result.summary or {}),
+    )
 
 
 async def _wait_for_listing_readiness(
@@ -667,6 +878,8 @@ async def _wait_for_listing_readiness(
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object] | None:
+    from app.services.config.selectors import resolve_listing_readiness_override
+    
     normalized_surface = str(surface or "").strip().lower()
     if not normalized_surface.endswith("listing"):
         return None
@@ -676,26 +889,22 @@ async def _wait_for_listing_readiness(
         else CARD_SELECTORS_COMMERCE
     )
     page_url = str(getattr(page, "url", "") or "").lower()
-    if normalized_surface == "job_listing" and "candidateexperience" in page_url and "oraclecloud.com" in page_url:
-        selectors = [*selectors, "a[href*='/job/']"]
-    if normalized_surface == "job_listing" and "workforcenow.adp.com" in page_url:
-        selectors = [*selectors, ".current-openings-item", "[id^='lblTitle_']"]
-    if normalized_surface == "job_listing" and "paycomonline.net" in page_url:
-        selectors = [*selectors, "a[href*='/jobs/']"]
-    if normalized_surface == "job_listing" and "recruiting.ultipro.com" in page_url:
-        selectors = [*selectors, "a[href*='/jobboard/jobdetails/']", "a[href*='/jobboard/']", "[data-testid*='job' i]"]
+    
+    # Apply platform overrides from config pattern matching.
+    override = resolve_listing_readiness_override(page_url)
+    if override is not None:
+        selectors = [*selectors, *list(override.get("selectors") or [])]
+    
     if not selectors:
         return None
     elapsed = 0
     poll_ms = max(100, LISTING_READINESS_POLL_MS)
     max_wait_ms = max(0, LISTING_READINESS_MAX_WAIT_MS)
-    if normalized_surface == "job_listing" and "candidateexperience" in page_url and "oraclecloud.com" in page_url:
-        max_wait_ms = max(max_wait_ms, 25_000)
-    if normalized_surface == "job_listing" and any(
-        token in page_url
-        for token in ("workforcenow.adp.com", "paycomonline.net", "recruiting.ultipro.com")
-    ):
-        max_wait_ms = max(max_wait_ms, 20_000)
+    
+    # Apply max_wait_ms override from configuration
+    if override is not None:
+        max_wait_ms = max(max_wait_ms, int(override.get("max_wait_ms", 0) or 0))
+    
     best_selector = ""
     best_count = 0
     stable_windows = 0
@@ -707,7 +916,7 @@ async def _wait_for_listing_readiness(
         for selector in selectors:
             try:
                 count = await page.locator(selector).count()
-            except Exception:
+            except PlaywrightError:
                 logger.debug("Listing readiness count failed for selector %s", selector, exc_info=True)
                 continue
             if count > current_best_count:
@@ -795,7 +1004,7 @@ async def _snapshot_listing_page_metrics(page) -> dict[str, object]:
             }
             """
         )
-    except Exception:
+    except PlaywrightError:
         logger.debug("Failed to snapshot listing page metrics", exc_info=True)
         return {}
 
@@ -844,7 +1053,7 @@ async def _wait_for_surface_readiness(
             for selector in selectors:
                 try:
                     count = await page.locator(selector).count()
-                except Exception:
+                except PlaywrightError:
                     continue
                 if count >= LISTING_MIN_ITEMS:
                     return {"ready": True, "selector": selector, "count": count, "waited_ms": 0}
@@ -866,7 +1075,7 @@ async def _wait_for_surface_readiness(
                         "selector": selector,
                         "waited_ms": elapsed,
                     }
-            except Exception:
+            except PlaywrightError:
                 logger.debug("Surface readiness check failed for selector %s", selector, exc_info=True)
                 continue
         if elapsed >= max_wait_ms:
@@ -881,37 +1090,12 @@ async def _wait_for_surface_readiness(
 
 
 async def _find_next_page_url_anchor_only(page) -> str:
-    for selector in PAGINATION_NEXT_SELECTORS:
-        try:
-            locator = page.locator(selector).first
-            if not await locator.count():
-                continue
-            href = await locator.get_attribute("href")
-            if href:
-                return urljoin(page.url, href)
-        except Exception:
-            logger.debug("Failed to inspect pagination selector %s", selector, exc_info=True)
-            continue
-
-    try:
-        href = await page.evaluate(
-            """
-            () => {
-              const anchors = Array.from(document.querySelectorAll('a[href]'));
-              const match = anchors.find((anchor) => {
-                const text = (anchor.textContent || '').trim().toLowerCase();
-                const aria = (anchor.getAttribute('aria-label') || '').trim().toLowerCase();
-                const title = (anchor.getAttribute('title') || '').trim().toLowerCase();
-                return text === 'next' || text === 'next >' || text === '>' || aria.includes('next') || title.includes('next');
-              });
-              return match ? match.href : '';
-            }
-            """
-        )
-    except Exception:
-        logger.debug("Failed to evaluate DOM for next-page link", exc_info=True)
-        return ""
-    return str(href or "").strip()
+    return await _find_next_page_url_anchor_only_shared(
+        page,
+        config=TraversalConfig(
+            pagination_next_selectors=list(PAGINATION_NEXT_SELECTORS),
+        ),
+    )
 
 
 async def _find_next_page_url(page) -> str:
@@ -919,78 +1103,11 @@ async def _find_next_page_url(page) -> str:
 
 
 async def _snapshot_pagination_state(page) -> dict[str, object]:
-    try:
-        return await page.evaluate(
-            """
-            () => {
-                const root = document.querySelector("main") || document.body || document.documentElement;
-                const listingLinks = Array.from((root || document).querySelectorAll("a[href]"))
-                    .map((anchor) => {
-                        const text = (anchor.textContent || anchor.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
-                        const href = (anchor.getAttribute("href") || "").trim();
-                        if (!text || !href) return null;
-                        const loweredHref = href.toLowerCase();
-                        const loweredText = text.toLowerCase();
-                        const looksLikeListingHref =
-                            loweredHref.includes("/job/") ||
-                            loweredHref.includes("/jobs/") ||
-                            loweredHref.includes("/career") ||
-                            loweredHref.includes("/position");
-                        const withinLikelyCard = !!anchor.closest(
-                            "article, li, tr, [role='listitem'], [data-automation-id], [class*='job'], [class*='career'], [class*='opening'], [class*='result']"
-                        );
-                        const looksLikeListing =
-                            (looksLikeListingHref || withinLikelyCard) &&
-                            text.length >= 8 &&
-                            !/apply|read more|save job|learn more|search/.test(loweredText);
-                        if (!looksLikeListing) return null;
-                        return `${text}@@${href}`;
-                    })
-                    .filter(Boolean)
-                    .slice(0, 8);
-                const activePaginationNode =
-                    document.querySelector("[aria-current='page']") ||
-                    document.querySelector("[aria-current='true']") ||
-                    document.querySelector("[aria-selected='true']") ||
-                    Array.from(document.querySelectorAll("button, a, [role='button']")).find((node) => {
-                        const classes = (node.className || "").toString().toLowerCase();
-                        const ariaPressed = (node.getAttribute("aria-pressed") || "").toLowerCase();
-                        return classes.includes("active") || classes.includes("current") || ariaPressed === "true";
-                    });
-                const paginationMarker = activePaginationNode
-                    ? ((activePaginationNode.getAttribute("aria-label") || activePaginationNode.textContent || "").replace(/\\s+/g, " ").trim())
-                    : "";
-                return {
-                    url: window.location.href,
-                    pagination_marker: paginationMarker,
-                    listing_signature: listingLinks.join("\\n"),
-                    listing_link_count: listingLinks.length,
-                    root_text_length: ((root && root.innerText) || "").trim().length,
-                };
-            }
-            """
-        )
-    except Exception:
-        logger.debug("Failed to snapshot pagination state", exc_info=True)
-        return {}
+    return await _snapshot_pagination_state_shared(page)
 
 
 def _pagination_state_changed(previous: dict[str, object] | None, current: dict[str, object] | None) -> bool:
-    if not previous or not current:
-        return False
-    previous_marker = str(previous.get("pagination_marker") or "").strip()
-    current_marker = str(current.get("pagination_marker") or "").strip()
-    if previous_marker and current_marker and previous_marker != current_marker:
-        return True
-    previous_signature = str(previous.get("listing_signature") or "").strip()
-    current_signature = str(current.get("listing_signature") or "").strip()
-    if previous_signature and current_signature and previous_signature != current_signature:
-        return True
-    previous_count = int(previous.get("listing_link_count", 0) or 0)
-    current_count = int(current.get("listing_link_count", 0) or 0)
-    if previous_count != current_count and max(previous_count, current_count) >= LISTING_MIN_ITEMS:
-        return True
-    return False
+    return _pagination_state_changed_shared(previous, current)
 
 
 async def _click_and_observe_next_page(
@@ -998,68 +1115,13 @@ async def _click_and_observe_next_page(
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> str:
-    next_page_url = await _find_next_page_url_anchor_only(page)
-    if next_page_url:
-        return next_page_url
-
-    async def _container_hash() -> int | None:
-        selector = '[class*="product"], [class*="result"], ul.products, main'
-        try:
-            locator = page.locator(selector).first
-            if not await locator.count():
-                return None
-            return hash((await locator.inner_html())[:2000])
-        except Exception:
-            logger.debug("Failed to inspect listing container before/after pagination click", exc_info=True)
-            return None
-
-    click_selectors = [
-        *PAGINATION_NEXT_SELECTORS,
-        '[aria-label*="next" i]',
-        'button[class*="next"]',
-        '[role="button"][class*="next"]',
-        'button:has-text("Next")',
-        '[data-testid*="next"]',
-    ]
-    target = None
-    for selector in click_selectors:
-        try:
-            locator = page.locator(selector).first
-            if await locator.count():
-                target = locator
-                break
-        except Exception:
-            logger.debug("Failed to inspect clickable pagination selector %s", selector, exc_info=True)
-    if target is None:
-        return ""
-
-    initial_url = str(page.url or "").strip()
-    initial_state = await _snapshot_pagination_state(page)
-    initial_hash = await _container_hash()
-    try:
-        await target.click(timeout=1500)
-    except Exception:
-        logger.debug("Failed to click next-page control", exc_info=True)
-        return ""
-    try:
-        await page.wait_for_load_state("domcontentloaded", timeout=5000)
-    except Exception:
-        logger.debug("Timed out waiting for domcontentloaded after pagination click", exc_info=True)
-
-    waited_ms = 0
-    poll_ms = 250
-    while waited_ms < 3000:
-        await _cooperative_page_wait(page, poll_ms, checkpoint=checkpoint)
-        waited_ms += poll_ms
-        current_url = str(page.url or "").strip()
-        if current_url != initial_url:
-            return current_url
-        current_state = await _snapshot_pagination_state(page)
-        if _pagination_state_changed(initial_state, current_state):
-            return current_url or initial_url
-        if await _container_hash() != initial_hash:
-            return current_url
-    return ""
+    return await _click_and_observe_next_page_shared(
+        page,
+        config=TraversalConfig(
+            pagination_next_selectors=list(PAGINATION_NEXT_SELECTORS),
+        ),
+        checkpoint=checkpoint,
+    )
 
 
 async def expand_all_interactive_elements(
@@ -1102,7 +1164,7 @@ async def expand_all_interactive_elements(
             "actions": ["expand_all_interactive_elements"],
             "expanded_count": int(expanded_count or 0),
         }
-    except Exception:
+    except PlaywrightError:
         logger.debug("Interactive element expansion failed (non-critical)", exc_info=True)
     return {}
 
@@ -1182,7 +1244,7 @@ async def _flatten_shadow_dom(page) -> None:
         )
         if flattened_count:
             logger.debug("Flattened %d shadow root hosts", flattened_count)
-    except Exception:
+    except PlaywrightError:
         logger.debug("Shadow DOM flattening failed (non-critical)", exc_info=True)
 
 
@@ -1214,7 +1276,7 @@ async def _page_content_with_retry(
     for attempt in range(max(1, attempts)):
         try:
             return await page.content()
-        except Exception as exc:
+        except PlaywrightError as exc:
             last_error = exc
             retryable_playwright_error = isinstance(exc, PlaywrightError) and bool(
                 _RETRYABLE_PAGE_CONTENT_ERROR_RE.search(str(exc))
@@ -1223,7 +1285,7 @@ async def _page_content_with_retry(
                 raise
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=2000)
-            except Exception:
+            except PlaywrightError:
                 logger.debug("Timed out waiting for domcontentloaded before retrying page.content()", exc_info=True)
             if attempt + 1 >= max(1, attempts):
                 break
@@ -1234,6 +1296,30 @@ async def _page_content_with_retry(
 
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int(round((time.perf_counter() - started_at) * 1000)))
+
+
+def _normalize_traversal_summary(
+    summary: dict[str, object],
+    *,
+    traversal_mode: str | None,
+    combined_html: str | None,
+) -> dict[str, object]:
+    normalized = dict(summary or {})
+    mode_used = str(normalized.get("mode_used") or normalized.get("mode") or traversal_mode or "").strip() or None
+    pages_collected = int(
+        normalized.get("pages_collected", 0) or (
+            str(combined_html or "").count("<!-- PAGE BREAK:") if combined_html else 0
+        )
+    )
+    stop_reason = str(normalized.get("stop_reason") or "").strip() or None
+    fallback_used = bool(normalized.get("fallback_used"))
+    scroll_iterations = int(normalized.get("scroll_iterations", 0) or 0)
+    normalized["mode_used"] = mode_used
+    normalized["pages_collected"] = pages_collected
+    normalized["scroll_iterations"] = scroll_iterations
+    normalized["stop_reason"] = stop_reason
+    normalized["fallback_used"] = fallback_used
+    return {key: value for key, value in normalized.items() if value is not None}
 
 
 async def _persist_context_cookies(context, final_url: str, original_domain: str) -> None:
@@ -1260,6 +1346,19 @@ def _shortened_navigation_strategies() -> list[tuple[str, int]]:
         ("domcontentloaded", 12000),
         ("commit", 8000),
     ]
+
+
+def _classify_profile_failure_reason(exc: Exception) -> str:
+    text = str(exc).lower()
+    if isinstance(exc, PlaywrightTimeoutError) or "timeout" in text:
+        return "timeout"
+    if "browser_navigation_error:" in text:
+        return "navigation_error"
+    return "generic_error"
+
+
+def _should_shorten_navigation_after_profile_failure(reason: str | None) -> bool:
+    return reason in {"timeout", "navigation_error"}
 
 
 async def _goto_with_fallback(
@@ -1317,10 +1416,10 @@ async def _goto_with_fallback(
                             wait_until,
                             timeout=min(timeout, BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS),
                         )
-                    except Exception:
+                    except PlaywrightError:
                         pass
             return
-        except Exception as exc:
+        except PlaywrightError as exc:
             last_error = exc
             logger.debug("goto(%s, attempt=%d) failed: %s", url, attempt, exc)
             if attempt >= browser_error_retries:
@@ -1333,7 +1432,7 @@ async def _retryable_browser_error_reason(page) -> str | None:
         return "chrome_error_url"
     try:
         html = await page.content()
-    except Exception:
+    except PlaywrightError:
         logger.debug("Failed to inspect page content for browser error markers", exc_info=True)
         return None
     text = (html or "")[:20_000].lower().replace("’", "'")
@@ -1368,9 +1467,9 @@ async def _warm_origin(
         try:
             await page.mouse.move(240, 180)
             await page.evaluate("window.scrollBy(0, 120)")
-        except Exception:
+        except PlaywrightError:
             logger.debug("Origin warm mouse/scroll interaction failed", exc_info=True)
-    except Exception:
+    except PlaywrightError:
         logger.debug("Origin warm navigation failed for %s", origin_url, exc_info=True)
         return
 
@@ -1381,36 +1480,16 @@ async def _scroll_to_bottom(
     *,
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> None:
-    """Scroll to bottom repeatedly until no new content appears."""
-    prev_height = 0
-    for _ in range(max_scrolls):
-        current_height = await page.evaluate(
-            """
-            () => {
-                const root = document.scrollingElement || document.documentElement || document.body;
-                if (!root) return 0;
-                return Math.max(root.scrollHeight || 0, document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0);
-            }
-            """
-        )
-        if current_height == prev_height:
-            break
-        prev_height = current_height
-        await page.evaluate(
-            """
-            (height) => {
-                const root = document.scrollingElement || document.documentElement || document.body;
-                if (!root) return;
-                window.scrollTo(0, height || root.scrollHeight || 0);
-            }
-            """,
-            current_height,
-        )
-        await _cooperative_sleep_ms(
-            max(request_delay_ms, SCROLL_WAIT_MIN_MS),
-            checkpoint=checkpoint,
-        )
+) -> dict[str, object]:
+    return await _scroll_to_bottom_shared(
+        page,
+        max_scrolls,
+        config=TraversalConfig(scroll_wait_min_ms=SCROLL_WAIT_MIN_MS),
+        request_delay_ms=request_delay_ms,
+        cooperative_sleep_ms=_cooperative_sleep_ms,
+        snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
+        checkpoint=checkpoint,
+    )
 
 
 async def _click_load_more(
@@ -1419,37 +1498,26 @@ async def _click_load_more(
     *,
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> None:
-    """Click load-more/show-all buttons until exhausted."""
-    for _ in range(max_clicks):
-        clicked = False
-        for sel in LOAD_MORE_SELECTORS:
-            try:
-                btn = page.locator(sel).first
-                if await btn.is_visible():
-                    await btn.click()
-                    await _cooperative_sleep_ms(
-                        max(request_delay_ms, LOAD_MORE_WAIT_MIN_MS),
-                        checkpoint=checkpoint,
-                    )
-                    clicked = True
-                    break
-            except Exception:
-                logger.debug("Load-more click failed for selector %s", sel, exc_info=True)
-                continue
-        if not clicked:
-            break
+) -> dict[str, object]:
+    return await _click_load_more_shared(
+        page,
+        max_clicks,
+        config=TraversalConfig(
+            load_more_selectors=list(LOAD_MORE_SELECTORS),
+            load_more_wait_min_ms=LOAD_MORE_WAIT_MIN_MS,
+        ),
+        request_delay_ms=request_delay_ms,
+        cooperative_sleep_ms=_cooperative_sleep_ms,
+        snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
+        checkpoint=checkpoint,
+    )
 
 
 async def _has_load_more_control(page) -> bool:
-    for selector in LOAD_MORE_SELECTORS:
-        try:
-            button = page.locator(selector).first
-            if await button.is_visible():
-                return True
-        except Exception:
-            logger.debug("Load-more visibility check failed for selector %s", selector, exc_info=True)
-    return False
+    return await _has_load_more_control_shared(
+        page,
+        config=TraversalConfig(load_more_selectors=list(LOAD_MORE_SELECTORS)),
+    )
 
 
 async def _dismiss_cookie_consent(
@@ -1459,7 +1527,7 @@ async def _dismiss_cookie_consent(
 ) -> None:
     try:
         await _cooperative_page_wait(page, COOKIE_CONSENT_PREWAIT_MS, checkpoint=checkpoint)
-    except Exception:
+    except PlaywrightError:
         logger.debug("Cookie consent pre-wait failed", exc_info=True)
         return
     for selector in COOKIE_CONSENT_SELECTORS:
@@ -1473,12 +1541,12 @@ async def _dismiss_cookie_consent(
                     checkpoint=checkpoint,
                 )
                 return
-        except Exception:
+        except PlaywrightError:
             logger.debug("Cookie consent click failed for selector %s", selector, exc_info=True)
             continue
     try:
         await page.keyboard.press("Escape")
-    except Exception:
+    except PlaywrightError:
         logger.debug("Escape key press failed during cookie consent dismissal", exc_info=True)
 
 
@@ -1491,7 +1559,7 @@ async def _wait_for_challenge_resolution(
 ) -> tuple[bool, str, list[str]]:
     try:
         html = await page.content()
-    except Exception:
+    except PlaywrightError:
         logger.debug("Failed to read page content for challenge detection", exc_info=True)
         return True, "none", []
 
@@ -1507,7 +1575,7 @@ async def _wait_for_challenge_resolution(
         elapsed += poll_interval_ms
         try:
             html = await page.content()
-        except Exception:
+        except PlaywrightError:
             logger.debug("Failed to read page content during challenge polling", exc_info=True)
             break
         assessment = _assess_challenge_signals(html)
@@ -1627,7 +1695,7 @@ async def _load_cookies(context, domain: str) -> bool:
         return False
     try:
         await context.add_cookies(cookies)
-    except Exception:
+    except PlaywrightError:
         logger.debug("Failed to add cookies to context for domain %s", domain, exc_info=True)
         return False
     return True
@@ -1636,7 +1704,7 @@ async def _load_cookies(context, domain: str) -> bool:
 async def _save_cookies(context, domain: str) -> None:
     try:
         cookies = await context.cookies()
-    except Exception:
+    except PlaywrightError:
         logger.debug("Failed to read cookies from context for domain %s", domain, exc_info=True)
         return
     save_cookies_payload(cookies, domain=domain)
@@ -1727,3 +1795,6 @@ def _chromium_host_rule_ip(ip_text: str) -> str:
     except ValueError:
         return ip_text
     return f"[{value.compressed}]" if value.version == 6 else value.compressed
+
+
+atexit.register(_shutdown_browser_pool_sync)

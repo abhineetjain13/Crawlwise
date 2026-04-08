@@ -5,6 +5,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
+from app.services.db_utils import escape_like_pattern
 
 
 async def list_users(
@@ -17,9 +18,9 @@ async def list_users(
     query = select(User)
     count_query = select(func.count()).select_from(User)
     if search:
-        pattern = f"%{search.lower()}%"
-        query = query.where(func.lower(User.email).like(pattern))
-        count_query = count_query.where(func.lower(User.email).like(pattern))
+        pattern = f"%{escape_like_pattern(search.lower())}%"
+        query = query.where(func.lower(User.email).like(pattern, escape="\\"))
+        count_query = count_query.where(func.lower(User.email).like(pattern, escape="\\"))
     if is_active is not None:
         query = query.where(User.is_active == is_active)
         count_query = count_query.where(User.is_active == is_active)

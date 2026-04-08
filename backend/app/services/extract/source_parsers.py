@@ -8,10 +8,24 @@ from bs4 import BeautifulSoup, Tag
 
 from app.services.pipeline_config import HYDRATED_STATE_PATTERNS
 
+_DATALAYER_PUSH_RE = re.compile(r"dataLayer\.push\s*\(")
+_REACT_CREATE_ELEMENT_RE = re.compile(r"createElement\s*\(")
+_NEXT_BOOTSTRAP_CHILD_RE = re.compile(
+    r"self\.__next_f\.push\(\s*\[(?:.|\n)*?({.*?}|\[.*?\])(?:.|\n)*?\]\s*\)"
+)
+_HYDRATED_ASSIGNMENT_PATTERNS = tuple(
+    re.compile(rf"(?:window\.)?{re.escape(pattern)}\s*=\s*", re.DOTALL)
+    for pattern in HYDRATED_STATE_PATTERNS
+)
+
 
 def parse_page_sources(html: str) -> dict[str, object]:
     soup = BeautifulSoup(html or "", "html.parser")
     hydrated_states, hydrated_script_ids = extract_hydrated_states(soup)
+    # Extract Apollo state from meta tags used by GraphQL-driven apps
+    apollo_state = extract_apollo_state_from_meta(soup)
+    if apollo_state:
+        hydrated_states.append(apollo_state)
     next_data = extract_next_data(soup)
     if next_data is None and hydrated_states:
         next_data = {"_hydrated_states": hydrated_states}
@@ -25,6 +39,7 @@ def parse_page_sources(html: str) -> dict[str, object]:
         "json_ld": extract_json_ld(soup),
         "microdata": extract_microdata(soup),
         "tables": extract_tables(soup),
+        "datalayer": parse_datalayer(html),
     }
 
 
@@ -34,6 +49,86 @@ def extract_json_ld(soup: BeautifulSoup) -> list[dict]:
         data = _parse_json_blob(node.string or node.get_text(" ", strip=True) or "")
         results.extend(_flatten_json_ld_payloads(data))
     return results
+
+
+def parse_datalayer(html: str) -> dict[str, object]:
+    """Extract Google Tag Manager dataLayer from page HTML.
+    
+    Supports:
+    - GA4 schema: dataLayer.push({ecommerce: {items: [...]}})
+    - UA schema: dataLayer.push({ecommerce: {detail: {...}}})
+    
+    Returns dict with extracted fields:
+    - price, sale_price, availability, price_currency, google_product_category
+    
+    Returns empty dict if dataLayer absent or malformed.
+    """
+    # Parse the first valid ecommerce payload from dataLayer.push(...) calls.
+    # Iterate lazily to avoid materializing all regex matches on large pages.
+    for match in _DATALAYER_PUSH_RE.finditer(html):
+        start_pos = match.end()
+        # Extract balanced JSON fragment starting from the opening brace
+        json_fragment = _extract_balanced_json_fragment(html[start_pos:])
+        
+        if not json_fragment:
+            continue
+        
+        parsed = _parse_json_blob(json_fragment)
+        if not isinstance(parsed, dict):
+            continue
+        
+        ecommerce = parsed.get("ecommerce")
+        if not isinstance(ecommerce, dict):
+            continue
+        
+        result: dict[str, object] = {}
+        
+        # GA4 schema: items array
+        items = ecommerce.get("items")
+        if isinstance(items, list) and len(items) > 0:
+            item = items[0]
+            if isinstance(item, dict):
+                if "price" in item:
+                    result["price"] = item["price"]
+                if "discount" in item:
+                    result["sale_price"] = item["discount"]
+                if "item_category" in item:
+                    result["google_product_category"] = item["item_category"]
+                if "currency" in item:
+                    result["price_currency"] = item["currency"]
+        
+        # UA schema: detail.products array
+        detail = ecommerce.get("detail")
+        if isinstance(detail, dict):
+            products = detail.get("products")
+            if isinstance(products, list) and len(products) > 0:
+                product = products[0]
+                if isinstance(product, dict):
+                    if "price" in product:
+                        result["price"] = product["price"]
+                    if "category" in product:
+                        result["google_product_category"] = product["category"]
+        
+        # UA schema: currencyCode at ecommerce level
+        if "currencyCode" in ecommerce:
+            result["price_currency"] = ecommerce["currencyCode"]
+        
+        # Return first valid ecommerce data found
+        if result:
+            return result
+    
+    return {}
+
+
+def extract_apollo_state_from_meta(soup: BeautifulSoup) -> dict | None:
+    """Extract Apollo GraphQL state from meta tags used by GraphQL-driven apps."""
+    for node in soup.find_all("meta", attrs={"name": re.compile(r"apollo[-_]state", re.I)}):
+        content = node.get("content")
+        if content:
+            parsed = _parse_json_blob(str(content))
+            if isinstance(parsed, dict):
+                return parsed
+    return None
 
 
 def extract_next_data(soup: BeautifulSoup) -> dict | None:
@@ -235,8 +330,8 @@ def _parse_json_blob(text: str) -> dict | list | None:
 
 
 def _parse_hydrated_assignment(text: str) -> dict | list | None:
-    for pattern in HYDRATED_STATE_PATTERNS:
-        match = re.search(rf"(?:window\.)?{re.escape(pattern)}\s*=\s*", text, re.DOTALL)
+    for assignment_pattern in _HYDRATED_ASSIGNMENT_PATTERNS:
+        match = assignment_pattern.search(text)
         if not match:
             continue
         fragment = _extract_balanced_json_fragment(text[match.end():])
@@ -249,7 +344,7 @@ def _parse_hydrated_assignment(text: str) -> dict | list | None:
 
 
 def _parse_react_create_element_props(text: str) -> dict | list | None:
-    for match in re.finditer(r"createElement\s*\(", text):
+    for match in _REACT_CREATE_ELEMENT_RE.finditer(text):
         args_start = match.end()
         args_end = _find_matching_delimiter(text, args_start - 1, "(", ")")
         if args_end == -1:
@@ -267,7 +362,7 @@ def _parse_react_create_element_props(text: str) -> dict | list | None:
 
 
 def _extract_next_bootstrap_children(text: str) -> list[str]:
-    matches = re.findall(r"self\.__next_f\.push\(\s*\[(?:.|\n)*?({.*?}|\[.*?\])(?:.|\n)*?\]\s*\)", text)
+    matches = _NEXT_BOOTSTRAP_CHILD_RE.findall(text)
     return [match for match in matches if isinstance(match, str)]
 
 

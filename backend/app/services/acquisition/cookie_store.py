@@ -56,7 +56,7 @@ def load_cookies_for_context(domain: str) -> list[dict]:
         return []
     try:
         payload = parse_json(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
         return []
     return filter_persistable_cookies(payload, domain=domain)
 

@@ -213,7 +213,6 @@ def is_meaningful_structured_listing_record(record: dict, *, surface: str = "") 
     if assessment.quality == "invalid":
         return False
     field_names = set(assessment.public_fields)
-    normalized_surface = str(surface or record.get("_surface") or "").strip().lower()
     if field_names == {"title"} or field_names == {"url"}:
         return False
     if field_names == {"title", "url"}:

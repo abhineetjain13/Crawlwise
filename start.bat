@@ -5,14 +5,12 @@ set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
 call :kill_window "CrawlerAI Backend"
-call :kill_window "CrawlerAI Worker"
 call :kill_window "CrawlerAI Frontend"
 
 call :kill_port 8000
 call :kill_port 3000
 
-start "CrawlerAI Backend" cmd /k "cd /d ""%ROOT%backend"" && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
-start "CrawlerAI Worker" cmd /k "cd /d ""%ROOT%backend"" && python -m app.workers"
+start "CrawlerAI Backend" cmd /k "cd /d ""%ROOT%backend"" && python run_dev_server.py"
 start "CrawlerAI Frontend" cmd /k "cd /d ""%ROOT%frontend"" && npm run dev"
 
 endlocal

@@ -88,7 +88,7 @@ class ShopifyAdapter(BaseAdapter):
             if resp.status_code != 200:
                 return []
             data = resp.json()
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
             return []
 
         products = [data] if surface == "ecommerce_detail" else data.get("products", [])

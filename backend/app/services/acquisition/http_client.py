@@ -9,6 +9,7 @@ import time
 from json import loads as parse_json
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 from curl_cffi.const import CurlOpt
 from curl_cffi import requests
@@ -26,6 +27,9 @@ from app.services.pipeline_config import (
     IMPERSONATION_TARGET,
 )
 from app.services.url_safety import ValidatedTarget, validate_public_target
+
+_MAX_REDIRECTS = 5
+_ALLOWED_REDIRECT_SCHEMES = {"http", "https"}
 
 
 def _validate_retry_backoff_config() -> None:
@@ -52,6 +56,7 @@ class HttpFetchResult:
     attempt_log: list[dict[str, object]] = field(default_factory=list)
     retry_after_seconds: float | None = None
 
+
 async def fetch_html(url: str, proxy: str | None = None) -> str:
     """Fetch HTML via the shared HTTP provider and return the text payload."""
     result = await fetch_html_result(url, proxy=proxy)
@@ -69,7 +74,8 @@ async def fetch_html_result(
 
     Args:
         url: Target URL.
-        proxy: Optional proxy URL (e.g. "http://user:pass@host:port").
+        proxy: Optional proxy URL with embedded credentials if required
+            (e.g. "http://<user>:<password>@host:port").
     """
     attempt_order = _build_attempt_order(
         url=url,
@@ -82,7 +88,6 @@ async def fetch_html_result(
         result = await _fetch_with_retry(url, proxy, impersonate=impersonate)
         last_result = result
         if _is_successful(result):
-            _remember_successful_fetch(url, result)
             return result
         if not _should_retry_with_stealth(result):
             break
@@ -90,7 +95,9 @@ async def fetch_html_result(
     return last_result
 
 
-def _build_attempt_order(*, url: str, allow_stealth_retry: bool, force_stealth: bool) -> list[str]:
+def _build_attempt_order(
+    *, url: str, allow_stealth_retry: bool, force_stealth: bool
+) -> list[str]:
     profiles = [profile for profile in HTTP_IMPERSONATION_PROFILES if profile]
     if not profiles:
         fallback_profile = str(IMPERSONATION_TARGET or "").strip()
@@ -98,7 +105,9 @@ def _build_attempt_order(*, url: str, allow_stealth_retry: bool, force_stealth: 
             profiles = [fallback_profile]
     if not profiles:
         raise ValueError("No valid HTTP impersonation profile is configured")
-    stealth_profile = str(HTTP_STEALTH_IMPERSONATION_PROFILE or "").strip() or profiles[-1]
+    stealth_profile = (
+        str(HTTP_STEALTH_IMPERSONATION_PROFILE or "").strip() or profiles[-1]
+    )
     if stealth_profile not in profiles:
         profiles.append(stealth_profile)
     if force_stealth:
@@ -108,11 +117,9 @@ def _build_attempt_order(*, url: str, allow_stealth_retry: bool, force_stealth: 
     return ordered[:1] if not allow_stealth_retry else ordered
 
 
-def _remember_successful_fetch(url: str, result: HttpFetchResult) -> None:
-    return None
-
-
-async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) -> HttpFetchResult:
+async def _fetch_with_retry(
+    url: str, proxy: str | None, *, impersonate: str
+) -> HttpFetchResult:
     attempts = max(1, HTTP_MAX_RETRIES + 1)
     last_result = HttpFetchResult(
         stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
@@ -123,10 +130,16 @@ async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) ->
     for attempt in range(1, attempts + 1):
         result = await _fetch_once(url, proxy, impersonate=impersonate)
         result.attempts = attempt
-        attempt_log.append(_build_attempt_entry(result, attempt=attempt, impersonate=impersonate))
+        attempt_log.append(
+            _build_attempt_entry(result, attempt=attempt, impersonate=impersonate)
+        )
         result.attempt_log = list(attempt_log)
         last_result = result
-        if result.text and result.content_type == "html" and detect_blocked_page(result.text).is_blocked:
+        if (
+            result.text
+            and result.content_type == "html"
+            and detect_blocked_page(result.text).is_blocked
+        ):
             return result
         if result.error and not result.status_code:
             if attempt < attempts:
@@ -134,7 +147,10 @@ async def _fetch_with_retry(url: str, proxy: str | None, *, impersonate: str) ->
                 continue
             return result
         if result.status_code in HTTP_RETRY_STATUS_CODES and attempt < attempts:
-            delay_seconds = max(_retry_backoff_seconds(attempt), float(result.retry_after_seconds or 0.0))
+            delay_seconds = max(
+                _retry_backoff_seconds(attempt),
+                float(result.retry_after_seconds or 0.0),
+            )
             await asyncio.sleep(delay_seconds)
             continue
         return result
@@ -149,7 +165,9 @@ def _retry_backoff_seconds(attempt: int) -> float:
     return bounded_ms / 1000
 
 
-def _build_attempt_entry(result: HttpFetchResult, *, attempt: int, impersonate: str) -> dict[str, object]:
+def _build_attempt_entry(
+    result: HttpFetchResult, *, attempt: int, impersonate: str
+) -> dict[str, object]:
     entry: dict[str, object] = {
         "attempt": attempt,
         "impersonate": impersonate,
@@ -167,60 +185,103 @@ def _build_attempt_entry(result: HttpFetchResult, *, attempt: int, impersonate: 
     return entry
 
 
-async def _fetch_once(url: str, proxy: str | None, *, impersonate: str) -> HttpFetchResult:
-    target = await validate_public_target(url)
-    session_kwargs: dict[str, Any] = {}
-    kwargs: dict[str, Any] = {
-        "impersonate": impersonate,
-        "timeout": HTTP_TIMEOUT_SECONDS,
-    }
-    request_url = url
-    if target.resolved_ips:
-        session_kwargs["curl_options"] = _resolve_options(target)
-    if proxy:
-        kwargs["proxies"] = {"http": proxy, "https": proxy}
-    cookies = load_cookies_for_http(target.hostname)
-    if cookies:
-        kwargs["cookies"] = cookies
-    try:
-        async with requests.AsyncSession(**session_kwargs) as session:
-            response = await session.get(request_url, **kwargs)
-    except Exception as exc:
+async def _fetch_once(
+    url: str, proxy: str | None, *, impersonate: str
+) -> HttpFetchResult:
+    request_url = str(url or "").strip()
+    redirect_count = 0
+    while True:
+        target = await validate_public_target(request_url)
+        session_kwargs: dict[str, Any] = {}
+        session_kwargs["trust_env"] = False
+        kwargs: dict[str, Any] = {
+            "impersonate": impersonate,
+            "timeout": HTTP_TIMEOUT_SECONDS,
+            "allow_redirects": False,
+        }
+        if target.resolved_ips:
+            session_kwargs["curl_options"] = _resolve_options(target)
+        if proxy:
+            kwargs["proxies"] = {"http": proxy, "https": proxy}
+        cookies = load_cookies_for_http(target.hostname)
+        if cookies:
+            kwargs["cookies"] = cookies
+        try:
+            async with requests.AsyncSession(**session_kwargs) as session:
+                response = await session.get(request_url, **kwargs)
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            return HttpFetchResult(
+                error=str(exc),
+                stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+                impersonate_profile=impersonate,
+                final_url=request_url,
+            )
+
+        headers = {
+            str(key).lower(): str(value)
+            for key, value in getattr(response, "headers", {}).items()
+        }
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        location = str(headers.get("location") or "").strip()
+        if status_code in {301, 302, 303, 307, 308} and location:
+            redirect_count += 1
+            if redirect_count > _MAX_REDIRECTS:
+                return HttpFetchResult(
+                    status_code=status_code,
+                    headers=headers,
+                    final_url=str(getattr(response, "url", request_url)),
+                    content_type="html",
+                    stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+                    impersonate_profile=impersonate,
+                    attempts=1,
+                    error="too_many_redirects",
+                )
+            next_url = _resolve_redirect_url(request_url, location)
+            if next_url is None:
+                return HttpFetchResult(
+                    status_code=status_code,
+                    headers=headers,
+                    final_url=str(getattr(response, "url", request_url)),
+                    content_type="html",
+                    stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+                    impersonate_profile=impersonate,
+                    attempts=1,
+                    error="invalid_redirect_target",
+                )
+            request_url = next_url
+            continue
+
+        text = getattr(response, "text", "") or ""
+        content_type, json_data = _parse_content(text, headers)
+        error = ""
+        if status_code >= 400:
+            error = f"HTTP {status_code}"
         return HttpFetchResult(
-            error=str(exc),
+            text=text,
+            status_code=status_code,
+            headers=headers,
+            final_url=str(getattr(response, "url", request_url)),
+            content_type=content_type,
+            json_data=json_data,
             stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
             impersonate_profile=impersonate,
+            attempts=1,
+            error=error,
+            retry_after_seconds=_parse_retry_after(headers),
         )
-
-    headers = {str(key).lower(): str(value) for key, value in getattr(response, "headers", {}).items()}
-    text = getattr(response, "text", "") or ""
-    status_code = int(getattr(response, "status_code", 0) or 0)
-    content_type, json_data = _parse_content(text, headers)
-    error = ""
-    if status_code >= 400:
-        error = f"HTTP {status_code}"
-    return HttpFetchResult(
-        text=text,
-        status_code=status_code,
-        headers=headers,
-        final_url=str(getattr(response, "url", url)),
-        content_type=content_type,
-        json_data=json_data,
-        stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
-        impersonate_profile=impersonate,
-        attempts=1,
-        error=error,
-        retry_after_seconds=_parse_retry_after(headers),
-    )
 
 
 def _resolve_options(target: ValidatedTarget) -> dict[int, list[str]]:
     return {
-        CurlOpt.RESOLVE: [f"{target.hostname}:{target.port}:{ip}" for ip in target.resolved_ips],
+        CurlOpt.RESOLVE: [
+            f"{target.hostname}:{target.port}:{ip}" for ip in target.resolved_ips
+        ],
     }
 
 
-def _parse_content(text: str, headers: dict[str, str]) -> tuple[str, dict | list | None]:
+def _parse_content(
+    text: str, headers: dict[str, str]
+) -> tuple[str, dict | list | None]:
     ct = (headers.get("content-type") or "").lower()
     if "application/json" in ct or "text/json" in ct:
         try:
@@ -234,6 +295,16 @@ def _parse_content(text: str, headers: dict[str, str]) -> tuple[str, dict | list
         except json.JSONDecodeError:
             return "html", None
     return "html", None
+
+
+def _resolve_redirect_url(current_url: str, location: str) -> str | None:
+    candidate = urljoin(current_url, str(location or "").strip())
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() not in _ALLOWED_REDIRECT_SCHEMES:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    return candidate
 
 
 def _is_successful(result: HttpFetchResult) -> bool:

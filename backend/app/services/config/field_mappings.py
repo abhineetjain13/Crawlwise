@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+DATALAYER_ECOMMERCE_FIELD_MAP = {
+    # GA4 schema
+    "items[0].price": "price",
+    "items[0].discount": "discount_amount",
+    "items[0].item_category": "google_product_category",
+    "items[0].currency": "price_currency",
+    # UA schema
+    "detail.products[0].price": "price",
+    "detail.products[0].category": "google_product_category",
+    "currencyCode": "price_currency",
+}
+
 CANONICAL_SCHEMAS = {
     "ecommerce_listing": [
         "title",

@@ -1,15 +1,17 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, PauseCircle, PlayCircle, RefreshCw, XCircle } from "lucide-react";
+import { Activity, RefreshCw, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 
 import { api } from "../../lib/api";
 import type { ActiveJob } from "../../lib/api/types";
+import { formatJobsTimestamp as formatTimestamp } from "../../lib/format/date";
+import { jobsStatusTone as statusTone } from "../../lib/ui/status";
 import { cn } from "../../lib/utils";
 import { Badge, Button, Card } from "../../components/ui/primitives";
-import { PageHeader, SectionHeader } from "../../components/ui/patterns";
+import { InlineAlert, PageHeader, SectionHeader } from "../../components/ui/patterns";
 
 export default function JobsPage() {
   const [lastRefreshed, setLastRefreshed] = useState<string>("--");
@@ -29,17 +31,12 @@ export default function JobsPage() {
 
   const jobs = jobsQuery.data ?? [];
 
-  async function runAction(runId: number, action: "pause" | "resume" | "kill") {
+  async function runAction(runId: number) {
+    const action = "kill";
     setPendingAction(`${action}:${runId}`);
     try {
       setActionError("");
-      if (action === "pause") {
-        await api.pauseCrawl(runId);
-      } else if (action === "resume") {
-        await api.resumeCrawl(runId);
-      } else {
-        await api.killCrawl(runId);
-      }
+      await api.killCrawl(runId);
       await jobsQuery.refetch();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : `Unable to ${action} run ${runId}.`);
@@ -67,10 +64,10 @@ export default function JobsPage() {
       <Card className="space-y-4">
         <SectionHeader
           title="Active Jobs"
-          description="Auto-refreshes every 5 seconds. Pause, resume, and hard kill controls are shown where the backend supports them."
+          description="Auto-refreshes every 5 seconds. Use hard kill to stop any active run."
           action={<Badge tone="neutral">{jobs.length} active</Badge>}
         />
-        {actionError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{actionError}</div> : null}
+        {actionError ? <InlineAlert message={actionError} /> : null}
 
         {jobs.length ? (
           <div className="overflow-auto rounded-[10px] border border-border">
@@ -107,22 +104,10 @@ export default function JobsPage() {
                     <td>
                       <div className="flex items-center gap-2">
                         <ActionButton
-                          icon={PauseCircle}
-                          label="Pause"
-                          disabled={job.status !== "running" || Boolean(pendingAction)}
-                          onClick={() => void runAction(job.run_id, "pause")}
-                        />
-                        <ActionButton
-                          icon={PlayCircle}
-                          label="Resume"
-                          disabled={job.status !== "paused" || Boolean(pendingAction)}
-                          onClick={() => void runAction(job.run_id, "resume")}
-                        />
-                        <ActionButton
                           icon={XCircle}
                           label="Hard Kill"
                           disabled={!(job.status === "pending" || job.status === "running" || job.status === "paused") || Boolean(pendingAction)}
-                          onClick={() => void runAction(job.run_id, "kill")}
+                          onClick={() => void runAction(job.run_id)}
                           danger
                         />
                       </div>
@@ -149,13 +134,6 @@ export default function JobsPage() {
 function StatusPill({ status }: Readonly<{ status: ActiveJob["status"] }>) {
   const tone = statusTone(status);
   return <Badge tone={tone}>{status.replace(/_/g, " ")}</Badge>;
-}
-
-function statusTone(status: ActiveJob["status"]) {
-  if (status === "running") return "success" as const;
-  if (status === "paused") return "warning" as const;
-  if (status === "killed" || status === "failed" || status === "proxy_exhausted") return "danger" as const;
-  return "neutral" as const;
 }
 
 function ActionButton({
@@ -195,19 +173,6 @@ function ProgressBar({ value }: Readonly<{ value: number }>) {
       />
     </div>
   );
-}
-
-function formatTimestamp(value: string) {
-  try {
-    return new Date(value).toLocaleString([], {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return value;
-  }
 }
 
 function formatJobType(value: string) {

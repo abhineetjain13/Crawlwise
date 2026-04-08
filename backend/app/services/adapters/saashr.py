@@ -82,7 +82,7 @@ class SaaSHRAdapter(BaseAdapter):
                 if response.status_code != 200:
                     break
                 payload = response.json()
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError):
                 break
             if not company_name:
                 company_name = await self._fetch_company_name(
@@ -133,7 +133,7 @@ class SaaSHRAdapter(BaseAdapter):
             if response.status_code != 200:
                 return ""
             payload = response.json()
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError):
             return ""
         return self._clean_text(payload.get("comp_name")) if isinstance(payload, dict) else ""
 

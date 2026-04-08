@@ -78,7 +78,7 @@ async def try_blocked_adapter_recovery(
     for proxy in proxies:
         try:
             records = await oracle_hcm.try_public_endpoint(url, "", surface, proxy=proxy)
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
             logger.debug("Oracle HCM recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
             records = []
         if records:
@@ -89,7 +89,7 @@ async def try_blocked_adapter_recovery(
             )
         try:
             records = await jibe.try_public_endpoint(url, "", surface, proxy=proxy)
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
             logger.debug("Jibe recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
             records = []
         if records:
@@ -100,7 +100,7 @@ async def try_blocked_adapter_recovery(
             )
         try:
             records = await shopify.try_public_endpoint(url, surface, proxy=proxy)
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
             logger.debug("Shopify recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
             continue
         if not records:

@@ -54,10 +54,8 @@ def test_find_repeating_cards_css_escapes_special_class_names():
     assert selector == r"article.product.tile\3a featured"
 
 
-@pytest.mark.asyncio
-async def test_classify_page_uses_deterministic_url_and_json_ld_rules(db_session):
-    result = await classify_page(
-        db_session,
+def test_classify_page_uses_deterministic_url_and_json_ld_rules():
+    result = classify_page(
         url="https://example.com/product/widget-123",
         html="""
         <html>
@@ -67,7 +65,6 @@ async def test_classify_page_uses_deterministic_url_and_json_ld_rules(db_session
           <body><h1>Widget</h1></body>
         </html>
         """,
-        llm_enabled=True,
     )
 
     assert result.page_type == "detail"
@@ -75,8 +72,7 @@ async def test_classify_page_uses_deterministic_url_and_json_ld_rules(db_session
     assert result.source == "deterministic"
 
 
-@pytest.mark.asyncio
-async def test_classify_page_caches_deterministic_result(db_session):
+def test_classify_page_caches_deterministic_result():
     html = """
     <html>
       <body>
@@ -86,30 +82,23 @@ async def test_classify_page_caches_deterministic_result(db_session):
     </html>
     """
 
-    first = await classify_page(
-        db_session,
+    first = classify_page(
         url="https://example.com/product",
         html=html,
-        llm_enabled=True,
     )
-    second = await classify_page(
-        db_session,
+    second = classify_page(
         url="https://example.com/product",
         html=html,
-        llm_enabled=True,
     )
 
     assert first.page_type == "detail"
     assert second.source == "cache"
 
 
-@pytest.mark.asyncio
-async def test_classify_page_returns_unknown_when_rules_are_inconclusive(db_session):
-    result = await classify_page(
-        db_session,
+def test_classify_page_returns_unknown_when_rules_are_inconclusive():
+    result = classify_page(
         url="https://example.com/ambiguous-page",
         html="<html><body><main>Ambiguous body</main></body></html>",
-        llm_enabled=False,
     )
 
     assert result.page_type == "unknown"

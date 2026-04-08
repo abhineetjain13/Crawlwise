@@ -138,3 +138,168 @@ def test_extract_semantic_detail_data_skips_contact_and_share_noise_sections():
     assert "contact_bolton_citroen" not in result["sections"]
     assert "share" not in result["sections"]
     assert result["sections"]["summary"] == "One owner vehicle with full service history."
+
+
+# Property-based tests for Task 5: Enable unconditional tier 2 attribute collection
+# Feature: extraction-pipeline-improvements
+
+from hypothesis import given, settings, strategies as st
+from unittest.mock import Mock, patch
+
+
+# Property 8: Semantic Extraction Invocation
+@given(
+    html=st.text(min_size=100, max_size=5000),
+    url=st.just("https://example.com/product/123"),
+    surface=st.sampled_from(["product_detail", "job_detail", "detail"]),
+)
+@settings(max_examples=100, deadline=None)
+def test_semantic_extraction_invocation(html: str, url: str, surface: str):
+    """Feature: extraction-pipeline-improvements, Property 8: Semantic Extraction Invocation.
+
+    For any detail page (page_type="detail"), the extraction pipeline SHALL invoke
+    semantic_detail_extractor exactly once, regardless of whether structured data
+    (JSON-LD, __NEXT_DATA__) is present.
+
+    Validates: Requirements 4.1, 4.2
+    """
+    from app.services.extract.service import extract_candidates
+
+    with patch("app.services.extract.service.extract_semantic_detail_data") as mock_semantic:
+        # Mock the semantic extractor to return a valid structure
+        mock_semantic.return_value = {
+            "sections": {},
+            "specifications": {},
+            "promoted_fields": {},
+            "coverage": {},
+            "aggregates": {},
+            "table_groups": [],
+        }
+
+        # Call extract_candidates for a detail page
+        extract_candidates(
+            url=url,
+            surface=surface,
+            html=html,
+            xhr_payloads=[],
+            additional_fields=[],
+            extraction_contract=None,
+            resolved_fields=None,
+            adapter_records=None,
+        )
+
+        # Verify semantic_detail_extractor was called exactly once
+        assert mock_semantic.call_count == 1, f"Expected 1 call, got {mock_semantic.call_count}"
+
+
+# Property 9: Product Attributes Extraction Completeness
+@given(
+    html_type=st.sampled_from(["dl_dd_dt", "table", "accordion"]),
+)
+@settings(max_examples=100, deadline=None)
+def test_product_attributes_extraction_completeness(html_type: str):
+    """Feature: extraction-pipeline-improvements, Property 9: Product Attributes Extraction Completeness.
+
+    For any detail page HTML containing definition lists (dl/dt/dd), spec tables (table elements),
+    or accordion content (details/summary), semantic_detail_extractor SHALL extract
+    product_attributes as a non-empty flat dict[str, str].
+
+    Validates: Requirements 4.3, 4.4, 4.5, 4.6
+    """
+    # Generate HTML based on type
+    if html_type == "dl_dd_dt":
+        html = """
+        <html>
+          <body>
+            <dl>
+              <dt>Material</dt>
+              <dd>Cotton</dd>
+              <dt>Color</dt>
+              <dd>Blue</dd>
+            </dl>
+          </body>
+        </html>
+        """
+    elif html_type == "table":
+        html = """
+        <html>
+          <body>
+            <table>
+              <tr><td>Brand</td><td>Nike</td></tr>
+              <tr><td>Size</td><td>Large</td></tr>
+            </table>
+          </body>
+        </html>
+        """
+    else:  # accordion
+        html = """
+        <html>
+          <body>
+            <details>
+              <summary>Specifications</summary>
+              <p>Weight: 500g</p>
+              <p>Dimensions: 10x20x30cm</p>
+            </details>
+          </body>
+        </html>
+        """
+
+    result = extract_semantic_detail_data(html)
+
+    # Verify specifications (product_attributes) is non-empty
+    assert "specifications" in result
+    assert isinstance(result["specifications"], dict)
+    assert len(result["specifications"]) > 0, f"Expected non-empty specifications for {html_type}"
+
+
+# Property 10: Product Attributes Output Persistence
+@given(
+    url=st.just("https://example.com/product/123"),
+    surface=st.sampled_from(["product_detail", "job_detail", "detail"]),
+)
+@settings(max_examples=100, deadline=None)
+def test_product_attributes_output_persistence(url: str, surface: str):
+    """Feature: extraction-pipeline-improvements, Property 10: Product Attributes Output Persistence.
+
+    For any detail page where semantic_detail_extractor returns non-empty product_attributes,
+    the final extraction output SHALL contain a "product_attributes" key with those attributes.
+
+    Validates: Requirement 4.7
+    """
+    from app.services.extract.service import extract_candidates
+
+    # HTML with specifications
+    html = """
+    <html>
+      <body>
+        <dl>
+          <dt>Material</dt>
+          <dd>Cotton</dd>
+          <dt>Color</dt>
+          <dd>Blue</dd>
+        </dl>
+      </body>
+    </html>
+    """
+
+    candidates, source_trace = extract_candidates(
+        url=url,
+        surface=surface,
+        html=html,
+        xhr_payloads=[],
+        additional_fields=[],
+        extraction_contract=None,
+        resolved_fields=None,
+        adapter_records=None,
+    )
+
+    # Verify product_attributes is in the output
+    assert "product_attributes" in candidates, "Expected product_attributes in candidates"
+
+    # Verify product_attributes contains the specifications
+    product_attrs = candidates["product_attributes"]
+    assert isinstance(product_attrs, list)
+    assert len(product_attrs) > 0
+    assert "value" in product_attrs[0]
+    assert isinstance(product_attrs[0]["value"], dict)
+    assert len(product_attrs[0]["value"]) > 0, "Expected non-empty product_attributes dict"

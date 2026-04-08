@@ -8,7 +8,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { PageHeader, SectionHeader } from "../ui/patterns";
 import { Button, Card, Input, Textarea } from "../ui/primitives";
 import { api } from "../../lib/api";
-import type { AdvancedCrawlMode, CrawlConfig } from "../../lib/api/types";
+import type { AdvancedCrawlMode, CrawlConfig, CrawlSurface } from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { UI_DELAYS } from "../../lib/constants/timing";
@@ -19,12 +19,17 @@ import {
   type CrawlTab,
   type FieldRow,
   ManualFieldEditor,
+  type PendingDispatch,
+  parseRequestedCategoryMode,
+  parseRequestedCrawlTab,
   parseLines,
+  parseRequestedPdpMode,
   type PdpMode,
   SegmentedMode,
   SettingSection,
   SliderRow,
   TabBar,
+  validateAdditionalFieldName,
   normalizeField,
   uniqueFields,
 } from "./shared";
@@ -35,15 +40,19 @@ type CrawlConfigScreenProps = {
   requestedPdpMode: PdpMode | null;
 };
 
+type SerializedAdvancedMode = Exclude<AdvancedCrawlMode, "view_all"> | "load_more" | null;
+const ADVANCED_MODE_OPTIONS = new Set<AdvancedCrawlMode>(["auto", "scroll", "load_more", "view_all", "paginate"]);
+
 export function CrawlConfigScreen({
   requestedTab,
   requestedCategoryMode,
   requestedPdpMode,
 }: Readonly<CrawlConfigScreenProps>) {
   const router = useRouter();
-  const [crawlTab, setCrawlTab] = useState<CrawlTab>(() => requestedTab ?? "pdp");
+  const [crawlTab, setCrawlTab] = useState<CrawlTab>(() => requestedTab ?? "category");
   const [categoryMode, setCategoryMode] = useState<CategoryMode>(() => requestedCategoryMode ?? "single");
   const [pdpMode, setPdpMode] = useState<PdpMode>(() => requestedPdpMode ?? "single");
+  const [surface, setSurface] = useState<CrawlSurface>("ecommerce_listing");
   const [targetUrl, setTargetUrl] = useState("");
   const [bulkUrls, setBulkUrls] = useState("");
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -62,17 +71,30 @@ export function CrawlConfigScreen({
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
   const [configError, setConfigError] = useState("");
   const [bulkBanner, setBulkBanner] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
 
   useEffect(() => {
-    const nextTab = requestedTab ?? "pdp";
+    const nextTab = requestedTab ?? "category";
     const nextCategoryMode = requestedCategoryMode ?? "single";
     const nextPdpMode = requestedPdpMode ?? "single";
     setCrawlTab((current) => (current === nextTab ? current : nextTab));
     setCategoryMode((current) => (current === nextCategoryMode ? current : nextCategoryMode));
     setPdpMode((current) => (current === nextPdpMode ? current : nextPdpMode));
   }, [requestedCategoryMode, requestedPdpMode, requestedTab]);
+
+  useEffect(() => {
+    setSurface((current) => {
+      if (crawlTab === "category" && current === "ecommerce_detail") {
+        return "ecommerce_listing";
+      }
+      if (crawlTab === "pdp" && current === "ecommerce_listing") {
+        return "ecommerce_detail";
+      }
+      return current;
+    });
+  }, [crawlTab]);
 
   useEffect(() => {
     const routeMode = crawlTab === "category" ? requestedCategoryMode : requestedPdpMode;
@@ -116,6 +138,7 @@ export function CrawlConfigScreen({
   const config = useMemo<CrawlConfig>(
     () => ({
       module: crawlTab,
+      surface,
       mode: crawlTab === "category" ? categoryMode : pdpMode,
       target_url: targetUrl,
       bulk_urls: bulkUrls,
@@ -152,6 +175,7 @@ export function CrawlConfigScreen({
       proxyEnabled,
       proxyInput,
       requestDelay,
+      surface,
       smartExtraction,
       targetUrl,
       antiBotEnabled,
@@ -160,9 +184,13 @@ export function CrawlConfigScreen({
 
   async function startCrawl(event: FormEvent) {
     event.preventDefault();
+    if (isSubmitting) {
+      return;
+    }
     setConfigError("");
+    setIsSubmitting(true);
     try {
-      const dispatch = buildDispatch(config);
+      const dispatch = buildDispatch(config, fieldRows);
       let response: { run_id: number };
       if (dispatch.runType === "csv") {
         if (!dispatch.csvFile) {
@@ -188,6 +216,8 @@ export function CrawlConfigScreen({
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to launch crawl.";
       setConfigError(message);
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -233,7 +263,13 @@ export function CrawlConfigScreen({
               <div className="flex flex-wrap items-center gap-3">
                 <TabBar
                   value={crawlTab}
-                  onChange={(value) => setCrawlTab(value as CrawlTab)}
+                  onChange={(value) => {
+                    const parsed = parseRequestedCrawlTab(value);
+                    if (parsed) {
+                      setCrawlTab(parsed);
+                      setSurface(parsed === "pdp" ? "ecommerce_detail" : "ecommerce_listing");
+                    }
+                  }}
                   options={[
                     { value: "category", label: "Category Crawl" },
                     { value: "pdp", label: "PDP Crawl" },
@@ -242,7 +278,12 @@ export function CrawlConfigScreen({
                 {crawlTab === "category" ? (
                   <SegmentedMode
                     value={categoryMode}
-                    onChange={(value) => setCategoryMode(value as CategoryMode)}
+                    onChange={(value) => {
+                      const parsed = parseRequestedCategoryMode(value);
+                      if (parsed) {
+                        setCategoryMode(parsed);
+                      }
+                    }}
                     options={[
                       { value: "single", label: "Single" },
                       { value: "sitemap", label: "Sitemap" },
@@ -252,7 +293,12 @@ export function CrawlConfigScreen({
                 ) : (
                   <SegmentedMode
                     value={pdpMode}
-                    onChange={(value) => setPdpMode(value as PdpMode)}
+                    onChange={(value) => {
+                      const parsed = parseRequestedPdpMode(value);
+                      if (parsed) {
+                        setPdpMode(parsed);
+                      }
+                    }}
                     options={[
                       { value: "single", label: "Single" },
                       { value: "batch", label: "Batch" },
@@ -260,13 +306,27 @@ export function CrawlConfigScreen({
                     ]}
                   />
                 )}
+                <select
+                  aria-label="Surface selection"
+                  value={surface}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (next === "ecommerce_listing" || next === "ecommerce_detail") {
+                      setSurface(next);
+                    }
+                  }}
+                  className="control-select focus-ring h-8 min-w-[190px]"
+                >
+                  <option value="ecommerce_listing">Listing Surface</option>
+                  <option value="ecommerce_detail">Detail Surface</option>
+                </select>
               </div>
               <Button
                 variant="accent"
                 type="submit"
-                disabled={!canPreview(config)}
+                disabled={!canPreview(config, fieldRows) || isSubmitting}
               >
-                Start Crawl
+                {isSubmitting ? "Starting..." : "Start Crawl"}
               </Button>
             </div>
 
@@ -377,21 +437,31 @@ export function CrawlConfigScreen({
                   checked={advancedEnabled}
                   onChange={setAdvancedEnabled}
                 >
-                  <div className="space-y-2.5 rounded-[var(--radius-xl)] border border-border bg-[var(--advanced-panel-bg)] px-3 py-3 shadow-[var(--advanced-panel-highlight)]">
+                  <div className="space-y-2.5 px-1 py-1">
                     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
                       <div className="text-sm font-medium text-[var(--text-secondary)]">Mode</div>
                       <select
                         aria-label="Advanced crawl mode"
                         value={advancedMode}
-                        onChange={(event) => setAdvancedMode(event.target.value as AdvancedCrawlMode)}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          if (ADVANCED_MODE_OPTIONS.has(next as AdvancedCrawlMode)) {
+                            setAdvancedMode(next as AdvancedCrawlMode);
+                          }
+                        }}
                         className="control-select focus-ring h-9 w-full"
                       >
                         <option value="auto">Auto</option>
                         <option value="scroll">Scroll</option>
                         <option value="load_more">Load More</option>
+                        <option value="view_all">View All</option>
                         <option value="paginate">Paginate</option>
                       </select>
                     </div>
+                    <p className="text-xs text-muted">
+                      Auto keeps backend auto-detection enabled. Explicit modes map directly to backend behavior, and View All maps to
+                      Load More.
+                    </p>
                     <div className="space-y-2">
                       <SliderRow
                         label="Request Delay"
@@ -447,7 +517,7 @@ export function CrawlConfigScreen({
                   checked={proxyEnabled}
                   onChange={setProxyEnabled}
                 >
-                  <div className="space-y-2 rounded-[var(--radius-lg)] border border-border bg-background px-3 py-3">
+                  <div className="space-y-2 px-1 py-1">
                     <div className="label-caps">Proxy Pool</div>
                     <Textarea
                       value={proxyInput}
@@ -468,12 +538,43 @@ export function CrawlConfigScreen({
   );
 }
 
-function buildDispatch(config: CrawlConfig): PendingDispatch {
+function buildExtractionContract(fieldRows: FieldRow[]) {
+  const extractionContract = fieldRows
+    .map((row) => {
+      const fieldName = normalizeField(row.fieldName);
+      const xpath = row.xpath.trim();
+      const regex = row.regex.trim();
+      if (!fieldName || (!xpath && !regex)) {
+        return null;
+      }
+      const reason = validateAdditionalFieldName(fieldName);
+      if (reason) {
+        throw new Error(`Invalid manual field "${row.fieldName || fieldName}": ${reason}`);
+      }
+      return {
+        field_name: fieldName,
+        xpath: xpath || undefined,
+        regex: regex || undefined,
+      };
+    })
+    .filter((row): row is { field_name: string; xpath?: string; regex?: string } => Boolean(row));
+  return extractionContract;
+}
+
+export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): PendingDispatch {
   const additionalFields = uniqueFields(config.additional_fields);
+  const invalidAdditionalField = additionalFields.find((field) => validateAdditionalFieldName(field));
+  if (invalidAdditionalField) {
+    const reason = validateAdditionalFieldName(invalidAdditionalField);
+    throw new Error(`Invalid additional field "${invalidAdditionalField}": ${reason}`);
+  }
+  const normalizedAdvancedMode = normalizeAdvancedMode(config.advanced_mode);
+  const resolvedAdvancedMode = config.advanced_enabled ? normalizedAdvancedMode : null;
+  const surface = config.surface;
   const commonSettings = {
     llm_enabled: config.smart_extraction,
     advanced_enabled: config.advanced_enabled,
-    advanced_mode: config.advanced_enabled ? config.advanced_mode : null,
+    advanced_mode: resolvedAdvancedMode,
     anti_bot_enabled: config.anti_bot_enabled,
     sleep_ms: config.request_delay_ms,
     max_records: config.max_records,
@@ -484,8 +585,8 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     additional_fields: additionalFields,
     crawl_module: config.module,
     crawl_mode: config.mode,
+    extraction_contract: buildExtractionContract(fieldRows),
   };
-  const inferredSurface = inferDispatchSurface(config);
 
   if (config.module === "category") {
     if (config.mode === "bulk") {
@@ -493,7 +594,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
       if (!urls.length) throw new Error("Bulk crawl needs at least one URL.");
       return {
         runType: "batch",
-        surface: inferredSurface,
+        surface,
         url: urls[0],
         urls,
         settings: { ...commonSettings, urls },
@@ -504,7 +605,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     if (!config.target_url.trim()) throw new Error("Enter a target URL.");
     return {
       runType: "crawl",
-      surface: inferredSurface,
+      surface,
       url: config.target_url.trim(),
       settings: commonSettings,
       additionalFields,
@@ -516,7 +617,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     if (!config.csv_file) throw new Error("Select a CSV file.");
     return {
       runType: "csv",
-      surface: inferredSurface,
+      surface,
       url: config.target_url.trim() || undefined,
       settings: commonSettings,
       additionalFields,
@@ -529,7 +630,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
     if (!urls.length) throw new Error("Batch crawl needs at least one URL.");
     return {
       runType: "batch",
-      surface: inferredSurface,
+      surface,
       url: urls[0],
       urls,
       settings: { ...commonSettings, urls },
@@ -541,7 +642,7 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
   if (!config.target_url.trim()) throw new Error("Enter a target URL.");
   return {
     runType: "crawl",
-    surface: inferredSurface,
+    surface,
     url: config.target_url.trim(),
     settings: commonSettings,
     additionalFields,
@@ -549,55 +650,16 @@ function buildDispatch(config: CrawlConfig): PendingDispatch {
   };
 }
 
-function inferDispatchSurface(config: CrawlConfig) {
-  const fallbackSurface = config.module === "category" ? "ecommerce_listing" : "ecommerce_detail";
-  const sampleUrl =
-    config.target_url.trim() ||
-    parseLines(config.bulk_urls)[0] ||
-    "";
-  if (!looksLikeJobUrl(sampleUrl)) {
-    return fallbackSurface;
+export function normalizeAdvancedMode(mode: AdvancedCrawlMode): SerializedAdvancedMode {
+  if (mode === "view_all") {
+    return "load_more";
   }
-  return config.module === "category" ? "job_listing" : "job_detail";
+  return mode;
 }
 
-function looksLikeJobUrl(value: string) {
+function canPreview(config: CrawlConfig, fieldRows: FieldRow[]) {
   try {
-    const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    const pathAndQuery = `${url.pathname}${url.search}`.toLowerCase();
-    const hostHints = [
-      "dice.com",
-      "linkedin.com",
-      "indeed.",
-      "greenhouse.io",
-      "idealist.org",
-      "usajobs.gov",
-      "remotive.com",
-    ];
-    const pathHints = [
-      "/job-detail/",
-      "/viewjob",
-      "/jobs",
-      "/job/",
-      "/position",
-      "/positions",
-      "/opening",
-      "/openings",
-      "/career",
-      "/careers",
-      "/search/results",
-    ];
-    const hasHostHint = hostHints.some((hint) => host.includes(hint));
-    return hasHostHint && pathHints.some((hint) => pathAndQuery.includes(hint));
-  } catch {
-    return false;
-  }
-}
-
-function canPreview(config: CrawlConfig) {
-  try {
-    buildDispatch(config);
+    buildDispatch(config, fieldRows);
     return true;
   } catch {
     return false;

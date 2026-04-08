@@ -5,8 +5,9 @@ import { useMemo, useState } from "react";
 
 import { api } from "../../../lib/api";
 import type { User } from "../../../lib/api/types";
+import { formatAdminUserDate as formatDate } from "../../../lib/format/date";
 import { Badge, Card, Input } from "../../../components/ui/primitives";
-import { EmptyPanel, PageHeader, SectionHeader } from "../../../components/ui/patterns";
+import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from "../../../components/ui/patterns";
 
 type StatusFilter = "all" | "active" | "inactive";
 
@@ -76,7 +77,7 @@ export default function AdminUsersPage() {
             <option value="inactive">Inactive</option>
           </select>
         </div>
-        {updateError ? <div className="rounded-md border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{updateError}</div> : null}
+        {updateError ? <InlineAlert message={updateError} /> : null}
 
         {usersQuery.isLoading ? (
           <div className="rounded-[10px] border border-border bg-panel px-4 py-8 text-center text-sm text-muted">
@@ -152,16 +153,3 @@ function MetricCard({ label, value }: Readonly<{ label: string; value: number }>
   );
 }
 
-function formatDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}

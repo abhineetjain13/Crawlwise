@@ -136,7 +136,7 @@ class PaycomAdapter(BaseAdapter):
                 if response.status_code != 200:
                     break
                 body = response.json()
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
                 break
             previews = body.get("jobPostingPreviews") if isinstance(body, dict) else []
             if not isinstance(previews, list) or not previews:
@@ -171,7 +171,7 @@ class PaycomAdapter(BaseAdapter):
             if response.status_code != 200:
                 return None
             body = response.json()
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
             return None
         posting = body.get("jobPosting") if isinstance(body, dict) else None
         if not isinstance(posting, dict):

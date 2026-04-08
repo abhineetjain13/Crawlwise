@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
-from json import loads as parse_json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,8 +14,9 @@ from app.services.pipeline_config import STEALTH_PREFER_TTL_HOURS
 logger = logging.getLogger(__name__)
 
 
-_CACHE: dict[str, dict[str, object]] = {}
+_STEALTH_CACHE: dict[str, tuple[str, float]] = {}
 _CACHE_PATH: Path | None = None
+_LOCK = threading.Lock()
 
 
 def host_key(url: str) -> str:
@@ -24,84 +25,106 @@ def host_key(url: str) -> str:
 
 
 def host_prefers_stealth(url: str) -> bool:
-    record = _load().get(host_key(url))
-    if not record:
+    key = host_key(url)
+    with _LOCK:
+        record = _load().get(key)
+    if record is None:
         return False
-    preferred_until = _as_float(record.get("preferred_stealth_until"))
-    return preferred_until > time.time()
+    _reason, expires_at = record
+    return expires_at > time.time()
 
 
-def remember_stealth_host(url: str, ttl_hours: int | None = None, reason: str = "blocked") -> None:
+def remember_stealth_host(
+    url: str, ttl_hours: int | None = None, reason: str = "blocked"
+) -> None:
     ttl = ttl_hours if ttl_hours is not None else STEALTH_PREFER_TTL_HOURS
-    now = time.time()
-    _load()[host_key(url)] = {
-        "preferred_stealth_until": now + max(0, ttl) * 3600,
-        "reason": reason,
-        "updated_at": now,
-    }
-    _save()
+    expires_at = time.time() + max(0, ttl) * 3600
+    with _LOCK:
+        _load()[host_key(url)] = (reason, expires_at)
+        _save()
 
 
 def clear_stealth_host(url: str) -> None:
     key = host_key(url)
-    if key in _load():
-        _CACHE.pop(key, None)
-        _save()
+    with _LOCK:
+        cache = _load()
+        if key in cache:
+            cache.pop(key, None)
+            _save()
 
 
 def reset_host_memory() -> None:
-    _CACHE.clear()
-    global _CACHE_PATH
-    _CACHE_PATH = None
-    path = _memory_path()
-    try:
-        path.unlink(missing_ok=True)
-    except Exception:
-        logger.debug("Failed to remove host memory file at %s", path, exc_info=True)
+    with _LOCK:
+        _STEALTH_CACHE.clear()
+        global _CACHE_PATH
+        path = _memory_path()
+        _CACHE_PATH = path
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Failed to remove host memory file at %s", path, exc_info=True)
 
 
 def snapshot_host_memory() -> dict[str, dict[str, object]]:
-    return {key: dict(value) for key, value in _load().items()}
+    with _LOCK:
+        return {
+            key: {"reason": reason, "preferred_stealth_until": expires_at}
+            for key, (reason, expires_at) in _load().items()
+        }
 
 
 def _memory_path() -> Path:
     return Path(settings.artifacts_dir) / "acquisition_memory" / "host_preferences.json"
 
 
-def _load() -> dict[str, dict[str, object]]:
+def _load() -> dict[str, tuple[str, float]]:
     global _CACHE_PATH
     path = _memory_path()
     if _CACHE_PATH != path:
-        _CACHE.clear()
+        _STEALTH_CACHE.clear()
         _CACHE_PATH = path
-    if _CACHE:
-        return _CACHE
+    if _STEALTH_CACHE:
+        return _STEALTH_CACHE
     if not path.exists():
-        return _CACHE
+        return _STEALTH_CACHE
     try:
-        payload = parse_json(path.read_text(encoding="utf-8"))
-    except Exception:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
         logger.debug("Failed to parse host memory file at %s", path, exc_info=True)
-        return _CACHE
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            if isinstance(key, str) and isinstance(value, dict):
-                _CACHE[key] = value
-    return _CACHE
+        return _STEALTH_CACHE
+    if not isinstance(payload, dict):
+        return _STEALTH_CACHE
+    now = time.time()
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        expires_at = _as_float(value.get("preferred_stealth_until"))
+        if expires_at <= now:
+            continue
+        reason = str(value.get("reason") or "blocked").strip() or "blocked"
+        _STEALTH_CACHE[key] = (reason, expires_at)
+    return _STEALTH_CACHE
 
 
 def _save() -> None:
     path = _memory_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".tmp")
+    payload = {
+        key: {"reason": reason, "preferred_stealth_until": expires_at}
+        for key, (reason, expires_at) in _STEALTH_CACHE.items()
+        if expires_at > time.time()
+    }
     try:
-        tmp_path.write_text(json.dumps(_CACHE, indent=2, sort_keys=True), encoding="utf-8")
+        tmp_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+        )
         tmp_path.replace(path)
-    except Exception:
+    except OSError:
         logger.debug("Failed to save host memory to %s", path, exc_info=True)
         try:
             tmp_path.unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             logger.debug("Failed to clean up temp file %s", tmp_path, exc_info=True)
 
 

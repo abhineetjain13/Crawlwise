@@ -206,3 +206,21 @@ export function InlineCode({ children }: Readonly<{ children: ReactNode }>) {
     </code>
   );
 }
+
+/* ─── InlineAlert ────────────────────────────────────────────────────────── */
+export function InlineAlert({
+  message,
+  tone = "danger",
+}: Readonly<{
+  message: ReactNode;
+  tone?: "danger" | "warning" | "neutral";
+}>) {
+  if (!message) return null;
+  const toneClass =
+    tone === "danger"
+      ? "border-danger/20 bg-danger/10 text-danger"
+      : tone === "warning"
+        ? "border-warning/30 bg-warning/10 text-warning"
+        : "border-border bg-panel text-muted";
+  return <div className={cn("rounded-md border px-3 py-2 text-sm", toneClass)}>{message}</div>;
+}
