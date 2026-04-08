@@ -15,6 +15,14 @@ try:
 except ImportError:
     curl_requests = None
 
+_FETCH_ERRORS = (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError)
+try:
+    from curl_cffi.requests.errors import RequestsError
+except ImportError:
+    RequestsError = None  # type: ignore[assignment]
+else:
+    _FETCH_ERRORS = _FETCH_ERRORS + (RequestsError,)
+
 
 class ShopifyAdapter(BaseAdapter):
     name = "shopify"
@@ -88,7 +96,7 @@ class ShopifyAdapter(BaseAdapter):
             if resp.status_code != 200:
                 return []
             data = resp.json()
-        except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
+        except _FETCH_ERRORS:
             return []
 
         products = [data] if surface == "ecommerce_detail" else data.get("products", [])

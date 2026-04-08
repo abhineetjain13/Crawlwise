@@ -17,6 +17,10 @@ from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import reset_learned_state
 from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
+from app.services.pipeline_config import (
+    LONG_RUN_THRESHOLD_SECONDS,
+    STALLED_RUN_THRESHOLD_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,16 +183,17 @@ def _legacy_artifact_paths() -> list[Path]:
 async def build_operational_metrics(session: AsyncSession) -> dict:
     """Build lightweight runtime + DB-backed operational metrics."""
     runtime = runtime_metrics_snapshot()
-    long_run_threshold_seconds = 30 * 60
-    stalled_run_threshold_seconds = 2 * 60
+    long_run_threshold_seconds = LONG_RUN_THRESHOLD_SECONDS
+    stalled_run_threshold_seconds = STALLED_RUN_THRESHOLD_SECONDS
+    max_duration_sample_size = 1000
     run_duration_rows = await session.execute(
         select(
             CrawlRun.created_at,
             CrawlRun.completed_at,
-            CrawlRun.status,
-            CrawlRun.updated_at,
-            CrawlRun.result_summary,
         )
+        .where(CrawlRun.created_at.is_not(None))
+        .order_by(CrawlRun.created_at.desc())
+        .limit(max_duration_sample_size)
     )
     durations_seconds: list[float] = []
     long_running_count = 0
@@ -198,10 +203,7 @@ async def build_operational_metrics(session: AsyncSession) -> dict:
     from datetime import UTC, datetime
 
     now = datetime.now(UTC)
-    for created_at, completed_at, status, updated_at, result_summary in run_duration_rows:
-        if not created_at:
-            continue
-        summary = result_summary if isinstance(result_summary, dict) else {}
+    for created_at, completed_at in run_duration_rows:
         created_ts = (
             created_at.replace(tzinfo=UTC)
             if getattr(created_at, "tzinfo", None) is None
@@ -217,25 +219,35 @@ async def build_operational_metrics(session: AsyncSession) -> dict:
         end_time = completed_ts or now
         duration = max(0.0, (end_time - created_ts).total_seconds())
         durations_seconds.append(duration)
-        is_active = status in active_status_values
+    active_rows = await session.execute(
+        select(CrawlRun.created_at, CrawlRun.updated_at, CrawlRun.result_summary).where(
+            CrawlRun.status.in_(list(active_status_values))
+        )
+    )
+    for created_at, updated_at, result_summary in active_rows:
+        if not created_at:
+            continue
+        summary = result_summary if isinstance(result_summary, dict) else {}
         current_stage = str(summary.get("current_stage") or "").strip()
-        if is_active and not current_stage:
-            active_without_stage_count += 1
-        if is_active and updated_at is not None:
-            updated_ts = (
-                updated_at.replace(tzinfo=UTC)
-                if getattr(updated_at, "tzinfo", None) is None
-                else updated_at.astimezone(UTC)
-            )
-            seconds_since_update = max(0.0, (now - updated_ts).total_seconds())
-            if seconds_since_update >= stalled_run_threshold_seconds and not current_stage:
-                active_stalled_no_progress_count += 1
-        if (
-            completed_at is None
-            and duration >= long_run_threshold_seconds
-            and is_active
-        ):
+        created_ts = (
+            created_at.replace(tzinfo=UTC)
+            if getattr(created_at, "tzinfo", None) is None
+            else created_at.astimezone(UTC)
+        )
+        active_duration = max(0.0, (now - created_ts).total_seconds())
+        if active_duration >= long_run_threshold_seconds:
             long_running_count += 1
+        if not current_stage:
+            active_without_stage_count += 1
+            if updated_at is not None:
+                updated_ts = (
+                    updated_at.replace(tzinfo=UTC)
+                    if getattr(updated_at, "tzinfo", None) is None
+                    else updated_at.astimezone(UTC)
+                )
+                seconds_since_update = max(0.0, (now - updated_ts).total_seconds())
+                if seconds_since_update >= stalled_run_threshold_seconds:
+                    active_stalled_no_progress_count += 1
     avg_duration = (
         round(sum(durations_seconds) / len(durations_seconds), 2)
         if durations_seconds

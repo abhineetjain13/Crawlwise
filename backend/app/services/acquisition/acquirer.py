@@ -66,7 +66,7 @@ _MIN_DETAIL_FIELD_SIGNAL_COUNT = 2
 logger = logging.getLogger(__name__)
 _REDACTED = "[REDACTED]"
 _MAX_PROXY_BACKOFF_EXPONENT = 8
-_PROXY_FAILURE_STATE: dict[str, tuple[int, float]] = {}
+_PROXY_FAILURE_STATE: dict[str, tuple[int, float, float]] = {}
 _PROXY_FAILURE_STATE_LOCK = asyncio.Lock()
 _PROXY_FAILURE_STATE_TTL_SECONDS = 60 * 60
 _PROXY_FAILURE_STATE_MAX_ENTRIES = 1024
@@ -114,7 +114,7 @@ class ProxyRotator:
     async def cycle_once(self, *, use_cooldown: bool = True) -> list[str]:
         if not self._proxies:
             return []
-        candidates = [self.next() for _ in range(len(self._proxies))]
+        candidates = list(self._proxies)
         if not use_cooldown:
             return [proxy for proxy in candidates if proxy]
         available: list[str] = []
@@ -137,8 +137,8 @@ def _evict_stale_proxy_entries(now: float) -> None:
     stale_cutoff = now - _PROXY_FAILURE_STATE_TTL_SECONDS
     stale_keys = [
         key
-        for key, (_, cooldown_until) in _PROXY_FAILURE_STATE.items()
-        if cooldown_until <= stale_cutoff
+        for key, (_failures, last_failure_time, _cooldown_until) in _PROXY_FAILURE_STATE.items()
+        if last_failure_time <= stale_cutoff
     ]
     for key in stale_keys:
         _PROXY_FAILURE_STATE.pop(key, None)
@@ -162,7 +162,7 @@ async def _is_proxy_available(proxy: str) -> bool:
         state = _PROXY_FAILURE_STATE.get(key)
         if state is None:
             return True
-        _, cooldown_until = state
+        _, _, cooldown_until = state
         return now >= cooldown_until
 
 
@@ -173,10 +173,10 @@ async def _mark_proxy_failed(proxy: str) -> None:
     async with _PROXY_FAILURE_STATE_LOCK:
         now = time.monotonic()
         _evict_stale_proxy_entries(now)
-        previous_failures = int((_PROXY_FAILURE_STATE.get(key) or (0, 0.0))[0])
+        previous_failures = int((_PROXY_FAILURE_STATE.get(key) or (0, 0.0, 0.0))[0])
         failures = max(1, previous_failures + 1)
         cooldown_until = now + _proxy_backoff_seconds(failures)
-        _PROXY_FAILURE_STATE[key] = (failures, cooldown_until)
+        _PROXY_FAILURE_STATE[key] = (failures, now, cooldown_until)
         _evict_stale_proxy_entries(now)
 
 
@@ -386,6 +386,27 @@ async def _acquire_once(
     checkpoint: Callable[[], Awaitable[None]] | None,
 ) -> AcquisitionResult | None:
     started = time.perf_counter()
+
+    def _finalize_diagnostics_payload(
+        diagnostics: dict[str, object] | None,
+    ) -> dict[str, object]:
+        payload = dict(diagnostics or {})
+        timings = _merge_timing_maps(payload.get("timings_ms"))
+        total_ms = max(0, _elapsed_ms(started))
+        if not timings.get("acquisition_total_ms"):
+            timings["acquisition_total_ms"] = total_ms
+        phase_sum_ms = sum(
+            int(value)
+            for key, value in timings.items()
+            if key != "acquisition_total_ms" and isinstance(value, int)
+        )
+        timings["phases_total_ms"] = phase_sum_ms
+        timings["unattributed_ms"] = max(
+            0, int(timings.get("acquisition_total_ms", total_ms)) - phase_sum_ms
+        )
+        payload["timings_ms"] = timings
+        return payload
+
     host_wait = await wait_for_host_slot(
         urlparse(url).netloc.lower(),
         ACQUIRE_HOST_MIN_INTERVAL_MS,
@@ -449,34 +470,38 @@ async def _acquire_once(
             network_payloads=list(first_data.get("network_payloads") or []),
             frame_sources=getattr(browser_first_result, "frame_sources", []),
             promoted_sources=getattr(browser_first_result, "promoted_sources", []),
-            diagnostics={
-                k: v
-                for k, v in {
-                    "browser_attempted": True,
-                    "browser_challenge_state": browser_first_result.challenge_state,
-                    "browser_origin_warmed": browser_first_result.origin_warmed,
-                    "browser_network_payloads": len(
-                        list(first_data.get("network_payloads") or [])
-                    ),
-                    "browser_diagnostics": first_data.get("diagnostics"),
-                    "timings_ms": _merge_timing_maps(
-                        {"browser_total_ms": first_data.get("browser_total_ms")},
-                        first_data.get("diagnostics", {}).get("timings_ms")
-                        if isinstance(first_data.get("diagnostics"), dict)
+            diagnostics=_finalize_diagnostics_payload(
+                {
+                    k: v
+                    for k, v in {
+                        "browser_attempted": True,
+                        "browser_challenge_state": browser_first_result.challenge_state,
+                        "browser_origin_warmed": browser_first_result.origin_warmed,
+                        "browser_network_payloads": len(
+                            list(first_data.get("network_payloads") or [])
+                        ),
+                        "browser_diagnostics": first_data.get("diagnostics"),
+                        "timings_ms": _merge_timing_maps(
+                            {"browser_total_ms": first_data.get("browser_total_ms")},
+                            first_data.get("diagnostics", {}).get("timings_ms")
+                            if isinstance(first_data.get("diagnostics"), dict)
+                            else None,
+                            {"acquisition_total_ms": _elapsed_ms(started)},
+                        ),
+                        "memory_prefer_stealth": bool(
+                            (acquisition_profile or {}).get("prefer_stealth")
+                        ),
+                        "memory_browser_first": True,
+                        "host_wait_seconds": round(host_wait, 3)
+                        if host_wait > 0
                         else None,
-                        {"acquisition_total_ms": _elapsed_ms(started)},
-                    ),
-                    "memory_prefer_stealth": bool(
-                        (acquisition_profile or {}).get("prefer_stealth")
-                    ),
-                    "memory_browser_first": True,
-                    "host_wait_seconds": round(host_wait, 3) if host_wait > 0 else None,
-                    "prefer_stealth": prefer_stealth,
-                    "anti_bot_enabled": runtime_options.anti_bot_enabled,
-                    "proxy_used": bool(proxy),
-                }.items()
-                if v is not None
-            },
+                        "prefer_stealth": prefer_stealth,
+                        "anti_bot_enabled": runtime_options.anti_bot_enabled,
+                        "proxy_used": bool(proxy),
+                    }.items()
+                    if v is not None
+                }
+            ),
         )
     http_result = await _try_http(
         url,
@@ -525,6 +550,9 @@ async def _acquire_once(
             else:
                 curl_result.diagnostics = dict(curl_result.diagnostics)
             curl_result.diagnostics["timings_ms"] = curl_diagnostics.get("timings_ms")
+            curl_result.diagnostics = _finalize_diagnostics_payload(
+                curl_result.diagnostics
+            )
             return curl_result
         return AcquisitionResult(
             html=http_result.text,
@@ -535,7 +563,7 @@ async def _acquire_once(
             promoted_sources=list(
                 (analysis.get("extractability") or {}).get("promoted_sources") or []
             ),
-            diagnostics=curl_diagnostics,
+            diagnostics=_finalize_diagnostics_payload(curl_diagnostics),
         )
     browser_result = await _try_browser(
         url,
@@ -609,7 +637,7 @@ async def _acquire_once(
             network_payloads=browser_payloads,
             frame_sources=getattr(browser_result, "frame_sources", []),
             promoted_sources=getattr(browser_result, "promoted_sources", []),
-            diagnostics=merged,
+            diagnostics=_finalize_diagnostics_payload(merged),
         )
     if curl_result is not None:
         curl_result.diagnostics.update(
@@ -630,6 +658,7 @@ async def _acquire_once(
                 ),
             }
         )
+        curl_result.diagnostics = _finalize_diagnostics_payload(curl_result.diagnostics)
         logger.info(
             "Playwright returned blocked/empty for %s — using curl_cffi fallback", url
         )
@@ -661,7 +690,7 @@ async def _acquire_once(
             network_payloads=browser_payloads,
             frame_sources=getattr(browser_result, "frame_sources", []),
             promoted_sources=getattr(browser_result, "promoted_sources", []),
-            diagnostics=blocked,
+            diagnostics=_finalize_diagnostics_payload(blocked),
         )
     if (
         http_result is not None
@@ -683,7 +712,7 @@ async def _acquire_once(
             promoted_sources=list(
                 (analysis.get("extractability") or {}).get("promoted_sources") or []
             ),
-            diagnostics=curl_diagnostics,
+            diagnostics=_finalize_diagnostics_payload(curl_diagnostics),
         )
     return None
 

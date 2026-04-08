@@ -8,6 +8,7 @@ from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup
+from curl_cffi.requests.errors import RequestsError
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 
@@ -66,7 +67,14 @@ class JibeAdapter(BaseAdapter):
             if response.status_code != 200:
                 return []
             payload = response.json()
-        except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            RequestsError,
+        ):
             return []
         jobs = payload.get("jobs") if isinstance(payload, dict) else []
         if not isinstance(jobs, list):

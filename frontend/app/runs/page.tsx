@@ -6,12 +6,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Plus, Trash2 } from "lucide-react";
 
 import { Badge, Button, Input } from "../../components/ui/primitives";
-import { EmptyPanel, InlineAlert, PageHeader, SkeletonRows } from "../../components/ui/patterns";
+import {
+  DataRegionEmpty,
+  DataRegionError,
+  DataRegionLoading,
+  InlineAlert,
+  PageHeader,
+  StatusDot,
+  SurfacePanel,
+  TableSurface,
+} from "../../components/ui/patterns";
 import { api } from "../../lib/api";
 import type { CrawlRun, RunStatus } from "../../lib/api/types";
 import { formatRunsDate as formatDate } from "../../lib/format/date";
 import { getDomain } from "../../lib/format/domain";
-import { runsStatusDot as statusDot, runsStatusTone as statusTone } from "../../lib/ui/status";
+import { humanizeStatus, runsStatusTone as statusTone } from "../../lib/ui/status";
 import { cn } from "../../lib/utils";
 
 type StatusFilter = "" | RunStatus;
@@ -32,10 +41,7 @@ function RunRow({
       {/* Domain + URL */}
       <td>
         <div className="flex items-center gap-2.5">
-          <span
-            className="size-1.5 shrink-0 rounded-full"
-            style={{ background: statusDot(run.status) }}
-          />
+          <StatusDot tone={statusTone(run.status)} />
           <div className="min-w-0">
             <Link
               href={`/crawl?run_id=${run.id}`}
@@ -65,7 +71,7 @@ function RunRow({
 
       {/* Status */}
       <td>
-        <Badge tone={statusTone(run.status)}>{run.status.replace(/_/g, " ")}</Badge>
+        <Badge tone={statusTone(run.status)}>{humanizeStatus(run.status)}</Badge>
       </td>
 
       {/* Records */}
@@ -173,7 +179,7 @@ export default function RunsPage() {
       />
 
       {/* ── Filters ── */}
-      <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-card)] p-3 shadow-[var(--shadow-card-value)]">
+      <SurfacePanel className="p-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="flex-1">
           <Input
@@ -201,25 +207,21 @@ export default function RunsPage() {
         <Button onClick={applyFilters} size="sm">Filter</Button>
         <Button variant="ghost" onClick={resetFilters} size="sm">Reset</Button>
         </div>
-      </div>
+      </SurfacePanel>
 
       {actionError ? <InlineAlert message={actionError} /> : null}
 
       {/* ── Table ── */}
-      <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] overflow-hidden shadow-[var(--shadow-card-value)]">
+      <TableSurface>
         {(() => {
           if (query.isError) {
-            return (
-              <div className="p-6 text-[13px] text-[var(--danger)]">
-                Unable to load run history.
-              </div>
-            );
+            return <DataRegionError message="Unable to load run history." />;
           }
           if (query.isLoading) {
-            return <div className="p-4"><SkeletonRows count={8} /></div>;
+            return <DataRegionLoading count={8} />;
           }
           if (!visibleRuns.length) {
-            return <div className="p-4"><EmptyPanel title="No runs found" description="Submitted crawls will appear here." /></div>;
+            return <DataRegionEmpty title="No runs found" description="Submitted crawls will appear here." />;
           }
           return (
             <table className="compact-data-table">
@@ -249,7 +251,7 @@ export default function RunsPage() {
             </table>
           );
         })()}
-      </div>
+      </TableSurface>
 
       {/* Total count */}
       {visibleRuns.length > 0 && (

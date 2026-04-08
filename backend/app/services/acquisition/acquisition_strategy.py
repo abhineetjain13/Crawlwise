@@ -146,6 +146,7 @@ class HtmlScrapingStrategy(AcquisitionStrategy):
         from app.services.acquisition.acquirer import acquire
         from app.services.acquisition.blocked_detector import detect_blocked_page
         from app.services.extract.listing_extractor import extract_listing_records
+        from app.services.shared_acquisition import try_blocked_adapter_recovery
 
         # Acquire the HTML response
         acq_result = await acquire(
@@ -167,13 +168,30 @@ class HtmlScrapingStrategy(AcquisitionStrategy):
 
         # Check if page is blocked
         if detect_blocked_page(acq_result.html, context.url):
+            recovery = await try_blocked_adapter_recovery(context.url, context.surface)
+            if recovery and recovery.records:
+                return AcquisitionStrategyResult(
+                    success=True,
+                    records=recovery.records,
+                    verdict="success",
+                    method=acq_result.method,
+                    content_type=acq_result.content_type,
+                    diagnostics={
+                        **(acq_result.diagnostics or {}),
+                        "blocked_recovery_adapter": recovery.adapter_name,
+                        "blocked_recovery_records": len(recovery.records),
+                    },
+                )
             return AcquisitionStrategyResult(
                 success=False,
                 records=[],
                 verdict="blocked",
                 method=acq_result.method,
                 content_type=acq_result.content_type,
-                diagnostics=acq_result.diagnostics,
+                diagnostics={
+                    **(acq_result.diagnostics or {}),
+                    "blocked_recovery_attempted": True,
+                },
             )
 
         # Extract records from HTML

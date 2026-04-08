@@ -28,9 +28,6 @@ def upgrade() -> None:
         batch_op.create_index(
             "ix_crawl_runs_lease_expires_at", ["lease_expires_at"], unique=False
         )
-    op.execute("UPDATE crawl_runs SET claim_count = 0 WHERE claim_count IS NULL")
-
-
 def downgrade() -> None:
     with op.batch_alter_table("crawl_runs") as batch_op:
         batch_op.drop_index("ix_crawl_runs_lease_expires_at")

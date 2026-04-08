@@ -180,10 +180,16 @@ BROWSER_FALLBACK_HTML_SIZE_THRESHOLD = _TUNING.get(
 )
 JS_GATE_PHRASES = _TUNING.get("js_gate_phrases", ["enable javascript", "<noscript>"])
 DEFAULT_MAX_RECORDS = _TUNING.get("default_max_records", 100)
+DEFAULT_MAX_PAGES = _TUNING.get("default_max_pages", 5)
 DEFAULT_SLEEP_MS = _TUNING.get("default_sleep_ms", 0)
 MIN_REQUEST_DELAY_MS = _TUNING.get("min_request_delay_ms", 100)
 DEFAULT_MAX_SCROLLS = _TUNING.get("default_max_scrolls", 10)
 BATCH_URL_CONCURRENCY = _TUNING.get("batch_url_concurrency", 8)
+URL_BATCH_CONCURRENCY = int(_TUNING.get("url_batch_concurrency", 4))
+URL_PROCESS_TIMEOUT_SECONDS = float(_TUNING.get("url_process_timeout_seconds", 90.0))
+MAX_URL_PROCESS_TIMEOUT_SECONDS = float(
+    _TUNING.get("max_url_process_timeout_seconds", 600.0)
+)
 WORKER_MAX_CONCURRENT_JOBS = _TUNING.get("worker_max_concurrent_jobs", 8)
 WORKER_ORPHAN_RECOVERY_GRACE_SECONDS = max(
     _TUNING.get("worker_orphan_recovery_grace_seconds", 900), 60
@@ -247,6 +253,9 @@ LOAD_MORE_WAIT_MIN_MS = _TUNING.get("load_more_wait_min_ms", 2000)
 COOKIE_CONSENT_PREWAIT_MS = _TUNING.get("cookie_consent_prewait_ms", 400)
 COOKIE_CONSENT_POSTCLICK_WAIT_MS = _TUNING.get("cookie_consent_postclick_wait_ms", 600)
 SHADOW_DOM_FLATTEN_MAX_HOSTS = _TUNING.get("shadow_dom_flatten_max_hosts", 100)
+LONG_RUN_THRESHOLD_SECONDS: int = 30 * 60
+STALLED_RUN_THRESHOLD_SECONDS: int = 2 * 60
+HTTP_URL_PREFIXES: tuple[str, str] = ("http://", "https://")
 
 if HTTP_RETRY_BACKOFF_BASE_MS < 0:
     raise ValueError("pipeline_tuning.py:http_retry_backoff_base_ms must be >= 0")
@@ -365,6 +374,15 @@ CANDIDATE_GENERIC_TITLE_VALUES = set(
     )
 )
 CANDIDATE_TITLE_NOISE_TOKENS = tuple(_CANDIDATE_CLEANUP.get("title_noise_tokens", []))
+CANDIDATE_TITLE_NOISE_PHRASES = tuple(
+    _CANDIDATE_CLEANUP.get("title_noise_phrases", [])
+)
+CANDIDATE_CATEGORY_NOISE_PHRASES = tuple(
+    _CANDIDATE_CLEANUP.get("category_noise_phrases", [])
+)
+CANDIDATE_AVAILABILITY_NOISE_PHRASES = tuple(
+    _CANDIDATE_CLEANUP.get("availability_noise_phrases", [])
+)
 GA_DATA_LAYER_KEYS = frozenset(_CANDIDATE_CLEANUP.get("ga_data_layer_keys", []))
 _CANDIDATE_FIELD_GROUPS = _CANDIDATE_CLEANUP.get("field_groups", {})
 CANDIDATE_FIELD_GROUPS = {
@@ -381,6 +399,11 @@ CANDIDATE_URL_SUFFIXES = tuple(
 CANDIDATE_IMAGE_TOKENS = tuple(
     _CANDIDATE_FIELD_NAME_PATTERNS.get(
         "image_tokens", ["image", "images", "gallery", "photo", "thumbnail", "hero"]
+    )
+)
+CANDIDATE_IMAGE_COLLECTION_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "image_collection_tokens", ["images", "gallery", "photos", "media"]
     )
 )
 CANDIDATE_CURRENCY_TOKENS = tuple(
@@ -421,6 +444,76 @@ CANDIDATE_IDENTIFIER_TOKENS = tuple(
     )
 )
 CANDIDATE_UI_NOISE_PHRASES = tuple(_CANDIDATE_CLEANUP.get("ui_noise_phrases", []))
+CANDIDATE_IMAGE_NOISE_TOKENS = tuple(_CANDIDATE_CLEANUP.get("image_noise_tokens", []))
+CANDIDATE_IMAGE_URL_HINT_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("image_url_hint_tokens", [])
+)
+CANDIDATE_IMAGE_CANDIDATE_DICT_KEYS = tuple(
+    _CANDIDATE_CLEANUP.get("image_candidate_dict_keys", [])
+)
+CANDIDATE_COLOR_CSS_NOISE_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("color_css_noise_tokens", [])
+)
+CANDIDATE_SIZE_CSS_NOISE_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("size_css_noise_tokens", [])
+)
+CANDIDATE_SIZE_PACKAGE_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("size_package_tokens", [])
+)
+_CANDIDATE_AVAILABILITY_STATUS_TOKENS = _CANDIDATE_CLEANUP.get(
+    "availability_status_tokens", {}
+)
+CANDIDATE_AVAILABILITY_TOKENS_LIMITED_STOCK = tuple(
+    _CANDIDATE_AVAILABILITY_STATUS_TOKENS.get("limited_stock", [])
+)
+CANDIDATE_AVAILABILITY_TOKENS_IN_STOCK = tuple(
+    _CANDIDATE_AVAILABILITY_STATUS_TOKENS.get("in_stock", [])
+)
+CANDIDATE_AVAILABILITY_TOKENS_OUT_OF_STOCK = tuple(
+    _CANDIDATE_AVAILABILITY_STATUS_TOKENS.get("out_of_stock", [])
+)
+CANDIDATE_AVAILABILITY_TOKENS_PREORDER = tuple(
+    _CANDIDATE_AVAILABILITY_STATUS_TOKENS.get("preorder", [])
+)
+CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS = frozenset(
+    _CANDIDATE_CLEANUP.get("dynamic_field_name_hard_rejects", [])
+)
+CANDIDATE_DESCRIPTION_META_SELECTORS = tuple(
+    _CANDIDATE_CLEANUP.get("description_meta_selectors", [])
+)
+CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS = tuple(
+    _CANDIDATE_CLEANUP.get("description_fallback_content_selectors", [])
+)
+CANDIDATE_TRACKING_PARAM_EXACT_KEYS = frozenset(
+    _CANDIDATE_CLEANUP.get("tracking_param_exact_keys", [])
+)
+CANDIDATE_TRACKING_PARAM_PREFIXES = tuple(
+    _CANDIDATE_CLEANUP.get("tracking_param_prefixes", [])
+)
+CANDIDATE_URL_ALLOWED_SCHEMES = frozenset(
+    _CANDIDATE_CLEANUP.get("candidate_url_allowed_schemes", ["http", "https"])
+)
+CANDIDATE_URL_ABSOLUTE_PREFIXES = tuple(
+    _CANDIDATE_CLEANUP.get("candidate_url_absolute_prefixes", ["http://", "https://"])
+)
+CANDIDATE_ASSET_FILE_EXTENSIONS = tuple(
+    _CANDIDATE_CLEANUP.get(
+        "asset_file_extensions",
+        [".woff", ".woff2", ".ttf", ".otf", ".eot", ".css", ".js", ".map"],
+    )
+)
+CANDIDATE_IMAGE_FILE_EXTENSIONS = tuple(
+    _CANDIDATE_CLEANUP.get(
+        "image_file_extensions",
+        [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg"],
+    )
+)
+CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT = int(
+    _CANDIDATE_CLEANUP.get("deep_alias_list_scan_limit", 40)
+)
+CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT = int(
+    _CANDIDATE_CLEANUP.get("nested_collection_scan_limit", 20)
+)
 CANDIDATE_UI_NOISE_TOKEN_PATTERN = str(
     _CANDIDATE_CLEANUP.get("ui_noise_token_pattern", r"\b[a-z]+_[a-z0-9_]+\b")
 )
@@ -450,6 +543,9 @@ DISCOVERED_VALUE_NOISE_PHRASES = tuple(
     _DISCOVERED_FIELD_CLEANUP.get("value_noise_phrases", [])
 )
 _LISTING_EXTRACTION_RULES = _EXTRACTION_RULES.get("listing_extraction", {})
+LISTING_CARD_TITLE_SELECTORS = tuple(
+    _LISTING_EXTRACTION_RULES.get("card_title_selectors", [])
+)
 LISTING_DETAIL_PATH_MARKERS = tuple(
     _LISTING_EXTRACTION_RULES.get("detail_path_markers", [])
 )
@@ -494,6 +590,57 @@ LISTING_FACET_PATH_FRAGMENTS = tuple(
 )
 LISTING_CATEGORY_PATH_MARKERS = frozenset(
     _LISTING_EXTRACTION_RULES.get("category_path_markers", [])
+)
+LISTING_BUY_BOX_HEADING_TEXTS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("buy_box_heading_texts", [])
+)
+LISTING_BUY_BOX_REQUIRED_TOKENS = tuple(
+    _LISTING_EXTRACTION_RULES.get("buy_box_required_tokens", [])
+)
+LISTING_BUY_BOX_PACK_SIZE_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_pack_size_pattern", r"Pack Size\s+(?P<value>.+?)\s+SKU(?:\s|$)"
+    )
+)
+LISTING_BUY_BOX_SKU_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_sku_pattern", r"SKU\s+(?P<value>[A-Z0-9-]{3,})"
+    )
+)
+LISTING_BUY_BOX_AVAILABILITY_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_availability_pattern",
+        r"Availability\s+(?P<value>.+?)\s+Price(?:\s|$)",
+    )
+)
+LISTING_BUY_BOX_PRICE_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_price_pattern", r"Price\s+(?P<value>[$€£₹]\s*[\d,.]+)"
+    )
+)
+LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP = dict(
+    _LISTING_EXTRACTION_RULES.get("buy_box_currency_symbol_map", {})
+)
+LISTING_PRODUCT_DETAIL_REQUIRED_KEYS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("product_detail_required_keys", [])
+)
+LISTING_PRODUCT_DETAIL_PRESENCE_ANY_KEYS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("product_detail_presence_any_keys", [])
+)
+LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT = int(
+    _LISTING_EXTRACTION_RULES.get("product_detail_list_scan_limit", 20)
+)
+LISTING_STRUCTURED_SPEC_GROUPS_KEY = str(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_groups_key", "specificationGroups")
+)
+LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH = int(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_search_max_depth", 7)
+)
+LISTING_STRUCTURED_SPEC_GROUP_LIMIT = int(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_group_limit", 8)
+)
+LISTING_STRUCTURED_SPEC_ROW_LIMIT = int(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_row_limit", 24)
 )
 _ACQUISITION_GUARDS = _EXTRACTION_RULES.get("acquisition_guards", {})
 JOB_REDIRECT_SHELL_TITLES = frozenset(

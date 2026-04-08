@@ -7,7 +7,14 @@ import { api } from "../../../lib/api";
 import type { User } from "../../../lib/api/types";
 import { formatAdminUserDate as formatDate } from "../../../lib/format/date";
 import { Badge, Card, Input } from "../../../components/ui/primitives";
-import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from "../../../components/ui/patterns";
+import {
+  DataRegionEmpty,
+  DataRegionLoading,
+  InlineAlert,
+  PageHeader,
+  SectionHeader,
+  TableSurface,
+} from "../../../components/ui/patterns";
 
 type StatusFilter = "all" | "active" | "inactive";
 
@@ -80,11 +87,9 @@ export default function AdminUsersPage() {
         {updateError ? <InlineAlert message={updateError} /> : null}
 
         {usersQuery.isLoading ? (
-          <div className="rounded-[10px] border border-border bg-panel px-4 py-8 text-center text-sm text-muted">
-            Loading users...
-          </div>
+          <DataRegionLoading count={6} />
         ) : users.length ? (
-          <div className="overflow-auto rounded-[10px] border border-border">
+          <TableSurface className="border border-border bg-transparent shadow-none">
             <table className="compact-data-table min-w-[840px]">
               <thead>
                 <tr>
@@ -135,9 +140,9 @@ export default function AdminUsersPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableSurface>
         ) : (
-          <EmptyPanel title="No users found" description="Adjust the filters to broaden the result set." />
+          <DataRegionEmpty title="No users found" description="Adjust the filters to broaden the result set." className="px-0" />
         )}
       </Card>
     </div>

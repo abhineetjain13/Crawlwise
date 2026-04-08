@@ -1,17 +1,25 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, RefreshCw, XCircle } from "lucide-react";
+import { RefreshCw, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 
 import { api } from "../../lib/api";
 import type { ActiveJob } from "../../lib/api/types";
-import { formatJobsTimestamp as formatTimestamp } from "../../lib/format/date";
-import { jobsStatusTone as statusTone } from "../../lib/ui/status";
+import { formatJobsTimestamp as formatTimestamp, formatNowHms } from "../../lib/format/date";
+import { humanizeStatus, jobsStatusTone as statusTone } from "../../lib/ui/status";
 import { cn } from "../../lib/utils";
 import { Badge, Button, Card } from "../../components/ui/primitives";
-import { InlineAlert, PageHeader, SectionHeader } from "../../components/ui/patterns";
+import {
+  DataRegionEmpty,
+  DataRegionLoading,
+  InlineAlert,
+  PageHeader,
+  ProgressBar,
+  SectionHeader,
+  TableSurface,
+} from "../../components/ui/patterns";
 
 export default function JobsPage() {
   const [lastRefreshed, setLastRefreshed] = useState<string>("--");
@@ -25,7 +33,7 @@ export default function JobsPage() {
 
   useEffect(() => {
     if (jobsQuery.data) {
-      setLastRefreshed(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setLastRefreshed(formatNowHms());
     }
   }, [jobsQuery.data]);
 
@@ -69,8 +77,10 @@ export default function JobsPage() {
         />
         {actionError ? <InlineAlert message={actionError} /> : null}
 
-        {jobs.length ? (
-          <div className="overflow-auto rounded-[10px] border border-border">
+        {jobsQuery.isLoading ? (
+          <DataRegionLoading count={6} />
+        ) : jobs.length ? (
+          <TableSurface className="border border-border bg-transparent shadow-none">
             <table className="compact-data-table min-w-[960px]">
               <thead>
                 <tr>
@@ -92,10 +102,7 @@ export default function JobsPage() {
                       {job.url}
                     </td>
                     <td>
-                      <div className="space-y-1">
-                        <ProgressBar value={job.progress} />
-                        <div className="text-xs text-muted">{job.progress}%</div>
-                      </div>
+                      <ProgressBar percent={job.progress} />
                     </td>
                     <td className="text-sm text-muted">{formatTimestamp(job.started_at)}</td>
                     <td>
@@ -116,15 +123,9 @@ export default function JobsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableSurface>
         ) : (
-          <div className="grid min-h-40 place-items-center rounded-[10px] border border-dashed border-border bg-panel/60 text-center">
-            <div>
-              <Activity className="mx-auto size-5 text-muted" />
-              <div className="mt-2 text-sm font-medium text-foreground">No active jobs</div>
-              <div className="mt-1 text-sm text-muted">Start a crawl to see live workers here.</div>
-            </div>
-          </div>
+          <DataRegionEmpty title="No active jobs" description="Start a crawl to see live workers here." />
         )}
       </Card>
     </div>
@@ -133,7 +134,7 @@ export default function JobsPage() {
 
 function StatusPill({ status }: Readonly<{ status: ActiveJob["status"] }>) {
   const tone = statusTone(status);
-  return <Badge tone={tone}>{status.replace(/_/g, " ")}</Badge>;
+  return <Badge tone={tone}>{humanizeStatus(status)}</Badge>;
 }
 
 function ActionButton({
@@ -164,17 +165,6 @@ function ActionButton({
   );
 }
 
-function ProgressBar({ value }: Readonly<{ value: number }>) {
-  return (
-    <div className="h-1.5 w-full rounded-full bg-border">
-      <div
-        className={cn("h-1.5 rounded-full transition-all", value > 90 ? "bg-brand" : "bg-accent")}
-        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
-      />
-    </div>
-  );
-}
-
 function formatJobType(value: string) {
-  return value.replace(/_/g, " ");
+  return humanizeStatus(value);
 }

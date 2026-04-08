@@ -7,13 +7,22 @@ import { useState } from "react";
 import { Activity, ArrowUpRight, Globe, Hash, LayoutDashboard, RefreshCw } from "lucide-react";
 
 import { Badge, Button, StatCard } from "../../components/ui/primitives";
-import { EmptyPanel, MetricGrid, MetricSkeleton, PageHeader, SectionHeader, SkeletonRows } from "../../components/ui/patterns";
+import {
+  DataRegionEmpty,
+  EmptyPanel,
+  MetricGrid,
+  MetricSkeleton,
+  PageHeader,
+  SectionHeader,
+  SkeletonRows,
+  StatusDot,
+  SurfacePanel,
+} from "../../components/ui/patterns";
 import { api } from "../../lib/api";
 import type { CrawlRun } from "../../lib/api/types";
 import { getDomain } from "../../lib/format/domain";
 import {
   dashboardStatusBarColor,
-  dashboardStatusDotColor,
   dashboardStatusLabel as statusLabel,
   dashboardStatusTone as statusTone,
 } from "../../lib/ui/status";
@@ -75,10 +84,7 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-[var(--bg-elevated)]"
     >
       {/* Status dot */}
-      <span
-        className="size-1.5 shrink-0 rounded-full"
-        style={{ background: dashboardStatusDotColor(run.status) }}
-      />
+      <StatusDot tone={statusTone(run.status)} />
       {/* Domain */}
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
         {domain || `Run #${run.id}`}
@@ -206,7 +212,7 @@ export default function DashboardPage() {
       {/* ── Lower grid ── */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
         {/* Recent runs */}
-        <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] shadow-[var(--shadow-card-value)]">
+        <SurfacePanel>
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <SectionHeader title="Recent Runs" description="Last 10 jobs" />
             <Link href="/runs" className="no-underline text-[12px] font-medium text-[var(--accent)] hover:underline">
@@ -226,10 +232,10 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
-        </div>
+        </SurfacePanel>
 
         {/* Top domains */}
-        <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] shadow-[var(--shadow-card-value)]">
+        <SurfacePanel>
           <div className="border-b border-[var(--border)] px-4 py-3">
             <SectionHeader title="Top Domains" description="By run count" />
           </div>
@@ -248,10 +254,10 @@ export default function DashboardPage() {
                 ))}
               </div>
             ) : (
-              <p className="py-2 text-[12px] text-[var(--text-muted)]">No domain data yet.</p>
+              <DataRegionEmpty title="No domain data yet" description="Run crawls to build domain distribution." className="px-0 py-2" />
             )}
           </div>
-        </div>
+        </SurfacePanel>
       </div>
     </div>
   );

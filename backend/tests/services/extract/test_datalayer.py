@@ -1,0 +1,232 @@
+# Property-based tests for dataLayer extraction
+from __future__ import annotations
+
+from hypothesis import HealthCheck, given, settings, strategies as st
+
+from app.services.extract.source_parsers import parse_datalayer
+
+
+# Property 3: Extraction Hierarchy Order Preservation
+# This property is tested in test_extract.py as it requires full extraction pipeline
+
+
+# Property 4: dataLayer Parsing Round-Trip
+@given(
+    price=st.one_of(st.floats(min_value=0.01, max_value=10000.0), st.integers(min_value=1, max_value=10000)),
+    currency=st.sampled_from(["USD", "EUR", "GBP", "JPY"]),
+    category=st.text(min_size=1, max_size=50, alphabet=st.characters(whitelist_categories=("L", "N"))),
+)
+@settings(
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+def test_datalayer_parsing_round_trip_ga4(price, currency, category):
+    """Feature: extraction-pipeline-improvements, Property 4: dataLayer Parsing Round-Trip
+    
+    **Validates: Requirements 2.1, 2.2, 2.4**
+    
+    For any valid dataLayer ecommerce object (GA4 schema), if we extract fields using
+    parse_datalayer(), the extracted values SHALL preserve the original price, availability,
+    and currency information without loss or corruption.
+    """
+    # Create GA4 schema dataLayer HTML
+    html = f"""
+    <html><body>
+    <script>
+    dataLayer.push({{
+        "ecommerce": {{
+            "items": [
+                {{
+                    "price": {price},
+                    "currency": "{currency}",
+                    "item_category": "{category}"
+                }}
+            ]
+        }}
+    }});
+    </script>
+    </body></html>
+    """
+    
+    result = parse_datalayer(html)
+    
+    # Verify price is preserved
+    assert "price" in result
+    assert result["price"] == price
+    
+    # Verify currency is preserved
+    assert "price_currency" in result
+    assert result["price_currency"] == currency
+    
+    # Verify category is preserved
+    assert "google_product_category" in result
+    assert result["google_product_category"] == category
+
+
+@given(
+    price=st.one_of(st.floats(min_value=0.01, max_value=10000.0), st.integers(min_value=1, max_value=10000)),
+    currency=st.sampled_from(["USD", "EUR", "GBP", "JPY"]),
+    category=st.text(min_size=1, max_size=50, alphabet=st.characters(whitelist_categories=("L", "N"))),
+)
+@settings(
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+def test_datalayer_parsing_round_trip_ua(price, currency, category):
+    """Feature: extraction-pipeline-improvements, Property 4: dataLayer Parsing Round-Trip (UA schema)
+    
+    **Validates: Requirements 2.1, 2.2, 2.4**
+    
+    For any valid dataLayer ecommerce object (UA schema), if we extract fields using
+    parse_datalayer(), the extracted values SHALL preserve the original price, availability,
+    and currency information without loss or corruption.
+    """
+    # Create UA schema dataLayer HTML
+    html = f"""
+    <html><body>
+    <script>
+    dataLayer.push({{
+        "ecommerce": {{
+            "currencyCode": "{currency}",
+            "detail": {{
+                "products": [
+                    {{
+                        "price": {price},
+                        "category": "{category}"
+                    }}
+                ]
+            }}
+        }}
+    }});
+    </script>
+    </body></html>
+    """
+    
+    result = parse_datalayer(html)
+    
+    # Verify price is preserved
+    assert "price" in result
+    assert result["price"] == price
+    
+    # Verify currency is preserved
+    assert "price_currency" in result
+    assert result["price_currency"] == currency
+    
+    # Verify category is preserved
+    assert "google_product_category" in result
+    assert result["google_product_category"] == category
+
+
+# Property 5: dataLayer Error Handling
+@given(html=st.text(max_size=1000))
+def test_datalayer_error_handling_no_datalayer(html):
+    """Feature: extraction-pipeline-improvements, Property 5: dataLayer Error Handling
+    
+    **Validates: Requirement 2.6**
+    
+    For any HTML input without a dataLayer object, parse_datalayer() SHALL return
+    an empty dict without raising exceptions.
+    """
+    # Filter out HTML that might accidentally contain valid dataLayer
+    if "dataLayer" in html:
+        return
+    
+    result = parse_datalayer(html)
+    
+    # Should return empty dict, not raise exception
+    assert isinstance(result, dict)
+    assert result == {}
+
+
+def test_datalayer_error_handling_malformed_json():
+    """Feature: extraction-pipeline-improvements, Property 5: dataLayer Error Handling
+    
+    **Validates: Requirement 2.6**
+    
+    For any HTML input with malformed JSON in the dataLayer, parse_datalayer() SHALL
+    return an empty dict without raising exceptions.
+    """
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 19.99,
+                    "currency": "USD"
+                    // Missing closing brace
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+    
+    result = parse_datalayer(html)
+    
+    # Should return empty dict, not raise exception
+    assert isinstance(result, dict)
+    assert result == {}
+
+
+def test_datalayer_error_handling_no_ecommerce():
+    """Feature: extraction-pipeline-improvements, Property 5: dataLayer Error Handling
+    
+    **Validates: Requirement 2.6**
+    
+    For any HTML input with dataLayer but no ecommerce data, parse_datalayer() SHALL
+    return an empty dict.
+    """
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "event": "pageview",
+        "page": "/products"
+    });
+    </script>
+    </body></html>
+    """
+    
+    result = parse_datalayer(html)
+    
+    # Should return empty dict when no ecommerce data
+    assert isinstance(result, dict)
+    assert result == {}
+
+
+def test_datalayer_skips_invalid_push_and_uses_next_valid_payload():
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 19.99,
+                    "currency": "USD"
+                    // malformed object on purpose
+            ]
+        }
+    });
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 29.99,
+                    "currency": "EUR",
+                    "item_category": "Shoes"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    result = parse_datalayer(html)
+
+    assert result["price"] == 29.99
+    assert result["price_currency"] == "EUR"
+    assert result["google_product_category"] == "Shoes"

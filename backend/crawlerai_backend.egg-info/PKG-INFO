@@ -1,0 +1,28 @@
+Metadata-Version: 2.4
+Name: crawlerai-backend
+Version: 0.1.0
+Summary: CrawlerAI POC backend
+Requires-Python: >=3.12
+Requires-Dist: aiosqlite>=0.21.0
+Requires-Dist: alembic>=1.16.5
+Requires-Dist: asyncpg>=0.30.0
+Requires-Dist: beautifulsoup4>=4.13.4
+Requires-Dist: cachetools>=5.5.2
+Requires-Dist: curl-cffi>=0.14.0
+Requires-Dist: cryptography>=46.0.5
+Requires-Dist: fastapi>=0.116.0
+Requires-Dist: httpx>=0.28.1
+Requires-Dist: lxml>=6.0.0
+Requires-Dist: passlib[bcrypt]>=1.7.4
+Requires-Dist: playwright>=1.54.0
+Requires-Dist: playwright-stealth>=2.0.0
+Requires-Dist: psycopg2>=2.9.10
+Requires-Dist: pydantic-settings>=2.10.0
+Requires-Dist: python-jose[cryptography]>=3.5.0
+Requires-Dist: python-multipart>=0.0.24
+Requires-Dist: regex>=2025.9.18
+Requires-Dist: sqlalchemy>=2.0.43
+Requires-Dist: uvicorn[standard]>=0.35.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.4.2; extra == "dev"
+Requires-Dist: pytest-asyncio>=1.1.0; extra == "dev"

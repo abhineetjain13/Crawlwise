@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 _STEALTH_CACHE: dict[str, tuple[str, float]] = {}
 _CACHE_PATH: Path | None = None
 _LOCK = threading.Lock()
+_MIN_TTL_HOURS = 1
 
 
 def host_key(url: str) -> str:
@@ -38,7 +39,8 @@ def remember_stealth_host(
     url: str, ttl_hours: int | None = None, reason: str = "blocked"
 ) -> None:
     ttl = ttl_hours if ttl_hours is not None else STEALTH_PREFER_TTL_HOURS
-    expires_at = time.time() + max(0, ttl) * 3600
+    ttl = max(_MIN_TTL_HOURS, int(ttl))
+    expires_at = time.time() + ttl * 3600
     with _LOCK:
         _load()[host_key(url)] = (reason, expires_at)
         _save()

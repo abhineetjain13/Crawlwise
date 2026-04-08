@@ -208,12 +208,23 @@ async def get_run_records(
     return list(result.scalars().all()), total
 
 
-async def get_run_logs(session: AsyncSession, run_id: int) -> list[CrawlLog]:
-    result = await session.execute(
+async def get_run_logs(
+    session: AsyncSession,
+    run_id: int,
+    *,
+    after_id: int | None = None,
+    limit: int | None = None,
+) -> list[CrawlLog]:
+    query = (
         select(CrawlLog)
         .where(CrawlLog.run_id == run_id)
         .order_by(CrawlLog.created_at.asc())
     )
+    if after_id is not None:
+        query = query.where(CrawlLog.id > after_id)
+    if limit is not None:
+        query = query.limit(limit)
+    result = await session.execute(query)
     return list(result.scalars().all())
 
 
@@ -319,11 +330,12 @@ async def active_jobs(
     result = await session.execute(query)
     rows = []
     for run in result.scalars().all():
+        result_summary = run.result_summary if isinstance(run.result_summary, dict) else {}
         rows.append(
             {
                 "run_id": run.id,
                 "status": run.status,
-                "progress": run.result_summary.get("progress", 0),
+                "progress": result_summary.get("progress", 0),
                 "started_at": run.created_at,
                 "url": run.url,
                 "type": run.run_type,

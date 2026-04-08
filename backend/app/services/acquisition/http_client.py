@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse
 
 from curl_cffi.const import CurlOpt
 from curl_cffi import requests
+from curl_cffi.requests.errors import RequestsError as CurlRequestsError
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.cookie_store import load_cookies_for_http
@@ -209,7 +210,7 @@ async def _fetch_once(
         try:
             async with requests.AsyncSession(**session_kwargs) as session:
                 response = await session.get(request_url, **kwargs)
-        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError) as exc:
             return HttpFetchResult(
                 error=str(exc),
                 stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,

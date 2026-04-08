@@ -258,7 +258,7 @@ async def resolve_schema(
                 sample_record=sample_record,
             )
             return await persist_resolved_schema(session, learned)
-    except Exception:
+    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
         logger.exception(
             "Schema resolution enrichment failed for surface=%s domain=%s; returning fallback resolved schema",
             surface,

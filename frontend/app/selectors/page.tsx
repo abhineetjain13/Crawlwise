@@ -7,6 +7,7 @@ import { EmptyPanel, PageHeader, SectionHeader } from "../../components/ui/patte
 import { Badge, Button, Card, Input, Textarea } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 import type { SelectorCreatePayload, SelectorSuggestion } from "../../lib/api/types";
+import { getNormalizedDomain } from "../../lib/format/domain";
 import { cn } from "../../lib/utils";
 
 type SelectorKind = "xpath" | "css_selector" | "regex";
@@ -41,7 +42,7 @@ export default function SelectorsPage() {
   const [activeDetectKey, setActiveDetectKey] = useState<string | null>(null);
 
   const parsedColumns = parseExpectedColumns(expectedColumns);
-  const domain = normalizeDomain(loadedUrl);
+  const domain = getNormalizedDomain(loadedUrl);
 
   async function loadPageAndSuggestions() {
     const targetUrl = url.trim();
@@ -254,13 +255,13 @@ export default function SelectorsPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)]">
         <Card className="space-y-4">
           <SectionHeader title="Page Preview" description={loadedUrl || "Load a page to preview its DOM context."} />
-          <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-white shadow-[var(--shadow-sm)]">
+          <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-panel shadow-[var(--shadow-sm)]">
             {loadedUrl ? (
               <iframe
                 key={loadedUrl}
                 src={loadedUrl}
                 title="Selector page preview"
-                className="h-[760px] w-full bg-white"
+                className="h-[760px] w-full bg-panel"
                 loading="lazy"
                 referrerPolicy="no-referrer"
                 sandbox=""
@@ -530,10 +531,3 @@ function normalizeField(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "_");
 }
 
-function normalizeDomain(url: string) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-  } catch {
-    return "";
-  }
-}

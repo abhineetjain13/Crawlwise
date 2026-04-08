@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import re
+from urllib.parse import urljoin
+
+from app.services.normalizers import normalize_value, validate_value
+
+_EMPTY_VALUES = (None, "", [], {})
+_LABEL_ONLY_VALUES = {
+    "color",
+    "colors",
+    "size",
+    "sizes",
+    "choose size",
+    "choose color",
+    "select size",
+    "select color",
+    "select option",
+}
+_NAVIGATION_VALUES = {
+    "previous image",
+    "next image",
+    "previous",
+    "next",
+    "view color",
+}
+_VARIANT_COUNT_RE = re.compile(r"^\(?\d+\)?(?:\s+)?(?:colors?|sizes?)?$", re.I)
+
+_BASE_FIELDS = {
+    "title",
+    "url",
+    "apply_url",
+    "image_url",
+    "additional_images",
+    "price",
+    "sale_price",
+    "original_price",
+    "currency",
+    "brand",
+    "sku",
+    "part_number",
+    "color",
+    "size",
+    "availability",
+    "rating",
+    "review_count",
+    "description",
+    "category",
+    "company",
+    "location",
+    "salary",
+    "department",
+    "job_id",
+    "job_type",
+    "posted_date",
+    "dimensions",
+    "slug",
+    "id",
+    "materials",
+}
+
+
+def canonical_listing_fields(surface: str, target_fields: set[str]) -> set[str]:
+    allowed = set(_BASE_FIELDS)
+    if "job" in str(surface or "").lower():
+        allowed.update({"company", "location", "salary", "department", "job_id", "job_type", "posted_date"})
+    else:
+        allowed.update({"price", "image_url", "brand", "color", "size"})
+    allowed.update({field for field in target_fields if field})
+    return allowed
+
+
+def normalize_listing_record(
+    record: dict,
+    *,
+    surface: str,
+    page_url: str,
+    target_fields: set[str],
+) -> dict:
+    allowed_fields = canonical_listing_fields(surface, target_fields)
+    normalized: dict = {}
+
+    for key, value in dict(record or {}).items():
+        if str(key).startswith("_"):
+            normalized[key] = value
+            continue
+        if key not in allowed_fields:
+            continue
+        cleaned = _normalize_field_value(key, value, page_url=page_url)
+        if cleaned in _EMPTY_VALUES:
+            continue
+        if _should_reject_text_value(key, cleaned):
+            continue
+        normalized[key] = cleaned
+
+    if "job" in str(surface or "").lower():
+        normalized.pop("currency", None)
+        normalized.pop("image_url", None)
+        normalized.pop("additional_images", None)
+        if normalized.get("price") not in _EMPTY_VALUES and normalized.get("salary") in _EMPTY_VALUES:
+            normalized["salary"] = normalized.pop("price")
+        for field_name in ("price", "sale_price", "original_price", "brand", "color", "size", "sku", "part_number", "availability", "rating", "review_count"):
+            normalized.pop(field_name, None)
+
+    return normalized
+
+
+def _normalize_field_value(field_name: str, value: object, *, page_url: str) -> object:
+    if value in _EMPTY_VALUES:
+        return None
+    if field_name in {"url", "apply_url", "image_url"}:
+        text = str(value).strip()
+        return urljoin(page_url, text) if text and page_url else text
+    if field_name == "additional_images":
+        parts = [
+            urljoin(page_url, str(part).strip()) if page_url else str(part).strip()
+            for part in str(value).split(",")
+            if str(part).strip()
+        ]
+        deduped = list(dict.fromkeys(parts))
+        return ", ".join(deduped)
+    if field_name in {"price", "sale_price", "original_price", "salary", "review_count", "rating"}:
+        if isinstance(value, str):
+            return " ".join(value.split()).strip()
+        return value
+    normalized = normalize_value(field_name, value)
+    return validate_value(field_name, normalized)
+
+
+def _should_reject_text_value(field_name: str, value: object) -> bool:
+    text = " ".join(str(value or "").split()).strip().lower()
+    if not text:
+        return True
+    if text in _LABEL_ONLY_VALUES or text in _NAVIGATION_VALUES:
+        return True
+    if field_name in {"color", "size"} and _VARIANT_COUNT_RE.fullmatch(text):
+        return True
+    return False

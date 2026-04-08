@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
+import { InlineAlert } from "../../components/ui/patterns";
 import { Button, Field, Input, Subtitle, Title } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 
@@ -48,7 +49,7 @@ export default function RegisterPage() {
             placeholder="Choose a secure password"
           />
         </Field>
-        {error ? <p className="rounded-2xl bg-danger/10 px-4 py-3 text-[13px] text-danger">{error}</p> : null}
+        {error ? <InlineAlert message={error} /> : null}
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit">Create account</Button>
           <Link className="text-[13px] font-medium text-accent" href="/login">

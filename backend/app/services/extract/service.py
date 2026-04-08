@@ -13,14 +13,32 @@ from lxml import etree, html as lxml_html
 
 from app.services.pipeline_config import (
     CANDIDATE_AVAILABILITY_TOKENS,
+    CANDIDATE_AVAILABILITY_NOISE_PHRASES,
+    CANDIDATE_AVAILABILITY_TOKENS_IN_STOCK,
+    CANDIDATE_AVAILABILITY_TOKENS_LIMITED_STOCK,
+    CANDIDATE_AVAILABILITY_TOKENS_OUT_OF_STOCK,
+    CANDIDATE_AVAILABILITY_TOKENS_PREORDER,
+    CANDIDATE_ASSET_FILE_EXTENSIONS,
+    CANDIDATE_CATEGORY_NOISE_PHRASES,
     CANDIDATE_CATEGORY_TOKENS,
+    CANDIDATE_COLOR_CSS_NOISE_TOKENS,
+    CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT,
     CANDIDATE_CURRENCY_TOKENS,
+    CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS,
+    CANDIDATE_DESCRIPTION_META_SELECTORS,
     CANDIDATE_DESCRIPTION_TOKENS,
+    CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS,
     CANDIDATE_FIELD_GROUPS,
     CANDIDATE_GENERIC_CATEGORY_VALUES,
     CANDIDATE_GENERIC_TITLE_VALUES,
+    CANDIDATE_IMAGE_CANDIDATE_DICT_KEYS,
+    CANDIDATE_IMAGE_FILE_EXTENSIONS,
+    CANDIDATE_IMAGE_NOISE_TOKENS,
+    CANDIDATE_IMAGE_URL_HINT_TOKENS,
     CANDIDATE_IDENTIFIER_TOKENS,
     CANDIDATE_IMAGE_TOKENS,
+    CANDIDATE_IMAGE_COLLECTION_TOKENS,
+    CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT,
     CANDIDATE_PLACEHOLDER_VALUES,
     CANDIDATE_PRICE_TOKENS,
     CANDIDATE_SALARY_TOKENS,
@@ -28,10 +46,19 @@ from app.services.pipeline_config import (
     CANDIDATE_RATING_TOKENS,
     CANDIDATE_REVIEW_COUNT_TOKENS,
     CANDIDATE_SCRIPT_NOISE_PATTERN,
+    CANDIDATE_SIZE_CSS_NOISE_TOKENS,
+    CANDIDATE_SIZE_PACKAGE_TOKENS,
+    CANDIDATE_TITLE_NOISE_PHRASES,
+    CANDIDATE_TRACKING_PARAM_EXACT_KEYS,
+    CANDIDATE_TRACKING_PARAM_PREFIXES,
+    CANDIDATE_URL_ABSOLUTE_PREFIXES,
+    CANDIDATE_URL_ALLOWED_SCHEMES,
     CANDIDATE_UI_ICON_TOKEN_PATTERN,
     CANDIDATE_UI_NOISE_PHRASES,
     CANDIDATE_UI_NOISE_TOKEN_PATTERN,
     CANDIDATE_URL_SUFFIXES,
+    CURRENCY_CODES,
+    CURRENCY_SYMBOL_MAP,
     DIMENSION_KEYWORDS,
     DOM_PATTERNS,
     DYNAMIC_FIELD_NAME_DROP_TOKENS,
@@ -50,6 +77,20 @@ from app.services.pipeline_config import (
     SALARY_RANGE_REGEX,
     SEMANTIC_AGGREGATE_SEPARATOR,
     SOURCE_RANKING,
+    LISTING_BUY_BOX_AVAILABILITY_PATTERN,
+    LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP,
+    LISTING_BUY_BOX_HEADING_TEXTS,
+    LISTING_BUY_BOX_PACK_SIZE_PATTERN,
+    LISTING_BUY_BOX_PRICE_PATTERN,
+    LISTING_BUY_BOX_REQUIRED_TOKENS,
+    LISTING_BUY_BOX_SKU_PATTERN,
+    LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT,
+    LISTING_PRODUCT_DETAIL_PRESENCE_ANY_KEYS,
+    LISTING_PRODUCT_DETAIL_REQUIRED_KEYS,
+    LISTING_STRUCTURED_SPEC_GROUP_LIMIT,
+    LISTING_STRUCTURED_SPEC_GROUPS_KEY,
+    LISTING_STRUCTURED_SPEC_ROW_LIMIT,
+    LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH,
 )
 from app.services.extract.source_parsers import parse_page_sources
 from app.services.extract.signal_inventory import (
@@ -104,36 +145,44 @@ _UI_NOISE_PHRASES_RE = (
     else None
 )
 _DYNAMIC_NUMERIC_FIELD_RE = re.compile(r"\d+(?:[_-]\d+)*?")
-_SALARY_MONEY_RE = re.compile(
-    r"(?<!\w)(?:[$€£₹]\s*\d[\d,.]*|\b(?:USD|EUR|GBP|INR)\s*\d[\d,.]*|\d[\d,.]*\s*(?:USD|EUR|GBP|INR)\b)",
-    re.IGNORECASE,
-)
+
+
+def _build_salary_money_re() -> re.Pattern[str]:
+    currency_symbols = sorted(
+        {
+            re.escape(str(symbol).strip())
+            for symbol in CURRENCY_SYMBOL_MAP.keys()
+            if str(symbol).strip()
+        }
+    )
+    symbol_pattern = (
+        "(?:" + "|".join(currency_symbols) + ")"
+        if currency_symbols
+        else r"[$€£₹]"
+    )
+    currency_codes = sorted(
+        {
+            re.escape(str(code).strip().upper())
+            for code in CURRENCY_CODES
+            if str(code).strip()
+        }
+    )
+    code_pattern = (
+        "(?:" + "|".join(currency_codes) + ")" if currency_codes else r"(?:USD|EUR|GBP|INR)"
+    )
+    pattern = (
+        rf"(?<!\w)(?:{symbol_pattern}\s*\d[\d,.]*|"
+        rf"\b{code_pattern}\s*\d[\d,.]*|"
+        rf"\d[\d,.]*\s*{code_pattern}\b)"
+    )
+    return re.compile(pattern, re.IGNORECASE)
+
+
+_SALARY_MONEY_RE = _build_salary_money_re()
 _COLOR_VARIANT_COUNT_RE = re.compile(r"^\d+\s+colors?\b", re.IGNORECASE)
-_TITLE_NOISE_PHRASES = (
-    "cookie preferences",
-    "privacy policy",
-    "terms of service",
-    "sign in",
-    "log in",
-    "my account",
-    "add to cart",
-    "shopping cart",
-    "department navigation",
-)
-_CATEGORY_NOISE_PHRASES = (
-    "breadcrumb",
-    "view all",
-    "filter by",
-    "sort by",
-    "shop all",
-)
-_AVAILABILITY_NOISE_PHRASES = (
-    "select options",
-    "choose options",
-    "add to cart",
-    "quantity",
-    "wishlist",
-)
+_TITLE_NOISE_PHRASES = tuple(CANDIDATE_TITLE_NOISE_PHRASES)
+_CATEGORY_NOISE_PHRASES = tuple(CANDIDATE_CATEGORY_NOISE_PHRASES)
+_AVAILABILITY_NOISE_PHRASES = tuple(CANDIDATE_AVAILABILITY_NOISE_PHRASES)
 
 
 def _looks_like_ga_data_layer(payload: object) -> bool:
@@ -211,174 +260,91 @@ def _collect_candidates(
     microdata = page_sources.get("microdata") or []
     datalayer = page_sources.get("datalayer") or {}
     
+    semantic_sections = (
+        semantic.get("sections") if isinstance(semantic.get("sections"), dict) else {}
+    )
+    semantic_specifications = (
+        semantic.get("specifications")
+        if isinstance(semantic.get("specifications"), dict)
+        else {}
+    )
+    semantic_promoted = (
+        semantic.get("promoted_fields")
+        if isinstance(semantic.get("promoted_fields"), dict)
+        else {}
+    )
+
     for field_name in target_fields:
         rows: list[dict] = []
-        
-        # 1. Explicit contracts remain the highest-precedence override
-        contract_rule = contract_by_field.get(field_name)
-        if contract_rule:
-            xpath_value = _extract_xpath_value(tree, contract_rule.get("xpath", ""))
-            if xpath_value:
-                rows.append(
-                    {
-                        "value": xpath_value,
-                        "source": "contract_xpath",
-                        "xpath": contract_rule.get("xpath"),
-                        "css_selector": None,
-                        "regex": None,
-                        "sample_value": xpath_value,
-                    }
-                )
-            regex_value = _extract_regex_value(html, contract_rule.get("regex", ""))
-            if regex_value:
-                rows.append(
-                    {
-                        "value": regex_value,
-                        "source": "contract_regex",
-                        "xpath": None,
-                        "css_selector": None,
-                        "regex": contract_rule.get("regex"),
-                        "sample_value": regex_value,
-                    }
-                )
-            if rows:
-                candidates[field_name] = rows
-                continue
-        
-        # 2. Platform adapter result
-        for record in adapter_records:
-            if isinstance(record, dict) and field_name in record and record[field_name]:
-                rows.append({"value": record[field_name], "source": "adapter"})
-        if rows:
+        if _collect_contract_candidates(
+            rows,
+            field_name=field_name,
+            tree=tree,
+            html=html,
+            contract_by_field=contract_by_field,
+        ):
             candidates[field_name] = rows
             continue
-        
-        # 3. dataLayer (GTM ecommerce data)
-        if datalayer and field_name in datalayer and datalayer[field_name]:
-            rows.append({"value": datalayer[field_name], "source": "datalayer"})
-        if rows:
+        if _collect_adapter_candidates(rows, field_name=field_name, adapter_records=adapter_records):
             candidates[field_name] = rows
             continue
-        
-        # 4. XHR / JSON API payloads
-        for payload in network_payloads:
-            if not isinstance(payload, dict):
-                continue
-            payload_url = str(payload.get("url") or "").lower()
-            if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
-                continue
-            body = payload.get("body", {})
-            if isinstance(body, (dict, list)):
-                _append_source_candidates(
-                    rows, field_name, body, "network_intercept", base_url=url
-                )
-        if rows:
+        if _collect_datalayer_candidates(rows, field_name=field_name, datalayer=datalayer):
             candidates[field_name] = rows
             continue
-        
-        # 5. JSON-LD
-        for payload in json_ld:
-            if isinstance(payload, dict):
-                if _should_skip_jsonld_block(payload, field_name):
-                    continue
-                _append_source_candidates(
-                    rows, field_name, payload, "json_ld", base_url=url
-                )
-        if rows:
+        if _collect_network_payload_candidates(
+            rows,
+            field_name=field_name,
+            network_payloads=network_payloads,
+            base_url=url,
+        ):
             candidates[field_name] = rows
             continue
-        
-        # 6. __NEXT_DATA__ / hydrated client state
-        for payload in embedded_json:
-            _append_source_candidates(
-                rows, field_name, payload, "embedded_json", base_url=url
-            )
-        if next_data:
-            _append_source_candidates(
-                rows, field_name, next_data, "next_data", base_url=url
-            )
-        for state in hydrated_states:
-            _append_source_candidates(
-                rows, field_name, state, "hydrated_state", base_url=url
-            )
-        rows.extend(
-            _structured_source_candidates(
-                field_name,
-                next_data=next_data,
-                hydrated_states=hydrated_states,
-                embedded_json=embedded_json,
-                network_payloads=network_payloads,
-            )
-        )
-        if rows:
+        if _collect_jsonld_candidates(
+            rows,
+            field_name=field_name,
+            json_ld=json_ld,
+            base_url=url,
+        ):
+            candidates[field_name] = rows
+            continue
+        if _collect_structured_state_candidates(
+            rows,
+            field_name=field_name,
+            next_data=next_data,
+            hydrated_states=hydrated_states,
+            embedded_json=embedded_json,
+            network_payloads=network_payloads,
+            base_url=url,
+        ):
             candidates[field_name] = rows
             continue
         
         # 7. DOM selectors
-        selectors = get_selector_defaults(domain, field_name)
-        for selector in selectors:
-            value, _, selector_used = extract_selector_value(
-                html,
-                css_selector=selector.get("css_selector"),
-                xpath=selector.get("xpath"),
-                regex=selector.get("regex"),
-            )
-            if value:
-                rows.append(
-                    {
-                        "value": value,
-                        "source": "selector",
-                        "xpath": selector.get("xpath"),
-                        "css_selector": selector.get("css_selector"),
-                        "regex": selector.get("regex"),
-                        "sample_value": selector.get("sample_value") or value,
-                        "selector_used": selector_used,
-                        "status": selector.get("status") or "validated",
-                    }
-                )
-        dom_row = _dom_pattern(soup, field_name)
-        if dom_row:
-            rows.append(dom_row)
-        for item in microdata:
-            if isinstance(item, dict):
-                _append_source_candidates(
-                    rows, field_name, item, "microdata", base_url=url
-                )
-        if open_graph:
-            _append_source_candidates(
-                rows, field_name, open_graph, "open_graph", base_url=url
-            )
-            if field_name == "company":
-                site_name = open_graph.get("og:site_name")
-                if site_name not in (None, "", [], {}):
-                    rows.append({"value": site_name, "source": "open_graph"})
+        _collect_dom_and_meta_candidates(
+            rows,
+            field_name=field_name,
+            html=html,
+            soup=soup,
+            domain=domain,
+            microdata=microdata,
+            open_graph=open_graph,
+            base_url=url,
+        )
         
         # 8. Semantic extraction
-        if (
-            field_name in canonical_target_fields
-            or field_name in REQUESTED_FIELD_ALIASES
-        ):
+        if _is_semantic_requested_field(field_name, canonical_target_fields):
             semantic_rows = resolve_requested_field_values(
                 [field_name],
-                sections=semantic.get("sections")
-                if isinstance(semantic.get("sections"), dict)
-                else {},
-                specifications=semantic.get("specifications")
-                if isinstance(semantic.get("specifications"), dict)
-                else {},
-                promoted_fields=semantic.get("promoted_fields")
-                if isinstance(semantic.get("promoted_fields"), dict)
-                else {},
+                sections=semantic_sections,
+                specifications=semantic_specifications,
+                promoted_fields=semantic_promoted,
             )
             semantic_value = semantic_rows.get(field_name)
             if semantic_value not in (None, "", [], {}):
                 rows.append({"value": semantic_value, "source": "semantic_section"})
         
         # 9. Text patterns
-        if (
-            field_name in canonical_target_fields
-            or field_name in REQUESTED_FIELD_ALIASES
-        ):
+        if _is_semantic_requested_field(field_name, canonical_target_fields):
             text_value = _extract_label_value_from_text(
                 field_name, label_value_text_sources, html
             )
@@ -389,6 +355,192 @@ def _collect_candidates(
             candidates[field_name] = rows
     
     return candidates
+
+
+def _is_semantic_requested_field(
+    field_name: str,
+    canonical_target_fields: set[str],
+) -> bool:
+    return field_name in canonical_target_fields or field_name in REQUESTED_FIELD_ALIASES
+
+
+def _collect_contract_candidates(
+    rows: list[dict],
+    *,
+    field_name: str,
+    tree,
+    html: str,
+    contract_by_field: dict,
+) -> bool:
+    contract_rule = contract_by_field.get(field_name)
+    if not contract_rule:
+        return False
+    xpath_value = _extract_xpath_value(tree, contract_rule.get("xpath", ""))
+    if xpath_value:
+        rows.append(
+            {
+                "value": xpath_value,
+                "source": "contract_xpath",
+                "xpath": contract_rule.get("xpath"),
+                "css_selector": None,
+                "regex": None,
+                "sample_value": xpath_value,
+            }
+        )
+    regex_value = _extract_regex_value(html, contract_rule.get("regex", ""))
+    if regex_value:
+        rows.append(
+            {
+                "value": regex_value,
+                "source": "contract_regex",
+                "xpath": None,
+                "css_selector": None,
+                "regex": contract_rule.get("regex"),
+                "sample_value": regex_value,
+            }
+        )
+    return bool(rows)
+
+
+def _collect_adapter_candidates(
+    rows: list[dict],
+    *,
+    field_name: str,
+    adapter_records: list[dict],
+) -> bool:
+    for record in adapter_records:
+        if isinstance(record, dict) and field_name in record and record[field_name]:
+            rows.append({"value": record[field_name], "source": "adapter"})
+    return bool(rows)
+
+
+def _collect_datalayer_candidates(
+    rows: list[dict],
+    *,
+    field_name: str,
+    datalayer: dict,
+) -> bool:
+    if datalayer and field_name in datalayer and datalayer[field_name]:
+        rows.append({"value": datalayer[field_name], "source": "datalayer"})
+    return bool(rows)
+
+
+def _collect_network_payload_candidates(
+    rows: list[dict],
+    *,
+    field_name: str,
+    network_payloads: list[dict],
+    base_url: str,
+) -> bool:
+    for payload in network_payloads:
+        if not isinstance(payload, dict):
+            continue
+        payload_url = str(payload.get("url") or "").lower()
+        if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
+            continue
+        body = payload.get("body", {})
+        if isinstance(body, (dict, list)):
+            _append_source_candidates(
+                rows, field_name, body, "network_intercept", base_url=base_url
+            )
+    return bool(rows)
+
+
+def _collect_jsonld_candidates(
+    rows: list[dict],
+    *,
+    field_name: str,
+    json_ld: list[dict],
+    base_url: str,
+) -> bool:
+    for payload in json_ld:
+        if isinstance(payload, dict):
+            if _should_skip_jsonld_block(payload, field_name):
+                continue
+            _append_source_candidates(
+                rows, field_name, payload, "json_ld", base_url=base_url
+            )
+    return bool(rows)
+
+
+def _collect_structured_state_candidates(
+    rows: list[dict],
+    *,
+    field_name: str,
+    next_data: dict | None,
+    hydrated_states: list[dict],
+    embedded_json: list[dict],
+    network_payloads: list[dict],
+    base_url: str,
+) -> bool:
+    for payload in embedded_json:
+        _append_source_candidates(
+            rows, field_name, payload, "embedded_json", base_url=base_url
+        )
+    if next_data:
+        _append_source_candidates(
+            rows, field_name, next_data, "next_data", base_url=base_url
+        )
+    for state in hydrated_states:
+        _append_source_candidates(
+            rows, field_name, state, "hydrated_state", base_url=base_url
+        )
+    rows.extend(
+        _structured_source_candidates(
+            field_name,
+            next_data=next_data,
+            hydrated_states=hydrated_states,
+            embedded_json=embedded_json,
+            network_payloads=network_payloads,
+        )
+    )
+    return bool(rows)
+
+
+def _collect_dom_and_meta_candidates(
+    rows: list[dict],
+    *,
+    field_name: str,
+    html: str,
+    soup: BeautifulSoup,
+    domain: str,
+    microdata: list[dict],
+    open_graph: dict[str, object],
+    base_url: str,
+) -> None:
+    selectors = get_selector_defaults(domain, field_name)
+    for selector in selectors:
+        value, _, selector_used = extract_selector_value(
+            html,
+            css_selector=selector.get("css_selector"),
+            xpath=selector.get("xpath"),
+            regex=selector.get("regex"),
+        )
+        if value:
+            rows.append(
+                {
+                    "value": value,
+                    "source": "selector",
+                    "xpath": selector.get("xpath"),
+                    "css_selector": selector.get("css_selector"),
+                    "regex": selector.get("regex"),
+                    "sample_value": selector.get("sample_value") or value,
+                    "selector_used": selector_used,
+                    "status": selector.get("status") or "validated",
+                }
+            )
+    dom_row = _dom_pattern(soup, field_name)
+    if dom_row:
+        rows.append(dom_row)
+    for item in microdata:
+        if isinstance(item, dict):
+            _append_source_candidates(rows, field_name, item, "microdata", base_url=base_url)
+    if open_graph:
+        _append_source_candidates(rows, field_name, open_graph, "open_graph", base_url=base_url)
+        if field_name == "company":
+            site_name = open_graph.get("og:site_name")
+            if site_name not in (None, "", [], {}):
+                rows.append({"value": site_name, "source": "open_graph"})
 
 
 def _filter_candidates(
@@ -534,10 +686,6 @@ def _finalize_candidates(
         "mapping_hint": mappings,
         "semantic": semantic,
     }
-
-
-_DYNAMIC_FIELD_NAME_DROP_TOKENS = DYNAMIC_FIELD_NAME_DROP_TOKENS
-_DYNAMIC_FIELD_NAME_MAX_TOKENS = DYNAMIC_FIELD_NAME_MAX_TOKENS
 
 
 def extract_candidates(
@@ -919,7 +1067,7 @@ def _dynamic_field_name_is_noisy(field_name: str) -> bool:
         return True
     if "price" in tokens and len(tokens) > 2:
         return True
-    if normalized in {"from", "location", "recommended", "reviews", "votes"}:
+    if normalized in CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS:
         return True
     return False
 
@@ -970,11 +1118,7 @@ def _build_label_value_text_sources(
         seen.add(normalized)
         text_sources.append(normalized)
 
-    for selector in (
-        "meta[name='description']",
-        "meta[property='og:description']",
-        "meta[name='twitter:description']",
-    ):
+    for selector in CANDIDATE_DESCRIPTION_META_SELECTORS:
         node = soup.select_one(selector)
         if node is not None:
             _append_text(node.get("content"))
@@ -1027,7 +1171,7 @@ def _build_label_value_text_sources(
         for row in rows:
             _append_text(row.get("value"))
 
-    for selector in ("article", "main", "body"):
+    for selector in CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS:
         node = soup.select_one(selector)
         if node is not None:
             _append_text(node.get_text("\n", strip=True))
@@ -1061,7 +1205,7 @@ def _deep_get_all_aliases(
                     continue
                 _collect(value, depth - 1, parent_key=current_key)
         elif isinstance(node, list):
-            for item in node[:40]:
+            for item in node[:CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT]:
                 _collect(item, depth - 1, parent_key=parent_key)
 
     _collect(data, max_depth)
@@ -1129,17 +1273,7 @@ def _coerce_size_field(value: str) -> str | None:
 def _coerce_category_field(value: str) -> str | None:
     """Coerce category fields: filter generic/noise values."""
     lowered = value.lower()
-    if (
-        lowered
-        in CANDIDATE_GENERIC_CATEGORY_VALUES
-        | {
-            "guest",
-            "max_discount",
-            "website",
-            "web site",
-        }
-        or "schema.org" in lowered
-    ):
+    if lowered in CANDIDATE_GENERIC_CATEGORY_VALUES or "schema.org" in lowered:
         return None
     if any(phrase in lowered for phrase in _CATEGORY_NOISE_PHRASES):
         return None
@@ -1199,13 +1333,13 @@ def _coerce_availability_field(value: str) -> str | None:
         return None
     if any(phrase in lowered for phrase in _AVAILABILITY_NOISE_PHRASES):
         return None
-    if any(token in lowered for token in ("limited stock", "low stock", "only", "left in stock")):
+    if any(token in lowered for token in CANDIDATE_AVAILABILITY_TOKENS_LIMITED_STOCK):
         return value
-    if any(token in lowered for token in ("in stock", "instock", "available", "ready to ship")):
+    if any(token in lowered for token in CANDIDATE_AVAILABILITY_TOKENS_IN_STOCK):
         return value
-    if any(token in lowered for token in ("out of stock", "oos", "sold out", "unavailable")):
+    if any(token in lowered for token in CANDIDATE_AVAILABILITY_TOKENS_OUT_OF_STOCK):
         return value
-    if any(token in lowered for token in ("pre-order", "preorder", "backorder", "back-order")):
+    if any(token in lowered for token in CANDIDATE_AVAILABILITY_TOKENS_PREORDER):
         return value
     return value
 
@@ -1424,7 +1558,7 @@ def _resolve_candidate_url(value: str, base_url: str) -> str:
         resolved = f"https:{candidate}"
         resolved = _strip_tracking_query_params(resolved)
         return "" if _looks_like_asset_url(resolved) else resolved
-    if candidate.startswith(("http://", "https://")):
+    if candidate.startswith(CANDIDATE_URL_ABSOLUTE_PREFIXES):
         normalized = _strip_tracking_query_params(candidate)
         return "" if _looks_like_asset_url(normalized) else normalized
     if candidate.startswith("/"):
@@ -1442,15 +1576,15 @@ def _resolve_candidate_url(value: str, base_url: str) -> str:
 
 def _strip_tracking_query_params(url: str) -> str:
     parsed = urlsplit(str(url or "").strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.scheme not in CANDIDATE_URL_ALLOWED_SCHEMES or not parsed.netloc:
         return str(url or "").strip()
     filtered_query = [
         (key, val)
         for key, val in parse_qsl(parsed.query, keep_blank_values=True)
         if key
         and (
-            (key_lower := key.lower()) not in {"ref", "ref_src"}
-            and not key_lower.startswith(("utm_", "fbclid", "gclid", "mc_"))
+            (key_lower := key.lower()) not in CANDIDATE_TRACKING_PARAM_EXACT_KEYS
+            and not key_lower.startswith(CANDIDATE_TRACKING_PARAM_PREFIXES)
         )
     ]
     return urlunsplit(
@@ -1467,18 +1601,7 @@ def _strip_tracking_query_params(url: str) -> str:
 def _looks_like_asset_url(url: str) -> bool:
     parsed = urlparse(str(url or "").strip())
     path = parsed.path.lower()
-    return path.endswith(
-        (
-            ".woff",
-            ".woff2",
-            ".ttf",
-            ".otf",
-            ".eot",
-            ".css",
-            ".js",
-            ".map",
-        )
-    )
+    return path.endswith(CANDIDATE_ASSET_FILE_EXTENSIONS)
 
 
 def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
@@ -1491,15 +1614,13 @@ def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
             return
         lowered = resolved.lower()
         path = urlparse(resolved).path.lower()
-        if any(
-            token in lowered for token in ("logo", "sprite", "icon", "badge", "favicon")
-        ):
+        if any(token in lowered for token in CANDIDATE_IMAGE_NOISE_TOKENS):
             return
         if not (
-            path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg"))
+            path.endswith(CANDIDATE_IMAGE_FILE_EXTENSIONS)
             or any(
                 token in lowered
-                for token in ("/image", "/images/", "/img", "image=", "im/")
+                for token in CANDIDATE_IMAGE_URL_HINT_TOKENS
             )
         ):
             return
@@ -1518,15 +1639,15 @@ def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
                     _append(cleaned)
             return
         if isinstance(node, dict):
-            for key in ("url", "contentUrl", "src", "image", "thumbnail", "href"):
+            for key in CANDIDATE_IMAGE_CANDIDATE_DICT_KEYS:
                 candidate = node.get(key)
                 if isinstance(candidate, str):
                     _append(candidate)
-            for item in list(node.values())[:20]:
+            for item in list(node.values())[:CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT]:
                 _collect(item)
             return
         if isinstance(node, list):
-            for item in node[:20]:
+            for item in node[:CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT]:
                 _collect(item)
 
     _collect(value)
@@ -1559,7 +1680,7 @@ _FIELD_TYPE_TOKENS: dict[str, tuple[str, ...]] = {
     "category": CANDIDATE_CATEGORY_TOKENS,
     "description": CANDIDATE_DESCRIPTION_TOKENS,
     "identifier": CANDIDATE_IDENTIFIER_TOKENS,
-    "image_collection": ("images", "gallery", "photos", "media"),
+    "image_collection": CANDIDATE_IMAGE_COLLECTION_TOKENS,
 }
 
 
@@ -1628,18 +1749,7 @@ def _normalize_color_candidate(value: str) -> str | None:
         return None
     lowered = cleaned.lower()
     tokens = cleaned.split()
-    if any(
-        token in lowered
-        for token in (
-            "padding:",
-            "font-size",
-            "font-weight",
-            "transition:",
-            "position:",
-            "-webkit-",
-            "css-",
-        )
-    ):
+    if any(token in lowered for token in CANDIDATE_COLOR_CSS_NOISE_TOKENS):
         return None
     if any(marker in cleaned for marker in ("{", "}", ";")):
         return None
@@ -1669,30 +1779,13 @@ def _normalize_size_candidate(value: str) -> str | None:
     if not cleaned:
         return None
     lowered = cleaned.lower()
-    if any(
-        token in lowered
-        for token in (
-            "max-width",
-            "min-width",
-            "vw",
-            "vh",
-            "sizes=",
-            "srcset",
-            "padding:",
-            "font-size",
-            "font-weight",
-            "transition:",
-            "position:",
-            "-webkit-",
-            "css-",
-        )
-    ):
+    if any(token in lowered for token in CANDIDATE_SIZE_CSS_NOISE_TOKENS):
         return None
     if any(marker in cleaned for marker in ("{", "}", ";")):
         return None
     if re.fullmatch(r"\d+(?:\.\d+)?\s*[A-Za-z]{1,8}", cleaned):
         return cleaned
-    if any(token in lowered for token in ("pkg of", "pack of", "pack size", "package")):
+    if any(token in lowered for token in CANDIDATE_SIZE_PACKAGE_TOKENS):
         return cleaned
     cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
     
@@ -1949,17 +2042,17 @@ def _find_product_detail_payload(payload: object) -> dict | None:
                     return page_props["product"]
         if isinstance(payload.get("getProductDetail"), dict):
             return payload["getProductDetail"]
-        required_keys = {"productNumber", "productKey", "name"}
+        required_keys = set(LISTING_PRODUCT_DETAIL_REQUIRED_KEYS)
         if required_keys.issubset(payload.keys()):
             return payload
-        if {"description", "variants", "detailedImages"} & set(payload.keys()):
+        if set(LISTING_PRODUCT_DETAIL_PRESENCE_ANY_KEYS) & set(payload.keys()):
             return payload
         for value in payload.values():
             found = _find_product_detail_payload(value)
             if found:
                 return found
     elif isinstance(payload, list):
-        for item in payload[:20]:
+        for item in payload[:LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT]:
             found = _find_product_detail_payload(item)
             if found:
                 return found
@@ -2214,11 +2307,7 @@ def _extract_buy_box_candidates(soup: BeautifulSoup) -> dict[str, str]:
             node
             for node in list(soup.find_all(["h2", "h3", "button", "p", "span"]))
             if _normalized_candidate_text(node.get_text(" ", strip=True)).lower()
-            in {
-                "select a size",
-                "select an option",
-                "pricing and availability",
-            }
+            in LISTING_BUY_BOX_HEADING_TEXTS
         ),
         None,
     )
@@ -2229,9 +2318,7 @@ def _extract_buy_box_candidates(soup: BeautifulSoup) -> dict[str, str]:
     text = ""
     while container is not None:
         text = _normalized_candidate_text(container.get_text(" ", strip=True))
-        if any(
-            token in text for token in ("Pack Size", "SKU", "Availability", "Price")
-        ):
+        if any(token in text for token in LISTING_BUY_BOX_REQUIRED_TOKENS):
             break
         container = container.parent
     if not text:
@@ -2239,36 +2326,29 @@ def _extract_buy_box_candidates(soup: BeautifulSoup) -> dict[str, str]:
 
     normalized_text = re.sub(r"\s+", " ", text)
     candidates: dict[str, str] = {}
-    pack_match = re.search(
-        r"Pack Size\s+(?P<value>.+?)\s+SKU(?:\s|$)", normalized_text, re.I
-    )
+    pack_match = re.search(LISTING_BUY_BOX_PACK_SIZE_PATTERN, normalized_text, re.I)
     if pack_match:
         pack_value = _normalized_candidate_text(pack_match.group("value"))
         if pack_value:
             candidates["pack_size"] = pack_value
             candidates.setdefault("size", pack_value)
-    sku_match = re.search(r"SKU\s+(?P<value>[A-Z0-9-]{3,})", normalized_text, re.I)
+    sku_match = re.search(LISTING_BUY_BOX_SKU_PATTERN, normalized_text, re.I)
     if sku_match:
         candidates["sku"] = _normalized_candidate_text(sku_match.group("value"))
     availability_match = re.search(
-        r"Availability\s+(?P<value>.+?)\s+Price(?:\s|$)", normalized_text, re.I
+        LISTING_BUY_BOX_AVAILABILITY_PATTERN, normalized_text, re.I
     )
     if availability_match:
         availability = _normalized_candidate_text(availability_match.group("value"))
         if availability:
             candidates["availability"] = availability
-    price_match = re.search(r"Price\s+(?P<value>[$€£₹]\s*[\d,.]+)", normalized_text)
+    price_match = re.search(LISTING_BUY_BOX_PRICE_PATTERN, normalized_text)
     if price_match:
         price_text = _normalized_candidate_text(price_match.group("value"))
         if price_text:
             candidates["price"] = price_text
             symbol = price_text[0]
-            candidates["currency"] = {
-                "$": "USD",
-                "£": "GBP",
-                "€": "EUR",
-                "₹": "INR",
-            }.get(symbol, "")
+            candidates["currency"] = LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP.get(symbol, "")
     return {key: value for key, value in candidates.items() if value}
 
 
@@ -2305,7 +2385,7 @@ def _find_key_values(payload: object, key: str, *, max_depth: int) -> list[objec
                 matches.append(value)
             matches.extend(_find_key_values(value, key, max_depth=max_depth - 1))
     elif isinstance(payload, list):
-        for item in payload[:20]:
+        for item in payload[:LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT]:
             matches.extend(_find_key_values(item, key, max_depth=max_depth - 1))
     return matches
 
@@ -2344,18 +2424,22 @@ def _structured_source_payloads(
 
 
 def _extract_structured_spec_map(payload: object) -> dict[str, str]:
-    groups = _find_key_values(payload, "specificationGroups", max_depth=7)
+    groups = _find_key_values(
+        payload,
+        LISTING_STRUCTURED_SPEC_GROUPS_KEY,
+        max_depth=LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH,
+    )
     structured: dict[str, str] = {}
     for group in groups:
         if not isinstance(group, list):
             continue
-        for entry in group[:8]:
+        for entry in group[:LISTING_STRUCTURED_SPEC_GROUP_LIMIT]:
             if not isinstance(entry, dict):
                 continue
             specs = entry.get("specifications")
             if not isinstance(specs, list):
                 continue
-            for row in specs[:24]:
+            for row in specs[:LISTING_STRUCTURED_SPEC_ROW_LIMIT]:
                 if not isinstance(row, dict):
                     continue
                 title = normalize_requested_field(

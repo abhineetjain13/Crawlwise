@@ -21,6 +21,7 @@ from app.services.pipeline_config import (
     LISTING_CATEGORY_PATH_MARKERS,
     LISTING_COLOR_ACTION_PREFIXES,
     LISTING_COLOR_ACTION_VALUES,
+    LISTING_CARD_TITLE_SELECTORS,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_FACET_PATH_FRAGMENTS,
@@ -176,16 +177,22 @@ def _extract_listing_records_single_page(
     xhr_payloads = xhr_payloads or []
 
     soup = BeautifulSoup(html, "html.parser")
-    raw_record_sets = {
-        "structured": _extract_from_structured_sources(
+    json_ld_records = _extract_from_json_ld(soup, surface, page_url)
+    structured_records = (
+        []
+        if len(json_ld_records) >= MIN_VIABLE_RECORDS
+        else _extract_from_structured_sources(
             page_sources=page_sources,
             xhr_payloads=xhr_payloads,
             surface=surface,
             page_url=page_url,
-        ),
+        )
+    )
+    raw_record_sets = {
+        "structured": structured_records,
         "next_flight": _extract_from_next_flight_scripts(html, page_url),
         "inline_array": _extract_from_inline_object_arrays(html, surface, page_url),
-        "json_ld": _extract_from_json_ld(soup, surface, page_url),
+        "json_ld": json_ld_records,
         "adapter": _adapter_candidate_records(adapter_records),
     }
 
@@ -197,23 +204,8 @@ def _extract_listing_records_single_page(
             record["_source"] = "listing_card"
             if used_selector:
                 record["_selector"] = used_selector
-            
-            # Enforce listing field contract for DOM records
-            # Drop detail-only fields for listing pages
-            if "listing" in str(surface or "").lower():
-                filtered_record = {
-                    k: v for k, v in record.items()
-                    if k not in DETAIL_ONLY_FIELDS
-                }
-                # Log warning if fields were dropped
-                dropped_fields = [k for k in record.keys() if k in DETAIL_ONLY_FIELDS]
-                if dropped_fields:
-                    logger.warning(
-                        f"Listing page contract violation: dropped detail-only fields {dropped_fields} from DOM record"
-                    )
-                dom_records.append(filtered_record)
-            else:
-                dom_records.append(record)
+            dom_records.append(record)
+    dom_records = _enforce_listing_field_contract(dom_records, "listing" if "listing" in str(surface or "").lower() else surface)
     raw_record_sets["dom"] = dom_records
 
     normalized_record_sets = {
@@ -1988,54 +1980,10 @@ def _extract_from_card(
     record: dict = {}
     is_job_surface = "job" in surface
 
-    # Price (extract early so we can exclude price-like headings from title)
     if "ecommerce" in surface:
-        price_el = card.select_one(
-            "[itemprop='price'], .price, .product-price, .a-price .a-offscreen, "
-            ".s-item__price, span[data-price], .amount, [class*='price']"
-        )
-        if price_el:
-            raw_price = price_el.get("content") or price_el.get_text(" ", strip=True)
-            record["price"] = _clean_price_text(raw_price)
-        original_price_el = card.select_one(
-            ".original-price, .compare-price, .was-price, .strike, s, del, [data-original-price]"
-        )
-        if original_price_el:
-            raw_op = original_price_el.get("content") or original_price_el.get_text(
-                " ", strip=True
-            )
-            record["original_price"] = _clean_price_text(raw_op)
+        _extract_ecommerce_price_fields(card, record)
 
-    # Title: prefer itemprop, then class-based, then headings — skip price-like text
-    title_selectors = [
-        ".item_description_title",
-        "[itemprop='name']",
-        ".product-title",
-        ".pro-title .text",
-        ".pro-title",
-        ".name [data-field='description']",
-        ".productDescription [data-field='description']",
-        ".job-title",
-        ".card-title",
-        "a.title",
-        ".title",
-        "h2 a",
-        "h3 a",
-        "h4 a",
-        "h2",
-        "h3",
-        "h4",
-        "a img[alt]",
-        "a[title]",
-    ]
-    for sel in title_selectors:
-        title_el = card.select_one(sel)
-        if title_el:
-            text = title_el.get_text(" ", strip=True)
-            if text and not _PRICE_LIKE_RE.match(text):
-                record["title"] = _normalize_listing_title_text(text)
-                record["_selector_title"] = sel
-                break
+    _extract_card_title(card, record)
     if "title" not in record and "job" not in surface:
         inferred_title = _infer_listing_title_from_links(card)
         if inferred_title:
@@ -2049,21 +1997,8 @@ def _extract_from_card(
         if inferred_title:
             record["title"] = _normalize_listing_title_text(inferred_title)
 
-    # Image: prefer itemprop, then standard patterns
     if not is_job_surface:
-        img_el = card.select_one("[itemprop='image']")
-        if img_el:
-            src = (
-                img_el.get("src") or img_el.get("data-src") or img_el.get("content", "")
-            )
-            if src:
-                record["image_url"] = urljoin(page_url, src) if page_url else src
-        if "image_url" not in record:
-            images = _extract_card_images(card, page_url)
-            if images:
-                record["image_url"] = images[0]
-                if len(images) > 1:
-                    record["additional_images"] = ", ".join(images[1:])
+        _extract_card_image_fields(card, record, page_url=page_url)
 
     # Brand
     brand_el = card.select_one(".brand, [itemprop='brand'], .product-brand")
@@ -2113,70 +2048,114 @@ def _extract_from_card(
             if inferred_currency:
                 record["currency"] = inferred_currency
 
-    # Job fields
     if is_job_surface:
-        metadata_fields = _extract_job_metadata_fields(card)
-        company_el = card.select_one(
-            ".company, .companyName, [data-testid='company-name'], [data-testid*='company-name'], "
-            "[data-testid*='listing-company-name'], [itemprop='publisher'] [itemprop='name'], "
-            "[itemprop='hiringOrganization'] [itemprop='name']"
-        )
-        if company_el:
-            company_value = company_el.get("content") or company_el.get_text(
-                " ", strip=True
-            )
-            company_value = " ".join(str(company_value or "").split()).strip()
-            if company_value:
-                record["company"] = company_value
-        location_el = card.select_one(
-            ".location, .companyLocation, [data-testid='text-location'], [data-testid*='job-location'], "
-            "[data-testid*='listing-job-location'], [itemprop='jobLocation']"
-        )
-        if location_el:
-            location_value = location_el.get("content") or location_el.get_text(
-                " ", strip=True
-            )
-            location_value = " ".join(str(location_value or "").split()).strip()
-            if location_value:
-                record["location"] = location_value
-        salary_el = card.select_one(
-            ".salary, .salary-snippet-container, [data-testid*='salary']"
-        )
-        if salary_el:
-            salary_value = " ".join(salary_el.get_text(" ", strip=True).split()).strip()
-            if salary_value:
-                record["salary"] = salary_value
-        for field_name, value in metadata_fields.items():
-            if value:
-                record.setdefault(field_name, value)
-        if not record.get("company") and not record.get("department"):
-            inferred_company = _infer_job_company(
-                card_text_lines, title=record.get("title")
-            )
-            if inferred_company:
-                record["company"] = inferred_company
-        if not record.get("location"):
-            inferred_location = _infer_job_location(
-                card_text_lines, title=record.get("title")
-            )
-            if inferred_location:
-                record["location"] = inferred_location
-        if not record.get("salary"):
-            inferred_salary = _infer_job_salary(card_text_lines)
-            if inferred_salary:
-                record["salary"] = inferred_salary
-        inferred_job_type = _infer_job_type(card_text_lines)
-        if inferred_job_type:
-            record.setdefault("job_type", inferred_job_type)
-        inferred_posted_date = _infer_job_posted_date(card_text_lines)
-        if inferred_posted_date:
-            record.setdefault("posted_date", inferred_posted_date)
+        _extract_job_card_fields(card, record, card_text_lines=card_text_lines)
         if record.get("url") and not record.get("apply_url"):
             record["apply_url"] = str(record["url"])
         record.pop("image_url", None)
         record.pop("additional_images", None)
 
     return record
+
+
+def _extract_ecommerce_price_fields(card: Tag, record: dict) -> None:
+    price_el = card.select_one(
+        "[itemprop='price'], .price, .product-price, .a-price .a-offscreen, "
+        ".s-item__price, span[data-price], .amount, [class*='price']"
+    )
+    if price_el:
+        raw_price = price_el.get("content") or price_el.get_text(" ", strip=True)
+        record["price"] = _clean_price_text(raw_price)
+    original_price_el = card.select_one(
+        ".original-price, .compare-price, .was-price, .strike, s, del, [data-original-price]"
+    )
+    if original_price_el:
+        raw_op = original_price_el.get("content") or original_price_el.get_text(
+            " ", strip=True
+        )
+        record["original_price"] = _clean_price_text(raw_op)
+
+
+def _extract_card_title(card: Tag, record: dict) -> None:
+    for selector in LISTING_CARD_TITLE_SELECTORS:
+        title_el = card.select_one(selector)
+        if not title_el:
+            continue
+        text = title_el.get_text(" ", strip=True)
+        if text and not _PRICE_LIKE_RE.match(text):
+            record["title"] = _normalize_listing_title_text(text)
+            record["_selector_title"] = selector
+            return
+
+
+def _extract_card_image_fields(card: Tag, record: dict, *, page_url: str) -> None:
+    img_el = card.select_one("[itemprop='image']")
+    if img_el:
+        src = img_el.get("src") or img_el.get("data-src") or img_el.get("content", "")
+        if src:
+            record["image_url"] = urljoin(page_url, src) if page_url else src
+    if "image_url" not in record:
+        images = _extract_card_images(card, page_url)
+        if images:
+            record["image_url"] = images[0]
+            if len(images) > 1:
+                record["additional_images"] = ", ".join(images[1:])
+
+
+def _extract_job_card_fields(
+    card: Tag,
+    record: dict,
+    *,
+    card_text_lines: list[str],
+) -> None:
+    metadata_fields = _extract_job_metadata_fields(card)
+    company_el = card.select_one(
+        ".company, .companyName, [data-testid='company-name'], [data-testid*='company-name'], "
+        "[data-testid*='listing-company-name'], [itemprop='publisher'] [itemprop='name'], "
+        "[itemprop='hiringOrganization'] [itemprop='name']"
+    )
+    if company_el:
+        company_value = company_el.get("content") or company_el.get_text(" ", strip=True)
+        company_value = " ".join(str(company_value or "").split()).strip()
+        if company_value:
+            record["company"] = company_value
+    location_el = card.select_one(
+        ".location, .companyLocation, [data-testid='text-location'], [data-testid*='job-location'], "
+        "[data-testid*='listing-job-location'], [itemprop='jobLocation']"
+    )
+    if location_el:
+        location_value = location_el.get("content") or location_el.get_text(" ", strip=True)
+        location_value = " ".join(str(location_value or "").split()).strip()
+        if location_value:
+            record["location"] = location_value
+    salary_el = card.select_one(
+        ".salary, .salary-snippet-container, [data-testid*='salary']"
+    )
+    if salary_el:
+        salary_value = " ".join(salary_el.get_text(" ", strip=True).split()).strip()
+        if salary_value:
+            record["salary"] = salary_value
+    for field_name, value in metadata_fields.items():
+        if value:
+            record.setdefault(field_name, value)
+    if not record.get("company") and not record.get("department"):
+        inferred_company = _infer_job_company(card_text_lines, title=record.get("title"))
+        if inferred_company:
+            record["company"] = inferred_company
+    if not record.get("location"):
+        inferred_location = _infer_job_location(card_text_lines, title=record.get("title"))
+        if inferred_location:
+            record["location"] = inferred_location
+    if not record.get("salary"):
+        inferred_salary = _infer_job_salary(card_text_lines)
+        if inferred_salary:
+            record["salary"] = inferred_salary
+    inferred_job_type = _infer_job_type(card_text_lines)
+    if inferred_job_type:
+        record.setdefault("job_type", inferred_job_type)
+    inferred_posted_date = _infer_job_posted_date(card_text_lines)
+    if inferred_posted_date:
+        record.setdefault("posted_date", inferred_posted_date)
 
 
 def _normalize_listing_value(

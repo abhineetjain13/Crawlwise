@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
+import { InlineAlert } from "../../components/ui/patterns";
 import { Button, Field, Input, Subtitle, Title } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 
@@ -46,11 +47,7 @@ export default function LoginPage() {
             placeholder="••••••••"
           />
         </Field>
-        {error ? (
-          <p role="alert" className="rounded-2xl bg-danger/10 px-4 py-3 text-[13px] text-danger">
-            {error}
-          </p>
-        ) : null}
+        {error ? <InlineAlert message={error} /> : null}
         <div className="flex items-center gap-3 pt-1">
           <Button type="submit">Sign in</Button>
           <Link className="text-[13px] font-medium text-accent" href="/register">

@@ -110,7 +110,6 @@ async def apply_traversal_mode(
             wait_for_surface_readiness=wait_for_surface_readiness,
             wait_for_listing_readiness=wait_for_listing_readiness,
             click_and_observe_next_page=click_and_observe_next_page,
-            cooperative_page_wait=cooperative_page_wait,
             dismiss_cookie_consent=dismiss_cookie_consent,
             pause_after_navigation=pause_after_navigation,
             expand_all_interactive_elements=expand_all_interactive_elements,

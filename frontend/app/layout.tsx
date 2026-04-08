@@ -15,13 +15,12 @@ const jetbrainsMono = JetBrains_Mono({
   weight: ["400", "500", "600"],
 });
 
-// Runs before first paint to set theme and matching bg — prevents FOUC
+// Runs before first paint to set theme and prevent FOUC
 const themeScript = `
   (() => {
     const stored = window.localStorage.getItem("crawlerai-theme");
     const dark = stored === "dark";
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    document.documentElement.style.background = dark ? "#111111" : "#f6f8fc";
   })();
 `;
 

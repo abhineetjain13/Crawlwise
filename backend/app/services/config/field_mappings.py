@@ -4,11 +4,11 @@ DATALAYER_ECOMMERCE_FIELD_MAP = {
     # GA4 schema
     "items[0].price": "price",
     "items[0].discount": "discount_amount",
-    "items[0].item_category": "google_product_category",
+    "items[0].item_category": "category",
     "items[0].currency": "price_currency",
     # UA schema
     "detail.products[0].price": "price",
-    "detail.products[0].category": "google_product_category",
+    "detail.products[0].category": "category",
     "currencyCode": "price_currency",
 }
 
@@ -20,6 +20,7 @@ CANONICAL_SCHEMAS = {
         "part_number",
         "price",
         "sale_price",
+        "discount_amount",
         "original_price",
         "currency",
         "availability",
@@ -39,6 +40,7 @@ CANONICAL_SCHEMAS = {
         "part_number",
         "price",
         "sale_price",
+        "discount_amount",
         "original_price",
         "currency",
         "availability",
@@ -139,6 +141,7 @@ FIELD_ALIASES = {
     "slug": ["slug"],
     "price": ["price", "amount", "cost", "sale_price", "current_price", "buyNowPrice", "lowPrice"],
     "sale_price": ["sale_price", "saleprice", "sellingprice", "newprice", "discount_price", "discountedPrice"],
+    "discount_amount": ["discount_amount", "discount", "discountValue", "discount_value"],
     "original_price": [
         "compare_at_price",
         "list_price",

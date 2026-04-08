@@ -10,6 +10,7 @@ from app.services.pipeline_config import HYDRATED_STATE_PATTERNS
 
 _DATALAYER_PUSH_RE = re.compile(r"dataLayer\.push\s*\(")
 _REACT_CREATE_ELEMENT_RE = re.compile(r"createElement\s*\(")
+_APOLLO_STATE_META_NAME_RE = re.compile(r"apollo[-_]state", re.IGNORECASE)
 _NEXT_BOOTSTRAP_CHILD_RE = re.compile(
     r"self\.__next_f\.push\(\s*\[(?:.|\n)*?({.*?}|\[.*?\])(?:.|\n)*?\]\s*\)"
 )
@@ -59,7 +60,7 @@ def parse_datalayer(html: str) -> dict[str, object]:
     - UA schema: dataLayer.push({ecommerce: {detail: {...}}})
     
     Returns dict with extracted fields:
-    - price, sale_price, availability, price_currency, google_product_category
+    - price, sale_price, discount_amount, availability, price_currency, category
     
     Returns empty dict if dataLayer absent or malformed.
     """
@@ -91,11 +92,25 @@ def parse_datalayer(html: str) -> dict[str, object]:
                 if "price" in item:
                     result["price"] = item["price"]
                 if "discount" in item:
-                    result["sale_price"] = item["discount"]
+                    discount_value = item["discount"]
+                    if "price" in item:
+                        try:
+                            sale_price = float(item["price"]) - float(discount_value)
+                        except (TypeError, ValueError):
+                            result["discount_amount"] = discount_value
+                        else:
+                            result["sale_price"] = sale_price
+                            result["discount_amount"] = discount_value
+                    else:
+                        result["discount_amount"] = discount_value
                 if "item_category" in item:
+                    result["category"] = item["item_category"]
                     result["google_product_category"] = item["item_category"]
                 if "currency" in item:
                     result["price_currency"] = item["currency"]
+                availability_value = item.get("availability") or item.get("itemAvailability")
+                if availability_value not in (None, "", [], {}):
+                    result["availability"] = availability_value
         
         # UA schema: detail.products array
         detail = ecommerce.get("detail")
@@ -107,7 +122,13 @@ def parse_datalayer(html: str) -> dict[str, object]:
                     if "price" in product:
                         result["price"] = product["price"]
                     if "category" in product:
+                        result["category"] = product["category"]
                         result["google_product_category"] = product["category"]
+                    availability_value = product.get("availability") or product.get(
+                        "itemAvailability"
+                    )
+                    if availability_value not in (None, "", [], {}):
+                        result["availability"] = availability_value
         
         # UA schema: currencyCode at ecommerce level
         if "currencyCode" in ecommerce:
@@ -122,7 +143,7 @@ def parse_datalayer(html: str) -> dict[str, object]:
 
 def extract_apollo_state_from_meta(soup: BeautifulSoup) -> dict | None:
     """Extract Apollo GraphQL state from meta tags used by GraphQL-driven apps."""
-    for node in soup.find_all("meta", attrs={"name": re.compile(r"apollo[-_]state", re.I)}):
+    for node in soup.find_all("meta", attrs={"name": _APOLLO_STATE_META_NAME_RE}):
         content = node.get("content")
         if content:
             parsed = _parse_json_blob(str(content))

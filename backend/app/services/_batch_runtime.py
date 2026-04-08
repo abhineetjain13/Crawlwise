@@ -34,6 +34,11 @@ from app.services.crawl_metrics import (
     finalize_url_metrics,
 )
 from app.services.pipeline_config import DEFAULT_MAX_SCROLLS
+from app.services.pipeline_config import (
+    MAX_URL_PROCESS_TIMEOUT_SECONDS,
+    URL_BATCH_CONCURRENCY,
+    URL_PROCESS_TIMEOUT_SECONDS,
+)
 from app.services.pipeline import (
     STAGE_FETCH,
     VERDICT_BLOCKED,
@@ -51,9 +56,6 @@ from app.services.pipeline import (
 )
 
 _TRAVERSAL_MODES = {"auto", "scroll", "load_more", "paginate"}
-DEFAULT_URL_BATCH_CONCURRENCY = 4
-DEFAULT_URL_PROCESS_TIMEOUT_SECONDS = 90.0
-MAX_URL_PROCESS_TIMEOUT_SECONDS = 600.0
 _RUN_UPDATE_LOCKS: dict[int, asyncio.Lock] = {}
 _RUN_UPDATE_LOCKS_GUARD = asyncio.Lock()
 
@@ -144,13 +146,13 @@ async def _run_control_checkpoint(session: AsyncSession, run: CrawlRun) -> None:
 
 
 def _coerce_url_timeout_seconds(settings: dict) -> float:
-    raw_value = settings.get("url_timeout_seconds", DEFAULT_URL_PROCESS_TIMEOUT_SECONDS)
+    raw_value = settings.get("url_timeout_seconds", URL_PROCESS_TIMEOUT_SECONDS)
     try:
         value = float(raw_value)
     except (TypeError, ValueError):
-        return DEFAULT_URL_PROCESS_TIMEOUT_SECONDS
+        return URL_PROCESS_TIMEOUT_SECONDS
     if value <= 0:
-        return DEFAULT_URL_PROCESS_TIMEOUT_SECONDS
+        return URL_PROCESS_TIMEOUT_SECONDS
     return min(value, MAX_URL_PROCESS_TIMEOUT_SECONDS)
 
 
@@ -219,8 +221,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         url_batch_concurrency = max(
             1,
             int(
-                settings.get("url_batch_concurrency", DEFAULT_URL_BATCH_CONCURRENCY)
-                or DEFAULT_URL_BATCH_CONCURRENCY
+                settings.get("url_batch_concurrency", URL_BATCH_CONCURRENCY)
+                or URL_BATCH_CONCURRENCY
             ),
         )
         url_timeout_seconds = _coerce_url_timeout_seconds(settings)
@@ -261,12 +263,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             ):
                 update_run_status(run, CrawlStatus.PAUSED)
                 set_control_request(run, None)
-                await _log(
-                    session,
-                    run.id,
-                    "warning",
-                    "Run paused after checkpoint; partial output preserved",
-                )
                 async def _pause_mutation(
                     retry_session: AsyncSession, retry_run: CrawlRun
                 ) -> None:
@@ -287,12 +283,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             ):
                 update_run_status(run, CrawlStatus.KILLED)
                 set_control_request(run, None)
-                await _log(
-                    session,
-                    run.id,
-                    "warning",
-                    "Run killed after checkpoint; partial output preserved",
-                )
                 async def _kill_mutation(
                     retry_session: AsyncSession, retry_run: CrawlRun
                 ) -> None:
@@ -522,9 +512,10 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         ) -> None:
             current_status = normalize_status(retry_run.status)
             if current_status == CrawlStatus.RUNNING:
-                if aggregate_verdict in {VERDICT_SUCCESS, VERDICT_PARTIAL}:
+                if aggregate_verdict == VERDICT_SUCCESS:
                     update_run_status(retry_run, CrawlStatus.COMPLETED)
                 elif aggregate_verdict in {
+                    VERDICT_PARTIAL,
                     VERDICT_EMPTY,
                     VERDICT_BLOCKED,
                     VERDICT_SCHEMA_MISS,
@@ -606,7 +597,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         ValueError,
         TypeError,
         OSError,
-        asyncio.TimeoutError,
     ) as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
         await _mark_run_failed(session, run_id, error_msg)

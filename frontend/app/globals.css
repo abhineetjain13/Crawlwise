@@ -143,6 +143,9 @@
   --nav-item-active-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(204, 251, 241, 0.95));
   --nav-item-active-shadow: var(--shadow-sm);
   --nav-item-active-marker: var(--accent);
+  --terminal-bg: #141414;
+  --terminal-fg: #d4d4d8;
+  --terminal-code-bg: #141414;
 
   /* ── Skeleton ── */
   --skeleton-base:      #e8ebf0;
@@ -298,6 +301,9 @@ html[data-theme="dark"] {
   --nav-item-active-bg: linear-gradient(135deg, rgba(31, 35, 48, 0.96), rgba(20, 60, 56, 0.96));
   --nav-item-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.26);
   --nav-item-active-marker: color-mix(in srgb, var(--accent) 82%, white);
+  --terminal-bg: #141414;
+  --terminal-fg: #d4d4d8;
+  --terminal-code-bg: #141414;
 
   /* ── Skeleton ── */
   --skeleton-base:      rgba(255, 255, 255, 0.05);
@@ -309,11 +315,11 @@ html[data-theme="dark"] {
   --metric-records-color: #8b5cf6;
   --metric-domains-color: #38bdf8;
 
-  background: #111111;
+  background: var(--bg-base);
 }
 
 html[data-theme="dark"] body {
-  background: #111111;
+  background: var(--bg-base);
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -327,7 +333,7 @@ html[data-theme="dark"] body {
 
 html {
   min-height: 100%;
-  background: #f4f6fb;
+  background: var(--bg-base);
   scroll-behavior: smooth;
   scrollbar-gutter: stable;
 }
@@ -421,6 +427,42 @@ select:focus-visible {
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/* Semantic typography helpers */
+.text-kicker {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.text-caption {
+  font-size: var(--text-xs);
+}
+
+.text-meta {
+  font-size: var(--text-2xs);
+}
+
+.text-body-sm {
+  font-size: var(--text-sm);
+}
+
+.text-body {
+  font-size: var(--text-base);
+}
+
+.text-title-sm {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+}
+
+.text-title-md {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tighter);
 }
 
 /* Focus ring */
@@ -522,10 +564,10 @@ select:focus-visible {
    CRAWL TERMINAL
    ════════════════════════════════════════════════════════════════════════════ */
 .crawl-terminal {
-  background: #141414;
+  background: var(--terminal-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  color: #d4d4d8;
+  color: var(--terminal-fg);
   font-family: var(--font-jetbrains-mono);
   font-size: 11.5px;
   line-height: 1.7;
@@ -618,10 +660,10 @@ select:focus-visible {
 }
 
 .markdown-document pre {
-  background: #141414;
+  background: var(--terminal-code-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  color: #d4d4d8;
+  color: var(--terminal-fg);
   overflow-x: auto;
   margin: 0.8rem 0;
   padding: 0.7rem 0.85rem;

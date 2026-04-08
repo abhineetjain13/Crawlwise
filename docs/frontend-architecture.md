@@ -1,242 +1,104 @@
 # Frontend Architecture
 
-This document describes the frontend as it exists in the current codebase. It is based on the implementation under `frontend/`, not on planned refactors.
+This document describes the current frontend implementation in `frontend/`.
 
 ## Overview
 
-The frontend is a Next.js App Router application with a shared authenticated shell, React Query for server-state fetching, and a small shared UI layer for patterns and primitives.
+The frontend is a Next.js App Router app with:
+- `AppShell` for authenticated workspace layout
+- React Query for server-state
+- typed API access via `frontend/lib/api`
+- Crawl Studio split into config and run workspaces
 
-Current route groups under `frontend/app/`:
+Primary routes:
+- `dashboard`, `crawl`, `runs`, `jobs`, `memory`, `selectors`
+- `admin/users`, `admin/llm`
+- `login`, `register`
 
-- `dashboard`
-- `crawl`
-- `runs`
-- `jobs`
-- `memory`
-- `selectors`
-- `admin/users`
-- `admin/llm`
-- `login`
-- `register`
-
-## Top-Level Structure
+## Structure
 
 ### `frontend/app`
-
-- Route entrypoints for the application.
-- Most pages are page-local and fetch their own data with React Query.
-- The crawl studio is currently implemented in a single page file: `frontend/app/crawl/page.tsx`.
+- Route entrypoints and page composition.
+- `frontend/app/crawl/page.tsx` switches between:
+  - `CrawlConfigScreen` (no `run_id`)
+  - `CrawlRunScreen` (`run_id` present)
 
 ### `frontend/components/layout`
-
-- Contains the authenticated shell and top-bar coordination.
-- `app-shell.tsx` owns:
-  - auth/session gate via `api.me()`
-  - desktop sidebar and mobile drawer navigation
-  - sticky top header
-  - shared page padding and max-width container
+- `app-shell.tsx` owns authenticated layout, session gating, sidebar/topbar.
+- `PageHeader` values are projected into the shell top bar.
 
 ### `frontend/components/ui`
+- `primitives.tsx`: low-level controls (`Button`, `Card`, `Input`, etc.)
+- `patterns.tsx`: page-level patterns (`PageHeader`, `SectionHeader`, `InlineAlert`, `ProgressBar`, etc.)
 
-- Shared UI building blocks.
-- `primitives.tsx` contains low-level reusable controls such as `Button`, `Card`, `Input`, `Textarea`, `Badge`, and `Toggle`.
-- `patterns.tsx` contains higher-level composition helpers such as `PageHeader`, `SectionHeader`, `EmptyPanel`, `MetricGrid`, and `JsonPanel`.
-- `query-provider.tsx` creates the shared React Query client.
-- `theme-toggle.tsx` manages the light/dark theme toggle used in the shell.
+### `frontend/components/crawl`
+- `crawl-config-screen.tsx`: crawl submission UI + `buildDispatch(...)`
+- `crawl-run-screen.tsx`: run workspace (progress, table/json/markdown/logs, actions)
+- `shared.tsx`: crawl-specific shared components/helpers (`RecordsTable`, `LogTerminal`, form helpers)
+- `use-run-polling.ts`: run status flags and one-shot terminal sync helper
 
-### `frontend/lib`
+## Crawl Contract in Frontend
 
-- Shared non-visual frontend logic.
-- `api/` contains the typed API client and request helpers.
-- `constants/` contains shared limits, timing values, status sets, and storage keys.
-- `utils.ts` contains generic helper utilities such as class-name merging.
+The crawl config UI is contract-driven and deterministic:
+- Crawl tab drives surface:
+  - `category` -> `ecommerce_listing`
+  - `pdp` -> `ecommerce_detail`
+- No independent surface dropdown exists.
 
-## Application Shell
+Modes:
+- Category: `single`, `sitemap`, `bulk`
+- PDP: `single`, `batch`, `csv`
 
-The root layout in `frontend/app/layout.tsx` is responsible for:
+Advanced traversal:
+- UI modes: `auto`, `scroll`, `load_more`, `view_all`, `paginate`
+- `view_all` is normalized to `load_more` before dispatch
+- `auto` is preserved when advanced mode is enabled
 
-- loading global CSS
-- registering the query provider
-- wrapping all authenticated pages in `AppShell`
-- setting up the theme boot script
-- registering the Inter and JetBrains Mono fonts
+Dispatch settings include:
+- `llm_enabled`, `advanced_enabled`, `advanced_mode`
+- `anti_bot_enabled`, `sleep_ms`
+- `max_records`, `max_pages`, `max_scrolls`
+- `proxy_enabled`, `proxy_list`
+- `additional_fields`, `crawl_module`, `crawl_mode`
+- `extraction_contract` from manual field rows
 
-`AppShell` is the main structural boundary for the product UI:
+## Data Fetching and Realtime Model
 
-- auth routes (`/login`, `/register`) render without the workspace shell
-- all other routes render inside the sidebar + top bar layout
-- unauthorized API responses redirect to `/login`
-- page headers are pushed into the top bar through `PageHeader` and the top-bar context
+React Query remains the baseline model, with status-aware fetching.
 
-Layout spacing for workspace pages comes from `ShellContent`:
+Run workspace behavior:
+- Single scheduler cadence for active run refresh orchestration
+- Terminal sync executes one final coordinated refetch
+- Table tab uses progressive server pagination (`page` + `limit`)
+- JSON tab uses bounded preview fetching
+- Logs use incremental cursor fetching (`after_id`) and append/trim behavior
+- WebSocket live-log stream:
+  - endpoint: `/api/crawls/{run_id}/logs/ws`
+  - frontend consumes stream when available
+  - polling fallback remains active when socket is unavailable/disconnected
 
-- main content wrapper: `px-4 py-4 lg:px-8 lg:py-5`
-- centered content container: `max-w-[1440px]`
+## Performance and UX Guards
 
-## Data Fetching Model
-
-The app uses React Query through `frontend/components/ui/query-provider.tsx`.
-
-Current default query behavior:
-
-- `retry: 1`
-- `staleTime: 5000`
-
-Pages generally fetch directly from the shared API layer instead of using an additional frontend service layer.
+- `RecordsTable` uses row-window virtualization to reduce DOM churn
+- log viewport is capped to recent `MAX_LIVE_LOGS`
+- expensive derivations are memoized
+- stuck-run warning surfaces stale active-run state
 
 ## API Layer
 
-`frontend/lib/api/index.ts` is the main client boundary between pages and the backend.
+`frontend/lib/api/index.ts` is the only shared API boundary for pages/components.
 
-Key characteristics:
+Notable API behavior:
+- typed response contracts from `frontend/lib/api/types.ts`
+- URL query helpers for paginated/cursored endpoints
+- CSV crawl upload via `FormData`
+- export downloads via blob endpoints (`downloadCsv/downloadJson/downloadMarkdown`)
+- websocket base URL derived via `getApiWebSocketBaseUrl()`
 
-- all requests flow through `apiClient`
-- endpoint responses are strongly typed via `frontend/lib/api/types.ts`
-- paginated endpoints return `{ items, meta }`
-- file upload for CSV crawl creation uses `FormData`
-- export endpoints return URLs rather than fetching blobs inside React
+## Invariants
 
-Examples of current frontend API coverage:
-
-- auth: `login`, `register`, `me`
-- crawl operations: `createCrawl`, `createCsvCrawl`, `getCrawl`, `listCrawls`, `pauseCrawl`, `resumeCrawl`, `killCrawl`, `deleteCrawl`
-- crawl outputs: `getRecords`, `getCrawlLogs`, `exportCsv`, `exportJson`
-- review/selector flows: `getReview`, `saveReview`, `previewSelectors`, `suggestSelectors`, `testSelector`
-- admin: user and LLM config endpoints
-
-## Crawl Studio
-
-The crawl studio is currently implemented in `frontend/app/crawl/page.tsx`.
-
-It is intentionally monolithic right now because the previous component refactor was removed after regressions. If this page is split again later, the split should happen from the current working behavior, not from the deleted refactor.
-
-### State Model
-
-The page uses a small local phase model:
-
-- `config`
-- `running`
-- `complete`
-
-Phase is derived from a mix of:
-
-- URL state via `run_id` or legacy `runId`
-- fetched run status
-- a short completion transition delay from `UI_DELAYS.PHASE_TRANSITION_MS`
-
-Important current behavior:
-
-- opening `/crawl?run_id=<id>` starts in a run-loading state instead of briefly rendering the config form
-- completed runs show a loading state until records are available, which avoids a misleading empty-results flash
-- `New Crawl` clears prior form state before navigating back to `/crawl`
-
-### Crawl Inputs
-
-The page supports:
-
-- crawl surface: `category` or `pdp`
-- category modes: `single`, `sitemap`, `bulk`
-- PDP modes: `single`, `batch`, `csv`
-- manual extra fields
-- optional advanced settings
-- optional proxy list
-- preview-before-launch modal
-
-Dispatch payload construction happens in `buildDispatch(config)`.
-
-The current backend contract used by the active page is:
-
-- `llm_enabled`
-- `traversal_mode`
-- `sleep_ms`
-- `max_records`
-- `max_pages`
-- `proxy_enabled`
-- `proxy_list`
-- `additional_fields`
-- `crawl_module`
-- `crawl_mode`
-
-### Active Run View
-
-When a run is active or paused, the page renders:
-
-- progress summary
-- run actions: pause, resume, hard kill
-- filtered log stream
-
-Polling behavior is status-aware:
-
-- run details poll while status is active
-- records and logs poll only while the latest run status is active
-- review data only loads for terminal runs
-
-Polling intervals come from `frontend/lib/constants/timing.ts`:
-
-- active job: 2000 ms
-- records: 2000 ms
-- logs: 2000 ms
-
-### Completed Run View
-
-The completed workspace includes:
-
-- metrics
-- table output
-- JSON output
-- intelligence review
-- logs
-- CSV/JSON exports
-- bulk-crawl-from-selected-records flow
-
-The table currently fetches up to 1000 records in one request for the workspace view.
-
-### Performance Constraints Implemented
-
-These optimizations are present in the current code:
-
-- log display is capped to the most recent `CRAWL_DEFAULTS.MAX_LIVE_LOGS` entries
-- expensive derived values such as visible columns, selected records, filtered logs, and intelligence suggestions use `useMemo`
-- polling is disabled automatically when a run is not active
-- summary record count prefers `run.result_summary.record_count` when available, instead of depending only on loaded table rows
-
-### URL and Session Handling
-
-The crawl page currently supports:
-
-- `run_id` and `runId` query param compatibility
-- session-storage based bulk-crawl prefill through `STORAGE_KEYS.BULK_PREFILL`
-- reset back to `/crawl` for a fresh configuration flow
-
-## Shared UI Pattern
-
-The UI layer follows a simple split:
-
-- primitives are dumb, reusable controls
-- patterns coordinate page-level composition and shell integration
-
-One important pattern detail:
-
-- `PageHeader` does not render visible markup itself
-- it writes title, description, and actions into the shell top bar through context
-
-That means page header spacing should be managed by the shell and page sections, not by local breadcrumb wrappers or duplicate top-of-page headers.
-
-## Current Invariants
-
-- The authenticated workspace layout is owned by `AppShell`.
-- The active crawl experience lives in `frontend/app/crawl/page.tsx`.
-- Crawl history opens runs by linking to `/crawl?run_id=<id>`.
-- Shared server-state fetching should go through the React Query client.
-- Shared backend access should go through `frontend/lib/api/index.ts`.
-- New documentation should describe the current single-page crawl implementation unless a verified replacement lands in code.
-
-## Notes For Future Refactors
-
-If the crawl page is split again:
-
-- preserve the current URL-driven run restoration behavior
-- preserve `run_id` compatibility
-- do not reintroduce stale form state when opening history/completed runs
-- keep completed-run loading distinct from true empty results
-- update this document only after the new structure is merged and in use
+- Authenticated workspace UI is owned by `AppShell`.
+- `/crawl?run_id=<id>` is the canonical run workspace route.
+- Crawl surface is derived from selected crawl tab, not inferred heuristics.
+- Shared backend access goes through `frontend/lib/api/index.ts`.
+- Shared server-state orchestration goes through React Query.

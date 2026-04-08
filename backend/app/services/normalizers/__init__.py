@@ -25,6 +25,7 @@ from app.services.pipeline_config import (
     CANDIDATE_UI_NOISE_PHRASES,
     CANDIDATE_UI_NOISE_TOKEN_PATTERN,
     CANDIDATE_URL_SUFFIXES,
+    HTTP_URL_PREFIXES,
     COLOR_NOISE_TOKENS,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
@@ -74,7 +75,6 @@ _IMAGE_NOISE_PATTERN = re.compile(
 )
 _NOISE_URL_SUFFIXES = (".js", ".css", ".woff", ".woff2", ".svg", "spinner.gif")
 _TRACKING_QUERY_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "ref", "ref_src")
-_HTTP_URL_PREFIXES = ("http://", "https://")
 
 
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
@@ -220,7 +220,7 @@ def extract_currency_hint(value: object) -> str:
 
 def _strip_tracking_params(value: str) -> str:
     text = str(value or "").strip()
-    if not text.startswith(_HTTP_URL_PREFIXES):
+    if not text.startswith(HTTP_URL_PREFIXES):
         return text
     parsed = urlsplit(text)
     filtered = [
@@ -238,7 +238,7 @@ def _strip_tracking_params(value: str) -> str:
 
 def _is_valid_http_url(value: str) -> bool:
     text = str(value or "").strip()
-    if not text.startswith(_HTTP_URL_PREFIXES):
+    if not text.startswith(HTTP_URL_PREFIXES):
         return False
     lowered = text.lower()
     if any(lowered.endswith(suffix) for suffix in _NOISE_URL_SUFFIXES):
@@ -274,7 +274,7 @@ def _split_image_values(value: str) -> list[str]:
     seen: set[str] = set()
     for part in parts:
         candidate = unescape(part).strip()
-        if not candidate or not candidate.startswith(_HTTP_URL_PREFIXES):
+        if not candidate or not candidate.startswith(HTTP_URL_PREFIXES):
             continue
         if candidate in seen:
             continue

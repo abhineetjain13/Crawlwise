@@ -5,13 +5,14 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { PageHeader, SectionHeader } from "../ui/patterns";
+import { PageHeader, SectionHeader, TabBar } from "../ui/patterns";
 import { Button, Card, Input, Textarea } from "../ui/primitives";
 import { api } from "../../lib/api";
 import type { AdvancedCrawlMode, CrawlConfig, CrawlSurface } from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { UI_DELAYS } from "../../lib/constants/timing";
+import { telemetryErrorPayload, trackEvent } from "../../lib/telemetry/events";
 import {
   AdditionalFieldInput,
   clampNumber,
@@ -25,10 +26,8 @@ import {
   parseLines,
   parseRequestedPdpMode,
   type PdpMode,
-  SegmentedMode,
   SettingSection,
   SliderRow,
-  TabBar,
   validateAdditionalFieldName,
   normalizeField,
   uniqueFields,
@@ -52,7 +51,6 @@ export function CrawlConfigScreen({
   const [crawlTab, setCrawlTab] = useState<CrawlTab>(() => requestedTab ?? "category");
   const [categoryMode, setCategoryMode] = useState<CategoryMode>(() => requestedCategoryMode ?? "single");
   const [pdpMode, setPdpMode] = useState<PdpMode>(() => requestedPdpMode ?? "single");
-  const [surface, setSurface] = useState<CrawlSurface>("ecommerce_listing");
   const [targetUrl, setTargetUrl] = useState("");
   const [bulkUrls, setBulkUrls] = useState("");
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -74,6 +72,7 @@ export function CrawlConfigScreen({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
+  const surface: CrawlSurface = crawlTab === "category" ? "ecommerce_listing" : "ecommerce_detail";
 
   useEffect(() => {
     const nextTab = requestedTab ?? "category";
@@ -83,18 +82,6 @@ export function CrawlConfigScreen({
     setCategoryMode((current) => (current === nextCategoryMode ? current : nextCategoryMode));
     setPdpMode((current) => (current === nextPdpMode ? current : nextPdpMode));
   }, [requestedCategoryMode, requestedPdpMode, requestedTab]);
-
-  useEffect(() => {
-    setSurface((current) => {
-      if (crawlTab === "category" && current === "ecommerce_detail") {
-        return "ecommerce_listing";
-      }
-      if (crawlTab === "pdp" && current === "ecommerce_listing") {
-        return "ecommerce_detail";
-      }
-      return current;
-    });
-  }, [crawlTab]);
 
   useEffect(() => {
     const routeMode = crawlTab === "category" ? requestedCategoryMode : requestedPdpMode;
@@ -191,6 +178,22 @@ export function CrawlConfigScreen({
     setIsSubmitting(true);
     try {
       const dispatch = buildDispatch(config, fieldRows);
+      const surfaceMismatch = isSurfaceMismatch(config.module, dispatch.surface);
+      if (surfaceMismatch) {
+        trackEvent("crawl_submit_surface_mismatch", {
+          module: config.module,
+          mode: config.mode,
+          selected_surface: config.surface,
+          effective_surface: dispatch.surface,
+        });
+      }
+      if (config.advanced_enabled) {
+        trackEvent("advanced_mode_selected_vs_effective", {
+          module: config.module,
+          selected_advanced_mode: config.advanced_mode,
+          effective_advanced_mode: dispatch.settings.advanced_mode ?? null,
+        });
+      }
       let response: { run_id: number };
       if (dispatch.runType === "csv") {
         if (!dispatch.csvFile) {
@@ -215,6 +218,18 @@ export function CrawlConfigScreen({
       router.replace((`/crawl?run_id=${response.run_id}`) as Route);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to launch crawl.";
+      trackEvent(
+        "crawl_submit_error_rate",
+        telemetryErrorPayload(error, {
+          module: config.module,
+          mode: config.mode,
+          surface: config.surface,
+          advanced_enabled: config.advanced_enabled,
+          advanced_mode: config.advanced_mode,
+          smart_extraction: config.smart_extraction,
+          run_type_hint: inferRunTypeHint(config),
+        }),
+      );
       setConfigError(message);
     } finally {
       setIsSubmitting(false);
@@ -267,7 +282,6 @@ export function CrawlConfigScreen({
                     const parsed = parseRequestedCrawlTab(value);
                     if (parsed) {
                       setCrawlTab(parsed);
-                      setSurface(parsed === "pdp" ? "ecommerce_detail" : "ecommerce_listing");
                     }
                   }}
                   options={[
@@ -276,7 +290,7 @@ export function CrawlConfigScreen({
                   ]}
                 />
                 {crawlTab === "category" ? (
-                  <SegmentedMode
+                  <TabBar
                     value={categoryMode}
                     onChange={(value) => {
                       const parsed = parseRequestedCategoryMode(value);
@@ -291,7 +305,7 @@ export function CrawlConfigScreen({
                     ]}
                   />
                 ) : (
-                  <SegmentedMode
+                  <TabBar
                     value={pdpMode}
                     onChange={(value) => {
                       const parsed = parseRequestedPdpMode(value);
@@ -306,20 +320,6 @@ export function CrawlConfigScreen({
                     ]}
                   />
                 )}
-                <select
-                  aria-label="Surface selection"
-                  value={surface}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    if (next === "ecommerce_listing" || next === "ecommerce_detail") {
-                      setSurface(next);
-                    }
-                  }}
-                  className="control-select focus-ring h-8 min-w-[190px]"
-                >
-                  <option value="ecommerce_listing">Listing Surface</option>
-                  <option value="ecommerce_detail">Detail Surface</option>
-                </select>
               </div>
               <Button
                 variant="accent"
@@ -536,6 +536,26 @@ export function CrawlConfigScreen({
 
     </div>
   );
+}
+
+function isSurfaceMismatch(module: CrawlConfig["module"], surface: CrawlSurface) {
+  if (module === "category") {
+    return surface !== "ecommerce_listing";
+  }
+  return surface !== "ecommerce_detail";
+}
+
+function inferRunTypeHint(config: CrawlConfig) {
+  if (config.module === "category") {
+    return config.mode === "bulk" ? "batch" : "crawl";
+  }
+  if (config.mode === "csv") {
+    return "csv";
+  }
+  if (config.mode === "batch") {
+    return "batch";
+  }
+  return "crawl";
 }
 
 function buildExtractionContract(fieldRows: FieldRow[]) {

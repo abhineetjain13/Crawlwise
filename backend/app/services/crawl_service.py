@@ -124,7 +124,6 @@ _COMPAT_EXPORTS = (
 )
 VERDICT_SUCCESS, VERDICT_PARTIAL, VERDICT_BLOCKED = "success", "partial", "blocked"
 VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = "schema_miss", "listing_detection_failed", "empty"
-DEFAULT_URL_BATCH_CONCURRENCY = 4
 
 
 async def _load_run_with_normalized_status(
@@ -150,8 +149,8 @@ async def _run_control_update(
     return run
 
 
-async def process_run(session: AsyncSession, run_id: int) -> None:
-    """Compatibility wrapper so test patches on crawl_service symbols still apply."""
+def _wire_runtime_dependencies() -> None:
+    """Keep runtime modules aligned with crawl_service patch points for tests."""
     from app.services.pipeline import core as pipeline_core
     from app.services import _batch_runtime as batch_runtime
 
@@ -162,11 +161,18 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
     pipeline_core.review_field_candidates = review_field_candidates
     pipeline_core._process_single_url = _process_single_url
     batch_runtime._process_single_url = _process_single_url
+
+
+async def process_run(session: AsyncSession, run_id: int) -> None:
+    """Compatibility wrapper so test patches on crawl_service symbols still apply."""
+    _wire_runtime_dependencies()
     await _batch_process_run(session, run_id)
 
 
 async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
-    async def _operation(retry_session: AsyncSession, retry_run: CrawlRun, current: CrawlStatus) -> None:
+    async def _operation(
+        retry_session: AsyncSession, retry_run: CrawlRun, current: CrawlStatus
+    ) -> None:
         if current != CrawlStatus.RUNNING:
             raise ValueError(f"Cannot pause run in state: {retry_run.status}")
         set_control_request(retry_run, CONTROL_REQUEST_PAUSE)
@@ -178,8 +184,12 @@ async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
         )
 
     return await _run_control_update(session, run, _operation)
+
+
 async def resume_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
-    async def _operation(retry_session: AsyncSession, retry_run: CrawlRun, current: CrawlStatus) -> None:
+    async def _operation(
+        retry_session: AsyncSession, retry_run: CrawlRun, current: CrawlStatus
+    ) -> None:
         if current != CrawlStatus.PAUSED:
             raise ValueError(f"Cannot resume run in state: {retry_run.status}")
         update_run_status(retry_run, CrawlStatus.RUNNING)
@@ -187,8 +197,12 @@ async def resume_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
         await _log(retry_session, retry_run.id, "info", "Resume requested")
 
     return await _run_control_update(session, run, _operation)
+
+
 async def kill_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
-    async def _operation(retry_session: AsyncSession, retry_run: CrawlRun, current: CrawlStatus) -> None:
+    async def _operation(
+        retry_session: AsyncSession, retry_run: CrawlRun, current: CrawlStatus
+    ) -> None:
         if current in TERMINAL_STATUSES:
             raise ValueError(f"Cannot kill run in terminal state: {retry_run.status}")
         if current == CrawlStatus.RUNNING:
@@ -210,5 +224,7 @@ async def kill_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
             )
 
     return await _run_control_update(session, run, _operation)
+
+
 async def cancel_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
     return await kill_run(session, run)

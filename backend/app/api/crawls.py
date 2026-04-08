@@ -1,6 +1,7 @@
 # Crawl run route handlers.
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, NoReturn
 
@@ -10,12 +11,15 @@ from fastapi import (
     HTTPException,
     Query,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
     File,
     Form,
     status,
 )
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.websockets import WebSocketState
 
 from app.core.database import SessionLocal
 from app.core.dependencies import get_current_user, get_db
@@ -68,11 +72,45 @@ RUN_CONFLICT_RESPONSE = {
 }
 
 
+async def _resolve_websocket_user(websocket: WebSocket) -> User | None:
+    token = websocket.cookies.get("access_token")
+    if not token:
+        auth_header = websocket.headers.get("authorization", "")
+        scheme, _, credentials = auth_header.partition(" ")
+        if scheme.lower() == "bearer" and credentials.strip():
+            token = credentials.strip()
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token)
+        user_id = int(payload["sub"])
+        token_version = int(payload.get("ver", 0))
+    except (JWTError, KeyError, ValueError):
+        return None
+
+    async with SessionLocal() as session:
+        user = await session.get(User, user_id)
+        if user is None or not user.is_active:
+            return None
+        user_token_version = user.token_version if user.token_version is not None else 0
+        if user_token_version != token_version:
+            return None
+        return user
+
+
 def _raise_http_from_value_error(
     *, status_code: int, exc: ValueError
 ) -> NoReturn:
     """Translate validation/business ValueError into HTTPException preserving cause."""
     raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+async def _close_websocket_safely(
+    websocket: WebSocket, *, code: int, reason: str
+) -> None:
+    if websocket.application_state == WebSocketState.CONNECTING:
+        await websocket.accept()
+    await websocket.close(code=code, reason=reason)
 
 
 @router.post(
@@ -382,11 +420,61 @@ async def crawls_logs(
     run_id: int,
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
+    after_id: int | None = None,
+    limit: int = 500,
 ) -> list[LogEntryResponse]:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
         )
-    rows = await get_run_logs(session, run_id)
+    safe_limit = max(1, min(limit, 2000))
+    rows = await get_run_logs(session, run_id, after_id=after_id, limit=safe_limit)
     return [LogEntryResponse.model_validate(row, from_attributes=True) for row in rows]
+
+
+@router.websocket("/{run_id}/logs/ws")
+async def crawls_logs_ws(websocket: WebSocket, run_id: int, after_id: int | None = None) -> None:
+    user = await _resolve_websocket_user(websocket)
+    if user is None:
+        await _close_websocket_safely(
+            websocket, code=1008, reason="Not authenticated"
+        )
+        return
+
+    async with SessionLocal() as session:
+        run = await get_run(session, run_id)
+        if run is None or (user.role != "admin" and run.user_id != user.id):
+            await _close_websocket_safely(
+                websocket, code=1008, reason=RUN_NOT_FOUND_DETAIL
+            )
+            return
+
+    await websocket.accept()
+    cursor = after_id
+    try:
+        while True:
+            async with SessionLocal() as session:
+                rows = await get_run_logs(session, run_id, after_id=cursor, limit=500)
+                run = await get_run(session, run_id)
+
+            for row in rows:
+                await websocket.send_json(serialize_log_event(row))
+                cursor = row.id
+
+            if run is None:
+                await websocket.close(code=1008, reason=RUN_NOT_FOUND_DETAIL)
+                return
+            if normalize_status(run.status) in TERMINAL_STATUSES and not rows:
+                await websocket.close(code=1000, reason="Run completed")
+                return
+            await asyncio.sleep(0.75)
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        logger.exception("Run logs websocket stream failed for run %s", run_id)
+        try:
+            await websocket.close(code=1011, reason=f"stream_error: {type(exc).__name__}")
+        except Exception:
+            logger.debug("Failed to close websocket after stream error", exc_info=True)
+        return

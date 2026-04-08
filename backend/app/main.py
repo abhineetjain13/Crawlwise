@@ -31,6 +31,7 @@ from app.core.telemetry import (
     set_correlation_id,
 )
 from app.services.auth_service import bootstrap_admin_user
+from app.services.acquisition.browser_client import shutdown_browser_pool
 from app.services.workers import CrawlWorkerLoop, QueueLeaseConfig, default_worker_id, recover_stale_leases
 
 
@@ -39,15 +40,19 @@ async def lifespan(_: FastAPI):
     worker = CrawlWorkerLoop(
         config=QueueLeaseConfig(worker_id=default_worker_id())
     )
+    started = False
     async with SessionLocal() as session:
         await ensure_sqlite_queue_lease_columns(session)
         await bootstrap_admin_user(session)
         await recover_stale_inflight_runs(session)
-    await worker.start()
     try:
+        await worker.start()
+        started = True
         yield
     finally:
-        await worker.stop()
+        if started:
+            await worker.stop()
+        await shutdown_browser_pool()
 
 
 async def recover_stale_inflight_runs(session) -> list[int]:

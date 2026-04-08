@@ -7,6 +7,11 @@ preventing the need for runtime monkeypatching.
 from __future__ import annotations
 
 from app.services.acquisition.acquirer import acquire as _acquire, AcquisitionResult
+from app.services.pipeline_config import (
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_SCROLLS,
+    DEFAULT_SLEEP_MS,
+)
 from app.services.adapters.registry import (
     run_adapter as _run_adapter,
     try_blocked_adapter_recovery as _try_blocked_adapter_recovery,
@@ -21,9 +26,9 @@ async def acquire(
     surface: str,
     proxy_list: list[str] | None = None,
     traversal_mode: str | None = None,
-    max_pages: int = 5,
-    max_scrolls: int = 10,
-    sleep_ms: int = 0,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    max_scrolls: int = DEFAULT_MAX_SCROLLS,
+    sleep_ms: int = DEFAULT_SLEEP_MS,
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[str]] | None = None,
     acquisition_profile: dict[str, object] | None = None,

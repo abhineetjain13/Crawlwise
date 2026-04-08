@@ -1,7 +1,6 @@
 # Playwright browser acquisition client with optional proxy and network interception.
 from __future__ import annotations
 
-import atexit
 import logging
 
 import asyncio
@@ -86,6 +85,16 @@ _RETRYABLE_PAGE_CONTENT_ERROR_RE = re.compile(
 _BROWSER_POOL_MAX_SIZE = 6
 _BROWSER_POOL_IDLE_TTL_SECONDS = 300
 _BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS = 60
+
+
+def _traversal_config() -> TraversalConfig:
+    return TraversalConfig(
+        pagination_next_selectors=list(PAGINATION_NEXT_SELECTORS),
+        load_more_selectors=list(LOAD_MORE_SELECTORS),
+        scroll_wait_min_ms=SCROLL_WAIT_MIN_MS,
+        load_more_wait_min_ms=LOAD_MORE_WAIT_MIN_MS,
+        validate_public_target=validate_public_target,
+    )
 
 
 @dataclass
@@ -415,7 +424,13 @@ async def _fetch_rendered_html_attempt(
                 request_delay_ms=request_delay_ms,
                 checkpoint=checkpoint,
             )
-        except Exception as exc:
+        except (
+            PlaywrightError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            OSError,
+        ) as exc:
             logger.warning(
                 "[traversal] fallback to single-page, reason=exception:%s, url=%s",
                 type(exc).__name__,
@@ -521,7 +536,7 @@ def _browser_is_connected(browser: object) -> bool:
         return True
     try:
         return bool(checker())
-    except Exception:
+    except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
         return False
 
 
@@ -530,7 +545,7 @@ async def _close_browser_safe(browser: object) -> None:
         await browser.close()
     except PlaywrightError:
         logger.debug("Failed to close pooled browser", exc_info=True)
-    except Exception:
+    except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
         logger.debug("Unexpected pooled browser close failure", exc_info=True)
 
 
@@ -562,14 +577,6 @@ async def _shutdown_browser_pool() -> None:
         await _close_browser_safe(browser)
 
 
-def _shutdown_browser_pool_sync() -> None:
-    try:
-        asyncio.run(_shutdown_browser_pool())
-    except RuntimeError:
-        # Event loop may already be running/interpreter may be shutting down.
-        pass
-
-
 async def _browser_pool_healthcheck_loop() -> None:
     while True:
         await asyncio.sleep(_BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS)
@@ -594,31 +601,42 @@ async def _acquire_browser(
     await _ensure_browser_pool_maintenance_task()
     await _evict_idle_or_dead_browsers()
     to_close: list[object] = []
+    browser = None
+    now = time.monotonic()
     async with _BROWSER_POOL_LOCK:
-        now = time.monotonic()
         if not force_new:
             pooled = _BROWSER_POOL.get(browser_pool_key)
             if pooled is not None and _browser_is_connected(pooled.browser):
                 pooled.last_used_monotonic = now
                 return pooled.browser, True
             _BROWSER_POOL.pop(browser_pool_key, None)
-        browser = await browser_type.launch(**launch_kwargs)
-        _BROWSER_POOL[browser_pool_key] = _PooledBrowser(
-            browser=browser,
-            last_used_monotonic=now,
-        )
-        if len(_BROWSER_POOL) > _BROWSER_POOL_MAX_SIZE:
-            lru_key = min(
-                _BROWSER_POOL,
-                key=lambda key: _BROWSER_POOL[key].last_used_monotonic,
+    browser = await browser_type.launch(**launch_kwargs)
+    async with _BROWSER_POOL_LOCK:
+        now = time.monotonic()
+        pooled = _BROWSER_POOL.get(browser_pool_key)
+        if not force_new and pooled is not None and _browser_is_connected(pooled.browser):
+            pooled.last_used_monotonic = now
+            to_close.append(browser)
+            browser = pooled.browser
+            reused = True
+        else:
+            _BROWSER_POOL[browser_pool_key] = _PooledBrowser(
+                browser=browser,
+                last_used_monotonic=now,
             )
-            if lru_key != browser_pool_key:
-                entry = _BROWSER_POOL.pop(lru_key, None)
-                if entry is not None:
-                    to_close.append(entry.browser)
+            reused = False
+            if len(_BROWSER_POOL) > _BROWSER_POOL_MAX_SIZE:
+                lru_key = min(
+                    _BROWSER_POOL,
+                    key=lambda key: _BROWSER_POOL[key].last_used_monotonic,
+                )
+                if lru_key != browser_pool_key:
+                    entry = _BROWSER_POOL.pop(lru_key, None)
+                    if entry is not None:
+                        to_close.append(entry.browser)
     for stale_browser in to_close:
         await _close_browser_safe(stale_browser)
-    return browser, False
+    return browser, reused
 
 
 async def _evict_browser(browser_pool_key: str, browser) -> None:
@@ -809,12 +827,14 @@ async def _apply_traversal_mode(
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> TraversalResult:
+    traversal_config = _traversal_config()
+
     return await _apply_traversal_mode_shared(
         page,
         surface,
         traversal_mode,
         max_scrolls,
-        config=TraversalConfig(),
+        config=traversal_config,
         max_pages=max_pages,
         request_delay_ms=request_delay_ms,
         page_content_with_retry=_page_content_with_retry,
@@ -846,12 +866,10 @@ async def _collect_paginated_html(
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> _PaginatedHtmlResult:
+    traversal_config = _traversal_config()
     traversal_result = await _collect_paginated_html_shared(
         page,
-        config=TraversalConfig(
-            pagination_next_selectors=list(PAGINATION_NEXT_SELECTORS),
-            validate_public_target=validate_public_target,
-        ),
+        config=traversal_config,
         surface=surface,
         max_pages=max_pages,
         request_delay_ms=request_delay_ms,
@@ -1090,11 +1108,10 @@ async def _wait_for_surface_readiness(
 
 
 async def _find_next_page_url_anchor_only(page) -> str:
+    traversal_config = _traversal_config()
     return await _find_next_page_url_anchor_only_shared(
         page,
-        config=TraversalConfig(
-            pagination_next_selectors=list(PAGINATION_NEXT_SELECTORS),
-        ),
+        config=traversal_config,
     )
 
 
@@ -1115,11 +1132,10 @@ async def _click_and_observe_next_page(
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> str:
+    traversal_config = _traversal_config()
     return await _click_and_observe_next_page_shared(
         page,
-        config=TraversalConfig(
-            pagination_next_selectors=list(PAGINATION_NEXT_SELECTORS),
-        ),
+        config=traversal_config,
         checkpoint=checkpoint,
     )
 
@@ -1481,10 +1497,11 @@ async def _scroll_to_bottom(
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object]:
+    traversal_config = _traversal_config()
     return await _scroll_to_bottom_shared(
         page,
         max_scrolls,
-        config=TraversalConfig(scroll_wait_min_ms=SCROLL_WAIT_MIN_MS),
+        config=traversal_config,
         request_delay_ms=request_delay_ms,
         cooperative_sleep_ms=_cooperative_sleep_ms,
         snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
@@ -1499,13 +1516,11 @@ async def _click_load_more(
     request_delay_ms: int,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object]:
+    traversal_config = _traversal_config()
     return await _click_load_more_shared(
         page,
         max_clicks,
-        config=TraversalConfig(
-            load_more_selectors=list(LOAD_MORE_SELECTORS),
-            load_more_wait_min_ms=LOAD_MORE_WAIT_MIN_MS,
-        ),
+        config=traversal_config,
         request_delay_ms=request_delay_ms,
         cooperative_sleep_ms=_cooperative_sleep_ms,
         snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
@@ -1514,9 +1529,10 @@ async def _click_load_more(
 
 
 async def _has_load_more_control(page) -> bool:
+    traversal_config = _traversal_config()
     return await _has_load_more_control_shared(
         page,
-        config=TraversalConfig(load_more_selectors=list(LOAD_MORE_SELECTORS)),
+        config=traversal_config,
     )
 
 
@@ -1797,4 +1813,5 @@ def _chromium_host_rule_ip(ip_text: str) -> str:
     return f"[{value.compressed}]" if value.version == 6 else value.compressed
 
 
-atexit.register(_shutdown_browser_pool_sync)
+async def shutdown_browser_pool() -> None:
+    await _shutdown_browser_pool()

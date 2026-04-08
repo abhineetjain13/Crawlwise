@@ -44,11 +44,11 @@ export function Title({
   return (
     <div className={cn("space-y-1", className)}>
       {kicker ? (
-        <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--accent)]">
+        <p className="text-kicker text-[var(--accent)]">
           {kicker}
         </p>
       ) : null}
-      <h1 className="text-[18px] font-semibold tracking-[var(--tracking-tight)] text-[var(--text-primary)] sm:text-[20px]">
+      <h1 className="text-title-sm text-[var(--text-primary)] sm:text-[20px]">
         {children}
       </h1>
     </div>
@@ -56,7 +56,7 @@ export function Title({
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="max-w-2xl text-[13px] leading-5 text-[var(--text-muted)]">{children}</p>;
+  return <p className="max-w-2xl text-body-sm leading-5 text-[var(--text-muted)]">{children}</p>;
 }
 
 /* ─── Field ──────────────────────────────────────────────────────────────── */
@@ -69,7 +69,7 @@ export function Field({
     <label className="grid gap-1.5">
       <span className="label-caps">{label}</span>
       {children}
-      {hint ? <span className="text-[11px] text-[var(--text-muted)]">{hint}</span> : null}
+      {hint ? <span className="text-meta text-[var(--text-muted)]">{hint}</span> : null}
     </label>
   );
 }
@@ -88,7 +88,7 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
       {...normalizedProps}
       className={cn(
         "focus-ring h-8 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
-        "bg-[var(--control-input-bg)] px-3 text-[13px] text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
+        "bg-[var(--control-input-bg)] px-3 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
         "placeholder:text-[var(--text-muted)]",
@@ -112,7 +112,7 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
       {...normalizedProps}
       className={cn(
         "focus-ring min-h-20 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
-        "bg-[var(--control-input-bg)] px-3 py-2 text-[13px] text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
+        "bg-[var(--control-input-bg)] px-3 py-2 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
         "placeholder:text-[var(--text-muted)]",
@@ -144,9 +144,9 @@ export function Button({
     danger:    "border border-[var(--danger-bg)] bg-transparent text-[var(--danger)] hover:bg-[var(--danger-bg)]",
   };
   const sizes: Record<string, string> = {
-    sm:   "h-7 px-2.5 text-[12px]",
-    md:   "h-8 px-3.5 text-[13px]",
-    lg:   "h-9 px-4 text-[14px]",
+    sm:   "h-7 px-2.5 text-caption",
+    md:   "h-8 px-3.5 text-body-sm",
+    lg:   "h-9 px-4 text-body",
     icon: "h-8 w-8 p-0",
   };
   return (
@@ -185,7 +185,7 @@ export function Badge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5",
-        "text-[10px] font-semibold uppercase tracking-[0.05em]",
+        "text-meta font-semibold uppercase tracking-[0.05em]",
         tones[tone] ?? tones.neutral,
         className,
       )}
@@ -239,7 +239,7 @@ export function Metric({
       {loading ? (
         <div className="skeleton h-7 w-20" aria-hidden />
       ) : (
-        <div className="text-[22px] font-bold tracking-[var(--tracking-tighter)] text-[var(--text-primary)]">
+        <div className="text-title-md text-[var(--text-primary)]">
           {value}
         </div>
       )}
@@ -284,12 +284,12 @@ export function StatCard({
       {loading ? (
         <div className="mt-2.5 skeleton h-9 w-28" aria-hidden />
       ) : (
-        <div className="mt-2 text-[28px] font-bold tracking-[var(--tracking-tighter)] text-[var(--text-primary)]">
+        <div className="mt-2 text-[var(--text-2xl)] font-bold tracking-[var(--tracking-tighter)] text-[var(--text-primary)]">
           {value}
         </div>
       )}
       {sub && !loading && (
-        <div className="mt-1.5 text-[11px] font-medium text-[var(--text-muted)]">
+        <div className="mt-1.5 text-meta font-medium text-[var(--text-muted)]">
           {sub}
         </div>
       )}
@@ -305,13 +305,13 @@ export function DataList({
 }: Readonly<{ title: string; items: ReactNode[]; empty: string }>) {
   return (
     <Card className="space-y-3">
-      <h2 className="text-[15px] font-semibold tracking-[var(--tracking-tight)] text-[var(--text-primary)]">
+      <h2 className="text-[var(--text-md)] font-semibold tracking-[var(--tracking-tight)] text-[var(--text-primary)]">
         {title}
       </h2>
       {items.length ? (
         <div className="grid gap-2">{items}</div>
       ) : (
-        <p className="text-[13px] text-[var(--text-muted)]">{empty}</p>
+        <p className="text-body-sm text-[var(--text-muted)]">{empty}</p>
       )}
     </Card>
   );
@@ -326,7 +326,7 @@ export function CodeBlock({
     <pre
       className={cn(
         "max-h-[28rem] overflow-auto rounded-[var(--radius-lg)] border border-[var(--border)]",
-        "bg-[var(--bg-elevated)] p-4 font-mono text-[12px] leading-[1.6] text-[var(--text-primary)]",
+        "bg-[var(--bg-elevated)] p-4 font-mono text-caption leading-[1.6] text-[var(--text-primary)]",
         className,
       )}
     >
@@ -374,7 +374,7 @@ export function TableHead({ children, className }: Readonly<{ children: ReactNod
   return (
     <th
       className={cn(
-        "h-9 px-4 text-left align-middle text-[11px] font-semibold uppercase tracking-[0.05em] text-[var(--text-muted)]",
+        "h-9 px-4 text-left align-middle text-meta font-semibold uppercase tracking-[0.05em] text-[var(--text-muted)]",
         className,
       )}
     >

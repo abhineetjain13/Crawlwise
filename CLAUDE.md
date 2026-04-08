@@ -39,6 +39,7 @@ Page type is no longer split into separate frontend pages. The unified crawl UI 
 
 - `settings.page_type="category"` with `surface="ecommerce_listing"`
 - `settings.page_type="pdp"` with `surface="ecommerce_detail"`
+- Frontend must derive `surface` directly from selected page type (`category`/`pdp`); do not expose an independent surface dropdown that can desynchronize payloads.
 
 Category is the default page type in the UI.
 
@@ -184,7 +185,7 @@ Code should continue to import from `pipeline_config.py`, not duplicate config v
 - Extraction pipeline is ACQUIRE → EXTRACT → UNIFY → PUBLISH with listing fallback guard and deterministic first-match field resolution.
 - Config is typed Python modules behind `pipeline_config.py`; no runtime selector CRUD/site-memory fallback subsystems in the active extraction path.
 - Generic crawler paths are policy-driven: no tenant/site hardcodes; platform behavior is family-based and minimized to the required families.
-- Browser-first policy is family-driven (`PLATFORM_BROWSER_POLICIES`), ATS URL classification uses known family domains (no loose host token guessing).
+- Browser-required policy for specific platform families (`PLATFORM_BROWSER_POLICIES`) overrides the default curl-first HTML waterfall (`curl_cffi` -> Playwright fallback); ATS URL classification uses known family domains (no loose host token guessing).
 - Acquisition hardening remains active: curl-first waterfall, TLS-safe hostname pinning, fail-closed URL safety, observational diagnostics artifacts, policy-driven cookies.
 - LLM/runtime behavior remains fail-fast on 429; dynamic field quality gates and JSON-LD structural filtering remain enforced.
 

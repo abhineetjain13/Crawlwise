@@ -1,0 +1,91 @@
+import { describe, expect, it } from "vitest";
+
+import { buildDispatch } from "./crawl-config-screen";
+import type { CrawlConfig } from "../../lib/api/types";
+
+function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
+  return {
+    module: "category",
+    surface: "ecommerce_listing",
+    mode: "single",
+    target_url: "https://example.com/collections/chairs",
+    bulk_urls: "",
+    csv_file: null,
+    smart_extraction: false,
+    advanced_enabled: false,
+    advanced_mode: "auto",
+    anti_bot_enabled: false,
+    request_delay_ms: 2000,
+    max_records: 100,
+    max_pages: 5,
+    max_scrolls: 10,
+    proxy_enabled: false,
+    proxy_lines: [],
+    additional_fields: [],
+    ...overrides,
+  };
+}
+
+describe("buildDispatch", () => {
+  it("defaults category single runs to ecommerce listing surface", () => {
+    const dispatch = buildDispatch(baseConfig());
+
+    expect(dispatch.runType).toBe("crawl");
+    expect(dispatch.surface).toBe("ecommerce_listing");
+    expect(dispatch.url).toBe("https://example.com/collections/chairs");
+  });
+
+  it("preserves advanced_mode auto when auto is selected", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        advanced_enabled: true,
+        advanced_mode: "auto",
+      }),
+    );
+
+    expect(dispatch.settings.advanced_enabled).toBe(true);
+    expect(dispatch.settings.advanced_mode).toBe("auto");
+  });
+
+  it("maps view_all to canonical load_more mode", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        advanced_enabled: true,
+        advanced_mode: "view_all",
+      }),
+    );
+
+    expect(dispatch.settings.advanced_mode).toBe("load_more");
+  });
+
+  it("submits pdp batch as ecommerce detail with URL list", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        module: "pdp",
+        surface: "ecommerce_detail",
+        mode: "batch",
+        target_url: "",
+        bulk_urls: "https://example.com/p/1\nhttps://example.com/p/2",
+      }),
+    );
+
+    expect(dispatch.runType).toBe("batch");
+    expect(dispatch.surface).toBe("ecommerce_detail");
+    expect(dispatch.urls).toEqual(["https://example.com/p/1", "https://example.com/p/2"]);
+    expect(dispatch.settings.urls).toEqual(["https://example.com/p/1", "https://example.com/p/2"]);
+  });
+
+  it("throws when batch mode has no URLs", () => {
+    expect(() =>
+      buildDispatch(
+        baseConfig({
+          module: "pdp",
+          surface: "ecommerce_detail",
+          mode: "batch",
+          target_url: "",
+          bulk_urls: "   ",
+        }),
+      ),
+    ).toThrow("Batch crawl needs at least one URL.");
+  });
+});

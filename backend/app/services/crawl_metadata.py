@@ -10,7 +10,9 @@ from app.services.schema_service import load_resolved_schema
 
 
 def _clean_candidate_text(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
+    if value is None:
+        return ""
+    return " ".join(str(value).split()).strip()
 
 
 def _compact_dict(payload: dict) -> dict:
@@ -62,13 +64,14 @@ def refresh_record_commit_metadata(
     }
     sources.add(source_label)
     canonical_fields = set(get_canonical_fields(run.surface))
+    cleaned_value = (
+        _clean_candidate_text(value) if value not in (None, "", [], {}) else None
+    )
     field_discovery[field_name] = _compact_dict(
         {
             **existing_entry,
             "status": "found",
-            "value": _clean_candidate_text(value)
-            if value not in (None, "", [], {})
-            else None,
+            "value": cleaned_value,
             "sources": sorted(sources),
             "is_canonical": existing_entry["is_canonical"]
             if "is_canonical" in existing_entry
@@ -84,7 +87,7 @@ def refresh_record_commit_metadata(
     source_trace["field_discovery_missing"] = missing_fields
 
     committed_fields = dict(source_trace.get("committed_fields") or {})
-    committed_fields[field_name] = {"value": value, "source": source_label}
+    committed_fields[field_name] = {"value": cleaned_value, "source": source_label}
     source_trace["committed_fields"] = committed_fields
     record.source_trace = source_trace
 

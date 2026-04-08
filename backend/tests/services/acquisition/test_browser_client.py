@@ -56,7 +56,7 @@ class FakePage:
 async def test_is_public_browser_request_target_allows_non_http_scheme():
     allowed, reason = await _is_public_browser_request_target("data:text/plain,ok")
     assert allowed is True
-    assert reason == "non_http_scheme"
+    assert reason == "non_http_scheme:allowed_data"
 
 
 @pytest.mark.asyncio
@@ -348,7 +348,7 @@ class FakePaginationPage:
         self.goto_calls.append(url)
         self.url = url
 
-    async def evaluate(self, _script: str):
+    async def evaluate(self, _script: str, *_args):
         return ""
 
 
@@ -403,6 +403,9 @@ class FakeClickObservePage:
 
     async def wait_for_timeout(self, value: int):
         self.wait_calls.append(value)
+
+    async def evaluate(self, _script: str, *_args):
+        return ""
 
 
 class FakeScrollPage:

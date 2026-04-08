@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, Tag
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from curl_cffi.requests.errors import RequestsError as CurlRequestsError
 
 try:
     from curl_cffi import requests as curl_requests
@@ -83,7 +84,7 @@ class ICIMSAdapter(BaseAdapter):
                     impersonate="chrome110",
                     timeout=15,
                 )
-            except (OSError, RuntimeError, ValueError, TypeError):
+            except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError):
                 break
             if response.status_code != 200 or not response.text:
                 break
@@ -142,7 +143,7 @@ class ICIMSAdapter(BaseAdapter):
                 impersonate="chrome110",
                 timeout=15,
             )
-        except (OSError, RuntimeError, ValueError, TypeError):
+        except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError):
             logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
             return fallback_html
         if response.status_code == 200 and response.text:

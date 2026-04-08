@@ -7,6 +7,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from curl_cffi.requests.errors import RequestsError
 
 try:
     from curl_cffi import requests as curl_requests
@@ -136,7 +137,14 @@ class PaycomAdapter(BaseAdapter):
                 if response.status_code != 200:
                     break
                 body = response.json()
-            except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                json.JSONDecodeError,
+                RequestsError,
+            ):
                 break
             previews = body.get("jobPostingPreviews") if isinstance(body, dict) else []
             if not isinstance(previews, list) or not previews:
@@ -171,7 +179,14 @@ class PaycomAdapter(BaseAdapter):
             if response.status_code != 200:
                 return None
             body = response.json()
-        except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            json.JSONDecodeError,
+            RequestsError,
+        ):
             return None
         posting = body.get("jobPosting") if isinstance(body, dict) else None
         if not isinstance(posting, dict):

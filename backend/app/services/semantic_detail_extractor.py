@@ -58,6 +58,12 @@ _SECTION_BODY_SKIP_PHRASES = (
     "share this ad",
 )
 _IMAGE_COUNTER_RE = re.compile(r"^\d+\s+of\s+\d+$", re.IGNORECASE)
+_PRICE_ONLY_TEXT_RE = re.compile(r"[$€£]\s?\d[\d,.\s]*", re.IGNORECASE)
+_HEADING_TAG_RE = re.compile(r"h[1-6]", re.IGNORECASE)
+_HEADING_LEVEL_RE = re.compile(r"h([1-6])", re.IGNORECASE)
+_PACK_KEY_RE = re.compile(r"pack[_-]?\d+", re.IGNORECASE)
+_NUMERIC_KEY_RE = re.compile(r"\d+(?:[_-]\d+)*")
+_HAS_ALPHA_RE = re.compile(r"[a-z]", re.IGNORECASE)
 
 
 def extract_semantic_detail_data(
@@ -215,7 +221,7 @@ def _collect_feature_values(sections: dict[str, str]) -> list[str]:
             continue
         if len(normalized_body) < 24 or len(normalized_body) > 280:
             continue
-        if re.fullmatch(r"[$€£]\s?\d[\d,.\s]*", normalized_body):
+        if _PRICE_ONLY_TEXT_RE.fullmatch(normalized_body):
             continue
         if _FEATURE_SKIP_PATTERN.search(lowered_body):
             continue
@@ -450,9 +456,9 @@ def _should_keep_specification(key: str, value: str, *, preserve_visible: bool =
         return False
     if lowered_key in SPEC_DROP_LABELS:
         return False
-    if re.fullmatch(r"pack[_-]?\d+", lowered_key):
+    if _PACK_KEY_RE.fullmatch(lowered_key):
         return False
-    if re.fullmatch(r"\d+(?:[_-]\d+)*", lowered_key):
+    if _NUMERIC_KEY_RE.fullmatch(lowered_key):
         return False
     if _DAY_TIME_KEY_RE.fullmatch(lowered_key):
         return False
@@ -556,7 +562,8 @@ def _extract_section_content(node: Tag, soup: BeautifulSoup) -> str:
     if wrapped:
         return wrapped
 
-    if re.fullmatch(r"h[2-6]", (node.name or "").lower()):
+    node_name = str(node.name or "")
+    if _HEADING_TAG_RE.fullmatch(node_name) and node_name.lower() != "h1":
         return _collect_section_body(node)
 
     sibling = node.find_next_sibling()
@@ -576,7 +583,7 @@ def _extract_section_content(node: Tag, soup: BeautifulSoup) -> str:
 
 
 def _heading_level(tag_name: str) -> int:
-    match = re.fullmatch(r"h([1-6])", tag_name.lower())
+    match = _HEADING_LEVEL_RE.fullmatch(str(tag_name or ""))
     return int(match.group(1)) if match else 0
 
 
@@ -609,7 +616,8 @@ def _collect_labeled_sibling_body(node: Tag) -> str:
     sibling = node.find_next_sibling()
     steps = 0
     while isinstance(sibling, Tag) and steps < 20:
-        if re.fullmatch(r"h[1-6]", (sibling.name or "").lower()) or sibling.name == "summary":
+        sibling_name = str(sibling.name or "")
+        if _HEADING_TAG_RE.fullmatch(sibling_name) or sibling_name.lower() == "summary":
             break
         if _is_major_section_break(sibling):
             break
@@ -635,7 +643,7 @@ def _is_prominent_section_label_node(node: Tag) -> bool:
     lowered = text.lower()
     if not text or len(text) > 80:
         return False
-    if not re.search(r"[a-z]", lowered):
+    if not _HAS_ALPHA_RE.search(lowered):
         return False
     if any(token in lowered for token in SECTION_SKIP_PATTERNS):
         return False
@@ -701,7 +709,7 @@ def _is_section_label(text: str) -> bool:
     lowered = text.lower()
     if not text or len(text) > 80:
         return False
-    if not re.search(r"[a-z]", lowered):
+    if not _HAS_ALPHA_RE.search(lowered):
         return False
     if any(token in lowered for token in SECTION_SKIP_PATTERNS):
         return False

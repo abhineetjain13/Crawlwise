@@ -8,11 +8,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 
 import { Badge, Button, Input, Textarea, Toggle as PrimitiveToggle } from "../ui/primitives";
 import type { CrawlRecord, CrawlRun, CrawlSurface } from "../../lib/api/types";
+import { formatTimeHms, parseApiDate } from "../../lib/format/date";
 import { cn } from "../../lib/utils";
 
 export type CrawlTab = "category" | "pdp";
@@ -181,10 +182,8 @@ export function readRecordValue(record: CrawlRecord, field: string) {
 
 export function formatDuration(start?: string | null, end?: string | null) {
   if (!start) return "--";
-  const started = new Date(start).getTime();
-  // Ensure we compare apples to apples: backend created_at is UTC. 
-  // If we don't have end_at, use a UTC-synced timestamp.
-  const finished = end ? new Date(end).getTime() : new Date(new Date().toISOString()).getTime();
+  const started = parseApiDate(start).getTime();
+  const finished = end ? parseApiDate(end).getTime() : Date.now();
 
   if (!Number.isFinite(started) || !Number.isFinite(finished)) return "--";
   const ms = Math.max(0, finished - started);
@@ -307,20 +306,6 @@ export function scrollViewportToBottom(ref: RefObject<HTMLDivElement | null>) {
   });
 }
 
-export function ProgressBar({ percent }: Readonly<{ percent: number }>) {
-  return (
-    <div className="space-y-1">
-      <div className="h-1.5 rounded-full bg-border">
-        <div
-          className={cn("h-1.5 rounded-full bg-accent transition-all", percent > 90 && "bg-danger")}
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-      <div className="text-xs text-muted">{percent}% complete</div>
-    </div>
-  );
-}
-
 export const LogTerminal = memo(function LogTerminal({
   logs,
   live = false,
@@ -342,7 +327,7 @@ export const LogTerminal = memo(function LogTerminal({
       {logs.length ? (
         logs.map((log) => (
           <div key={log.id} className="font-mono text-xs leading-6">
-            <span className="text-muted">[{formatTimestamp(log.created_at)}]</span>{" "}
+            <span className="text-muted">[{formatTimeHms(log.created_at)}]</span>{" "}
             <span
               className={cn(
                 "inline-flex items-center px-1.5 py-0.5 text-xs font-semibold tracking-[0.08em]",
@@ -360,48 +345,6 @@ export const LogTerminal = memo(function LogTerminal({
     </div>
   );
 });
-
-export function TabBar({
-  value,
-  onChange,
-  options,
-}: Readonly<{
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-}>) {
-  return (
-    <div className="inline-flex h-8 items-center rounded-[var(--radius-md)] border border-border bg-[var(--segmented-bg)] p-0.5 shadow-[var(--segmented-shadow)]">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "h-7 rounded-[var(--radius-md)] px-3 text-sm font-medium transition-all",
-            value === option.value
-              ? "segmented-active"
-              : "text-muted hover:bg-[var(--segmented-item-hover-bg)] hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-export function SegmentedMode({
-  value,
-  onChange,
-  options,
-}: Readonly<{
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-}>) {
-  return <TabBar value={value} onChange={onChange} options={options} />;
-}
 
 export function AdvancedModePicker({
   value,
@@ -699,8 +642,46 @@ export const RecordsTable = memo(function RecordsTable({
   onSelectAll: (checked: boolean) => void;
   onToggleRow: (id: number, checked: boolean) => void;
 }>) {
+  const rowHeightPx = 40;
+  const overscanRows = 8;
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(560);
+  const [containerNode, setContainerNode] = useState<HTMLDivElement | null>(null);
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    setContainerNode(node);
+    if (node) {
+      setViewportHeight(node.clientHeight || 560);
+    }
+  }, []);
+  const totalCount = records.length;
+  const startIndex = Math.max(0, Math.floor(scrollTop / rowHeightPx) - overscanRows);
+  const visibleCount = Math.ceil(viewportHeight / rowHeightPx) + overscanRows * 2;
+  const endIndex = Math.min(totalCount, startIndex + visibleCount);
+  const windowedRecords = records.slice(startIndex, endIndex);
+  const topSpacerPx = startIndex * rowHeightPx;
+  const bottomSpacerPx = Math.max(0, (totalCount - endIndex) * rowHeightPx);
+
+  useEffect(() => {
+    if (!containerNode) {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+      setViewportHeight(entry.contentRect.height || 560);
+    });
+    observer.observe(containerNode);
+    return () => observer.disconnect();
+  }, [containerNode]);
+
   return (
-    <div className="overflow-auto rounded-[var(--radius-lg)] border border-border">
+    <div
+      ref={setContainerRef}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      className="max-h-[70vh] overflow-auto rounded-[var(--radius-lg)] border border-border"
+    >
       <table className="compact-data-table min-w-[960px]">
         <thead>
           <tr>
@@ -728,7 +709,12 @@ export const RecordsTable = memo(function RecordsTable({
           </tr>
         </thead>
         <tbody>
-          {records.map((record) => (
+          {topSpacerPx > 0 ? (
+            <tr aria-hidden="true">
+              <td colSpan={visibleColumns.length + 1} style={{ height: `${topSpacerPx}px`, padding: 0 }} />
+            </tr>
+          ) : null}
+          {windowedRecords.map((record) => (
             <tr key={record.id}>
               <td>
                 <input
@@ -746,6 +732,11 @@ export const RecordsTable = memo(function RecordsTable({
               ))}
             </tr>
           ))}
+          {bottomSpacerPx > 0 ? (
+            <tr aria-hidden="true">
+              <td colSpan={visibleColumns.length + 1} style={{ height: `${bottomSpacerPx}px`, padding: 0 }} />
+            </tr>
+          ) : null}
         </tbody>
       </table>
     </div>
@@ -768,25 +759,6 @@ export function ActionButton({
     >
       {label}
     </Button>
-  );
-}
-
-export function OutputTab({
-  active = false,
-  children,
-  onClick,
-}: Readonly<{ active?: boolean; children: ReactNode; onClick: () => void }>) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "relative px-4 py-2 text-sm font-medium transition-colors",
-        active ? "text-[var(--text-primary)] after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-accent" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -921,10 +893,3 @@ function ValidatedField({
   );
 }
 
-function formatTimestamp(value: string) {
-  try {
-    return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  } catch {
-    return value;
-  }
-}

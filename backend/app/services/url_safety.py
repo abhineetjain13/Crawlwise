@@ -64,7 +64,12 @@ async def validate_public_target(url: str) -> ValidatedTarget:
         )
 
     port = _target_port(parsed)
-    resolved_ips = await _resolve_host_ips(hostname, port)
+    try:
+        resolved_ips = await _resolve_host_ips(hostname, port)
+    except ValueError as exc:
+        raise ValueError(
+            f"Proxy host could not be resolved to a valid IP address: {hostname}"
+        ) from exc
     validated_ips: list[str] = []
     for ip_text in resolved_ips:
         ip_value = _parse_ip(ip_text)

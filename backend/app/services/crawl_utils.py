@@ -82,7 +82,10 @@ def resolve_traversal_mode(settings: dict | None) -> str | None:
     """Resolve and validate the traversal mode from settings."""
     if not isinstance(settings, dict):
         return None
-    if not bool(settings.get("advanced_enabled")):
+    advanced_enabled_value = settings.get("advanced_enabled")
+    advanced_enabled = bool(advanced_enabled_value)
+    advanced_flag_present = advanced_enabled_value is not None
+    if advanced_flag_present and not advanced_enabled:
         return None
     # Preserve user-owned advanced mode semantics from the unified crawl UI.
     # `auto` means "no explicit traversal helper requested".
@@ -94,7 +97,7 @@ def resolve_traversal_mode(settings: dict | None) -> str | None:
     if mode in {"", "none", "single"}:
         return None
     if mode == "auto":
-        return "auto"
+        return "auto" if advanced_enabled else None
     if mode == "pagination":
         mode = "paginate"
     if mode == "infinite_scroll":
@@ -103,11 +106,14 @@ def resolve_traversal_mode(settings: dict | None) -> str | None:
         mode = "load_more"
     if mode in _TRAVERSAL_MODES:
         return mode
-    logger.warning(
-        "Unrecognized traversal_mode=%r with advanced_enabled=true; defaulting to auto",
-        mode,
-    )
-    return "auto"
+    if advanced_enabled:
+        logger.warning(
+            "Unrecognized traversal_mode=%r with advanced_enabled=true; defaulting to auto",
+            mode,
+        )
+        return "auto"
+    logger.warning("Unrecognized traversal_mode=%r; ignoring", mode)
+    return None
 
 
 # Field name normalization

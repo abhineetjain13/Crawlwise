@@ -77,8 +77,16 @@ export const api = {
     return apiClient.get<Paginated<CrawlRecord>>(withQuery(`/api/crawls/${runId}/records`, query));
   },
   getRecordProvenance: (recordId: number) => apiClient.get<CrawlRecordProvenance>(`/api/records/${recordId}/provenance`),
-  getCrawlLogs: (runId: number) => apiClient.get<CrawlLog[]>(`/api/crawls/${runId}/logs`),
+  getCrawlLogs: (runId: number, params?: { afterId?: number; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.afterId !== undefined) query.set("after_id", String(params.afterId));
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    return apiClient.get<CrawlLog[]>(withQuery(`/api/crawls/${runId}/logs`, query));
+  },
   getMarkdown: (runId: number) => apiClient.getText(`/api/crawls/${runId}/export/markdown`),
+  downloadCsv: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/csv`),
+  downloadJson: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/json`),
+  downloadMarkdown: (runId: number) => apiClient.getBlob(`/api/crawls/${runId}/export/markdown`),
   exportCsv: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/csv`,
   exportJson: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/json`,
   exportMarkdown: (runId: number) => `${getApiBaseUrl()}/api/crawls/${runId}/export/markdown`,
