@@ -5,13 +5,18 @@ import re
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.extraction_rules import (
     COOKIE_POLICY as _COOKIE_POLICY,
+    DISCOVERED_SOURCE_NOISE_TOKENS as _DISCOVERED_SOURCE_NOISE_TOKENS,
+    ECOMMERCE_ONLY_JOB_LISTING_FIELDS as _ECOMMERCE_ONLY_JOB_LISTING_FIELDS,
+    EMPTY_SENTINEL_VALUES as _EMPTY_SENTINEL_VALUES,
     EXTRACTION_RULES as _EXTRACTION_RULES,
     HYDRATED_STATE_PATTERNS as _HYDRATED_STATE_PATTERNS,
     KNOWN_ATS_PLATFORMS as _KNOWN_ATS_PLATFORMS,
     LLM_TUNING as _LLM_TUNING,
+    MAX_SELECTOR_ROWS_PER_FIELD as _MAX_SELECTOR_ROWS_PER_FIELD,
     NORMALIZATION_RULES as _NORM_RULES,
     PIPELINE_TUNING as _TUNING,
     PLATFORM_BROWSER_POLICIES as _PLATFORM_BROWSER_POLICIES,
+    REQUIRED_FIELDS_BY_SURFACE as _REQUIRED_FIELDS_BY_SURFACE,
     SITE_POLICY_REGISTRY as _SITE_POLICY_REGISTRY,
     VERDICT_RULES as _VERDICT_RULES,
 )
@@ -22,6 +27,7 @@ from app.services.config.field_mappings import (
     REQUESTED_FIELD_ALIASES as _REQUESTED_FIELD_ALIASES_FILE,
 )
 from app.services.config.selectors import (
+    ANCHOR_SELECTOR as _ANCHOR_SELECTOR,
     CARD_SELECTORS as _CARD_SELECTORS,
     CONSENT_SELECTORS as _CONSENT_SELECTORS,
     DISCOVERIST_SCHEMA as _DISCOVERIST_SCHEMA,
@@ -32,6 +38,7 @@ from app.services.config.selectors import (
     PLATFORM_LISTING_READINESS_SELECTORS as _PLATFORM_LISTING_READINESS_SELECTORS,
     PLATFORM_LISTING_READINESS_URL_PATTERNS as _PLATFORM_LISTING_READINESS_URL_PATTERNS,
     REVIEW_CONTAINER_KEYS as _REVIEW_CONTAINER_KEYS,
+    TITLE_SELECTOR as _TITLE_SELECTOR,
 )
 
 
@@ -219,6 +226,7 @@ ACQUIRE_HOST_MIN_INTERVAL_MS = _TUNING.get("acquire_host_min_interval_ms", 250)
 PACING_HOST_CACHE_MAX_ENTRIES = _TUNING.get("pacing_host_cache_max_entries", 1024)
 PACING_HOST_CACHE_TTL_SECONDS = _TUNING.get("pacing_host_cache_ttl_seconds", 3600)
 STEALTH_PREFER_TTL_HOURS = _TUNING.get("stealth_prefer_ttl_hours", 24)
+STEALTH_MIN_TTL_HOURS = 1
 CHALLENGE_WAIT_MAX_SECONDS = _TUNING.get(
     "challenge_wait_max_seconds", _P["challenge_wait_max_seconds"]
 )
@@ -255,7 +263,21 @@ COOKIE_CONSENT_POSTCLICK_WAIT_MS = _TUNING.get("cookie_consent_postclick_wait_ms
 SHADOW_DOM_FLATTEN_MAX_HOSTS = _TUNING.get("shadow_dom_flatten_max_hosts", 100)
 LONG_RUN_THRESHOLD_SECONDS: int = 30 * 60
 STALLED_RUN_THRESHOLD_SECONDS: int = 2 * 60
+MAX_DURATION_SAMPLE_SIZE: int = 1000
 HTTP_URL_PREFIXES: tuple[str, str] = ("http://", "https://")
+MAX_SELECTOR_ROWS_PER_FIELD: int = int(_MAX_SELECTOR_ROWS_PER_FIELD)
+ECOMMERCE_ONLY_JOB_LISTING_FIELDS: frozenset[str] = frozenset(
+    _ECOMMERCE_ONLY_JOB_LISTING_FIELDS
+)
+EMPTY_SENTINEL_VALUES: frozenset[str] = frozenset(_EMPTY_SENTINEL_VALUES)
+DISCOVERED_SOURCE_NOISE_TOKENS: frozenset[str] = frozenset(
+    _DISCOVERED_SOURCE_NOISE_TOKENS
+)
+REQUIRED_FIELDS_BY_SURFACE: dict[str, frozenset[str]] = {
+    key: frozenset(values) for key, values in dict(_REQUIRED_FIELDS_BY_SURFACE).items()
+}
+TITLE_SELECTOR: str = str(_TITLE_SELECTOR)
+ANCHOR_SELECTOR: str = str(_ANCHOR_SELECTOR)
 
 if HTTP_RETRY_BACKOFF_BASE_MS < 0:
     raise ValueError("pipeline_tuning.py:http_retry_backoff_base_ms must be >= 0")
@@ -478,6 +500,19 @@ CANDIDATE_AVAILABILITY_TOKENS_PREORDER = tuple(
 CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS = frozenset(
     _CANDIDATE_CLEANUP.get("dynamic_field_name_hard_rejects", [])
 )
+_CANDIDATE_SCHEMA_NOISE_PATTERNS = _CANDIDATE_CLEANUP.get(
+    "dynamic_field_name_schema_noise_patterns", []
+)
+DYNAMIC_FIELD_NAME_SCHEMA_NOISE_REGEXES = tuple(
+    re.compile(p)
+    for p in _CANDIDATE_SCHEMA_NOISE_PATTERNS
+    if isinstance(p, str) and p.strip()
+)
+DYNAMIC_FIELD_NAME_TICKERLIKE_BLOCKLIST = frozenset(
+    str(x).strip().lower()
+    for x in _CANDIDATE_CLEANUP.get("dynamic_field_name_tickerlike_blocklist", [])
+    if str(x).strip()
+)
 CANDIDATE_DESCRIPTION_META_SELECTORS = tuple(
     _CANDIDATE_CLEANUP.get("description_meta_selectors", [])
 )
@@ -513,6 +548,26 @@ CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT = int(
 )
 CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT = int(
     _CANDIDATE_CLEANUP.get("nested_collection_scan_limit", 20)
+)
+CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("dynamic_numeric_field_pattern", r"\d+(?:[_-]\d+)*?")
+)
+CANDIDATE_DYNAMIC_FIELD_NAME_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("dynamic_field_name_pattern", r"[a-z][a-z0-9_]*")
+)
+CANDIDATE_COLOR_VARIANT_COUNT_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("color_variant_count_pattern", r"^\d+\s+colors?\b")
+)
+CANDIDATE_RATING_WORD_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("rating_word_tokens", ["one", "two", "three", "four", "five"])
+)
+CANDIDATE_ANALYTICS_DIMENSION_TOKEN_PATTERN = str(
+    _CANDIDATE_CLEANUP.get(
+        "analytics_dimension_token_pattern", r"dimension\d+|metric\d+|cd\d+|ev\d+"
+    )
+)
+CANDIDATE_ALPHA_CHAR_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("alpha_char_pattern", r"[A-Za-z]")
 )
 CANDIDATE_UI_NOISE_TOKEN_PATTERN = str(
     _CANDIDATE_CLEANUP.get("ui_noise_token_pattern", r"\b[a-z]+_[a-z0-9_]+\b")
@@ -641,6 +696,44 @@ LISTING_STRUCTURED_SPEC_GROUP_LIMIT = int(
 )
 LISTING_STRUCTURED_SPEC_ROW_LIMIT = int(
     _LISTING_EXTRACTION_RULES.get("structured_spec_row_limit", 24)
+)
+LISTING_PRODUCT_DETAIL_IMAGE_SOURCE_KEYS = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_image_source_keys",
+        ["images", "detailedImages", "colourAlternateViews", "variants"],
+    )
+)
+LISTING_PRODUCT_DETAIL_TOP_LEVEL_PAYLOAD_KEYS = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_top_level_payload_keys", ["getProductDetail", "product"]
+    )
+)
+LISTING_PRODUCT_DETAIL_PROPS_PATH = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_props_path", ["props", "pageProps", "data", "getProductDetail"]
+    )
+)
+LISTING_PRODUCT_DETAIL_PRODUCT_BLOB_PATH = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_product_blob_path", ["props", "pageProps", "product"]
+    )
+)
+LISTING_BUY_BOX_HEADING_SCAN_TAGS = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_heading_scan_tags", ["h2", "h3", "button", "p", "span"]
+    )
+)
+LISTING_DESCRIPTION_CANDIDATE_FIELDS = tuple(
+    _LISTING_EXTRACTION_RULES.get("description_candidate_fields", ["description", "summary"])
+)
+_LISTING_MATERIALS_AND_CARE_SECTION_LABELS = _LISTING_EXTRACTION_RULES.get(
+    "materials_and_care_section_labels", {}
+)
+LISTING_MATERIALS_SECTION_LABEL = str(
+    _LISTING_MATERIALS_AND_CARE_SECTION_LABELS.get("materials", "Materials:")
+)
+LISTING_CARE_SECTION_LABEL = str(
+    _LISTING_MATERIALS_AND_CARE_SECTION_LABELS.get("care", "Care:")
 )
 _ACQUISITION_GUARDS = _EXTRACTION_RULES.get("acquisition_guards", {})
 JOB_REDIRECT_SHELL_TITLES = frozenset(

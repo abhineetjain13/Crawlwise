@@ -68,7 +68,7 @@ async def validate_public_target(url: str) -> ValidatedTarget:
         resolved_ips = await _resolve_host_ips(hostname, port)
     except ValueError as exc:
         raise ValueError(
-            f"Proxy host could not be resolved to a valid IP address: {hostname}"
+            f"Target host could not be resolved to a valid IP address: {hostname}"
         ) from exc
     validated_ips: list[str] = []
     for ip_text in resolved_ips:
@@ -150,9 +150,6 @@ async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
             if attempt < attempts:
                 await asyncio.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
                 continue
-            fallback = await _resolve_host_ips_via_nslookup(hostname)
-            if fallback:
-                return fallback
             raise ValueError(f"Target host could not be resolved: {hostname}") from exc
 
     resolved: list[str] = []
@@ -167,68 +164,6 @@ async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
     return resolved
 
 
-async def _resolve_host_ips_via_nslookup(hostname: str) -> list[str]:
-    if hostname and hostname[0] == "-":
-        raise ValueError(f"Target host is not allowed: {hostname}")
-    resolved: list[str] = []
-    seen: set[str] = set()
-    for record_type in ("A", "AAAA"):
-        process = None
-        try:
-            process = await asyncio.create_subprocess_exec(
-                "nslookup",
-                f"-type={record_type}",
-                hostname,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
-        except asyncio.TimeoutError:
-            if process is not None:
-                process.kill()
-                await process.wait()
-            continue
-        except OSError:
-            continue
-        output = "\n".join(
-            part
-            for part in (
-                stdout.decode(errors="ignore") if stdout else "",
-                stderr.decode(errors="ignore") if stderr else "",
-            )
-            if part
-        )
-        for ip_text in _parse_nslookup_addresses(output):
-            if ip_text in seen:
-                continue
-            seen.add(ip_text)
-            resolved.append(ip_text)
-    return resolved
-
-
-def _parse_nslookup_addresses(output: str) -> list[str]:
-    resolved: list[str] = []
-    seen: set[str] = set()
-    capture = False
-    for raw_line in str(output or "").splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        lowered = stripped.lower()
-        if lowered.startswith(("name:", "aliases:", "canonical name", "non-authoritative answer")):
-            capture = True
-        if not capture:
-            continue
-        for token in re.split(r"[\s,;]+", stripped):
-            ip_value = _parse_ip(token.strip("[]"))
-            if ip_value is None:
-                continue
-            normalized = ip_value.compressed
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            resolved.append(normalized)
-    return resolved
 
 
 def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:

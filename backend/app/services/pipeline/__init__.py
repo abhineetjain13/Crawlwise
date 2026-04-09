@@ -136,6 +136,8 @@ __all__ = [
     "_aggregate_verdict",
     # Core functions (from legacy)
     "_process_single_url",
+    "_looks_like_job_listing_page",
+    "_resolve_listing_surface",
     "_extract_listing",
     "_extract_detail",
     "_process_json_response",

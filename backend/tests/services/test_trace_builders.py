@@ -24,6 +24,7 @@ def test_build_manifest_trace_scrubs_network_payload_sensitive_values():
     )
 
     row = manifest["network_payloads"][0]
+    assert row["headers"]["authorization"] == "[REDACTED]"
     assert row["body"]["email"] == "[REDACTED]"
     assert row["body"]["token"] == "[REDACTED]"
     assert "[REDACTED]" in row["body"]["note"]

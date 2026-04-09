@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     crawl_log_db_max_rows_per_run: int = 1000
     crawl_log_file_enabled: bool = True
     crawl_log_file_dir: Path = Field(default=BASE_DIR / "artifacts" / "run_logs")
+    # When false, POST /api/auth/register returns 403 (POC single-admin dev). Enable for production multi-tenant.
+    registration_enabled: bool = False
 
 
 settings = Settings()

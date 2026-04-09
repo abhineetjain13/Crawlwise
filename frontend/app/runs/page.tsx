@@ -91,7 +91,7 @@ function RunRow({
         <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 group-hover:opacity-100 transition-opacity">
           <Link
             href={`/crawl?run_id=${run.id}`}
-            className="no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-panel)] px-2.5 text-[12px] font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-elevated)]"
+            className="ui-on-accent-surface no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent)] bg-[var(--accent)] px-2.5 text-[12px] font-medium transition-colors hover:opacity-90"
           >
             Open <ArrowUpRight className="size-3" />
           </Link>

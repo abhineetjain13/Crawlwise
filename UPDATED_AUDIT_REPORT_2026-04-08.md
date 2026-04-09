@@ -6,11 +6,7 @@ This revision incorporates your clarifications:
 - Advanced traversal semantics: when advanced mode is enabled, `auto` should detect all; explicit selection should run only selected mode
 - Pollution focus confirmed on: `category`, `title`, `availability`, `color`, `brand`
 
-Phase 6 completion update (2026-04-08):
-- Traversal summaries are now propagated into browser diagnostics with normalized keys (`mode_used`, `pages_collected`, `scroll_iterations`, `stop_reason`, `fallback_used`).
-- Run-level acquisition summary now aggregates traversal counters (`traversal_attempted`, `traversal_succeeded`, `traversal_fell_back`, `traversal_modes_used`).
-- Thin wrapper module `backend/app/services/batch.py` has been removed; imports now point to `backend/app/services/_batch_runtime.py`.
-- Dead-code sweep for high-confidence service wrappers completed as part of wrapper collapse.
+Phase 6 note (2026-04-08): This document is an audit and backlog assessment, not an implementation changelog. Claims about telemetry wiring, module removals, or dead-code sweeps should be verified against the repository at the cited paths; the bullets below are **findings and recommendations**, not assertions that a specific PR shipped them.
 
 ---
 

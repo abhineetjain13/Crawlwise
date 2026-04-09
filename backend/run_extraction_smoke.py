@@ -113,10 +113,18 @@ async def _run_one(site: dict, run_id: int) -> dict:
 
     try:
         # Phase 1: Acquire
-        acquire_kwargs = {}
+        acquire_kwargs: dict[str, object] = {
+            "surface": surface,
+            "traversal_mode": None,
+            "max_pages": 5,
+            "max_scrolls": 5,
+            "sleep_ms": 0,
+            "requested_fields": [],
+        }
         if page_type == "category":
-            acquire_kwargs = {"advanced_mode": "auto", "max_pages": 5}
-        acq = await asyncio.wait_for(acquire(run_id, url, **acquire_kwargs), timeout=45)
+            # Category runs exercise explicit traversal mode wiring in acquisition.
+            acquire_kwargs["traversal_mode"] = "scroll"
+        acq = await asyncio.wait_for(acquire(run_id=run_id, url=url, **acquire_kwargs), timeout=45)
         result_entry["method"] = acq.method
         result_entry["html_len"] = len(acq.html or "")
         result_entry["content_type"] = acq.content_type

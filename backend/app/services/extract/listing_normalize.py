@@ -60,9 +60,14 @@ _BASE_FIELDS = {
 }
 
 
+def _is_job_surface(surface: str) -> bool:
+    normalized = str(surface or "").strip().lower()
+    return normalized == "job" or normalized.startswith("job_")
+
+
 def canonical_listing_fields(surface: str, target_fields: set[str]) -> set[str]:
     allowed = set(_BASE_FIELDS)
-    if "job" in str(surface or "").lower():
+    if _is_job_surface(surface):
         allowed.update({"company", "location", "salary", "department", "job_id", "job_type", "posted_date"})
     else:
         allowed.update({"price", "image_url", "brand", "color", "size"})
@@ -93,7 +98,7 @@ def normalize_listing_record(
             continue
         normalized[key] = cleaned
 
-    if "job" in str(surface or "").lower():
+    if _is_job_surface(surface):
         normalized.pop("currency", None)
         normalized.pop("image_url", None)
         normalized.pop("additional_images", None)
@@ -112,11 +117,18 @@ def _normalize_field_value(field_name: str, value: object, *, page_url: str) -> 
         text = str(value).strip()
         return urljoin(page_url, text) if text and page_url else text
     if field_name == "additional_images":
-        parts = [
-            urljoin(page_url, str(part).strip()) if page_url else str(part).strip()
-            for part in str(value).split(",")
-            if str(part).strip()
-        ]
+        if isinstance(value, (list, tuple, set)):
+            parts = [
+                urljoin(page_url, str(part).strip()) if page_url else str(part).strip()
+                for part in value
+                if str(part).strip()
+            ]
+        else:
+            parts = [
+                urljoin(page_url, str(part).strip()) if page_url else str(part).strip()
+                for part in str(value).split(",")
+                if str(part).strip()
+            ]
         deduped = list(dict.fromkeys(parts))
         return ", ".join(deduped)
     if field_name in {"price", "sale_price", "original_price", "salary", "review_count", "rating"}:

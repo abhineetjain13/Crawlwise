@@ -310,14 +310,7 @@ class CrawlWorkerLoop:
         try:
             async with self._session_factory() as session:
                 await process_run(session, run_id)
-        except (
-            SQLAlchemyError,
-            RuntimeError,
-            ValueError,
-            TypeError,
-            OSError,
-            asyncio.TimeoutError,
-        ) as exc:
+        except Exception as exc:
             logger.exception("Worker run execution failed for run %s", run_id)
             incr("queue_worker_run_failures_total")
             await mark_run_failed_with_retry(
@@ -345,10 +338,17 @@ class CrawlWorkerLoop:
                 continue
             except asyncio.TimeoutError:
                 pass
-            async with self._session_factory() as session:
-                await heartbeat_run(
-                    session,
-                    run_id=run_id,
-                    worker_id=self._config.worker_id,
-                    lease_seconds=self._config.lease_seconds,
+            try:
+                async with self._session_factory() as session:
+                    await heartbeat_run(
+                        session,
+                        run_id=run_id,
+                        worker_id=self._config.worker_id,
+                        lease_seconds=self._config.lease_seconds,
+                    )
+            except Exception:
+                logger.exception(
+                    "Heartbeat update failed for run %s worker %s",
+                    run_id,
+                    self._config.worker_id,
                 )

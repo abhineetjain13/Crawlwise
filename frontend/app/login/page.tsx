@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
@@ -28,7 +27,11 @@ export default function LoginPage() {
     <div className="space-y-6">
       <div className="space-y-2">
         <Title kicker="Auth">Sign in</Title>
-        <Subtitle>Enter your credentials to continue.</Subtitle>
+        <Subtitle>
+          Enter the bootstrap admin credentials from your backend <code className="text-body-sm">.env</code>{" "}
+          (<code className="text-body-sm">DEFAULT_ADMIN_EMAIL</code> / <code className="text-body-sm">DEFAULT_ADMIN_PASSWORD</code>
+          , with <code className="text-body-sm">BOOTSTRAP_ADMIN_ONCE=1</code>). Registration is disabled in this POC build.
+        </Subtitle>
       </div>
       <form className="grid gap-4" onSubmit={onSubmit}>
         <Field label="Email">
@@ -50,9 +53,6 @@ export default function LoginPage() {
         {error ? <InlineAlert message={error} /> : null}
         <div className="flex items-center gap-3 pt-1">
           <Button type="submit">Sign in</Button>
-          <Link className="text-[13px] font-medium text-accent" href="/register">
-            Create account
-          </Link>
         </div>
       </form>
     </div>

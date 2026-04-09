@@ -51,7 +51,10 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         if started:
-            await worker.stop()
+            try:
+                await worker.stop()
+            except Exception:
+                logger.exception("Worker stop failed during shutdown")
         await shutdown_browser_pool()
 
 

@@ -147,49 +147,112 @@ def normalize_value(field_name: str, value: object) -> object:
 
 
 def validate_value(field_name: str, value: object) -> object | None:
+    """Strict canonical validation gate. Rejects garbage strings so fallbacks can win."""
     if value in (None, "", [], {}):
         return None
+        
+    text = ""
+    lowered = ""
+    
     if isinstance(value, str):
-        text = " ".join(str(value).split()).strip()
-        if not text:
+        text = " ".join(value.split()).strip()
+        lowered = text.lower()
+        
+        # 1. Global noise rejection
+        if lowered in {"null", "undefined", "n/a", "none", "nan"}:
             return None
-        if _is_title_field(field_name) or _is_entity_name_field(field_name):
-            lowered = text.lower()
-            if len(text) < 3 or len(text) > 250:
-                return None
-            if lowered in _TITLE_NOISE_WORDS or _NUMERIC_ONLY_RE.fullmatch(text):
-                return None
-            return text
-        if _is_numeric_field(field_name):
-            amount = _extract_positive_number(text)
-            return text if amount is not None and amount > 0 else None
-        if _is_salary_field(field_name):
-            if _SALARY_NOISE_PATTERN.search(text) or not re.search(r"\d", text):
-                return None
-            return text
-        if _is_image_collection_field(field_name):
-            normalized_urls = [
-                normalized_url
-                for normalized_url in (
-                    _strip_tracking_params(url) for url in _split_image_values(text)
-                )
-                if _is_valid_http_url(normalized_url)
-                and not _IMAGE_NOISE_PATTERN.search(normalized_url)
-            ]
-            return ", ".join(normalized_urls) if normalized_urls else None
-        if _is_image_primary_field(field_name):
-            normalized_url = _strip_tracking_params(text)
-            if not _is_valid_http_url(normalized_url) or _IMAGE_NOISE_PATTERN.search(
-                normalized_url
-            ):
-                return None
-            return normalized_url
-        if _is_url_field(field_name):
-            normalized_url = _strip_tracking_params(text)
-            if not _is_valid_http_url(normalized_url):
-                return None
-            return normalized_url
-    return value
+    
+    # 2. Field-specific strict rules (using helper functions to honor aliases)
+    if _is_brand_field(field_name):
+        if not isinstance(value, str):
+            # Allow non-string values to pass through for brand
+            return value
+        if len(text) > 60:
+            return None
+        if ">" in text or "/" in text:  # Rejects breadcrumbs
+            return None
+        if "cookie" in lowered or "privacy" in lowered:
+            return None
+        
+    elif _is_color_field(field_name):
+        if not isinstance(value, str):
+            # Allow non-string values to pass through for color
+            return value
+        if len(text) > 40:
+            return None
+        # First reject CSS-like tokens
+        if re.search(r"[{};]|rgb\(|rgba\(", lowered):
+            return None
+        # If a hex pattern is present, allow it only if it's a valid full-string hex color
+        if "#" in lowered:
+            if re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", lowered):
+                return text  # Valid standalone hex color
+            else:
+                return None  # Invalid or partial hex pattern
+        if "cookie" in lowered or "select" in lowered:
+            return None
+        
+    elif _is_availability_field(field_name):
+        if not isinstance(value, str):
+            # Allow non-string values to pass through for availability
+            return value
+        if len(text) > 50:
+            return None
+        if re.search(r"dimension\d+|metric\d+", lowered):  # Rejects GA metrics
+            return None
+        
+    elif _is_category_field(field_name):
+        if not isinstance(value, str):
+            # Allow non-string values to pass through for category
+            return value
+        if len(text) > 150:
+            return None
+        if "cookie" in lowered or "sign in" in lowered:
+            return None
+    
+    # 3. Legacy validation for other fields (only for string values)
+    if not isinstance(value, str):
+        # Non-string values that didn't match field-specific rules above
+        # should still go through remaining validation
+        return value
+    
+    if _is_title_field(field_name) or _is_entity_name_field(field_name):
+        if len(text) < 3 or len(text) > 250:
+            return None
+        if lowered in _TITLE_NOISE_WORDS or _NUMERIC_ONLY_RE.fullmatch(text):
+            return None
+        return text
+    if _is_numeric_field(field_name):
+        amount = _extract_positive_number(text)
+        return text if amount is not None and amount > 0 else None
+    if _is_salary_field(field_name):
+        if _SALARY_NOISE_PATTERN.search(text) or not re.search(r"\d", text):
+            return None
+        return text
+    if _is_image_collection_field(field_name):
+        normalized_urls = [
+            normalized_url
+            for normalized_url in (
+                _strip_tracking_params(url) for url in _split_image_values(text)
+            )
+            if _is_valid_http_url(normalized_url)
+            and not _IMAGE_NOISE_PATTERN.search(normalized_url)
+        ]
+        return ", ".join(normalized_urls) if normalized_urls else None
+    if _is_image_primary_field(field_name):
+        normalized_url = _strip_tracking_params(text)
+        if not _is_valid_http_url(normalized_url) or _IMAGE_NOISE_PATTERN.search(
+            normalized_url
+        ):
+            return None
+        return normalized_url
+    if _is_url_field(field_name):
+        normalized_url = _strip_tracking_params(text)
+        if not _is_valid_http_url(normalized_url):
+            return None
+        return normalized_url
+    
+    return text if isinstance(value, str) else value
 
 
 def extract_currency_hint(value: object) -> str:
@@ -460,6 +523,19 @@ def _is_color_field(field_name: str) -> bool:
         _field_token("color"),
         _field_token("colors"),
         _field_token("color_name"),
+    }
+
+
+def _is_brand_field(field_name: str) -> bool:
+    normalized = _field_token(field_name)
+    return normalized in {
+        _field_token("brand"),
+        _field_token("vendor"),
+        _field_token("manufacturer"),
+        _field_token("company_name"),
+        _field_token("brand_name"),
+        _field_token("designer"),
+        _field_token("brandname"),
     }
 
 

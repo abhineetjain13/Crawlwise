@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -363,6 +364,107 @@ async def test_acquire_job_listing_iframe_shell_escalates_to_browser():
     assert result.promoted_sources
     assert result.diagnostics["browser_retry_reason"] == "iframe_shell"
     browser_mock.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acquire_job_listing_iframe_shell_still_escalates_with_adapter_hint():
+    shell_html = """
+    <html><body>
+      <main>
+        <h1>Careers</h1>
+        <iframe src="https://secure7.saashr.com/ta/6208610.careers?CareersSearch&InFrameset=1"></iframe>
+      </main>
+    </body></html>
+    """
+    browser_html = """
+    <html><body>
+      <div class="job-card">
+        <a href="https://example.com/jobs/1"><h3>Platform Engineer</h3></a>
+      </div>
+    </body></html>
+    """
+
+    from app.services.acquisition.browser_client import BrowserResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.resolve_adapter",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(name="saashr"),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=BrowserResult(html=browser_html),
+        ) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
+
+    assert result.method == "playwright"
+    assert result.diagnostics["browser_retry_reason"] == "iframe_shell"
+    browser_mock.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acquire_iframe_shell_promoted_source_used_before_browser():
+    shell_html = """
+    <html><body>
+      <main>
+        <h1>Careers</h1>
+        <iframe src="https://secure7.saashr.com/ta/6208610.careers?CareersSearch&InFrameset=1"></iframe>
+      </main>
+    </body></html>
+    """
+    promoted_html = """
+    <html><body>
+      <ul>
+        <li><a href="https://example.com/jobs/1">Behavioral Health Tech</a></li>
+        <li><a href="https://example.com/jobs/2">Crisis Care EMT</a></li>
+      </ul>
+    </body></html>
+    """
+
+    parent_result = HttpFetchResult(text=shell_html, status_code=200, content_type="html")
+    promoted_result = HttpFetchResult(text=promoted_html, status_code=200, content_type="html")
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            side_effect=[parent_result, promoted_result],
+        ),
+        patch(
+            "app.services.acquisition.acquirer.resolve_adapter",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+        ) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_settings.artifacts_dir = Path(tmpdir)
+            result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
+
+    assert result.method == "curl_cffi"
+    assert result.diagnostics.get("promoted_source_used")
+    browser_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -72,7 +72,7 @@ Small, high-signal set to validate traversal behavior before interpreting broade
 
 | # | URL | Surface | Traversal Mode Focus | What It Tests |
 |---|---|---|---|---|
-| TC01 | `https://web-scraping.dev/products` | Listing | `paginate` | Deterministic product listing with clear next-page behavior |
+| TC01 | `https://books.toscrape.com/` | Listing | `paginate` | Classic numbered pagination (distinct from S01 sandbox host) |
 | TC02 | `https://www.myntra.com/hand-towels` | Listing | `paginate` | Real commerce pagination, duplicate-page suppression, stable card counting |
 | TC03 | `https://in.puma.com/in/en/classics-collection?filter_gender=%3E{unisex;unisex_0_adults;male;unisex0_kids}&offset=96` | Listing | `scroll` | Real infinite scroll, async settling, item-growth stop conditions |
 | TC04 | `https://quotes.toscrape.com/scroll` | Infinite scroll | `scroll` | Low-noise infinite scroll baseline |

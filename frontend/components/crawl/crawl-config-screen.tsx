@@ -3,7 +3,7 @@
 import { Plus, Shield, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { PageHeader, SectionHeader, TabBar } from "../ui/patterns";
 import { Button, Card, Input, Textarea } from "../ui/primitives";
@@ -39,7 +39,6 @@ type CrawlConfigScreenProps = {
   requestedPdpMode: PdpMode | null;
 };
 
-type SerializedAdvancedMode = Exclude<AdvancedCrawlMode, "view_all"> | "load_more" | null;
 const ADVANCED_MODE_OPTIONS = new Set<AdvancedCrawlMode>(["auto", "scroll", "load_more", "view_all", "paginate"]);
 
 export function CrawlConfigScreen({
@@ -70,11 +69,19 @@ export function CrawlConfigScreen({
   const [configError, setConfigError] = useState("");
   const [bulkBanner, setBulkBanner] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  /** While set, ignore route→state sync until the URL shows PDP (bulk prefill). */
+  const bulkPrefillRouteSyncGuardRef = useRef(false);
 
   const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
   const surface: CrawlSurface = crawlTab === "category" ? "ecommerce_listing" : "ecommerce_detail";
 
   useEffect(() => {
+    if (bulkPrefillRouteSyncGuardRef.current) {
+      if (requestedTab === "pdp") {
+        bulkPrefillRouteSyncGuardRef.current = false;
+      }
+      return;
+    }
     const nextTab = requestedTab ?? "category";
     const nextCategoryMode = requestedCategoryMode ?? "single";
     const nextPdpMode = requestedPdpMode ?? "single";
@@ -88,8 +95,14 @@ export function CrawlConfigScreen({
     if (requestedTab === crawlTab && routeMode === activeMode) {
       return;
     }
-    router.replace((`/crawl?module=${crawlTab}&mode=${activeMode}`) as Route);
-  }, [activeMode, crawlTab, requestedCategoryMode, requestedPdpMode, requestedTab, router]);
+    const nextUrl = `/crawl?module=${crawlTab}&mode=${activeMode}`;
+    if (typeof window !== "undefined") {
+      const currentUrl = `${window.location.pathname}${window.location.search}`;
+      if (currentUrl !== nextUrl) {
+        window.history.replaceState(null, "", nextUrl);
+      }
+    }
+  }, [activeMode, crawlTab, requestedCategoryMode, requestedPdpMode, requestedTab]);
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem(STORAGE_KEYS.BULK_PREFILL);
@@ -99,6 +112,7 @@ export function CrawlConfigScreen({
     try {
       const parsed = JSON.parse(stored) as { urls: string[]; additional_fields?: string[] };
       if (Array.isArray(parsed.urls) && parsed.urls.length) {
+        bulkPrefillRouteSyncGuardRef.current = true;
         setCrawlTab("pdp");
         setPdpMode("batch");
         setBulkUrls(parsed.urls.join("\n"));
@@ -106,13 +120,14 @@ export function CrawlConfigScreen({
           setAdditionalFields(uniqueFields(parsed.additional_fields));
         }
         setBulkBanner(`${parsed.urls.length} URLs loaded into PDP batch crawl.`);
+        router.replace("/crawl?module=pdp&mode=batch" as Route);
       }
     } catch {
       // Ignore malformed prefill data.
     } finally {
       window.sessionStorage.removeItem(STORAGE_KEYS.BULK_PREFILL);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (!bulkBanner) {
@@ -292,6 +307,7 @@ export function CrawlConfigScreen({
                 {crawlTab === "category" ? (
                   <TabBar
                     value={categoryMode}
+                    compact
                     onChange={(value) => {
                       const parsed = parseRequestedCategoryMode(value);
                       if (parsed) {
@@ -307,6 +323,7 @@ export function CrawlConfigScreen({
                 ) : (
                   <TabBar
                     value={pdpMode}
+                    compact
                     onChange={(value) => {
                       const parsed = parseRequestedPdpMode(value);
                       if (parsed) {
@@ -345,6 +362,7 @@ export function CrawlConfigScreen({
               <label className="grid gap-1.5">
                 <span className="label-caps">CSV File</span>
                 <Input
+                  key="csv-file-input"
                   type="file"
                   accept=".csv,text/csv"
                   onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
@@ -356,6 +374,7 @@ export function CrawlConfigScreen({
               <label className="grid gap-1.5">
                 <span className="label-caps">Target URL</span>
                 <Input
+                  key="target-url-input"
                   value={targetUrl}
                   onChange={(event) => setTargetUrl(event.target.value)}
                   placeholder={
@@ -588,8 +607,7 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
     const reason = validateAdditionalFieldName(invalidAdditionalField);
     throw new Error(`Invalid additional field "${invalidAdditionalField}": ${reason}`);
   }
-  const normalizedAdvancedMode = normalizeAdvancedMode(config.advanced_mode);
-  const resolvedAdvancedMode = config.advanced_enabled ? normalizedAdvancedMode : null;
+  const resolvedAdvancedMode = config.advanced_enabled ? config.advanced_mode : null;
   const surface = config.surface;
   const commonSettings = {
     llm_enabled: config.smart_extraction,
@@ -668,13 +686,6 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
     additionalFields,
     csvFile: null,
   };
-}
-
-export function normalizeAdvancedMode(mode: AdvancedCrawlMode): SerializedAdvancedMode {
-  if (mode === "view_all") {
-    return "load_more";
-  }
-  return mode;
 }
 
 function canPreview(config: CrawlConfig, fieldRows: FieldRow[]) {

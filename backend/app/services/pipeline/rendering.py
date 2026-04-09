@@ -179,7 +179,6 @@ def _should_skip_fallback_node(node: Tag, *, page_url: str) -> bool:
                 "contact us",
                 "blogs",
                 "news",
-                "grinding advice",
             }:
                 return True
     

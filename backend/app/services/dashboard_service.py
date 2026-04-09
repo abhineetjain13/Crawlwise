@@ -19,6 +19,7 @@ from app.services.knowledge_base.store import reset_learned_state
 from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
 from app.services.pipeline_config import (
     LONG_RUN_THRESHOLD_SECONDS,
+    MAX_DURATION_SAMPLE_SIZE,
     STALLED_RUN_THRESHOLD_SECONDS,
 )
 
@@ -185,7 +186,6 @@ async def build_operational_metrics(session: AsyncSession) -> dict:
     runtime = runtime_metrics_snapshot()
     long_run_threshold_seconds = LONG_RUN_THRESHOLD_SECONDS
     stalled_run_threshold_seconds = STALLED_RUN_THRESHOLD_SECONDS
-    max_duration_sample_size = 1000
     run_duration_rows = await session.execute(
         select(
             CrawlRun.created_at,
@@ -193,7 +193,7 @@ async def build_operational_metrics(session: AsyncSession) -> dict:
         )
         .where(CrawlRun.created_at.is_not(None))
         .order_by(CrawlRun.created_at.desc())
-        .limit(max_duration_sample_size)
+        .limit(MAX_DURATION_SAMPLE_SIZE)
     )
     durations_seconds: list[float] = []
     long_running_count = 0

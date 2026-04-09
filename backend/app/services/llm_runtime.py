@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from json import loads as parse_json
@@ -325,10 +324,11 @@ async def _call_provider_with_retry(
     api_key: str,
     system_prompt: str,
     user_prompt: str,
-    max_retries: int = 3,
-    base_delay_s: float = 2.0,
+    max_retries: int = 1,
+    base_delay_s: float = 0.0,
 ) -> tuple[str, int, int]:
-    """Wrap _call_provider with exponential backoff for rate limits."""
+    """Call provider once and fail fast on rate limits."""
+    _ = base_delay_s
     last_error = ""
     for attempt in range(max_retries):
         result, input_tokens, output_tokens = await _call_provider(
@@ -342,19 +342,12 @@ async def _call_provider_with_retry(
             return result, input_tokens, output_tokens
         if "429" in result or "rate" in result.lower():
             last_error = result
-            if attempt == max_retries - 1:
-                break
-            wait_s = base_delay_s * (2 ** attempt)
             logger.warning(
-                "LLM rate limit on attempt %d/%d for provider=%s model=%s, retrying in %.1fs",
-                attempt + 1,
-                max_retries,
+                "LLM rate limited for provider=%s model=%s; failing fast",
                 provider,
                 model,
-                wait_s,
             )
-            await asyncio.sleep(wait_s)
-            continue
+            break
         return result, input_tokens, output_tokens
     return last_error or f"{_ERROR_PREFIX} Rate limited after {max_retries} attempts", 0, 0
 

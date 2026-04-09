@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+TITLE_SELECTOR = "h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5"
+ANCHOR_SELECTOR = "a[href]"
+
 DOM_PATTERNS = {
     "title": "h1, [itemprop='name'], meta[property='og:title'], title",
     "price": "[itemprop='price'], .price, .product-price",

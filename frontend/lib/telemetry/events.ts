@@ -41,7 +41,8 @@ export function trackEvent(name: string, payload: TelemetryPayload = {}) {
   try {
     const body = JSON.stringify(event);
     if (typeof navigator !== "undefined" && "sendBeacon" in navigator) {
-      navigator.sendBeacon(TELEMETRY_ENDPOINT, body);
+      const payloadBlob = new Blob([body], { type: "application/json" });
+      navigator.sendBeacon(TELEMETRY_ENDPOINT, payloadBlob);
       return;
     }
     void fetch(TELEMETRY_ENDPOINT, {

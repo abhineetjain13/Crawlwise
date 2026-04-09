@@ -285,9 +285,13 @@ async def _fetch_rendered_html_attempt(
     timings_ms["browser_reused"] = int(browser_reused)
     browser_channel = str(launch_profile.get("channel") or "").strip() or None
     try:
-        context = await browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel))
-    except PlaywrightError:
-        # Browser in pool may have died; evict and retry once.
+        # FIX: Wrap context creation in a strict timeout to prevent zombie browsers
+        context = await asyncio.wait_for(
+            browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel)),
+            timeout=15.0
+        )
+    except (PlaywrightError, asyncio.TimeoutError):
+        # Browser in pool may have died or hung; evict and retry once.
         await _evict_browser(_browser_pool_key(launch_profile, proxy), browser)
         browser, _ = await _acquire_browser(
             browser_type=browser_type,
@@ -295,11 +299,16 @@ async def _fetch_rendered_html_attempt(
             browser_pool_key=_browser_pool_key(launch_profile, proxy),
             force_new=True,
         )
-        context = await browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel))
+        context = await asyncio.wait_for(
+            browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel)),
+            timeout=15.0
+        )
+        
     original_domain = _domain(url)
     try:
         await _load_cookies(context, original_domain)
-        page = await context.new_page()
+        # FIX: Wrap page creation in timeout
+        page = await asyncio.wait_for(context.new_page(), timeout=10.0)
 
         async def _guard_non_public_request(route, request) -> None:
             request_url = str(getattr(request, "url", "") or "").strip()
@@ -333,7 +342,7 @@ async def _fetch_rendered_html_attempt(
                         "status": response.status,
                         "body": body,
                     })
-                except PlaywrightError:
+                except (PlaywrightError, ValueError):
                     logger.debug("Failed to parse intercepted JSON response from %s", response.url, exc_info=True)
 
         page.on("response", _on_response)
@@ -1146,10 +1155,12 @@ async def expand_all_interactive_elements(
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object]:
     try:
+        # FIX: Added maxClicks limit (20) to prevent browser crashing on heavy DOMs
         expanded_count = await page.evaluate(
             """
             () => {
                 let count = 0;
+                const maxClicks = 20;
                 const seen = new Set();
                 const targets = [
                     ...document.querySelectorAll('details > summary'),
@@ -1162,6 +1173,7 @@ async def expand_all_interactive_elements(
                     return true;
                 });
                 for (const el of targets) {
+                    if (count >= maxClicks) break;
                     if (!(el instanceof Element) || seen.has(el)) continue;
                     seen.add(el);
                     try {
@@ -1679,6 +1691,7 @@ def _context_kwargs(prefer_stealth: bool, *, browser_channel: str | None = None)
             "has_touch": False,
             "color_scheme": "light",
             "user_agent": _STEALTH_USER_AGENT,
+            "service_workers": "block",  # FIX: Prevent Service Worker SSRF bypasses
         }
         return kwargs
     kwargs = {
@@ -1692,6 +1705,7 @@ def _context_kwargs(prefer_stealth: bool, *, browser_channel: str | None = None)
         "is_mobile": False,
         "has_touch": False,
         "color_scheme": "light",
+        "service_workers": "block",  # FIX: Prevent Service Worker SSRF bypasses
     }
     if prefer_stealth:
         kwargs["user_agent"] = _STEALTH_USER_AGENT

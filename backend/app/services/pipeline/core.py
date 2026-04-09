@@ -61,9 +61,7 @@ from app.services.normalizers import (
     normalize_value,
     validate_value,
 )
-from app.services.pipeline_config import (
-    SOURCE_RANKING,
-)
+from app.services.pipeline_config import SOURCE_RANKING
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.schema_service import (
     ResolvedSchema,
@@ -144,26 +142,8 @@ from .review_helpers import (
 
 
 logger = logging.getLogger(__name__)
-MAX_SELECTOR_ROWS_PER_FIELD = 100
 HTTP_URL_PREFIXES = ("http://", "https://")
-TITLE_SELECTOR = "h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5"
-ANCHOR_SELECTOR = "a[href]"
 _TRAVERSAL_MODES = {"auto", "scroll", "load_more", "paginate"}
-_ECOMMERCE_ONLY_JOB_LISTING_FIELDS = frozenset(
-    {
-        "price",
-        "sale_price",
-        "original_price",
-        "currency",
-        "sku",
-        "part_number",
-        "availability",
-        "rating",
-        "review_count",
-        "image_url",
-        "additional_images",
-    }
-)
 STAGE_FETCH = "FETCH"
 STAGE_ANALYZE = "ANALYZE"
 STAGE_SAVE = "SAVE"
@@ -636,7 +616,7 @@ async def _process_json_response(
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
-    verdict = _compute_verdict(saved, run.surface)
+    verdict = _compute_verdict(saved, run.surface, is_listing=is_listing)
     if persist_logs:
         await _log(
             session,
@@ -757,7 +737,7 @@ async def _extract_listing(
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
-    verdict = _compute_verdict(saved, effective_surface)
+    verdict = _compute_verdict(saved, effective_surface, is_listing=True)
     if persist_logs:
         await _log(
             session,
@@ -1044,14 +1024,27 @@ async def _extract_detail(
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
-    verdict = _compute_verdict(saved, surface)
+    verdict = _compute_verdict(saved, surface, is_listing=False)
+    
     if persist_logs:
+        # FIX: Add critical telemetry revealing which extraction layer won arbitration
+        winning_sources = []
+        if saved:
+            for field, val in saved[0].items():
+                src_map = source_trace.get("committed_fields", {}).get(field) or \
+                          source_trace.get("field_discovery", {}).get(field, {})
+                srcs = src_map.get("sources", ["unknown"]) if isinstance(src_map, dict) else ["unknown"]
+                winning_sources.append(f"{field}:{srcs[0]}")
+                
+        source_summary = ", ".join(winning_sources[:5]) + ("..." if len(winning_sources)>5 else "")
+        
         await _log(
             session,
             run.id,
             "info",
-            f"[SAVE] Saved {len(saved)} detail records (verdict={verdict})",
+            f"[SAVE] Saved {len(saved)} detail records (verdict={verdict}). Sources: [{source_summary}]",
         )
+        
     await session.flush()
     _finalize_url_metrics(
         url_metrics, records=saved, requested_fields=additional_fields

@@ -256,3 +256,22 @@ def test_classify_unknown_page():
 
     page_type = classify_page_type(inventory)
     assert page_type == "unknown"
+
+
+def test_classify_does_not_infer_from_surface_metadata():
+    """Surface metadata should not drive page classification."""
+    inventory = SignalInventory(
+        structured_data={
+            "json_ld": [],
+            "datalayer": {},
+            "next_data": None,
+            "hydrated_states": [],
+        },
+        dom_patterns={
+            "card_count": 0,
+            "detail_markers": {"has_price": False, "has_description": False, "has_specs": False},
+            "url_patterns": {"is_listing_url": False, "is_detail_url": False},
+        },
+        metadata={"link_count": 1, "text_ratio": 0.1, "domain": "example.com", "surface": "ecommerce_detail"},
+    )
+    assert classify_page_type(inventory) == "unknown"

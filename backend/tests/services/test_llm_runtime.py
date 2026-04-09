@@ -15,6 +15,7 @@ from app.services.llm_runtime import (
     _build_targeted_html_snippet,
     _call_groq,
     _call_provider,
+    _call_provider_with_retry,
     _enforce_token_limit,
     _truncate_html,
     resolve_active_config,
@@ -217,6 +218,28 @@ async def test_call_provider_returns_error_string_on_httpx_failure():
     assert raw.startswith("Error: ConnectError:")
     assert input_tokens == 0
     assert output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_call_provider_with_retry_fails_fast_on_rate_limit():
+    with patch(
+        "app.services.llm_runtime._call_provider",
+        new=AsyncMock(return_value=("Error: HTTP 429: rate limited", 0, 0)),
+    ) as call_mock:
+        raw, input_tokens, output_tokens = await _call_provider_with_retry(
+            provider="groq",
+            model="llama-test",
+            api_key="secret",
+            system_prompt="system",
+            user_prompt="user",
+            max_retries=3,
+            base_delay_s=2.0,
+        )
+
+    assert raw == "Error: HTTP 429: rate limited"
+    assert input_tokens == 0
+    assert output_tokens == 0
+    assert call_mock.await_count == 1
 
 
 @pytest.mark.asyncio

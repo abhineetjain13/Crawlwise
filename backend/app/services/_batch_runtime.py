@@ -56,8 +56,6 @@ from app.services.pipeline import (
 )
 
 _TRAVERSAL_MODES = {"auto", "scroll", "load_more", "paginate"}
-_RUN_UPDATE_LOCKS: dict[int, asyncio.Lock] = {}
-_RUN_UPDATE_LOCKS_GUARD = asyncio.Lock()
 
 
 class RunControlSignal(RunControlError):
@@ -95,17 +93,7 @@ async def _retry_run_update(
     run_id: int,
     mutate,
 ) -> None:
-    async def _run_update_lock(target_run_id: int) -> asyncio.Lock:
-        lock = _RUN_UPDATE_LOCKS.get(target_run_id)
-        if lock is not None:
-            return lock
-        async with _RUN_UPDATE_LOCKS_GUARD:
-            lock = _RUN_UPDATE_LOCKS.get(target_run_id)
-            if lock is None:
-                lock = asyncio.Lock()
-                _RUN_UPDATE_LOCKS[target_run_id] = lock
-            return lock
-
+    """Safely update a run using DB-level row locks (FOR UPDATE) and exponential backoff."""
     async def _load_run_for_update(
         retry_session: AsyncSession, target_run_id: int
     ) -> CrawlRun | None:
@@ -125,14 +113,14 @@ async def _retry_run_update(
             return
         await mutate(retry_session, retry_run)
 
-    lock = await _run_update_lock(run_id)
-    async with lock:
-        await with_retry(session, _operation)
+    # Directly use the DB retry mechanism without the broken in-memory lock
+    await with_retry(session, _operation)
 
 
 async def _cleanup_run_lock(run_id: int) -> None:
-    async with _RUN_UPDATE_LOCKS_GUARD:
-        _RUN_UPDATE_LOCKS.pop(run_id, None)
+    # Intentionally left empty as the in-memory lock dict has been removed.
+    # Kept to preserve the function signature used in the finally block.
+    pass
 
 
 async def _run_control_checkpoint(session: AsyncSession, run: CrawlRun) -> None:
@@ -344,8 +332,12 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         async def _cancel_tasks(tasks: list[asyncio.Task]) -> None:
             for task in tasks:
                 task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # FIX: Do NOT await asyncio.gather here.
+            # Tasks running CPU-bound code in asyncio.to_thread cannot be preempted
+            # by cancellation. Awaiting them guarantees the worker hangs indefinitely.
+            # Python will garbage collect the task once the background thread completes.
+            pass
 
         watchdog_active = False
         if (

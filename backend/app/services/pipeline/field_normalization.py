@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
+from app.services.pipeline_config import EMPTY_SENTINEL_VALUES
 from .utils import _clean_page_text, _compact_dict, _normalize_committed_field_name
 
 
@@ -12,7 +13,7 @@ def _normalize_review_value(value: object) -> object | None:
     if isinstance(value, (list, dict)):
         return value
     text = _clean_page_text(value)
-    if not text or text.lower() in {"-", "—", "--", "n/a", "na", "none", "null", "undefined"}:
+    if not text or text.lower() in EMPTY_SENTINEL_VALUES:
         return None
     return text
 
@@ -48,12 +49,13 @@ def _normalize_record_fields(
     normalized = _compact_dict(normalized)
     
     # Remove currency for job listings
-    if "job" in normalized_surface:
+    if normalized_surface == "job" or normalized_surface.startswith("job_"):
         normalized.pop("currency", None)
     
     # Extract currency hint for non-job listings
     if (
-        "job" not in normalized_surface
+        normalized_surface != "job"
+        and not normalized_surface.startswith("job_")
         and not str(normalized.get("currency") or "").strip()
     ):
         for field_name in ("price", "sale_price", "original_price", "salary"):
@@ -76,8 +78,7 @@ def _passes_detail_quality_gate(field_name: str, value: object) -> bool:
         text = " ".join(validated.split()).strip()
         return bool(
             text
-            and text.lower()
-            not in {"-", "—", "--", "n/a", "na", "none", "null", "undefined"}
+            and text.lower() not in EMPTY_SENTINEL_VALUES
         )
     return True
 
@@ -101,8 +102,7 @@ def _public_record_fields(record: dict) -> dict:
 
 def _merge_record_fields(primary: dict, secondary: dict) -> dict:
     """Merge two records, preferring primary but taking better secondary values."""
-    from .utils import _clean_candidate_text
-    
+
     merged = dict(primary)
     for key, value in secondary.items():
         if key.startswith("_"):
@@ -122,49 +122,45 @@ def _should_prefer_secondary_field(
         return False
     if existing in (None, "", [], {}):
         return True
-    if field_name in {"description", "specifications"}:
-        return len(_clean_candidate_text(candidate, limit=None)) > len(
-            _clean_candidate_text(existing, limit=None)
-        )
-    if field_name in {"brand", "category"}:
-        existing_text = _clean_candidate_text(existing, limit=None).casefold()
-        candidate_text = _clean_candidate_text(candidate, limit=None).casefold()
-        if not candidate_text:
+        
+    existing_text = _clean_candidate_text(existing, limit=None).casefold()
+    candidate_text = _clean_candidate_text(candidate, limit=None).casefold()
+    
+    if not candidate_text:
+        return False
+
+    # 1. Long-form text fields: longer is generally better
+    if field_name in {"description", "specifications", "responsibilities", "requirements"}:
+        return len(candidate_text) > len(existing_text)
+
+    # 2. Short-form categorical fields: prevent long noise from overwriting short facts
+    if field_name in {"brand", "category", "color", "size", "availability"}:
+        # FIX: If the candidate is suspiciously long (e.g., a sentence), reject it
+        if len(candidate_text) > 40 or len(candidate_text.split()) > 5:
             return False
+            
         low_quality_tokens = {
-            "cookie",
-            "privacy",
-            "sign in",
-            "log in",
-            "account",
-            "home",
-            "menu",
+            "cookie", "privacy", "sign in", "log in", 
+            "account", "home", "menu", "agree", "policy"
         }
         existing_is_noisy = any(token in existing_text for token in low_quality_tokens)
         candidate_is_noisy = any(token in candidate_text for token in low_quality_tokens)
+        
         if existing_is_noisy and not candidate_is_noisy:
             return True
         if not existing_is_noisy and candidate_is_noisy:
             return False
-        # Prefer a richer candidate label when both pass baseline quality.
+            
+        # If both are clean, prefer the slightly longer/richer label,
+        # but only up to our 40-character safety cap.
         return len(candidate_text) > len(existing_text)
+
+    # 3. List-based fields (images)
     if field_name == "additional_images":
-        # Handle both list/tuple and string inputs
-        if isinstance(existing, (list, tuple)):
-            existing_count = len([p for p in existing if p])
-        else:
-            existing_count = len(
-                [part for part in str(existing or "").split(",") if part.strip()]
-            )
-        
-        if isinstance(candidate, (list, tuple)):
-            candidate_count = len([p for p in candidate if p])
-        else:
-            candidate_count = len(
-                [part for part in str(candidate or "").split(",") if part.strip()]
-            )
-        
+        existing_count = len([p for p in (existing if isinstance(existing, (list, tuple)) else str(existing or "").split(",")) if p])
+        candidate_count = len([p for p in (candidate if isinstance(candidate, (list, tuple)) else str(candidate or "").split(",")) if p])
         return candidate_count > existing_count
+        
     return False
 
 

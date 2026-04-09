@@ -9,6 +9,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 from app.services.pipeline_config import COLLECTION_KEYS, FIELD_ALIASES, JSON_MAX_SEARCH_DEPTH
+from app.services.normalizers import validate_value
 
 
 def extract_json_listing(
@@ -139,7 +140,14 @@ def _normalize_item(item: dict, page_url: str) -> dict:
             )
             if normalized in (None, "", [], {}):
                 continue
-            record[canonical] = normalized
+                
+            # FIX: Enforce strict schema validation on JSON API responses
+            # to prevent payload pollution
+            validated = validate_value(canonical, normalized)
+            if validated in (None, "", [], {}):
+                continue
+                
+            record[canonical] = validated
             consumed_keys.update(key for key in candidate_keys if key in item)
             break
 

@@ -14,6 +14,12 @@ CrawlerAI is a POC crawler stack with:
 - `docs/backend-pending-items.md`: the single consolidated backend backlog for bugs, refactors, and follow-up architecture work.
 - Root audit files are historical inputs, not the canonical backlog.
 
+## Development authentication (POC)
+
+- **Public registration is off by default.** `registration_enabled` defaults to `false` in `app/core/config.py` (`REGISTRATION_ENABLED` unset or false). `POST /api/auth/register` returns 403. The Register UI is informational only. For production multi-tenant use, set `REGISTRATION_ENABLED=true` in the backend environment and restore self-serve registration in the frontend.
+- **Single bootstrap admin:** set `BOOTSTRAP_ADMIN_ONCE=1`, `DEFAULT_ADMIN_EMAIL`, and `DEFAULT_ADMIN_PASSWORD` (password rules in `app/services/auth_service.py`). Startup creates or repairs that admin user.
+- **Dashboard “Reset data”** requires an admin session (`require_admin`), not merely any logged-in user.
+
 ## Control Ownership
 
 User-selected crawl controls are authoritative. The backend must preserve them exactly as submitted.

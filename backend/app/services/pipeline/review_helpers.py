@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.services.pipeline_config import (
     DISCOVERED_FIELD_NOISE_TOKENS,
+    DISCOVERED_SOURCE_NOISE_TOKENS,
     DISCOVERED_VALUE_NOISE_PHRASES,
 )
 
@@ -41,10 +42,7 @@ def _should_surface_discovered_field(
             return False
 
     lowered_source = str(source or "").strip().lower()
-    if any(
-        token in lowered_source
-        for token in ("review", "reviews", "bazaarvoice", "rating_distribution")
-    ):
+    if any(token in lowered_source for token in DISCOVERED_SOURCE_NOISE_TOKENS):
         return False
 
     return _passes_detail_quality_gate(normalized_field, normalized_value)

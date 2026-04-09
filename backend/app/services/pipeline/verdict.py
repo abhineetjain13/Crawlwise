@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from app.services.extract.listing_quality import assess_listing_record_quality
+from app.services.pipeline_config import REQUIRED_FIELDS_BY_SURFACE
 
 # Verdict constants
 VERDICT_SUCCESS = "success"
@@ -14,30 +15,28 @@ VERDICT_LISTING_FAILED = "listing_detection_failed"
 VERDICT_EMPTY = "empty"
 
 
-def _compute_verdict(records: list[dict], surface: str) -> str:
+def _compute_verdict(records: list[dict], surface: str, *, is_listing: bool) -> str:
     """Compute extraction quality verdict for a single URL.
 
     Verdict is based on core field presence, not requested fields.
     Requested field coverage is tracked separately in ``_requested_field_coverage``
     and stored in ``discovered_data`` — it does NOT downgrade the verdict.
     """
-    is_listing = "listing" in str(surface or "").lower()
     if not records:
         return VERDICT_LISTING_FAILED if is_listing else VERDICT_EMPTY
 
     for record in records:
-        if _passes_core_verdict(record, surface):
+        if _passes_core_verdict(record, surface, is_listing=is_listing):
             return VERDICT_SUCCESS
 
     return VERDICT_PARTIAL
 
 
-def _passes_core_verdict(record: dict, surface: str) -> bool:
+def _passes_core_verdict(record: dict, surface: str, *, is_listing: bool) -> bool:
     """Check if a record passes core quality requirements."""
-    normalized_surface = str(surface or "").strip().lower()
-    if "listing" in normalized_surface:
+    if is_listing:
         return assess_listing_record_quality(
-            record, surface=normalized_surface
+            record, surface=str(surface or "").strip().lower()
         ).meaningful
     
     normalized_record = {
@@ -55,10 +54,12 @@ def _passes_core_verdict(record: dict, surface: str) -> bool:
     company = normalized_record.get("company")
     description = normalized_record.get("description")
 
-    if normalized_surface == "job_detail":
-        return bool(title and company and description)
-    if normalized_surface == "ecommerce_detail":
-        return bool(title and (price or image_url))
+    surface_key = str(surface or "").strip().lower()
+    required_fields = REQUIRED_FIELDS_BY_SURFACE.get(surface_key, frozenset())
+    if required_fields:
+        if required_fields == frozenset({"title"}):
+            return bool(title and (price or image_url))
+        return all(normalized_record.get(field) not in (None, "", [], {}) for field in required_fields)
     return bool(title and (price or image_url or company or description))
 
 

@@ -41,6 +41,16 @@ export class ApiError extends Error {
   }
 }
 
+/** HTTP status from API failures (duck-typed so checks work if `instanceof ApiError` fails across bundles). */
+export function httpErrorStatus(error: unknown): number | undefined {
+  if (error instanceof ApiError) return error.status;
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const s = (error as { status: unknown }).status;
+    return typeof s === "number" && Number.isFinite(s) ? s : undefined;
+  }
+  return undefined;
+}
+
 export function getApiBaseUrl() {
   if (resolvedBaseUrl) {
     return resolvedBaseUrl;
@@ -77,20 +87,9 @@ export function getApiWebSocketBaseUrl() {
 }
 
 function getApiBaseUrlCandidates() {
-  const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
-  if (configured) {
-    return [parseConfiguredApiBaseUrl(configured)];
-  }
-  if (typeof window === "undefined") {
-    return ["http://127.0.0.1:8000", "http://localhost:8000"];
-  }
-  const { protocol, hostname } = window.location;
-  const candidates = [
-    `${protocol}//${hostname}:8000`,
-    `${protocol}//127.0.0.1:8000`,
-    `${protocol}//localhost:8000`,
-  ];
-  return Array.from(new Set(candidates.map(normalizeBaseUrl)));
+  // Single origin per process: multi-host fallback retries can hit a different API instance
+  // (stale data, wrong cookies). Use the same resolution path as getApiBaseUrl().
+  return [getApiBaseUrl()];
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

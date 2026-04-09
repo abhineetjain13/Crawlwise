@@ -79,6 +79,11 @@ def _build_manifest_trace(
     extra: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build manifest trace from page sources."""
+    reserved_keys = {"next_data", "tables", "semantic"}
+    extra_payload = dict(extra or {})
+    # Prevent callers from silently overriding core manifest sections.
+    for reserved_key in reserved_keys:
+        extra_payload.pop(reserved_key, None)
     scrubbed_payloads = scrub_network_payloads_for_storage(
         [row for row in xhr_payloads if isinstance(row, dict)]
     )
@@ -91,6 +96,7 @@ def _build_manifest_trace(
                     {
                         "url": row.get("url"),
                         "status": row.get("status"),
+                        "headers": row.get("headers"),
                         "body": row.get("body"),
                     }
                 )
@@ -105,7 +111,7 @@ def _build_manifest_trace(
             "microdata": page_sources.get("microdata") or None,
             "tables": page_sources.get("tables") or None,
             "semantic": semantic or None,
-            **(extra or {}),
+            **extra_payload,
         }
     )
     return payload

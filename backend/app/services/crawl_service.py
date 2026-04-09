@@ -149,23 +149,8 @@ async def _run_control_update(
     return run
 
 
-def _wire_runtime_dependencies() -> None:
-    """Keep runtime modules aligned with crawl_service patch points for tests."""
-    from app.services.pipeline import core as pipeline_core
-    from app.services import _batch_runtime as batch_runtime
-
-    pipeline_core.acquire = acquire
-    pipeline_core.run_adapter = run_adapter
-    pipeline_core.try_blocked_adapter_recovery = try_blocked_adapter_recovery
-    pipeline_core.discover_xpath_candidates = discover_xpath_candidates
-    pipeline_core.review_field_candidates = review_field_candidates
-    pipeline_core._process_single_url = _process_single_url
-    batch_runtime._process_single_url = _process_single_url
-
-
 async def process_run(session: AsyncSession, run_id: int) -> None:
     """Compatibility wrapper so test patches on crawl_service symbols still apply."""
-    _wire_runtime_dependencies()
     await _batch_process_run(session, run_id)
 
 

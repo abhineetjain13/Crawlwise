@@ -2,7 +2,7 @@
 
 import { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { useLayoutEffect } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { useTopBarStore } from "../layout/top-bar-context";
 import { cn } from "../../lib/utils";
@@ -64,38 +64,84 @@ export function TabBar({
   value,
   onChange,
   options,
+  compact = false,
 }: Readonly<{
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
+  compact?: boolean;
 }>) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [pill, setPill] = useState({ left: 0, width: 0 });
+
   const activeIndex = options.findIndex((o) => o.value === value);
-  const pct = activeIndex >= 0 ? (activeIndex / options.length) * 100 : 0;
+  const padX = compact ? "px-2.5" : "px-3";
+
+  const syncPill = useCallback(() => {
+    const container = containerRef.current;
+    if (activeIndex < 0 || !container) {
+      setPill({ left: 0, width: 0 });
+      return;
+    }
+    const btn = buttonRefs.current[activeIndex];
+    if (!btn) {
+      return;
+    }
+    const cRect = container.getBoundingClientRect();
+    const bRect = btn.getBoundingClientRect();
+    setPill({
+      left: bRect.left - cRect.left,
+      width: bRect.width,
+    });
+  }, [activeIndex]);
+
+  useLayoutEffect(() => {
+    syncPill();
+  }, [syncPill, value, options]);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const ro = new ResizeObserver(() => syncPill());
+    ro.observe(container);
+    window.addEventListener("resize", syncPill);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", syncPill);
+    };
+  }, [syncPill]);
 
   return (
     <div
-      className="relative inline-flex h-[30px] items-center rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-elevated)] p-0.5"
+      ref={containerRef}
+      className="relative inline-flex h-8 items-stretch rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-elevated)] p-0.5"
     >
-      {/* Sliding pill */}
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[var(--bg-panel)] shadow-[var(--shadow-xs)] transition-transform duration-150 ease-out border border-[var(--border)]"
+        className="pointer-events-none absolute inset-y-0.5 rounded-[4px] border border-[var(--accent)] bg-[var(--accent)] shadow-[var(--shadow-xs)] transition-[left,width] duration-150 ease-out motion-reduce:transition-none"
         style={{
-          width: `calc(100% / ${options.length})`,
-          transform: `translateX(${pct * options.length}%)`,
-          left: 0,
+          width: pill.width > 0 ? pill.width : 0,
+          left: pill.left,
+          opacity: activeIndex >= 0 && pill.width > 0 ? 1 : 0,
         }}
       />
-      {options.map((option) => (
+      {options.map((option, index) => (
         <button
           key={option.value}
+          ref={(el) => {
+            buttonRefs.current[index] = el;
+          }}
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "relative z-10 flex-1 whitespace-nowrap rounded-[4px] px-3 py-1 text-caption font-medium transition-colors duration-100",
+            "relative z-10 inline-flex shrink-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-caption font-medium leading-none transition-colors duration-100 motion-reduce:transition-none",
+            padX,
             value === option.value
-              ? "text-[var(--text-primary)]"
+              ? "text-[var(--accent-foreground)]"
               : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
           )}
         >

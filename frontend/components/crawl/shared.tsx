@@ -336,7 +336,7 @@ export const LogTerminal = memo(function LogTerminal({
             >
               {normalizeLogLevel(log.level)}
             </span>{" "}
-            <span>{log.message}</span>
+            <span>{sanitizeLogMessage(log.message)}</span>
           </div>
         ))
       ) : (
@@ -372,19 +372,21 @@ export function AdvancedModePicker({
             )}
           >
             <div className="flex items-center justify-between gap-3">
-              <span className={cn("text-sm font-semibold leading-none", active ? "text-foreground" : "text-[var(--text-secondary)]")}>
+              <span className="text-sm font-semibold leading-none text-[var(--text-primary)]">
                 {option.label}
               </span>
               <span
                 className={cn(
                   "rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-[0.08em]",
-                  active ? "bg-accent text-[var(--accent-fg)]" : "bg-[var(--bg-elevated)] text-muted",
+                  active
+                    ? "bg-accent text-[var(--accent-foreground)]"
+                    : "bg-[var(--bg-elevated)] text-[var(--text-secondary)]",
                 )}
               >
                 {active ? "Active" : "Mode"}
               </span>
             </div>
-            <p className="mt-1.5 text-xs leading-4 text-muted">{option.description}</p>
+            <p className="mt-1.5 text-xs leading-4 text-[var(--text-secondary)]">{option.description}</p>
           </button>
         );
       })}
@@ -473,8 +475,13 @@ export function SliderRow({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <div className="text-xs font-semibold text-[var(--text-secondary)]">{label}</div>
-          <button type="button" onClick={onReset} aria-label={`Reset ${label}`} className="text-muted hover:text-foreground">
-            <RotateCcw className="size-3" />
+          <button
+            type="button"
+            onClick={onReset}
+            aria-label={`Reset ${label}`}
+            className="text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+          >
+            <RotateCcw className="size-3" aria-hidden="true" />
           </button>
         </div>
         <div className="flex items-center gap-3">
@@ -567,7 +574,7 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs"
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs text-foreground"
             >
               <span>{field}</span>
               <X className="size-3.5" aria-hidden="true" />
@@ -618,7 +625,7 @@ export function ManualFieldEditor({
           type="button"
           onClick={onDelete}
           aria-label={`Delete ${row.fieldName || "manual field"}`}
-          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-danger hover:bg-danger/10"
+          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-white hover:bg-danger/10"
         >
           <Trash2 className="size-3.5" aria-hidden="true" />
         </button>
@@ -753,9 +760,10 @@ export function ActionButton({
     <Button
       type="button"
       variant={danger ? "danger" : "secondary"}
+      size="sm"
       disabled={disabled}
       onClick={onClick}
-      className="h-8 px-3 text-xs"
+      className={cn("h-8 min-w-0 px-3", !danger && "text-caption")}
     >
       {label}
     </Button>
@@ -832,6 +840,13 @@ function logTone(level: string) {
 
 function normalizeLogLevel(level: string) {
   return String(level || "").trim().toUpperCase();
+}
+
+function sanitizeLogMessage(message: string) {
+  return String(message || "")
+    .replace(/\s*\[corr=[^\]]+\]/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null>) {

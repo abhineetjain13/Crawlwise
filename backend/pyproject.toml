@@ -31,9 +31,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local/dev environments can use psycopg2-binary to avoid libpq toolchain setup.
+# Production should keep using psycopg2 from [project.dependencies].
 dev = [
   "pytest>=8.4.2",
   "pytest-asyncio>=1.1.0",
+  "psycopg2-binary>=2.9.10",
 ]
 
 [tool.setuptools.packages.find]

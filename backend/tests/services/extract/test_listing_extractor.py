@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import pytest
 
 import app.services.extract.listing_extractor as listing_extractor
 from unittest.mock import patch
@@ -253,6 +254,7 @@ def test_extract_listing_records_maps_generic_job_ids_without_emitting_sku():
     assert "sku" not in records[0]
 
 
+@pytest.mark.skip(reason="UltiPro-specific URL synthesis was intentionally removed in Fix 10 (Batch 2) - site-specific logic belongs in Adapters")
 def test_normalize_generic_item_synthesizes_ultipro_job_links_from_payload_ids():
     record = listing_extractor._normalize_generic_item(
         {

@@ -561,10 +561,22 @@ async def scroll_to_bottom(
             current_height=current_height,
             force_probe=forced_probe_used,
         )
-        await cooperative_sleep_ms(
-            max(request_delay_ms, config.scroll_wait_min_ms),
-            checkpoint=checkpoint,
-        )
+        # FIX: Wait for network idle to ensure XHRs for new items complete,
+        # falling back to the cooperative sleep if it times out.
+        if hasattr(page, "wait_for_load_state"):
+            try:
+                from playwright.async_api import TimeoutError as PwTimeoutError
+                await page.wait_for_load_state("networkidle", timeout=max(request_delay_ms, config.scroll_wait_min_ms))
+            except (PwTimeoutError, Exception):
+                await cooperative_sleep_ms(
+                    max(request_delay_ms, config.scroll_wait_min_ms),
+                    checkpoint=checkpoint,
+                )
+        else:
+            await cooperative_sleep_ms(
+                max(request_delay_ms, config.scroll_wait_min_ms),
+                checkpoint=checkpoint,
+            )
         next_height = await current_scroll_height(page)
         next_metrics = await snapshot_listing_page_metrics(page)
         progress_kind = classify_progress(
@@ -777,10 +789,22 @@ async def click_load_more(
                 button = page.locator(selector).first
                 if await button.is_visible():
                     await button.click()
-                    await cooperative_sleep_ms(
-                        max(request_delay_ms, config.load_more_wait_min_ms),
-                        checkpoint=checkpoint,
-                    )
+                    # FIX: Wait for network idle to ensure XHRs for new items complete,
+                    # falling back to the cooperative sleep if it times out.
+                    if hasattr(page, "wait_for_load_state"):
+                        try:
+                            from playwright.async_api import TimeoutError as PwTimeoutError
+                            await page.wait_for_load_state("networkidle", timeout=max(request_delay_ms, config.load_more_wait_min_ms))
+                        except (PwTimeoutError, Exception):
+                            await cooperative_sleep_ms(
+                                max(request_delay_ms, config.load_more_wait_min_ms),
+                                checkpoint=checkpoint,
+                            )
+                    else:
+                        await cooperative_sleep_ms(
+                            max(request_delay_ms, config.load_more_wait_min_ms),
+                            checkpoint=checkpoint,
+                        )
                     current_metrics = await snapshot_listing_page_metrics(page)
                     progressed = listing_progressed(previous_metrics, current_metrics)
                     steps.append(

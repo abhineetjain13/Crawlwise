@@ -137,11 +137,14 @@ export function Button({
   }
 >) {
   const variants: Record<string, string> = {
-    primary:   "bg-[var(--accent)] text-[var(--accent-fg)] hover:bg-[var(--accent-hover)] shadow-[var(--shadow-xs)]",
-    secondary: "border border-[var(--border)] bg-[var(--button-secondary-bg)] text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-strong)]",
-    ghost:     "border border-transparent bg-transparent text-[var(--text-muted)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
-    accent:    "accent-fill",
-    danger:    "border border-[var(--danger-bg)] bg-transparent text-[var(--danger)] hover:bg-[var(--danger-bg)]",
+    primary:
+      "bg-[var(--accent)] !text-[var(--button-filled-fg)] hover:bg-[var(--accent-hover)] shadow-[var(--shadow-xs)]",
+    secondary:
+      "border border-[var(--border)] bg-[var(--button-secondary-bg)] text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-strong)]",
+    ghost:
+      "border border-transparent bg-transparent text-[var(--text-primary)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
+    accent: "accent-fill",
+    danger: "border border-[var(--danger)] bg-[var(--danger)] !text-[var(--button-filled-fg)] hover:opacity-90",
   };
   const sizes: Record<string, string> = {
     sm:   "h-7 px-2.5 text-caption",
@@ -149,12 +152,14 @@ export function Button({
     lg:   "h-9 px-4 text-body",
     icon: "h-8 w-8 p-0",
   };
+  const onAccent = variant === "primary" || variant === "danger" || variant === "accent";
   return (
     <button
       {...props}
       className={cn(
         "focus-ring inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-md)] font-medium",
-        "transition-all disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40",
+        "transition-all disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-80",
+        onAccent && "ui-on-accent-surface",
         variants[variant],
         sizes[size],
         className,
@@ -185,7 +190,7 @@ export function Badge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5",
-        "text-meta font-semibold uppercase tracking-[0.05em]",
+        "text-[10px] font-medium uppercase tracking-[0.04em] leading-none",
         tones[tone] ?? tones.neutral,
         className,
       )}

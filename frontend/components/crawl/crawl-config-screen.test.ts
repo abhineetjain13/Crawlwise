@@ -47,7 +47,7 @@ describe("buildDispatch", () => {
     expect(dispatch.settings.advanced_mode).toBe("auto");
   });
 
-  it("maps view_all to canonical load_more mode", () => {
+  it("preserves view_all for user-owned settings (backend resolves traversal)", () => {
     const dispatch = buildDispatch(
       baseConfig({
         advanced_enabled: true,
@@ -55,7 +55,7 @@ describe("buildDispatch", () => {
       }),
     );
 
-    expect(dispatch.settings.advanced_mode).toBe("load_more");
+    expect(dispatch.settings.advanced_mode).toBe("view_all");
   });
 
   it("submits pdp batch as ecommerce detail with URL list", () => {

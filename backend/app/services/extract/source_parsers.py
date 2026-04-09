@@ -47,7 +47,13 @@ def parse_page_sources(html: str) -> dict[str, object]:
 def extract_json_ld(soup: BeautifulSoup) -> list[dict]:
     results = []
     for node in soup.select("script[type='application/ld+json']"):
-        data = _parse_json_blob(node.string or node.get_text(" ", strip=True) or "")
+        # FIX: Do not use get_text() as it strips HTML tags inside valid JSON strings,
+        # corrupting the payload. Use the raw inner strings.
+        raw_text = node.string
+        if not raw_text:
+            raw_text = "".join(node.strings)
+            
+        data = _parse_json_blob(raw_text.strip())
         results.extend(_flatten_json_ld_payloads(data))
     return results
 
@@ -93,16 +99,30 @@ def parse_datalayer(html: str) -> dict[str, object]:
                     result["price"] = item["price"]
                 if "discount" in item:
                     discount_value = item["discount"]
-                    if "price" in item:
-                        try:
-                            sale_price = float(item["price"]) - float(discount_value)
-                        except (TypeError, ValueError):
-                            result["discount_amount"] = discount_value
-                        else:
-                            result["sale_price"] = sale_price
-                            result["discount_amount"] = discount_value
+                    
+                    # FIX: Mathematical safety routing for discount amount vs percentage
+                    if isinstance(discount_value, str) and "%" in discount_value:
+                        result["discount_percentage"] = discount_value.replace("%", "").strip()
                     else:
-                        result["discount_amount"] = discount_value
+                        price_val = 0.0
+                        disc_val = 0.0
+                        try:
+                            if "price" in item:
+                                price_val = float(item["price"])
+                            disc_val = float(discount_value)
+                        except (TypeError, ValueError):
+                            pass
+                        
+                        # If the discount number is larger than the item price,
+                        # it is physically impossible for it to be a flat currency amount.
+                        # It MUST be a percentage (e.g., Price: $40, Discount: 46 -> 46% off)
+                        if price_val > 0 and disc_val > price_val:
+                            result["discount_percentage"] = discount_value
+                        else:
+                            # Standard fallback
+                            result["discount_amount"] = discount_value
+                            if "price" in item and price_val >= 0 and disc_val >= 0:
+                                result["sale_price"] = max(0, price_val - disc_val)
                 if "item_category" in item:
                     result["category"] = item["item_category"]
                     result["google_product_category"] = item["item_category"]

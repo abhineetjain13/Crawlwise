@@ -23,8 +23,7 @@ import {
 } from "lucide-react";
 
 import { api } from "../../lib/api";
-import { ApiError } from "../../lib/api/client";
-import type { User } from "../../lib/api/types";
+import { ApiError, httpErrorStatus } from "../../lib/api/client";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { cn } from "../../lib/utils";
 import { getAuthSessionQueryOptions, isAuthRoute } from "./auth-session-query";
@@ -71,7 +70,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   const authQuery = useQuery(getAuthSessionQueryOptions(pathname));
 
   useEffect(() => {
-    if (!authRoute && authQuery.error instanceof ApiError && authQuery.error.isUnauthorized) {
+    if (!authRoute && httpErrorStatus(authQuery.error) === 401) {
       router.replace("/login");
     }
   }, [authQuery.error, authRoute, router]);
@@ -171,7 +170,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
         </div>
         <div className="min-h-screen lg:grid lg:grid-cols-[auto_minmax(0,1fr)]">
           <Sidebar pathname={pathname} />
-          <ShellContent me={authQuery.data} pathname={pathname} onOpenMobileNav={() => setMobileNavOpen(true)}>
+          <ShellContent pathname={pathname} onOpenMobileNav={() => setMobileNavOpen(true)}>
             {children}
           </ShellContent>
         </div>
@@ -292,11 +291,10 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
 
 /* ─── Shell content ──────────────────────────────────────────────────────── */
 function ShellContent({
-  me,
   children,
   pathname,
   onOpenMobileNav,
-}: Readonly<{ me: User | undefined; children: React.ReactNode; pathname: string; onOpenMobileNav: () => void }>) {
+}: Readonly<{ children: React.ReactNode; pathname: string; onOpenMobileNav: () => void }>) {
   const header = useTopBarHeader();
   const topBar = header ?? getFallbackHeader(pathname);
   const router = useRouter();
@@ -311,12 +309,15 @@ function ShellContent({
       await api.resetApplicationData();
       globalThis.location.reload();
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
+      const status = httpErrorStatus(error);
+      if (status === 401) {
         router.replace("/login");
         return;
       }
-      if (error instanceof ApiError && error.status === 403) {
-        globalThis.alert("Reset is admin-only.");
+      if (status === 403) {
+        globalThis.alert(
+          "The API refused reset (admin-only on an older backend build, or a stale session). Stop and restart the FastAPI server so it loads the latest code, then try again — or sign out and sign back in.",
+        );
         return;
       }
       const message = error instanceof Error ? error.message : "Failed to reset application data.";
@@ -326,9 +327,7 @@ function ShellContent({
     }
   }
 
-  const isAdmin = me?.role === "admin";
-  const resetDisabled = isResetting || !isAdmin;
-  const resetTitle = !isAdmin ? "Reset is admin-only." : undefined;
+  const resetDisabled = isResetting;
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -357,12 +356,10 @@ function ShellContent({
             <Button
               type="button"
               onClick={() => {
-                if (!isAdmin) return;
                 void handleResetData();
               }}
               disabled={resetDisabled}
               aria-disabled={resetDisabled}
-              title={resetTitle}
               variant="danger"
               size="sm"
               className="h-8"

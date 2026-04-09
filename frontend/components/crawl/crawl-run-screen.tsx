@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRightCircle, ChevronsDown, Copy, Download } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -136,6 +136,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     enabled: shouldFetchLogs,
     refetchInterval: false,
   });
+  const { refetch: refetchLogsQuery } = logsQuery;
   const markdownQuery = useQuery({
     queryKey: ["crawl-markdown", runId],
     queryFn: () => api.getMarkdown(runId),
@@ -153,14 +154,18 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     () => records.slice(0, Math.min(records.length, jsonVisibleCount)),
     [records, jsonVisibleCount],
   );
+  const deferredJsonRecords = useDeferredValue(jsonRecords);
   const hasMoreTableRecords = tableRecords.length < tableTotal;
   const hasMoreJsonRecords =
     jsonRecords.length < records.length || (records.length < recordsTotal && !recordsFetchCapReached);
   const logs = useMemo(() => logItems.slice(-CRAWL_DEFAULTS.MAX_LIVE_LOGS), [logItems]);
   const markdown = markdownQuery.data ?? "";
   const recordsJson = useMemo(
-    () => (outputTab === "json" ? JSON.stringify(jsonRecords.map(cleanRecord), null, 2) : ""),
-    [outputTab, jsonRecords],
+    () =>
+      outputTab === "json"
+        ? JSON.stringify(deferredJsonRecords.map(cleanRecord), null, 2)
+        : "",
+    [deferredJsonRecords, outputTab],
   );
   const showRunLoadingState = runQuery.isLoading && !run;
   const panelRefreshErrors = [
@@ -261,6 +266,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       // When the backend closes the stream at terminal status, refresh immediately
       // so the completed screen appears without manual page refresh.
       void refetchRunQuery();
+      void refetchLogsQuery();
     };
     ws.onerror = () => setLogSocketConnected(false);
     ws.onmessage = (event) => {
@@ -283,7 +289,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       }
     };
     return () => ws.close();
-  }, [refetchRunQuery, runId, shouldFetchLogs]);
+  }, [refetchLogsQuery, refetchRunQuery, runId, shouldFetchLogs]);
 
   useEffect(() => {
     if (!live) {

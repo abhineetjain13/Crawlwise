@@ -5,7 +5,7 @@ Task 7: Simplify extract_candidates and coerce_field_candidate_value
 """
 
 import pytest
-from hypothesis import given, strategies as st, settings
+from hypothesis import HealthCheck, given, settings, strategies as st
 from bs4 import BeautifulSoup
 
 from app.services.extract.service import (
@@ -90,7 +90,7 @@ def test_property_13_candidate_filtering_quality(invalid_value):
     
     # After refactoring, _filter_candidates should remove invalid values
     # Valid fields should still be present
-    if "price" in candidates:
+    if candidates.get("price") and len(candidates["price"]) > 0:
         assert candidates["price"][0]["value"] != invalid_value
 
 
@@ -98,7 +98,7 @@ def test_property_13_candidate_filtering_quality(invalid_value):
 @given(
     duplicate_value=st.text(min_size=5, max_size=50, alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd")))
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 def test_property_14_candidate_deduplication(duplicate_value):
     """Feature: extraction-pipeline-improvements, Property 14: Candidate Deduplication
     

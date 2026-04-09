@@ -30,6 +30,55 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # Default Settings.database_url is SQLite under backend/; no Alembic migrate step required for this smoke job.
+      - name: Start backend API server
+        working-directory: backend
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/backend.log 2>&1 &
+
+      - name: Wait for backend healthcheck
+        run: |
+          for i in {1..60}; do
+            if curl -fsS "http://127.0.0.1:8000/api/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become ready in time"
+          cat /tmp/backend.log || true
+          exit 1
+
+      - name: Start frontend dev server
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+        run: |
+          nohup npm run dev -- --hostname 127.0.0.1 --port 3000 > /tmp/frontend.log 2>&1 &
+
+      - name: Wait for frontend root URL
+        run: |
+          for i in {1..60}; do
+            if curl -fsS "http://127.0.0.1:3000/" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Frontend did not become ready in time"
+          cat /tmp/frontend.log || true
+          exit 1
+
       - name: Run Playwright smoke suite
         env:
           CI: true

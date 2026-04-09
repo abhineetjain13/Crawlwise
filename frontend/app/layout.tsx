@@ -21,6 +21,7 @@ const themeScript = `
     const stored = window.localStorage.getItem("crawlerai-theme");
     const dark = stored === "dark";
     document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.style.backgroundColor = dark ? "#0b1220" : "#f8fafc";
   })();
 `;
 

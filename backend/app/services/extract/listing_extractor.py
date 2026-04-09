@@ -74,52 +74,48 @@ LISTING_PAGE_ALLOWED_FIELDS = {"url", "title", "price", "image_link"}
 DETAIL_ONLY_FIELDS = {"brand", "gtin", "variants", "specifications", "description"}
 
 
-def _enforce_listing_field_contract(
-    records: list[dict], 
-    page_type: str
-) -> list[dict]:
+def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
     """Filter listing page records to remove detail-only fields from DOM records.
-    
+
     If page_type is "listing":
     - For DOM-extracted records (source="listing_card"), drop detail-only fields
     - For structured data records (JSON-LD, __NEXT_DATA__, etc.), preserve all fields
     - Log warning if detail fields were present in DOM records
-    
+
     Returns filtered records.
-    
+
     Note: This function is kept for testing purposes. The actual contract enforcement
     happens inline during DOM extraction in _extract_listing_records_single_page.
     """
     if page_type != "listing":
         return records
-    
+
     filtered_records = []
-    
+
     for record in records:
         # Check if this is a DOM-extracted record
         source = record.get("_source", "")
         is_dom_record = "listing_card" in str(source)
-        
+
         if not is_dom_record:
             # Preserve all fields for structured data records
             filtered_records.append(record)
             continue
-        
+
         # For DOM records, drop detail-only fields
         filtered_record = {
-            k: v for k, v in record.items()
-            if k not in DETAIL_ONLY_FIELDS
+            k: v for k, v in record.items() if k not in DETAIL_ONLY_FIELDS
         }
-        
+
         # Log warning if detail fields were dropped
         dropped_fields = [k for k in record.keys() if k in DETAIL_ONLY_FIELDS]
         if dropped_fields:
             logger.warning(
                 f"Listing page contract violation: dropped detail-only fields {dropped_fields} from DOM record"
             )
-        
+
         filtered_records.append(filtered_record)
-    
+
     return filtered_records
 
 
@@ -143,8 +139,8 @@ def extract_listing_records(
                     target_fields,
                     page_url=page_url,
                     max_records=max_records,
-                    xhr_payloads=xhr_payloads if index == 0 else None,
-                    adapter_records=adapter_records if index == 0 else None,
+                    xhr_payloads=xhr_payloads,
+                    adapter_records=adapter_records,
                 )
             )
             if len(merged_records) >= max_records:
@@ -178,20 +174,30 @@ def _extract_listing_records_single_page(
 
     soup = BeautifulSoup(html, "html.parser")
     json_ld_records = _extract_from_json_ld(soup, surface, page_url)
-    structured_records = (
-        []
-        if len(json_ld_records) >= MIN_VIABLE_RECORDS
-        else _extract_from_structured_sources(
-            page_sources=page_sources,
-            xhr_payloads=xhr_payloads,
-            surface=surface,
-            page_url=page_url,
-        )
+    structured_records = _extract_from_structured_sources(
+        page_sources=page_sources,
+        xhr_payloads=xhr_payloads,
+        surface=surface,
+        page_url=page_url,
+    )
+    should_run_expensive_fallbacks = (
+        len(json_ld_records) < MIN_VIABLE_RECORDS
+        and len(structured_records) < MIN_VIABLE_RECORDS
+    )
+    next_flight_records = (
+        _extract_from_next_flight_scripts(html, page_url)
+        if should_run_expensive_fallbacks
+        else []
+    )
+    inline_array_records = (
+        _extract_from_inline_object_arrays(html, surface, page_url)
+        if should_run_expensive_fallbacks
+        else []
     )
     raw_record_sets = {
         "structured": structured_records,
-        "next_flight": _extract_from_next_flight_scripts(html, page_url),
-        "inline_array": _extract_from_inline_object_arrays(html, surface, page_url),
+        "next_flight": next_flight_records,
+        "inline_array": inline_array_records,
         "json_ld": json_ld_records,
         "adapter": _adapter_candidate_records(adapter_records),
     }
@@ -205,7 +211,9 @@ def _extract_listing_records_single_page(
             if used_selector:
                 record["_selector"] = used_selector
             dom_records.append(record)
-    dom_records = _enforce_listing_field_contract(dom_records, "listing" if "listing" in str(surface or "").lower() else surface)
+    dom_records = _enforce_listing_field_contract(
+        dom_records, "listing" if "listing" in str(surface or "").lower() else surface
+    )
     raw_record_sets["dom"] = dom_records
 
     normalized_record_sets = {
@@ -260,7 +268,9 @@ def _is_identity_supplement_record(record: dict) -> bool:
     if not strong_identity_key(record):
         return False
     public_fields = [
-        key for key, value in record.items() if not str(key).startswith("_") and value not in _EMPTY_VALUES
+        key
+        for key, value in record.items()
+        if not str(key).startswith("_") and value not in _EMPTY_VALUES
     ]
     return len(public_fields) >= 2
 
@@ -396,21 +406,24 @@ def _extract_from_structured_sources(
 
     if not structured_groups:
         return []
-    
+
     # Convert groups to a dict for choose_primary_record_set
     record_sets = {f"group_{i}": group for i, group in enumerate(structured_groups)}
-    primary_label, primary_records = choose_primary_record_set(record_sets, surface=surface)
-    
+    primary_label, primary_records = choose_primary_record_set(
+        record_sets, surface=surface
+    )
+
     if not primary_records:
         return []
-    
+
     # Merge supplemental groups into primary
     supplemental_sets = [
-        records for label, records in record_sets.items()
+        records
+        for label, records in record_sets.items()
         if label != primary_label and records
     ]
     merged = merge_record_sets_on_identity(primary_records, supplemental_sets)
-    
+
     return merged if len(merged) >= MIN_VIABLE_RECORDS else []
 
 
@@ -824,7 +837,6 @@ def _extract_from_next_flight_scripts(html: str, page_url: str) -> list[dict]:
     if not decoded_chunks:
         return []
 
-    combined = "\n".join(decoded_chunks)
     records_by_url: dict[str, dict] = {}
     pair_patterns = [
         re.compile(
@@ -836,23 +848,13 @@ def _extract_from_next_flight_scripts(html: str, page_url: str) -> list[dict]:
             re.S,
         ),
     ]
-    brand_pattern = re.compile(
-        r'"name":"(?P<brand>[^"]+)","__typename":"ManufacturerCuratedBrand"'
-    )
-    sale_price_pattern = re.compile(
-        r'"priceVariation":"(?:SALE|PRIMARY)".{0,220}?"amount":"(?P<amount>[\d.]+)"',
-        re.S,
-    )
-    original_price_pattern = re.compile(
-        r'"priceVariation":"PREVIOUS".{0,220}?"amount":"(?P<amount>[\d.]+)"', re.S
-    )
-    rating_pattern = re.compile(
-        r'"averageRating":(?P<rating>[\d.]+),"totalCount":(?P<count>\d+)'
-    )
-    availability_pattern = re.compile(
-        r'"(?:shortInventoryStatusMessage|stockStatus)":"(?P<availability>[^"]+)"'
-    )
+    brand_pattern = re.compile(r'"name":"(?P<brand>[^"]+)","__typename":"ManufacturerCuratedBrand"')
+    sale_price_pattern = re.compile(r'"priceVariation":"(?:SALE|PRIMARY)".{0,220}?"amount":"(?P<amount>[\d.]+)"', re.S)
+    original_price_pattern = re.compile(r'"priceVariation":"PREVIOUS".{0,220}?"amount":"(?P<amount>[\d.]+)"', re.S)
+    rating_pattern = re.compile(r'"averageRating":(?P<rating>[\d.]+),"totalCount":(?P<count>\d+)')
+    availability_pattern = re.compile(r'"(?:shortInventoryStatusMessage|stockStatus)":"(?P<availability>[^"]+)"')
 
+    # FIX: Process exclusively per-chunk. Do not join chunks into a massive string.
     for chunk in decoded_chunks:
         for pair_pattern in pair_patterns:
             for match in pair_pattern.finditer(chunk):
@@ -861,44 +863,28 @@ def _extract_from_next_flight_scripts(html: str, page_url: str) -> list[dict]:
                 if not title:
                     continue
 
-                lookup_index = _lookup_next_flight_window_index(
-                    combined, raw_url, page_url
-                )
-                if lookup_index is None:
-                    continue
-                window_start = max(0, lookup_index - 1200)
-                window_end = min(len(combined), lookup_index + 2200)
-                window = combined[window_start:window_end]
+                # Isolate the search window around the match inside THIS chunk only
+                start_index = max(0, match.start() - 1200)
+                end_index = min(len(chunk), match.end() + 2200)
+                window = chunk[start_index:end_index]
+                
                 resolved_url = urljoin(page_url, raw_url)
                 record = records_by_url.setdefault(
                     resolved_url, {"url": resolved_url, "_source": "next_flight"}
                 )
                 record["title"] = title
 
-                brand_match = brand_pattern.search(window)
-                if brand_match:
+                if brand_match := brand_pattern.search(window):
                     record.setdefault("brand", brand_match.group("brand"))
-
-                sale_price_match = sale_price_pattern.search(window)
-                if sale_price_match:
+                if sale_price_match := sale_price_pattern.search(window):
                     record.setdefault("price", sale_price_match.group("amount"))
-
-                original_price_match = original_price_pattern.search(window)
-                if original_price_match:
-                    record.setdefault(
-                        "original_price", original_price_match.group("amount")
-                    )
-
-                rating_match = rating_pattern.search(window)
-                if rating_match:
+                if original_price_match := original_price_pattern.search(window):
+                    record.setdefault("original_price", original_price_match.group("amount"))
+                if rating_match := rating_pattern.search(window):
                     record.setdefault("rating", rating_match.group("rating"))
                     record.setdefault("review_count", rating_match.group("count"))
-
-                availability_match = availability_pattern.search(window)
-                if availability_match:
-                    record.setdefault(
-                        "availability", availability_match.group("availability")
-                    )
+                if availability_match := availability_pattern.search(window):
+                    record.setdefault("availability", availability_match.group("availability"))
 
     return [
         record
@@ -1075,6 +1061,16 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
         if slug_url:
             record["url"] = slug_url
 
+    if "ecommerce" in str(_surface or "").lower() and record.get("url") in (
+        None,
+        "",
+        [],
+        {},
+    ):
+        harvested = _harvest_product_url_from_item(item, page_url=page_url)
+        if harvested:
+            record["url"] = harvested
+
     record = _apply_surface_record_contract(
         record, surface=_surface, raw_item=item, page_url=page_url
     )
@@ -1249,11 +1245,9 @@ def _extract_generic_job_identifier(item: dict) -> str:
 def _synthesize_job_detail_url(item: dict, *, page_url: str) -> str:
     if not isinstance(item, dict):
         return ""
-    platform_family = _detect_platform_family_from_url(page_url)
-    strategy = _JOB_URL_SYNTHESIS_STRATEGIES.get(
-        platform_family, _default_job_detail_url_synthesis
-    )
-    return strategy(item, page_url=page_url)
+    # FIX: Removed dangerous hardcoded _JOB_URL_SYNTHESIS_STRATEGIES dispatch.
+    # Site-specific URL synthesis must be handled by proper Adapters (e.g. SaaSHRAdapter).
+    return _default_job_detail_url_synthesis(item, page_url=page_url)
 
 
 def _clean_identifier(value: object) -> str:
@@ -1263,43 +1257,6 @@ def _clean_identifier(value: object) -> str:
 def _default_job_detail_url_synthesis(item: dict, *, page_url: str) -> str:
     del item, page_url
     return ""
-
-
-def _synthesize_ultipro_detail_url(item: dict, *, page_url: str) -> str:
-    parsed = urlparse(str(page_url or "").strip())
-    opportunity_id = _clean_identifier(
-        item.get("OpportunityId")
-        or item.get("opportunityId")
-        or item.get("Id")
-        or item.get("id")
-    )
-    if not opportunity_id:
-        return ""
-    base_path = parsed.path.rstrip("/")
-    if "/OpportunityDetail" in base_path:
-        return parsed._replace(query=urlencode({"opportunityId": opportunity_id})).geturl()
-    return parsed._replace(
-        path=f"{base_path}/OpportunityDetail",
-        query=urlencode({"opportunityId": opportunity_id}),
-    ).geturl()
-
-
-def _detect_platform_family_from_url(url: str) -> str | None:
-    domain = urlparse(str(url or "").strip().lower()).netloc.replace("www.", "")
-    domain_rules = PLATFORM_FAMILIES.get("domain_rules", {})
-    for family, patterns in domain_rules.items():
-        for pattern in patterns:
-            normalized = str(pattern or "").strip().lower()
-            if not normalized:
-                continue
-            if domain == normalized or domain.endswith(f".{normalized}"):
-                return str(family)
-    return None
-
-
-_JOB_URL_SYNTHESIS_STRATEGIES = {
-    "ultipro_ukg": _synthesize_ultipro_detail_url,
-}
 
 
 def _looks_like_listing_variant_option(item: dict, *, surface: str) -> bool:
@@ -1904,7 +1861,13 @@ def _detect_repeated_link_card_roots(
                 break
             signature = (
                 current.name,
-                tuple(sorted(class_name for class_name in current.get("class", []) if class_name)),
+                tuple(
+                    sorted(
+                        class_name
+                        for class_name in current.get("class", [])
+                        if class_name
+                    )
+                ),
             )
             grouped.setdefault(signature, []).append(current)
 
@@ -2039,7 +2002,7 @@ def _extract_from_card(
         size_text = _extract_card_size(card_text_lines)
         if size_text:
             record["size"] = size_text
-        
+
         dimensions_text = _match_dimensions_line(card_text_lines)
         if dimensions_text:
             record["dimensions"] = dimensions_text
@@ -2115,7 +2078,9 @@ def _extract_job_card_fields(
         "[itemprop='hiringOrganization'] [itemprop='name']"
     )
     if company_el:
-        company_value = company_el.get("content") or company_el.get_text(" ", strip=True)
+        company_value = company_el.get("content") or company_el.get_text(
+            " ", strip=True
+        )
         company_value = " ".join(str(company_value or "").split()).strip()
         if company_value:
             record["company"] = company_value
@@ -2124,7 +2089,9 @@ def _extract_job_card_fields(
         "[data-testid*='listing-job-location'], [itemprop='jobLocation']"
     )
     if location_el:
-        location_value = location_el.get("content") or location_el.get_text(" ", strip=True)
+        location_value = location_el.get("content") or location_el.get_text(
+            " ", strip=True
+        )
         location_value = " ".join(str(location_value or "").split()).strip()
         if location_value:
             record["location"] = location_value
@@ -2139,11 +2106,15 @@ def _extract_job_card_fields(
         if value:
             record.setdefault(field_name, value)
     if not record.get("company") and not record.get("department"):
-        inferred_company = _infer_job_company(card_text_lines, title=record.get("title"))
+        inferred_company = _infer_job_company(
+            card_text_lines, title=record.get("title")
+        )
         if inferred_company:
             record["company"] = inferred_company
     if not record.get("location"):
-        inferred_location = _infer_job_location(card_text_lines, title=record.get("title"))
+        inferred_location = _infer_job_location(
+            card_text_lines, title=record.get("title")
+        )
         if inferred_location:
             record["location"] = inferred_location
     if not record.get("salary"):
@@ -2331,6 +2302,135 @@ def _resolve_slug_url(slug: str, *, page_url: str) -> str:
         return urljoin(page_url, text)
     origin = f"{parsed.scheme}://{parsed.netloc}/"
     return urljoin(origin, text)
+
+
+_PRODUCT_URL_TEMPLATE_KEYS = (
+    "urlTemplate",
+    "productUrlTemplate",
+    "pdpUrlTemplate",
+    "itemUrlPattern",
+    "urlPattern",
+)
+
+
+def _harvest_product_url_from_item(item: dict, *, page_url: str) -> str:
+    """Resolve PDP URLs from nested link objects, templates, or URL-shaped payload keys."""
+    if not isinstance(item, dict) or not page_url:
+        return ""
+    direct = _coerce_listing_product_url_candidate(
+        _first_href_from_nested_link(item), page_url
+    )
+    if direct:
+        return direct
+    for key in _PRODUCT_URL_TEMPLATE_KEYS:
+        tpl = item.get(key)
+        if not isinstance(tpl, str) or "{" not in tpl:
+            continue
+        ident = _primary_commerce_identifier(item)
+        if not ident:
+            continue
+        try:
+            filled = tpl.format(
+                sku=ident,
+                id=ident,
+                ID=ident,
+                productId=ident,
+                product_id=ident,
+            )
+        except (KeyError, ValueError, IndexError):
+            filled = (
+                tpl.replace("{sku}", ident)
+                .replace("{id}", ident)
+                .replace("{ID}", ident)
+                .replace("{productId}", ident)
+                .replace("{product_id}", ident)
+                .replace("{0}", ident)
+            )
+            # Validate that all placeholders were replaced
+            if "{" in filled or "}" in filled or re.search(r"\{[^}]+\}", filled):
+                # Unknown placeholders remain, skip this template
+                continue
+        resolved = _coerce_listing_product_url_candidate(filled, page_url)
+        if resolved:
+            return resolved
+    return _scan_payload_for_product_url(item, page_url, depth=0)
+
+
+def _primary_commerce_identifier(item: dict) -> str:
+    for key in (
+        "sku",
+        "product_id",
+        "productId",
+        "item_id",
+        "itemId",
+        "articleNumber",
+        "part_number",
+        "styleNumber",
+    ):
+        val = item.get(key)
+        if val not in (None, "", [], {}):
+            return str(val).strip()
+    return ""
+
+
+def _first_href_from_nested_link(item: dict) -> str:
+    for key in ("link", "links", "urlInfo", "productLink"):
+        node = item.get(key)
+        if isinstance(node, dict):
+            for hk in ("href", "url", "path", "pathname"):
+                v = node.get(hk)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    return ""
+
+
+def _coerce_listing_product_url_candidate(text: str, page_url: str) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if text.startswith(("http://", "https://")):
+        return text
+    lower = text.lower()
+    if any(
+        frag in lower
+        for frag in ("/product", "/p/", "/pd/", "/item/", "/products/", "/pdps/")
+    ):
+        return urljoin(page_url, text)
+    return ""
+
+
+def _scan_payload_for_product_url(item: object, page_url: str, depth: int) -> str:
+    if depth > 6 or not page_url:
+        return ""
+    if isinstance(item, dict):
+        for k, v in item.items():
+            ks = str(k)
+            kl = ks.lower()
+            if isinstance(v, str) and v.strip():
+                if any(
+                    token in kl
+                    for token in (
+                        "producturl",
+                        "pdpurl",
+                        "itemurl",
+                        "canonicalurl",
+                        "detailurl",
+                        "product_url",
+                        "pdp_url",
+                    )
+                ):
+                    got = _coerce_listing_product_url_candidate(v, page_url)
+                    if got:
+                        return got
+            nested = _scan_payload_for_product_url(v, page_url, depth + 1)
+            if nested:
+                return nested
+    elif isinstance(item, list):
+        for el in item[:40]:
+            nested = _scan_payload_for_product_url(el, page_url, depth + 1)
+            if nested:
+                return nested
+    return ""
 
 
 def _coerce_nested_text(value: object, *, keys: tuple[str, ...]) -> object | None:
@@ -2765,7 +2865,7 @@ def _extract_card_color(card: Tag, lines: list[str]) -> str:
             color = _extract_color_label_from_node(node)
             if color:
                 return color
-    
+
     # Fallback: try to extract value after "Color:" or "Colors:" label
     # Avoid returning just the label itself (e.g., "2 colors" or "Color")
     color_line = _match_line(lines, r"\bcolors?\b")
@@ -2885,7 +2985,11 @@ def _extract_card_identifiers(card: Tag, lines: list[str]) -> dict[str, str]:
                 identifiers["job_id"] = candidate
                 break
     detail_link = card.select_one("a[href]")
-    href = str(detail_link.get("href") or "").strip() if isinstance(detail_link, Tag) else ""
+    href = (
+        str(detail_link.get("href") or "").strip()
+        if isinstance(detail_link, Tag)
+        else ""
+    )
     if href and not identifiers.get("id"):
         tail = urlparse(href).path.rstrip("/").split("/")[-1]
         if re.fullmatch(r"[0-9]{4,}", tail):

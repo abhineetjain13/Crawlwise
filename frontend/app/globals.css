@@ -55,7 +55,7 @@
   /* ── Borders ── */
   --border:            rgba(15, 23, 42, 0.08);
   --border-strong:     rgba(15, 23, 42, 0.12);
-  --border-focus:      #14b8a6;
+  --border-focus:      #1E4DB7;
 
   /* ── Text ── */
   --text-primary:      #0f172a;
@@ -63,11 +63,12 @@
   --text-muted:        #64748b;
 
   /* ── Accent ── */
-  --accent:            #14b8a6;
-  --accent-hover:      #0d9488;
+  --accent:            #1E4DB7;
+  --accent-hover:      #1640A0;
+  --accent-foreground: #ffffff;
   --accent-fg:         #ffffff;
-  --accent-subtle:     rgba(20, 184, 166, 0.06);
-  --accent-dim:        rgba(20, 184, 166, 0.12);
+  --accent-subtle:     rgba(30, 77, 183, 0.06);
+  --accent-dim:        rgba(30, 77, 183, 0.12);
 
   /* ── Semantic ── */
   --success:           #10b981;
@@ -105,42 +106,43 @@
   --surface-card-edge: rgba(0, 0, 0, 0.02);
   --surface-header-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.04);
   --surface-sidebar-depth: 18px 0 44px rgba(0, 0, 0, 0.02);
-  --page-glow-1: rgba(20, 184, 166, 0.06);
-  --page-glow-2: rgba(20, 184, 166, 0.05);
-  --page-glow-3: rgba(16, 185, 129, 0.03);
+  --page-glow-1: rgba(30, 77, 183, 0.06);
+  --page-glow-2: rgba(30, 77, 183, 0.05);
+  --page-glow-3: rgba(30, 77, 183, 0.03);
   --button-secondary-bg: #ffffff;
   --button-secondary-hover-bg: #f8fafc;
   --button-ghost-hover-bg: #f1f5f9;
   --button-accent-bg: var(--accent);
+  --button-filled-fg: #ffffff;
   --control-input-bg: #ffffff;
   --control-input-hover-bg: #f8fafa;
   --control-input-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   --control-input-hover-shadow: 0 2px 4px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  --control-input-focus-shadow: 0 0 0 3px rgba(20, 184, 166, 0.12), 0 2px 4px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  --segmented-bg: rgba(20, 184, 166, 0.05);
+  --control-input-focus-shadow: 0 0 0 3px rgba(30, 77, 183, 0.12), 0 2px 4px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --segmented-bg: rgba(30, 77, 183, 0.05);
   --segmented-shadow: none;
   --segmented-item-active-bg: var(--accent);
   --segmented-item-active-fg: var(--accent-fg);
-  --segmented-item-hover-bg: rgba(20, 184, 166, 0.08);
-  --advanced-picker-bg: rgba(20, 184, 166, 0.03);
-  --advanced-picker-hover-bg: rgba(20, 184, 166, 0.06);
+  --segmented-item-hover-bg: rgba(30, 77, 183, 0.08);
+  --advanced-picker-bg: rgba(30, 77, 183, 0.03);
+  --advanced-picker-hover-bg: rgba(30, 77, 183, 0.06);
   --advanced-picker-active-bg: #ffffff;
   --advanced-panel-bg: #f8fafc;
   --advanced-panel-highlight: none;
-  --advanced-callout-bg: rgba(20, 184, 166, 0.05);
+  --advanced-callout-bg: rgba(30, 77, 183, 0.05);
   --advanced-callout-border: var(--accent-subtle);
-  --setting-surface-bg: rgba(20, 184, 166, 0.02);
+  --setting-surface-bg: rgba(30, 77, 183, 0.02);
   --setting-surface-active-bg: #ffffff;
   --setting-icon-bg: #ffffff;
   --setting-icon-active-bg: var(--accent-subtle);
   --setting-body-bg: #f8fafc;
-  --slider-row-bg: rgba(20, 184, 166, 0.03);
+  --slider-row-bg: rgba(30, 77, 183, 0.03);
   --slider-row-highlight: none;
   --slider-value-bg: var(--accent-subtle);
   --slider-input-bg: #ffffff;
   --slider-thumb-border: #ffffff;
   --nav-item-hover-bg: rgba(255, 255, 255, 0.75);
-  --nav-item-active-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(204, 251, 241, 0.95));
+  --nav-item-active-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.85), rgba(220, 230, 250, 0.95));
   --nav-item-active-shadow: var(--shadow-sm);
   --nav-item-active-marker: var(--accent);
   --terminal-bg: #141414;
@@ -190,7 +192,7 @@
   --transition-slow: 220ms ease;
 
   /* ── Metric accent colors (for top-stripe) ── */
-  --metric-runs-color:    #14b8a6;
+  --metric-runs-color:    #1E4DB7;
   --metric-active-color:  #16a34a;
   --metric-records-color: #f59e0b;
   --metric-domains-color: #0891b2;
@@ -213,7 +215,7 @@ html[data-theme="dark"] {
   /* ── Borders — very tight, low-opacity ── */
   --border:            rgba(255, 255, 255, 0.08);
   --border-strong:     rgba(255, 255, 255, 0.14);
-  --border-focus:      #14b8a6;
+  --border-focus:      #1E4DB7;
 
   /* ── Text ── */
   --text-primary:      #e7e7e7;
@@ -221,11 +223,12 @@ html[data-theme="dark"] {
   --text-muted:        #6f6f6f;
 
   /* ── Accent ── */
-  --accent:            #14b8a6;
-  --accent-hover:      #2dd4bf;
+  --accent:            #1E4DB7;
+  --accent-hover:      #2D5FD4;
+  --accent-foreground: #ffffff;
   --accent-fg:         #ffffff;
-  --accent-subtle:     rgba(20, 184, 166, 0.10);
-  --accent-dim:        rgba(20, 184, 166, 0.16);
+  --accent-subtle:     rgba(30, 77, 183, 0.10);
+  --accent-dim:        rgba(30, 77, 183, 0.16);
 
   /* ── Semantic ── */
   --success:           #34d399;
@@ -239,7 +242,7 @@ html[data-theme="dark"] {
 
   /* ── Status chips ── */
   --status-active-bg:  var(--success-bg);
-  --status-running-bg: rgba(20, 184, 166, 0.10);
+  --status-running-bg: rgba(30, 77, 183, 0.10);
   --status-killed-bg:  var(--danger-bg);
   --status-paused-bg:  var(--warning-bg);
   --status-neutral-bg: rgba(255, 255, 255, 0.06);
@@ -263,18 +266,19 @@ html[data-theme="dark"] {
   --surface-card-edge: rgba(255, 255, 255, 0.04);
   --surface-header-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
   --surface-sidebar-depth: 18px 0 44px rgba(0, 0, 0, 0.16);
-  --page-glow-1: rgba(20, 184, 166, 0.08);
-  --page-glow-2: rgba(20, 184, 166, 0.08);
-  --page-glow-3: rgba(52, 211, 153, 0.05);
+  --page-glow-1: rgba(30, 77, 183, 0.08);
+  --page-glow-2: rgba(30, 77, 183, 0.08);
+  --page-glow-3: rgba(30, 77, 183, 0.05);
   --button-secondary-bg: rgba(255, 255, 255, 0.04);
   --button-secondary-hover-bg: rgba(255, 255, 255, 0.08);
   --button-ghost-hover-bg: rgba(255, 255, 255, 0.06);
   --button-accent-bg: linear-gradient(135deg, color-mix(in srgb, var(--accent) 82%, white), var(--accent));
+  --button-filled-fg: #ffffff;
   --control-input-bg: rgba(255, 255, 255, 0.05);
   --control-input-hover-bg: rgba(255, 255, 255, 0.07);
   --control-input-shadow: none;
   --control-input-hover-shadow: none;
-  --control-input-focus-shadow: 0 0 0 3px rgba(20, 184, 166, 0.16), 0 10px 24px rgba(0, 0, 0, 0.22);
+  --control-input-focus-shadow: 0 0 0 3px rgba(30, 77, 183, 0.16), 0 10px 24px rgba(0, 0, 0, 0.22);
   --segmented-bg: rgba(255, 255, 255, 0.06);
   --segmented-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   --segmented-item-active-bg: var(--accent);
@@ -285,20 +289,20 @@ html[data-theme="dark"] {
   --advanced-picker-active-bg: linear-gradient(180deg, rgba(27, 27, 27, 0.96), rgba(37, 41, 62, 0.96));
   --advanced-panel-bg: linear-gradient(180deg, rgba(22, 22, 22, 0.96), rgba(26, 28, 38, 0.98));
   --advanced-panel-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --advanced-callout-bg: rgba(20, 184, 166, 0.1);
-  --advanced-callout-border: rgba(20, 184, 166, 0.18);
+  --advanced-callout-bg: rgba(30, 77, 183, 0.1);
+  --advanced-callout-border: rgba(30, 77, 183, 0.18);
   --setting-surface-bg: rgba(255, 255, 255, 0.04);
   --setting-surface-active-bg: linear-gradient(180deg, rgba(29, 29, 29, 0.96), rgba(31, 34, 46, 0.96));
   --setting-icon-bg: rgba(255, 255, 255, 0.05);
-  --setting-icon-active-bg: rgba(20, 184, 166, 0.14);
+  --setting-icon-active-bg: rgba(30, 77, 183, 0.14);
   --setting-body-bg: rgba(255, 255, 255, 0.03);
   --slider-row-bg: rgba(255, 255, 255, 0.03);
   --slider-row-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --slider-value-bg: rgba(20, 184, 166, 0.12);
+  --slider-value-bg: rgba(30, 77, 183, 0.12);
   --slider-input-bg: rgba(255, 255, 255, 0.04);
   --slider-thumb-border: rgba(24, 24, 24, 0.95);
   --nav-item-hover-bg: rgba(255, 255, 255, 0.05);
-  --nav-item-active-bg: linear-gradient(135deg, rgba(31, 35, 48, 0.96), rgba(20, 60, 56, 0.96));
+  --nav-item-active-bg: linear-gradient(135deg, rgba(31, 35, 48, 0.96), rgba(30, 45, 80, 0.96));
   --nav-item-active-shadow: 0 8px 18px rgba(0, 0, 0, 0.26);
   --nav-item-active-marker: color-mix(in srgb, var(--accent) 82%, white);
   --terminal-bg: #141414;
@@ -310,7 +314,7 @@ html[data-theme="dark"] {
   --skeleton-highlight: rgba(255, 255, 255, 0.09);
 
   /* ── Metric accent colors ── */
-  --metric-runs-color:    #14b8a6;
+  --metric-runs-color:    #1E4DB7;
   --metric-active-color:  #34d399;
   --metric-records-color: #8b5cf6;
   --metric-domains-color: #38bdf8;
@@ -488,12 +492,23 @@ select:focus-visible {
 
 .accent-fill {
   background: var(--button-accent-bg);
-  color: var(--accent-fg);
+  color: var(--button-filled-fg) !important;
   box-shadow: var(--shadow-sm);
 }
 
 .accent-fill:hover {
   background: var(--accent-hover);
+}
+
+/* Solid CTAs (primary / danger / accent): `color` must win over inherited body text and
+   Tailwind utility order. Same for links styled as accent buttons (e.g. Run History “Open”). */
+.ui-on-accent-surface {
+  color: var(--button-filled-fg) !important;
+}
+
+.ui-on-accent-surface svg {
+  color: inherit !important;
+  stroke: currentColor;
 }
 
 .segmented-active {

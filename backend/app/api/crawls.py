@@ -108,6 +108,7 @@ def _raise_http_from_value_error(
 async def _close_websocket_safely(
     websocket: WebSocket, *, code: int, reason: str
 ) -> None:
+    """Close before accept() would otherwise fail to deliver code/reason on some ASGI stacks."""
     if websocket.application_state == WebSocketState.CONNECTING:
         await websocket.accept()
     await websocket.close(code=code, reason=reason)
@@ -400,19 +401,7 @@ async def crawls_cancel(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
-    try:
-        updated = await kill_run(session, run)
-    except ValueError as exc:
-        _raise_http_from_value_error(
-            status_code=status.HTTP_409_CONFLICT,
-            exc=exc,
-        )
-    return {"run_id": updated.id, "status": updated.status}
+    return await crawls_kill(run_id, session, user)
 
 
 @router.get("/{run_id}/logs", responses=RUN_NOT_FOUND_RESPONSE)
@@ -450,31 +439,34 @@ async def crawls_logs_ws(websocket: WebSocket, run_id: int, after_id: int | None
             )
             return
 
-    await websocket.accept()
-    cursor = after_id
-    try:
-        while True:
-            async with SessionLocal() as session:
+        await websocket.accept()
+        cursor = after_id
+        try:
+            # FIX: Maintain ONE database connection for the lifetime of the socket,
+            # rather than thrashing the connection pool 2 times a second.
+            while True:
+                # Rollback resets the transaction snapshot so we see new rows
+                await session.rollback() 
                 rows = await get_run_logs(session, run_id, after_id=cursor, limit=500)
                 run = await get_run(session, run_id)
+                
+                for row in rows:
+                    await websocket.send_json(serialize_log_event(row))
+                    cursor = row.id
 
-            for row in rows:
-                await websocket.send_json(serialize_log_event(row))
-                cursor = row.id
-
-            if run is None:
-                await websocket.close(code=1008, reason=RUN_NOT_FOUND_DETAIL)
-                return
-            if normalize_status(run.status) in TERMINAL_STATUSES and not rows:
-                await websocket.close(code=1000, reason="Run completed")
-                return
-            await asyncio.sleep(0.75)
-    except WebSocketDisconnect:
-        return
-    except Exception as exc:
-        logger.exception("Run logs websocket stream failed for run %s", run_id)
-        try:
-            await websocket.close(code=1011, reason=f"stream_error: {type(exc).__name__}")
-        except Exception:
-            logger.debug("Failed to close websocket after stream error", exc_info=True)
-        return
+                if run is None:
+                    await websocket.close(code=1008, reason=RUN_NOT_FOUND_DETAIL)
+                    return
+                if normalize_status(run.status) in TERMINAL_STATUSES and not rows:
+                    await websocket.close(code=1000, reason="Run completed")
+                    return
+                await asyncio.sleep(0.75)
+                
+        except WebSocketDisconnect:
+            return
+        except Exception as exc:
+            logger.exception("Run logs websocket stream failed for run %s", run_id)
+            try:
+                await websocket.close(code=1011, reason=f"stream_error: {type(exc).__name__}")
+            except Exception:
+                logger.debug("Failed to close websocket after stream error", exc_info=True)

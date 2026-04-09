@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
-from app.services.pipeline_config import STEALTH_PREFER_TTL_HOURS
+from app.services.pipeline_config import STEALTH_MIN_TTL_HOURS, STEALTH_PREFER_TTL_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,6 @@ logger = logging.getLogger(__name__)
 _STEALTH_CACHE: dict[str, tuple[str, float]] = {}
 _CACHE_PATH: Path | None = None
 _LOCK = threading.Lock()
-_MIN_TTL_HOURS = 1
-
-
 def host_key(url: str) -> str:
     parsed = urlparse(url)
     return (parsed.netloc or parsed.path or "").lower().strip()
@@ -39,7 +36,7 @@ def remember_stealth_host(
     url: str, ttl_hours: int | None = None, reason: str = "blocked"
 ) -> None:
     ttl = ttl_hours if ttl_hours is not None else STEALTH_PREFER_TTL_HOURS
-    ttl = max(_MIN_TTL_HOURS, int(ttl))
+    ttl = max(STEALTH_MIN_TTL_HOURS, int(ttl))
     expires_at = time.time() + ttl * 3600
     with _LOCK:
         _load()[host_key(url)] = (reason, expires_at)

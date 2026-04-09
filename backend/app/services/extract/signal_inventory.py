@@ -107,12 +107,26 @@ def classify_page_type(inventory: SignalInventory) -> str:
     # Check dataLayer signals
     datalayer = inventory.structured_data.get("datalayer", {})
     if isinstance(datalayer, dict):
+        event_name = str(datalayer.get("event", "")).lower()
         ecommerce = datalayer.get("ecommerce", {})
         if isinstance(ecommerce, dict):
             # GA4 schema has items array for listing pages
             if "items" in ecommerce and isinstance(ecommerce["items"], list):
-                if len(ecommerce["items"]) > 1:
+                items = ecommerce["items"]
+                detail_hint_fields = {
+                    "item_id",
+                    "item_name",
+                    "item_variant",
+                    "item_brand",
+                    "item_category",
+                    "currency",
+                    "value",
+                }
+                has_detail_hint = event_name == "view_item" or any(key in ecommerce for key in detail_hint_fields)
+                if len(items) > 1:
                     return "listing"
+                if len(items) == 1 and has_detail_hint:
+                    return "detail"
             # UA schema has detail object for detail pages
             if "detail" in ecommerce:
                 return "detail"
@@ -131,13 +145,6 @@ def classify_page_type(inventory: SignalInventory) -> str:
     if url_patterns.get("is_listing_url"):
         return "listing"
     if url_patterns.get("is_detail_url"):
-        return "detail"
-
-    # Check surface hint
-    surface = inventory.metadata.get("surface", "")
-    if "listing" in str(surface).lower():
-        return "listing"
-    if "detail" in str(surface).lower():
         return "detail"
 
     return "unknown"
@@ -293,9 +300,9 @@ def _analyze_url_patterns(url: str) -> dict[str, bool]:
         r"/jobs/?$",
         r"/products/?$",
         r"/listings/?$",
-        r"/search",
-        r"/category",
-        r"/collection",
+        r"/search(?:/|$|\?)",
+        r"/category(?:/|$|\?)",
+        r"/collection(?:/|$|\?)",
     ]
     is_listing_url = any(re.search(pattern, url_lower) for pattern in listing_patterns)
 

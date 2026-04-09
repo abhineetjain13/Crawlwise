@@ -24,6 +24,12 @@ def upgrade() -> None:
         batch_op.add_column(
             sa.Column("last_claimed_at", sa.DateTime(timezone=True), nullable=True)
         )
+        batch_op.alter_column(
+            "claim_count",
+            existing_type=sa.Integer(),
+            existing_nullable=False,
+            server_default=None,
+        )
         batch_op.create_index("ix_crawl_runs_queue_owner", ["queue_owner"], unique=False)
         batch_op.create_index(
             "ix_crawl_runs_lease_expires_at", ["lease_expires_at"], unique=False

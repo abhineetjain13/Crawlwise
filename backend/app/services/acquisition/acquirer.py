@@ -37,6 +37,7 @@ from app.services.pipeline_config import (
     JOB_REDIRECT_SHELL_CANONICAL_URLS,
     JOB_REDIRECT_SHELL_HEADINGS,
     JOB_REDIRECT_SHELL_TITLES,
+    LISTING_MIN_ITEMS,
     PLATFORM_BROWSER_FIRST,
     PROXY_FAILURE_COOLDOWN_BASE_MS,
     PROXY_FAILURE_COOLDOWN_MAX_MS,
@@ -339,7 +340,9 @@ async def acquire(
             break
 
     if result is None:
-        _write_failed_diagnostics(
+        # FIX: Offload disk I/O
+        await asyncio.to_thread(
+            _write_failed_diagnostics,
             run_id,
             url,
             diagnostics_path,
@@ -351,16 +354,19 @@ async def acquire(
         raise RuntimeError(f"Unable to acquire content for {url}")
 
     path = _artifact_path(run_id, url)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+    
     if result.content_type == "json" and result.json_data is not None:
         path = path.with_suffix(".json")
-        path.write_text(
-            json.dumps(result.json_data, indent=2, default=str), encoding="utf-8"
+        await asyncio.to_thread(
+            path.write_text, json.dumps(result.json_data, indent=2, default=str), encoding="utf-8"
         )
     else:
-        path.write_text(result.html, encoding="utf-8")
-    _write_network_payloads(run_id, url, result.network_payloads)
-    _write_diagnostics(run_id, url, result, path, diagnostics_path)
+        await asyncio.to_thread(path.write_text, result.html, encoding="utf-8")
+        
+    # FIX: Offload network payload and diagnostics disk I/O
+    await asyncio.to_thread(_write_network_payloads, run_id, url, result.network_payloads)
+    await asyncio.to_thread(_write_diagnostics, run_id, url, result, path, diagnostics_path)
 
     result.artifact_path = str(path)
     result.diagnostics_path = str(diagnostics_path)
@@ -517,13 +523,28 @@ async def _acquire_once(
         host_wait_seconds=host_wait,
         checkpoint=checkpoint,
     )
-    should_escalate, _ = _needs_browser(
-        http_result, url, surface, requested_fields, acquisition_profile
-    )
     analysis = (
         getattr(http_result, "_acquirer_analysis", {})
         if http_result is not None
         else {}
+    )
+    promoted_source_result = await _try_promoted_source_acquire(
+        url=url,
+        proxy=proxy,
+        surface=surface,
+        run_id=run_id,
+        analysis=analysis,
+        started=started,
+        prefer_stealth=prefer_stealth,
+        runtime_options=runtime_options,
+        host_wait_seconds=host_wait,
+        checkpoint=checkpoint,
+    )
+    if promoted_source_result is not None:
+        return promoted_source_result
+
+    should_escalate, _ = _needs_browser(
+        http_result, url, surface, requested_fields, acquisition_profile
     )
     curl_result = (
         analysis.get("curl_result")
@@ -717,6 +738,162 @@ async def _acquire_once(
     return None
 
 
+async def _try_promoted_source_acquire(
+    *,
+    url: str,
+    proxy: str | None,
+    surface: str | None,
+    run_id: int,
+    analysis: dict[str, object],
+    started: float,
+    prefer_stealth: bool,
+    runtime_options,
+    host_wait_seconds: float,
+    checkpoint: Callable[[], Awaitable[None]] | None,
+) -> AcquisitionResult | None:
+    extractability = (
+        analysis.get("extractability")
+        if isinstance(analysis.get("extractability"), dict)
+        else {}
+    )
+    promoted_sources = list(extractability.get("promoted_sources") or [])
+    if not promoted_sources:
+        return None
+    if str(extractability.get("reason") or "") != "iframe_shell":
+        return None
+
+    max_candidates = 2
+    for source in promoted_sources[:max_candidates]:
+        if checkpoint is not None:
+            await checkpoint()
+        if not isinstance(source, dict):
+            continue
+        promoted_url = str(source.get("url") or "").strip()
+        if not promoted_url:
+            continue
+        try:
+            await validate_public_target(promoted_url)
+        except ValueError:
+            logger.debug("Skipping non-public promoted source %s", promoted_url)
+            continue
+        try:
+            fetch_started = time.perf_counter()
+            promoted_fetch = _normalize_fetch_result(
+                await _fetch_with_content_type(promoted_url, proxy)
+            )
+            promoted_timings = {"promoted_source_fetch_ms": _elapsed_ms(fetch_started)}
+        except (OSError, RuntimeError, ValueError, TypeError):
+            continue
+        if promoted_fetch.content_type != "html":
+            continue
+        promoted_html = str(promoted_fetch.text or "")
+        if not promoted_html:
+            continue
+        promoted_adapter_hint = await _resolve_adapter_hint(promoted_url, promoted_html)
+        promoted_extractability = _assess_extractable_html(
+            promoted_html,
+            url=promoted_url,
+            surface=surface,
+            adapter_hint=promoted_adapter_hint,
+        )
+        promoted_has_data = bool(promoted_extractability.get("has_extractable_data"))
+        if not promoted_has_data and _html_has_min_listing_link_signals(
+            promoted_html, surface=surface
+        ):
+            promoted_has_data = True
+            promoted_extractability = {
+                **promoted_extractability,
+                "has_extractable_data": True,
+                "reason": "listing_link_signals",
+            }
+        if not promoted_has_data:
+            continue
+        blocked = detect_blocked_page(promoted_html)
+        if blocked.is_blocked:
+            continue
+
+        diagnostics = _build_curl_diagnostics(
+            normalized=promoted_fetch,
+            blocked=blocked,
+            visible_text="",
+            content_len=_content_html_length(promoted_html),
+            gate_phrases=False,
+            needs_browser=False,
+            adapter_hint=promoted_adapter_hint,
+            platform_family=_detect_platform_family(promoted_url, promoted_html),
+            proxy=proxy,
+            prefer_stealth=prefer_stealth,
+            traversal_mode=None,
+            host_wait_seconds=host_wait_seconds,
+            memory_prefer_stealth=False,
+            anti_bot_enabled=runtime_options.anti_bot_enabled,
+            memory_browser_first=False,
+        )
+        diagnostics.update(
+            {
+                "curl_final_url": promoted_fetch.final_url or promoted_url,
+                "extractability": promoted_extractability,
+                "promoted_source_used": {
+                    "kind": str(source.get("kind") or "iframe"),
+                    "url": promoted_url,
+                },
+                "promoted_source_candidates": promoted_sources,
+                "timings_ms": _merge_timing_maps(
+                    diagnostics.get("timings_ms"),
+                    promoted_timings,
+                    {"acquisition_total_ms": _elapsed_ms(started)},
+                ),
+            }
+        )
+        timings = _merge_timing_maps(diagnostics.get("timings_ms"))
+        phase_sum_ms = sum(
+            int(value)
+            for key, value in timings.items()
+            if key != "acquisition_total_ms" and isinstance(value, int)
+        )
+        timings["phases_total_ms"] = phase_sum_ms
+        timings["unattributed_ms"] = max(
+            0, int(timings.get("acquisition_total_ms", 0)) - phase_sum_ms
+        )
+        diagnostics["timings_ms"] = timings
+        return AcquisitionResult(
+            html=promoted_html,
+            content_type="html",
+            method="curl_cffi",
+            artifact_path=str(_artifact_path(run_id, url)),
+            promoted_sources=promoted_sources,
+            diagnostics=diagnostics,
+        )
+    return None
+
+
+def _html_has_min_listing_link_signals(html: str, *, surface: str | None) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    if not normalized_surface.endswith("listing"):
+        return False
+    soup = BeautifulSoup(html, "html.parser")
+    count = 0
+    for anchor in soup.select("a[href]"):
+        href = str(anchor.get("href") or "").strip()
+        text = " ".join(anchor.get_text(" ", strip=True).split())
+        if not href or not text:
+            continue
+        if len(text) < 3:
+            continue
+        count += 1
+        if count >= max(2, int(LISTING_MIN_ITEMS)):
+            return True
+    return False
+
+
+def _analyze_html_sync(html: str) -> tuple[str, bool]:
+    """Runs heavy CPU-bound HTML analysis synchronously."""
+    soup = BeautifulSoup(html, "html.parser")
+    visible_text = " ".join(soup.get_text(" ", strip=True).lower().split())
+    gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
+    return visible_text, gate_phrases
+
+
 async def _try_http(
     url: str,
     proxy: str | None,
@@ -787,11 +964,12 @@ async def _try_http(
         setattr(normalized, "_acquirer_analysis", analysis)
         return normalized
     decision_started_at = time.perf_counter()
-    blocked = detect_blocked_page(html)
-    soup = BeautifulSoup(html, "html.parser")
-    visible_text = " ".join(soup.get_text(" ", strip=True).lower().split())
-    gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
+    
+    # FIX: Offload CPU-bound HTML parsing to prevent Event Loop Starvation
+    blocked = await asyncio.to_thread(detect_blocked_page, html)
+    visible_text, gate_phrases = await asyncio.to_thread(_analyze_html_sync, html)
     content_len = _content_html_length(html)
+    
     visible_len = len(visible_text)
     js_shell_detected = (
         content_len >= _JS_SHELL_MIN_CONTENT_LEN
@@ -800,9 +978,12 @@ async def _try_http(
     )
     adapter_hint = await _resolve_adapter_hint(url, html)
     platform_family = _detect_platform_family(url, html)
-    extractability = _assess_extractable_html(
-        html, url=url, surface=surface, adapter_hint=adapter_hint
+    
+    # FIX: Offload extractability check
+    extractability = await asyncio.to_thread(
+        _assess_extractable_html, html, url=url, surface=surface, adapter_hint=adapter_hint
     )
+    
     invalid_surface_page = _is_invalid_surface_page(
         requested_url=url,
         final_url=str(normalized.final_url or url).strip() or url,
@@ -914,6 +1095,7 @@ def _needs_browser(
         and str(extractability.get("reason") or "") in {
             "listing_search_shell_without_records",
             "iframe_shell",
+            "frameset_shell",
             "insufficient_detail_signals",
             "no_listing_signals",
             "empty_html",
@@ -1239,13 +1421,14 @@ def _find_promotable_iframe_sources(html: str, *, surface: str | None) -> list[d
     soup = BeautifulSoup(html, "html.parser")
     promoted: list[dict] = []
     promotable_tokens = _promotable_job_iframe_tokens()
-    for iframe in soup.select("iframe[src]"):
-        src = str(iframe.get("src") or "").strip()
+    for tag in soup.select("iframe[src], frame[src]"):
+        src = str(tag.get("src") or "").strip()
         if not src:
             continue
         lowered = src.lower()
         if any(token in lowered for token in promotable_tokens):
-            promoted.append({"kind": "iframe", "url": src, "same_origin": False})
+            kind = "frame" if tag.name and tag.name.lower() == "frame" else "iframe"
+            promoted.append({"kind": kind, "url": src, "same_origin": False})
     return promoted
 
 
@@ -1316,14 +1499,19 @@ def _assess_extractable_html(
     normalized_surface = str(surface or "").strip().lower()
     if not html:
         return {"has_extractable_data": False, "reason": "empty_html"}
-    if adapter_hint:
+
+    soup_probe = BeautifulSoup(html, "html.parser")
+    if soup_probe.find("frameset") is not None or "<frameset" in html.lower():
+        promoted_iframes = _find_promotable_iframe_sources(html, surface=surface)
         return {
-            "has_extractable_data": True,
-            "reason": "adapter_hint",
-            "adapter_hint": adapter_hint,
+            "has_extractable_data": False,
+            "reason": "frameset_shell",
+            "promoted_sources": promoted_iframes or None,
         }
 
     if normalized_surface.endswith("listing") or not normalized_surface:
+        promoted_iframes = _find_promotable_iframe_sources(html, surface=surface)
+
         # (a) JSON-LD: count "@type" paired with Product/JobPosting
         json_ld_count = _count_json_ld_type_signals(html)
         non_product_types = _count_json_ld_non_product_types(html)
@@ -1336,6 +1524,7 @@ def _assess_extractable_html(
                 "has_extractable_data": True,
                 "reason": "structured_listing_markup",
                 "json_ld_count": json_ld_count,
+                "promoted_sources": promoted_iframes or None,
             }
 
         # (b) __NEXT_DATA__ signal density OR general product signals in HTML
@@ -1348,15 +1537,22 @@ def _assess_extractable_html(
                 if has_next_data
                 else "product_signals_in_html",
                 "signal_hits": signal_hits,
+                "promoted_sources": promoted_iframes or None,
             }
 
         # (c) Iframe shell detection (BeautifulSoup only, no extractor imports)
-        promoted_iframes = _find_promotable_iframe_sources(html, surface=surface)
         if promoted_iframes:
             return {
                 "has_extractable_data": False,
                 "reason": "iframe_shell",
                 "promoted_sources": promoted_iframes,
+            }
+
+        if adapter_hint:
+            return {
+                "has_extractable_data": True,
+                "reason": "adapter_hint",
+                "adapter_hint": adapter_hint,
             }
 
         # (d) Search shell detection
@@ -1374,6 +1570,12 @@ def _assess_extractable_html(
         return {"has_extractable_data": False, "reason": "no_listing_signals"}
 
     if normalized_surface.endswith("detail"):
+        if adapter_hint:
+            return {
+                "has_extractable_data": True,
+                "reason": "adapter_hint",
+                "adapter_hint": adapter_hint,
+            }
         # (a) JSON-LD presence for detail types
         html_lower = html.lower()
         has_json_ld = '"@type"' in html and any(

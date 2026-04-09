@@ -5,8 +5,10 @@ import json
 from unittest.mock import patch
 
 from app.services.extract.service import (
+    _coerce_scalar_for_dynamic_row,
     _dispatch_string_field_coercer,
     _extract_image_urls,
+    _finalize_candidate_rows,
     _label_value_pattern,
     _normalize_html_rich_text,
     _normalize_color_candidate,
@@ -1079,8 +1081,69 @@ def test_coerce_availability_normalizes_known_states_and_drops_ui_noise():
 
 
 def test_coerce_category_rejects_nav_breadcrumb_noise():
-    assert coerce_field_candidate_value("category", "Home > Men > Shirts > Tops") is None
+    assert coerce_field_candidate_value("category", "Home > Men > Shirts > Tops") == "Men > Shirts > Tops"
     assert coerce_field_candidate_value("category", "Men > Shirts") == "Men > Shirts"
+    assert coerce_field_candidate_value("category", "object") is None
+
+
+def test_coerce_price_rejects_boolean_values():
+    assert coerce_field_candidate_value("price", False) is None
+    assert coerce_field_candidate_value("price", "2") is None
+    assert coerce_field_candidate_value("price", "2500") == "2500"
+
+
+def test_coerce_scalar_for_dynamic_row_rejects_blobs_and_sentinels():
+    assert _coerce_scalar_for_dynamic_row(False) is None
+    assert _coerce_scalar_for_dynamic_row(True) is None
+    assert _coerce_scalar_for_dynamic_row({"a": 1}) is None
+    assert _coerce_scalar_for_dynamic_row("object") is None
+    assert _coerce_scalar_for_dynamic_row("pending") is None
+    assert _coerce_scalar_for_dynamic_row("ok label") == "ok label"
+    assert _coerce_scalar_for_dynamic_row(42) == 42
+    assert _coerce_scalar_for_dynamic_row(["a", "b"]) == "a; b"
+
+
+def test_finalize_candidate_rows_never_reintroduces_boolean_via_fallback():
+    assert (
+        _finalize_candidate_rows(
+            "dynamic_noise_field",
+            [{"value": False, "source": "network_intercept"}],
+            base_url="https://example.com/p",
+        )
+        == []
+    )
+
+
+def test_extract_category_falls_back_to_breadcrumb_and_ignores_network_sentinel_values():
+    html = """
+    <html>
+      <body>
+        <nav aria-label="Breadcrumb">
+          <a href="/">Home</a>
+          <a href="/women">Women</a>
+          <a href="/women/shoes">Shoes</a>
+        </nav>
+      </body>
+    </html>
+    """
+    manifest = _manifest(
+        network_payloads=[
+            {
+                "url": "https://api.example.com/product",
+                "body": {"category": "object", "price": False},
+            }
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product/123",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert candidates["category"][0]["value"] == "Women > Shoes"
+    assert "price" not in candidates
 
 
 def test_coerce_title_rejects_account_and_cookie_noise():

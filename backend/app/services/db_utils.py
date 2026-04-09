@@ -94,17 +94,5 @@ async def with_retry(
     raise RuntimeError("Retry loop exited unexpectedly")
 
 
-async def commit_with_retry(
-    session: AsyncSession,
-    *,
-    max_retries: int = 5,
-    base_delay_ms: int = 50,
-    max_delay_ms: int = 2000,
-) -> None:
-    """Deprecated: commit-only retries are unsafe for mutable unit-of-work paths."""
-    del session, max_retries, base_delay_ms, max_delay_ms
-    raise RuntimeError(
-        "commit_with_retry is deprecated and unsafe; use with_retry(session, operation) "
-        "to retry the full unit-of-work."
-    )
+
 

@@ -79,4 +79,12 @@ describe("apiClient", () => {
     expect(secondUrl).not.toEqual("");
     expect(firstUrl).not.toEqual(secondUrl);
   });
+
+  it("httpErrorStatus reads status from ApiError and duck-typed errors", async () => {
+    const { ApiError, httpErrorStatus } = await import("./client");
+    const apiErr = new ApiError("x", 403, "{}");
+    expect(httpErrorStatus(apiErr)).toBe(403);
+    expect(httpErrorStatus({ status: 401 })).toBe(401);
+    expect(httpErrorStatus(new Error("no"))).toBeUndefined();
+  });
 });
