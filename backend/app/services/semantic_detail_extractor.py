@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.services.pipeline_config import (
     DIMENSION_KEYWORDS,
@@ -71,6 +72,8 @@ def extract_semantic_detail_data(
     *,
     requested_fields: list[str] | None = None,
     soup: BeautifulSoup | None = None,
+    page_url: str = "",
+    adapter_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Extract page-local semantic content from detail pages.
 
@@ -82,6 +85,9 @@ def extract_semantic_detail_data(
 
     working_soup = deepcopy(soup) if soup is not None else BeautifulSoup(html, "html.parser")
     _strip_non_content_nodes(working_soup)
+    working_root = _semantic_content_root(working_soup)
+    if working_root is not None and working_root is not working_soup:
+        working_soup = BeautifulSoup(str(working_root), "html.parser")
     sections = _extract_sections(working_soup)
     table_groups = _extract_table_groups(working_soup)
     specifications = _extract_specifications(working_soup, table_groups)
@@ -95,7 +101,49 @@ def extract_semantic_detail_data(
         "coverage": coverage,
         "aggregates": aggregates,
         "table_groups": table_groups,
+        "scope": _semantic_scope(page_url, adapter_records or []),
     }
+
+
+def _semantic_scope(
+    page_url: str,
+    adapter_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "url": _semantic_scope_url(page_url),
+        "product_ids": sorted(_semantic_scope_product_ids(page_url, adapter_records)),
+    }
+
+
+def _semantic_scope_url(value: str) -> str:
+    parsed = urlsplit(str(value or "").strip())
+    if not parsed.netloc:
+        return ""
+    return f"{parsed.netloc.lower()}{parsed.path.rstrip('/').lower()}"
+
+
+def _semantic_scope_product_ids(
+    page_url: str,
+    adapter_records: list[dict[str, Any]],
+) -> set[str]:
+    identifiers: set[str] = set()
+    path_parts = [part for part in urlsplit(str(page_url or "").strip()).path.split("/") if part]
+    if path_parts:
+        identifiers.add(path_parts[-1].lower())
+    for record in adapter_records:
+        if not isinstance(record, dict):
+            continue
+        for key in ("sku", "product_id", "job_id", "variant_id", "id", "handle", "url", "source_url"):
+            value = str(record.get(key) or "").strip()
+            if not value:
+                continue
+            if key in {"url", "source_url"}:
+                scoped = _semantic_scope_url(value)
+                if scoped:
+                    identifiers.add(scoped)
+                continue
+            identifiers.add(value.lower())
+    return identifiers
 
 
 def resolve_requested_field_values(
@@ -301,6 +349,21 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
 def _strip_non_content_nodes(soup: BeautifulSoup) -> None:
     for tag in soup.find_all(_NON_CONTENT_TAGS):
         tag.decompose()
+
+
+def _semantic_content_root(soup: BeautifulSoup) -> Tag | BeautifulSoup | None:
+    h1 = soup.find("h1")
+    if not isinstance(h1, Tag):
+        return soup.find("main") or soup.find("article") or soup
+    for ancestor in h1.parents:
+        if not isinstance(ancestor, Tag):
+            continue
+        if ancestor.name not in {"section", "article", "main", "div"}:
+            continue
+        text = _clean_text(ancestor.get_text(" ", strip=True))
+        if 120 <= len(text) <= 20000:
+            return ancestor
+    return soup.find("main") or soup.find("article") or soup
 
 
 def _should_skip_section(key: str, label: str, body: str) -> bool:

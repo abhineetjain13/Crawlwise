@@ -99,6 +99,34 @@ _NOISE_URL_SUFFIXES = (".js", ".css", ".woff", ".woff2", ".svg", "spinner.gif")
 _TRACKING_QUERY_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "ref", "ref_src")
 _GENERIC_SENTINEL_VALUES = {"object", "array", "boolean", "null", "none", "undefined", "unknown", "pending", "n/a", "na"}
 _MAX_REGEX_INPUT_LEN = 500
+_CATEGORY_PLACEHOLDER_VALUES = {
+    "all",
+    "default",
+    "misc",
+    "miscellaneous",
+    "other",
+    "uncategorized",
+}
+_NON_SIZE_VALUES = {
+    "top",
+    "tops",
+    "bottom",
+    "bottoms",
+    "shirt",
+    "shirts",
+    "sweater",
+    "sweatshirt",
+    "hoodie",
+    "hoodies",
+    "pants",
+    "pant",
+    "shorts",
+    "dress",
+    "skirt",
+}
+_STRUCTURED_DETAIL_FIELDS = frozenset(
+    {"product_attributes", "variant_axes", "selected_variant", "variants"}
+)
 
 
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
@@ -144,7 +172,7 @@ def normalize_value(field_name: str, value: object, *, base_url: str = "") -> ob
         match = re.search(PRICE_REGEX, text)
         return match.group(0) if match else text
     if _is_description_field(field_name):
-        return " ".join(_strip_html(text, preserve_paragraphs=True).split()).strip()
+        return _strip_ui_noise(_strip_html(text, preserve_paragraphs=True), preserve_newlines=True)
     if _is_availability_field(field_name):
         coerced = _coerce_availability_field(text)
         return coerced if coerced is not None else text
@@ -273,6 +301,8 @@ def _coerce_size_field(value: str) -> str | None:
     if not cleaned:
         return None
     lowered = cleaned.lower()
+    if lowered in _NON_SIZE_VALUES:
+        return None
     if len(cleaned) > 100 or "gsm:" in lowered or "weight:" in lowered or "lbs" in lowered:
         return None
     if any(token in lowered for token in CANDIDATE_SIZE_CSS_NOISE_TOKENS):
@@ -298,6 +328,8 @@ def _coerce_category_field(value: str) -> str | None:
     if lowered in _GENERIC_SENTINEL_VALUES:
         return None
     if lowered in {item.lower() for item in CANDIDATE_GENERIC_CATEGORY_VALUES}:
+        return None
+    if lowered in _CATEGORY_PLACEHOLDER_VALUES:
         return None
     if "schema.org" in lowered or "cookie" in lowered or "sign in" in lowered:
         return None
@@ -494,9 +526,184 @@ def _dispatch_string_field_coercer(
     return value or None
 
 
+def _normalized_mapping_key(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_")
+
+
+def _normalize_structured_scalar(
+    value: object,
+    *,
+    field_name: str = "",
+    base_url: str = "",
+) -> object | None:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, bool):
+        return value if field_name == "available" else None
+    if isinstance(value, (int, float)):
+        if field_name in {"price", "original_price"}:
+            return _coerce_price_field(str(value)) or str(value)
+        if field_name in {"variant_id", "variant_color_id", "variant_size_id"}:
+            return str(value)
+        return value
+    if not isinstance(value, str):
+        return None
+    cleaned = _normalized_candidate_text(unescape(value))
+    if not cleaned or cleaned.lower() in _GENERIC_SENTINEL_VALUES:
+        return None
+    if field_name == "color":
+        return _coerce_color_field(cleaned)
+    if field_name == "size":
+        return _coerce_size_field(cleaned)
+    if field_name in {"image_url", "url"}:
+        return _resolve_candidate_url(cleaned, base_url) or cleaned
+    if field_name in {"price", "original_price"}:
+        return _coerce_price_field(cleaned) or cleaned
+    if field_name == "availability":
+        return _coerce_availability_field(cleaned) or cleaned
+    return cleaned
+
+
+def _normalize_option_values(value: object) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    normalized: dict[str, str] = {}
+    for key, raw in value.items():
+        axis_name = _normalized_mapping_key(key)
+        if not axis_name:
+            continue
+        axis_value = _normalize_structured_scalar(raw, field_name=axis_name)
+        if isinstance(axis_value, str) and axis_value:
+            normalized[axis_name] = axis_value
+    return normalized or None
+
+
+def _normalize_product_attributes(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    normalized: dict[str, object] = {}
+    for key, raw in value.items():
+        attr_key = _normalized_mapping_key(key)
+        if not attr_key:
+            continue
+        attr_value = _normalize_structured_scalar(raw)
+        if attr_value in (None, "", [], {}):
+            continue
+        normalized[attr_key] = attr_value
+    return normalized or None
+
+
+def _normalize_variant_axes(value: object) -> dict[str, list[str]] | None:
+    if not isinstance(value, dict):
+        return None
+    normalized: dict[str, list[str]] = {}
+    for key, raw in value.items():
+        axis_name = _normalized_mapping_key(key)
+        if not axis_name:
+            continue
+        axis_values: list[str] = []
+        for item in (raw if isinstance(raw, list) else [raw]):
+            cleaned = _normalize_structured_scalar(item, field_name=axis_name)
+            if not isinstance(cleaned, str) or not cleaned or cleaned in axis_values:
+                continue
+            axis_values.append(cleaned)
+        if axis_values:
+            normalized[axis_name] = axis_values
+    return normalized or None
+
+
+def _normalize_selected_variant(
+    value: object,
+    *,
+    base_url: str = "",
+) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    normalized: dict[str, object] = {}
+    for key, raw in value.items():
+        key_name = _normalized_mapping_key(key)
+        if not key_name:
+            continue
+        if key_name == "option_values":
+            option_values = _normalize_option_values(raw)
+            if option_values:
+                normalized[key_name] = option_values
+            continue
+        cleaned = _normalize_structured_scalar(
+            raw,
+            field_name=key_name,
+            base_url=base_url,
+        )
+        if cleaned in (None, "", [], {}):
+            continue
+        normalized[key_name] = cleaned
+    if "option_values" not in normalized:
+        option_values = {
+            key: str(value)
+            for key in ("color", "size")
+            if isinstance(normalized.get(key), str)
+            for value in [normalized[key]]
+        }
+        if option_values:
+            normalized["option_values"] = option_values
+    return normalized or None
+
+
+def _normalize_variants(value: object, *, base_url: str = "") -> list[dict[str, object]] | None:
+    if not isinstance(value, list):
+        return None
+    normalized_rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in value:
+        normalized = _normalize_selected_variant(item, base_url=base_url)
+        if not normalized:
+            continue
+        fingerprint = json.dumps(normalized, sort_keys=True, default=str)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        normalized_rows.append(normalized)
+    return normalized_rows or None
+
+
+def _preprocess_structured_detail_value(
+    field_name: str,
+    value: object,
+    *,
+    base_url: str = "",
+) -> object | None:
+    if not _is_structured_detail_field(field_name):
+        return None
+    if isinstance(value, str):
+        parsed = _parse_json_like_value(value)
+        if parsed is None:
+            return None
+        value = parsed
+    if field_name == "product_attributes":
+        return _normalize_product_attributes(value)
+    if field_name == "variant_axes":
+        return _normalize_variant_axes(value)
+    if field_name == "selected_variant":
+        return _normalize_selected_variant(value, base_url=base_url)
+    if field_name == "variants":
+        return _normalize_variants(value, base_url=base_url)
+    return None
+
+
 def _preprocess_value(field_name: str, value: object, *, base_url: str = "") -> object:
     if _is_empty_value(value) or isinstance(value, bool):
         return None
+    structured_value = _preprocess_structured_detail_value(
+        field_name,
+        value,
+        base_url=base_url,
+    )
+    if structured_value not in (None, "", [], {}):
+        return structured_value
     if isinstance(value, str):
         cleaned = _normalized_candidate_text(value)
         if not cleaned:
@@ -553,6 +760,10 @@ def validate_value(field_name: str, value: object) -> object | None:
     """Strict canonical validation gate."""
     if value in (None, "", [], {}):
         return None
+    if _is_structured_detail_field(field_name):
+        if field_name == "variants":
+            return value if isinstance(value, list) and value else None
+        return value if isinstance(value, dict) and value else None
     text = ""
     lowered = ""
     if isinstance(value, str):
@@ -601,6 +812,11 @@ def validate_value(field_name: str, value: object) -> object | None:
         if lowered in {"detail-page", "product", "category", "page", "object"}:
             return None
         if re.fullmatch(r"e\d+", lowered):
+            return None
+    elif _is_size_field(field_name):
+        if not isinstance(value, str):
+            return value
+        if lowered in _NON_SIZE_VALUES:
             return None
     if not isinstance(value, str):
         return value
@@ -664,6 +880,7 @@ def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
             return
         if not (
             path.endswith(CANDIDATE_IMAGE_FILE_EXTENSIONS)
+            or re.search(r"/(?:webp|jpeg|jpg|png)$", path)
             or any(token in lowered for token in CANDIDATE_IMAGE_URL_HINT_TOKENS)
         ):
             return
@@ -904,3 +1121,7 @@ def _is_salary_field(field_name: str) -> bool:
     return _field_in_group(field_name, "salary") or _field_has_any_token(
         field_name, CANDIDATE_SALARY_TOKENS
     )
+
+
+def _is_structured_detail_field(field_name: str) -> bool:
+    return str(field_name or "").strip().lower() in _STRUCTURED_DETAIL_FIELDS

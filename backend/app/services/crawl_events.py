@@ -12,6 +12,7 @@ from app.core.redis import get_redis, redis_fail_open, schedule_fail_open
 from app.models.crawl import CrawlLog, CrawlRun
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger("app.crawl.events")
 _LEVEL_ORDER = {
@@ -209,11 +210,40 @@ async def append_log_event(
         return serialize_log_event(row)
 
     async with SessionLocal() as new_session:
-        new_session.add(row)
-        await new_session.flush()
-        await new_session.commit()
-        await new_session.refresh(row)
-        return serialize_log_event(row)
+        try:
+            new_session.add(row)
+            await new_session.flush()
+            await new_session.commit()
+            await new_session.refresh(row)
+            return serialize_log_event(row)
+        except IntegrityError:
+            await new_session.rollback()
+            logger.debug(
+                "Skipping persisted crawl log because run_id=%s is not yet visible to the detached session",
+                run_id,
+                exc_info=True,
+            )
+            return {
+                "id": None,
+                "run_id": run_id,
+                "level": normalized_level,
+                "message": formatted_message,
+                "created_at": created_at.isoformat(),
+            }
+        except Exception:
+            await new_session.rollback()
+            logger.debug(
+                "Skipping detached crawl log persistence for run_id=%s after transient session failure",
+                run_id,
+                exc_info=True,
+            )
+            return {
+                "id": None,
+                "run_id": run_id,
+                "level": normalized_level,
+                "message": formatted_message,
+                "created_at": created_at.isoformat(),
+            }
 
 
 async def persist_run_summary_patch(

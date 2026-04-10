@@ -106,6 +106,8 @@ def normalize_listing_record(
         normalized.pop("additional_images", None)
         if normalized.get("price") not in _EMPTY_VALUES and normalized.get("salary") in _EMPTY_VALUES:
             normalized["salary"] = normalized.pop("price")
+        if normalized.get("category") in _EMPTY_VALUES and normalized.get("department") not in _EMPTY_VALUES:
+            normalized["category"] = normalized["department"]
         for field_name in ("price", "sale_price", "original_price", "brand", "color", "size", "sku", "part_number", "availability", "rating", "review_count", "discount_amount", "discount_percentage"):
             normalized.pop(field_name, None)
 

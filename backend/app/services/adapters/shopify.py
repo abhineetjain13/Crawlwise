@@ -6,7 +6,7 @@ import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import loads as parse_json
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 
@@ -102,7 +102,27 @@ class ShopifyAdapter(BaseAdapter):
         products = [data] if surface == "ecommerce_detail" else data.get("products", [])
         records = []
         for p in products:
-            variant = p.get("variants", [{}])[0] if p.get("variants") else {}
+            variants = p.get("variants", []) if isinstance(p.get("variants"), list) else []
+            option_names = self._option_names(p.get("options"))
+            normalized_variants = [
+                normalized
+                for variant in variants
+                if isinstance(variant, dict)
+                if (normalized := self._normalize_variant(
+                    variant,
+                    option_names=option_names,
+                    scheme=parsed.scheme,
+                    base_url=urljoin(url, f"/products/{p.get('handle', '')}"),
+                ))
+            ]
+            selected_variant = self._select_shopify_variant(
+                normalized_variants,
+                base_url=url,
+            )
+            axes = self._variant_axes(normalized_variants)
+            selectable_axes, single_value_attributes = self._split_selectable_axes(
+                axes
+            )
             images = [
                 image_url
                 for img in p.get("images", [])
@@ -114,13 +134,22 @@ class ShopifyAdapter(BaseAdapter):
                 "description": p.get("body_html", ""),
                 "url": urljoin(url, f"/products/{p.get('handle', '')}"),
                 "image_url": images[0] if images else None,
-                "image_urls": images,
-                "price": self._normalize_price(variant.get("price")),
-                "sku": variant.get("sku"),
-                "availability": "in_stock" if variant.get("available") else "out_of_stock",
+                "additional_images": ", ".join(images[1:]) if len(images) > 1 else None,
+                "price": selected_variant.get("price") if isinstance(selected_variant, dict) else None,
+                "original_price": selected_variant.get("original_price") if isinstance(selected_variant, dict) else None,
+                "sku": selected_variant.get("sku") if isinstance(selected_variant, dict) else None,
+                "availability": selected_variant.get("availability") if isinstance(selected_variant, dict) else None,
                 "category": p.get("product_type"),
                 "tags": p.get("tags", "").split(", ") if isinstance(p.get("tags"), str) else p.get("tags", []),
+                "variants": normalized_variants,
+                "variant_axes": selectable_axes,
+                "selected_variant": selected_variant,
+                "product_attributes": single_value_attributes or None,
             }
+            if isinstance(selected_variant, dict):
+                for field_name in ("color", "size"):
+                    if selected_variant.get(field_name):
+                        record[field_name] = selected_variant[field_name]
             records.append(record)
         return records
 
@@ -143,11 +172,40 @@ class ShopifyAdapter(BaseAdapter):
                 meta = parse_json(match.group(1))
                 product = meta.get("product", {})
                 if product.get("title"):
+                    option_names = self._option_names(product.get("options"))
+                    normalized_variants = [
+                        normalized
+                        for variant in (product.get("variants") or [])
+                        if isinstance(variant, dict)
+                        if (normalized := self._normalize_variant(
+                            variant,
+                            option_names=option_names,
+                            scheme=urlparse(url).scheme or "https",
+                            base_url=url,
+                        ))
+                    ]
+                    selected_variant = self._select_shopify_variant(
+                        normalized_variants,
+                        base_url=url,
+                    )
+                    axes = self._variant_axes(normalized_variants)
+                    selectable_axes, single_value_attributes = (
+                        self._split_selectable_axes(axes)
+                    )
+                    selected_price = (
+                        selected_variant.get("price")
+                        if isinstance(selected_variant, dict)
+                        else product.get("price")
+                    )
                     records.append({
                         "title": product.get("title"),
                         "brand": product.get("vendor"),
-                        "price": self._normalize_price(product.get("price")),
+                        "price": self._normalize_price(selected_price),
                         "category": product.get("type"),
+                        "variants": normalized_variants,
+                        "variant_axes": selectable_axes,
+                        "selected_variant": selected_variant,
+                        "product_attributes": single_value_attributes or None,
                     })
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -167,6 +225,145 @@ class ShopifyAdapter(BaseAdapter):
             return f"{scheme}:{value}"
         return value
 
+    def _option_names(self, raw_options: object) -> list[str]:
+        names: list[str] = []
+        if isinstance(raw_options, list):
+            for option in raw_options:
+                if isinstance(option, str):
+                    names.append(option)
+                elif isinstance(option, dict):
+                    label = option.get("name") or option.get("title")
+                    if label:
+                        names.append(str(label))
+        return names
+
+    def _normalize_variant(
+        self,
+        variant: dict,
+        *,
+        option_names: list[str],
+        scheme: str,
+        base_url: str,
+    ) -> dict | None:
+        row: dict[str, object] = {}
+        if variant.get("id") not in (None, "", [], {}):
+            row["variant_id"] = str(variant.get("id"))
+            row["url"] = f"{base_url}{'&' if '?' in base_url else '?'}variant={row['variant_id']}"
+        if variant.get("sku"):
+            row["sku"] = variant.get("sku")
+        price = self._normalize_price(variant.get("price"))
+        if price is not None:
+            row["price"] = price
+        original_price = self._normalize_price(variant.get("compare_at_price"))
+        if original_price is not None:
+            row["original_price"] = original_price
+        raw_available = variant.get("available")
+        if raw_available is not None:
+            if isinstance(raw_available, bool):
+                available = raw_available
+            elif isinstance(raw_available, str):
+                available = raw_available.strip().lower() in {"true", "1", "yes"}
+            elif isinstance(raw_available, (int, float)):
+                available = raw_available != 0
+            else:
+                available = False
+            row["available"] = available
+            row["availability"] = "in_stock" if available else "out_of_stock"
+        featured = self._normalize_url(self._image_src(variant.get("featured_image")), scheme)
+        if featured:
+            row["image_url"] = featured
+        option_values: dict[str, str] = {}
+        raw_options = variant.get("options") if isinstance(variant.get("options"), list) else []
+        for index in range(1, 4):
+            axis_name = option_names[index - 1] if index - 1 < len(option_names) else f"option_{index}"
+            axis_name_text = str(axis_name or "").strip().lower()
+            if axis_name_text in {"size", "sizes"}:
+                axis_key = "size"
+            elif axis_name_text in {"color", "colour", "colors", "colours"}:
+                axis_key = "color"
+            else:
+                axis_key = self._normalize_axis(axis_name)
+            value = variant.get(f"option{index}")
+            if value in (None, "", [], {}) and index - 1 < len(raw_options):
+                value = raw_options[index - 1]
+            if value in (None, "", [], {}):
+                continue
+            option_values[axis_key] = str(value)
+            if axis_key in {"color", "size"}:
+                row[axis_key] = str(value)
+        if option_values:
+            row["option_values"] = option_values
+        return row or None
+
+    def _variant_axes(self, variants: list[dict]) -> dict[str, list[str]]:
+        axes: dict[str, list[str]] = {}
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+            option_values = variant.get("option_values")
+            if not isinstance(option_values, dict):
+                continue
+            for axis_name, value in option_values.items():
+                cleaned = str(value or "").strip()
+                if not cleaned:
+                    continue
+                axes.setdefault(str(axis_name), [])
+                if cleaned not in axes[str(axis_name)]:
+                    axes[str(axis_name)].append(cleaned)
+        return axes
+
+    def _split_selectable_axes(
+        self, axes: dict[str, list[str]]
+    ) -> tuple[dict[str, list[str]], dict[str, str]]:
+        selectable: dict[str, list[str]] = {}
+        attributes: dict[str, str] = {}
+        for axis_name, values in axes.items():
+            cleaned_values = [
+                str(value or "").strip()
+                for value in values
+                if str(value or "").strip()
+            ]
+            if len(cleaned_values) > 1 or axis_name == "size":
+                selectable[axis_name] = cleaned_values
+            elif len(cleaned_values) == 1:
+                attributes[axis_name] = cleaned_values[0]
+        return selectable, attributes
+
+    def _select_shopify_variant(
+        self,
+        variants: list[dict],
+        *,
+        base_url: str,
+    ) -> dict | None:
+        if not variants:
+            return None
+        parsed = urlsplit(str(base_url or "").strip())
+        variant_id = next(
+            (
+                str(value).strip()
+                for key, value in parse_qsl(parsed.query, keep_blank_values=False)
+                if key == "variant" and str(value).strip()
+            ),
+            "",
+        )
+        if variant_id:
+            matched_variant = next(
+                (
+                    row
+                    for row in variants
+                    if str(row.get("variant_id") or "").strip() == variant_id
+                ),
+                None,
+            )
+            if matched_variant is not None:
+                return matched_variant
+        return next((row for row in variants if row.get("available") is True), None) or variants[0]
+
+    def _normalize_axis(self, value: object) -> str:
+        text = str(value or "").strip().lower().replace("&", " ")
+        text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+        return text or "option"
+
     def _normalize_price(self, value: object) -> str | None:
         if value is None:
             return None
@@ -184,6 +381,11 @@ class ShopifyAdapter(BaseAdapter):
             if not raw:
                 return None
             try:
+                if re.fullmatch(r"\d+", raw):
+                    return format(
+                        (Decimal(raw) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                        "f",
+                    )
                 return format(
                     Decimal(raw).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                     "f",

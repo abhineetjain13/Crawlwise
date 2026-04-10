@@ -51,6 +51,19 @@ from app.services.pipeline_config import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+_global_url_semaphore: asyncio.Semaphore | None = None
+_global_url_semaphore_limit: int | None = None
+
+
+def _get_global_url_semaphore() -> asyncio.Semaphore:
+    global _global_url_semaphore, _global_url_semaphore_limit
+    limit = max(1, int(settings.system_max_concurrent_urls or 1))
+    if _global_url_semaphore is None or _global_url_semaphore_limit != limit:
+        _global_url_semaphore = asyncio.Semaphore(limit)
+        _global_url_semaphore_limit = limit
+    return _global_url_semaphore
+
+
 async def _log_with_retry(
     session: AsyncSession,
     run_id: int,
@@ -286,21 +299,22 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 total_urls=total_urls,
             )
 
-            records, verdict, url_metrics = await asyncio.wait_for(
-                _process_single_url(
-                    session=session,
-                    run=run,
-                    url=url,
-                    proxy_list=proxy_list,
-                    traversal_mode=traversal_mode,
-                    max_pages=max_pages,
-                    max_scrolls=max_scrolls,
-                    max_records=remaining_records,
-                    sleep_ms=sleep_ms,
-                    checkpoint=lambda: _run_control_checkpoint(session, run),
-                ),
-                timeout=url_timeout_seconds,
-            )
+            async with _get_global_url_semaphore():
+                records, verdict, url_metrics = await asyncio.wait_for(
+                    _process_single_url(
+                        session=session,
+                        run=run,
+                        url=url,
+                        proxy_list=proxy_list,
+                        traversal_mode=traversal_mode,
+                        max_pages=max_pages,
+                        max_scrolls=max_scrolls,
+                        max_records=remaining_records,
+                        sleep_ms=sleep_ms,
+                        checkpoint=lambda: _run_control_checkpoint(session, run),
+                    ),
+                    timeout=url_timeout_seconds,
+                )
             await _apply_url_result(idx, url, len(records), verdict, url_metrics)
             if persisted_record_count >= max_records:
                 await _log(

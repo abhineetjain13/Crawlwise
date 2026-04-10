@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -13,8 +12,6 @@ from app.services.config.field_mappings import (
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import get_canonical_fields
 from sqlalchemy.ext.asyncio import AsyncSession
-
-logger = logging.getLogger(__name__)
 
 _FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
 _NUMERIC_ONLY_RE = re.compile(r"^\d+$")
@@ -66,11 +63,6 @@ def _dedupe_fields(values: list[str] | None) -> list[str]:
         deduped.append(normalized)
         seen.add(normalized)
     return deduped
-
-
-def _supports_record_learning(surface: str) -> bool:
-    normalized = str(surface or "").strip().lower()
-    return normalized not in {"job_listing", "job_detail"}
 
 
 def _field_allowed_for_surface(surface: str, field_name: str) -> bool:
@@ -226,63 +218,6 @@ async def persist_resolved_schema(session: AsyncSession, schema: ResolvedSchema)
     return schema
 
 
-def learn_schema_from_record(
-    *,
-    surface: str,
-    domain: str,
-    baseline_fields: list[str],
-    explicit_fields: list[str] | None = None,
-    sample_record: dict | None = None,
-) -> ResolvedSchema:
-    baseline = _dedupe_fields(
-        field
-        for field in baseline_fields
-        if _field_allowed_for_surface(surface, field)
-    )
-    explicit = _dedupe_fields(
-        field
-        for field in (explicit_fields or [])
-        if _field_allowed_for_surface(surface, field)
-    )
-    record = sample_record if isinstance(sample_record, dict) else {}
-    normalized_record_values: dict[str, object] = {}
-    discovered_new_fields: list[str] = []
-    baseline_set = set(baseline)
-    allow_record_learning = _supports_record_learning(surface)
-    for key, value in record.items():
-        normalized = _normalize_field_name(key)
-        if normalized and normalized not in normalized_record_values:
-            normalized_record_values[normalized] = value
-        if (
-            not allow_record_learning
-            or
-            not is_valid_schema_field_name(normalized)
-            or not _field_allowed_for_surface(surface, normalized)
-            or normalized in baseline_set
-            or normalized in discovered_new_fields
-            or value in (None, "", [], {})
-            or isinstance(value, (dict, list))
-        ):
-            continue
-        discovered_new_fields.append(normalized)
-    fields = _dedupe_fields([*baseline, *discovered_new_fields, *explicit])
-    return ResolvedSchema(
-        surface=surface,
-        domain=domain,
-        baseline_fields=baseline,
-        fields=fields,
-        new_fields=[field for field in fields if field not in baseline_set],
-        deprecated_fields=[
-            field
-            for field in baseline
-            if field not in normalized_record_values or normalized_record_values.get(field) in (None, "", [], {})
-        ],
-        source="learned",
-        saved_at=_now_iso(),
-        stale=False,
-    )
-
-
 async def resolve_schema(
     session: AsyncSession,
     surface: str,
@@ -302,28 +237,6 @@ async def resolve_schema(
         domain,
         explicit_fields=explicit_fields,
     )
-    if not _supports_record_learning(surface):
-        return resolved
-    if not resolved.domain:
-        return resolved
-    try:
-        if (not resolved.saved_at or resolved.stale) and isinstance(sample_record, dict) and sample_record:
-            learned = learn_schema_from_record(
-                surface=surface,
-                domain=resolved.domain,
-                baseline_fields=resolved.baseline_fields,
-                explicit_fields=explicit_fields,
-                sample_record=sample_record,
-            )
-            return await persist_resolved_schema(session, learned)
-    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
-        logger.exception(
-            "Schema resolution enrichment failed for surface=%s domain=%s; returning fallback resolved schema",
-            surface,
-            resolved.domain,
-            extra={"resolved": _schema_payload(resolved)},
-        )
-        return resolved
     return resolved
 
 

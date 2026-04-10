@@ -16,6 +16,7 @@ _pool: ConnectionPool | None = None
 _client: Redis | None = None
 _redis_disabled_until: float = 0.0
 _last_disable_log_at: float = 0.0
+_redis_failure_total: int = 0
 _T = TypeVar("_T")
 _DISABLE_COOLDOWN_SECONDS = 30.0
 
@@ -27,9 +28,10 @@ def redis_is_enabled() -> bool:
 
 
 def _temporarily_disable_redis(exc: Exception) -> None:
-    global _redis_disabled_until, _last_disable_log_at
+    global _redis_disabled_until, _last_disable_log_at, _redis_failure_total
     now = time.monotonic()
     _redis_disabled_until = now + _DISABLE_COOLDOWN_SECONDS
+    _redis_failure_total += 1
     if now - _last_disable_log_at >= _DISABLE_COOLDOWN_SECONDS:
         logger.warning(
             "Redis unavailable; disabling shared state for %.0fs: %s",
@@ -55,6 +57,10 @@ def get_redis() -> Redis:
     if _client is None:
         _client = Redis(connection_pool=get_redis_pool())
     return _client
+
+
+def redis_failure_total() -> int:
+    return _redis_failure_total
 
 
 async def close_redis() -> None:

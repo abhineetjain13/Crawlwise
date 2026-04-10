@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
+from app.core.metrics import observe_acquisition_duration
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import BrowserResult, fetch_rendered_html
 from app.services.acquisition.browser_runtime import resolve_browser_runtime_options
@@ -413,6 +414,12 @@ async def acquire(
     diagnostics = result.diagnostics if isinstance(result.diagnostics, dict) else {}
     if bool(diagnostics.get("browser_blocked")) or bool(diagnostics.get("curl_blocked")):
         incr("blocked_page_result_total")
+    timings_ms = diagnostics.get("timings_ms") if isinstance(diagnostics, dict) else None
+    acquisition_total_ms = 0
+    if isinstance(timings_ms, dict):
+        acquisition_total_ms = int(timings_ms.get("acquisition_total_ms", 0) or 0)
+    if acquisition_total_ms > 0:
+        observe_acquisition_duration(acquisition_total_ms / 1000)
     return result
 
 

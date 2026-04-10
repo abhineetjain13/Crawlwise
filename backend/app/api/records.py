@@ -383,9 +383,6 @@ def _collect_table_export_rows(rows: list[CrawlRecord]) -> list[dict]:
 
 
 def _artifact_table_rows(row: CrawlRecord) -> list[dict]:
-    legacy_rows = _legacy_fallback_markdown_rows(row)
-    if legacy_rows:
-        return legacy_rows
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
     manifest_trace = (
         source_trace.get("manifest_trace")
@@ -439,35 +436,29 @@ def _artifact_table_rows(row: CrawlRecord) -> list[dict]:
 
 
 def _legacy_fallback_markdown_rows(row: CrawlRecord) -> list[dict]:
-    source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    if str(source_trace.get("type") or "") != "listing_fallback":
-        return []
-    data = row.data if isinstance(row.data, dict) else {}
-    markdown = _stringify_markdown_value(data.get("page_markdown"))
+    raw_data = row.data if isinstance(row.data, dict) else {}
+    markdown = _stringify_markdown_value(raw_data.get("page_markdown"))
     if not markdown:
         return []
+
+    heading_re = re.compile(
+        r"^##\s+\[(?P<title>[^\]]+)\]\((?P<url>[^)]+)\)\s*$",
+        re.MULTILINE,
+    )
+    matches = list(heading_re.finditer(markdown))
     rows: list[dict] = []
-    current: dict[str, object] | None = None
-    for raw_line in markdown.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = re.match(r"^## \[(.+?)\]\((https?://[^)]+)\)$", line)
-        if match:
-            if current:
-                rows.append(current)
-            current = {
-                "record_id": row.id,
-                "source_url": row.source_url,
-                "table_caption": "Fallback listing rows",
-                "title": match.group(1).strip(),
-                "url": match.group(2).strip(),
-            }
-            continue
-        if current is not None and "description" not in current:
-            current["description"] = line
-    if current:
-        rows.append(current)
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        description = markdown[start:end].strip()
+        payload = {
+            "record_id": row.id,
+            "source_url": row.source_url,
+            "title": match.group("title").strip(),
+            "url": match.group("url").strip(),
+            "description": description,
+        }
+        rows.append({key: value for key, value in payload.items() if value not in (None, "", [], {})})
     return rows
 
 
@@ -593,7 +584,7 @@ def _record_to_markdown(row: CrawlRecord) -> str:
         rendered_section_keys.add(normalized_field)
 
     if scalar_rows:
-        lines.extend(["", "## Fields", ""])
+        lines.extend(["", "## Core Fields", ""])
         for label, value in scalar_rows:
             lines.append(f"- **{label}:** {_render_markdown_inline(value)}")
 

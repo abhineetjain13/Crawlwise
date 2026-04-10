@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urljoin
 
 from app.services.pipeline_config import (
@@ -161,6 +163,9 @@ async def apply_traversal_mode(
     flatten_shadow_dom: Callable[..., Awaitable[None]],
     cooperative_sleep_ms: Callable[..., Awaitable[None]],
     snapshot_listing_page_metrics: Callable[..., Awaitable[dict[str, object]]],
+    ensure_memory_available: Callable[[], None] | None = None,
+    run_id: int | None = None,
+    traversal_artifact_dir: Path | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> TraversalResult:
     config = _resolved_config(config)
@@ -344,6 +349,9 @@ async def apply_traversal_mode(
             pause_after_navigation=pause_after_navigation,
             expand_all_interactive_elements=expand_all_interactive_elements,
             flatten_shadow_dom=flatten_shadow_dom,
+            ensure_memory_available=ensure_memory_available,
+            run_id=run_id,
+            traversal_artifact_dir=traversal_artifact_dir,
             checkpoint=checkpoint,
         ))
     if traversal_mode == "auto":
@@ -398,6 +406,9 @@ async def apply_traversal_mode(
                 pause_after_navigation=pause_after_navigation,
                 expand_all_interactive_elements=expand_all_interactive_elements,
                 flatten_shadow_dom=flatten_shadow_dom,
+                ensure_memory_available=ensure_memory_available,
+                run_id=run_id,
+                traversal_artifact_dir=traversal_artifact_dir,
                 checkpoint=checkpoint,
             )
             if pre_pagination_html:
@@ -451,13 +462,19 @@ async def collect_paginated_html(
     pause_after_navigation: Callable[..., Awaitable[None]],
     expand_all_interactive_elements: Callable[..., Awaitable[dict[str, object]]],
     flatten_shadow_dom: Callable[..., Awaitable[None]],
+    ensure_memory_available: Callable[[], None] | None = None,
+    run_id: int | None = None,
+    traversal_artifact_dir: Path | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> TraversalResult:
     config = _resolved_config(config)
     if advance_next_page_fn is None and click_and_observe_next_page is None:
         raise ValueError("no pagination callback provided")
+    if ensure_memory_available is not None:
+        ensure_memory_available()
 
     fragments: list[str] = []
+    page_files: list[Path] = []
     visited_urls: set[str] = set()
     stop_reason = "max_pages_reached"
     steps: list[dict[str, object]] = []
@@ -484,15 +501,31 @@ async def collect_paginated_html(
     page_limit = max(1, int(max_pages or 1))
     for page_index in range(page_limit):
         page_html = await page_content_with_retry(page, checkpoint=checkpoint)
-        fragments.append(
-            f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}"
-        )
+        if traversal_artifact_dir is not None:
+            await asyncio.to_thread(
+                traversal_artifact_dir.mkdir,
+                parents=True,
+                exist_ok=True,
+            )
+            file_prefix = str(run_id) if run_id is not None else "adhoc"
+            page_path = traversal_artifact_dir / f"{file_prefix}_page_{page_index + 1}.html"
+            await asyncio.to_thread(
+                page_path.write_text,
+                f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}",
+                encoding="utf-8",
+            )
+            page_files.append(page_path)
+        else:
+            fragments.append(
+                f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}"
+            )
         steps.append(
             {
                 "action": "capture_page",
                 "page_index": page_index + 1,
                 "url": str(page.url or "").strip() or None,
                 "html_length": len(page_html or ""),
+                "html_path": str(page_files[-1]) if page_files else None,
             }
         )
         if page_index + 1 >= page_limit:
@@ -563,12 +596,20 @@ async def collect_paginated_html(
         await expand_all_interactive_elements(page, checkpoint=checkpoint)
         await flatten_shadow_dom(page)
         await wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
+    if page_files:
+        fragments = await asyncio.gather(
+            *[
+                asyncio.to_thread(page_path.read_text, encoding="utf-8")
+                for page_path in page_files
+            ]
+        )
+
     return TraversalResult(
         html="\n".join(fragments),
         summary={
             "mode": "paginate",
             "attempted": True,
-            "pages_collected": len(fragments),
+            "pages_collected": len(page_files) or len(fragments),
             "visited_urls": len(visited_urls),
             "steps": steps,
             "stop_reason": stop_reason,

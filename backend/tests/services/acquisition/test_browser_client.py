@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -966,6 +967,44 @@ async def test_collect_paginated_html_allows_in_place_pagination_without_goto(mo
     assert "Page 2" in result.html
     assert page.goto_calls == []
     assert result.summary["pages_collected"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_collect_paginated_html_streams_pages_to_disk_and_preserves_combined_html(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    page = FakePaginationPage()
+    monkeypatch.setattr("app.services.acquisition.browser_client.settings.acquisition_cache_dir", tmp_path)
+    monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client.expand_all_interactive_elements", AsyncMock())
+
+    result = await _collect_paginated_html(page, max_pages=2, request_delay_ms=0, run_id=77)
+
+    assert "Page 1" in result.html
+    assert "Page 2" in result.html
+    assert result.summary["pages_collected"] == 2
+    html_paths = [
+        Path(step["html_path"])
+        for step in result.summary["steps"]
+        if step.get("action") == "capture_page" and step.get("html_path")
+    ]
+    assert html_paths
+    assert all(path.exists() for path in html_paths)
+    assert html_paths[0].read_text(encoding="utf-8").startswith("<!-- PAGE BREAK:1:")
+
+
+def test_check_memory_available_fails_fast_when_available_memory_is_too_low(monkeypatch):
+    module = __import__("app.services.acquisition.browser_client", fromlist=["_check_memory_available"])
+
+    class _LowMemory:
+        available = 100 * 1024 * 1024
+
+    monkeypatch.setattr(module, "psutil", type("PsutilStub", (), {"virtual_memory": staticmethod(lambda: _LowMemory())}))
+
+    with pytest.raises(MemoryError, match="Insufficient memory"):
+        module._check_memory_available()
 
 
 @pytest.mark.asyncio

@@ -53,10 +53,7 @@ from app.services.requested_field_policy import expand_requested_fields
 from app.services.runtime_metrics import incr
 from app.services.schema_service import (
     ResolvedSchema,
-    _supports_record_learning,
-    learn_schema_from_record,
     load_resolved_schema,
-    persist_resolved_schema,
     resolve_schema,
     schema_trace_payload,
 )
@@ -572,19 +569,10 @@ async def _process_json_response(
             else None,
             llm_enabled=bool((run.settings or {}).get("llm_enabled")),
         )
-        current_schema = resolved_schema
         for raw_record in extracted:
             if len(saved) >= max_records:
                 break
-            learned_schema = await _refresh_schema_from_record(
-                session,
-                surface=run.surface,
-                url=url,
-                base_schema=current_schema,
-                sample_record=raw_record,
-            )
-            current_schema = learned_schema or current_schema
-            allowed_fields = set(current_schema.fields)
+            allowed_fields = set(resolved_schema.fields)
             public_fields = _public_record_fields(raw_record)
             normalized, discovered_fields = _split_detail_output_fields(
                 public_fields,
@@ -612,6 +600,7 @@ async def _process_json_response(
                 raw_data=raw_data,
                 discovered_data=_compact_dict(
                     {
+                        "discovered_fields": review_bucket or None,
                         "review_bucket": review_bucket or None,
                         "requested_field_coverage": requested_coverage or None,
                     }
@@ -620,7 +609,7 @@ async def _process_json_response(
                     {
                         "type": "json_api",
                         "method": acq.method,
-                        "schema_resolution": schema_trace_payload(current_schema),
+                        "schema_resolution": schema_trace_payload(resolved_schema),
                         "acquisition": _build_acquisition_trace(acq).get("acquisition"),
                         "requested_fields": requested_fields or None,
                         "requested_field_coverage": requested_coverage or None,
@@ -1134,6 +1123,7 @@ async def _extract_detail(
                 raw_data=raw_data,
                 discovered_data=_compact_dict(
                     {
+                        "discovered_fields": review_bucket or None,
                         "review_bucket": review_bucket or None,
                         "requested_field_coverage": requested_coverage or None,
                     }
@@ -1179,6 +1169,7 @@ async def _extract_detail(
         )
         discovered_data = _compact_dict(
             {
+                "discovered_fields": review_bucket or None,
                 "review_bucket": review_bucket or None,
                 "requested_field_coverage": requested_coverage or None,
             }
@@ -1266,14 +1257,20 @@ async def _log(session: AsyncSession, run_id: int, level: str, message: str) -> 
     )
     if not should_persist:
         return
-    # Persist log rows outside the crawl transaction so the live log poller and
-    # websocket stream can see them before the run commits its main work.
-    await append_log_event(
+    persisted = await append_log_event(
         run_id,
         normalized_level,
         formatted_message,
         preformatted=True,
     )
+    if persisted.get("id") is None:
+        await append_log_event(
+            run_id,
+            normalized_level,
+            formatted_message,
+            preformatted=True,
+            session=session,
+        )
 
 
 async def _set_stage(
@@ -1701,40 +1698,6 @@ async def _load_domain_requested_fields(
 ) -> list[str]:
     resolved = await load_resolved_schema(session, surface, normalize_domain(url))
     return expand_requested_fields(list(resolved.new_fields))
-
-
-async def _refresh_schema_from_record(
-    session: AsyncSession,
-    *,
-    surface: str,
-    url: str,
-    base_schema: ResolvedSchema,
-    sample_record: dict | None,
-) -> ResolvedSchema | None:
-    if not isinstance(sample_record, dict) or not sample_record:
-        return None
-    if not _supports_record_learning(surface):
-        return None
-    learned = learn_schema_from_record(
-        surface=surface,
-        domain=base_schema.domain or normalize_domain(url),
-        baseline_fields=base_schema.baseline_fields,
-        explicit_fields=[
-            field
-            for field in base_schema.fields
-            if field not in set(base_schema.baseline_fields)
-        ],
-        sample_record=sample_record,
-    )
-    if (
-        learned.fields == base_schema.fields
-        and learned.new_fields == base_schema.new_fields
-        and learned.deprecated_fields == base_schema.deprecated_fields
-        and not base_schema.stale
-        and base_schema.saved_at
-    ):
-        return None
-    return await persist_resolved_schema(session, learned)
 
 
 def _refresh_record_commit_metadata(

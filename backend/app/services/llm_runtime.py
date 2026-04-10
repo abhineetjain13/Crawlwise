@@ -157,9 +157,14 @@ async def run_prompt_task(
         if isinstance(inner, (dict, list)):
             payload = inner
 
+    persisted_run_id = run_id
+    if run_id is not None:
+        existing_run = await session.get(CrawlRun, run_id)
+        if existing_run is None:
+            persisted_run_id = None
     session.add(
         LLMCostLog(
-            run_id=run_id,
+            run_id=persisted_run_id,
             provider=str(config.get("provider") or ""),
             model=str(config.get("model") or ""),
             task_type=task_type,

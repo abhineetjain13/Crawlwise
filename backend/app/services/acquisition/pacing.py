@@ -127,15 +127,21 @@ async def wait_for_host_slot(
 
 
 async def reset_pacing_state() -> None:
-    redis = get_redis()
-    cursor = 0
-    while True:
-        cursor, keys = await redis.scan(
-            cursor=cursor,
-            match=f"{_PACING_KEY_PREFIX}:*",
-            count=200,
-        )
-        if keys:
-            await redis.delete(*keys)
-        if cursor == 0:
-            return
+    async def _reset(redis) -> None:
+        cursor = 0
+        while True:
+            cursor, keys = await redis.scan(
+                cursor=cursor,
+                match=f"{_PACING_KEY_PREFIX}:*",
+                count=200,
+            )
+            if keys:
+                await redis.delete(*keys)
+            if cursor == 0:
+                return
+
+    await redis_fail_open(
+        _reset,
+        default=None,
+        operation_name="reset_pacing_state",
+    )

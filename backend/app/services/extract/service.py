@@ -8,7 +8,11 @@ from functools import lru_cache
 from json import loads as parse_json
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
-from app.services.config.field_mappings import get_surface_field_aliases
+from app.services.config.field_mappings import (
+    ECOMMERCE_ONLY_FIELDS,
+    JOB_ONLY_FIELDS,
+    get_surface_field_aliases,
+)
 from app.services.exceptions import ExtractionError, ExtractionParseError
 from app.services.extract.signal_inventory import (
     build_signal_inventory,
@@ -122,7 +126,7 @@ from app.services.semantic_detail_extractor import (
     resolve_requested_field_values,
 )
 from app.services.xpath_service import build_absolute_xpath, extract_selector_value
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from lxml import etree
 from lxml import html as lxml_html
 
@@ -226,9 +230,35 @@ _GENERIC_SENTINEL_VALUES = {
     "n/a",
     "na",
 }
-_RISKY_DETAIL_FIELDS = frozenset({"title", "brand", "category", "availability", "color"})
+_RISKY_DETAIL_FIELDS = frozenset(
+    {"title", "brand", "category", "availability", "color", "size"}
+)
 _DETAIL_FIELD_SOURCE_RANK_OVERRIDES: dict[str, dict[str, int]] = {
-    field_name: {"datalayer": 8} for field_name in _RISKY_DETAIL_FIELDS
+    "title": {"datalayer": 2, "embedded_json": 8, "adapter": 10},
+    "brand": {"datalayer": 2, "hydrated_state": 8, "embedded_json": 8, "adapter": 10},
+    "category": {
+        "datalayer": 2,
+        "text_pattern": 1,
+        "json_ld": 6,
+        "embedded_json": 8,
+        "adapter": 10,
+        "dom_breadcrumb": 7,
+    },
+    "availability": {"datalayer": 3, "embedded_json": 8, "adapter": 10},
+    "color": {
+        "text_pattern": 1,
+        "semantic_section": 1,
+        "semantic_spec": 3,
+        "embedded_json": 8,
+        "adapter": 10,
+    },
+    "size": {
+        "text_pattern": 1,
+        "semantic_section": 1,
+        "semantic_spec": 4,
+        "embedded_json": 8,
+        "adapter": 10,
+    },
 }
 _COMMON_DETAIL_REJECT_PHRASES = (
     "cookie",
@@ -246,11 +276,16 @@ _DETAIL_FIELD_REJECT_PHRASES: dict[str, tuple[str, ...]] = {
     "category": ("page type", "page category", "detail page"),
     "availability": ("add to cart", "choose options", "select options", "view details"),
     "color": ("add to cart", "choose options", "select options"),
+    "size": ("select size", "choose size"),
 }
 _BREADCRUMB_STYLE_BRAND_RE = re.compile(r"\s(?:>|/)\s")
 _EMBEDDED_BLOB_PAYLOAD_KEY = "_blob_payload"
 _EMBEDDED_BLOB_FAMILY_KEY = "_blob_family"
 _EMBEDDED_BLOB_ORIGIN_KEY = "_blob_origin"
+_DYNAMIC_VARIANT_VALUE_FIELDS = frozenset(
+    {"style", "styles", "xs", "s", "m", "l", "xl", "xxl", "xxxl", "onesize", "one_size"}
+)
+_PACK_STYLE_DYNAMIC_RE = re.compile(r"^pack_\d+$", re.IGNORECASE)
 
 
 def _coerce_scalar_for_dynamic_row(value: object) -> str | int | float | None:
@@ -290,7 +325,19 @@ def candidate_source_rank(field_name: str, source: object) -> int:
     if not source_parts:
         return 0
     overrides = _DETAIL_FIELD_SOURCE_RANK_OVERRIDES.get(field_name, {})
-    return max(int(overrides.get(part, SOURCE_RANKING.get(part, 0))) for part in source_parts)
+    source_ranking_overrides = {
+        "adapter": 12,
+        "dom_variant": 9,
+        "shopify_content": 11,
+        "structured_spec": 10,
+        "dom_section": 10,
+        "dom_gallery": 10,
+        "shopify_variant": 10,
+    }
+    return max(
+        int(overrides.get(part, source_ranking_overrides.get(part, SOURCE_RANKING.get(part, 0))))
+        for part in source_parts
+    )
 
 
 def _sanitize_detail_field_value(
@@ -377,13 +424,15 @@ def _dynamic_field_name_is_valid(normalized: str) -> bool:
         return False
     if normalized in JSONLD_TYPE_NOISE:
         return False
+    if normalized in _DYNAMIC_VARIANT_VALUE_FIELDS or _PACK_STYLE_DYNAMIC_RE.fullmatch(normalized):
+        return False
     if _dynamic_field_name_is_schema_slug_noise(normalized):
         return False
     tokens = [token for token in normalized.split("_") if token]
     if len(tokens) > _DYNAMIC_FIELD_NAME_MAX_TOKENS:
         return False
     dropped_tokens = sum(
-        1 for token in tokens if token in _DYNAMIC_FIELD_NAME_DROP_TOKENS
+        1 for token in tokens if token in DYNAMIC_FIELD_NAME_DROP_TOKENS
     )
     if dropped_tokens >= 2 and dropped_tokens >= len(tokens) - 1:
         return False
@@ -393,8 +442,40 @@ def _dynamic_field_name_is_valid(normalized: str) -> bool:
     return True
 
 
-_DYNAMIC_FIELD_NAME_DROP_TOKENS = DYNAMIC_FIELD_NAME_DROP_TOKENS
 _DYNAMIC_FIELD_NAME_MAX_TOKENS = DYNAMIC_FIELD_NAME_MAX_TOKENS
+_STRUCTURED_CANONICAL_ATTRIBUTE_KEYS = {
+    "additional_images",
+    "availability",
+    "brand",
+    "category",
+    "color",
+    "description",
+    "features",
+    "image_url",
+    "materials",
+    "original_price",
+    "price",
+    "product_attributes",
+    "selected_variant",
+    "size",
+    "sku",
+    "specifications",
+    "variant_axes",
+    "variants",
+}
+_TRUE_VARIANT_AXES = {"color", "size", "waist", "width", "length", "inseam"}
+
+
+def _canonical_structured_key(value: object) -> str:
+    text = _normalized_candidate_text(value).lower()
+    if text in {"color", "colour", "colors", "colours"}:
+        return "color"
+    if text in {"size", "sizes", "dimension", "dimensions"}:
+        return "size"
+    normalized = normalize_requested_field(text)
+    if normalized in {"dimension", "dimensions"}:
+        return "size"
+    return normalized or text
 
 
 def _collect_candidates(
@@ -456,21 +537,18 @@ def _collect_candidates(
     for field_name in target_fields:
         rows: list[dict] = []
 
-        # 1-2. Contract and adapter are authoritative — first-match wins.
-        if _collect_contract_candidates(
+        # 1-2. Collect contract and adapter candidates, but do not short-circuit:
+        # downstream arbitration must see all sources to choose the winner.
+        _collect_contract_candidates(
             rows,
             field_name=field_name,
             tree=tree,
             html=html,
             contract_by_field=contract_by_field,
-        ):
-            candidates[field_name] = rows
-            continue
-        if _collect_adapter_candidates(
+        )
+        _collect_adapter_candidates(
             rows, field_name=field_name, adapter_records=adapter_records
-        ):
-            candidates[field_name] = rows
-            continue
+        )
 
         # 3-6. Collect from ALL remaining structured sources so
         # _finalize_candidates can pick the highest-ranked candidate
@@ -651,6 +729,8 @@ def _collect_jsonld_candidates(
         if isinstance(payload, dict):
             if _should_skip_jsonld_block(payload, field_name):
                 continue
+            if not _payload_matches_page_scope(payload, base_url=base_url):
+                continue
             _append_source_candidates(
                 rows,
                 field_name,
@@ -674,6 +754,8 @@ def _collect_structured_state_candidates(
     surface: str,
 ) -> bool:
     for payload in embedded_json:
+        if not _payload_matches_page_scope(payload, base_url=base_url):
+            continue
         _append_source_candidates(
             rows,
             field_name,
@@ -684,23 +766,25 @@ def _collect_structured_state_candidates(
             surface=surface,
         )
     if next_data:
-        _append_source_candidates(
-            rows,
-            field_name,
-            next_data,
-            "next_data",
-            base_url=base_url,
-            surface=surface,
-        )
+        if _payload_matches_page_scope(next_data, base_url=base_url):
+            _append_source_candidates(
+                rows,
+                field_name,
+                next_data,
+                "next_data",
+                base_url=base_url,
+                surface=surface,
+            )
     for state in hydrated_states:
-        _append_source_candidates(
-            rows,
-            field_name,
-            state,
-            "hydrated_state",
-            base_url=base_url,
-            surface=surface,
-        )
+        if _payload_matches_page_scope(state, base_url=base_url):
+            _append_source_candidates(
+                rows,
+                field_name,
+                state,
+                "hydrated_state",
+                base_url=base_url,
+                surface=surface,
+            )
     rows.extend(
         _structured_source_candidates(
             field_name,
@@ -708,6 +792,7 @@ def _collect_structured_state_candidates(
             hydrated_states=hydrated_states,
             embedded_json=embedded_json,
             network_payloads=network_payloads,
+            base_url=base_url,
         )
     )
     return bool(rows)
@@ -813,6 +898,7 @@ def _finalize_candidates(
     embedded_json: list[dict],
     network_payloads: list[dict],
     soup: BeautifulSoup,
+    adapter_records: list[dict] | None = None,
 ) -> tuple[dict, dict]:
     """Deduplicate, rank, and prepare final output.
 
@@ -836,54 +922,116 @@ def _finalize_candidates(
                 final_candidates[field_name] = [decision.winning_row]
 
     # Add dynamic fields from semantic and structured sources
-    dynamic_rows = _build_dynamic_semantic_rows(semantic, surface=surface)
-    structured_rows = _build_dynamic_structured_rows(
+    dynamic_rows = _build_dynamic_semantic_rows(
+        semantic,
         surface=surface,
+        allowed_fields=target_fields,
+    )
+    structured_sources = _structured_source_payloads(
         next_data=next_data,
         hydrated_states=hydrated_states,
         embedded_json=embedded_json,
         network_payloads=network_payloads,
+        base_url=url,
+    )
+    structured_rows = _build_dynamic_structured_rows(
+        surface=surface,
+        structured_sources=structured_sources,
+        allowed_fields=target_fields,
     )
     product_detail_rows = _build_product_detail_rows(
         soup,
         base_url=url,
-        next_data=next_data,
-        hydrated_states=hydrated_states,
-        embedded_json=embedded_json,
+        structured_sources=structured_sources,
+    )
+    platform_detail_rows = _build_platform_detail_rows(
+        base_url=url,
+        soup=soup,
+        adapter_records=adapter_records or [],
+    )
+    variant_rows = _build_variant_rows(
+        base_url=url,
+        soup=soup,
+        adapter_records=adapter_records or [],
         network_payloads=network_payloads,
     )
 
     # Merge dynamic rows
     merged_dynamic_rows: dict[str, list[dict]] = {}
+    for field_name, rows in variant_rows.items():
+        merged_dynamic_rows.setdefault(field_name, []).extend(rows)
     for field_name, rows in structured_rows.items():
         merged_dynamic_rows.setdefault(field_name, []).extend(rows)
     for field_name, rows in product_detail_rows.items():
+        merged_dynamic_rows.setdefault(field_name, []).extend(rows)
+    for field_name, rows in platform_detail_rows.items():
         merged_dynamic_rows.setdefault(field_name, []).extend(rows)
     for field_name, rows in dynamic_rows.items():
         merged_dynamic_rows.setdefault(field_name, []).extend(rows)
 
     # Add dynamic fields if not already present
+    dynamic_override_fields = {
+        "color",
+        "size",
+        "image_url",
+        "additional_images",
+        "category",
+        "sku",
+        "price",
+        "original_price",
+        "availability",
+        "variants",
+        "variant_axes",
+        "selected_variant",
+        "description",
+        "features",
+        "specifications",
+        "product_attributes",
+        "materials",
+    }
+    surface_name = str(surface or "").strip().lower()
+    if surface_name in {"job_listing", "job_detail"}:
+        surface_excluded_dynamic_fields = ECOMMERCE_ONLY_FIELDS
+    elif surface_name in {"ecommerce_listing", "ecommerce_detail"}:
+        surface_excluded_dynamic_fields = JOB_ONLY_FIELDS
+    else:
+        surface_excluded_dynamic_fields = frozenset()
+    discovered_dynamic_fields: dict[str, object] = {}
     for field_name, rows in merged_dynamic_rows.items():
-        if field_name in final_candidates:
+        if field_name in surface_excluded_dynamic_fields:
+            continue
+        filtered_rows = _finalize_candidate_rows(field_name, rows, base_url=url)
+        if not filtered_rows:
             continue
         if (
             field_name not in canonical_target_fields
             and not _dynamic_field_name_is_valid(field_name)
         ):
             continue
-        filtered_rows = _finalize_candidate_rows(field_name, rows, base_url=url)
-        if filtered_rows:
-            if (
-                field_name not in canonical_target_fields
-                and _dynamic_value_is_bare_ticker_symbol(filtered_rows[0].get("value"))
-            ):
-                continue
-            normalized_value = _normalized_candidate_text(
-                filtered_rows[0].get("value")
-            ).casefold()
-            if normalized_value in CANDIDATE_PLACEHOLDER_VALUES:
-                continue
-            final_candidates[field_name] = filtered_rows[:1]
+        if (
+            field_name not in canonical_target_fields
+            and _dynamic_value_is_bare_ticker_symbol(filtered_rows[0].get("value"))
+        ):
+            continue
+        normalized_value = _normalized_candidate_text(
+            filtered_rows[0].get("value")
+        ).casefold()
+        if normalized_value in CANDIDATE_PLACEHOLDER_VALUES:
+            continue
+        if field_name not in canonical_target_fields:
+            discovered_dynamic_fields[field_name] = filtered_rows[0].get("value")
+            continue
+        if field_name in final_candidates and field_name not in dynamic_override_fields:
+            continue
+        if field_name in final_candidates:
+            decision = engine.decide_from_rows(
+                field_name,
+                [*final_candidates[field_name], *filtered_rows],
+            )
+            if decision.accepted and decision.winning_row is not None:
+                final_candidates[field_name] = [decision.winning_row]
+            continue
+        final_candidates[field_name] = filtered_rows[:1]
 
     # Mirror image_url to additional_images if needed
     if (
@@ -902,7 +1050,12 @@ def _finalize_candidates(
     # Add product_attributes from semantic extraction to output
     if "detail" in str(surface or "").lower():
         specifications = semantic.get("specifications")
-        if specifications and isinstance(specifications, dict) and specifications:
+        if (
+            "product_attributes" not in final_candidates
+            and specifications
+            and isinstance(specifications, dict)
+            and specifications
+        ):
             final_candidates["product_attributes"] = [
                 {"value": specifications, "source": "semantic_specifications"}
             ]
@@ -910,12 +1063,111 @@ def _finalize_candidates(
     # Apply domain field mappings
     domain = _domain(url)
     mappings = get_domain_mapping(domain, surface)
+    _sync_selected_variant_root_fields(final_candidates)
+    _sanitize_structured_variant_output(final_candidates)
+    _sanitize_product_attributes(final_candidates)
 
     return final_candidates, {
         "candidates": dict(final_candidates),
+        "discovered_data": {
+            "discovered_fields": discovered_dynamic_fields,
+        },
         "mapping_hint": mappings,
         "semantic": semantic,
     }
+
+
+def _sync_selected_variant_root_fields(final_candidates: dict[str, list[dict]]) -> None:
+    selected_rows = final_candidates.get("selected_variant")
+    if not isinstance(selected_rows, list) or not selected_rows:
+        return
+    selected_row = selected_rows[0]
+    selected_variant = (
+        selected_row.get("value") if isinstance(selected_row, dict) else None
+    )
+    if not isinstance(selected_variant, dict):
+        return
+    source = str(selected_row.get("source") or "selected_variant").strip() or "selected_variant"
+    for field_name in (
+        "price",
+        "original_price",
+        "sku",
+        "color",
+        "size",
+        "availability",
+        "image_url",
+    ):
+        value = selected_variant.get(field_name)
+        if value in (None, "", [], {}):
+            continue
+        final_candidates[field_name] = [{"value": value, "source": source}]
+
+
+def _sanitize_structured_variant_output(final_candidates: dict[str, list[dict]]) -> None:
+    variant_axes_rows = final_candidates.get("variant_axes")
+    if not isinstance(variant_axes_rows, list) or not variant_axes_rows:
+        return
+    axis_payload = (
+        variant_axes_rows[0].get("value")
+        if isinstance(variant_axes_rows[0], dict)
+        else None
+    )
+    if not isinstance(axis_payload, dict):
+        return
+    cleaned_axes, moved_attributes = _split_variant_axes(axis_payload)
+    if cleaned_axes:
+        final_candidates["variant_axes"] = [{**variant_axes_rows[0], "value": cleaned_axes}]
+    else:
+        final_candidates.pop("variant_axes", None)
+    if moved_attributes:
+        _merge_product_attributes_into_candidates(
+            final_candidates,
+            moved_attributes,
+            source=str(variant_axes_rows[0].get("source") or "variant_axes").strip()
+            or "variant_axes",
+        )
+
+
+def _merge_product_attributes_into_candidates(
+    final_candidates: dict[str, list[dict]],
+    attributes: dict[str, object],
+    *,
+    source: str,
+) -> None:
+    if not attributes:
+        return
+    merged: dict[str, object] = {}
+    existing_rows = final_candidates.get("product_attributes")
+    if isinstance(existing_rows, list) and existing_rows:
+        current = existing_rows[0].get("value") if isinstance(existing_rows[0], dict) else None
+        if isinstance(current, dict):
+            merged.update(current)
+    merged.update(attributes)
+    final_candidates["product_attributes"] = [{"value": merged, "source": source}]
+
+
+def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> None:
+    product_rows = final_candidates.get("product_attributes")
+    if not isinstance(product_rows, list) or not product_rows:
+        return
+    payload = product_rows[0].get("value") if isinstance(product_rows[0], dict) else None
+    if not isinstance(payload, dict):
+        final_candidates.pop("product_attributes", None)
+        return
+    sanitized = dict(payload)
+    canonical_keys = {
+        key
+        for key in final_candidates.keys()
+        if key in _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS and key != "product_attributes"
+    } | _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS
+    for key in list(sanitized.keys()):
+        normalized_key = _canonical_structured_key(key)
+        if normalized_key in canonical_keys:
+            sanitized.pop(key, None)
+    if sanitized:
+        final_candidates["product_attributes"] = [{**product_rows[0], "value": sanitized}]
+    else:
+        final_candidates.pop("product_attributes", None)
 
 
 def extract_candidates(
@@ -958,7 +1210,7 @@ def extract_candidates(
             }
 
         tree = _build_xpath_tree(html)
-        adapter_records = adapter_records or []
+        adapter_records = _scope_adapter_records_for_url(url, adapter_records or [])
         network_payloads = xhr_payloads or []
 
         base_target_fields = set(resolved_fields or get_canonical_fields(surface))
@@ -973,7 +1225,10 @@ def extract_candidates(
             html,
             requested_fields=sorted(target_fields),
             soup=soup,
+            page_url=url,
+            adapter_records=adapter_records,
         )
+        semantic = _scoped_semantic_payload(semantic, url=url, adapter_records=adapter_records)
         label_value_text_sources = _build_label_value_text_sources(
             url=url,
             soup=soup,
@@ -1028,7 +1283,92 @@ def extract_candidates(
         embedded_json=page_sources.get("embedded_json") or [],
         network_payloads=network_payloads,
         soup=soup,
+        adapter_records=adapter_records,
     )
+
+
+def _scope_adapter_records_for_url(url: str, adapter_records: list[dict]) -> list[dict]:
+    if not adapter_records:
+        return []
+    scoped: list[dict] = []
+    current_url_key = _scoped_url_key(url)
+    current_identifiers = _scoped_record_identifiers({"url": url})
+    for record in adapter_records:
+        if not isinstance(record, dict):
+            continue
+        record_url = str(record.get("url") or record.get("source_url") or "").strip()
+        if record_url and current_url_key and _scoped_url_key(record_url) != current_url_key:
+            continue
+        record_identifiers = _scoped_record_identifiers(record)
+        if current_identifiers and record_identifiers and current_identifiers.isdisjoint(record_identifiers):
+            continue
+        scoped.append(record)
+    return scoped
+
+
+def _scoped_semantic_payload(
+    semantic: dict,
+    *,
+    url: str,
+    adapter_records: list[dict],
+) -> dict:
+    payload = semantic if isinstance(semantic, dict) else {}
+    scope = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+    if not scope:
+        return payload
+    if _scoped_url_key(scope.get("url")) not in {"", _scoped_url_key(url)}:
+        return {
+            "sections": {},
+            "specifications": {},
+            "promoted_fields": {},
+            "coverage": {},
+            "aggregates": {},
+            "table_groups": [],
+            "scope": scope,
+        }
+    scope_ids = {
+        str(value).strip().lower()
+        for value in (scope.get("product_ids") or [])
+        if str(value).strip()
+    }
+    current_ids = _scoped_record_identifiers({"url": url})
+    for record in adapter_records:
+        current_ids.update(_scoped_record_identifiers(record))
+    if scope_ids and current_ids and scope_ids.isdisjoint(current_ids):
+        return {
+            "sections": {},
+            "specifications": {},
+            "promoted_fields": {},
+            "coverage": {},
+            "aggregates": {},
+            "table_groups": [],
+            "scope": scope,
+        }
+    return payload
+
+
+def _scoped_url_key(value: object) -> str:
+    parsed = urlsplit(str(value or "").strip())
+    if not parsed.netloc:
+        return ""
+    return f"{parsed.netloc.lower()}{parsed.path.rstrip('/').lower()}"
+
+
+def _scoped_record_identifiers(record: dict[str, object]) -> set[str]:
+    identifiers: set[str] = set()
+    for key in ("sku", "product_id", "job_id", "variant_id", "id", "handle"):
+        value = str(record.get(key) or "").strip().lower()
+        if value:
+            identifiers.add(value)
+    record_url = str(record.get("url") or record.get("source_url") or "").strip()
+    if record_url:
+        scoped_url = _scoped_url_key(record_url)
+        if scoped_url:
+            identifiers.add(scoped_url)
+        path_parts = [part for part in urlsplit(record_url).path.split("/") if part]
+        if path_parts:
+            identifiers.add(path_parts[-1].lower())
+    return identifiers
 
 
 def _extract_label_value_from_text(
@@ -1321,7 +1661,7 @@ def _field_name_preference(field_name: str, *, target_fields: set[str]) -> int:
         score -= 20
     if len(tokens) > _DYNAMIC_FIELD_NAME_MAX_TOKENS:
         score -= 30
-    score -= sum(5 for token in tokens if token in _DYNAMIC_FIELD_NAME_DROP_TOKENS)
+    score -= sum(5 for token in tokens if token in DYNAMIC_FIELD_NAME_DROP_TOKENS)
     return score
 
 
@@ -1336,7 +1676,7 @@ def _dynamic_field_name_is_noisy(field_name: str) -> bool:
         return True
     if len(tokens) > _DYNAMIC_FIELD_NAME_MAX_TOKENS:
         return True
-    noise_hits = sum(1 for token in tokens if token in _DYNAMIC_FIELD_NAME_DROP_TOKENS)
+    noise_hits = sum(1 for token in tokens if token in DYNAMIC_FIELD_NAME_DROP_TOKENS)
     if noise_hits >= 2:
         return True
     if "price" in tokens and len(tokens) > 2:
@@ -1613,9 +1953,45 @@ def _extract_breadcrumb_category(soup: BeautifulSoup) -> str | None:
         return None
     if parts and parts[0].lower() == "home":
         parts = parts[1:]
+    title_text = _normalized_candidate_text(
+        (
+            soup.select_one("main h1")
+            or soup.select_one("article h1")
+            or soup.select_one("h1")
+        ).get_text(" ", strip=True)
+        if (
+            soup.select_one("main h1")
+            or soup.select_one("article h1")
+            or soup.select_one("h1")
+        )
+        else ""
+    )
+    if parts and title_text and _breadcrumb_item_matches_title(parts[-1], title_text):
+        parts = parts[:-1]
     if not parts:
         return None
     return " > ".join(parts)
+
+
+def _breadcrumb_item_matches_title(item: str, title: str) -> bool:
+    def _normalize(value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower())
+        return " ".join(normalized.split())
+
+    normalized_item = _normalize(item)
+    normalized_title = _normalize(title)
+    if not normalized_item or not normalized_title:
+        return False
+    if normalized_item == normalized_title:
+        return True
+    if normalized_item in normalized_title or normalized_title in normalized_item:
+        return True
+    item_tokens = set(normalized_item.split())
+    title_tokens = set(normalized_title.split())
+    if not item_tokens or not title_tokens:
+        return False
+    overlap = len(item_tokens & title_tokens)
+    return overlap >= max(2, min(len(item_tokens), len(title_tokens)))
 
 
 def _strip_tracking_query_params(url: str) -> str:
@@ -1662,6 +2038,7 @@ def _extract_image_urls(value: object, *, base_url: str = "") -> list[str]:
             return
         if not (
             path.endswith(CANDIDATE_IMAGE_FILE_EXTENSIONS)
+            or re.search(r"/(?:webp|jpeg|jpg|png)$", path)
             or any(token in lowered for token in CANDIDATE_IMAGE_URL_HINT_TOKENS)
         ):
             return
@@ -1826,43 +2203,6 @@ def _normalize_color_candidate(value: str) -> str | None:
     return cleaned or None
 
 
-def _normalize_size_candidate(value: str) -> str | None:
-    cleaned = _strip_ui_noise(value)
-    if not cleaned:
-        return None
-    lowered = cleaned.lower()
-
-    # FIX: Reject specification blobs masquerading as simple sizes
-    if len(cleaned) > 100:
-        return None
-    if "gsm:" in lowered or "weight:" in lowered or "lbs" in lowered:
-        return None
-
-    if any(token in lowered for token in CANDIDATE_SIZE_CSS_NOISE_TOKENS):
-        return None
-    if any(marker in cleaned for marker in ("{", "}", ";")):
-        return None
-    if re.fullmatch(r"\d+(?:\.\d+)?\s*[A-Za-z]{1,8}", cleaned):
-        return cleaned
-    if any(token in lowered for token in CANDIDATE_SIZE_PACKAGE_TOKENS):
-        return cleaned
-    cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
-
-    # Check if it's already a clean size value (e.g., "13 in", "XL", "10.5 oz")
-    # Don't split and rejoin if it's already good
-    if re.fullmatch(r"[A-Za-z0-9.+-]+(?:\s+[A-Za-z0-9.+-]+){0,3}", cleaned):
-        return cleaned
-
-    # Only split/rejoin for multi-value sizes like "S/M/L" or "10,12,14"
-    tokens = [
-        token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()
-    ]
-    if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):
-        # Use "/" for joining size variants, not comma
-        return "/".join(tokens)
-    return cleaned or None
-
-
 def _structured_source_candidates(
     field_name: str,
     *,
@@ -1870,6 +2210,7 @@ def _structured_source_candidates(
     hydrated_states: list[object],
     embedded_json: list[object],
     network_payloads: list[dict],
+    base_url: str = "",
 ) -> list[dict]:
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
@@ -1878,6 +2219,7 @@ def _structured_source_candidates(
         hydrated_states=hydrated_states,
         embedded_json=embedded_json,
         network_payloads=network_payloads,
+        base_url=base_url,
     )
     for source, payload, metadata in sources:
         value = _extract_structured_field_value(payload, field_name)
@@ -1895,8 +2237,500 @@ def _structured_source_candidates(
     return rows
 
 
+def _build_variant_rows(
+    *,
+    base_url: str,
+    soup: BeautifulSoup,
+    adapter_records: list[dict],
+    network_payloads: list[dict],
+) -> dict[str, list[dict]]:
+    rows: dict[str, list[dict]] = {}
+    adapter_variant_rows = _build_adapter_variant_rows(adapter_records)
+    if adapter_variant_rows:
+        _merge_dynamic_row_map(rows, adapter_variant_rows)
+
+    demandware_rows = _build_demandware_variant_rows(
+        network_payloads,
+        base_url=base_url,
+    )
+    if demandware_rows:
+        _merge_dynamic_row_map(rows, demandware_rows)
+
+    return rows
+
+
+def _merge_dynamic_row_map(
+    target: dict[str, list[dict]],
+    source: dict[str, list[dict]],
+) -> None:
+    for field_name, field_rows in source.items():
+        target.setdefault(field_name, []).extend(field_rows)
+
+
+def _find_variant_adapter_record(adapter_records: list[dict]) -> dict[str, object] | None:
+    for record in adapter_records:
+        if isinstance(record, dict) and isinstance(record.get("variants"), list):
+            return record
+    return None
+
+
+def _build_adapter_variant_rows(
+    adapter_records: list[dict],
+) -> dict[str, list[dict]]:
+    record = _find_variant_adapter_record(adapter_records)
+    if not isinstance(record, dict):
+        return {}
+    rows: dict[str, list[dict]] = {}
+    source = str(record.get("_source") or "adapter").strip() or "adapter"
+    variants = record.get("variants")
+    if isinstance(variants, list) and variants:
+        rows["variants"] = [{"value": variants, "source": source}]
+    axes = record.get("variant_axes")
+    if isinstance(axes, dict) and axes:
+        rows["variant_axes"] = [{"value": axes, "source": source}]
+    selected_variant = record.get("selected_variant")
+    if selected_variant:
+        rows["selected_variant"] = [{"value": selected_variant, "source": source}]
+        for field_name in ("color", "size", "sku", "price", "original_price", "availability", "image_url"):
+            value = selected_variant.get(field_name)
+            if value not in (None, "", [], {}):
+                rows.setdefault(field_name, []).append({"value": value, "source": source})
+    product_attributes = record.get("product_attributes")
+    if isinstance(product_attributes, dict) and product_attributes:
+        rows["product_attributes"] = [{"value": product_attributes, "source": source}]
+    return rows
+
+
+def _build_demandware_variant_rows(
+    network_payloads: list[dict], *, base_url: str
+) -> dict[str, list[dict]]:
+    parsed_variants = _extract_demandware_variants_from_payloads(
+        network_payloads,
+        base_url=base_url,
+    )
+    if not parsed_variants:
+        return {}
+
+    source = "network_intercept"
+    rows: dict[str, list[dict]] = {}
+    variants = parsed_variants.get("variants")
+    if isinstance(variants, list) and variants:
+        rows["variants"] = [{"value": variants, "source": source}]
+    selectable_axes = parsed_variants.get("variant_axes")
+    if isinstance(selectable_axes, dict) and selectable_axes:
+        rows["variant_axes"] = [{"value": selectable_axes, "source": source}]
+    product_attributes = parsed_variants.get("product_attributes")
+    if isinstance(product_attributes, dict) and product_attributes:
+        rows["product_attributes"] = [{"value": product_attributes, "source": source}]
+    selected_variant = parsed_variants.get("selected_variant")
+    if isinstance(selected_variant, dict) and selected_variant:
+        rows["selected_variant"] = [{"value": selected_variant, "source": source}]
+        for field_name in (
+            "color",
+            "size",
+            "sku",
+            "price",
+            "original_price",
+            "availability",
+            "image_url",
+        ):
+            value = selected_variant.get(field_name)
+            if value not in (None, "", [], {}):
+                rows.setdefault(field_name, []).append({"value": value, "source": source})
+    return rows
+
+
+def _extract_demandware_variants_from_payloads(
+    network_payloads: list[dict], *, base_url: str
+) -> dict[str, object]:
+    variants: list[dict[str, object]] = []
+    axis_values: dict[str, list[str]] = {}
+    seen_variants: set[str] = set()
+    selected_variant: dict[str, object] | None = None
+    selected_score = -1
+
+    for payload in network_payloads:
+        parsed = _parse_demandware_variation_payload(payload, base_url=base_url)
+        if not parsed:
+            continue
+        candidate = parsed.get("selected_variant")
+        if isinstance(candidate, dict) and candidate:
+            fingerprint = json.dumps(candidate, sort_keys=True, default=str)
+            if fingerprint not in seen_variants:
+                seen_variants.add(fingerprint)
+                variants.append(candidate)
+        for axis_name, values in (parsed.get("axis_values") or {}).items():
+            cleaned_axis = _canonical_structured_key(axis_name)
+            if not cleaned_axis:
+                continue
+            target = axis_values.setdefault(cleaned_axis, [])
+            for value in values:
+                cleaned_value = _normalized_candidate_text(value)
+                if cleaned_value and cleaned_value not in target:
+                    target.append(cleaned_value)
+        score = int(parsed.get("selection_score") or 0)
+        if isinstance(candidate, dict) and candidate and score >= selected_score:
+            selected_variant = candidate
+            selected_score = score
+
+    selectable_axes, product_attributes = _split_variant_axes(axis_values)
+    result: dict[str, object] = {}
+    if variants:
+        result["variants"] = variants
+    if selectable_axes:
+        result["variant_axes"] = selectable_axes
+    if product_attributes:
+        result["product_attributes"] = product_attributes
+    if selected_variant:
+        result["selected_variant"] = selected_variant
+    return result
+
+
+def _parse_demandware_variation_payload(
+    payload: dict[str, object], *, base_url: str
+) -> dict[str, object] | None:
+    if not isinstance(payload, dict):
+        return None
+    payload_url = str(payload.get("url") or "")
+    if not _is_demandware_variation_payload_url(payload_url):
+        return None
+    body = payload.get("body")
+    root = body.get("product") if isinstance(body, dict) and isinstance(body.get("product"), dict) else body
+    if not isinstance(root, dict):
+        return None
+    variation_attributes = root.get("variationAttributes") or root.get("variation_attributes")
+    if not isinstance(variation_attributes, list) or not variation_attributes:
+        return None
+
+    axis_values: dict[str, list[str]] = {}
+    selected_values = _demandware_selected_values_from_url(payload_url)
+    for attribute in variation_attributes:
+        if not isinstance(attribute, dict):
+            continue
+        axis_name = _normalize_demandware_axis_name(attribute)
+        if not axis_name:
+            continue
+        raw_values = attribute.get("values")
+        if not isinstance(raw_values, list):
+            continue
+        for raw_value in raw_values:
+            if not isinstance(raw_value, dict):
+                continue
+            display_value = _normalized_candidate_text(
+                raw_value.get("displayValue")
+                or raw_value.get("displayvalue")
+                or raw_value.get("value")
+                or raw_value.get("id")
+            )
+            if display_value:
+                axis_values.setdefault(axis_name, [])
+                if display_value not in axis_values[axis_name]:
+                    axis_values[axis_name].append(display_value)
+            if raw_value.get("selected") is True and display_value:
+                selected_values[axis_name] = display_value
+
+    selected_variant = _build_demandware_selected_variant(
+        root,
+        base_url=base_url,
+        payload_url=payload_url,
+        selected_values=selected_values,
+    )
+    if not selected_variant:
+        return None
+    return {
+        "axis_values": axis_values,
+        "selected_variant": selected_variant,
+        "selection_score": _score_demandware_selected_variant(
+            selected_variant,
+            base_url=base_url,
+            payload_url=payload_url,
+        ),
+    }
+
+
+def _is_demandware_variation_payload_url(payload_url: str) -> bool:
+    lowered = str(payload_url or "").lower()
+    return (
+        "product-variation" in lowered
+        or "/product/variation" in lowered
+        or ("dwvar_" in lowered and "variation" in lowered)
+    )
+
+
+def _normalize_demandware_axis_name(attribute: dict[str, object]) -> str:
+    label = (
+        attribute.get("id")
+        or attribute.get("attributeId")
+        or attribute.get("displayName")
+        or attribute.get("name")
+    )
+    normalized = _canonical_structured_key(label)
+    if normalized:
+        return normalized
+    text = _normalized_candidate_text(label).lower()
+    if text in {"colour", "colors", "colours"}:
+        return "color"
+    if text == "sizes":
+        return "size"
+    return text
+
+
+def _demandware_selected_values_from_url(payload_url: str) -> dict[str, str]:
+    selected: dict[str, str] = {}
+    parsed = urlsplit(str(payload_url or "").strip())
+    for key, value in parse_qsl(parsed.query, keep_blank_values=False):
+        if not key.lower().startswith("dwvar_"):
+            continue
+        axis_name = key.split("_")[-1]
+        normalized_axis = _canonical_structured_key(axis_name)
+        cleaned_value = _normalized_candidate_text(value)
+        if normalized_axis and cleaned_value:
+            selected[normalized_axis] = cleaned_value
+    return selected
+
+
+def _build_demandware_selected_variant(
+    root: dict[str, object],
+    *,
+    base_url: str,
+    payload_url: str,
+    selected_values: dict[str, str],
+) -> dict[str, object] | None:
+    row: dict[str, object] = {}
+    variant_id = root.get("id") or root.get("productId") or root.get("pid") or root.get("sku")
+    if variant_id not in (None, "", [], {}):
+        row["variant_id"] = str(variant_id)
+        row["sku"] = str(variant_id)
+    resolved_url = _resolve_candidate_url(
+        root.get("selectedProductUrl") or root.get("selected_product_url") or base_url,
+        base_url,
+    )
+    if resolved_url:
+        row["url"] = resolved_url
+    option_values = {
+        axis_name: value
+        for axis_name, value in selected_values.items()
+        if value not in (None, "", [], {})
+    }
+    if option_values:
+        row["option_values"] = option_values
+        for axis_name in ("color", "size"):
+            if option_values.get(axis_name):
+                row[axis_name] = option_values[axis_name]
+    price = _extract_demandware_price(root.get("price"), preferred_keys=("sales", "sale", "current"))
+    if price:
+        row["price"] = price
+    original_price = _extract_demandware_price(
+        root.get("price"),
+        preferred_keys=("list", "regular", "base", "strikeThrough"),
+    )
+    if original_price:
+        row["original_price"] = original_price
+    availability = _extract_demandware_availability(root)
+    if availability:
+        row["availability"] = availability
+    image_url = _extract_demandware_image_url(root, base_url=payload_url or base_url)
+    if image_url:
+        row["image_url"] = image_url
+    return row or None
+
+
+def _extract_demandware_price(
+    value: object, *, preferred_keys: tuple[str, ...]
+) -> str | None:
+    if isinstance(value, (str, int, float)):
+        return normalize_and_validate_value("price", value)
+    if not isinstance(value, dict):
+        return None
+    for key in preferred_keys:
+        candidate = value.get(key)
+        if isinstance(candidate, dict):
+            for nested_key in ("formatted", "value", "amount", "price"):
+                normalized = normalize_and_validate_value("price", candidate.get(nested_key))
+                if normalized:
+                    return normalized
+        else:
+            normalized = normalize_and_validate_value("price", candidate)
+            if normalized:
+                return normalized
+    for nested_key in ("formatted", "value", "amount", "price"):
+        normalized = normalize_and_validate_value("price", value.get(nested_key))
+        if normalized:
+            return normalized
+    return None
+
+
+def _extract_demandware_availability(root: dict[str, object]) -> str | None:
+    for model in (
+        root,
+        root.get("availability"),
+        root.get("availabilityModel"),
+        root.get("availability_model"),
+        root.get("inventory"),
+        root.get("inventoryRecord"),
+    ):
+        if not isinstance(model, dict):
+            continue
+        for key in ("availability", "message", "status", "stockLevelStatus"):
+            normalized = normalize_and_validate_value("availability", model.get(key))
+            if normalized:
+                return str(normalized)
+        if any(model.get(key) is True for key in ("readyToOrder", "ready_to_order", "orderable", "available", "inStock")):
+            return "in_stock"
+        if any(model.get(key) is False for key in ("readyToOrder", "ready_to_order", "orderable", "available", "inStock")):
+            return "out_of_stock"
+        try:
+            ats = model.get("ats") or model.get("stockLevel")
+            if ats is not None and float(ats) > 0:
+                return "in_stock"
+            if ats is not None and float(ats) <= 0:
+                return "out_of_stock"
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _extract_demandware_image_url(root: dict[str, object], *, base_url: str) -> str | None:
+    images = root.get("images")
+    if isinstance(images, dict):
+        for key in ("large", "medium", "small"):
+            values = images.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    resolved = _resolve_candidate_url(item.get("url"), base_url)
+                else:
+                    resolved = _resolve_candidate_url(item, base_url)
+                if resolved:
+                    return resolved
+    featured = root.get("image") or root.get("featuredImage")
+    if isinstance(featured, dict):
+        return _resolve_candidate_url(featured.get("url") or featured.get("src"), base_url)
+    return _resolve_candidate_url(featured, base_url)
+
+
+def _score_demandware_selected_variant(
+    variant: dict[str, object], *, base_url: str, payload_url: str
+) -> int:
+    score = 0
+    parsed_base = urlsplit(str(base_url or "").strip())
+    base_query = dict(parse_qsl(parsed_base.query, keep_blank_values=False))
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict):
+        score += len(option_values)
+        base_pid = base_query.get("pid")
+        for axis_name, value in option_values.items():
+            key = f"dwvar_{base_pid}_{axis_name}" if base_pid else ""
+            if key and str(base_query.get(key) or "").strip() == str(value).strip():
+                score += 10
+    if variant.get("url") and _scoped_url_key(str(variant.get("url"))) == _scoped_url_key(base_url):
+        score += 5
+    if variant.get("availability") == "in_stock":
+        score += 1
+    if _is_demandware_variation_payload_url(payload_url):
+        score += 1
+    return score
+
+
+def _split_variant_axes(
+    axis_values: dict[str, list[str]]
+) -> tuple[dict[str, list[str]], dict[str, str]]:
+    selectable: dict[str, list[str]] = {}
+    product_attributes: dict[str, str] = {}
+    for axis_name, values in axis_values.items():
+        cleaned_values = list(dict.fromkeys(_normalized_candidate_text(value) for value in values if _normalized_candidate_text(value)))
+        if len(cleaned_values) > 1 or axis_name in _TRUE_VARIANT_AXES:
+            selectable[axis_name] = cleaned_values
+        elif len(cleaned_values) == 1:
+            product_attributes[axis_name] = cleaned_values[0]
+    return selectable, product_attributes
+
+
+def _variant_axis_name(button) -> str:
+    raw_data_attr = _normalized_candidate_text(button.get("data-attr")).lower()
+    if raw_data_attr in {"color", "colour"}:
+        return "color"
+    if raw_data_attr == "size":
+        return "size"
+    data_attr = normalize_requested_field(raw_data_attr)
+    if data_attr:
+        return data_attr
+    class_names = " ".join(button.get("class", []))
+    if "color-attribute" in class_names:
+        return "color"
+    if "size-attribute" in class_names:
+        return "size"
+    aria_label = str(button.get("aria-label") or "").lower()
+    if "color" in aria_label:
+        return "color"
+    if "size" in aria_label:
+        return "size"
+    attr_name = _normalized_candidate_text(button.get("name") or button.get("data-name"))
+    normalized_attr_name = normalize_requested_field(attr_name)
+    if normalized_attr_name:
+        return normalized_attr_name
+    return ""
+
+
+def _variant_button_label(button, *, axis_name: str) -> str:
+    span = button.find(attrs={"data-displayvalue": True}) or button.find(attrs={"data-display-value": True})
+    if span:
+        label = _normalized_candidate_text(span.get("data-displayvalue") or span.get("data-display-value"))
+        if label:
+            return label
+    described = button.find("span", class_="description")
+    if described:
+        label = _normalized_candidate_text(described.get_text(" ", strip=True))
+        if label:
+            return label
+    aria_label = _normalized_candidate_text(button.get("aria-label"))
+    if aria_label.lower().startswith("select "):
+        parts = aria_label.split(" ", 2)
+        if len(parts) == 3:
+            return parts[2].strip()
+    text = _normalized_candidate_text(button.get_text(" ", strip=True))
+    if text:
+        return text
+    return axis_name
+
+
+def _variant_button_selected(button) -> bool:
+    class_names = " ".join(button.get("class", []))
+    if "selected" in class_names:
+        return True
+    if button.select_one(".selected"):
+        return True
+    assistive = button.select_one(".selected-assistive-text")
+    if assistive:
+        return "selected" in _normalized_candidate_text(
+            assistive.get_text(" ", strip=True)
+        ).lower()
+    return False
+
+
+def _selected_dom_variant(
+    base_url: str, *, selected_values: dict[str, str]
+) -> dict[str, object] | None:
+    if not selected_values:
+        return None
+    row: dict[str, object] = {"url": base_url}
+    option_values = {
+        axis_name: value
+        for axis_name, value in selected_values.items()
+        if value
+    }
+    row.update(option_values)
+    if option_values:
+        row["option_values"] = option_values
+    return row
+
+
 def _build_dynamic_semantic_rows(
-    semantic: dict, *, surface: str = ""
+    semantic: dict,
+    *,
+    surface: str = "",
+    allowed_fields: set[str] | None = None,
 ) -> dict[str, list[dict]]:
     specifications = (
         semantic.get("specifications")
@@ -1946,6 +2780,7 @@ def _build_dynamic_semantic_rows(
             normalized = normalize_requested_field(
                 row.get("normalized_key") or row.get("label")
             )
+            display_label = _normalized_candidate_text(row.get("label")) or normalized
             value = row.get("value")
             if (
                 not normalized
@@ -1958,7 +2793,6 @@ def _build_dynamic_semantic_rows(
             coerced = _coerce_scalar_for_dynamic_row(value)
             if coerced is None:
                 continue
-            display_label = _normalized_candidate_text(row.get("label")) or normalized
             target_fields = [normalized]
             if normalized == "dimensions" and display_label.casefold() == "size":
                 target_fields.append("size")
@@ -2013,18 +2847,11 @@ def _build_dynamic_semantic_rows(
 def _build_dynamic_structured_rows(
     *,
     surface: str = "",
-    next_data: object,
-    hydrated_states: list[object],
-    embedded_json: list[object],
-    network_payloads: list[dict] | None = None,
+    structured_sources: list[tuple[str, object, dict[str, object]]],
+    allowed_fields: set[str] | None = None,
 ) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {}
-    for source, payload, metadata in _structured_source_payloads(
-        next_data=next_data,
-        hydrated_states=hydrated_states,
-        embedded_json=embedded_json,
-        network_payloads=network_payloads or [],
-    ):
+    for source, payload, metadata in structured_sources:
         spec_map = _extract_structured_spec_map(payload)
         if not spec_map:
             continue
@@ -2032,11 +2859,18 @@ def _build_dynamic_structured_rows(
         if spec_lines and not str(surface or "").lower().startswith("job_"):
             row = {
                 "value": SEMANTIC_AGGREGATE_SEPARATOR.join(spec_lines),
-                "source": source,
+                "source": "structured_spec",
             }
             if metadata:
                 row.update(metadata)
             rows.setdefault("specifications", []).append(row)
+            rows.setdefault("product_attributes", []).append(
+                {
+                    **metadata,
+                    "value": spec_map,
+                    "source": "structured_spec",
+                }
+            )
         dimension_lines = [
             f"{label}: {value}"
             for label, value in spec_map.items()
@@ -2045,7 +2879,7 @@ def _build_dynamic_structured_rows(
         if dimension_lines:
             row = {
                 "value": SEMANTIC_AGGREGATE_SEPARATOR.join(dimension_lines),
-                "source": source,
+                "source": "structured_spec",
             }
             if metadata:
                 row.update(metadata)
@@ -2070,18 +2904,10 @@ def _build_product_detail_rows(
     soup: BeautifulSoup,
     *,
     base_url: str,
-    next_data: object,
-    hydrated_states: list[object],
-    embedded_json: list[object],
-    network_payloads: list[dict] | None = None,
+    structured_sources: list[tuple[str, object, dict[str, object]]],
 ) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {}
-    for source, payload, metadata in _structured_source_payloads(
-        next_data=next_data,
-        hydrated_states=hydrated_states,
-        embedded_json=embedded_json,
-        network_payloads=network_payloads or [],
-    ):
+    for source, payload, metadata in structured_sources:
         detail = _find_product_detail_payload(payload)
         if not isinstance(detail, dict):
             continue
@@ -2100,6 +2926,283 @@ def _build_product_detail_rows(
     for field_name, value in _extract_buy_box_candidates(soup).items():
         rows.setdefault(field_name, []).append(
             {"value": value, "source": "dom_buy_box"}
+        )
+    return rows
+
+
+def _build_platform_detail_rows(
+    *,
+    base_url: str,
+    soup: BeautifulSoup,
+    adapter_records: list[dict],
+) -> dict[str, list[dict]]:
+    rows: dict[str, list[dict]] = {}
+    shopify_product = _find_variant_adapter_record(adapter_records)
+    if shopify_product:
+        _merge_dynamic_row_map(
+            rows,
+            _build_shopify_content_rows(shopify_product, base_url=base_url),
+        )
+    _merge_dynamic_row_map(rows, _build_dom_section_rows(soup))
+    _merge_dynamic_row_map(rows, _build_dom_gallery_rows(soup, base_url=base_url))
+    return rows
+
+
+def _section_content_text(node) -> str:
+    if node is None:
+        return ""
+    if isinstance(node, Tag):
+        return _rich_text_from_node(node).strip()
+    html = node.decode_contents() if hasattr(node, "decode_contents") else str(node)
+    return _normalize_html_rich_text(html).strip()
+
+
+def _rich_text_from_node(node) -> str:
+    if node is None:
+        return ""
+    if not isinstance(node, Tag):
+        return _normalized_candidate_text(node)
+
+    if node.name in {"table", "tbody", "thead"}:
+        rows: list[str] = []
+        for tr in node.find_all("tr", recursive=True):
+            cells = [
+                _section_content_text(cell)
+                for cell in tr.find_all(["th", "td"], recursive=False)
+            ]
+            cells = [cell for cell in cells if cell]
+            if cells:
+                rows.append(" | ".join(cells))
+        return "\n".join(rows).strip()
+
+    if node.name in {"ul", "ol"}:
+        items = []
+        for li in node.find_all("li", recursive=False):
+            text = _section_content_text(li)
+            if text:
+                items.append(f"- {text}")
+        return "\n".join(items).strip()
+
+    if node.name == "li":
+        parts = [
+            _rich_text_from_node(child) if isinstance(child, Tag) else _normalized_candidate_text(child)
+            for child in node.children
+        ]
+        return " ".join(part for part in parts if part).strip()
+
+    block_names = {"p", "div", "section", "article", "details", "blockquote"}
+    parts: list[str] = []
+    for child in node.children:
+        if isinstance(child, Tag):
+            child_text = _rich_text_from_node(child)
+            if child_text:
+                parts.append(child_text)
+        else:
+            text = _normalized_candidate_text(child)
+            if text:
+                parts.append(text)
+    joiner = "\n\n" if node.name in block_names else "\n"
+    rendered = joiner.join(part for part in parts if part).strip()
+    if rendered:
+        return rendered
+    return _normalized_candidate_text(node.get_text(" ", strip=True))
+
+
+def _build_dom_section_rows(soup: BeautifulSoup) -> dict[str, list[dict]]:
+    rows: dict[str, list[dict]] = {}
+
+    product_attributes: dict[str, object] = {}
+    for header_text, content_text in _iter_dom_sections(soup):
+        normalized_header = normalize_requested_field(header_text)
+        if not normalized_header or not content_text:
+            continue
+        if normalized_header in {"description", "summary", "overview"}:
+            rows.setdefault("description", []).append(
+                {"value": content_text, "source": "dom_section"}
+            )
+            continue
+        if normalized_header in {"details", "specifications", "product_details", "technical_details"}:
+            rows.setdefault("specifications", []).append(
+                {"value": content_text, "source": "dom_section"}
+            )
+            product_attributes.setdefault(normalized_header, content_text)
+            continue
+        if normalized_header in {"features", "key_features", "highlights"}:
+            rows.setdefault("features", []).append(
+                {"value": content_text, "source": "dom_section"}
+            )
+            continue
+        if normalized_header in {"materials", "material_composition", "fabric", "composition"}:
+            rows.setdefault("materials", []).append(
+                {"value": content_text, "source": "dom_section"}
+            )
+        product_attributes.setdefault(normalized_header, content_text)
+
+    if product_attributes:
+        rows.setdefault("product_attributes", []).append(
+            {"value": product_attributes, "source": "dom_section"}
+        )
+    return rows
+
+
+def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _append(header: str, content: str) -> None:
+        normalized_header = _normalized_candidate_text(header)
+        normalized_content = _normalized_candidate_text(content)
+        if not normalized_header or not normalized_content:
+            return
+        key = (normalized_header.casefold(), normalized_content.casefold())
+        if key in seen:
+            return
+        seen.add(key)
+        sections.append((normalized_header, content.strip()))
+
+    for details in soup.find_all("details"):
+        summary = details.find("summary")
+        if not isinstance(summary, Tag):
+            continue
+        body_parts = [
+            _section_content_text(child)
+            for child in details.children
+            if child is not summary and isinstance(child, Tag)
+        ]
+        _append(_normalized_candidate_text(summary.get_text(" ", strip=True)), "\n\n".join(part for part in body_parts if part))
+
+    for node in soup.select("[data-tab], [data-tab-content], [data-panel], [role='tabpanel']"):
+        if not isinstance(node, Tag):
+            continue
+        label = _normalized_candidate_text(
+            node.get("data-tab")
+            or node.get("data-title")
+            or node.get("aria-label")
+            or (
+                node.find_previous(["button", "h2", "h3", "h4"])
+                .get_text(" ", strip=True)
+                if node.find_previous(["button", "h2", "h3", "h4"])
+                else ""
+            )
+        )
+        _append(label, _section_content_text(node))
+
+    for heading in soup.find_all(["h2", "h3", "h4", "h5"]):
+        if not isinstance(heading, Tag):
+            continue
+        header = _normalized_candidate_text(heading.get_text(" ", strip=True))
+        if not header:
+            continue
+        content = _collect_heading_section_content(heading)
+        _append(header, content)
+
+    return sections
+
+
+def _collect_heading_section_content(heading: Tag) -> str:
+    parts: list[str] = []
+    for sibling in heading.next_siblings:
+        if not isinstance(sibling, Tag):
+            continue
+        if sibling.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            break
+        text = _section_content_text(sibling)
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts).strip()
+
+
+def _build_dom_gallery_rows(
+    soup: BeautifulSoup, *, base_url: str
+) -> dict[str, list[dict]]:
+    image_urls: list[str] = []
+    seen: set[str] = set()
+    for node in soup.select(
+        ".primary-images img[src], .primary-images-main img[src], img[itemprop='image'][src]"
+    ):
+        resolved = _resolve_candidate_url(node.get("src", ""), base_url)
+        if not resolved or resolved in seen:
+            continue
+        seen.add(resolved)
+        image_urls.append(resolved)
+    if not image_urls:
+        return {}
+    rows: dict[str, list[dict]] = {
+        "image_url": [{"value": image_urls[0], "source": "dom_gallery"}]
+    }
+    rows["additional_images"] = [
+        {
+            "value": ", ".join(image_urls[1:] if len(image_urls) > 1 else image_urls),
+            "source": "dom_gallery",
+        }
+    ]
+    return rows
+
+
+def _build_shopify_content_rows(
+    product: dict[str, object], *, base_url: str
+) -> dict[str, list[dict]]:
+    del base_url
+    content = product.get("content") or product.get("description") or product.get("body_html")
+    if not isinstance(content, str) or not content.strip():
+        return {}
+
+    soup = BeautifulSoup(content, "html.parser")
+    paragraphs = [
+        _section_content_text(node)
+        for node in soup.find_all("p")
+        if _section_content_text(node)
+    ]
+    bullets = [
+        _section_content_text(node)
+        for node in soup.find_all("li")
+        if _section_content_text(node)
+    ]
+
+    rows: dict[str, list[dict]] = {}
+    if paragraphs:
+        rows.setdefault("description", []).append(
+            {"value": paragraphs[0], "source": "shopify_content"}
+        )
+    if bullets:
+        rows.setdefault("features", []).append(
+            {
+                "value": "\n".join(f"- {item}" for item in bullets),
+                "source": "shopify_content",
+            }
+        )
+
+    product_attributes: dict[str, object] = {}
+    materials_value = ""
+    for bullet in bullets:
+        label_match = re.match(r"^(?P<label>[A-Za-z][A-Za-z0-9 /'&-]{1,40})\s*:\s*(?P<value>.+)$", bullet)
+        if label_match:
+            label = normalize_requested_field(label_match.group("label"))
+            value = _normalized_candidate_text(label_match.group("value"))
+            if label and value:
+                product_attributes[label] = value
+            continue
+        lowered = bullet.lower()
+        if not materials_value and (
+            "%" in bullet
+            or any(token in lowered for token in ("cotton", "polyester", "elastane", "nylon", "wool", "linen"))
+        ):
+            materials_value = bullet
+            product_attributes.setdefault("materials", bullet)
+            continue
+        if lowered.startswith("style "):
+            product_attributes.setdefault("style", bullet.split(" ", 1)[1].strip())
+            continue
+        if lowered.startswith("model is "):
+            product_attributes.setdefault("model", bullet)
+
+    if materials_value:
+        rows.setdefault("materials", []).append(
+            {"value": materials_value, "source": "shopify_content"}
+        )
+    if product_attributes:
+        rows.setdefault("product_attributes", []).append(
+            {"value": product_attributes, "source": "shopify_content"}
         )
     return rows
 
@@ -2306,11 +3409,14 @@ def _product_detail_features(value: object) -> str | None:
             continue
         label = _normalized_candidate_text(row.get("label"))
         bullet_rows = row.get("value")
-        bullets = [
-            _normalized_candidate_text(item)
-            for item in (bullet_rows if isinstance(bullet_rows, list) else [])
-            if _normalized_candidate_text(item)
-        ]
+        bullets: list[str] = []
+        for item in (bullet_rows if isinstance(bullet_rows, list) else []):
+            if isinstance(item, str):
+                cleaned = _normalize_html_rich_text(item)
+            else:
+                cleaned = _normalized_candidate_text(item)
+            if cleaned:
+                bullets.append(cleaned)
         if not bullets:
             continue
         if label:
@@ -2527,9 +3633,16 @@ def _structured_source_payloads(
     hydrated_states: list[object],
     embedded_json: list[object],
     network_payloads: list[dict],
+    base_url: str = "",
 ) -> list[tuple[str, object, dict[str, object]]]:
-    sources: list[tuple[str, object, dict[str, object]]] = [("next_data", next_data, {})]
-    sources.extend(("hydrated_state", payload, {}) for payload in hydrated_states)
+    sources: list[tuple[str, object, dict[str, object]]] = []
+    if _payload_matches_page_scope(next_data, base_url=base_url):
+        sources.append(("next_data", next_data, {}))
+    sources.extend(
+        ("hydrated_state", payload, {})
+        for payload in hydrated_states
+        if _payload_matches_page_scope(payload, base_url=base_url)
+    )
     sources.extend(
         (
             "embedded_json",
@@ -2537,6 +3650,7 @@ def _structured_source_payloads(
             _embedded_blob_metadata(payload),
         )
         for payload in embedded_json
+        if _payload_matches_page_scope(payload, base_url=base_url)
     )
     for payload in network_payloads:
         if not isinstance(payload, dict):
@@ -2544,8 +3658,67 @@ def _structured_source_payloads(
         payload_url = str(payload.get("url") or "").lower()
         if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
             continue
-        sources.append(("network_intercept", payload.get("body"), {}))
+        if _payload_matches_page_scope(payload.get("body"), base_url=base_url):
+            sources.append(("network_intercept", payload.get("body"), {}))
     return sources
+
+
+def _payload_matches_page_scope(payload: object, *, base_url: str) -> bool:
+    if not base_url or payload in (None, "", [], {}):
+        return True
+    page_scope = _scoped_url_key(base_url)
+    page_tokens = _page_scope_tokens(base_url)
+    urls, handles = _payload_scope_hints(payload)
+    normalized_urls = {_scoped_url_key(url) for url in urls if _scoped_url_key(url)}
+    normalized_handles = {
+        normalize_requested_field(handle) or str(handle).strip().lower()
+        for handle in handles
+        if str(handle).strip()
+    }
+    if normalized_urls:
+        if page_scope in normalized_urls:
+            return True
+        if any(token and any(token in scoped_url for scoped_url in normalized_urls) for token in page_tokens):
+            return True
+        return False
+    if normalized_handles:
+        return any(token in normalized_handles for token in page_tokens if token)
+    return True
+
+
+def _page_scope_tokens(base_url: str) -> set[str]:
+    parsed = urlsplit(str(base_url or "").strip())
+    tokens = {
+        normalize_requested_field(part) or part.lower()
+        for part in parsed.path.split("/")
+        if part and part not in {"products", "product", "collections"}
+    }
+    return {token for token in tokens if token}
+
+
+def _payload_scope_hints(payload: object, *, max_depth: int = 4) -> tuple[set[str], set[str]]:
+    urls: set[str] = set()
+    handles: set[str] = set()
+    if max_depth <= 0 or payload in (None, "", [], {}):
+        return urls, handles
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            normalized_key = normalize_requested_field(key)
+            if isinstance(value, str):
+                cleaned = str(value).strip()
+                if normalized_key and normalized_key.endswith("url") and cleaned:
+                    urls.add(cleaned)
+                if normalized_key in {"handle", "slug", "product_handle", "product_slug"} and cleaned:
+                    handles.add(cleaned)
+            child_urls, child_handles = _payload_scope_hints(value, max_depth=max_depth - 1)
+            urls.update(child_urls)
+            handles.update(child_handles)
+    elif isinstance(payload, list):
+        for item in payload[:LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT]:
+            child_urls, child_handles = _payload_scope_hints(item, max_depth=max_depth - 1)
+            urls.update(child_urls)
+            handles.update(child_handles)
+    return urls, handles
 
 
 def _extract_structured_spec_map(payload: object) -> dict[str, str]:

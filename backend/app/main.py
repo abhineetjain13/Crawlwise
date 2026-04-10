@@ -16,9 +16,16 @@ from app.api.records import router as records_router
 from app.api.review import router as review_router
 from app.api.users import router as users_router
 from app.core.config import get_frontend_origins, settings
+from app.core.metrics import (
+    check_browser_pool,
+    check_database,
+    check_redis,
+    render_prometheus_metrics,
+)
 from app.core.redis import close_redis
 from app.core.database import SessionLocal
 from app.core.telemetry import (
+    configure_logging,
     generate_correlation_id,
     reset_correlation_id,
     set_correlation_id,
@@ -29,12 +36,7 @@ from app.services.auth_service import bootstrap_admin_user
 from app.services.crawl_service import recover_stale_local_runs
 
 logger = logging.getLogger("app")
-
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
+configure_logging()
 
 
 @asynccontextmanager
@@ -80,7 +82,19 @@ async def correlation_middleware(request: Request, call_next) -> Response:
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    checks = {
+        "database": await check_database(),
+        "redis": await check_redis(),
+        "browser_pool": check_browser_pool(),
+    }
+    status = "healthy" if all(checks.values()) else "degraded"
+    return {"status": status, "checks": checks}
+
+
+@app.get("/api/metrics")
+async def metrics() -> Response:
+    payload, content_type = await render_prometheus_metrics()
+    return Response(content=payload, media_type=content_type)
 
 
 for router in [

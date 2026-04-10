@@ -25,6 +25,7 @@ def test_finalize_candidates_prefers_higher_trust_source_over_first_row_bias() -
         embedded_json=[],
         network_payloads=[],
         soup=BeautifulSoup("<html><body></body></html>", "html.parser"),
+        adapter_records=[],
     )
 
     # json_ld (rank 9) should win over selector (rank 4).
@@ -73,6 +74,7 @@ def test_finalize_candidates_prefers_json_ld_over_datalayer_for_risky_fields() -
         embedded_json=[],
         network_payloads=[],
         soup=BeautifulSoup("<html><body></body></html>", "html.parser"),
+        adapter_records=[],
     )
 
     assert final_candidates["category"][0]["value"] == "Mirrorless Cameras"
@@ -110,4 +112,3 @@ def test_reconcile_detail_candidate_values_applies_final_detail_sanitizer() -> N
         "field_pollution_rule",
         "detail_field_noise",
     }
-

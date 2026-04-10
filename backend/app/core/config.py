@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     crawl_log_db_max_rows_per_run: int = 1000
     crawl_log_file_enabled: bool = True
     crawl_log_file_dir: Path = Field(default=BASE_DIR / "artifacts" / "run_logs")
+    system_max_concurrent_urls: int = 8
     default_admin_email: str = "admin@admin.com"
     default_admin_password: str | None = None
     bootstrap_admin_once: bool = False

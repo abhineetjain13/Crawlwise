@@ -268,13 +268,17 @@ def test_product_attributes_output_persistence(url: str, surface: str):
     """
     from app.services.extract.service import extract_candidates
 
-    # HTML with specifications
+    # HTML with a mix of canonical and non-canonical specifications.
+    # Canonical fields such as materials/color are promoted elsewhere and
+    # should not survive in product_attributes after final cleanup.
     html = """
     <html>
       <body>
         <dl>
-          <dt>Material</dt>
-          <dd>Cotton</dd>
+          <dt>Fit</dt>
+          <dd>Slim</dd>
+          <dt>Model</dt>
+          <dd>6'1" wearing size M</dd>
           <dt>Color</dt>
           <dd>Blue</dd>
         </dl>
@@ -303,3 +307,4 @@ def test_product_attributes_output_persistence(url: str, surface: str):
     assert "value" in product_attrs[0]
     assert isinstance(product_attrs[0]["value"], dict)
     assert len(product_attrs[0]["value"]) > 0, "Expected non-empty product_attributes dict"
+    assert product_attrs[0]["value"]["fit"] == "Slim"

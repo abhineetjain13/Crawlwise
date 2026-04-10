@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { useId } from "react";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { cn } from "../../lib/utils";
@@ -432,13 +433,14 @@ export function Tooltip({
   className,
 }: Readonly<{ children: ReactNode; content: string; className?: string }>) {
   const tooltipId = useId();
+  const child = React.Children.only(children);
+  const enhancedChild = React.isValidElement(child)
+    ? React.cloneElement(child, { "aria-describedby": tooltipId } as React.HTMLAttributes<HTMLElement>)
+    : child;
 
   return (
-    <div
-      aria-describedby={tooltipId}
-      className={cn("group relative flex items-center", className)}
-    >
-      {children}
+    <div className={cn("group relative flex items-center", className)}>
+      {enhancedChild}
       <div
         id={tooltipId}
         role="tooltip"

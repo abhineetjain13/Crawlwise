@@ -225,7 +225,7 @@ async def kill_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
             raise ValueError(f"Cannot kill run in terminal state: {retry_run.status}")
         task_id = _get_task_id(retry_run)
         local_task = _local_run_tasks.get(run_id)
-        if local_task is not None and current == CrawlStatus.RUNNING:
+        if local_task is not None:
             set_control_request(retry_run, CONTROL_REQUEST_KILL)
             local_task.cancel()
             update_run_status(retry_run, CrawlStatus.KILLED)

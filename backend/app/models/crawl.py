@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import DDL, event
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -77,3 +78,96 @@ class ReviewPromotion(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+event.listen(
+    CrawlRecord.__table__,
+    "after_create",
+    DDL(
+        """
+        CREATE OR REPLACE FUNCTION enforce_crawl_run_max_records()
+        RETURNS trigger AS $$
+        DECLARE
+            configured_max integer;
+            current_count integer;
+        BEGIN
+            SELECT NULLIF(crawl_runs.settings->>'max_records', '')::integer
+            INTO configured_max
+            FROM crawl_runs
+            WHERE crawl_runs.id = NEW.run_id;
+
+            IF configured_max IS NULL THEN
+                RETURN NEW;
+            END IF;
+
+            SELECT COUNT(*)
+            INTO current_count
+            FROM crawl_records
+            WHERE crawl_records.run_id = NEW.run_id;
+
+            IF current_count > configured_max THEN
+                RAISE EXCEPTION 'max_records exceeded for run %%', NEW.run_id;
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    ).execute_if(dialect="postgresql"),
+)
+event.listen(
+    CrawlRecord.__table__,
+    "after_create",
+    DDL(
+        """
+        CREATE CONSTRAINT TRIGGER trigger_enforce_crawl_run_max_records
+        AFTER INSERT OR UPDATE OF run_id ON crawl_records
+        DEFERRABLE INITIALLY IMMEDIATE
+        FOR EACH ROW
+        EXECUTE FUNCTION enforce_crawl_run_max_records();
+        """
+    ).execute_if(dialect="postgresql"),
+)
+event.listen(
+    CrawlRun.__table__,
+    "after_create",
+    DDL(
+        """
+        CREATE OR REPLACE FUNCTION enforce_crawl_run_max_records_on_settings()
+        RETURNS trigger AS $$
+        DECLARE
+            configured_max integer;
+            current_count integer;
+        BEGIN
+            configured_max := NULLIF(NEW.settings->>'max_records', '')::integer;
+            IF configured_max IS NULL THEN
+                RETURN NEW;
+            END IF;
+
+            SELECT COUNT(*)
+            INTO current_count
+            FROM crawl_records
+            WHERE crawl_records.run_id = NEW.id;
+
+            IF current_count > configured_max THEN
+                RAISE EXCEPTION 'max_records below existing record count for run %%', NEW.id;
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        """
+    ).execute_if(dialect="postgresql"),
+)
+event.listen(
+    CrawlRun.__table__,
+    "after_create",
+    DDL(
+        """
+        CREATE TRIGGER trigger_enforce_crawl_run_max_records_on_settings
+        BEFORE INSERT OR UPDATE OF settings ON crawl_runs
+        FOR EACH ROW
+        EXECUTE FUNCTION enforce_crawl_run_max_records_on_settings();
+        """
+    ).execute_if(dialect="postgresql"),
+)

@@ -12,6 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional dependency fallback
+    psutil = None
+
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
@@ -114,6 +119,7 @@ _RETRYABLE_PAGE_CONTENT_ERROR_RE = re.compile(
 _BROWSER_POOL_MAX_SIZE = 6
 _BROWSER_POOL_IDLE_TTL_SECONDS = 300
 _BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS = 60
+_MIN_TRAVERSAL_MEMORY_BYTES = 500 * 1024 * 1024
 
 
 def _traversal_config() -> TraversalConfig:
@@ -491,6 +497,7 @@ async def _fetch_rendered_html_attempt(
                 max_scrolls,
                 max_pages=max_pages,
                 request_delay_ms=request_delay_ms,
+                run_id=run_id,
                 checkpoint=checkpoint,
             )
         except (
@@ -991,6 +998,7 @@ async def _apply_traversal_mode(
     *,
     max_pages: int,
     request_delay_ms: int,
+    run_id: int | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> TraversalResult:
     traversal_config = _traversal_config()
@@ -1016,6 +1024,9 @@ async def _apply_traversal_mode(
         flatten_shadow_dom=_flatten_shadow_dom,
         cooperative_sleep_ms=_cooperative_sleep_ms,
         snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
+        ensure_memory_available=_check_memory_available,
+        run_id=run_id,
+        traversal_artifact_dir=_traversal_artifact_dir(run_id),
         checkpoint=checkpoint,
     )
 
@@ -1032,8 +1043,10 @@ async def _collect_paginated_html(
     surface: str | None = None,
     max_pages: int,
     request_delay_ms: int,
+    run_id: int | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> _PaginatedHtmlResult:
+    _check_memory_available()
     traversal_config = _traversal_config()
     traversal_result = await _collect_paginated_html_shared(
         page,
@@ -1050,6 +1063,9 @@ async def _collect_paginated_html(
         pause_after_navigation=_pause_after_navigation,
         expand_all_interactive_elements=expand_all_interactive_elements,
         flatten_shadow_dom=_flatten_shadow_dom,
+        ensure_memory_available=_check_memory_available,
+        run_id=run_id,
+        traversal_artifact_dir=_traversal_artifact_dir(run_id),
         checkpoint=checkpoint,
     )
     html = traversal_result.html or ""
@@ -1962,7 +1978,28 @@ async def _save_cookies(context, domain: str) -> None:
     except PlaywrightError:
         logger.debug("Failed to read cookies from context for domain %s", domain, exc_info=True)
         return
-    save_cookies_payload(cookies, domain=domain)
+    await asyncio.to_thread(save_cookies_payload, cookies, domain=domain)
+
+
+def _check_memory_available() -> None:
+    if psutil is None:
+        return
+    mem = psutil.virtual_memory()
+    if int(mem.available) < _MIN_TRAVERSAL_MEMORY_BYTES:
+        raise MemoryError("Insufficient memory for traversal")
+
+
+def _traversal_artifact_dir(run_id: int | None) -> Path:
+    run_token = str(run_id) if run_id is not None else f"adhoc-{os.getpid()}-{time.time_ns()}"
+    return settings.acquisition_cache_dir / "traversal_html" / run_token
+
+
+def browser_pool_snapshot() -> dict[str, int]:
+    state = _browser_pool_state()
+    return {
+        "size": len(state.pool),
+        "max_size": _BROWSER_POOL_MAX_SIZE,
+    }
 
 
 def _cookie_store_path(domain: str) -> Path | None:

@@ -290,7 +290,7 @@ Invariants are conditions that must hold true at all times, regardless of applic
 <a id="data-integrity"></a>
 
 - **INV-DATA-01:** Every output record is linked to exactly one Run ID. Orphaned records (records with no associated run) are invalid and must not appear in any output view.
-- **INV-DATA-02:** Durable application state is persisted in Postgres under transaction boundaries managed by SQLAlchemy and Alembic. Concurrency guarantees must rely on database transactions and row-level guarantees, not file-based WAL assumptions.
+- **INV-DATA-02:** Durable application state is persisted in Postgres under transaction boundaries managed by SQLAlchemy. Schema migrations are managed by Alembic. Concurrency guarantees must rely on database transactions and row-level locking, not file-based WAL assumptions.
 - **INV-DATA-03:** Deleting a run record also deletes all associated output records in the same transaction. Partial deletes are not permitted.
 - **INV-DATA-04:** Exports (CSV, JSON, Discoverist CSV) are generated from the stored output data, not re-fetched from the source URL. The exported data reflects what was captured at run time.
 

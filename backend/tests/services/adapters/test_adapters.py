@@ -108,6 +108,77 @@ async def test_shopify_detail_accepts_string_image_array():
         )
     assert len(result.records) == 1
     assert result.records[0]["image_url"] == "https://cdn.example.com/shirt.jpg"
+    assert result.records[0]["additional_images"] is None
+
+
+@pytest.mark.asyncio
+async def test_shopify_detail_normalizes_integer_string_cents_price():
+    adapter = ShopifyAdapter()
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "title": "Cents Shirt",
+        "vendor": "BrandX",
+        "handle": "shirt",
+        "variants": [{"price": "15800", "compare_at_price": "19900", "sku": "SKU-1", "available": True}],
+        "images": ["https://cdn.example.com/shirt.jpg"],
+        "product_type": "Apparel",
+        "tags": [],
+    }
+    with patch("app.services.adapters.shopify.curl_requests.get", return_value=response):
+        result = await adapter.extract(
+            "https://store.com/products/shirt",
+            '<script>Shopify.theme = {}</script>',
+            "ecommerce_detail",
+        )
+    assert len(result.records) == 1
+    assert result.records[0]["price"] == "158.00"
+    assert result.records[0]["original_price"] == "199.00"
+
+
+@pytest.mark.asyncio
+async def test_shopify_detail_prefers_url_variant_over_first_available():
+    adapter = ShopifyAdapter()
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "title": "Variant Shirt",
+        "vendor": "BrandX",
+        "handle": "shirt",
+        "variants": [
+            {
+                "id": 111,
+                "price": "29.99",
+                "sku": "SKU-AVAILABLE",
+                "available": True,
+                "option1": "Blue",
+                "featured_image": {"src": "https://cdn.example.com/blue.jpg"},
+            },
+            {
+                "id": 222,
+                "price": "34.99",
+                "sku": "SKU-REQUESTED",
+                "available": False,
+                "option1": "Red",
+                "featured_image": {"src": "https://cdn.example.com/red.jpg"},
+            },
+        ],
+        "options": [{"name": "Color"}],
+        "images": ["https://cdn.example.com/shirt.jpg"],
+        "product_type": "Apparel",
+        "tags": [],
+    }
+    with patch("app.services.adapters.shopify.curl_requests.get", return_value=response):
+        result = await adapter.extract(
+            "https://store.com/products/shirt?variant=222",
+            '<script>Shopify.theme = {}</script>',
+            "ecommerce_detail",
+        )
+    assert len(result.records) == 1
+    assert result.records[0]["selected_variant"]["variant_id"] == "222"
+    assert result.records[0]["price"] == "34.99"
+    assert result.records[0]["availability"] == "out_of_stock"
+    assert result.records[0]["color"] == "Red"
 
 
 @pytest.mark.asyncio

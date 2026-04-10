@@ -198,7 +198,7 @@ async def test_export_markdown_includes_clean_sections_fields_and_headers(db_ses
     assert "## Description" in payload
     assert "- Stable ride" in payload
     assert "## Materials and care" in payload
-    assert "## Fields" in payload
+    assert "## Core Fields" in payload
     assert "- **Price:** $180" in payload
     assert "## Specifications" in payload
     assert "- **Weight:** 310 g" in payload

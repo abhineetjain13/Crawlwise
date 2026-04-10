@@ -15,7 +15,6 @@ from app.services.extract.service import (
     _label_value_pattern,
     _normalize_color_candidate,
     _normalize_html_rich_text,
-    _normalize_size_candidate,
     _resolve_candidate_url,
     _should_skip_jsonld_block,
     coerce_field_candidate_value,
@@ -775,8 +774,10 @@ def test_extract_semantic_specifications_from_inline_list_pairs():
             manifest,
             ["number_of_keys", "polyphony"],
         )
-    assert candidates["number_of_keys"][0]["value"] == "61"
-    assert candidates["polyphony"][0]["value"] == "16 Voice"
+    assert "number_of_keys" not in candidates
+    assert "polyphony" not in candidates
+    assert trace["discovered_data"]["discovered_fields"]["number_of_keys"] == "61"
+    assert trace["discovered_data"]["discovered_fields"]["polyphony"] == "16 Voice"
     semantic = trace["semantic"]
     assert semantic["specifications"]["number_of_keys"] == "61"
     assert semantic["specifications"]["polyphony"] == "16 Voice"
@@ -800,12 +801,12 @@ def test_extract_semantic_specifications_are_exposed_as_candidate_rows_without_r
             manifest,
             [],
         )
-    assert "wire_gauge" in candidates
-    assert candidates["wire_gauge"][0]["value"] == "26 AWG"
-    assert "impedance" in candidates
-    assert candidates["impedance"][0]["value"] == "50 Ohms"
+    assert "wire_gauge" not in candidates
+    assert "impedance" not in candidates
     assert "specifications" in candidates
     assert "wire_gauge: 26 AWG" in candidates["specifications"][0]["value"]
+    assert candidates["product_attributes"][0]["value"]["wire_gauge"] == "26 AWG"
+    assert candidates["product_attributes"][0]["value"]["impedance"] == "50 Ohms"
 
 
 def test_extract_job_detail_semantic_specs_do_not_emit_specifications_aggregate():
@@ -828,8 +829,8 @@ def test_extract_job_detail_semantic_specs_do_not_emit_specifications_aggregate(
         )
     assert "salary" in candidates
     assert candidates["salary"][0]["value"] == "$82,000 - $92,000"
-    assert "requisition_id" in candidates
-    assert candidates["requisition_id"][0]["value"] == "1393"
+    assert "requisition_id" not in candidates
+    assert candidates["product_attributes"][0]["value"]["requisition_id"] == "1393"
     assert "specifications" not in candidates
 
 
@@ -948,14 +949,13 @@ def test_extract_specifications_from_structured_specification_groups():
             [],
         )
     assert "specifications" in candidates
-    assert candidates["specifications"][0]["source"] == "next_data"
+    assert candidates["specifications"][0]["source"] == "structured_spec"
     assert "prop_65: CA" in candidates["specifications"][0]["value"]
     assert "depth: 9-21/32 in" in candidates["specifications"][0]["value"]
     assert "height: 15 in" in candidates["specifications"][0]["value"]
-    assert "depth" in candidates
-    assert candidates["depth"][0]["value"] == "9-21/32 in"
-    assert "height" in candidates
-    assert candidates["height"][0]["value"] == "15 in"
+    assert candidates["product_attributes"][0]["value"]["prop_65"] == "CA"
+    assert "depth" not in candidates
+    assert "height" not in candidates
 
 
 def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholders():
@@ -1023,7 +1023,17 @@ def test_extract_filters_noisy_dynamic_semantic_field_names():
             manifest,
             [],
         )
-    assert "compression" in candidates
+    assert "compression" not in candidates
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        _, trace = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+    assert trace["discovered_data"]["discovered_fields"]["compression"] == "Ultra-tight, second-skin fit."
     assert "5.0_recommended" not in candidates
     assert "featured_new_arrivals_now_trending" not in candidates
     assert "heatgear_elite_men_s_compression_mock_short_sleeve_50_price" not in candidates
@@ -1265,11 +1275,11 @@ def test_extract_dedupes_same_value_across_sources_and_preserves_supporting_sour
             html,
             manifest,
             [],
-        )
+    )
     assert len(candidates["title"]) == 1
     assert candidates["title"][0]["value"] == "Shared Title"
-    assert candidates["title"][0]["source"] == "adapter"
-    assert candidates["title"][0]["sources"] == ["adapter"]
+    assert candidates["title"][0]["source"] == "adapter, json_ld"
+    assert set(candidates["title"][0]["sources"]) == {"adapter", "json_ld"}
 
 
 def test_extract_dedupes_case_only_variants_and_keeps_best_display_value():
@@ -1288,7 +1298,7 @@ def test_extract_dedupes_case_only_variants_and_keeps_best_display_value():
             [],
     )
     assert [row["value"] for row in candidates["brand"]] == ["Supelco"]
-    assert candidates["brand"][0]["sources"] == ["adapter"]
+    assert set(candidates["brand"][0]["sources"]) == {"adapter", "hydrated_state", "json_ld"}
 
 
 def test_extract_sigma_product_detail_and_buy_box_candidates():
@@ -1331,7 +1341,7 @@ def test_extract_sigma_product_detail_and_buy_box_candidates():
         }
     })
     with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
+        candidates, trace = extract_candidates(
             "https://www.sigmaaldrich.com/IN/en/product/supelco/su860101",
             "ecommerce_detail",
             html,
@@ -1342,7 +1352,8 @@ def test_extract_sigma_product_detail_and_buy_box_candidates():
     assert candidates["sku"][0]["value"] == "SU860101"
     assert candidates["synonyms"][0]["value"] == "18 mm magnetic screw cap for vials"
     assert candidates["size"][0]["value"] == "pkg of 100 ea"
-    assert candidates["pack_size"][0]["value"] == "pkg of 100 ea"
+    assert "pack_size" not in candidates
+    assert trace["discovered_data"]["discovered_fields"]["pack_size"] == "pkg of 100 ea"
     assert candidates["availability"][0]["value"] == "Available to ship TODAY from Bangalore Non-Bonded Warehouse"
     assert candidates["price"][0]["value"] == "₹16,484.75"
     assert candidates["currency"][0]["value"] == "INR"
@@ -1406,7 +1417,7 @@ def test_extract_product_string_payload_surfaces_fit_materials_and_carousel_text
         }
     })
     with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
+        candidates, trace = extract_candidates(
             "https://arcteryx.com/us/en/shop/mens/sylan-2-shoe-0155",
             "ecommerce_detail",
             html,
@@ -1415,10 +1426,11 @@ def test_extract_product_string_payload_surfaces_fit_materials_and_carousel_text
         )
     assert candidates["image_url"][0]["value"].endswith("Profile.jpg")
     assert "Hover.jpg" in candidates["additional_images"][0]["value"]
-    assert "Choose the size equal to your measured foot length." in candidates["fit_and_sizing"][0]["value"]
-    assert "Product tip: This shoe is designed for a Precision Fit." in candidates["fit_and_sizing"][0]["value"]
-    assert "Lining: Textile" in candidates["materials_and_care"][0]["value"]
-    assert "Surface clean only" in candidates["materials_and_care"][0]["value"]
+    assert "fit_and_sizing" not in candidates
+    assert "Choose the size equal to your measured foot length." in trace["discovered_data"]["discovered_fields"]["fit_and_sizing"]
+    assert "Product tip: This shoe is designed for a Precision Fit." in trace["discovered_data"]["discovered_fields"]["fit_and_sizing"]
+    assert "Lining: Textile" in trace["discovered_data"]["discovered_fields"]["materials_and_care"]
+    assert "Surface clean only" in trace["discovered_data"]["discovered_fields"]["materials_and_care"]
     assert "Technical features:" in candidates["features"][0]["value"]
     assert "Speedy construction: The rockered shape maximizes energy return." in candidates["features"][0]["value"]
 
@@ -1517,9 +1529,11 @@ def test_normalize_color_candidate_rejects_variant_count_labels():
     assert _normalize_color_candidate("12 colors") is None
 
 
-def test_normalize_size_candidate_rejects_css_noise():
-    assert _normalize_size_candidate(
-        "12px;font-weight:330;-webkit-transition:0.1s ease;transition:0.1s ease;}"
+def test_size_coercer_rejects_css_noise():
+    assert _dispatch_string_field_coercer(
+        "size",
+        "12px;font-weight:330;-webkit-transition:0.1s ease;transition:0.1s ease;}",
+        base_url="",
     ) is None
 
 
@@ -1609,7 +1623,7 @@ def test_extract_prefers_json_ld_when_datalayer_category_and_availability_are_po
     assert candidates["category"][0]["source"] == "json_ld"
     assert candidates["category"][0]["value"] == "Mirrorless Cameras"
     assert candidates["availability"][0]["source"] == "json_ld"
-    assert str(candidates["availability"][0]["value"]).endswith("InStock")
+    assert candidates["availability"][0]["value"] == "in_stock"
 
 
 def test_extract_ignores_generic_config_blob_pollution_from_data_attributes():
@@ -1635,3 +1649,151 @@ def test_extract_ignores_generic_config_blob_pollution_from_data_attributes():
     assert candidates["title"][0]["value"] == "Canon EOS R8"
     assert "category" not in candidates
     assert "availability" not in candidates
+
+
+def test_extract_demandware_network_payload_builds_variants_and_syncs_root_scalars():
+    html = "<html><body><button data-url=\"/ignored\"></button></body></html>"
+    manifest = _manifest(
+        network_payloads=[
+            {
+                "url": (
+                    "https://www.giro.com/on/demandware.store/Sites-giro-us-Site/en_US/"
+                    "Product-Variation?pid=GR-7115071&dwvar_GR-7115071_color=Black&dwvar_GR-7115071_size=28"
+                ),
+                "body": {
+                    "product": {
+                        "id": "GR-7115071-BLK-28",
+                        "readyToOrder": True,
+                        "selectedProductUrl": (
+                            "https://www.giro.com/product/ga-m-venture-pant-blk-28/GR-7115071.html"
+                            "?dwvar_GR-7115071_color=Black&dwvar_GR-7115071_size=28"
+                        ),
+                        "price": {
+                            "sales": {"formatted": "89.00"},
+                            "list": {"formatted": "99.00"},
+                        },
+                        "images": {
+                            "large": [{"url": "https://cdn.example.com/blk-28.jpg"}]
+                        },
+                        "variationAttributes": [
+                            {
+                                "id": "color",
+                                "values": [
+                                    {"id": "BLACK", "displayValue": "Black", "selected": True},
+                                    {"id": "CHARCOAL", "displayValue": "Charcoal"},
+                                ],
+                            },
+                            {
+                                "id": "size",
+                                "values": [
+                                    {"id": "28", "displayValue": "28", "selected": True},
+                                    {"id": "30", "displayValue": "30"},
+                                ],
+                            },
+                            {
+                                "id": "style",
+                                "values": [
+                                    {
+                                        "id": "KN4991300",
+                                        "displayValue": "KN4991300",
+                                        "selected": True,
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                },
+            }
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.giro.com/product/ga-m-venture-pant-blk-28/GR-7115071.html",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert candidates["selected_variant"][0]["value"]["sku"] == "GR-7115071-BLK-28"
+    assert candidates["variant_axes"][0]["value"]["color"] == ["Black", "Charcoal"]
+    assert candidates["variant_axes"][0]["value"]["size"] == ["28", "30"]
+    assert "style" not in candidates["variant_axes"][0]["value"]
+    assert candidates["product_attributes"][0]["value"] == {"style": "KN4991300"}
+    assert candidates["price"][0]["value"] == "89.00"
+    assert candidates["original_price"][0]["value"] == "99.00"
+    assert candidates["availability"][0]["value"] == "in_stock"
+    assert candidates["image_url"][0]["value"] == "https://cdn.example.com/blk-28.jpg"
+    assert candidates["color"][0]["value"] == "Black"
+    assert candidates["size"][0]["value"] == "28"
+
+
+def test_extract_selected_variant_overwrites_root_scalars_and_cleans_product_attributes():
+    html = "<html><body><h1>Adapter Variant Product</h1></body></html>"
+    manifest = _manifest(
+        adapter_data=[
+            {
+                "_source": "adapter",
+                "title": "Adapter Variant Product",
+                "price": "10.00",
+                "color": "Blue",
+                "variants": [
+                    {
+                        "variant_id": "sku-red-s",
+                        "sku": "sku-red-s",
+                        "price": "12.00",
+                        "original_price": "15.00",
+                        "availability": "in_stock",
+                        "image_url": "https://cdn.example.com/red-s.jpg",
+                        "color": "Red",
+                        "size": "S",
+                        "option_values": {"color": "Red", "size": "S", "style": "KN4991300"},
+                    }
+                ],
+                "variant_axes": {
+                    "color": ["Red", "Blue"],
+                    "size": ["S"],
+                    "style": ["KN4991300"],
+                },
+                "selected_variant": {
+                    "variant_id": "sku-red-s",
+                    "sku": "sku-red-s",
+                    "price": "12.00",
+                    "original_price": "15.00",
+                    "availability": "in_stock",
+                    "image_url": "https://cdn.example.com/red-s.jpg",
+                    "color": "Red",
+                    "size": "S",
+                    "option_values": {"color": "Red", "size": "S", "style": "KN4991300"},
+                },
+                "product_attributes": {
+                    "fit": "Slim",
+                    "color": "Should disappear",
+                    "size": "Should disappear",
+                    "materials": "Should disappear",
+                    "style": "KN4991300",
+                },
+            }
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/adapter-variant",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert candidates["price"][0]["value"] == "12.00"
+    assert candidates["original_price"][0]["value"] == "15.00"
+    assert candidates["sku"][0]["value"] == "sku-red-s"
+    assert candidates["color"][0]["value"] == "Red"
+    assert candidates["size"][0]["value"] == "S"
+    assert candidates["availability"][0]["value"] == "in_stock"
+    assert candidates["image_url"][0]["value"] == "https://cdn.example.com/red-s.jpg"
+    assert candidates["variant_axes"][0]["value"] == {"color": ["Red", "Blue"], "size": ["S"]}
+    assert candidates["product_attributes"][0]["value"] == {
+        "fit": "Slim",
+        "style": "KN4991300",
+    }
