@@ -2,21 +2,17 @@ from __future__ import annotations
 
 import importlib
 
-from app.core.config import _normalize_sqlite_database_url, _resolve_project_path
+from app.core.config import Settings, _resolve_project_path
 from app.services.config.selectors import CONSENT_SELECTORS as MODULE_COOKIE_CONSENT_SELECTORS
 from app.services.pipeline_config import COOKIE_CONSENT_SELECTORS
 
 
-def test_normalize_sqlite_database_url_resolves_relative_path_to_backend_dir(tmp_path):
-    backend_dir = tmp_path / "backend"
-    backend_dir.mkdir()
-
-    normalized = _normalize_sqlite_database_url(
-        "sqlite+aiosqlite:///./crawlerai.db",
-        sqlite_anchor=backend_dir,
+def test_database_url_defaults_to_postgres_asyncpg(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert (
+        Settings(_env_file=None).database_url
+        == "postgresql+asyncpg://postgres:postgres@localhost:5432/crawl_db"
     )
-
-    assert normalized == f"sqlite+aiosqlite:///{(backend_dir / 'crawlerai.db').resolve().as_posix()}"
 
 
 def test_resolve_project_path_keeps_absolute_paths(tmp_path):

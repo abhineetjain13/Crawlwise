@@ -441,7 +441,7 @@ export function CrawlConfigScreen({
           <Card className="space-y-4">
             <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
             <div className="space-y-4">
-              <div className="space-y-2">
+              <div className="divide-y divide-[var(--border-strong)]">
                 <SettingSection
                   label="Smart Extraction"
                   description="AI-assisted enrichment"
@@ -456,7 +456,7 @@ export function CrawlConfigScreen({
                   checked={advancedEnabled}
                   onChange={setAdvancedEnabled}
                 >
-                  <div className="space-y-2.5 px-1 py-1">
+                  <div className="space-y-4 px-1 py-3">
                     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
                       <div className="text-sm font-medium text-[var(--text-secondary)]">Mode</div>
                       <select
@@ -477,11 +477,8 @@ export function CrawlConfigScreen({
                         <option value="paginate">Paginate</option>
                       </select>
                     </div>
-                    <p className="text-xs text-muted">
-                      Auto keeps backend auto-detection enabled. Explicit modes map directly to backend behavior, and View All maps to
-                      Load More.
-                    </p>
-                    <div className="space-y-2">
+
+                    <div className="space-y-3">
                       <SliderRow
                         label="Request Delay"
                         value={requestDelay}
@@ -523,7 +520,7 @@ export function CrawlConfigScreen({
                   </div>
                 </SettingSection>
                 <SettingSection
-                  label="Anti-Bot Browser Mode"
+                  label="Anti-Bot Mode"
                   description="Adds browser-style waits for protected sites."
                   icon={<Shield className="size-4" />}
                   checked={antiBotEnabled}
@@ -536,7 +533,7 @@ export function CrawlConfigScreen({
                   checked={proxyEnabled}
                   onChange={setProxyEnabled}
                 >
-                  <div className="space-y-2 px-1 py-1">
+                  <div className="space-y-3 px-1 py-3">
                     <div className="label-caps">Proxy Pool</div>
                     <Textarea
                       value={proxyInput}
@@ -600,7 +597,7 @@ function buildExtractionContract(fieldRows: FieldRow[]) {
         regex: regex || undefined,
       };
     })
-    .filter((row): row is { field_name: string; xpath?: string; regex?: string } => Boolean(row));
+    .filter((row): row is NonNullable<typeof row> => Boolean(row));
   return extractionContract;
 }
 

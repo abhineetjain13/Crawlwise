@@ -93,7 +93,7 @@ def test_extract_products_derives_url_from_slug_without_treating_slug_as_url_ali
     records = extract_json_listing(data, "https://www.nykaa.com/makeup/c/12")
 
     assert len(records) == 1
-    assert records[0]["slug"] == "nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
+    assert "slug" not in records[0]
     assert records[0]["url"] == "https://www.nykaa.com/nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
 
 
@@ -165,6 +165,24 @@ def test_max_records_respected():
     data = [{"name": f"Item {i}", "price": i} for i in range(50)]
     records = extract_json_listing(data, max_records=5)
     assert len(records) == 5
+
+
+def test_extract_json_listing_does_not_drop_fields_when_requested_fields_is_empty():
+    data = {
+        "products": [
+            {"title": "Widget", "price": 12.5, "brand": "Acme"},
+        ]
+    }
+
+    records = extract_json_listing(
+        data,
+        "https://example.com/products",
+        requested_fields=[],
+    )
+
+    assert len(records) == 1
+    assert records[0]["title"] == "Widget"
+    assert records[0]["price"] == 12.5
 
 
 def test_graphql_edges_pattern():

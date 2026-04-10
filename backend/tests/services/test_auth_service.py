@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import verify_password
 from app.services.auth_service import (
     BOOTSTRAP_ADMIN_ONCE,
@@ -14,6 +12,7 @@ from app.services.auth_service import (
     create_user,
     ensure_default_admin,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio
@@ -85,6 +84,11 @@ async def test_bootstrap_admin_user_skips_when_toggle_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.delenv(BOOTSTRAP_ADMIN_ONCE, raising=False)
+    monkeypatch.setattr(
+        bootstrap_admin_user.__globals__["settings"],
+        "bootstrap_admin_once",
+        False,
+    )
     monkeypatch.setenv(DEFAULT_ADMIN_EMAIL, "admin@example.com")
     monkeypatch.setenv(DEFAULT_ADMIN_PASSWORD, "StrongerAdmin#123")
 
@@ -120,3 +124,15 @@ def test_ensure_default_admin_rejects_weak_password(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(RuntimeError, match="DEFAULT_ADMIN_PASSWORD must include"):
         ensure_default_admin.__globals__["_load_default_admin_credentials"]()
+
+
+def test_load_default_admin_credentials_strips_password_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(DEFAULT_ADMIN_EMAIL, "admin@example.com")
+    monkeypatch.setenv(DEFAULT_ADMIN_PASSWORD, "  StrongerAdmin#123  ")
+
+    email, password = ensure_default_admin.__globals__["_load_default_admin_credentials"]()
+
+    assert email == "admin@example.com"
+    assert password == "StrongerAdmin#123"

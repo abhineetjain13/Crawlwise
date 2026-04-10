@@ -6,22 +6,22 @@ import time
 from unittest.mock import AsyncMock
 
 import pytest
-
 from app.core.config import settings
-from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
-from app.services.acquisition.traversal import TraversalResult, apply_traversal_mode
+from app.services._batch_runtime import _merge_run_acquisition_metrics
+from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.browser_client import (
     _assess_challenge_signals,
+    _browser_launch_profiles,
     _build_launch_kwargs,
-    _collect_frame_sources,
     _click_and_observe_next_page,
-    _collect_paginated_html,
     _click_load_more,
+    _collect_frame_sources,
+    _collect_paginated_html,
     _context_kwargs,
     _cookie_policy_for_domain,
     _fetch_rendered_html_with_fallback,
-    _flatten_shadow_dom,
     _find_next_page_url,
+    _flatten_shadow_dom,
     _goto_with_fallback,
     _is_public_browser_request_target,
     _load_cookies,
@@ -33,7 +33,10 @@ from app.services.acquisition.browser_client import (
     _wait_for_listing_readiness,
     expand_all_interactive_elements,
 )
+from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.cookie_store import validate_cookie_policy_config
+from app.services.acquisition.traversal import AdvanceResult, TraversalResult, apply_traversal_mode
+from app.services.crawl_metrics import build_url_metrics
 
 
 class FakePage:
@@ -274,6 +277,53 @@ def test_build_launch_kwargs_skips_host_pinning_for_system_chrome():
 
     assert kwargs["channel"] == "chrome"
     assert "args" not in kwargs
+
+
+def test_build_launch_kwargs_pins_dns_with_http2_disabled():
+    """DNS pinning must be active for bundled Chromium to prevent TOCTOU SSRF."""
+    target = type("Target", (), {
+        "dns_resolved": True,
+        "resolved_ips": ["203.0.113.10"],
+        "hostname": "example.com",
+    })()
+
+    kwargs = _build_launch_kwargs(None, target)
+
+    assert "args" in kwargs
+    args = kwargs["args"]
+    assert any("--host-resolver-rules=" in a for a in args)
+    assert any("MAP example.com 203.0.113.10" in a for a in args)
+    assert "--disable-http2" in args
+
+
+def test_browser_launch_profiles_uses_bundled_chromium_when_dns_pinning_is_required():
+    target = type("Target", (), {
+        "dns_resolved": True,
+        "resolved_ips": ["203.0.113.10"],
+    })()
+
+    profiles = _browser_launch_profiles(BrowserRuntimeOptions(), target=target)
+
+    assert profiles == [
+        {"label": "bundled_chromium", "browser_type": "chromium", "channel": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_browser_acquisition_rejects_loopback_hostname(monkeypatch):
+    """A hostname that resolves to 127.0.0.1 must be rejected by the browser
+    acquisition layer's validate_public_target gate. This guards against DNS
+    rebinding SSRF: the pinned IP would be loopback, so the validation must
+    reject before Playwright ever launches."""
+    import app.services.url_safety as url_safety_mod
+
+    async def _fake_resolve(hostname, port):
+        return ["127.0.0.1"]
+
+    monkeypatch.setattr(url_safety_mod, "_resolve_host_ips", _fake_resolve)
+
+    with pytest.raises(ValueError, match="non-public"):
+        await url_safety_mod.validate_public_target("http://rebind-target.example.com/")
 
 
 class FakeCookieContext:
@@ -719,7 +769,7 @@ async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypat
 
     result = await _fetch_rendered_html_with_fallback(
         object(),
-        target=object(),
+        target=type("Target", (), {"dns_resolved": False, "resolved_ips": []})(),
         url="https://example.com/product",
         proxy=None,
         traversal_mode=None,
@@ -757,7 +807,7 @@ async def test_fetch_rendered_html_with_fallback_keeps_default_navigation_after_
 
     await _fetch_rendered_html_with_fallback(
         object(),
-        target=object(),
+        target=type("Target", (), {"dns_resolved": False, "resolved_ips": []})(),
         url="https://example.com/product",
         proxy=None,
         traversal_mode=None,
@@ -835,6 +885,31 @@ async def test_collect_paginated_html_stops_at_max_pages(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_paginate_run_summary(monkeypatch):
+    page = FakePaginationPage()
+    monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
+    monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
+
+    traversal_result = await _collect_paginated_html(page, max_pages=2, request_delay_ms=0)
+    assert traversal_result.summary["pages_collected"] == 2
+    assert "page_count" not in traversal_result.summary
+
+    acq = AcquisitionResult(
+        method="playwright",
+        diagnostics={"traversal_summary": traversal_result.summary},
+    )
+    url_metrics = build_url_metrics(acq, requested_fields=[])
+    run_summary = _merge_run_acquisition_metrics({}, url_metrics)
+    result = {
+        "pages_collected": traversal_result.summary["pages_collected"],
+        "traversal_succeeded": run_summary["traversal_succeeded"],
+    }
+
+    assert result["pages_collected"] == 2
+    assert result["traversal_succeeded"] == 1
+
+
+@pytest.mark.asyncio
 async def test_collect_paginated_html_rejects_non_public_next_page(monkeypatch, caplog):
     page = FakePaginationPage()
     monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
@@ -867,20 +942,20 @@ async def test_collect_paginated_html_allows_in_place_pagination_without_goto(mo
     in_place_urls = ["https://example.com/products?page=1", "https://example.com/products?page=1", ""]
     page_state = {"index": 0}
 
-    async def _fake_click_and_observe_next_page(_page, checkpoint=None):
+    async def _fake_advance_next_page(_page, checkpoint=None):
         _ = checkpoint
         if in_place_urls:
             next_url = in_place_urls.pop(0)
             if next_url:
                 page_state["index"] += 1
-            return next_url
-        return ""
+            return AdvanceResult(url=next_url, already_navigated=False)
+        return AdvanceResult(url="", already_navigated=False)
 
     async def _fake_content():
         return f"<html><body><div>Page {page_state['index'] + 1}</div></body></html>"
 
     page.content = _fake_content
-    monkeypatch.setattr("app.services.acquisition.browser_client._click_and_observe_next_page", _fake_click_and_observe_next_page)
+    monkeypatch.setattr("app.services.acquisition.browser_client._advance_next_page", _fake_advance_next_page)
     monkeypatch.setattr("app.services.acquisition.browser_client._dismiss_cookie_consent", AsyncMock())
     monkeypatch.setattr("app.services.acquisition.browser_client._pause_after_navigation", AsyncMock())
     monkeypatch.setattr("app.services.acquisition.browser_client.expand_all_interactive_elements", AsyncMock())

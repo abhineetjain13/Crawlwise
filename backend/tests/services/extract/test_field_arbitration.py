@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
-
-from app.services.pipeline.core import _reconcile_detail_candidate_values
 from app.services.extract.service import _finalize_candidates
+from app.services.pipeline.core import _reconcile_detail_candidate_values
+from bs4 import BeautifulSoup
 
 
 def test_finalize_candidates_prefers_higher_trust_source_over_first_row_bias() -> None:
@@ -104,6 +103,7 @@ def test_reconcile_detail_candidate_values_applies_final_detail_sanitizer() -> N
         "validation_rejected",
         "field_pollution_rule",
         "breadcrumb_like_brand",
+        "empty_after_normalization",
     }
     assert reconciliation["title"]["rejected"][0]["reason"] in {
         "empty_after_normalization",

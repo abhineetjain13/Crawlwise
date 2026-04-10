@@ -4,7 +4,6 @@ from __future__ import annotations
 from unittest.mock import Mock, patch
 
 import pytest
-
 from app.services.adapters.icims import ICIMSAdapter
 
 

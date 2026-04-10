@@ -79,14 +79,14 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
     return (
       <div className="min-h-screen bg-[var(--bg-base)] text-[var(--text-primary)]">
         <header
-          className="surface-header flex h-[52px] items-center justify-between border-b border-[var(--border)] px-6"
+          className="surface-header flex h-[52px] items-center justify-between border-b-2 border-[var(--border-strong)] px-6"
           style={{ backdropFilter: "blur(12px)" }}
         >
           <LogoMark />
           <ThemeToggle compact />
         </header>
         <main className="grid min-h-[calc(100vh-52px)] place-items-center px-4 py-10">
-          <div className="w-full max-w-[400px] rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] p-8 shadow-[var(--shadow-modal)]">
+          <div className="w-full max-w-[400px] rounded-[var(--radius-xl)] border-2 border-[var(--border-strong)] bg-[var(--bg-panel)] p-8 shadow-[var(--shadow-modal)]">
             {children}
           </div>
         </main>
@@ -98,8 +98,8 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   if (authQuery.isPending) {
     return (
       <div className="min-h-screen lg:grid lg:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--border)] lg:flex lg:flex-col lg:w-[220px]">
-          <div className="flex h-[52px] items-center gap-3 border-b border-[var(--border)] px-4">
+        <aside className="surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r-2 border-[var(--border-strong)] lg:flex lg:flex-col lg:w-[220px]">
+          <div className="flex h-[52px] items-center gap-3 border-b-2 border-[var(--border-strong)] px-4">
             <div className="size-7 rounded-lg bg-[var(--border)]" />
             <div className="skeleton h-3 w-24" />
           </div>
@@ -110,7 +110,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
           </div>
         </aside>
         <div className="flex min-w-0 flex-col">
-          <div className="surface-header sticky top-0 z-20 h-[52px] border-b border-[var(--border)]">
+          <div className="surface-header sticky top-0 z-20 h-[52px] border-b-2 border-[var(--border-strong)]">
             <div className="flex h-full items-center gap-4 px-6">
               <div className="skeleton h-4 w-36" />
             </div>
@@ -134,7 +134,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   if (authQuery.error && httpErrorStatus(authQuery.error) === 401) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--bg-base)] px-4 text-center">
-        <div className="max-w-sm rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] p-6 shadow-[var(--shadow-card-value)]">
+        <div className="max-w-sm rounded-[var(--radius-xl)] border-2 border-[var(--border-strong)] bg-[var(--bg-panel)] p-6 shadow-[var(--shadow-card-value)]">
           <p className="font-semibold text-[var(--text-primary)]">Session expired</p>
           <p className="mt-1.5 text-sm text-[var(--text-muted)]">Redirecting to login…</p>
         </div>
@@ -145,7 +145,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   if (authQuery.error) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--bg-base)] px-4 text-center">
-        <div className="max-w-sm rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] p-6 shadow-[var(--shadow-card-value)]">
+        <div className="max-w-sm rounded-[var(--radius-xl)] border-2 border-[var(--border-strong)] bg-[var(--bg-panel)] p-6 shadow-[var(--shadow-card-value)]">
           <p className="font-semibold text-[var(--text-primary)]">Unable to load session</p>
           <p className="mt-1.5 text-sm text-[var(--text-muted)]">
             Refresh to retry, or sign in again if the session expired.
@@ -165,7 +165,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
         >
           Skip to main content
         </a>
-        <div className="lg:hidden border-b border-[var(--border)] bg-[var(--warning-bg)] px-4 py-2 text-xs text-[var(--text-secondary)]">
+        <div className="lg:hidden border-b-2 border-[var(--border-strong)] bg-[var(--warning-bg)] px-4 py-2 text-xs text-[var(--text-secondary)]">
           Best viewed on desktop (1024px+).
         </div>
         <div className="min-h-screen lg:grid lg:grid-cols-[auto_minmax(0,1fr)]">
@@ -212,14 +212,14 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
   return (
     <aside
       className={cn(
-        "surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--border)] backdrop-blur-xl lg:flex lg:flex-col sidebar-animated",
+        "surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r-2 border-[var(--border-strong)] backdrop-blur-xl lg:flex lg:flex-col sidebar-animated",
         collapsed ? "lg:w-[52px]" : "lg:w-[220px]",
       )}
     >
       {/* Header row */}
       <div
         className={cn(
-          "flex h-[52px] shrink-0 items-center border-b border-[var(--border)]",
+          "flex h-[52px] shrink-0 items-center border-b-2 border-[var(--border-strong)]",
           collapsed ? "justify-center px-0" : "justify-between px-4",
         )}
       >
@@ -278,7 +278,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
 
       {/* Footer */}
       {!collapsed && (
-        <div className="shrink-0 border-t border-[var(--border)] px-3 py-3">
+        <div className="shrink-0 border-t-2 border-[var(--border-strong)] px-3 py-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-[var(--text-muted)]">Theme</span>
             <ThemeToggle compact />
@@ -301,7 +301,7 @@ function ShellContent({
   const [isResetting, setIsResetting] = useState(false);
 
   async function handleResetData() {
-    if (!confirm("Delete and reset all app data? This clears runs, records, logs, artifacts, cookies, selectors, and domain mappings.")) {
+    if (!confirm("Delete crawl data and generated artifacts? This clears runs, records, logs, review promotions, artifacts, cookies, and learned selector/domain mappings. User accounts and LLM config remain.")) {
       return;
     }
     setIsResetting(true);
@@ -332,7 +332,7 @@ function ShellContent({
   return (
     <div className="flex min-w-0 flex-col">
       <header
-        className="surface-header sticky top-0 z-20 h-[52px] border-b border-[var(--border)] backdrop-blur-xl"
+        className="surface-header sticky top-0 z-20 h-[52px] border-b-2 border-[var(--border-strong)] backdrop-blur-xl"
       >
         <div className="flex h-full items-center justify-between gap-3 px-4 lg:px-6">
           <div className="flex min-w-0 items-center gap-3">
@@ -360,7 +360,7 @@ function ShellContent({
               }}
               disabled={resetDisabled}
               aria-disabled={resetDisabled}
-              variant="danger"
+              variant="secondary"
               size="sm"
               className="h-8"
             >
@@ -395,12 +395,12 @@ function MobileNav({
       />
       <aside
         className={cn(
-          "surface-sidebar absolute inset-y-0 left-0 flex w-[260px] max-w-[85vw] flex-col border-r border-[var(--border)] transition-transform duration-200 ease-out",
+          "surface-sidebar absolute inset-y-0 left-0 flex w-[260px] max-w-[85vw] flex-col border-r-2 border-[var(--border-strong)] transition-transform duration-200 ease-out",
           open ? "translate-x-0" : "-translate-x-full",
         )}
         style={{ boxShadow: "var(--surface-drawer-shadow)" }}
       >
-        <div className="flex h-[52px] items-center justify-between border-b border-[var(--border)] px-4">
+        <div className="flex h-[52px] items-center justify-between border-b-2 border-[var(--border-strong)] px-4">
           <LogoMark />
           <Button type="button" variant="ghost" onClick={onClose} className="h-7 w-7 px-0" aria-label="Close">
             <X className="size-4" />
@@ -437,7 +437,7 @@ function MobileNav({
             </div>
           ))}
         </nav>
-        <div className="shrink-0 border-t border-[var(--border)] px-3 py-3">
+        <div className="shrink-0 border-t-2 border-[var(--border-strong)] px-3 py-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-[var(--text-muted)]">Theme</span>
             <ThemeToggle compact />

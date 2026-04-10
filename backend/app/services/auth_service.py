@@ -15,10 +15,21 @@ DEFAULT_ADMIN_PASSWORD = "DEFAULT_ADMIN_PASSWORD"
 BOOTSTRAP_ADMIN_ONCE = "BOOTSTRAP_ADMIN_ONCE"
 
 
+def _coerce_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value) if value not in (None, "") else False
+
+
 def _env_flag(name: str) -> bool:
     if name == BOOTSTRAP_ADMIN_ONCE:
-        return bool(settings.bootstrap_admin_once)
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        env_value = os.getenv(BOOTSTRAP_ADMIN_ONCE)
+        if env_value is not None:
+            return _coerce_flag(env_value)
+        return _coerce_flag(settings.bootstrap_admin_once)
+    return _coerce_flag(os.getenv(name, ""))
 
 
 def _validate_default_admin_password(password: str) -> None:
@@ -40,8 +51,15 @@ def _validate_default_admin_password(password: str) -> None:
 
 
 def _load_default_admin_credentials() -> tuple[str, str]:
-    email = str(settings.default_admin_email or "").strip().lower()
-    password = str(settings.default_admin_password or "")
+    email = str(
+        os.getenv(DEFAULT_ADMIN_EMAIL, str(settings.default_admin_email or ""))
+    ).strip().lower()
+    password = str(
+        os.getenv(
+        DEFAULT_ADMIN_PASSWORD,
+        str(settings.default_admin_password or ""),
+        )
+    ).strip()
     if not email:
         raise RuntimeError(f"{DEFAULT_ADMIN_EMAIL} is required for admin bootstrap.")
     if not password:

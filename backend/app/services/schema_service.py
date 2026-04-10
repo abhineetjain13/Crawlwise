@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -296,13 +295,7 @@ async def resolve_schema(
     sample_record: dict | None = None,
     llm_enabled: bool = False,
 ) -> ResolvedSchema:
-    del run_id, html, url
-    if llm_enabled:
-        warnings.warn(
-            "LLM-based schema inference is no longer supported; falling back to deterministic schema resolution.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    del run_id, html, url, llm_enabled
     resolved = await load_resolved_schema(
         session,
         surface,

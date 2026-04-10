@@ -26,6 +26,7 @@ from app.core.telemetry import (
 from app.services.acquisition.browser_client import shutdown_browser_pool
 from app.services.acquisition.cookie_store import validate_cookie_policy_config
 from app.services.auth_service import bootstrap_admin_user
+from app.services.crawl_service import recover_stale_local_runs
 
 logger = logging.getLogger("app")
 
@@ -41,6 +42,12 @@ async def lifespan(_: FastAPI):
     validate_cookie_policy_config()
     async with SessionLocal() as session:
         await bootstrap_admin_user(session)
+        recovered = await recover_stale_local_runs(session)
+        if recovered:
+            logger.warning(
+                "Recovered %s stale local crawl run(s) after backend restart",
+                recovered,
+            )
     try:
         yield
     finally:

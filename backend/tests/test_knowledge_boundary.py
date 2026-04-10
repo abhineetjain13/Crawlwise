@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 from app.services.pipeline_config import CANONICAL_SCHEMAS, FIELD_ALIASES, SALARY_RANGE_REGEX
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVICES_DIR = REPO_ROOT / "backend" / "app" / "services"

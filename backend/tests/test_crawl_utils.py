@@ -1,6 +1,5 @@
 # Tests for crawl_utils module
 import pytest
-
 from app.services.crawl_utils import (
     collect_target_urls,
     normalize_committed_field_name,

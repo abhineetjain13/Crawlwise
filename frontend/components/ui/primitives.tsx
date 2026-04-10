@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
@@ -22,9 +23,8 @@ export function Card({
     <section
       {...props}
       className={cn(
-        "rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--surface-card)] shadow-[var(--shadow-card-value)] backdrop-blur-xl",
-        "before:pointer-events-none before:absolute before:inset-[1px] before:rounded-[calc(var(--radius-xl)-1px)] before:border before:border-[var(--surface-card-edge)] before:content-['']",
-        "relative overflow-hidden",
+        "rounded-[var(--radius-xl)] border-2 border-[var(--border-strong)] bg-[var(--surface-card)] shadow-[var(--shadow-card-value)]",
+        "relative",
         "p-5",
         animate && "animate-fade-in",
         className,
@@ -87,7 +87,7 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
     <input
       {...normalizedProps}
       className={cn(
-        "focus-ring h-8 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
+        "focus-ring h-8 w-full rounded-[var(--radius-md)] border-2 border-[var(--border-strong)]",
         "bg-[var(--control-input-bg)] px-3 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
@@ -111,7 +111,7 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
     <textarea
       {...normalizedProps}
       className={cn(
-        "focus-ring min-h-20 w-full rounded-[var(--radius-md)] border border-[var(--border)]",
+        "focus-ring min-h-20 w-full rounded-[var(--radius-md)] border-2 border-[var(--border-strong)]",
         "bg-[var(--control-input-bg)] px-3 py-2 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
@@ -140,11 +140,11 @@ export function Button({
     primary:
       "bg-[var(--accent)] !text-[var(--button-filled-fg)] hover:bg-[var(--accent-hover)] shadow-[var(--shadow-xs)]",
     secondary:
-      "border border-[var(--border)] bg-[var(--button-secondary-bg)] text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-strong)]",
+      "border-2 border-[var(--border-strong)] bg-[var(--button-secondary-bg)] text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-focus)]",
     ghost:
-      "border border-transparent bg-transparent text-[var(--text-primary)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
+      "border-2 border-transparent bg-transparent text-[var(--text-primary)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
     accent: "accent-fill",
-    danger: "border border-[var(--danger)] bg-[var(--danger)] !text-[var(--button-filled-fg)] hover:opacity-90",
+    danger: "border-2 border-[var(--danger)] bg-[var(--danger)] !text-[var(--button-filled-fg)] hover:opacity-90",
   };
   const sizes: Record<string, string> = {
     sm:   "h-7 px-2.5 text-caption",
@@ -422,5 +422,36 @@ export function Spinner({ className }: Readonly<{ className?: string }>) {
         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
       />
     </svg>
+  );
+}
+
+/* ─── Tooltip ────────────────────────────────────────────────────────────── */
+export function Tooltip({
+  children,
+  content,
+  className,
+}: Readonly<{ children: ReactNode; content: string; className?: string }>) {
+  const tooltipId = useId();
+
+  return (
+    <div
+      aria-describedby={tooltipId}
+      className={cn("group relative flex items-center", className)}
+    >
+      {children}
+      <div
+        id={tooltipId}
+        role="tooltip"
+        className={cn(
+          "pointer-events-none absolute bottom-full left-1/2 mb-2 w-max max-w-[320px] -translate-x-1/2",
+          "rounded-[var(--radius-md)] border-2 border-[var(--border-strong)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
+          "text-[10px] font-medium leading-normal text-[var(--text-primary)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+          "z-50 break-words",
+        )}
+      >
+        {content}
+        <div className="absolute -bottom-[6px] left-1/2 size-2.5 -translate-x-1/2 rotate-45 border-b-2 border-r-2 border-[var(--border-strong)] bg-[var(--bg-panel)]" />
+      </div>
+    </div>
   );
 }

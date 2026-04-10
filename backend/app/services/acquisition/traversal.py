@@ -152,7 +152,7 @@ async def apply_traversal_mode(
     wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]],
     wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]],
     peek_next_page_signal: Callable[..., Awaitable[dict[str, object] | None]],
-    click_and_observe_next_page: Callable[..., Awaitable[str]] | None = None,
+    click_and_observe_next_page: Callable[..., Awaitable[str | AdvanceResult]] | None = None,
     advance_next_page_fn: Callable[..., Awaitable[AdvanceResult]] | None = None,
     has_load_more_control: Callable[..., Awaitable[bool]],
     dismiss_cookie_consent: Callable[..., Awaitable[None]],
@@ -445,7 +445,7 @@ async def collect_paginated_html(
     page_content_with_retry: Callable[..., Awaitable[str]],
     wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]],
     wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]],
-    click_and_observe_next_page: Callable[..., Awaitable[str]] | None = None,
+    click_and_observe_next_page: Callable[..., Awaitable[str | AdvanceResult]] | None = None,
     advance_next_page_fn: Callable[..., Awaitable[AdvanceResult]] | None = None,
     dismiss_cookie_consent: Callable[..., Awaitable[None]],
     pause_after_navigation: Callable[..., Awaitable[None]],
@@ -471,8 +471,13 @@ async def collect_paginated_html(
     async def _legacy_advance(pg, *, checkpoint=None) -> AdvanceResult:
         if click_and_observe_next_page is None:
             raise ValueError("no pagination callback provided")
-        url = await click_and_observe_next_page(pg, checkpoint=checkpoint)  # type: ignore[misc]
-        return AdvanceResult(url=url, already_navigated=False)
+        result = await click_and_observe_next_page(pg, checkpoint=checkpoint)  # type: ignore[misc]
+        if isinstance(result, AdvanceResult):
+            return AdvanceResult(
+                url=result.url,
+                already_navigated=result.already_navigated,
+            )
+        return AdvanceResult(url=result, already_navigated=False)
 
     _advance = advance_next_page_fn if advance_next_page_fn is not None else _legacy_advance
 

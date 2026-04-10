@@ -1,17 +1,21 @@
 # Tests for the shared HTTP acquisition provider.
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
-from curl_cffi.const import CurlOpt
 from app.core.config import settings
-
-from app.services.acquisition.http_client import _build_attempt_order, _parse_retry_after, _retry_backoff_seconds, fetch_html_result
 from app.services.acquisition.cookie_store import is_persistable_cookie
+from app.services.acquisition.http_client import (
+    _build_attempt_order,
+    _parse_retry_after,
+    _retry_backoff_seconds,
+    fetch_html_result,
+)
 from app.services.url_safety import ValidatedTarget
+from curl_cffi.const import CurlOpt
 
 
 @dataclass

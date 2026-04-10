@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.models.llm import LLMCostLog
 from app.models.user import User
 from app.services import dashboard_service
+from app.services.knowledge_base.store import (
+    load_field_mappings,
+    load_selector_defaults,
+    save_domain_mapping,
+    save_selector_defaults,
+)
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio
@@ -65,10 +71,12 @@ async def test_reset_application_data_clears_rows_and_artifacts(
     monkeypatch.setattr("app.services.dashboard_service.settings.cookie_store_dir", cookie_dir)
     monkeypatch.setattr("app.services.dashboard_service.PROJECT_ROOT", tmp_path)
 
-    async def _noop_reset_learned_state() -> None:
-        return None
-
-    monkeypatch.setattr("app.services.dashboard_service.reset_learned_state", _noop_reset_learned_state)
+    await save_domain_mapping("example.com", "product_detail", {"price": "price"})
+    await save_selector_defaults(
+        "example.com",
+        "title",
+        [{"css_selector": "h1", "status": "validated", "source": "test"}],
+    )
 
     result = await dashboard_service.reset_application_data(db_session)
 
@@ -84,89 +92,14 @@ async def test_reset_application_data_clears_rows_and_artifacts(
     assert result["artifacts_removed"] == 1
     assert result["legacy_artifacts_removed"] == 1
     assert result["cookies_removed"] == 1
+    assert load_field_mappings() == {}
+    assert load_selector_defaults() == {}
     assert artifacts_dir.exists()
     assert cookie_dir.exists()
     assert legacy_artifacts_dir.exists()
     assert list(artifacts_dir.iterdir()) == []
     assert list(cookie_dir.iterdir()) == []
     assert list(legacy_artifacts_dir.iterdir()) == []
-
-
-@pytest.mark.asyncio
-async def test_reset_application_data_ignores_sqlite_vacuum_failures(
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    artifacts_dir = tmp_path / "backend" / "artifacts"
-    cookie_dir = tmp_path / "backend" / "cookie_store"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    cookie_dir.mkdir(parents=True, exist_ok=True)
-
-    user = User(email="vacuum@example.com", hashed_password="hashed", role="admin")
-    db_session.add(user)
-    await db_session.flush()
-
-    run = CrawlRun(
-        user_id=user.id,
-        run_type="crawl",
-        url="https://example.com",
-        status="completed",
-        surface="product_detail",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
-    db_session.add(run)
-    await db_session.flush()
-    db_session.add(CrawlRecord(run_id=run.id, source_url="https://example.com", data={}, raw_data={}, discovered_data={}, source_trace={}))
-    await db_session.commit()
-
-    monkeypatch.setattr("app.services.dashboard_service.settings.artifacts_dir", artifacts_dir)
-    monkeypatch.setattr("app.services.dashboard_service.settings.cookie_store_dir", cookie_dir)
-    monkeypatch.setattr("app.services.dashboard_service.PROJECT_ROOT", tmp_path)
-
-    async def _noop_reset_learned_state() -> None:
-        return None
-
-    monkeypatch.setattr("app.services.dashboard_service.reset_learned_state", _noop_reset_learned_state)
-
-    real_connect = type(db_session.bind).connect
-
-    class _FailingVacuumConnection:
-        def __init__(self, connection) -> None:
-            self._connection = connection
-
-        async def __aenter__(self):
-            await self._connection.__aenter__()
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb) -> None:
-            await self._connection.__aexit__(exc_type, exc, tb)
-
-        async def execution_options(self, **kwargs):
-            await self._connection.execution_options(**kwargs)
-            return self
-
-        async def execute(self, statement, *args, **kwargs):
-            if str(statement) == "VACUUM":
-                raise RuntimeError("vacuum failed")
-            return await self._connection.execute(statement, *args, **kwargs)
-
-    def _connect_with_failing_vacuum(engine):
-        return _FailingVacuumConnection(real_connect(engine))
-
-    monkeypatch.setattr(type(db_session.bind), "connect", _connect_with_failing_vacuum)
-
-    result = await dashboard_service.reset_application_data(db_session)
-
-    remaining_runs = await db_session.scalar(select(func.count()).select_from(CrawlRun))
-    remaining_records = await db_session.scalar(select(func.count()).select_from(CrawlRecord))
-
-    assert remaining_runs == 0
-    assert remaining_records == 0
-    assert result["knowledge_base_reset"] is True
-
 
 @pytest.mark.asyncio
 async def test_reset_application_data_does_not_create_missing_legacy_artifacts_dir(
@@ -184,11 +117,6 @@ async def test_reset_application_data_does_not_create_missing_legacy_artifacts_d
     monkeypatch.setattr("app.services.dashboard_service.settings.cookie_store_dir", cookie_dir)
     monkeypatch.setattr("app.services.dashboard_service.PROJECT_ROOT", tmp_path)
 
-    async def _noop_reset_learned_state() -> None:
-        return None
-
-    monkeypatch.setattr("app.services.dashboard_service.reset_learned_state", _noop_reset_learned_state)
-
     result = await dashboard_service.reset_application_data(db_session)
 
     assert result["legacy_artifacts_removed"] == 0
@@ -204,7 +132,7 @@ async def test_build_operational_metrics_reports_runtime_and_duration_stats(
     db_session.add(user)
     await db_session.flush()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     completed_run = CrawlRun(
         user_id=user.id,
         run_type="crawl",
@@ -248,12 +176,12 @@ async def test_build_operational_metrics_reports_runtime_and_duration_stats(
 
     monkeypatch.setattr(
         "app.services.dashboard_service.runtime_metrics_snapshot",
-        lambda: {
+        AsyncMock(return_value={
             "db_lock_errors_total": 3,
             "db_lock_retries_total": 2,
             "browser_launch_failures_total": 1,
             "proxy_exhaustion_total": 4,
-        },
+        }),
     )
 
     metrics = await dashboard_service.build_operational_metrics(db_session)

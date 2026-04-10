@@ -17,7 +17,13 @@ def incr(metric_name: str, amount: int = 1) -> None:
 async def snapshot() -> dict[str, int]:
     async def _snapshot(redis) -> dict[str, int]:
         raw = await redis.hgetall(_RUNTIME_METRICS_KEY)
-        return {str(key): int(value) for key, value in raw.items()}
+        snapshot: dict[str, int] = {}
+        for key, value in raw.items():
+            try:
+                snapshot[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return snapshot
 
     return await redis_fail_open(
         _snapshot,

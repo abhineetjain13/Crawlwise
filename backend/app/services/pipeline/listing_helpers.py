@@ -79,6 +79,22 @@ def _sanitize_listing_record_fields(
         {},
     ):
         sanitized["salary"] = sanitized.get("price")
+
+    for field_name in (
+        "price",
+        "sale_price",
+        "original_price",
+        "currency",
+        "sku",
+        "part_number",
+        "color",
+        "availability",
+        "rating",
+        "review_count",
+        "image_url",
+        "additional_images",
+    ):
+        sanitized.pop(field_name, None)
     
     # Summarize job description
     description = _summarize_job_listing_description(sanitized.get("description"))

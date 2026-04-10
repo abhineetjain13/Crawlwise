@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     encryption_key: str = "change-me-32-bytes-minimum-change-me"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/crawl_db"
     redis_url: str = "redis://localhost:6379/0"
+    redis_state_enabled: bool = False
+    celery_dispatch_enabled: bool = False
+    legacy_inprocess_runner_enabled: bool = True
     artifacts_dir: Path = Field(default=BASE_DIR / "artifacts")
     acquisition_cache_dir: Path = Field(
         default=BASE_DIR / "artifacts" / "acquisition_cache"
@@ -45,7 +48,7 @@ class Settings(BaseSettings):
     crawl_log_file_enabled: bool = True
     crawl_log_file_dir: Path = Field(default=BASE_DIR / "artifacts" / "run_logs")
     default_admin_email: str = "admin@admin.com"
-    default_admin_password: str = "YourSecurePassword123!"
+    default_admin_password: str | None = None
     bootstrap_admin_once: bool = False
     # When false, POST /api/auth/register returns 403 (POC single-admin dev). Enable for production multi-tenant.
     registration_enabled: bool = False
@@ -76,6 +79,8 @@ settings.crawl_log_file_dir = _resolve_project_path(
 # Security guard: reject default secrets in non-dev environments
 # ---------------------------------------------------------------------------
 _INSECURE_DEFAULTS = {"change-me", "change-me-32-bytes-minimum-change-me"}
+_INSECURE_ADMIN_PASSWORD_DEFAULTS = {"YourSecurePassword123!"}
+_INSECURE_ADMIN_EMAIL_DEFAULTS = {"admin@admin.com"}
 
 
 def _check_secret_defaults() -> None:
@@ -90,6 +95,17 @@ def _check_secret_defaults() -> None:
         issues.append("jwt_secret_key is set to a default value")
     if settings.encryption_key in _INSECURE_DEFAULTS:
         issues.append("encryption_key is set to a default value")
+    default_admin_password = str(settings.default_admin_password or "").strip()
+    default_admin_email = str(settings.default_admin_email or "").strip().lower()
+    if default_admin_password in _INSECURE_ADMIN_PASSWORD_DEFAULTS:
+        issues.append("default_admin_password is set to an insecure placeholder value")
+    if settings.bootstrap_admin_once and not default_admin_password:
+        issues.append("bootstrap_admin_once requires a non-empty default_admin_password")
+    if (
+        settings.bootstrap_admin_once
+        and default_admin_email in _INSECURE_ADMIN_EMAIL_DEFAULTS
+    ):
+        issues.append("bootstrap_admin_once requires a non-default default_admin_email")
     if not issues:
         return
     msg = (

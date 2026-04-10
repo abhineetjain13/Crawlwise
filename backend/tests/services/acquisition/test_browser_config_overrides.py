@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
-
 from app.services.config.platform_readiness import (
     LISTING_READINESS_OVERRIDES,
     load_platform_readiness,

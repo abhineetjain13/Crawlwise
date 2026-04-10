@@ -1,110 +1,121 @@
 from __future__ import annotations
 
-import asyncio
-import tempfile
-
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.core.database import Base
-from app.core.security import hash_password
-from app.models.crawl import CrawlRun
-from app.models.user import User
-from app.services._batch_runtime import _merge_run_summary_patch, _retry_run_update
+from app.services.crawl_service import CELERY_TASK_ID_KEY, dispatch_run
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 @pytest.mark.asyncio
-async def test_retry_run_update_serializes_concurrent_summary_updates() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = f"{tmpdir}/test_batch_runtime_update_lock.db"
-        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
-        session_factory = async_sessionmaker(
-            engine,
-            expire_on_commit=False,
-            class_=AsyncSession,
-        )
-        try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+async def test_dispatch_run_enqueues_celery_task_and_persists_task_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: dict[str, object] = {}
 
-            async with session_factory() as setup_session:
-                user = User(
-                    email="batch-runtime-lock@example.com",
-                    hashed_password=hash_password("password123"),
-                    role="admin",
-                )
-                setup_session.add(user)
-                await setup_session.commit()
-                await setup_session.refresh(user)
+    def _fake_apply_async(*, args, task_id):
+        recorded["args"] = list(args)
+        recorded["task_id"] = task_id
+        return None
 
-                run = CrawlRun(
-                    user_id=user.id,
-                    run_type="batch",
-                    url="https://example.com",
-                    status="running",
-                    surface="ecommerce_listing",
-                    settings={},
-                    requested_fields=[],
-                    result_summary={},
-                )
-                setup_session.add(run)
-                await setup_session.commit()
-                await setup_session.refresh(run)
-                run_id = run.id
+    monkeypatch.setattr(
+        "app.services.crawl_service.process_run_task.apply_async",
+        _fake_apply_async,
+    )
 
-            async def _apply_progress_patch(
-                progress: int,
-                record_count: int,
-                completed_urls: int,
-                verdict: str,
-                delay_seconds: float,
-            ) -> None:
-                async with session_factory() as session:
-                    async def _mutation(_retry_session: AsyncSession, retry_run: CrawlRun) -> None:
-                        await asyncio.sleep(delay_seconds)
-                        retry_run.result_summary = _merge_run_summary_patch(
-                            retry_run.result_summary,
-                            {
-                                "progress": progress,
-                                "record_count": record_count,
-                                "completed_urls": completed_urls,
-                                "processed_urls": completed_urls,
-                                "remaining_urls": max(2 - completed_urls, 0),
-                                "url_verdicts": [verdict] * completed_urls,
-                                "verdict_counts": {verdict: completed_urls},
-                            },
-                        )
+    run = SimpleNamespace(id=7, status="pending", result_summary={})
+    session = SimpleNamespace(
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
 
-                    await _retry_run_update(session, run_id, _mutation)
+    async def _load_run_with_status(_session, _run_id):
+        return run, "pending"
 
-            await asyncio.gather(
-                _apply_progress_patch(
-                    progress=50,
-                    record_count=1,
-                    completed_urls=1,
-                    verdict="success",
-                    delay_seconds=0.02,
-                ),
-                _apply_progress_patch(
-                    progress=100,
-                    record_count=2,
-                    completed_urls=2,
-                    verdict="success",
-                    delay_seconds=0.005,
-                ),
-            )
+    monkeypatch.setattr(
+        "app.services.crawl_service._load_run_with_normalized_status",
+        _load_run_with_status,
+    )
 
-            async with session_factory() as verify_session:
-                refreshed = await verify_session.get(CrawlRun, run_id)
-                assert refreshed is not None
-                summary = dict(refreshed.result_summary or {})
-                record_count = int(summary.get("record_count") or 0)
-                completed_urls = int(summary.get("completed_urls") or 0)
-                processed_urls = int(summary.get("processed_urls") or 0)
-                assert processed_urls == completed_urls
-                assert summary.get("remaining_urls") == max(record_count - processed_urls, 0)
-                assert sorted(list(summary.get("url_verdicts") or [])) == ["success", "success"]
-                assert summary.get("verdict_counts") == {"success": 2}
-        finally:
-            await engine.dispose()
+    dispatched = await dispatch_run(session, run)
+    task_id = dispatched.result_summary.get(CELERY_TASK_ID_KEY)
+    assert task_id
+    assert recorded == {
+        "args": [7],
+        "task_id": task_id,
+    }
+    session.commit.assert_awaited_once()
+    session.refresh.assert_awaited_once_with(run)
 
+
+@pytest.mark.asyncio
+async def test_dispatch_run_rejects_terminal_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.crawl_service.process_run_task.apply_async",
+        lambda **_kwargs: None,
+    )
+
+    run = SimpleNamespace(id=9, status="completed", result_summary={})
+    session = SimpleNamespace(
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+
+    async def _load_run_with_status(_session, _run_id):
+        return run, "completed"
+
+    monkeypatch.setattr(
+        "app.services.crawl_service._load_run_with_normalized_status",
+        _load_run_with_status,
+    )
+
+    with pytest.raises(ValueError, match="Cannot dispatch run in state"):
+        await dispatch_run(session, run)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_run_falls_back_to_local_runner_when_celery_enqueue_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SimpleNamespace(id=11, status="pending", result_summary={})
+    session = SimpleNamespace(
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+
+    async def _load_run_with_status(_session, _run_id):
+        return run, "pending"
+
+    recorded: dict[str, object] = {}
+
+    def _raise_apply_async(**_kwargs):
+        raise RuntimeError("redis down")
+
+    def _fake_track_local_run_task(run_id: int):
+        recorded["run_id"] = run_id
+        return None
+
+    monkeypatch.setattr(
+        "app.services.crawl_service._load_run_with_normalized_status",
+        _load_run_with_status,
+    )
+    monkeypatch.setattr(
+        "app.services.crawl_service.process_run_task.apply_async",
+        _raise_apply_async,
+    )
+    monkeypatch.setattr(
+        "app.services.crawl_service._track_local_run_task",
+        _fake_track_local_run_task,
+    )
+    monkeypatch.setattr(
+        "app.services.crawl_service.settings.legacy_inprocess_runner_enabled",
+        True,
+    )
+
+    dispatched = await dispatch_run(session, run)
+    task_id = dispatched.result_summary.get(CELERY_TASK_ID_KEY)
+    assert task_id
+    assert recorded == {"run_id": 11}
+    session.commit.assert_awaited_once()
+    session.refresh.assert_awaited_once_with(run)

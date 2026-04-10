@@ -27,6 +27,7 @@ import { CRAWL_DEFAULTS } from "../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES } from "../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { POLLING_INTERVALS } from "../../lib/constants/timing";
+import { getDomain } from "../../lib/format/domain";
 import { telemetryErrorPayload, trackEvent } from "../../lib/telemetry/events";
 import { parseApiDate } from "../../lib/format/date";
 import { humanizeStatus, runsStatusTone as statusTone } from "../../lib/ui/status";
@@ -547,9 +548,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Crawl Studio"
+        title={run?.url ? `Run Details: ${getDomain(run.url)}` : "Crawl Results"}
         actions={
-          <Button variant="accent" type="button" onClick={resetToConfig}>
+          <Button variant="secondary" size="sm" type="button" onClick={resetToConfig}>
             New Crawl
           </Button>
         }
@@ -684,15 +685,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                     {batchFromResultsLabel}
                   </Button>
                 ) : null}
-                <Button variant="accent" type="button" onClick={() => void downloadExport("csv")}>
+                <Button variant="secondary" type="button" onClick={() => void downloadExport("csv")}>
                   <Download className="size-3.5" />
                   Excel (CSV)
                 </Button>
-                <Button variant="accent" type="button" onClick={() => void downloadExport("json")}>
+                <Button variant="secondary" type="button" onClick={() => void downloadExport("json")}>
                   <Download className="size-3.5" />
                   JSON
                 </Button>
-                <Button variant="accent" type="button" onClick={() => void downloadExport("markdown")}>
+                <Button variant="secondary" type="button" onClick={() => void downloadExport("markdown")}>
                   <Download className="size-3.5" />
                   Markdown
                 </Button>
@@ -701,6 +702,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             tabs={
               <TabBar
                 value={outputTab}
+                variant="underline"
                 onChange={(value) => setOutputTab(value as OutputTabKey)}
                 options={[
                   { value: "table", label: `Table (${summary.records})` },

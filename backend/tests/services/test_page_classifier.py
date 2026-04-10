@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
-import pytest
-
 from app.services.llm_integration.page_classifier import (
     _classify_by_heuristics,
     _find_repeating_cards,
@@ -10,6 +7,7 @@ from app.services.llm_integration.page_classifier import (
     _url_matches_hint,
     classify_page,
 )
+from bs4 import BeautifulSoup
 
 
 def test_url_hint_match_only_counts_detail_specific_query_keys():

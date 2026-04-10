@@ -5,7 +5,7 @@ const DASHBOARD_STATUS_CONFIG: Record<string, { tone: Tone; label: string }> = {
   running: { tone: "accent", label: "Running" },
   paused: { tone: "warning", label: "Paused" },
   failed: { tone: "danger", label: "Failed" },
-  killed: { tone: "danger", label: "Killed" },
+  killed: { tone: "warning", label: "Killed" },
   proxy_exhausted: { tone: "danger", label: "Proxy Exhausted" },
   pending: { tone: "neutral", label: "Pending" },
   degraded: { tone: "warning", label: "Degraded" },
@@ -16,7 +16,7 @@ const RUNS_STATUS_CONFIG: Record<string, { tone: Exclude<Tone, "info">; dot: str
   running: { tone: "accent", dot: "var(--accent)" },
   paused: { tone: "warning", dot: "var(--warning)" },
   failed: { tone: "danger", dot: "var(--danger)" },
-  killed: { tone: "danger", dot: "var(--danger)" },
+  killed: { tone: "warning", dot: "var(--warning)" },
   proxy_exhausted: { tone: "danger", dot: "var(--danger)" },
   pending: { tone: "neutral", dot: "var(--text-muted)" },
 };
@@ -40,15 +40,16 @@ export function runsStatusDot(status: string): string {
 export function jobsStatusTone(status: string): Exclude<Tone, "info"> {
   if (status === "running") return "success";
   if (status === "paused") return "warning";
-  if (status === "killed" || status === "failed" || status === "proxy_exhausted") return "danger";
+  if (status === "killed") return "warning";
+  if (status === "failed" || status === "proxy_exhausted") return "danger";
   return "neutral";
 }
 
 export function dashboardStatusBarColor(status: string): string {
   if (status === "completed") return "var(--success)";
   if (status === "running") return "var(--accent)";
-  if (status === "failed" || status === "killed" || status === "proxy_exhausted") return "var(--danger)";
-  if (status === "paused" || status === "degraded") return "var(--warning)";
+  if (status === "failed" || status === "proxy_exhausted") return "var(--danger)";
+  if (status === "killed" || status === "paused" || status === "degraded") return "var(--warning)";
   return "var(--text-muted)";
 }
 

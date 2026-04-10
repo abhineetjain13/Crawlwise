@@ -11,8 +11,6 @@ from app.services.url_safety import (
 )
 
 
-
-
 @pytest.mark.asyncio
 async def test_resolve_host_ips_retries_transient_dns_failure(monkeypatch):
     calls = {"count": 0}

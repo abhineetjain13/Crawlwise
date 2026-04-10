@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-import asyncio
 
+import pytest
 from run_acquire_smoke import _build_summary, _run_batch, _write_report
 
 
@@ -53,10 +53,11 @@ async def _fake_run_one(run_id: int, name: str, url: str, timeout_seconds: int) 
     return {"ok": True, "run_id": run_id, "name": name, "url": url, "timeout_seconds": timeout_seconds}
 
 
-def test_run_batch_uses_unique_start_run_ids(monkeypatch):
+@pytest.mark.asyncio
+async def test_run_batch_uses_unique_start_run_ids(monkeypatch):
     monkeypatch.setattr("run_acquire_smoke._run_one", _fake_run_one)
 
-    results = asyncio.run(_run_batch("api", 30, start_run_id=45000))
+    results = await _run_batch("api", 30, start_run_id=45000)
 
     assert results[0]["run_id"] == 45000
     assert results[-1]["run_id"] == 45003

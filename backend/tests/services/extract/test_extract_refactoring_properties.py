@@ -4,14 +4,12 @@ Feature: extraction-pipeline-improvements
 Task 7: Simplify extract_candidates and coerce_field_candidate_value
 """
 
-import pytest
-from hypothesis import HealthCheck, given, settings, strategies as st
-from bs4 import BeautifulSoup
-
 from app.services.extract.service import (
-    extract_candidates,
     coerce_field_candidate_value,
+    extract_candidates,
 )
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 
 # Property 12: Candidate Collection Without Filtering
@@ -197,7 +195,7 @@ def test_property_15_refactoring_equivalence(title, price):
     assert isinstance(trace_current, dict)
     
     # Verify structure is preserved
-    for field_name, rows in candidates_current.items():
+    for _field_name, rows in candidates_current.items():
         assert isinstance(rows, list)
         for row in rows:
             assert isinstance(row, dict)

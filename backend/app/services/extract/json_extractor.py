@@ -33,11 +33,13 @@ def extract_json_listing(
     if not items:
         return []
 
+    normalized_requested_fields = _normalize_requested_fields(requested_fields)
     records = []
     for item in items[:max_records]:
         if not isinstance(item, dict):
             continue
         record = _normalize_item(item, page_url, surface=surface)
+        record = _filter_requested_fields(record, normalized_requested_fields)
         if record and any(v for k, v in record.items() if not k.startswith("_")):
             record["_source"] = "json_api"
             records.append(record)
@@ -53,6 +55,7 @@ def extract_json_detail(
     requested_fields: list[str] | None = None,
 ) -> list[dict]:
     """Extract a single record from a JSON API response (detail page)."""
+    normalized_requested_fields = _normalize_requested_fields(requested_fields)
     if isinstance(json_data, list):
         if not json_data:
             return []
@@ -62,10 +65,37 @@ def extract_json_detail(
         return []
 
     record = _normalize_item(json_data, page_url, surface=surface)
+    record = _filter_requested_fields(record, normalized_requested_fields)
     if record and any(v for k, v in record.items() if not k.startswith("_")):
         record["_source"] = "json_api"
         return [record]
     return []
+
+
+def _normalize_requested_fields(
+    requested_fields: list[str] | None,
+) -> set[str] | None:
+    if requested_fields is None:
+        return None
+    normalized = {
+        str(field).strip()
+        for field in requested_fields
+        if isinstance(field, str) and str(field).strip()
+    }
+    return normalized or None
+
+
+def _filter_requested_fields(
+    record: dict,
+    requested_fields: set[str] | None,
+) -> dict:
+    if requested_fields is None:
+        return record
+    return {
+        key: value
+        for key, value in record.items()
+        if key.startswith("_") or key in requested_fields
+    }
 
 
 def _find_items_array(data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH) -> list[dict]:

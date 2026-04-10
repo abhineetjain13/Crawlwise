@@ -4,14 +4,15 @@ import {
   CheckCircle2,
   CircleAlert,
   GripVertical,
+  Info,
   RotateCcw,
   Trash2,
   X,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode, RefObject } from "react";
+import React, { memo, useCallback, useEffect, useRef, useState } from "react";
+import type { ReactElement, ReactNode, RefObject } from "react";
 
-import { Badge, Button, Input, Textarea, Toggle as PrimitiveToggle } from "../ui/primitives";
+import { Badge, Button, Input, Textarea, Tooltip, Toggle as PrimitiveToggle } from "../ui/primitives";
 import type { CrawlRecord, CrawlRun, CrawlSurface } from "../../lib/api/types";
 import { formatTimeHms, parseApiDate } from "../../lib/format/date";
 import { cn } from "../../lib/utils";
@@ -38,6 +39,9 @@ export type PendingDispatch = {
   csvFile: File | null;
 };
 export type OutputTabKey = "table" | "json" | "markdown" | "logs";
+type IconElementProps = {
+  className?: string;
+};
 
 export function parseRequestedCrawlTab(value: string | null): CrawlTab | null {
   return value === "category" || value === "pdp" ? value : null;
@@ -404,35 +408,43 @@ export function SettingSection({
 }: Readonly<{
   label: string;
   description: string;
-  icon: ReactNode;
+  icon: ReactElement<IconElementProps>;
   checked: boolean;
   onChange: (value: boolean) => void;
   children?: ReactNode;
 }>) {
+  const renderedIcon = React.isValidElement<IconElementProps>(icon)
+    ? React.cloneElement(icon, {
+        className: cn(icon.props.className, "size-4"),
+      })
+    : null;
+
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-[var(--radius-xl)] border backdrop-blur-sm transition-all",
+        "transition-all",
         checked
-          ? "border-[color:color-mix(in_srgb,var(--accent)_28%,var(--border))] bg-[var(--setting-surface-active-bg)] shadow-[var(--shadow-sm)]"
-          : "border-[var(--border-strong)] bg-[var(--setting-surface-bg)]",
+          ? "bg-[var(--setting-surface-active-bg)]"
+          : "hover:bg-[var(--bg-alt)]/50",
       )}
     >
-      <div className="flex min-h-[68px] items-center justify-between gap-3 px-4 py-3">
-        <div className="flex min-w-0 items-start gap-3">
+      <div className="flex min-h-[56px] items-center justify-between gap-4 px-4 py-4">
+        <div className="flex min-w-0 items-center gap-3.5">
           <div
             className={cn(
-              "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[12px] border transition-colors",
+              "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border-2 transition-colors",
               checked
-                ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)]"
-                : "border-border bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
+                ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--shadow-xs)]"
+                : "border-[var(--border)] bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
             )}
           >
-            {icon}
+            {renderedIcon}
           </div>
-          <div className="min-w-0">
-            <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--text-primary)]">{label}</div>
-            <div className="text-sm leading-5 text-[var(--text-secondary)]">{description}</div>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="text-[12px] font-medium uppercase tracking-[0.08em] text-[var(--text-primary)] leading-none">{label}</div>
+            <Tooltip content={description}>
+               <Info className="size-3 text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-help transition-colors" />
+            </Tooltip>
           </div>
         </div>
         <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
@@ -441,10 +453,10 @@ export function SettingSection({
         <div
           className={cn(
             "overflow-hidden transition-[max-height] duration-200 ease-out",
-            checked ? "max-h-[420px]" : "max-h-0",
+            checked ? "max-h-[500px]" : "max-h-0",
           )}
         >
-          <div className="border-t border-border/80 bg-[var(--setting-body-bg)] p-2 space-y-2">{children}</div>
+          <div className="border-t-2 border-[var(--border-strong)] bg-[var(--bg-base)]/30 p-4 space-y-4">{children}</div>
         </div>
       ) : null}
     </div>
@@ -907,4 +919,3 @@ function ValidatedField({
     </label>
   );
 }
-

@@ -1,60 +1,58 @@
 # CrawlerAI Backend Architecture
 
-> **Last Updated:** 2026-04-08
-> **Stack:** Python 3.14+, FastAPI, SQLAlchemy 2.0 (async), SQLite, Playwright, curl_cffi
-> **Test Status:** Active targeted suites green on 2026-04-08 (acquisition, listing extraction, classifier, normalizers)
+> **Last Updated:** 2026-04-10
+> **Stack:** Python 3.14+, FastAPI, SQLAlchemy 2.0 (async), Postgres, Redis, Celery, Playwright, curl_cffi
+> **Test Status:** Active targeted suites green on 2026-04-10
 
 ---
 
 ## 1. System Overview
 
-CrawlerAI is a deterministic web crawling pipeline that extracts structured data from ecommerce listing/detail pages and job boards. The backend runs as a FastAPI application with a DB-backed in-process worker lease loop (no external message queue).
+CrawlerAI is a deterministic web crawling pipeline that extracts structured data from ecommerce listing/detail pages and job boards. The backend runs as a FastAPI API layer backed by Postgres for durable persistence, Redis for shared ephemeral runtime state, and Celery workers for background run execution.
 
 ### High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Frontend (Next.js)                    │
+│                        Frontend (Next.js)                  │
 └────────────────────────┬────────────────────────────────────┘
                          │ HTTP + Session Cookie / Bearer Token
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    FastAPI Application                       │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              7 API Route Modules                      │   │
-│  │  auth | crawls | records | dashboard | jobs | review │   │
-│  │  users                                                │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                          │                                   │
-│  ┌───────────────────────┴──────────────────────────────┐   │
-│  │              Service Layer                            │   │
-│  │  crawl_service | auth_service | review_service       │   │
-│  │  selector_service | llm_service | dashboard_service  │   │
-│  └───────────────────────┬──────────────────────────────┘   │
-│                          │                                   │
-│  ┌───────────────────────┴──────────────────────────────┐   │
-│  │              Crawl Worker (`services/workers.py`)     │   │
-│  │  Polls DB → Claims runs → Executes pipeline          │   │
-│  │  Semaphore-limited concurrency (default: 8)           │   │
-│  └───────────────────────┬──────────────────────────────┘   │
-│                          │                                   │
-│  ┌───────────────────────▼──────────────────────────────┐   │
-│  │              Extraction Pipeline                      │   │
-│  │  ACQUIRE → EXTRACT → UNIFY → PUBLISH                  │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                          │                                   │
-│  ┌───────────────────────┴──────────────────────────────┐   │
-│  │              Knowledge Base (JSON)                    │   │
-│  │  22 config files + 6 prompt templates                 │   │
-│  └──────────────────────────────────────────────────────┘   │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
+│                    FastAPI Application                     │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │               7 API Route Modules                    │  │
+│  │  auth | crawls | records | dashboard | jobs |       │  │
+│  │  review | users                                      │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                         │                                   │
+│  ┌──────────────────────┴──────────────────────────────┐  │
+│  │                 Service Layer                        │  │
+│  │  crawl_service | auth_service | review_service      │  │
+│  │  llm_service | dashboard_service | user_service     │  │
+│  └──────────────────────┬──────────────────────────────┘  │
+└─────────────────────────┼──────────────────────────────────┘
+                          │ enqueue / control
+                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              SQLite (crawlerai.db) + Alembic                 │
-│  Tables: users, crawl_runs, crawl_records, crawl_logs,      │
-│          review_promotions, selectors, llm_configs,         │
-│          llm_cost_logs, site_memories                        │
+│                     Redis + Celery                         │
+│  Redis: broker + shared runtime state + pacing / events   │
+│  Celery: durable background execution of `crawl.process_run`│
+└─────────────────────────┬──────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Celery Worker Processes                 │
+│  `app/tasks.py` → `process_run(run_id)`                    │
+│  Browser pool init/shutdown hooks per worker process       │
+│  Executes: ACQUIRE → EXTRACT → UNIFY → PUBLISH             │
+└─────────────────────────┬──────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Postgres + Alembic                        │
+│  Tables: users, crawl_runs, crawl_records, crawl_logs,    │
+│          review_promotions, llm_configs, llm_cost_log     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,20 +63,23 @@ CrawlerAI is a deterministic web crawling pipeline that extracts structured data
 ```
 backend/
 ├── app/
-│   ├── main.py                    # FastAPI app + lifespan worker start/stop
+│   ├── main.py                    # FastAPI app + lifespan startup/shutdown
+│   ├── tasks.py                   # Celery task entrypoints
 │   ├── api/                       # auth, users, dashboard, crawls, records, jobs, review
-│   ├── core/                      # config, db/session, auth dependencies, security, telemetry
-│   ├── models/                    # ORM models (users, crawls, records, logs, review, llm, selectors, site memory)
+│   ├── core/                      # config, database, redis, celery_app, auth, telemetry
+│   ├── models/                    # ORM models (users, crawls, records, logs, review, llm)
 │   ├── schemas/                   # request/response schemas
 │   └── services/
-│       ├── workers.py             # DB-backed lease worker loop + stale lease recovery
-│       ├── _batch_runtime.py      # batch orchestration + summary merge
+│       ├── crawl_service.py       # enqueue/pause/resume/kill run control
+│       ├── _batch_runtime.py      # run execution orchestration
+│       ├── crawl_events.py        # Redis-backed log/progress sampling helpers
+│       ├── runtime_metrics.py     # Redis-backed runtime counters
 │       ├── pipeline/              # pipeline core helpers
 │       ├── acquisition/           # acquirer, browser client/runtime, blocked detection, pacing, HTTP
 │       ├── extract/               # listing/detail/json extraction + source parsers
 │       ├── adapters/              # platform/domain adapters
 │       ├── review/                # review payload + persistence helpers
-│       └── config/                # typed config modules (extraction rules/selectors/block signatures/field mappings)
+│       └── config/                # typed config modules
 ├── alembic/                       # migrations
 ├── tests/
 ├── run_acquire_smoke.py
@@ -92,47 +93,72 @@ backend/
 
 ### 3.1 FastAPI Application (`app/main.py`)
 
-- Creates FastAPI app with lifespan context manager
-- Registers CORS middleware (configurable origins)
-- Mounts 7 API routers under `/api` prefix (`auth`, `users`, `dashboard`, `crawls`, `records`, `jobs`, `review`)
-- Bootstraps admin user on startup via `auth_service.bootstrap_admin()`
-- Runs database table creation on startup
+- Creates the FastAPI app with lifespan management
+- Registers CORS middleware and correlation-id middleware
+- Mounts 7 API routers under `/api`
+- Validates cookie policy configuration at startup
+- Bootstraps the admin user at startup
+- Shuts down browser pools and Redis clients during app shutdown
 
-### 3.2 Crawl Worker (`app/services/workers.py`)
+### 3.2 Celery App (`app/core/celery_app.py`)
 
-- Runs via FastAPI lifespan startup (`main.py` creates `CrawlWorkerLoop`)
-- Polls database every 1 second for `pending` runs
-- Claims runs atomically with `SELECT ... FOR UPDATE SKIP LOCKED`
-- Executes runs concurrently with semaphore-limited concurrency (default: 8)
-- Recovers only stale `claimed` / `running` runs after a grace window from crashes
-- Uses queue lease coordination and heartbeat/recovery helpers from `services/workers.py`
+- Configures the `crawlerai` Celery app
+- Uses `settings.redis_url` for both broker and result backend
+- Includes `app.tasks`
+- Enables `task_track_started`, `acks_late`, `reject_on_worker_lost`, and `worker_prefetch_multiplier=1`
+
+### 3.3 Celery Task Worker (`app/tasks.py`)
+
+- Exposes `crawl.process_run`
+- Creates an async SQLAlchemy session per task and calls `_batch_runtime.process_run(session, run_id)`
+- Initializes and tears down the Playwright browser pool per Celery worker process
+
+### 3.4 Run Dispatch / Control (`app/services/crawl_service.py`)
+
+- `dispatch_run()` allocates a Celery task id, stores it in `crawl_runs.result_summary`, and enqueues the task
+- `pause_run()` and `kill_run()` revoke the active Celery task and persist the updated run state
+- `resume_run()` transitions the run and re-enqueues it through Celery
 
 ---
 
-## 4. Database Schema
+## 4. Persistence and Runtime State
 
-### 4.1 Tables
+### 4.1 Durable Database
+
+Durable state lives in Postgres through SQLAlchemy async sessions and Alembic migrations.
 
 | Table | Model | Key Columns |
 |-------|-------|-------------|
 | `users` | `User` | id, email, hashed_password, role, is_active, token_version, created_at |
-| `crawl_runs` | `CrawlRun` | id, url, run_type, status, settings (JSON), result_summary (JSON), submitted_by, started_at, finished_at |
-| `crawl_records` | `CrawlRecord` | id, run_id, record_index, data (JSON), raw_data (JSON), discovered_data (JSON), source_trace (JSON) |
-| `crawl_logs` | `CrawlLog` | id, run_id, level, message, timestamp |
-| `review_promotions` | `ReviewPromotion` | id, domain, field_name, approved_value, selector, promoted_at |
-| `selectors` | `Selector` | id, domain, field_name, css_selector, xpath, regex, status, source, created_at |
-| `llm_configs` | `LLMConfig` | id, provider, model, api_key (encrypted), monthly_budget, is_active |
-| `llm_cost_logs` | `LLMCostLog` | id, config_id, prompt_tokens, completion_tokens, cost, timestamp |
-| `site_memories` | `SiteMemory` | id, domain, payload (JSON), updated_at |
+| `crawl_runs` | `CrawlRun` | id, user_id, run_type, url, status, surface, settings, requested_fields, result_summary, queue_owner, lease_expires_at, last_heartbeat_at, claim_count, last_claimed_at, completed_at |
+| `crawl_records` | `CrawlRecord` | id, run_id, source_url, data, raw_data, discovered_data, source_trace, raw_html_path |
+| `crawl_logs` | `CrawlLog` | id, run_id, level, message, created_at |
+| `review_promotions` | `ReviewPromotion` | id, run_id, domain, surface, approved_schema, field_mapping, created_at |
+| `llm_configs` | `LLMConfig` | id, provider, model, api_key_encrypted, task_type, budget fields, is_active |
+| `llm_cost_log` | `LLMCostLog` | id, run_id, provider, model, task_type, token counts, cost_usd, domain, created_at |
 
-### 4.2 Migrations
+### 4.2 Shared Ephemeral Runtime State
 
-5 Alembic migrations tracked:
-1. **Initial** — users, crawls, selectors
-2. **Selector XPath first** — reorders selector columns
-3. **Auth/status invariants** — adds token_version, status constraints
-4. **Remove selector confidence** — drops unused column
-5. **Site memory** — adds site_memories table
+Redis is authoritative for shared, short-lived coordination state:
+
+- Celery broker and result backend
+- Host memory / acquisition preferences
+- Crawl event sampling counters
+- Runtime metrics counters
+- Shared acquisition pacing and lock state
+
+Redis-backed state is fail-open where appropriate for diagnostics and pacing helpers; Postgres remains the durable source of truth for runs, records, logs, and review state.
+
+### 4.3 Migrations
+
+Alembic tracks the schema history, including:
+
+1. Initial schema
+2. Auth/status invariants
+3. Removal of selector/site-memory persistence from the active design
+4. Durable queue lease fields on `crawl_runs`
+
+The current schema is Postgres-oriented and uses `JSONB` for structured run and record payloads.
 
 ---
 
@@ -142,7 +168,7 @@ backend/
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/auth/register` | Public | Register new user |
+| POST | `/api/auth/register` | Public when enabled | Register new user |
 | POST | `/api/auth/login` | Public | Login (sets httponly cookie) |
 | GET | `/api/auth/me` | Session/Bearer | Current user info |
 
@@ -180,7 +206,7 @@ backend/
 | GET | `/api/review/{id}` | Authenticated | Review payload |
 | GET | `/api/review/{id}/artifact-html` | Authenticated | Raw HTML artifact |
 | POST | `/api/review/{id}/save` | Authenticated | Save review selections |
-| POST | `/api/review/{id}/selector-preview` | Authenticated | Selector preview |
+| POST | `/api/review/{id}/selector-preview` | Authenticated | Selector preview compatibility endpoint |
 
 ### 5.5 Admin Endpoints
 
@@ -197,7 +223,18 @@ backend/
 
 The pipeline follows: **ACQUIRE → EXTRACT → UNIFY → PUBLISH**
 
-### 6.1 ACQUIRE (`services/acquisition/`)
+### 6.1 Dispatch Flow
+
+```
+POST /api/crawls
+  │
+  ├── Persist run in Postgres
+  ├── Generate Celery task id
+  ├── Save task id in result_summary
+  └── Enqueue `crawl.process_run(run_id)` via Celery/Redis
+```
+
+### 6.2 ACQUIRE (`services/acquisition/`)
 
 **Orchestrator:** `acquirer.py`
 
@@ -205,108 +242,73 @@ The pipeline follows: **ACQUIRE → EXTRACT → UNIFY → PUBLISH**
 acquire(url, settings)
   │
   ├── Validate URL (url_safety.py: SSRF check, DNS resolution, public IP verify)
-  ├── Check host memory (host_memory.py: does this host need stealth?)
+  ├── Check Redis-backed host memory (host_memory.py)
   │
   ├── Try curl_cffi first
-  │   ├── DNS resolve → CurlOpt.RESOLVE for hostname pinning (preserves TLS/SNI)
+  │   ├── DNS resolve → CurlOpt.RESOLVE for hostname pinning
   │   ├── Apply proxy rotation if configured
-  │   ├── Apply stealth TLS fingerprint if host_memory says so
-  │   └── Detect JSON response (Content-Type header or body sniff)
+  │   ├── Apply platform/pacing policy
+  │   └── Detect JSON response
   │
-  ├── If JS-blocked / challenge / short content / JS-shell → Playwright fallback
+  ├── If blocked / JS-shell / unusable → Playwright fallback
   │   ├── browser_client.py: stealth context creation
   │   ├── Origin warming
-  │   ├── Cookie consent dismissal (from consent_selectors.json)
+  │   ├── Cookie consent dismissal
   │   ├── Network XHR/fetch interception
-  │   ├── Accordion expansion (configurable max + wait)
-  │   ├── Shadow DOM flattening
+  │   ├── Interactive expansion
   │   └── Advanced modes: scroll, paginate, load_more
   │
   └── Return AcquisitionResult(html/json, network_payloads, diagnostics)
 ```
 
 **Key invariants:**
-- curl_cffi always tried first; Playwright is fallback only
-- DNS pinning uses `CurlOpt.RESOLVE` on session, not URL rewrite
-- No manual `Host` header injection in Playwright contexts
-- Acquisition pacing from `pipeline_tuning.json`, not hardcoded sleeps
-- Diagnostics persisted alongside HTML/JSON artifacts
+- `curl_cffi` is the default acquisition path; Playwright is escalation/fallback
+- DNS pinning uses `CurlOpt.RESOLVE`, never raw-IP URL rewrites
+- Redis-backed pacing/host-memory state must not become authority for rewriting user crawl controls
+- Diagnostics persist alongside HTML/JSON artifacts
 
-**Blocked Detection:** `blocked_detector.py`
-- Tiered: Active markers (high confidence) → CDN markers (low confidence) → Block phrases → Title regexes → Structural signals
-- Rich content guard: don't block if page has rich usable content
-- Adapter recovery: `try_blocked_adapter_recovery()` (Shopify only currently)
-
-### 6.2 EXTRACT (`services/extract/`)
+### 6.3 EXTRACT (`services/extract/`)
 
 #### Listing Extraction (`listing_extractor.py`)
 
-Structured-data-first strategy with ordered fallback:
+Ordered strategy:
 
-```
-extract_listing(manifest, url, contract_fields)
-  │
-  ├── 1. JSON-LD item lists / Product arrays
-  ├── 2. Embedded app state (__NEXT_DATA__)
-  ├── 3. Hydrated state objects (__NUXT__, __APOLLO_STATE__, etc.)
-  ├── 4. Network payloads (intercepted JSON)
-  ├── 5. DOM card detection
-  │   ├── Use card_selectors.json (22 ecommerce + 12 job patterns)
-  │   ├── Auto-detect: score candidate groups by product signal density
-  │   └── Extract fields from cards using ordered selectors
-  │
-  ├── Filter category/navigation URLs and title/image-only hub cards from product URLs
-  ├── Resolve relative URLs against page URL
-  └── Return list of records OR listing_detection_failed verdict
-```
+1. JSON-LD item lists / Product arrays
+2. Embedded app state (`__NEXT_DATA__`)
+3. Hydrated state objects (`__NUXT__`, `__APOLLO_STATE__`, etc.)
+4. Intercepted network payloads
+5. DOM card detection
 
-**Fallback guard:** 0 item-level records → `listing_detection_failed` verdict (never downgrades to detail-style single record).
+0 real item-level records results in `listing_detection_failed`; listing pages never downgrade to detail-style single-record fallback.
 
 #### Detail Extraction (`service.py`)
 
-Deterministic source priority:
+Field resolution is strict first-match:
 
-```
-extract_detail(manifest, url, contract_fields)
-  │
-  ├── 1. Extraction contract (user-defined XPath/regex)
-  ├── 2. Adapter data
-  ├── 3. Network payloads
-  ├── 4. __NEXT_DATA__
-  ├── 5. JSON-LD
-  ├── 6. Microdata
-  ├── 7. DOM selectors
-  ├── 8. Semantic sections (semantic_detail_extractor.py)
-  └── 9. DOM patterns
-       │
-       ├── Quality scoring per field
-       ├── Type-aware normalization
-       ├── Noise filtering (JSON-LD types, promo labels, etc.)
-       └── Return single record with field_discovery summaries
-```
+1. Adapter
+2. XHR/JSON payload
+3. JSON-LD
+4. Hydrated state
+5. DOM selector defaults
+6. LLM fallback
 
 #### JSON Extraction (`json_extractor.py`)
 
-First-class JSON API extraction:
-- 37 collection keys (products, jobs, drinks, books, categories, etc.)
-- GraphQL edges/node patterns
+- First-class JSON API extraction
+- Collection-key and GraphQL edge/node discovery
 - Falls back to preserving scalar fields under original keys
 
-### 6.3 UNIFY → PUBLISH
+### 6.4 UNIFY → PUBLISH
 
 ```
 unify(records, manifest, requested_fields)
   │
-  ├── Strip empty/null fields from record.data
-  ├── Strip _-prefixed internal keys from record.data
-  ├── Strip raw manifest containers from discovered_data
-  ├── Build source_trace.field_discovery summaries
-  ├── Compute extraction_verdict (success/partial/blocked/schema_miss/empty/error)
-  ├── Map verdict to run status (completed=success, failed=all others)
-  └── Persist to database
+  ├── Strip empty/null/internal fields from API-facing payloads
+  ├── Build source_trace summaries
+  ├── Compute extraction_verdict
+  ├── Map verdict to run status
+  └── Persist runs/records/logs to Postgres
 ```
-
-**Verdict logic:** Based on `VERDICT_CORE_FIELDS` presence only (from `verdict_rules.json`). Requested field coverage does NOT affect verdict.
 
 ---
 
@@ -315,39 +317,48 @@ unify(records, manifest, requested_fields)
 **Registry:** `services/adapters/registry.py`
 
 Resolution order:
-1. Domain-matched adapters (exact domain match)
-2. Signal-based adapters (Shopify detection via page signals)
 
-| Adapter | Type | Strategy |
-|---------|------|----------|
-| Amazon | Ecommerce PDP | Domain match |
-| Walmart | Ecommerce PDP | Domain match |
-| eBay | Ecommerce PDP | Domain match |
-| Shopify | Ecommerce (signal-based) | `/products/<handle>.js` endpoint |
-| Indeed | Jobs listing | Domain match |
-| LinkedIn Jobs | Jobs listing | Domain match |
-| Greenhouse | ATS | `boards-api.greenhouse.io` + HTML fallback |
-| Remotive/RemoteOK | Jobs listing | HTML fallback |
+1. Domain-matched adapters
+2. Signal-based adapters (Shopify)
 
-**Recovery:** `try_blocked_adapter_recovery()` attempts public platform endpoints when pages are blocked. Currently supports Shopify only.
+Implemented adapters currently include:
+
+- Amazon
+- Walmart
+- eBay
+- ADP
+- Greenhouse
+- iCIMS
+- Indeed
+- Jibe
+- LinkedIn Jobs
+- Oracle HCM
+- Paycom
+- RemoteOK
+- Remotive
+- SaaShr
+- Shopify
+
+Blocked-page recovery currently includes Shopify public endpoint fallback.
 
 ---
 
 ## 8. Configuration Model
 
-All tunables are loaded via typed config modules and surfaced through `services/pipeline_config.py`. Code MUST import from `pipeline_config.py` — never hardcode values in service code.
+All tunables are loaded via typed config modules and surfaced through `services/pipeline_config.py`. Service code should import through `pipeline_config.py`, not duplicate configuration values.
 
 | File | Contents |
 |------|----------|
 | `config/extraction_rules.py` | Pipeline tuning, field rules, platform families, browser-first family policy |
 | `config/block_signatures.py` | WAF/challenge signatures |
-| `config/selectors.py` | Card/pagination/consent selectors and listing-readiness overrides |
+| `config/selectors.py` | Card, pagination, consent, and readiness selectors |
 | `config/field_mappings.py` | Canonical schemas, aliases, collection keys |
 
-Current policy stance from 2026-04 docs:
-- Generic crawler paths must not contain tenant/site hardcoded hacks.
-- Family-level platform policy is allowed but kept to bare minimum required.
-- Browser-first policy is family-driven (`PLATFORM_BROWSER_POLICIES`), not site-literal in service code.
+Policy stance:
+
+- Generic crawler paths must not contain tenant/site hardcoded hacks
+- Family-level platform policy is allowed where required
+- Browser-first behavior is family-driven, not host-literal in service code
 
 ---
 
@@ -355,26 +366,25 @@ Current policy stance from 2026-04 docs:
 
 | Pattern | Where |
 |---------|-------|
-| **Waterfall Acquisition** | curl_cffi → Playwright → curl_cffi fallback |
-| **Strategy Pattern** | Platform adapters via `BaseAdapter` ABC |
-| **Source-Ranked Extraction** | Deterministic priority from typed config exposed through `pipeline_config.py` |
-| **Config-Driven Policy** | Shared tunables in `services/config/*.py`, consumed through `pipeline_config.py` |
-| **Worker Claim** | `SELECT ... FOR UPDATE SKIP LOCKED` for race-free claiming |
-| **State Machine** | `_ALLOWED_TRANSITIONS` in `crawl_state.py` |
-| **Atomic Writes** | temp-file + `os.replace()` for KB store |
-| **Fail-Closed URL Safety** | DNS failure → reject, never silently allow |
-| **Policy-Driven Cookies** | `cookie_policy` config allowlists, challenge cookies filtered |
+| **Waterfall Acquisition** | `curl_cffi` → Playwright escalation |
+| **Strategy Pattern** | Platform adapters via `BaseAdapter` |
+| **Source-Ranked Extraction** | Deterministic first-match field resolution |
+| **Config-Driven Policy** | Typed config modules via `pipeline_config.py` |
+| **Task Queue Dispatch** | Celery task enqueue + revoke for run control |
+| **Fail-Closed URL Safety** | DNS failure → reject |
+| **Policy-Driven Cookies** | Domain policy allowlists + filtered persistence |
+| **Redis Shared State** | Pacing, host memory, event counters, runtime metrics |
 
 ---
 
 ## 10. Authentication & Authorization
 
-- **Password hashing:** `pbkdf2_sha256` (passlib)
-- **JWT:** python-jose, with `token_version` on User model for revocation
-- **Session:** httponly cookie set on login
-- **API auth:** Accepts either session cookie OR `Authorization: Bearer <token>`
-- **Admin bootstrap:** Auto-creates admin user from env vars on startup
-- **Role-based:** `require_admin` dependency guards admin-only endpoints
+- Password hashing via `pbkdf2_sha256`
+- JWT auth with `token_version`-based revocation
+- Session cookie or bearer token accepted
+- Bootstrap admin from environment at startup
+- `require_admin` guards admin-only endpoints
+- Public registration is disabled by default unless `REGISTRATION_ENABLED=true`
 
 ---
 
@@ -387,21 +397,19 @@ $env:PYTHONPATH='.'
 pytest tests -q
 ```
 
-The backend test tree currently collects 360 tests. Coverage includes adapters, acquisition, blocked detection, JSON extraction, listing extraction, crawl service, review, normalizers, security, host memory, URL safety, dashboard, discovery, and worker recovery.
+Use the current `pytest` collection as the source of truth for exact test counts. Coverage includes acquisition, extraction, adapters, crawl service, Celery dispatch integration, Redis-backed runtime helpers, review flows, security, and worker/process lifecycle behavior.
 
 ### 11.2 Acquire-Only Smoke Tests
 
 ```powershell
 $env:PYTHONPATH='.'
-python run_acquire_smoke.py api        # Adorama, Dice, SSENSE
-python run_acquire_smoke.py commerce   # Arc'teryx, Adafruit, SparkFun
-python run_acquire_smoke.py jobs       # Indeed, LinkedIn
-python run_acquire_smoke.py hard       # Challenging sites
-python run_acquire_smoke.py ats        # ATS platforms
-python run_acquire_smoke.py specialist # Specialist retailers
+python run_acquire_smoke.py api
+python run_acquire_smoke.py commerce
+python run_acquire_smoke.py jobs
+python run_acquire_smoke.py hard
+python run_acquire_smoke.py ats
+python run_acquire_smoke.py specialist
 ```
-
-Writes reports to `artifacts/acquisition_smoke/` and per-URL diagnostics to `artifacts/diagnostics/<run_id>/`.
 
 ### 11.3 Full Extraction Smoke Tests
 
@@ -410,34 +418,35 @@ $env:PYTHONPATH='.'
 python run_extraction_smoke.py
 ```
 
-Tests 10 client URLs through complete extraction pipeline. Writes report to `artifacts/extraction_smoke/`.
-
 ---
 
 ## 12. Architecture Invariants
 
 These MUST be preserved across all changes:
 
-1. **No magic values in code** — Shared tunables in typed config modules, loaded via `pipeline_config.py`
-2. **Async-safe adapters** — HTTP calls use `asyncio.to_thread()` for sync libraries
-3. **Verdict based on core fields only** — `_compute_verdict()` uses `VERDICT_CORE_FIELDS`, not requested fields
-4. **Clean record API responses** — `data` strips empty/null/internal keys; `discovered_data` strips raw manifest containers
-5. **Listing fallback guard** — 0 item records → `listing_detection_failed`, never detail-style fallback
-6. **Review shows only actionable fields** — `discovered_fields` excludes container keys and empty values
-7. **Pipeline config is single source of truth** — field aliases, collection keys, selectors, block signatures, etc.
-8. **Preserve usable content over brittle heuristics** — Anti-bot signatures only block when page actually behaves like challenge
-9. **HTTP pinning preserves TLS identity** — Original hostname URL preserved with DNS pinning
-10. **Acquisition regressions diagnosable from artifacts** — HTML/JSON + per-URL diagnostics + smoke summaries
-11. **Cookie reuse is policy-driven** — Only policy-approved cookies persisted via `cookie_policy.json`
-12. **Diagnostics are observational** — Report only what actually happened, no fabricated causes
-13. **JS-shell triggers Playwright** — Large HTML (>=200KB) + low text ratio (<2%) → Playwright escalation
-14. **LLM calls fail fast** — No retry/backoff on 429 errors
-15. **Dynamic field names pass quality gates** — Single-char keys, JSON-LD types, sentence-like labels filtered
-16. **JSON-LD structural keys produce no candidates** — `@type`, `@context`, `@id`, `@graph` skipped before alias matching
-17. **No tenant/site hacks in generic paths** — Generic acquisition/extraction/classification logic must use family/policy configuration, not direct tenant host branches.
+1. **No magic values in service code** — shared tunables live in typed config modules behind `pipeline_config.py`
+2. **Async-safe adapters** — sync HTTP clients in async paths must use `asyncio.to_thread()`
+3. **Verdict based on core fields only** — requested field coverage is metadata, not verdict input
+4. **Clean record API responses** — `data` strips empty/null/internal keys; `discovered_data` strips raw containers
+5. **Listing fallback guard** — listing pages with 0 item records yield `listing_detection_failed`
+6. **Review shows only actionable fields** — no container keys or empty values in review payloads
+7. **Postgres is the durable source of truth** — runs, logs, records, review state, and LLM config/cost data persist in Postgres
+8. **Redis is shared ephemeral state only** — broker/runtime coordination may live in Redis; durable business state must not
+9. **Celery owns background run execution** — FastAPI enqueues and controls runs, workers execute them
+10. **Preserve usable content over brittle anti-bot heuristics** — vendor markers alone are not enough to classify a block
+11. **HTTP pinning preserves TLS identity** — preserve hostname when pinning DNS
+12. **Acquisition regressions must be diagnosable from artifacts** — successful acquires emit artifacts and machine-readable diagnostics
+13. **Cookie reuse is policy-driven** — only policy-approved cookies persist; challenge cookies stay deny-by-default
+14. **Diagnostics are observational** — report what happened; do not fabricate causes
+15. **User-owned crawl controls are never rewritten by the backend** — no silent mode or proxy policy mutation
+16. **Field extraction is first-match, not score-based** — adapter → payload → JSON-LD → hydrated state → DOM → LLM fallback
+17. **Playwright expansion is generic, not field-routed** — requested fields must not determine click plans
+18. **Deleted subsystems stay deleted** — do not reintroduce selector CRUD, site memory persistence, or runtime-editable per-domain extraction logic
+19. **LLM calls fail fast on 429** — no retry/backoff sleep loops on rate limits
+20. **Generic crawler paths stay generic** — no tenant/site hacks in production acquisition or extraction paths
 
 ---
 
 ## 13. Backlog Reference
 
-All active backend bugs, refactors, and follow-up architecture work now live in [backend-pending-items.md](/C:/Projects/pre_poc_ai_crawler/docs/backend-pending-items.md). This architecture document is intended to describe the current implemented system, not to duplicate the backlog.
+All active backend bugs, refactors, and follow-up architecture work live in [backend-pending-items.md](/C:/Projects/pre_poc_ai_crawler/docs/backend-pending-items.md). This document describes the current implemented backend, not future backlog items.

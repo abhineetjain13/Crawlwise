@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import re
 import tempfile
 from fnmatch import fnmatch
 from pathlib import Path
@@ -17,6 +18,7 @@ from app.models.user import User
 from app.services.acquisition.browser_client import reset_browser_pool_state
 from app.services.acquisition.host_memory import reset_host_memory
 from app.services.acquisition.pacing import reset_pacing_state
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _TMP_COUNTER = itertools.count()
@@ -161,6 +163,9 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
     client = FakeRedis()
     monkeypatch.setattr(app_redis, "_client", client)
     monkeypatch.setattr(app_redis, "_pool", None)
+    monkeypatch.setattr(app_redis, "_redis_disabled_until", 0.0)
+    monkeypatch.setattr(app_redis, "_last_disable_log_at", 0.0)
+    monkeypatch.setattr(app_redis.settings, "redis_state_enabled", True)
     return client
 
 
@@ -182,14 +187,29 @@ async def _dispose_global_app_engine():
 @pytest_asyncio.fixture
 async def db_session():
     """Create a PostgreSQL database schema for each test."""
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    schema_suffix = re.sub(r"[^a-zA-Z0-9_]", "_", f"{worker_id}_{next(_TMP_COUNTER)}")
+    schema_name = f"test_{schema_suffix}"
+    quoted_schema_name = f'"{schema_name}"'
     engine = create_async_engine(TEST_DATABASE_URL, future=True, echo=False)
+    scoped_engine = engine.execution_options(schema_translate_map={None: schema_name})
     async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {quoted_schema_name}"))
+    async with scoped_engine.begin() as conn:
+        await conn.execute(text(f"SET search_path TO {quoted_schema_name}"))
         await conn.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    session_factory = async_sessionmaker(
+        scoped_engine,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
     async with session_factory() as session:
         yield session
-    async with engine.begin() as conn:
+    async with scoped_engine.begin() as conn:
+        await conn.execute(text(f"SET search_path TO {quoted_schema_name}"))
         await conn.run_sync(Base.metadata.drop_all)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP SCHEMA IF EXISTS {quoted_schema_name} CASCADE"))
     await engine.dispose()
 
 

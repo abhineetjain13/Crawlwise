@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Plus, Trash2 } from "lucide-react";
+import { ArrowUpRight, Copy, ExternalLink, Plus, Trash2 } from "lucide-react";
 
-import { Badge, Button, Input } from "../../components/ui/primitives";
+import { Badge, Button, Input, Tooltip } from "../../components/ui/primitives";
 import {
   DataRegionEmpty,
   DataRegionError,
@@ -42,22 +42,39 @@ function RunRow({
       <td>
         <div className="flex items-center gap-2.5">
           <StatusDot tone={statusTone(run.status)} />
-          <div className="min-w-0">
-            <Link
-              href={`/crawl?run_id=${run.id}`}
-              className="no-underline block truncate text-[13px] font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors max-w-lg"
-            >
-              {domain || `Run #${run.id}`}
-            </Link>
-            <a
-              href={run.url}
-              target="_blank"
-              rel="noreferrer"
-              className="no-underline block truncate font-mono text-[10px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors max-w-lg"
-              title={run.url}
-            >
-              {run.url}
-            </a>
+          <div className="flex min-w-0 items-center gap-2">
+            <Tooltip content={run.url}>
+              <Link
+                href={`/crawl?run_id=${run.id}`}
+                className="no-underline block truncate text-[13px] font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors max-w-[280px]"
+              >
+                {domain || `Run #${run.id}`}
+              </Link>
+            </Tooltip>
+            
+            <div className="flex items-center gap-1 opacity-10 group-hover:opacity-100 transition-opacity">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void navigator.clipboard.writeText(run.url);
+                }}
+                className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                title="Copy URL"
+              >
+                <Copy className="size-3" />
+              </button>
+              <a
+                href={run.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                title="Open original URL"
+              >
+                <ExternalLink className="size-3" />
+              </a>
+            </div>
           </div>
         </div>
       </td>

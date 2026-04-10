@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.services.schema_service import (
     is_valid_schema_field_name,
     learn_schema_from_record,
@@ -12,6 +10,7 @@ from app.services.schema_service import (
     persist_resolved_schema,
     resolve_schema,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def test_is_valid_schema_field_name_rejects_invalid_names():
@@ -53,6 +52,25 @@ async def test_load_resolved_schema_keeps_explicit_fields_without_cross_run_pers
     assert "wire_gauge" not in resolved.fields
     assert "finish" in resolved.fields
     assert resolved.domain == "example.com"
+
+
+def test_learn_schema_from_record_filters_internal_and_cross_surface_fields():
+    schema = learn_schema_from_record(
+        surface="ecommerce_detail",
+        domain="example.com",
+        baseline_fields=["title", "price"],
+        sample_record={
+            "title": "Chair",
+            "price": "10",
+            "finish": "Oak",
+            "salary": "$100k",
+            "slug": "chair-1",
+        },
+    )
+
+    assert "finish" in schema.fields
+    assert "salary" not in schema.fields
+    assert "slug" not in schema.fields
 
 
 @pytest.mark.asyncio
@@ -115,16 +133,15 @@ async def test_resolve_schema_does_not_learn_job_surface_from_sample_record(db_s
 
 @pytest.mark.asyncio
 async def test_resolve_schema_ignores_llm_flag_and_returns_static_without_sample_record(db_session: AsyncSession):
-    with pytest.warns(DeprecationWarning, match="LLM-based schema inference is no longer supported"):
-        resolved = await resolve_schema(
-            db_session,
-            "ecommerce_detail",
-            "example.com",
-            run_id=55,
-            html="<html><body><h1>Chair</h1></body></html>",
-            url="https://example.com/product",
-            llm_enabled=True,
-        )
+    resolved = await resolve_schema(
+        db_session,
+        "ecommerce_detail",
+        "example.com",
+        run_id=55,
+        html="<html><body><h1>Chair</h1></body></html>",
+        url="https://example.com/product",
+        llm_enabled=True,
+    )
 
     assert resolved.source == "static"
     assert "title" in resolved.fields

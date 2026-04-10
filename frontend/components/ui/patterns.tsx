@@ -2,7 +2,7 @@
 
 import { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useTopBarStore } from "../layout/top-bar-context";
 import { cn } from "../../lib/utils";
@@ -65,22 +65,26 @@ export function TabBar({
   onChange,
   options,
   compact = false,
+  className,
+  variant = "pill",
 }: Readonly<{
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
   compact?: boolean;
+  className?: string;
+  variant?: "pill" | "underline";
 }>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [pill, setPill] = useState({ left: 0, width: 0 });
 
   const activeIndex = options.findIndex((o) => o.value === value);
-  const padX = compact ? "px-2.5" : "px-3";
+  const padX = compact ? "px-2.5" : "px-3.5";
 
   const syncPill = useCallback(() => {
     const container = containerRef.current;
-    if (activeIndex < 0 || !container) {
+    if (activeIndex < 0 || !container || variant !== "pill") {
       setPill({ left: 0, width: 0 });
       return;
     }
@@ -94,15 +98,15 @@ export function TabBar({
       left: bRect.left - cRect.left,
       width: bRect.width,
     });
-  }, [activeIndex]);
+  }, [activeIndex, variant]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     syncPill();
   }, [syncPill, value, options]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const container = containerRef.current;
-    if (!container || typeof ResizeObserver === "undefined") {
+    if (!container || typeof ResizeObserver === "undefined" || variant !== "pill") {
       return;
     }
     const ro = new ResizeObserver(() => syncPill());
@@ -112,16 +116,48 @@ export function TabBar({
       ro.disconnect();
       window.removeEventListener("resize", syncPill);
     };
-  }, [syncPill]);
+  }, [syncPill, variant]);
+
+  if (variant === "underline") {
+    return (
+      <div
+        className={cn(
+          "flex h-9 items-stretch border-b-2 border-[var(--border-strong)] bg-transparent p-0",
+          className,
+        )}
+      >
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={value === option.value}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-[12px] font-bold transition-all",
+              padX,
+              value === option.value
+                ? "border-b-[3px] border-[var(--accent)] text-[var(--accent)]"
+                : "border-b-[3px] border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border)]",
+            )}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div
       ref={containerRef}
-      className="relative inline-flex h-8 items-stretch rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-elevated)] p-0.5"
+      className={cn(
+        "relative inline-flex h-8 items-stretch rounded-[var(--radius-md)] border-2 border-[var(--border-strong)] bg-[var(--bg-elevated)] p-0.5 shadow-[var(--shadow-xs)]",
+        className,
+      )}
     >
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0.5 rounded-[4px] border border-[var(--accent)] bg-[var(--accent)] shadow-[var(--shadow-xs)] transition-[left,width] duration-150 ease-out motion-reduce:transition-none"
+        className="pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[#3b82f6] shadow-[0_1px_2px_rgba(0,0,0,0.1)] transition-[left,width] duration-200 ease-out"
         style={{
           width: pill.width > 0 ? pill.width : 0,
           left: pill.left,
@@ -138,11 +174,11 @@ export function TabBar({
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "relative z-10 inline-flex shrink-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-caption font-medium leading-none transition-colors duration-100 motion-reduce:transition-none",
+            "relative z-10 inline-flex shrink-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-[11px] font-bold transition-all duration-200",
             padX,
             value === option.value
-              ? "text-[var(--accent-foreground)]"
-              : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
+              ? "text-white"
+              : "text-[var(--text-muted)] hover:text-[var(--text-primary)]",
           )}
         >
           {option.label}
@@ -185,7 +221,7 @@ export function EmptyPanel({
   description,
 }: Readonly<{ title: string; description: string }>) {
   return (
-    <div className="grid min-h-32 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--border)] text-center px-6 py-8">
+    <div className="grid min-h-32 place-items-center rounded-[var(--radius-lg)] border-2 border-dashed border-[var(--border-strong)] bg-[var(--bg-panel)] text-center px-6 py-8">
       <div className="space-y-1">
         <p className="text-body-sm font-medium text-[var(--text-primary)]">{title}</p>
         <p className="text-caption text-[var(--text-muted)]">{description}</p>
@@ -231,7 +267,7 @@ export function SkeletonRows({
 /* ─── MetricSkeleton ─────────────────────────────────────────────────────── */
 export function MetricSkeleton() {
   return (
-    <div className="stat-card space-y-2">
+    <div className="stat-card space-y-2 border-2 border-[var(--border-strong)] bg-[var(--surface-card)] p-4 rounded-[var(--radius-xl)] shadow-[var(--shadow-card-value)]">
       <Skeleton className="h-3 w-20" />
       <Skeleton className="h-9 w-28" />
       <Skeleton className="h-3 w-16" />
@@ -321,12 +357,12 @@ export function RunWorkspaceShell({
 }>) {
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-border bg-[var(--bg-elevated)] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border-2 border-[var(--border-strong)] bg-[var(--bg-elevated)] px-4 py-3 shadow-[var(--shadow-sm)]">
         <div className="min-w-0 flex-1">{header}</div>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
       <div className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           {tabs}
           {summary ? <div className="pb-2">{summary}</div> : null}
         </div>
@@ -377,8 +413,8 @@ export function TableSurface({
   contentClassName?: string;
 }>) {
   return (
-    <SurfacePanel className={cn("overflow-hidden", className)}>
-      <div className={cn("overflow-auto", contentClassName)}>{children}</div>
+    <SurfacePanel className={cn("overflow-visible", className)}>
+      <div className={cn("min-h-0 min-w-0 w-full", contentClassName)}>{children}</div>
     </SurfacePanel>
   );
 }

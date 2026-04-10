@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.services.extract.service import (
     _dynamic_field_name_is_schema_slug_noise,
     _dynamic_field_name_is_valid,

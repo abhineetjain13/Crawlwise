@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from math import ceil
@@ -19,6 +20,7 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+logger = logging.getLogger(__name__)
 
 
 def _lock_key(normalized_host: str) -> str:
@@ -36,7 +38,10 @@ def _lock_ttl_seconds(minimum_interval_ms: int) -> int:
 
 async def _release_lock(lock_key: str, token: str) -> None:
     redis = get_redis()
-    await redis.eval(_RELEASE_LOCK_SCRIPT, 1, lock_key, token)
+    try:
+        await redis.eval(_RELEASE_LOCK_SCRIPT, 1, lock_key, token)
+    except Exception:
+        logger.warning("Failed to release pacing lock for %s", lock_key, exc_info=True)
 
 
 async def _cooperative_delay(
@@ -69,15 +74,17 @@ async def wait_for_host_slot(
     interval_seconds = minimum_interval_ms / 1000.0
 
     async def _wait(redis) -> float:
+        total_delay = 0.0
         while True:
             if checkpoint is not None:
                 await checkpoint()
             token = uuid4().hex
+            lock_ttl_seconds = _lock_ttl_seconds(minimum_interval_ms)
             acquired = await redis.set(
                 lock_key,
                 token,
                 nx=True,
-                ex=_lock_ttl_seconds(minimum_interval_ms),
+                ex=lock_ttl_seconds,
             )
             if not acquired:
                 await _cooperative_delay(
@@ -94,14 +101,21 @@ async def wait_for_host_slot(
                     next_allowed = now
                 delay = max(0.0, next_allowed - now)
                 if delay > 0:
-                    await _cooperative_delay(delay, checkpoint=checkpoint)
+                    max_delay = max(0.0, lock_ttl_seconds - 1.0)
+                    sleep_delay = min(delay, max_delay)
+                    await _cooperative_delay(sleep_delay, checkpoint=checkpoint)
+                    total_delay += sleep_delay
+                    if await redis.get(lock_key) != token:
+                        continue
+                    if delay > sleep_delay:
+                        continue
                 current_time = time.time()
                 await redis.set(
                     next_key,
                     f"{current_time + interval_seconds:.6f}",
                     ex=ttl_seconds,
                 )
-                return delay
+                return total_delay
             finally:
                 await _release_lock(lock_key, token)
 

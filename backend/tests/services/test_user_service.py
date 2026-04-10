@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.user import User
 from app.services.user_service import list_users
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio

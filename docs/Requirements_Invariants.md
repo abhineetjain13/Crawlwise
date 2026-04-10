@@ -1,9 +1,9 @@
 # Web Crawling Platform — Requirements & System Invariants
 **Document Type:** Product Requirements + System Invariants  
 **Scope:** Internal Tool POC  
-**Stack:** Next.js (frontend) + FastAPI (backend) + SQLite (persistence)  
+**Stack:** Next.js (frontend) + FastAPI (backend) + Postgres (persistence)  
 **Crawl Engine:** Hybrid — HTTP/HTML parsing for static pages, Playwright for JS-rendered/SPA pages  
-**Job Execution:** In-process background workers (DB polling with `SELECT FOR UPDATE SKIP LOCKED`)  
+**Job Execution:** Celery workers with Redis broker/result backend  
 **Version:** 2.0 — Revised post-complexity audit (2026-04-06)
 
 > **What changed from v1.0:** Section 3.5 (CSS/XPath Selector UI) and Section 3.9 (Site Memory) have been removed. Their associated invariants (§4.4) have been removed. A new §4.7 Extraction Behaviour section has been added. Open items OI-04 and OI-05 are closed. See each section for inline change notes.
@@ -177,7 +177,7 @@
 - Discoverist CSV (customer-specific column schema — schema definition maintained separately)
 
 **Data Persistence**
-- All confirmed output is stored in SQLite for future reference and reuse
+- All confirmed output is stored in Postgres for future reference and reuse
 - Each record is linked to its Run ID, source URL, and timestamp
 
 **Proxy Behaviour**
@@ -290,7 +290,7 @@ Invariants are conditions that must hold true at all times, regardless of applic
 <a id="data-integrity"></a>
 
 - **INV-DATA-01:** Every output record is linked to exactly one Run ID. Orphaned records (records with no associated run) are invalid and must not appear in any output view.
-- **INV-DATA-02:** SQLite write operations are serialised using WAL (Write-Ahead Logging) mode to prevent corruption under concurrent job writes.
+- **INV-DATA-02:** Durable application state is persisted in Postgres under transaction boundaries managed by SQLAlchemy and Alembic. Concurrency guarantees must rely on database transactions and row-level guarantees, not file-based WAL assumptions.
 - **INV-DATA-03:** Deleting a run record also deletes all associated output records in the same transaction. Partial deletes are not permitted.
 - **INV-DATA-04:** Exports (CSV, JSON, Discoverist CSV) are generated from the stored output data, not re-fetched from the source URL. The exported data reflects what was captured at run time.
 
@@ -299,7 +299,7 @@ Invariants are conditions that must hold true at all times, regardless of applic
 - **INV-CRAWL-01:** `sleep time` is applied between every consecutive outbound request within a job, without exception. A sleep time of 0ms is valid but must be explicitly set by the user.
 - **INV-CRAWL-02:** The hybrid crawler selects the engine (HTTP or Playwright) per page, not per job. Static pages always use the lightweight HTTP path unless the page is detected as JS-rendered (JS-shell detection: response ≥ 200 KB with visible text ratio < 2%).
 - **INV-CRAWL-03:** Acquisition hardening must remain generic. No production code that runs against external or customer-facing target sites may contain per-domain hacks, allowlists, or special-case bypasses to make one production target pass. Internal test fixtures, local mocks, and deterministic adapter fixtures used only under test are allowed, provided they remain isolated from production acquisition paths and exercise the same acquisition hardening controls (retries, browser fallback, challenge detection, error handling) validated in production.
-- **INV-CRAWL-04:** Every successful acquisition attempt at the page-fetch level, regardless of whether downstream extraction later yields zero records, persists both the fetched artifact and a machine-readable diagnostics record so transport regressions can be investigated without depending on ephemeral logs. At minimum, the fetched artifact set must preserve raw HTML for HTTP/browser fetches, the HTTP response envelope when available (final URL, status, headers), and a screenshot for browser-engine acquisitions when one was captured. The diagnostics record must be stored in a machine-readable JSON payload and/or a dedicated SQLite table. Minimum diagnostics fields are: `timestamp`, `url`, `final_url`, `http_status`, `response_time_ms`, `proxy`, `engine_type`, `error_code`, `error_detail`, `blocked_verdict`, and references to the persisted fetched artifacts.
+- **INV-CRAWL-04:** Every successful acquisition attempt at the page-fetch level, regardless of whether downstream extraction later yields zero records, persists both the fetched artifact and a machine-readable diagnostics record so transport regressions can be investigated without depending on ephemeral logs. At minimum, the fetched artifact set must preserve raw HTML for HTTP/browser fetches, the HTTP response envelope when available (final URL, status, headers), and a screenshot for browser-engine acquisitions when one was captured. The diagnostics record must be stored in a machine-readable JSON payload and/or a dedicated Postgres-backed table. Minimum diagnostics fields are: `timestamp`, `url`, `final_url`, `http_status`, `response_time_ms`, `proxy`, `engine_type`, `error_code`, `error_detail`, `blocked_verdict`, and references to the persisted fetched artifacts.
 
 ### 4.7 Extraction Behaviour
 
@@ -319,7 +319,7 @@ Invariants are conditions that must hold true at all times, regardless of applic
 | OI-02 | Discoverist CSV column schema | Client / stakeholder | Open | Must be formally documented before the Download button is implemented |
 | OI-03 | Concurrency limit per user | Engineering | Open | Multiple concurrent jobs per user are permitted; a sensible cap (e.g. 5) should be agreed before load testing |
 | OI-04 | Browser automation engine | Engineering | **Closed** | Playwright chosen. Puppeteer not in scope. |
-| OI-05 | Background job queue | Engineering | **Closed** | In-process worker using `SELECT FOR UPDATE SKIP LOCKED`. No Celery, no Redis. Revisit only if multi-server deployment is required. |
+| OI-05 | Background job queue | Engineering | **Closed** | Celery is the background execution layer and Redis backs queue/runtime coordination. |
 | OI-06 | Session token strategy | Engineering | Open | JWT with server-side `token_version` for revocation (satisfies INV-AUTH-02). Confirm token expiry window before go-live. |
 | OI-07 | LLM provider library | Engineering | Open | Evaluate LiteLLM as a drop-in replacement for custom provider routing and token counting before shipping the LLM config module. |
 

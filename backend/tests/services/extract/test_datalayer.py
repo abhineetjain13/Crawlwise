@@ -1,10 +1,9 @@
 # Property-based tests for dataLayer extraction
 from __future__ import annotations
 
-from hypothesis import HealthCheck, given, settings, strategies as st
-
 from app.services.extract.source_parsers import parse_datalayer
-
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 # Property 3: Extraction Hierarchy Order Preservation
 # This property is tested in test_extract.py as it requires full extraction pipeline
@@ -272,3 +271,56 @@ def test_datalayer_prefers_richer_later_ecommerce_push_and_records_selected_inde
     assert result["google_product_category"] == "Cameras"
     assert result["availability"] == "InStock"
     assert result["_selected_push_index"] == 1
+
+
+def test_datalayer_parses_json_with_braces_inside_string_values():
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 9.99,
+                    "currency": "USD",
+                    "item_category": "Accessories",
+                    "text": "this is a { test } string"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    result = parse_datalayer(html)
+
+    assert result["price"] == 9.99
+    assert result["price_currency"] == "USD"
+    assert result["google_product_category"] == "Accessories"
+
+
+def test_datalayer_does_not_compute_sale_price_when_price_parse_fails() -> None:
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": "not-a-number",
+                    "discount": "5",
+                    "currency": "USD"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    result = parse_datalayer(html)
+
+    assert result["price"] == "not-a-number"
+    assert result["discount_amount"] == "5"
+    assert "sale_price" not in result

@@ -5,6 +5,7 @@
 CrawlerAI is a POC crawler stack with:
 
 - `backend/`: FastAPI + SQLAlchemy async backend, crawl worker loop, adapters, deterministic extraction pipeline, review/promotion flow.
+  - Current backend runtime uses Postgres for durable persistence, Redis for shared runtime state, and Celery for background run execution.
 - `frontend/`: Next.js app for crawl submission, run inspection, review, and admin views.
 - `docs/`: product notes and implementation planning docs.
 
@@ -75,7 +76,7 @@ The crawl pipeline follows: ACQUIRE → EXTRACT → UNIFY → PUBLISH
 - JSON responses detected via Content-Type header or body sniffing, parsed automatically
 - HTML waterfall: curl_cffi → Playwright fallback (when JS-blocked or short content)
 - `blocked_detector.py`: Post-acquisition blocked/challenge page detection with deterministic signatures for WAFs (PerimeterX, Cloudflare, Akamai, Datadome), CAPTCHA pages, access-denied pages
-- `host_memory.py`: TTL-aware, file-backed acquisition history. It is diagnostic/supporting state, not authority for rewriting user-owned crawl controls.
+- `host_memory.py`: TTL-aware, Redis-backed acquisition history. It is diagnostic/supporting state, not authority for rewriting user-owned crawl controls.
 - `browser_client.py`: Stealth context, challenge wait, origin warming, cookie consent dismissal, network XHR/fetch interception, unconditional interactive expansion before HTML capture
 - Detail pages never run traversal helpers (`paginate` / `scroll` / `load_more`) even if `advanced_mode` is present; traversal is listing-only policy.
 - Listing pages also never run traversal helpers unless `advanced_mode` was explicitly set by the user.
@@ -88,7 +89,7 @@ The crawl pipeline follows: ACQUIRE → EXTRACT → UNIFY → PUBLISH
 - `curl_cffi` hostname pinning must preserve hostname-based TLS. Use `CurlOpt.RESOLVE` on the session while keeping the original request URL; do not rewrite the request URL to a raw IP.
 - Playwright contexts must not set a manual `Host` header. That caused `net::ERR_INVALID_ARGUMENT` on valid storefronts.
 - Chromium host pinning, when used, must stay at the resolver-rule level only; connection-controlled headers are off limits.
-- API startup must not mark queued `pending` runs as failed. Orphan recovery belongs to the worker path for jobs that were actually in-flight.
+- API startup must not mark queued `pending` runs as failed. Recovery for interrupted work belongs to the run-execution/control path for jobs that were actually in-flight.
 - Every successful acquire must persist a machine-readable diagnostics artifact alongside the HTML/JSON artifact. Transport and blocker regressions should be debugged from diagnostics files, not only log output.
 - Persisted cookies are optional runtime state, never committed source data. Cookie reuse must be policy-filtered: anti-bot/challenge cookies are not persisted, expired cookies are ignored, and session cookies remain in-memory unless explicitly enabled by policy.
 - Cookie policy can now carry domain-specific overrides from `data/knowledge_base/cookie_policy.json`; use explicit allowlists for benign cookies rather than widening the global persistence rules.
@@ -187,7 +188,7 @@ Code should continue to import from `pipeline_config.py`, not duplicate config v
 ### Current status snapshot
 
 - Unified crawl contract is live: single-page submit flow with `run_type="crawl"`, user-owned controls, and explicit traversal-only advanced modes.
-- Crawl runtime is DB-backed lease processing (`services/workers.py`) with stale lease recovery at startup; API no longer owns in-memory background orchestration.
+- Crawl runtime is Celery-dispatched background execution. FastAPI enqueues runs, Celery workers execute `process_run(run_id)`, Redis backs broker/shared runtime state, and Postgres remains the durable source of truth for run state and records.
 - Extraction pipeline is ACQUIRE → EXTRACT → UNIFY → PUBLISH with listing fallback guard and deterministic first-match field resolution.
 - Config is typed Python modules behind `pipeline_config.py`; no runtime selector CRUD/site-memory fallback subsystems in the active extraction path.
 - Generic crawler paths are policy-driven: no tenant/site hardcodes; platform behavior is family-based and minimized to the required families.

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
-
+from app.services.acquisition.traversal import (
+    AdvanceResult,
+    apply_traversal_mode,
+    collect_paginated_html,
+)
 from app.services.crawl_utils import resolve_traversal_mode
 
 
@@ -30,4 +35,242 @@ def test_resolve_traversal_mode_unrecognized_mode_falls_back_to_auto_with_warnin
         )
     assert resolved == "auto"
     assert "Unrecognized traversal_mode" in caplog.text
+
+
+def _make_product_card(index: int) -> str:
+    return (
+        f'<article class="product-card" data-product-id="{index}">'
+        f'<a href="/products/{index}">Product {index}</a>'
+        "</article>"
+    )
+
+
+class _FakeButtonOnlyNextLocator:
+    def __init__(self, page: _ButtonOnlyPaginationPage) -> None:
+        self._page = page
+
+    @property
+    def first(self) -> _FakeButtonOnlyNextLocator:
+        return self
+
+    async def count(self) -> int:
+        return 1 if self._page.has_next else 0
+
+    async def is_visible(self) -> bool:
+        return self._page.has_next
+
+    async def click(self, timeout: int | None = None) -> None:
+        _ = timeout
+        self._page.advance()
+
+
+class _MissingLocator:
+    @property
+    def first(self) -> _MissingLocator:
+        return self
+
+    async def count(self) -> int:
+        return 0
+
+    async def is_visible(self) -> bool:
+        return False
+
+
+class _ButtonOnlyPaginationPage:
+    def __init__(self) -> None:
+        self.url = "https://example.com/products"
+        self.page_index = 0
+        self.wait_for_load_state_calls: list[tuple[str, int]] = []
+        self.pages = [
+            [_make_product_card(1), _make_product_card(2)],
+            [_make_product_card(3), _make_product_card(4)],
+            [_make_product_card(5), _make_product_card(6)],
+        ]
+
+    @property
+    def has_next(self) -> bool:
+        return self.page_index < len(self.pages) - 1
+
+    def advance(self) -> None:
+        if self.has_next:
+            self.page_index += 1
+
+    def locator(self, selector: str):
+        if selector == "button.next":
+            return _FakeButtonOnlyNextLocator(self)
+        return _MissingLocator()
+
+    async def content(self) -> str:
+        cards = "".join(self.pages[self.page_index])
+        return (
+            f"<html><body><section data-page='{self.page_index + 1}'>"
+            f"{cards}</section></body></html>"
+        )
+
+    async def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+        raise AssertionError(
+            f"Button-only pagination should not call goto (got {url}, {wait_until}, {timeout})"
+        )
+
+    async def wait_for_load_state(self, state: str, *, timeout: int) -> None:
+        self.wait_for_load_state_calls.append((state, timeout))
+
+
+class _VirtualizedScrollPage:
+    def __init__(self, *, steps: int, cards_per_step: int) -> None:
+        self.url = "https://example.com/virtualized"
+        self._steps = steps
+        self._cards_per_step = cards_per_step
+        self._visible_step = -1
+        self._scroll_calls = 0
+        self.wait_for_load_state_calls: list[tuple[str, int]] = []
+
+    def _cards_for_visible_step(self) -> list[dict[str, str]]:
+        if self._visible_step < 0:
+            return []
+        start = self._visible_step * self._cards_per_step
+        return [
+            {
+                "html": _make_product_card(start + offset),
+                "identity": f"/products/{start + offset}",
+            }
+            for offset in range(self._cards_per_step)
+        ]
+
+    def snapshot_metrics(self) -> dict[str, object]:
+        cards = self._cards_for_visible_step()
+        identities = [card["identity"] for card in cards]
+        count = len(cards)
+        return {
+            "link_count": count,
+            "cardish_count": count,
+            "text_length": count * 40,
+            "html_length": count * 120,
+            "identity_count": count,
+            "identities": identities,
+            "dom_signature": f"visible-step-{self._visible_step}",
+        }
+
+    async def evaluate(self, script: str, arg=None):
+        if "const seen = new Set();" in script:
+            return {
+                "cards": self._cards_for_visible_step(),
+                "container_signature": f"visible-step-{self._visible_step}",
+            }
+        if "knownSigs" in script:
+            return []
+        if "return Math.max(root.scrollHeight" in script:
+            return 1000 + max(self._visible_step, 0) * 100
+        if "forceProbe" in script:
+            self._scroll_calls += 1
+            if self._visible_step < self._steps - 1:
+                self._visible_step += 1
+            return {"target": "window"}
+        raise AssertionError(f"Unexpected evaluate script: {script[:80]!r}")
+
+    async def content(self) -> str:
+        return "<html><body>unused fallback</body></html>"
+
+    async def wait_for_load_state(self, state: str, *, timeout: int) -> None:
+        self.wait_for_load_state_calls.append((state, timeout))
+
+
+@pytest.mark.asyncio
+async def test_paginate_mode_collects_three_button_only_pages_without_duplicates():
+    page = _ButtonOnlyPaginationPage()
+
+    async def _page_content_with_retry(current_page, checkpoint=None) -> str:
+        _ = checkpoint
+        return await current_page.content()
+
+    async def _advance_button_only_page(current_page, *, checkpoint=None) -> AdvanceResult:
+        _ = checkpoint
+        button = current_page.locator("button.next").first
+        if not await button.count():
+            return AdvanceResult()
+        await button.click()
+        return AdvanceResult(url=current_page.url, already_navigated=True)
+
+    result = await collect_paginated_html(
+        page,
+        surface="ecommerce_listing",
+        max_pages=5,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+        advance_next_page_fn=_advance_button_only_page,
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+    )
+
+    assert result.summary["pages_collected"] == 3
+    assert "goto_next_page" in {step["action"] for step in result.summary["steps"]}
+    assert result.summary["stop_reason"] == "no_next_page"
+    assert result.html is not None
+    assert result.html.count("PAGE BREAK:") == 3
+    for product_id in range(1, 7):
+        assert result.html.count(f'href="/products/{product_id}"') == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_paginated_html_requires_pagination_callback():
+    page = _ButtonOnlyPaginationPage()
+
+    async def _page_content_with_retry(current_page, checkpoint=None) -> str:
+        _ = checkpoint
+        return await current_page.content()
+
+    with pytest.raises(ValueError, match="no pagination callback provided"):
+        await collect_paginated_html(
+            page,
+            surface="ecommerce_listing",
+            max_pages=2,
+            request_delay_ms=0,
+            page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+            wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+            wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+            dismiss_cookie_consent=AsyncMock(),
+            pause_after_navigation=AsyncMock(),
+            expand_all_interactive_elements=AsyncMock(return_value={}),
+            flatten_shadow_dom=AsyncMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_scroll_mode_preserves_all_cards_from_virtualized_infinite_scroll():
+    page = _VirtualizedScrollPage(steps=5, cards_per_step=10)
+    metrics = AsyncMock(side_effect=lambda current_page: current_page.snapshot_metrics())
+
+    result = await apply_traversal_mode(
+        page,
+        "ecommerce_listing",
+        "scroll",
+        5,
+        max_pages=1,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(return_value=""),
+        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+        peek_next_page_signal=AsyncMock(return_value=None),
+        click_and_observe_next_page=AsyncMock(return_value=""),
+        has_load_more_control=AsyncMock(return_value=False),
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+        cooperative_sleep_ms=AsyncMock(),
+        snapshot_listing_page_metrics=metrics,
+    )
+
+    assert result.summary["mode"] == "scroll"
+    assert result.summary["attempt_count"] == 5
+    assert result.summary["pages_collected"] == 5
+    assert result.summary["captured_fragment_bytes"] < 1_000_000
+    assert result.html is not None
+    assert len(result.html.encode("utf-8")) < 1_000_000
+    for product_id in range(50):
+        assert result.html.count(f'href="/products/{product_id}"') == 1
 

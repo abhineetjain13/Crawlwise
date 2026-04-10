@@ -2,45 +2,44 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
-from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
+from app.core.security import hash_password
 from app.core.telemetry import reset_correlation_id, set_correlation_id
 from app.models.crawl import CrawlLog, CrawlRecord
+from app.models.user import User
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.adapters.base import AdapterResult
-from app.services.crawl_state import set_control_request
 from app.services.crawl_service import (
-    STAGE_SAVE,
-    _build_field_discovery_summary,
-    _build_llm_candidate_evidence,
-    _collect_detail_llm_suggestions,
-    _looks_like_job_listing_page,
-    _merge_record_fields,
-    _normalize_record_fields,
-    _normalize_detail_candidate_values,
-    _sanitize_listing_record_fields,
+    kill_run,
+    pause_run,
+    process_run,
+    resume_run,
+)
+from app.services.crawl_crud import (
     active_jobs,
     commit_selected_fields,
     create_crawl_run,
     delete_run,
     get_run,
-    kill_run,
     list_runs,
-    parse_csv_urls,
-    pause_run,
-    process_run,
-    resume_run,
+)
+from app.services.crawl_utils import parse_csv_urls
+from app.services.pipeline import (
+    STAGE_SAVE,
+    _build_field_discovery_summary,
+    _build_llm_candidate_evidence,
+    _collect_detail_llm_suggestions,
+    _merge_record_fields,
+    _normalize_detail_candidate_values,
+    _normalize_record_fields,
+    _sanitize_listing_record_fields,
 )
 from app.services.extract.service import sanitize_field_value
-from app.models.user import User
-from app.core.database import Base
-from app.core.security import hash_password
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 class _MissingRunRef:
@@ -189,29 +188,6 @@ def test_sanitize_listing_record_fields_strips_ecommerce_only_fields_from_job_re
     assert "review_count" not in sanitized
     assert "image_url" not in sanitized
     assert "additional_images" not in sanitized
-
-
-def test_looks_like_job_listing_page_ignores_generic_ecommerce_marketing_copy():
-    html = """
-    <html><body>
-      <main>
-        <section class="hero">
-          <h2>Career Opportunities</h2>
-          <a href="/rewards/apply">Apply now</a>
-        </section>
-        <ul class="product-grid">
-          <li><a href="/products/widget-1">Widget 1</a></li>
-          <li><a href="/products/widget-2">Widget 2</a></li>
-        </ul>
-      </main>
-    </body></html>
-    """
-
-    assert _looks_like_job_listing_page(
-        url="https://example.com/products",
-        html=html,
-        acq=_make_acq(html),
-    ) is False
 
 
 def test_normalize_detail_candidate_values_dedupes_primary_image_from_additional_images():
@@ -445,25 +421,35 @@ async def test_pause_resume_and_kill_run(db_session: AsyncSession, test_user):
         "run_type": "crawl", "url": "https://example.com", "surface": "ecommerce_detail",
     })
     run.status = "running"
+    run.result_summary = {"celery_task_id": "task-running"}
     await db_session.commit()
 
-    paused = await pause_run(db_session, run)
-    assert paused.status == "running"
-    assert paused.result_summary["control_requested"] == "pause"
+    with (
+        patch("app.services.crawl_service.process_run_task.app.control.revoke") as revoke_mock,
+        patch("app.services.crawl_service.process_run_task.apply_async") as apply_async_mock,
+        patch("app.services.crawl_service._log", new_callable=AsyncMock),
+    ):
+        paused = await pause_run(db_session, run)
+        assert paused.status == "paused"
+        assert paused.result_summary.get("celery_task_id") is None
+        revoke_mock.assert_called_once_with("task-running", terminate=True)
 
-    paused.status = "paused"
-    paused.result_summary = {
-        **(paused.result_summary or {}),
-        "control_requested": None,
-    }
-    await db_session.commit()
+        paused.result_summary = {}
+        await db_session.commit()
 
-    resumed = await resume_run(db_session, paused)
-    assert resumed.status == "running"
+        resumed = await resume_run(db_session, paused)
+        assert resumed.status == "running"
+        assert resumed.result_summary.get("celery_task_id")
+        apply_async_mock.assert_called_once()
 
-    killed = await kill_run(db_session, resumed)
-    assert killed.status == "running"
-    assert killed.result_summary["control_requested"] == "kill"
+        next_task_id = resumed.result_summary["celery_task_id"]
+        killed = await kill_run(db_session, resumed)
+        assert killed.status == "killed"
+        assert killed.result_summary.get("celery_task_id") is None
+        assert revoke_mock.call_args_list[-1].kwargs == {
+            "terminate": True,
+        }
+        assert revoke_mock.call_args_list[-1].args == (next_task_id,)
 
 
 @pytest.mark.asyncio
@@ -586,22 +572,18 @@ async def test_process_run_applies_kill_during_inflight_acquire_wait(db_session:
         "url": "https://example.com/product",
         "surface": "ecommerce_detail",
     })
+    run.status = "running"
+    run.result_summary = {"celery_task_id": "task-inflight"}
+    await db_session.commit()
 
-    async def fake_acquire(*_args, checkpoint=None, **_kwargs):
-        current = await db_session.get(type(run), run.id)
-        assert current is not None
-        set_control_request(current, "kill")
-        await db_session.commit()
-        assert checkpoint is not None
-        await checkpoint()
-        raise AssertionError("checkpoint should have interrupted acquire")
+    with (
+        patch("app.services.crawl_service.process_run_task.app.control.revoke") as revoke_mock,
+        patch("app.services.crawl_service._log", new_callable=AsyncMock),
+    ):
+        killed = await kill_run(db_session, run)
 
-    with patch("app.services.pipeline.core.acquire", new=fake_acquire):
-        await process_run(db_session, run.id)
-
-    await db_session.refresh(run)
-    assert run.status == "killed"
-    assert run.result_summary.get("control_requested") is None
+    assert killed.status == "killed"
+    revoke_mock.assert_called_once_with("task-inflight", terminate=True)
 
 
 @pytest.mark.asyncio
@@ -700,72 +682,71 @@ async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_ses
 
 
 @pytest.mark.asyncio
-async def test_process_run_multi_run_concurrency_keeps_status_and_summary_consistent():
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        db_path = f"{tmpdir}/test_multi_run_concurrency.db"
-        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
-        try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-            async with session_factory() as setup_session:
-                user = User(
-                    email="concurrency@example.com",
-                    hashed_password=hash_password("password123"),
-                    role="admin",
-                )
-                setup_session.add(user)
-                await setup_session.commit()
-                await setup_session.refresh(user)
+async def test_process_run_multi_run_concurrency_keeps_status_and_summary_consistent(
+    db_session: AsyncSession,
+):
+    assert db_session.bind is not None
+    session_factory = async_sessionmaker(
+        db_session.bind,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
 
-                run_a = await create_crawl_run(
-                    setup_session,
-                    user.id,
-                    {
-                        "run_type": "crawl",
-                        "url": "https://example.com/listing-a",
-                        "surface": "ecommerce_listing",
-                    },
-                )
-                run_b = await create_crawl_run(
-                    setup_session,
-                    user.id,
-                    {
-                        "run_type": "crawl",
-                        "url": "https://example.com/listing-b",
-                        "surface": "ecommerce_listing",
-                    },
-                )
-                run_ids = [run_a.id, run_b.id]
+    user = User(
+        email="concurrency@example.com",
+        hashed_password=hash_password("password123"),
+        role="admin",
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
 
-            async def _run_one(run_id: int) -> None:
-                async with session_factory() as session:
-                    await process_run(session, run_id)
+    run_a = await create_crawl_run(
+        db_session,
+        user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/listing-a",
+            "surface": "ecommerce_listing",
+        },
+    )
+    run_b = await create_crawl_run(
+        db_session,
+        user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/listing-b",
+            "surface": "ecommerce_listing",
+        },
+    )
+    run_ids = [run_a.id, run_b.id]
 
-            with (
-                patch(
-                    "app.services.pipeline.core.acquire",
-                    new_callable=AsyncMock,
-                    return_value=_make_acq(
-                        "<html><body><div class='product-card'><a href='/p/1'>One</a><span class='price'>$10</span></div>"
-                        "<div class='product-card'><a href='/p/2'>Two</a><span class='price'>$20</span></div></body></html>",
-                        method="curl_cffi",
-                    ),
-                ),
-                patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
-            ):
-                await asyncio.gather(*[_run_one(run_id) for run_id in run_ids])
+    async def _run_one(run_id: int) -> None:
+        async with session_factory() as session:
+            await process_run(session, run_id)
 
-            async with session_factory() as verify_session:
-                for run_id in run_ids:
-                    run = await get_run(verify_session, run_id)
-                    assert run is not None
-                    assert run.status == "completed"
-                    summary = dict(run.result_summary or {})
-                    assert summary.get("extraction_verdict") in {"success", "partial"}
-                    assert int(summary.get("record_count", 0) or 0) >= 1
-        finally:
-            await engine.dispose()
+    with (
+        patch(
+            "app.services.pipeline.core.acquire",
+            new_callable=AsyncMock,
+            return_value=_make_acq(
+                "<html><body><div class='product-card'><a href='/p/1'>One</a><span class='price'>$10</span></div>"
+                "<div class='product-card'><a href='/p/2'>Two</a><span class='price'>$20</span></div></body></html>",
+                method="curl_cffi",
+            ),
+        ),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await asyncio.gather(*[_run_one(run_id) for run_id in run_ids])
+
+    async with session_factory() as verify_session:
+        for run_id in run_ids:
+            run = await get_run(verify_session, run_id)
+            assert run is not None
+            assert run.status == "completed"
+            summary = dict(run.result_summary or {})
+            assert summary.get("extraction_verdict") in {"success", "partial"}
+            assert int(summary.get("record_count", 0) or 0) >= 1
 
 
 @pytest.mark.asyncio
@@ -1981,9 +1962,9 @@ async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting
     with (
         patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
         patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
-        patch("app.services.crawl_service.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
+        patch("app.services.pipeline.core.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
         patch(
-            "app.services.crawl_service.review_field_candidates",
+            "app.services.pipeline.core.review_field_candidates",
             new_callable=AsyncMock,
             return_value=(
                 {
@@ -2103,8 +2084,8 @@ async def test_process_run_skips_cleanup_llm_when_deterministic_fields_are_unamb
     with (
         patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
         patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
-        patch("app.services.crawl_service.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
-        patch("app.services.crawl_service.review_field_candidates", new_callable=AsyncMock) as review_mock,
+        patch("app.services.pipeline.core.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
+        patch("app.services.pipeline.core.review_field_candidates", new_callable=AsyncMock) as review_mock,
     ):
         await process_run(db_session, run.id)
 
@@ -2147,7 +2128,7 @@ async def test_collect_detail_llm_suggestions_builds_discovered_sources_in_threa
 
     with (
         patch(
-            "app.services.crawl_service.discover_xpath_candidates",
+            "app.services.pipeline.core.discover_xpath_candidates",
             new_callable=AsyncMock,
             return_value=([], None),
         ),

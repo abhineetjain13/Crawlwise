@@ -6,9 +6,6 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.security import encrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
 from app.services.llm_runtime import (
@@ -19,9 +16,11 @@ from app.services.llm_runtime import (
     _enforce_token_limit,
     _truncate_html,
     resolve_active_config,
-    snapshot_active_configs,
     run_prompt_task,
+    snapshot_active_configs,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio

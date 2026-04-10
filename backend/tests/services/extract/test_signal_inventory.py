@@ -5,14 +5,13 @@ Feature: extraction-pipeline-improvements
 
 from __future__ import annotations
 
-import pytest
-from hypothesis import given, settings, strategies as st
-
 from app.services.extract.signal_inventory import (
     SignalInventory,
     build_signal_inventory,
     classify_page_type,
 )
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 
 # Property 1: Signal Inventory Completeness

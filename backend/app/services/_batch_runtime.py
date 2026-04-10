@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+
 from app.core.telemetry import (
     generate_correlation_id,
     get_correlation_id,
@@ -15,14 +16,18 @@ from app.services.crawl_metrics import (
     finalize_url_metrics,
 )
 from app.services.crawl_state import (
+    CONTROL_REQUEST_KILL,
+    CONTROL_REQUEST_PAUSE,
     TERMINAL_STATUSES,
     CrawlStatus,
+    get_control_request,
     normalize_status,
+    set_control_request,
     update_run_status,
 )
+from app.services.exceptions import RunControlError
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls, resolve_traversal_mode
 from app.services.domain_utils import normalize_domain
-from app.services.exceptions import RunControlError
 from app.services.pipeline import (
     STAGE_FETCH,
     VERDICT_BLOCKED,
@@ -39,15 +44,12 @@ from app.services.pipeline import (
 )
 from app.services.pipeline_config import (
     DEFAULT_MAX_SCROLLS,
+    URL_BATCH_CONCURRENCY,
     MAX_URL_PROCESS_TIMEOUT_SECONDS,
     URL_PROCESS_TIMEOUT_SECONDS,
 )
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-class RunControlSignal(RunControlError):  # noqa: N818 - kept for compatibility with exception hierarchy tests.
-    pass
-
 
 async def _log_with_retry(
     session: AsyncSession,
@@ -89,14 +91,24 @@ async def _retry_run_update(
     await session.commit()
 
 
-async def _cleanup_run_lock(run_id: int) -> None:
-    # Intentionally left empty as the in-memory lock dict has been removed.
-    # Kept to preserve the function signature used in the finally block.
-    pass
-
-
 async def _noop_checkpoint() -> None:
     return None
+
+
+class RunControlSignal(RunControlError):
+    def __init__(self, request: str) -> None:
+        super().__init__(request)
+        self.request = request
+
+
+async def _run_control_checkpoint(session: AsyncSession, run: CrawlRun) -> None:
+    await session.refresh(run)
+    current_status = normalize_status(run.status)
+    control_request = get_control_request(run)
+    if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
+        raise RunControlSignal(CONTROL_REQUEST_PAUSE)
+    if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
+        raise RunControlSignal(CONTROL_REQUEST_KILL)
 
 
 def _coerce_url_timeout_seconds(settings: dict) -> float:
@@ -285,7 +297,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                     max_scrolls=max_scrolls,
                     max_records=remaining_records,
                     sleep_ms=sleep_ms,
-                    checkpoint=_noop_checkpoint,
+                    checkpoint=lambda: _run_control_checkpoint(session, run),
                 ),
                 timeout=url_timeout_seconds,
             )
@@ -300,7 +312,9 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 break
 
             if sleep_ms > 0 and idx < total_urls - 1:
-                await _sleep_with_checkpoint(sleep_ms, _noop_checkpoint)
+                await _sleep_with_checkpoint(
+                    sleep_ms, lambda: _run_control_checkpoint(session, run)
+                )
 
         aggregate_verdict = _aggregate_verdict(url_verdicts)
         async def _finalize_mutation(
@@ -378,6 +392,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         await _retry_run_update(session, run.id, _proxy_exhausted_mutation)
     except TimeoutError:
         await _mark_run_failed(session, run_id, "URL processing timed out")
+    except RunControlSignal as signal:
+        await _handle_run_control_signal(session, run_id, signal.request)
     except (
         RuntimeError,
         ValueError,
@@ -388,7 +404,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         await _mark_run_failed(session, run_id, error_msg)
     finally:
         reset_correlation_id(correlation_token)
-        await _cleanup_run_lock(run_id)
 
 
 async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
@@ -399,6 +414,28 @@ async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
         await asyncio.sleep(current_ms / 1000)
         remaining_ms -= current_ms
     await checkpoint()
+
+
+async def _handle_run_control_signal(
+    session: AsyncSession,
+    run_id: int,
+    request: str,
+) -> None:
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return
+    if request == CONTROL_REQUEST_PAUSE:
+        if normalize_status(run.status) != CrawlStatus.PAUSED:
+            update_run_status(run, CrawlStatus.PAUSED)
+        set_control_request(run, None)
+        await _log(session, run.id, "warning", "Run paused at checkpoint")
+        await session.commit()
+        return
+    if normalize_status(run.status) != CrawlStatus.KILLED:
+        update_run_status(run, CrawlStatus.KILLED)
+    set_control_request(run, None)
+    await _log(session, run.id, "warning", "Run killed at checkpoint")
+    await session.commit()
 
 async def _count_run_records(session: AsyncSession, run_id: int) -> int:
     return int(

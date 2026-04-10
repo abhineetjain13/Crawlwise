@@ -1,34 +1,38 @@
 # Tests for acquisition waterfall and proxy rotation.
 from __future__ import annotations
 
-import json
 import itertools
-from pathlib import Path
+import json
 import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
+import pytest_asyncio
 from app.services.acquisition.acquirer import (
-    ProxyRotator,
     _PROXY_FAILURE_STATE,
-    _mark_proxy_failed,
-    _mark_proxy_succeeded,
+    ProxyRotator,
     _artifact_path,
     _diagnose_job_surface_page,
     _diagnostics_path,
     _json_ld_listing_count,
+    _mark_proxy_failed,
+    _mark_proxy_succeeded,
     _network_payload_path,
     _requires_browser_first,
     _write_network_payloads,
     acquire,
     acquire_html,
 )
+from app.services.acquisition.host_memory import (
+    host_prefers_stealth,
+    remember_stealth_host,
+    reset_host_memory,
+)
 from app.services.acquisition.http_client import HttpFetchResult
-from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host, reset_host_memory
 from app.services.acquisition.pacing import reset_pacing_state
-
+from app.services.exceptions import AcquisitionTimeoutError
 
 _TMP_COUNTER = itertools.count()
 _WORKSPACE_TMP_ROOT = (
@@ -229,6 +233,21 @@ async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_struct
     assert result.diagnostics["curl_needs_browser"] is False
     assert result.diagnostics["js_shell_overridden"] == "structured_data_found"
     browser_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acquire_raises_acquisition_timeout_with_preserved_cause(tmp_path):
+    timeout_exc = TimeoutError("attempt timed out")
+
+    with (
+        patch("app.services.acquisition.acquirer.asyncio.wait_for", side_effect=timeout_exc),
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        mock_settings.artifacts_dir = tmp_path
+        with pytest.raises(AcquisitionTimeoutError) as exc_info:
+            await acquire(1, "https://example.com/slow-page")
+
+    assert exc_info.value.__cause__ is timeout_exc
 
 
 
@@ -842,6 +861,38 @@ async def test_acquire_scrubs_sensitive_network_payloads_before_artifact_write(t
 
 
 @pytest.mark.asyncio
+async def test_acquire_scrubs_session_and_cookie_keys_before_artifact_write(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    payloads = [
+        {
+            "url": "https://api.example.com/data",
+            "headers": {
+                "Set-Cookie": "x=1",
+                "authorization": "Bearer xyz",
+                "content-type": "application/json",
+            },
+            "body": {
+                "session_id": "abc123",
+                "X-Session-ID": "abc123",
+                "sessionid": "abc123",
+                "__session": "abc123",
+            },
+        }
+    ]
+    _write_network_payloads(42, "https://example.com/product", payloads)
+
+    payload_path = _network_payload_path(42, "https://example.com/product")
+    persisted = json.loads(payload_path.read_text(encoding="utf-8"))
+    assert persisted[0]["headers"]["Set-Cookie"] == "[REDACTED]"
+    assert persisted[0]["headers"]["authorization"] == "[REDACTED]"
+    assert persisted[0]["headers"]["content-type"] == "application/json"
+    assert persisted[0]["body"]["session_id"] == "[REDACTED]"
+    assert persisted[0]["body"]["X-Session-ID"] == "[REDACTED]"
+    assert persisted[0]["body"]["sessionid"] == "[REDACTED]"
+    assert persisted[0]["body"]["__session"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
 async def test_acquire_diagnostics_include_platform_family_for_real_family_url(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
     html = "<html><body><h1>Jobs</h1><p>" + ("Open roles " * 80) + "</p><table class='iCIMS_JobsTable'></table></body></html>"
@@ -920,32 +971,32 @@ async def test_acquire_returns_blocked_html_instead_of_raising_when_challenge_pa
     assert result.diagnostics["browser_blocked"] is True
 
 
-@pytest.fixture(autouse=True)
-def _reset_host_memory():
-    reset_host_memory()
-    reset_pacing_state()
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_host_memory():
+    await reset_host_memory()
+    await reset_pacing_state()
     yield
-    reset_host_memory()
-    reset_pacing_state()
+    await reset_host_memory()
+    await reset_pacing_state()
 
 
-def test_host_memory_persists_preference(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.host_memory.settings.artifacts_dir", tmp_path)
-    assert not host_prefers_stealth("https://example.com/path")
-    remember_stealth_host("https://example.com/path", ttl_hours=1)
-    assert host_prefers_stealth("https://example.com/path")
+@pytest.mark.asyncio
+async def test_host_memory_persists_preference(fake_redis):
+    assert not await host_prefers_stealth("https://example.com/path")
+    await remember_stealth_host("https://example.com/path", ttl_hours=1)
+    assert await host_prefers_stealth("https://example.com/path")
+
+    payload = await fake_redis.hgetall("crawl:host-memory:stealth:example.com")
+    assert payload["reason"] == "blocked"
+    assert float(payload["preferred_stealth_until"]) > 0
+    assert fake_redis._ttl["crawl:host-memory:stealth:example.com"] == 3600
 
 
-def test_host_memory_survives_process_cache_reset(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.host_memory.settings.artifacts_dir", tmp_path)
-    remember_stealth_host("https://example.com/path", ttl_hours=1)
-
-    import app.services.acquisition.host_memory as host_memory_module
-
-    host_memory_module._STEALTH_CACHE.clear()
-    host_memory_module._CACHE_PATH = None
-
-    assert host_prefers_stealth("https://example.com/path")
+@pytest.mark.asyncio
+async def test_host_memory_persists_in_redis(fake_redis):
+    await remember_stealth_host("https://example.com/path", ttl_hours=1)
+    assert await fake_redis.exists("crawl:host-memory:stealth:example.com")
+    assert await host_prefers_stealth("https://example.com/path")
 
 
 def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):

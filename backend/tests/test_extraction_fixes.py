@@ -1,8 +1,6 @@
 # Tests for size/color extraction fixes
-import pytest
-from bs4 import BeautifulSoup
-
 from app.services.extract.listing_extractor import _extract_card_color
+from bs4 import BeautifulSoup
 
 
 class TestColorExtraction:

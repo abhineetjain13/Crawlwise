@@ -4,9 +4,8 @@ from __future__ import annotations
 from unittest.mock import Mock, patch
 
 import pytest
-
-from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.adp import ADPAdapter
+from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.base import AdapterResult
 from app.services.adapters.ebay import EbayAdapter
 from app.services.adapters.icims import ICIMSAdapter
@@ -15,11 +14,10 @@ from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.paycom import PaycomAdapter
-from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.registry import resolve_adapter
+from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.shopify import ShopifyAdapter
-
 
 # --- Shopify ---
 

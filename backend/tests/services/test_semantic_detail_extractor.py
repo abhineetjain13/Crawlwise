@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from app.services.semantic_detail_extractor import extract_semantic_detail_data
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 
 def test_extract_semantic_detail_data_empty_html_includes_aggregates_key():
@@ -142,10 +146,6 @@ def test_extract_semantic_detail_data_skips_contact_and_share_noise_sections():
 
 # Property-based tests for Task 5: Enable unconditional tier 2 attribute collection
 # Feature: extraction-pipeline-improvements
-
-from hypothesis import given, settings, strategies as st
-from unittest.mock import Mock, patch
-
 
 # Property 8: Semantic Extraction Invocation
 @given(

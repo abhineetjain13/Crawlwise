@@ -1,14 +1,11 @@
 # Tests for review payload construction.
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.crawl import CrawlRecord
 from app.services.crawl_crud import create_crawl_run
 from app.services.review import build_review_payload, save_review
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio

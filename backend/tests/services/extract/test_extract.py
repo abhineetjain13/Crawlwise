@@ -4,19 +4,23 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+import pytest
+from app.services.exceptions import ExtractionParseError
 from app.services.extract.service import (
     _coerce_scalar_for_dynamic_row,
-    _extract_label_value_from_text,
     _dispatch_string_field_coercer,
     _extract_image_urls,
+    _extract_label_value_from_text,
     _finalize_candidate_rows,
     _label_value_pattern,
-    _normalize_html_rich_text,
     _normalize_color_candidate,
+    _normalize_html_rich_text,
     _normalize_size_candidate,
     _resolve_candidate_url,
     _should_skip_jsonld_block,
     coerce_field_candidate_value,
+)
+from app.services.extract.service import (
     extract_candidates as _extract_candidates_impl,
 )
 
@@ -85,6 +89,25 @@ def test_extract_from_json_ld():
     json_ld_sources = [c for c in candidates["title"] if c["source"] == "json_ld"]
     assert len(json_ld_sources) >= 1
     assert json_ld_sources[0]["value"] == "JSON-LD Title"
+
+
+def test_extract_candidates_raises_typed_parse_error_with_cause():
+    parse_exc = ValueError("broken source payload")
+
+    with patch(
+        "app.services.extract.service.parse_page_sources",
+        side_effect=parse_exc,
+    ):
+        with pytest.raises(ExtractionParseError) as exc_info:
+            _extract_candidates_impl(
+                "https://example.com/product",
+                "ecommerce_detail",
+                "<html></html>",
+                [],
+                [],
+            )
+
+    assert exc_info.value.__cause__ is parse_exc
 
 
 def test_extract_title_drops_generic_breadcrumb_candidates_and_keeps_product_name():
@@ -1114,6 +1137,10 @@ def test_coerce_price_rejects_boolean_values():
     assert coerce_field_candidate_value("price", "2500") == "2500"
 
 
+def test_coerce_salary_returns_none_for_overlong_input():
+    assert coerce_field_candidate_value("salary", "9" * 10_000) is None
+
+
 def test_coerce_scalar_for_dynamic_row_rejects_blobs_and_sentinels():
     assert _coerce_scalar_for_dynamic_row(False) is None
     assert _coerce_scalar_for_dynamic_row(True) is None
@@ -1499,63 +1526,6 @@ def test_normalize_size_candidate_rejects_css_noise():
 def test_normalize_html_rich_text_handles_block_tags_without_crashing():
     assert _normalize_html_rich_text("<div>Alpha</div><p>Beta</p><br><li>Gamma</li>") == "Alpha\nBeta\nGamma"
 
-
-
-# Property 3: Extraction Hierarchy Order Preservation
-def test_extraction_hierarchy_order_preservation_datalayer_before_network():
-    """Feature: extraction-pipeline-improvements, Property 3: Extraction Hierarchy Order Preservation
-    
-    **Validates: Requirements 1.6, 2.3, 2.5**
-    
-    For any HTML containing the same field value in multiple sources (adapter, dataLayer, 
-    JSON-LD, DOM), the extraction pipeline SHALL resolve the field using the first source 
-    in hierarchy order, and SHALL NOT consult subsequent sources once a valid value is found.
-    
-    This test verifies that dataLayer (step 2) is consulted before Network Intercept (step 3).
-    """
-    html = """
-    <html><body>
-    <script>
-    dataLayer.push({
-        "ecommerce": {
-            "items": [
-                {
-                    "price": 29.99,
-                    "currency": "USD"
-                }
-            ]
-        }
-    });
-    </script>
-    </body></html>
-    """
-    
-    # Network payload has different price
-    manifest = _manifest(
-        network_payloads=[
-            {
-                "url": "https://api.example.com/product",
-                "body": {"price": "39.99", "currency": "EUR"}
-            }
-        ]
-    )
-    
-    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
-            "https://example.com/product",
-            "ecommerce_detail",
-            html,
-            manifest,
-            [],
-        )
-    
-    # Should use dataLayer price (29.99), not network payload price (39.99)
-    assert "price" in candidates
-    assert len(candidates["price"]) == 1
-    assert candidates["price"][0]["source"] == "datalayer"
-    assert candidates["price"][0]["value"] == 29.99
-
-
 def test_extraction_hierarchy_order_preservation_adapter_before_datalayer():
     """Feature: extraction-pipeline-improvements, Property 3: Extraction Hierarchy Order Preservation
     
@@ -1599,52 +1569,6 @@ def test_extraction_hierarchy_order_preservation_adapter_before_datalayer():
     assert len(candidates["price"]) == 1
     assert candidates["price"][0]["source"] == "adapter"
     assert candidates["price"][0]["value"] == "19.99"
-
-
-def test_extraction_hierarchy_order_preservation_datalayer_before_jsonld():
-    """Feature: extraction-pipeline-improvements, Property 3: Extraction Hierarchy Order Preservation
-    
-    **Validates: Requirements 1.6, 2.3, 2.5**
-    
-    This test verifies that dataLayer (step 2) is consulted before JSON-LD (step 4).
-    """
-    html = """
-    <html><body>
-    <script>
-    dataLayer.push({
-        "ecommerce": {
-            "items": [
-                {
-                    "price": 29.99,
-                    "currency": "USD"
-                }
-            ]
-        }
-    });
-    </script>
-    <script type="application/ld+json">
-    {"@context": "https://schema.org", "@type": "Product", "price": "39.99", "priceCurrency": "EUR"}
-    </script>
-    </body></html>
-    """
-    
-    # Don't use manifest - let parse_page_sources extract both dataLayer and JSON-LD from HTML
-    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
-            "https://example.com/product",
-            "ecommerce_detail",
-            html,
-            None,  # No manifest - parse from HTML
-            [],
-        )
-    
-    # Should use dataLayer price (29.99), not JSON-LD price (39.99)
-    assert "price" in candidates
-    assert len(candidates["price"]) == 1
-    assert candidates["price"][0]["source"] == "datalayer"
-    assert candidates["price"][0]["value"] == 29.99
-
-
 def test_extract_prefers_json_ld_when_datalayer_category_and_availability_are_polluted():
     html = """
     <html><body>

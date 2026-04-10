@@ -3,7 +3,7 @@ import { AppShell } from "../components/layout/app-shell";
 import { QueryProvider } from "../components/ui/query-provider";
 import { Inter, JetBrains_Mono } from "next/font/google";
 
-const inter = Inter({
+const mainFont = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
   weight: ["400", "500", "600", "700"],
@@ -19,9 +19,9 @@ const jetbrainsMono = JetBrains_Mono({
 const themeScript = `
   (() => {
     const stored = window.localStorage.getItem("crawlerai-theme");
-    const dark = stored === "dark";
+    const dark = stored === "dark" || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    document.documentElement.style.backgroundColor = dark ? "#0b1220" : "#f8fafc";
+    document.documentElement.style.backgroundColor = dark ? "#1E1E1E" : "#F8FAFC";
   })();
 `;
 
@@ -31,7 +31,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${inter.variable} ${jetbrainsMono.variable}`}>
+      <body className={`${mainFont.variable} ${jetbrainsMono.variable}`}>
         <QueryProvider>
           <AppShell>{children}</AppShell>
         </QueryProvider>

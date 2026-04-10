@@ -20,6 +20,7 @@ def test_canonical_listing_fields_handles_non_job_surface() -> None:
 def test_normalized_size_tokens_do_not_match_letter_sizes_inside_words() -> None:
     tokens = _normalized_size_tokens("small mall XS S M XL EU 42 10.5")
 
+    assert "xs" in tokens
     assert "s" in tokens
     assert "m" in tokens
     assert "xl" in tokens

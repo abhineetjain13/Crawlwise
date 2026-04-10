@@ -119,7 +119,6 @@ def normalize_value(field_name: str, value: object, *, base_url: str = "") -> ob
     if not isinstance(value, str):
         return value
     text = _normalized_candidate_text(unescape(value))
-    _ = base_url
     if not text:
         return ""
     lowered = text.lower()
@@ -381,7 +380,6 @@ _SCHEMA_ORG_AVAILABILITY_MAP: dict[str, str] = {
     "outofstock": "out_of_stock",
     "preorder": "preorder",
     "pre-order": "preorder",
-    "preorder": "preorder",
     "limitedavailability": "limited_availability",
     "soldout": "out_of_stock",
     "discontinued": "discontinued",

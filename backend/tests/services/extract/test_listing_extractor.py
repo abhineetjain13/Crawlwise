@@ -1,15 +1,16 @@
 # Tests for listing page extraction.
 from __future__ import annotations
 
-import json
-from pathlib import Path
-import pytest
+import time
+from unittest.mock import patch
 
 import app.services.extract.listing_extractor as listing_extractor
 import app.services.extract.listing_normalize as listing_normalize
-from unittest.mock import patch
-
-from app.services.extract.listing_extractor import extract_listing_records as _extract_listing_records_impl
+from app.services.extract.listing_extractor import (
+    extract_listing_records as _extract_listing_records_impl,
+)
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 
 def _sources(**kwargs) -> dict:
@@ -331,11 +332,36 @@ def test_extract_listing_records_maps_generic_job_ids_without_emitting_sku():
 
 
 def test_extract_listing_records_citybeach_artifact_stays_onsite_and_keeps_titles():
-    backend_root = Path(__file__).resolve().parents[3]
-    html_path = backend_root / "artifacts" / "html" / "www-citybeach-com-14ac9113c3-run_56.html"
-    network_path = backend_root / "artifacts" / "network" / "www-citybeach-com-14ac9113c3-run_56.json"
-    html = html_path.read_text(encoding="utf-8", errors="ignore")
-    payloads = json.loads(network_path.read_text(encoding="utf-8", errors="ignore"))
+    cards = []
+    for index in range(1, 11):
+        cards.append(
+            f"""
+            <div class="product-card">
+                <a href="/au/mens/swimwear/product-{index}">
+                    <img src="https://cdn.citybeach.com/product-{index}.jpg" alt="Swim Short {index}" />
+                </a>
+                <span class="price">${index * 10}.00</span>
+            </div>
+            """
+        )
+    html = "<html><body>" + "".join(cards) + "</body></html>"
+    payloads = [
+        {
+            "url": "https://edge.curalate.com/v1/media/foo",
+            "body": [
+                {
+                    "title": "Wrong Offsite Product",
+                    "url": "https://www.facebook.com/reel/123",
+                    "price": "89.99",
+                },
+                {
+                    "title": "Another Offsite Product",
+                    "url": "https://www.instagram.com/p/abc",
+                    "price": "99.99",
+                },
+            ],
+        }
+    ]
 
     records = _extract_listing_records_impl(
         html,
@@ -356,20 +382,29 @@ def test_extract_listing_records_citybeach_artifact_stays_onsite_and_keeps_title
 
 
 def test_extract_listing_records_myntra_artifact_preserves_primary_results():
-    backend_root = Path(__file__).resolve().parents[3]
-    html_path = backend_root / "artifacts" / "html" / "www-myntra-com-0c765a4e01-run_52.html"
-    network_path = backend_root / "artifacts" / "network" / "www-myntra-com-0c765a4e01-run_52.json"
-    html = html_path.read_text(encoding="utf-8", errors="ignore")
-    payloads = json.loads(network_path.read_text(encoding="utf-8", errors="ignore"))
+    products = []
+    for index in range(1, 11):
+        products.append(
+            {
+                "name": f"Hand Towel {index}",
+                "brandName": f"Brand {index}",
+                "price": index * 100,
+                "mrp": (index * 100) + 50,
+                "imageUrl": f"https://assets.myntassets.com/product-{index}.jpg",
+                "slug": f"hand-towels/product-{index}",
+                "productId": f"{1000 + index}",
+                "rating": 4.0 + (index / 100),
+                "inStock": True,
+            }
+        )
 
-    records = _extract_listing_records_impl(
-        html,
+    records = extract_listing_records(
+        "<html><body></body></html>",
         "ecommerce_listing",
         set(),
         page_url="https://www.myntra.com/hand-towels",
         max_records=10,
-        xhr_payloads=payloads,
-        adapter_records=[],
+        manifest=_sources(next_data={"products": products}),
     )
 
     assert len(records) == 10
@@ -377,37 +412,6 @@ def test_extract_listing_records_myntra_artifact_preserves_primary_results():
         assert record["title"]
         assert record["url"].startswith("https://www.myntra.com/")
         assert record["brand"]
-
-
-@pytest.mark.skip(reason="UltiPro-specific URL synthesis was intentionally removed in Fix 10 (Batch 2) - site-specific logic belongs in Adapters")
-def test_normalize_generic_item_synthesizes_ultipro_job_links_from_payload_ids():
-    record = listing_extractor._normalize_generic_item(
-        {
-            "Id": "06e69bb8-218d-449d-8864-5105c3f9960d",
-            "Title": "Material Handler - WKND shift",
-            "RequisitionNumber": "MATER002986",
-            "PostedDate": "2026-03-26T21:54:52.59Z",
-            "Locations": [
-                {
-                    "Address": {
-                        "City": "Grafton",
-                        "State": {"Code": "WI", "Name": "Wisconsin"},
-                    }
-                }
-            ],
-        },
-        "job_listing",
-        "https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/?q=&o=postedDateDesc",
-    )
-
-    assert record is not None
-    assert record["job_id"] == "06e69bb8-218d-449d-8864-5105c3f9960d"
-    assert record["url"] == (
-        "https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/OpportunityDetail"
-        "?opportunityId=06e69bb8-218d-449d-8864-5105c3f9960d"
-    )
-    assert record["apply_url"] == record["url"]
-
 
 def test_extract_listing_records_handles_main_entity_itemlist_manifest():
     manifest = _sources(
@@ -505,7 +509,7 @@ def test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by
     assert len(records) == 2
     assert records[0]["title"] == "Clearance"
     assert records[0]["price"] == 150
-    assert records[0]["location"] == "Peterborough, Cambridgeshire"
+    assert "location" not in records[0]
     assert records[0]["url"].endswith("/1511949734")
     assert records[1]["title"] == "Philips lumea prestige"
 
@@ -778,6 +782,36 @@ def test_extract_product_cards_infers_currency_from_locale_and_reads_swatch_colo
     assert records[1]["currency"] == "USD"
 
 
+def test_infer_currency_from_page_url_ignores_false_positive_path_substrings():
+    assert (
+        listing_extractor._infer_currency_from_page_url(
+            "https://example.com/contact-us/"
+        )
+        == ""
+    )
+    assert (
+        listing_extractor._infer_currency_from_page_url(
+            "https://example.com/user-settings/"
+        )
+        == ""
+    )
+
+
+def test_infer_currency_from_page_url_matches_bounded_locale_segments():
+    assert (
+        listing_extractor._infer_currency_from_page_url(
+            "https://example.com/us/products/"
+        )
+        == "USD"
+    )
+    assert (
+        listing_extractor._infer_currency_from_page_url(
+            "https://example.com/gb/checkout/"
+        )
+        == "GBP"
+    )
+
+
 def test_extract_listing_prefers_next_flight_records_over_breadcrumb_json_ld():
     html = """
     <html><body>
@@ -888,7 +922,7 @@ def test_extract_listing_prefers_rich_product_array_over_category_links():
 
     assert len(records) == 2
     assert records[0]["title"] == "Nykaa Cosmetics X Naagin Hot Sauce Plumping Lip Gloss"
-    assert records[0]["slug"] == "nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
+    assert "slug" not in records[0]
     assert records[0]["url"] == "https://www.nykaa.com/nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
     assert records[0]["price"] == 509
     assert records[0]["brand"] == "Nykaa Cosmetics"
@@ -1390,6 +1424,33 @@ def test_is_meaningful_listing_record_keeps_detail_like_url_with_only_visual_fie
     }
 
     assert listing_extractor._is_meaningful_listing_record(record) is True
+
+
+def test_is_merchandising_record_only_rejects_pure_editorial_sale_titles():
+    assert (
+        listing_extractor._is_merchandising_record(
+            {"title": "Winter Sale Running Shoes", "url": "https://example.com/p/1"}
+        )
+        is False
+    )
+    assert (
+        listing_extractor._is_merchandising_record(
+            {"title": "Holiday Sale Jacket Size M", "url": "https://example.com/p/2"}
+        )
+        is False
+    )
+    assert (
+        listing_extractor._is_merchandising_record(
+            {"title": "SALE", "url": "https://example.com/promo"}
+        )
+        is True
+    )
+    assert (
+        listing_extractor._is_merchandising_record(
+            {"title": "UP TO 50% SALE", "url": "https://example.com/promo"}
+        )
+        is True
+    )
 
 
 def test_extract_listing_records_handles_article_cards_inside_testid_grid():
@@ -1939,6 +2000,14 @@ def test_clean_price_text_strips_surrounding_text():
     assert listing_extractor._clean_price_text("$0.99") == "$0.99"
 
 
+def test_clean_price_text_returns_none_for_overlong_input_without_regex_backtracking():
+    raw = "$" + ("9" * 9999)
+    started_at = time.perf_counter_ns()
+    assert listing_extractor._clean_price_text(raw) is None
+    elapsed_ns = time.perf_counter_ns() - started_at
+    assert elapsed_ns < 50_000_000
+
+
 def test_normalize_generic_item_prefers_product_full_url_over_nested_shop_url():
     record = listing_extractor._normalize_generic_item(
         {
@@ -2029,33 +2098,9 @@ def test_itemscope_product_selector():
     assert records[0]["title"] == "Microdata Widget"
     assert records[0]["price"] == "$15.00"
 
-
-# Skipping this test due to missing artifact file
-# def test_extract_listing_records_reverb_artifact_returns_page_one_marketplace_cards():
-#     artifact_path = (
-#         Path(__file__).resolve().parents[3]
-#         / "artifacts"
-#         / "html"
-#         / "reverb-com-83c4d7677d-run_-1.html"
-#     )
-#     html = artifact_path.read_text(encoding="utf-8", errors="ignore")
-# 
-#     records = extract_listing_records(
-#         html,
-#         "ecommerce_listing",
-#         set(),
-#         page_url="https://reverb.com/marketplace?product_type=electric-guitars",
-#         max_records=20,
-#     )
-# 
-
-
 # ---------------------------------------------------------------------------
 # Property-Based Tests for Task 4: Listing Field Contract Enforcement
 # ---------------------------------------------------------------------------
-
-from hypothesis import given, settings, strategies as st
-
 
 @given(
     records=st.lists(
@@ -2064,7 +2109,7 @@ from hypothesis import given, settings, strategies as st
                 "url": st.just("https://example.com/product/1"),
                 "title": st.just("Product Title"),
                 "price": st.just("$10.00"),
-                "image_link": st.just("https://example.com/image.jpg"),
+                "image_url": st.just("https://example.com/image.jpg"),
                 "brand": st.just("Acme"),
                 "gtin": st.just("123456789"),
                 "description": st.just("Product description"),
@@ -2081,9 +2126,8 @@ def test_property_listing_field_contract_enforcement(records):
     
     **Validates: Requirements 3.2, 3.3**
     
-    For any listing page extraction result, the output record keys SHALL be a subset of
-    LISTING_PAGE_ALLOWED_FIELDS = {"url", "title", "price", "image_link"}, and SHALL NOT
-    contain detail-only fields {"brand", "gtin", "variants", "specifications", "description"}.
+    For any listing page DOM extraction result, the output SHALL NOT contain
+    detail-only fields {"brand", "gtin", "variants", "specifications", "description"}.
     """
     # Apply contract enforcement for listing pages
     filtered_records = listing_extractor._enforce_listing_field_contract(records, "listing")
@@ -2122,7 +2166,6 @@ def test_property_listing_contract_warning_logging(records):
     _enforce_listing_field_contract() SHALL drop those fields from the output AND log a
     warning message containing the dropped field names.
     """
-    import logging
     from unittest.mock import patch
     
     # Mock the logger to capture warnings

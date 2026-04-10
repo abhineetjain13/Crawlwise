@@ -57,7 +57,7 @@ export default function JobsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Jobs"
-        description="Live worker state and job control."
+        description="Live run state for the local dev runner."
         actions={
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted">Last refreshed {lastRefreshed}</span>
@@ -72,7 +72,7 @@ export default function JobsPage() {
       <Card className="space-y-4">
         <SectionHeader
           title="Active Jobs"
-          description="Auto-refreshes every 5 seconds. Use hard kill to stop any active run."
+          description="Auto-refreshes every 5 seconds. Hard kill is the only active-run control in dev mode."
           action={<Badge tone="neutral">{jobs.length} active</Badge>}
         />
         {actionError ? <InlineAlert message={actionError} /> : null}

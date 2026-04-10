@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import time
 
 from app.core.database import SessionLocal
@@ -141,7 +142,14 @@ def _is_error_page_record(record: dict) -> bool:
     title = str(record.get("title") or "").lower()
     description = str(record.get("description") or "").lower()
     combined = title + " " + description
-    return any(token in combined for token in _ERROR_PAGE_TITLE_TOKENS)
+    for token in _ERROR_PAGE_TITLE_TOKENS:
+        if token.isdigit():
+            if re.search(rf"\b{re.escape(token)}\b", combined):
+                return True
+            continue
+        if token in combined:
+            return True
+    return False
 
 
 async def _process_single_url(
@@ -1258,8 +1266,13 @@ async def _log(session: AsyncSession, run_id: int, level: str, message: str) -> 
     )
     if not should_persist:
         return
+    # Persist log rows outside the crawl transaction so the live log poller and
+    # websocket stream can see them before the run commits its main work.
     await append_log_event(
-        run_id, normalized_level, formatted_message, preformatted=True
+        run_id,
+        normalized_level,
+        formatted_message,
+        preformatted=True,
     )
 
 
@@ -1272,7 +1285,6 @@ async def _set_stage(
     current_url_index: int | None = None,
     total_urls: int | None = None,
 ) -> None:
-    run_id = int(run.id)
     summary_patch = {
         "current_stage": stage,
         **({"current_url": current_url} if current_url is not None else {}),
@@ -1283,7 +1295,9 @@ async def _set_stage(
         ),
         **({"total_urls": total_urls} if total_urls is not None else {}),
     }
-    await persist_run_summary_patch(run_id=run_id, summary_patch=summary_patch)
+    current_summary = dict(run.result_summary or {})
+    run.result_summary = {**current_summary, **summary_patch}
+    await session.flush()
 
 
 async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -> None:
