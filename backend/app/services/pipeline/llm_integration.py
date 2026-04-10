@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import re
-from html import unescape
-
 from app.services.extract.service import coerce_field_candidate_value
 from app.services.extract.source_parsers import parse_page_sources
 
-from .utils import _compact_dict, _clean_candidate_text
-from .field_normalization import _normalize_review_value, _review_values_equal, _passes_detail_quality_gate
-from .verdict import _review_bucket_fingerprint
+from .field_normalization import (
+    _normalize_review_value,
+    _passes_detail_quality_gate,
+    _review_values_equal,
+)
 from .review_helpers import _merge_review_bucket_entries
+from .utils import _clean_candidate_text, _compact_dict
+from .verdict import _review_bucket_fingerprint
 
 LLM_CLEAN_CANDIDATE_TEXT_LIMIT = 2000
 

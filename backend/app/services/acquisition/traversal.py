@@ -6,13 +6,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from urllib.parse import urljoin
 
-from playwright.async_api import (
-    Error as PlaywrightError,
-    TimeoutError as PlaywrightTimeoutError,
-)
-
 from app.services.pipeline_config import (
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
+    CARD_SELECTORS_COMMERCE,
+    CARD_SELECTORS_JOBS,
     LISTING_MIN_ITEMS,
     LOAD_MORE_SELECTORS,
     LOAD_MORE_WAIT_MIN_MS,
@@ -20,12 +17,82 @@ from app.services.pipeline_config import (
     PAGINATION_NEXT_SELECTORS,
     SCROLL_WAIT_MIN_MS,
 )
+from app.services.runtime_metrics import incr
 from app.services.url_safety import validate_public_target
+from playwright.async_api import (
+    Error as PlaywrightError,
+)
+from playwright.async_api import (
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 logger = logging.getLogger(__name__)
-_MAX_TRAVERSAL_FRAGMENTS = 12
+_MAX_TRAVERSAL_FRAGMENTS = 50
 _MAX_TRAVERSAL_FRAGMENT_BYTES = 2_000_000
 _MAX_TRAVERSAL_TOTAL_BYTES = 6_000_000
+
+
+def _card_selectors_for_surface(surface: str | None) -> list[str]:
+    """Return the appropriate CARD_SELECTORS list based on the crawl surface."""
+    normalized = str(surface or "").strip().lower()
+    if "job" in normalized:
+        return list(CARD_SELECTORS_JOBS)
+    return list(CARD_SELECTORS_COMMERCE)
+
+
+# ---------------------------------------------------------------------------
+# JS snippet: extract only card outerHTML + identity keys from the live DOM.
+# Returns {cards: [{html, identity}], container_signature: str}.
+# ---------------------------------------------------------------------------
+_JS_EXTRACT_CARDS = """
+(selectors) => {
+    const seen = new Set();
+    const cards = [];
+    for (const sel of selectors) {
+        let nodes;
+        try { nodes = document.querySelectorAll(sel); } catch { continue; }
+        for (const node of nodes) {
+            const identity =
+                (node.getAttribute('href') || '').trim() ||
+                (node.querySelector('a[href]')?.getAttribute('href') || '').trim() ||
+                (node.getAttribute('data-id') || '').trim() ||
+                (node.getAttribute('data-product-id') || '').trim() ||
+                (node.getAttribute('data-job-id') || '').trim() ||
+                '';
+            const key = identity || node.outerHTML.slice(0, 200);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            cards.push({html: node.outerHTML, identity: identity});
+        }
+    }
+    // Container signature for DOM-diff fallback when selectors match nothing.
+    const container = document.querySelector(
+        'main, [role="main"], [role="feed"], .products, .product-grid, .results, .search-results'
+    ) || document.body;
+    const childCount = container ? container.children.length : 0;
+    const sig = container ? (container.tagName + ':' + childCount) : '';
+    return {cards, container_signature: sig};
+}
+"""
+
+# JS snippet: DOM-diff fallback — returns outerHTML of new children added to
+# the listing container since the last capture.  Caller passes the set of
+# child signatures already seen (first 200 chars of outerHTML).
+_JS_CONTAINER_DIFF = """
+(knownSigs) => {
+    const container = document.querySelector(
+        'main, [role="main"], [role="feed"], .products, .product-grid, .results, .search-results'
+    ) || document.body;
+    if (!container) return [];
+    const news = [];
+    for (const child of container.children) {
+        const sig = child.outerHTML.slice(0, 200);
+        if (knownSigs.includes(sig)) continue;
+        news.push({html: child.outerHTML, sig});
+    }
+    return news;
+}
+"""
 
 
 def _identity_tokens(metrics: dict[str, object] | None) -> set[str]:
@@ -85,7 +152,8 @@ async def apply_traversal_mode(
     wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]],
     wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]],
     peek_next_page_signal: Callable[..., Awaitable[dict[str, object] | None]],
-    click_and_observe_next_page: Callable[..., Awaitable[str]],
+    click_and_observe_next_page: Callable[..., Awaitable[str]] | None = None,
+    advance_next_page_fn: Callable[..., Awaitable[AdvanceResult]] | None = None,
     has_load_more_control: Callable[..., Awaitable[bool]],
     dismiss_cookie_consent: Callable[..., Awaitable[None]],
     pause_after_navigation: Callable[..., Awaitable[None]],
@@ -119,25 +187,97 @@ async def apply_traversal_mode(
     collected_fragments: list[str] = []
     seen_fragment_hashes: set[str] = set()
     captured_fragment_bytes = 0
+    # Card-level dedup: identity string → True.  Prevents virtualized grids
+    # from producing duplicate cards across scroll steps.
+    seen_card_identities: set[str] = set()
+    # Container child signatures seen so far, used for DOM-diff fallback
+    # when CARD_SELECTORS match 0 elements.
+    known_container_sigs: list[str] = []
+
+    card_selectors = _card_selectors_for_surface(surface)
 
     async def _capture_fragment(page, marker: str) -> None:
+        """Capture only card-level HTML instead of full page content.
+
+        Strategy:
+        1. Run JS with CARD_SELECTORS to extract matching card outerHTML,
+           deduplicating by stable identity (href / data-id).
+        2. If selectors match nothing, fall back to a DOM diff of the listing
+           container (new children since the last step).
+        3. Only if both produce nothing, fall back to full page.content() —
+           but this path should be rare.
+        """
         nonlocal captured_fragment_bytes
         if len(collected_fragments) >= _MAX_TRAVERSAL_FRAGMENTS:
             return
-        html = await page_content_with_retry(page, checkpoint=checkpoint)
-        if not isinstance(html, str) or not html:
+
+        fragment_parts: list[str] = []
+        try:
+            result = await page.evaluate(_JS_EXTRACT_CARDS, card_selectors)
+            cards = result.get("cards", []) if isinstance(result, dict) else []
+            for card in cards:
+                identity = card.get("identity", "")
+                card_html = card.get("html", "")
+                if not card_html:
+                    continue
+                if identity and identity in seen_card_identities:
+                    continue
+                if identity:
+                    seen_card_identities.add(identity)
+                fragment_parts.append(card_html)
+        except (PlaywrightError, Exception):
+            logger.debug("Card-selector extraction failed at %s", marker, exc_info=True)
+            cards = []
+
+        # Fallback: DOM diff of listing container when selectors matched nothing.
+        if not fragment_parts:
+            try:
+                diff_items = await page.evaluate(
+                    _JS_CONTAINER_DIFF, known_container_sigs
+                )
+                if isinstance(diff_items, list):
+                    for item in diff_items:
+                        item_html = item.get("html", "") if isinstance(item, dict) else ""
+                        item_sig = item.get("sig", "") if isinstance(item, dict) else ""
+                        if not item_html:
+                            continue
+                        fragment_parts.append(item_html)
+                        if item_sig:
+                            known_container_sigs.append(item_sig)
+            except (PlaywrightError, Exception):
+                logger.debug("Container-diff fallback failed at %s", marker, exc_info=True)
+
+        # Last resort: full page content (original behavior).
+        if not fragment_parts:
+            html = await page_content_with_retry(page, checkpoint=checkpoint)
+            if not isinstance(html, str) or not html:
+                return
+            encoded_size = len(html.encode("utf-8", errors="ignore"))
+            if encoded_size > _MAX_TRAVERSAL_FRAGMENT_BYTES:
+                return
+            if captured_fragment_bytes + encoded_size > _MAX_TRAVERSAL_TOTAL_BYTES:
+                return
+            fingerprint = hashlib.sha1(
+                html.encode("utf-8", errors="ignore")
+            ).hexdigest()
+            if fingerprint in seen_fragment_hashes:
+                return
+            seen_fragment_hashes.add(fingerprint)
+            captured_fragment_bytes += encoded_size
+            collected_fragments.append(
+                f"<!-- PAGE BREAK:traversal:{marker}:{getattr(page, 'url', '')} -->\n{html}"
+            )
             return
+
+        # Assemble targeted fragment from card parts.
+        html = "\n".join(fragment_parts)
         encoded_size = len(html.encode("utf-8", errors="ignore"))
-        if encoded_size > _MAX_TRAVERSAL_FRAGMENT_BYTES:
-            return
         if captured_fragment_bytes + encoded_size > _MAX_TRAVERSAL_TOTAL_BYTES:
             return
-        fingerprint = hashlib.sha1(html.encode("utf-8", errors="ignore")).hexdigest()
-        if fingerprint in seen_fragment_hashes:
-            return
-        seen_fragment_hashes.add(fingerprint)
         captured_fragment_bytes += encoded_size
-        collected_fragments.append(f"<!-- PAGE BREAK:traversal:{marker}:{getattr(page, 'url', '')} -->\n{html}")
+        collected_fragments.append(
+            f"<!-- PAGE BREAK:traversal:{marker}:{getattr(page, 'url', '')} -->\n{html}"
+        )
 
     async def _capture_initial_fragment(page, marker: str) -> None:
         if collected_fragments:
@@ -199,6 +339,7 @@ async def apply_traversal_mode(
             wait_for_surface_readiness=wait_for_surface_readiness,
             wait_for_listing_readiness=wait_for_listing_readiness,
             click_and_observe_next_page=click_and_observe_next_page,
+            advance_next_page_fn=advance_next_page_fn,
             dismiss_cookie_consent=dismiss_cookie_consent,
             pause_after_navigation=pause_after_navigation,
             expand_all_interactive_elements=expand_all_interactive_elements,
@@ -252,6 +393,7 @@ async def apply_traversal_mode(
                 wait_for_surface_readiness=wait_for_surface_readiness,
                 wait_for_listing_readiness=wait_for_listing_readiness,
                 click_and_observe_next_page=click_and_observe_next_page,
+                advance_next_page_fn=advance_next_page_fn,
                 dismiss_cookie_consent=dismiss_cookie_consent,
                 pause_after_navigation=pause_after_navigation,
                 expand_all_interactive_elements=expand_all_interactive_elements,
@@ -303,7 +445,8 @@ async def collect_paginated_html(
     page_content_with_retry: Callable[..., Awaitable[str]],
     wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]],
     wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]],
-    click_and_observe_next_page: Callable[..., Awaitable[str]],
+    click_and_observe_next_page: Callable[..., Awaitable[str]] | None = None,
+    advance_next_page_fn: Callable[..., Awaitable[AdvanceResult]] | None = None,
     dismiss_cookie_consent: Callable[..., Awaitable[None]],
     pause_after_navigation: Callable[..., Awaitable[None]],
     expand_all_interactive_elements: Callable[..., Awaitable[dict[str, object]]],
@@ -311,6 +454,9 @@ async def collect_paginated_html(
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> TraversalResult:
     config = _resolved_config(config)
+    if advance_next_page_fn is None and click_and_observe_next_page is None:
+        raise ValueError("no pagination callback provided")
+
     fragments: list[str] = []
     visited_urls: set[str] = set()
     stop_reason = "max_pages_reached"
@@ -318,6 +464,17 @@ async def collect_paginated_html(
     current_url = str(page.url or "").strip()
     if current_url:
         visited_urls.add(current_url)
+
+    # Resolve the advance callback.  Prefer advance_next_page_fn (aware of
+    # already_navigated); fall back to the legacy click_and_observe_next_page
+    # wrapper for backward compatibility.
+    async def _legacy_advance(pg, *, checkpoint=None) -> AdvanceResult:
+        if click_and_observe_next_page is None:
+            raise ValueError("no pagination callback provided")
+        url = await click_and_observe_next_page(pg, checkpoint=checkpoint)  # type: ignore[misc]
+        return AdvanceResult(url=url, already_navigated=False)
+
+    _advance = advance_next_page_fn if advance_next_page_fn is not None else _legacy_advance
 
     page_limit = max(1, int(max_pages or 1))
     for page_index in range(page_limit):
@@ -336,7 +493,8 @@ async def collect_paginated_html(
         if page_index + 1 >= page_limit:
             break
         current_url = str(page.url or "").strip()
-        next_page_url = await click_and_observe_next_page(page, checkpoint=checkpoint)
+        advance_result = await _advance(page, checkpoint=checkpoint)
+        next_page_url = advance_result.url
         page_advanced_in_place = (
             bool(next_page_url)
             and str(page.url or "").strip() == current_url
@@ -356,7 +514,10 @@ async def collect_paginated_html(
             stop_reason = "rejected_next_page"
             break
         visited_urls.add(next_page_url)
-        if not page_advanced_in_place:
+        # Only navigate when the advance step did not already mutate the page
+        # (e.g. it returned an <a href> URL but did not click).
+        needs_goto = not advance_result.already_navigated and not page_advanced_in_place
+        if needs_goto:
             await page.goto(
                 next_page_url,
                 wait_until="domcontentloaded",
@@ -389,7 +550,7 @@ async def collect_paginated_html(
                     "action": "goto_next_page",
                     "page_index": page_index + 2,
                     "url": next_page_url,
-                    "in_place": True,
+                    "in_place": page_advanced_in_place or advance_result.already_navigated,
                 }
             )
         await dismiss_cookie_consent(page, checkpoint=checkpoint)
@@ -403,7 +564,6 @@ async def collect_paginated_html(
             "mode": "paginate",
             "attempted": True,
             "pages_collected": len(fragments),
-            "page_count": len(fragments),
             "visited_urls": len(visited_urls),
             "steps": steps,
             "stop_reason": stop_reason,
@@ -589,16 +749,38 @@ def pagination_state_changed(
     return False
 
 
-async def click_and_observe_next_page(
+@dataclass
+class AdvanceResult:
+    """Result of advance_next_page.
+
+    - ``url``: the URL of the next page (empty string if advance failed).
+    - ``already_navigated``: True when a button click already changed the page
+      state, so the caller must NOT do a redundant ``page.goto()``.
+    """
+    url: str = ""
+    already_navigated: bool = False
+
+
+async def advance_next_page(
     page,
     *,
     config: TraversalConfig | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> str:
+) -> AdvanceResult:
+    """Advance to the next page by clicking the pagination control.
+
+    First checks for an ``<a href>`` next-page link (non-mutating).  If found,
+    returns the URL with ``already_navigated=False`` so the caller can
+    ``page.goto()`` itself.
+
+    If no anchor is found, clicks the first matching pagination button and
+    waits for the page to settle, returning ``already_navigated=True`` so the
+    caller skips ``goto``.
+    """
     config = _resolved_config(config)
     next_page_url = await find_next_page_url_anchor_only(page, config=config)
     if next_page_url:
-        return next_page_url
+        return AdvanceResult(url=next_page_url, already_navigated=False)
 
     async def _container_hash() -> int | None:
         selector = '[class*="product"], [class*="result"], ul.products, main'
@@ -616,7 +798,7 @@ async def click_and_observe_next_page(
 
     _selector, target = await _find_clickable_pagination_target(page, config=config)
     if target is None:
-        return ""
+        return AdvanceResult()
 
     initial_url = str(page.url or "").strip()
     initial_state = await snapshot_pagination_state(page)
@@ -625,7 +807,7 @@ async def click_and_observe_next_page(
         await target.click(timeout=1500)
     except PlaywrightError:
         logger.debug("Failed to click next-page control", exc_info=True)
-        return ""
+        return AdvanceResult()
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=5000)
     except PlaywrightTimeoutError:
@@ -647,13 +829,31 @@ async def click_and_observe_next_page(
         waited_ms += poll_ms
         current_url = str(page.url or "").strip()
         if current_url != initial_url:
-            return current_url
+            return AdvanceResult(url=current_url, already_navigated=True)
         current_state = await snapshot_pagination_state(page)
         if pagination_state_changed(initial_state, current_state):
-            return current_url or initial_url
+            return AdvanceResult(
+                url=current_url or initial_url, already_navigated=True,
+            )
         if await _container_hash() != initial_hash:
-            return current_url
-    return ""
+            return AdvanceResult(url=current_url, already_navigated=True)
+    return AdvanceResult()
+
+
+async def click_and_observe_next_page(
+    page,
+    *,
+    config: TraversalConfig | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> str:
+    """Legacy wrapper — delegates to advance_next_page and returns just the URL.
+
+    Existing callers that only need the URL string continue to work unchanged.
+    """
+    result = await advance_next_page(
+        page, config=config, checkpoint=checkpoint,
+    )
+    return result.url
 
 
 async def scroll_to_bottom(
@@ -793,6 +993,7 @@ async def scroll_to_bottom(
             try:
                 await capture_dom_fragment(page, index + 1)
             except Exception:
+                incr("traversal_dom_fragment_capture_failures_total")
                 logger.debug("DOM fragment capture failed at scroll %s", index + 1, exc_info=True)
         prev_height = next_height
         previous_metrics = next_metrics
@@ -1046,6 +1247,7 @@ async def click_load_more(
                         try:
                             await capture_dom_fragment(page, index + 1)
                         except Exception:
+                            incr("traversal_dom_fragment_capture_failures_total")
                             logger.debug("DOM fragment capture failed at load_more %s", index + 1, exc_info=True)
                     break
             except PlaywrightError:

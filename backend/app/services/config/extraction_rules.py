@@ -1407,6 +1407,7 @@ EXTRACTION_RULES = {
             r"\byou are seeing this ad\b",
             r"\bpromoted\b",
             r"\btrending now\b",
+            r"^(?:(?:up to\s+)?\d{1,3}%\s*(?:off\s+)?)?(?:clearance\s+)?sale$",
         ],
         "alt_text_title_pattern": r"\b(?:worn|wearing|shown|shot|mid-shot|close-up|detail(?:ed)? view|view of|front view|back view)\b",
         "weak_listing_titles": [

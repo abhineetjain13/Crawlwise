@@ -1,40 +1,20 @@
 # Playwright browser acquisition client with optional proxy and network interception.
 from __future__ import annotations
 
-import logging
-
 import asyncio
 import ipaddress
+import logging
+import os
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-import time
-from urllib.parse import urljoin, urlparse, urlunparse
-
-from playwright.async_api import (
-    Error as PlaywrightError,
-    TimeoutError as PlaywrightTimeoutError,
-    async_playwright,
-)
+from urllib.parse import urlparse, urlunparse
 
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
-from app.services.acquisition.traversal import (
-    TraversalResult,
-    TraversalConfig,
-    apply_traversal_mode as _apply_traversal_mode_shared,
-    click_and_observe_next_page as _click_and_observe_next_page_shared,
-    click_load_more as _click_load_more_shared,
-    collect_paginated_html as _collect_paginated_html_shared,
-    find_next_page_url_anchor_only as _find_next_page_url_anchor_only_shared,
-    has_load_more_control as _has_load_more_control_shared,
-    pagination_state_changed as _pagination_state_changed_shared,
-    peek_next_page_signal as _peek_next_page_signal_shared,
-    scroll_to_bottom as _scroll_to_bottom_shared,
-    snapshot_pagination_state as _snapshot_pagination_state_shared,
-)
 from app.services.acquisition.cookie_store import (
     cookie_policy_for_domain,
     cookie_store_path,
@@ -42,41 +22,88 @@ from app.services.acquisition.cookie_store import (
     load_cookies_for_context,
     save_cookies_payload,
 )
-from app.services.runtime_metrics import incr
+from app.services.acquisition.traversal import (
+    AdvanceResult,
+    TraversalConfig,
+    TraversalResult,
+)
+from app.services.acquisition.traversal import (
+    advance_next_page as _advance_next_page_shared,
+)
+from app.services.acquisition.traversal import (
+    apply_traversal_mode as _apply_traversal_mode_shared,
+)
+from app.services.acquisition.traversal import (
+    click_and_observe_next_page as _click_and_observe_next_page_shared,
+)
+from app.services.acquisition.traversal import (
+    click_load_more as _click_load_more_shared,
+)
+from app.services.acquisition.traversal import (
+    collect_paginated_html as _collect_paginated_html_shared,
+)
+from app.services.acquisition.traversal import (
+    find_next_page_url_anchor_only as _find_next_page_url_anchor_only_shared,
+)
+from app.services.acquisition.traversal import (
+    has_load_more_control as _has_load_more_control_shared,
+)
+from app.services.acquisition.traversal import (
+    pagination_state_changed as _pagination_state_changed_shared,
+)
+from app.services.acquisition.traversal import (
+    peek_next_page_signal as _peek_next_page_signal_shared,
+)
+from app.services.acquisition.traversal import (
+    scroll_to_bottom as _scroll_to_bottom_shared,
+)
+from app.services.acquisition.traversal import (
+    snapshot_pagination_state as _snapshot_pagination_state_shared,
+)
+from app.services.exceptions import BrowserError, BrowserNavigationError
 from app.services.pipeline_config import (
     ACCORDION_EXPAND_WAIT_MS,
-    BLOCK_MIN_HTML_LENGTH,
     BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS,
     BLOCK_BROWSER_CHALLENGE_WEAK_MARKERS,
+    BLOCK_MIN_HTML_LENGTH,
     BROWSER_ERROR_RETRY_ATTEMPTS,
     BROWSER_ERROR_RETRY_DELAY_MS,
     BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
     BROWSER_NAVIGATION_LOAD_TIMEOUT_MS,
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
+    CARD_SELECTORS_COMMERCE,
+    CARD_SELECTORS_JOBS,
     CHALLENGE_POLL_INTERVAL_MS,
     CHALLENGE_WAIT_MAX_SECONDS,
     COOKIE_CONSENT_POSTCLICK_WAIT_MS,
-    COOKIE_CONSENT_SELECTORS,
     COOKIE_CONSENT_PREWAIT_MS,
-    CARD_SELECTORS_COMMERCE,
-    CARD_SELECTORS_JOBS,
+    COOKIE_CONSENT_SELECTORS,
     DEFAULT_MAX_SCROLLS,
     DOM_PATTERNS,
     INTERRUPTIBLE_WAIT_POLL_MS,
     LISTING_MIN_ITEMS,
     LISTING_READINESS_MAX_WAIT_MS,
     LISTING_READINESS_POLL_MS,
-    LOAD_MORE_WAIT_MIN_MS,
     LOAD_MORE_SELECTORS,
+    LOAD_MORE_WAIT_MIN_MS,
     ORIGIN_WARM_PAUSE_MS,
-    PAGINATION_NAVIGATION_TIMEOUT_MS,
     PAGINATION_NEXT_SELECTORS,
     SCROLL_WAIT_MIN_MS,
     SHADOW_DOM_FLATTEN_MAX_HOSTS,
     SURFACE_READINESS_MAX_WAIT_MS,
     SURFACE_READINESS_POLL_MS,
 )
+from app.services.runtime_metrics import incr
 from app.services.url_safety import validate_public_target
+from playwright.async_api import (
+    Error as PlaywrightError,
+)
+from playwright.async_api import (
+    TimeoutError as PlaywrightTimeoutError,
+)
+from playwright.async_api import (
+    async_playwright,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +132,24 @@ class _PooledBrowser:
     last_used_monotonic: float
 
 
-_BROWSER_POOL: dict[str, _PooledBrowser] = {}
-_BROWSER_POOL_LOCK = asyncio.Lock()
-_BROWSER_POOL_TASK_LOCK = asyncio.Lock()
-_BROWSER_POOL_CLEANUP_TASK: asyncio.Task | None = None
+@dataclass
+class _BrowserPoolState:
+    pid: int
+    pool: dict[str, _PooledBrowser] = field(default_factory=dict)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    task_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    cleanup_task: asyncio.Task | None = None
+
+
+_BROWSER_POOL_STATE = _BrowserPoolState(pid=os.getpid())
+
+
+def _browser_pool_state() -> _BrowserPoolState:
+    global _BROWSER_POOL_STATE
+    pid = os.getpid()
+    if _BROWSER_POOL_STATE.pid != pid:
+        _BROWSER_POOL_STATE = _BrowserPoolState(pid=pid)
+    return _BROWSER_POOL_STATE
 
 
 @dataclass
@@ -204,7 +245,7 @@ async def _fetch_rendered_html_with_fallback(
     last_error: Exception | None = None
     first_profile_failure_reason: str | None = None
     options = runtime_options or BrowserRuntimeOptions()
-    profiles = _browser_launch_profiles(options)
+    profiles = _browser_launch_profiles(options, target=target)
     for index, profile in enumerate(profiles):
         navigation_strategies = (
             _shortened_navigation_strategies()
@@ -248,7 +289,7 @@ async def _fetch_rendered_html_with_fallback(
             continue
     if last_error is not None:
         raise last_error
-    raise RuntimeError(f"Unable to render {url}")
+    raise BrowserError(f"Unable to render {url}")
 
 
 async def _fetch_rendered_html_attempt(
@@ -303,7 +344,7 @@ async def _fetch_rendered_html_attempt(
             ),
             timeout=15.0
         )
-    except (PlaywrightError, asyncio.TimeoutError):
+    except (TimeoutError, PlaywrightError):
         # Browser in pool may have died or hung; evict and retry once.
         await _evict_browser(_browser_pool_key(launch_profile, proxy), browser)
         browser, _ = await _acquire_browser(
@@ -516,7 +557,12 @@ async def _fetch_rendered_html_attempt(
                     message=f"[TRAVERSAL] {', '.join(_ts_parts)}",
                 )
             except Exception:
-                pass  # Don't fail the acquisition if logging fails
+                incr("acquisition_log_event_failures_total")
+                logger.debug(
+                    "Failed to append traversal crawl event for %s",
+                    url,
+                    exc_info=True,
+                )
 
         # Only apply fallback detection for paginated modes (auto, paginate)
         # scroll/load_more mutate the page in-place and don't collect separate pages
@@ -622,17 +668,18 @@ async def _close_browser_safe(browser: object) -> None:
 
 
 async def _evict_idle_or_dead_browsers() -> None:
+    state = _browser_pool_state()
     now = time.monotonic()
     to_close: list[object] = []
-    async with _BROWSER_POOL_LOCK:
+    async with state.lock:
         stale_keys = [
             key
-            for key, entry in _BROWSER_POOL.items()
+            for key, entry in state.pool.items()
             if (now - entry.last_used_monotonic) >= _BROWSER_POOL_IDLE_TTL_SECONDS
             or not _browser_is_connected(entry.browser)
         ]
         for key in stale_keys:
-            entry = _BROWSER_POOL.pop(key, None)
+            entry = state.pool.pop(key, None)
             if entry is not None:
                 to_close.append(entry.browser)
     for browser in to_close:
@@ -640,11 +687,12 @@ async def _evict_idle_or_dead_browsers() -> None:
 
 
 async def _shutdown_browser_pool() -> None:
+    state = _browser_pool_state()
     to_close: list[object] = []
-    async with _BROWSER_POOL_LOCK:
-        for entry in _BROWSER_POOL.values():
+    async with state.lock:
+        for entry in state.pool.values():
             to_close.append(entry.browser)
-        _BROWSER_POOL.clear()
+        state.pool.clear()
     for browser in to_close:
         await _close_browser_safe(browser)
 
@@ -655,12 +703,30 @@ async def _browser_pool_healthcheck_loop() -> None:
         await _evict_idle_or_dead_browsers()
 
 
+async def reset_browser_pool_state() -> None:
+    """Clear pooled browser state and stop background maintenance.
+
+    WARNING: Intended for test cleanup only.
+    """
+    state = _browser_pool_state()
+    await _shutdown_browser_pool()
+    async with state.task_lock:
+        task = state.cleanup_task
+        state.cleanup_task = None
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 async def _ensure_browser_pool_maintenance_task() -> None:
-    global _BROWSER_POOL_CLEANUP_TASK
-    async with _BROWSER_POOL_TASK_LOCK:
+    state = _browser_pool_state()
+    async with state.task_lock:
         loop = asyncio.get_running_loop()
-        if _BROWSER_POOL_CLEANUP_TASK is None or _BROWSER_POOL_CLEANUP_TASK.done():
-            _BROWSER_POOL_CLEANUP_TASK = loop.create_task(_browser_pool_healthcheck_loop())
+        if state.cleanup_task is None or state.cleanup_task.done():
+            state.cleanup_task = loop.create_task(_browser_pool_healthcheck_loop())
 
 
 async def _acquire_browser(
@@ -672,38 +738,39 @@ async def _acquire_browser(
 ):
     await _ensure_browser_pool_maintenance_task()
     await _evict_idle_or_dead_browsers()
+    state = _browser_pool_state()
     to_close: list[object] = []
     browser = None
     now = time.monotonic()
-    async with _BROWSER_POOL_LOCK:
+    async with state.lock:
         if not force_new:
-            pooled = _BROWSER_POOL.get(browser_pool_key)
+            pooled = state.pool.get(browser_pool_key)
             if pooled is not None and _browser_is_connected(pooled.browser):
                 pooled.last_used_monotonic = now
                 return pooled.browser, True
-            _BROWSER_POOL.pop(browser_pool_key, None)
+            state.pool.pop(browser_pool_key, None)
     browser = await browser_type.launch(**launch_kwargs)
-    async with _BROWSER_POOL_LOCK:
+    async with state.lock:
         now = time.monotonic()
-        pooled = _BROWSER_POOL.get(browser_pool_key)
+        pooled = state.pool.get(browser_pool_key)
         if not force_new and pooled is not None and _browser_is_connected(pooled.browser):
             pooled.last_used_monotonic = now
             to_close.append(browser)
             browser = pooled.browser
             reused = True
         else:
-            _BROWSER_POOL[browser_pool_key] = _PooledBrowser(
+            state.pool[browser_pool_key] = _PooledBrowser(
                 browser=browser,
                 last_used_monotonic=now,
             )
             reused = False
-            if len(_BROWSER_POOL) > _BROWSER_POOL_MAX_SIZE:
+            if len(state.pool) > _BROWSER_POOL_MAX_SIZE:
                 lru_key = min(
-                    _BROWSER_POOL,
-                    key=lambda key: _BROWSER_POOL[key].last_used_monotonic,
+                    state.pool,
+                    key=lambda key: state.pool[key].last_used_monotonic,
                 )
                 if lru_key != browser_pool_key:
-                    entry = _BROWSER_POOL.pop(lru_key, None)
+                    entry = state.pool.pop(lru_key, None)
                     if entry is not None:
                         to_close.append(entry.browser)
     for stale_browser in to_close:
@@ -712,14 +779,26 @@ async def _acquire_browser(
 
 
 async def _evict_browser(browser_pool_key: str, browser) -> None:
-    async with _BROWSER_POOL_LOCK:
-        pooled = _BROWSER_POOL.get(browser_pool_key)
+    state = _browser_pool_state()
+    async with state.lock:
+        pooled = state.pool.get(browser_pool_key)
         if pooled is not None and pooled.browser is browser:
-            _BROWSER_POOL.pop(browser_pool_key, None)
+            state.pool.pop(browser_pool_key, None)
     await _close_browser_safe(browser)
 
 
-def _browser_launch_profiles(runtime_options: BrowserRuntimeOptions) -> list[dict[str, str | None]]:
+def _browser_launch_profiles(
+    runtime_options: BrowserRuntimeOptions,
+    *,
+    target=None,
+) -> list[dict[str, str | None]]:
+    # DNS-pinned targets must stay on bundled Chromium because system Chrome
+    # ignores --host-resolver-rules and would bypass the SSRF hardening.
+    if bool(getattr(target, "dns_resolved", False)) and bool(
+        getattr(target, "resolved_ips", None)
+    ):
+        return [{"label": "bundled_chromium", "browser_type": "chromium", "channel": None}]
+
     # Make system_chrome the primary profile to avoid ERR_HTTP2_PROTOCOL_ERROR
     # and TLS fingerprinting blocks from CDNs like Akamai (Myntra/Target/etc).
     # If real Chrome is missing or fails, it will fall back to bundled_chromium.
@@ -727,7 +806,7 @@ def _browser_launch_profiles(runtime_options: BrowserRuntimeOptions) -> list[dic
         {"label": "system_chrome", "browser_type": "chromium", "channel": "chrome"},
         {"label": "bundled_chromium", "browser_type": "chromium", "channel": None},
     ]
-    
+
     # Always return both to ensure maximum resilience
     return profiles
 
@@ -831,16 +910,19 @@ def _build_launch_kwargs(proxy: str | None, target, *, browser_channel: str | No
         launch_kwargs["proxy"] = {"server": proxy}
     if browser_channel:
         launch_kwargs["channel"] = browser_channel
-    # Disabled DNS pinning as it causes HTTP2 errors with some sites (e.g., Myntra)
-    # if target.dns_resolved and target.resolved_ips and not browser_channel:
-    #     pinned_ip = target.resolved_ips[0]
-    #     launch_kwargs["args"] = [
-    #         f"--host-resolver-rules=MAP {target.hostname} {_chromium_host_rule_ip(pinned_ip)}",
-    #     ]
-    
-    # NOTE: --disable-http2 was removed as it triggers anti-bot detection
-    # HTTP/2 multiplexing is a key browser fingerprint that anti-bot systems check
-    
+    # DNS pinning: prevent TOCTOU SSRF where Playwright re-resolves to a
+    # different (internal) IP after Python validated it as public.
+    # System Chrome (browser_channel set) does not support --host-resolver-rules.
+    if target.dns_resolved and target.resolved_ips and not browser_channel:
+        pinned_ip = target.resolved_ips[0]
+        args = [
+            f"--host-resolver-rules=MAP {target.hostname} {_chromium_host_rule_ip(pinned_ip)}",
+            # HTTP/2 with resolver-rule pinning can cause TLS SNI/ALPN mismatches
+            # on some hosts (e.g. Myntra). Disable H2 at the Chromium level for
+            # pinned contexts so TLS negotiation stays on HTTP/1.1.
+            "--disable-http2",
+        ]
+        launch_kwargs.setdefault("args", []).extend(args)
     return launch_kwargs
 
 
@@ -926,6 +1008,7 @@ async def _apply_traversal_mode(
         wait_for_listing_readiness=_wait_for_listing_readiness,
         peek_next_page_signal=_peek_next_page_signal,
         click_and_observe_next_page=_click_and_observe_next_page,
+        advance_next_page_fn=_advance_next_page,
         has_load_more_control=lambda p, _cfg: _has_load_more_control(p),
         dismiss_cookie_consent=_dismiss_cookie_consent,
         pause_after_navigation=_pause_after_navigation,
@@ -962,6 +1045,7 @@ async def _collect_paginated_html(
         wait_for_surface_readiness=_wait_for_surface_readiness,
         wait_for_listing_readiness=_wait_for_listing_readiness,
         click_and_observe_next_page=_click_and_observe_next_page,
+        advance_next_page_fn=_advance_next_page,
         dismiss_cookie_consent=_dismiss_cookie_consent,
         pause_after_navigation=_pause_after_navigation,
         expand_all_interactive_elements=expand_all_interactive_elements,
@@ -1093,6 +1177,17 @@ async def _snapshot_listing_page_metrics(page) -> dict[str, object]:
         return await page.evaluate(
             """
             () => {
+                const MAX_IDENTITIES = 20;
+                const hashToken = (value) => {
+                    const normalized = String(value || "").trim().toLowerCase();
+                    if (!normalized) return "";
+                    let hash = 2166136261;
+                    for (const ch of normalized) {
+                        hash ^= ch.charCodeAt(0);
+                        hash = Math.imul(hash, 16777619);
+                    }
+                    return `h:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+                };
                 const body = document.body;
                 const main = document.querySelector("main");
                 const root = main || body;
@@ -1116,21 +1211,25 @@ async def _snapshot_listing_page_metrics(page) -> dict[str, object]:
                         return token;
                     })
                     .filter((token, index, arr) => token && arr.indexOf(token) === index)
-                    .slice(0, 200);
+                const identityCount = identities.length;
+                const anonymizedIdentities = identities
+                    .slice(0, MAX_IDENTITIES)
+                    .map((token) => hashToken(token))
+                    .filter((token, index, arr) => token && arr.indexOf(token) === index);
                 const domSignature = JSON.stringify({
                     linkCount,
                     cardishCount,
                     htmlLength,
-                    identities: identities.slice(0, 20),
-                    textSample: text.slice(0, 240),
+                    identities: anonymizedIdentities,
+                    textHash: hashToken(text.slice(0, 240)),
                 });
                 return {
                     link_count: linkCount,
                     cardish_count: cardishCount,
                     text_length: text.length,
                     html_length: htmlLength,
-                    identity_count: identities.length,
-                    identities: identities,
+                    identity_count: identityCount,
+                    identities: anonymizedIdentities,
                     dom_signature: domSignature,
                     loading: loading,
                 };
@@ -1249,6 +1348,19 @@ async def _click_and_observe_next_page(
 ) -> str:
     traversal_config = _traversal_config()
     return await _click_and_observe_next_page_shared(
+        page,
+        config=traversal_config,
+        checkpoint=checkpoint,
+    )
+
+
+async def _advance_next_page(
+    page,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> AdvanceResult:
+    traversal_config = _traversal_config()
+    return await _advance_next_page_shared(
         page,
         config=traversal_config,
         checkpoint=checkpoint,
@@ -1514,7 +1626,6 @@ async def _goto_with_fallback(
     retrying before giving up.
     """
     strategies = strategies or _navigation_strategies()
-    last_error = None
     browser_error_retries = max(0, BROWSER_ERROR_RETRY_ATTEMPTS)
 
     for attempt in range(browser_error_retries + 1):
@@ -1529,7 +1640,9 @@ async def _goto_with_fallback(
             browser_error_reason = await _retryable_browser_error_reason(page)
             if browser_error_reason is not None:
                 if attempt >= browser_error_retries:
-                    raise RuntimeError(f"browser_navigation_error:{browser_error_reason}")
+                    raise BrowserNavigationError(
+                        f"browser_navigation_error:{browser_error_reason}"
+                    )
                 logger.debug(
                     "goto(%s) landed on transient browser error page (%s); retrying",
                     url,
@@ -1554,10 +1667,9 @@ async def _goto_with_fallback(
                         pass
             return
         except PlaywrightError as exc:
-            last_error = exc
             logger.debug("goto(%s, attempt=%d) failed: %s", url, attempt, exc)
             if attempt >= browser_error_retries:
-                raise last_error
+                raise
 
 
 async def _retryable_browser_error_reason(page) -> str | None:
@@ -1942,3 +2054,15 @@ def _chromium_host_rule_ip(ip_text: str) -> str:
 
 async def shutdown_browser_pool() -> None:
     await _shutdown_browser_pool()
+
+
+def prepare_browser_pool_for_worker_process() -> None:
+    global _BROWSER_POOL_STATE
+    _BROWSER_POOL_STATE = _BrowserPoolState(pid=os.getpid())
+
+
+def shutdown_browser_pool_sync() -> None:
+    try:
+        asyncio.run(_shutdown_browser_pool())
+    except RuntimeError:
+        prepare_browser_pool_for_worker_process()

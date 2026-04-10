@@ -4,9 +4,8 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from bs4 import BeautifulSoup
 
 
 class ADPAdapter(BaseAdapter):

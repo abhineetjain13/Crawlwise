@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import re
+from copy import deepcopy
 from typing import Any
-
-from bs4 import BeautifulSoup, Tag
 
 from app.services.pipeline_config import (
     DIMENSION_KEYWORDS,
@@ -18,6 +16,7 @@ from app.services.pipeline_config import (
     SPEC_LABEL_BLOCK_PATTERNS,
 )
 from app.services.requested_field_policy import normalize_requested_field
+from bs4 import BeautifulSoup, Tag
 
 _CANONICAL_TO_ALIASES: dict[str, set[str]] = {}
 for canonical, aliases in REQUESTED_FIELD_ALIASES.items():

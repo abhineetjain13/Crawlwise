@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import re
 import socket
 from collections.abc import Iterable
 from dataclasses import dataclass

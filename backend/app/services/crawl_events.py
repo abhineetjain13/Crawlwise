@@ -1,19 +1,17 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
-import json
 from datetime import datetime
-from pathlib import Path
 from typing import Any
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.redis import get_redis, redis_fail_open, schedule_fail_open
 from app.models.crawl import CrawlLog, CrawlRun
-from app.services.db_utils import sqlite_write_lock, with_retry
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("app.crawl.events")
 _LEVEL_ORDER = {
@@ -24,13 +22,29 @@ _LEVEL_ORDER = {
     "critical": 50,
 }
 _URL_PROGRESS_PATTERN = re.compile(r"^Processing URL \d+/\d+: ")
-_url_progress_counters: dict[int, int] = {}
-_db_log_counters: dict[int, int] = {}
+_COUNTER_TTL_SECONDS = 86400
+_REDIS_KEY_PREFIX = "crawl:events"
 
 
 def clear_url_progress_counter(run_id: int) -> None:
-    _url_progress_counters.pop(run_id, None)
-    _db_log_counters.pop(run_id, None)
+    schedule_fail_open(
+        lambda redis: redis.delete(
+            _url_progress_counter_key(run_id),
+            _db_log_counter_key(run_id),
+        ),
+        operation_name=f"clear_url_progress_counter:{run_id}",
+    )
+
+
+async def clear_url_progress_counter_async(run_id: int) -> None:
+    await redis_fail_open(
+        lambda redis: redis.delete(
+            _url_progress_counter_key(run_id),
+            _db_log_counter_key(run_id),
+        ),
+        default=0,
+        operation_name=f"clear_url_progress_counter:{run_id}",
+    )
 
 
 def _isoformat(value: object) -> str | None:
@@ -71,26 +85,39 @@ def _format_message(message: str, correlation_id: str | None) -> str:
     return text
 
 
-def _should_persist_log(level: str, run_id: int, message: str) -> bool:
+def _url_progress_counter_key(run_id: int) -> str:
+    return f"{_REDIS_KEY_PREFIX}:progress:{int(run_id)}"
+
+
+def _db_log_counter_key(run_id: int) -> str:
+    return f"{_REDIS_KEY_PREFIX}:db:{int(run_id)}"
+
+
+async def _should_persist_log(level: str, run_id: int, message: str) -> bool:
     min_level = _normalize_level(settings.crawl_log_db_min_level)
     log_level = _normalize_level(level)
     if _LEVEL_ORDER[log_level] < _LEVEL_ORDER[min_level]:
         return False
-    sample_rate = max(1, int(settings.crawl_log_db_url_progress_sample_rate or 1))
-    if sample_rate > 1 and log_level == "info" and _URL_PROGRESS_PATTERN.match(message):
-        counter = _url_progress_counters.get(run_id, 0) + 1
-        _url_progress_counters[run_id] = counter
-        return counter % sample_rate == 1
-    max_rows = max(1, int(settings.crawl_log_db_max_rows_per_run or 1))
-    db_count = _db_log_counters.get(run_id, 0)
-    if db_count >= max_rows:
-        return False
-    _db_log_counters[run_id] = db_count + 1
-    return True
 
+    async def _decide(redis) -> bool:
+        sample_rate = max(1, int(settings.crawl_log_db_url_progress_sample_rate or 1))
+        if sample_rate > 1 and log_level == "info" and _URL_PROGRESS_PATTERN.match(message):
+            counter = int(await redis.incr(_url_progress_counter_key(run_id)))
+            if counter == 1:
+                await redis.expire(_url_progress_counter_key(run_id), _COUNTER_TTL_SECONDS)
+            return counter % sample_rate == 1
 
-def _run_log_path(run_id: int) -> Path:
-    return settings.crawl_log_file_dir / f"run_{int(run_id)}.jsonl"
+        max_rows = max(1, int(settings.crawl_log_db_max_rows_per_run or 1))
+        db_count = int(await redis.incr(_db_log_counter_key(run_id)))
+        if db_count == 1:
+            await redis.expire(_db_log_counter_key(run_id), _COUNTER_TTL_SECONDS)
+        return db_count <= max_rows
+
+    return await redis_fail_open(
+        _decide,
+        default=True,
+        operation_name=f"should_persist_log:{run_id}",
+    )
 
 
 def _append_log_file_line(
@@ -102,22 +129,21 @@ def _append_log_file_line(
 ) -> None:
     if not bool(settings.crawl_log_file_enabled):
         return
-    path = _run_log_path(run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(
-        {
-            "run_id": int(run_id),
-            "level": str(level or "info"),
-            "message": str(message or ""),
-            "created_at": created_at.isoformat(),
-        },
-        ensure_ascii=True,
+    logger.info(
+        "crawl_log %s",
+        json.dumps(
+            {
+                "run_id": int(run_id),
+                "level": str(level or "info"),
+                "message": str(message or ""),
+                "created_at": created_at.isoformat(),
+            },
+            ensure_ascii=True,
+        ),
     )
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(line + "\n")
 
 
-def prepare_log_event(run_id: int, level: str, message: str) -> tuple[str, str, bool]:
+async def prepare_log_event(run_id: int, level: str, message: str) -> tuple[str, str, bool]:
     normalized_level = _normalize_level(level)
     formatted_message = _format_message(message, None)
     logger.log(
@@ -126,7 +152,7 @@ def prepare_log_event(run_id: int, level: str, message: str) -> tuple[str, str, 
         run_id,
         formatted_message,
     )
-    should_persist = _should_persist_log(normalized_level, run_id, formatted_message)
+    should_persist = await _should_persist_log(normalized_level, run_id, formatted_message)
     return normalized_level, formatted_message, should_persist
 
 
@@ -142,10 +168,10 @@ async def append_log_event(
         normalized_level, formatted_message, should_persist = (
             _normalize_level(level),
             str(message or ""),
-            _should_persist_log(level, run_id, str(message or "")),
+            await _should_persist_log(level, run_id, str(message or "")),
         )
     else:
-        normalized_level, formatted_message, should_persist = prepare_log_event(
+        normalized_level, formatted_message, should_persist = await prepare_log_event(
             run_id, level, message
         )
     created_at = datetime.now()
@@ -171,24 +197,21 @@ async def append_log_event(
             "created_at": created_at.isoformat(),
         }
 
-    async def _operation(retry_session: AsyncSession) -> CrawlLog:
-        row = CrawlLog(
-            run_id=run_id,
-            level=normalized_level,
-            message=formatted_message,
-        )
-        retry_session.add(row)
-        await retry_session.flush()
-        return row
+    row = CrawlLog(
+        run_id=run_id,
+        level=normalized_level,
+        message=formatted_message,
+    )
 
     if session is not None:
-        row = await _operation(session)
-        # We don't commit here because it's the caller's session.
-        # But we do need to return serialized log.
+        session.add(row)
+        await session.flush()
         return serialize_log_event(row)
 
     async with SessionLocal() as new_session:
-        row = await with_retry(new_session, _operation)
+        new_session.add(row)
+        await new_session.flush()
+        await new_session.commit()
         await new_session.refresh(row)
         return serialize_log_event(row)
 
@@ -199,16 +222,11 @@ async def persist_run_summary_patch(
     summary_patch: dict[str, Any],
     session: AsyncSession | None = None,
 ) -> dict[str, Any] | None:
-    async def _operation(retry_session: AsyncSession) -> CrawlRun | None:
-        bind = retry_session.bind
-        is_sqlite = bind is not None and bind.dialect.name == "sqlite"
-        if not is_sqlite:
-            result = await retry_session.execute(
-                select(CrawlRun).where(CrawlRun.id == run_id).with_for_update()
-            )
-            run = result.scalar_one_or_none()
-        else:
-            run = await retry_session.get(CrawlRun, run_id)
+    async def _do_patch(s: AsyncSession) -> CrawlRun | None:
+        result = await s.execute(
+            select(CrawlRun).where(CrawlRun.id == run_id).with_for_update()
+        )
+        run = result.scalar_one_or_none()
         if run is None:
             return None
         result_summary = dict(run.result_summary or {})
@@ -216,29 +234,20 @@ async def persist_run_summary_patch(
         if merged_summary == result_summary:
             return run
         run.result_summary = merged_summary
-        await retry_session.flush()
+        await s.flush()
         return run
 
     if session is not None:
-        bind = session.bind
-        if bind is not None and bind.dialect.name == "sqlite":
-            async with sqlite_write_lock:
-                run = await _operation(session)
-        else:
-            run = await _operation(session)
+        run = await _do_patch(session)
         if run is None:
             return None
         return serialize_run_snapshot(run)
 
     async with SessionLocal() as new_session:
-        bind = new_session.bind
-        if bind is not None and bind.dialect.name == "sqlite":
-            async with sqlite_write_lock:
-                run = await with_retry(new_session, _operation)
-        else:
-            run = await with_retry(new_session, _operation)
+        run = await _do_patch(new_session)
         if run is None:
             return None
+        await new_session.commit()
         await new_session.refresh(run)
         return serialize_run_snapshot(run)
 

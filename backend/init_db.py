@@ -1,8 +1,8 @@
 """Initialize the database with all tables."""
 import asyncio
-from app.core.database import engine, Base
-from app.models.crawl import CrawlRun, CrawlRecord, CrawlLog
-from app.models.user import User
+
+import app.models  # noqa: F401  Ensures all ORM models are registered before create_all().
+from app.core.database import Base, engine
 
 
 async def init_database():

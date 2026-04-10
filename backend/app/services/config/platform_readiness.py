@@ -6,12 +6,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
-
 from app.services.config.platform_registry import (
     listing_readiness_domains,
     resolve_listing_readiness_platform,
 )
+from pydantic import BaseModel, Field
 
 
 class PlatformReadinessConfig(BaseModel):

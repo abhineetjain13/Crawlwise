@@ -7,10 +7,9 @@ import re
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
+from app.services.adapters.base import AdapterResult, BaseAdapter
 from bs4 import BeautifulSoup
 from curl_cffi.requests.errors import RequestsError
-
-from app.services.adapters.base import AdapterResult, BaseAdapter
 
 try:
     from curl_cffi import requests as curl_requests

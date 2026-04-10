@@ -1,11 +1,10 @@
 # User administration service.
 from __future__ import annotations
 
-from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.user import User
 from app.services.db_utils import escape_like_pattern
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def list_users(

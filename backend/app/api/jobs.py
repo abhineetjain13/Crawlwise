@@ -3,12 +3,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.services.crawl_crud import active_jobs
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 

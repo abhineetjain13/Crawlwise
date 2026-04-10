@@ -1,24 +1,25 @@
 # FastAPI dependency helpers.
 from __future__ import annotations
 
+from app.core.database import get_session
+from app.core.security import decode_access_token
+from app.models.user import User
 from fastapi import Cookie, Depends, Header, HTTPException, status
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_session
-from app.core.security import decode_access_token
-from app.models.user import User
 
-
-async def get_db(session: AsyncSession = Depends(get_session)) -> AsyncSession:
+async def get_db(
+    session: AsyncSession = Depends(get_session),  # noqa: B008 - FastAPI injects dependencies via parameter defaults.
+) -> AsyncSession:
     return session
 
 
 async def get_current_user(
     access_token: str | None = Cookie(default=None),
     authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI dependency injection requires Depends defaults.
 ) -> User:
     token = access_token
     if not token and authorization:
@@ -43,7 +44,9 @@ async def get_current_user(
     return user
 
 
-async def require_admin(user: User = Depends(get_current_user)) -> User:
+async def require_admin(
+    user: User = Depends(get_current_user),  # noqa: B008 - FastAPI dependency injection requires Depends defaults.
+) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user

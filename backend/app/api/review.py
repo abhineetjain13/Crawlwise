@@ -3,10 +3,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.crawl import (
@@ -18,6 +14,9 @@ from app.schemas.crawl import (
 )
 from app.services.crawl_crud import get_run
 from app.services.review import build_review_payload, load_review_html, save_review
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/review", tags=["review"])
 

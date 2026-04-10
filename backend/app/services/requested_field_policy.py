@@ -4,7 +4,6 @@ import re
 
 from app.services.pipeline_config import REQUESTED_FIELD_ALIASES
 
-
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<!^)(?=[A-Z])")
 _NON_FIELD_RE = re.compile(r"[^a-z0-9.]+")
 

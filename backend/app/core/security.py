@@ -4,11 +4,11 @@ from __future__ import annotations
 import base64
 from datetime import UTC, datetime, timedelta
 
+from app.core.config import settings
 from cryptography.fernet import Fernet
 from jose import jwt
 from passlib.hash import pbkdf2_sha256
 
-from app.core.config import settings
 
 def hash_password(password: str) -> str:
     return pbkdf2_sha256.hash(password)

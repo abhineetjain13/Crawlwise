@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -242,8 +241,12 @@ def listing_readiness_domains() -> dict[str, list[str]]:
     mapping: dict[str, list[str]] = {}
     for config in platform_configs():
         domains = _normalize_patterns(config.readiness_domains)
-        if domains:
-            mapping[config.family] = domains
+        if not domains or not config.family:
+            continue
+        existing = mapping.setdefault(config.family, [])
+        for domain in domains:
+            if domain not in existing:
+                existing.append(domain)
     return mapping
 
 

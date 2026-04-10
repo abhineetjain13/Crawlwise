@@ -4,9 +4,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi import HTTPException
-from fastapi.routing import APIRoute
-
 from app.api.records import (
     EXPORT_PAGING_HEADER,
     EXPORT_PARTIAL_HEADER,
@@ -14,8 +11,8 @@ from app.api.records import (
     MAX_RECORD_PAGE_SIZE,
     RUN_NOT_FOUND_DETAIL,
     _artifact_table_rows,
-    _collect_export_rows,
     _clean_export_data,
+    _collect_export_rows,
     _legacy_fallback_markdown_rows,
     _stream_export_csv,
     export_artifacts_json,
@@ -26,9 +23,11 @@ from app.api.records import (
     record_provenance,
     router,
 )
+from app.core.security import hash_password
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.models.user import User
-from app.core.security import hash_password
+from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 
 async def _read_streaming_body(response) -> str:

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BASE_DIR.parent
@@ -27,7 +27,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 24
     encryption_key: str = "change-me-32-bytes-minimum-change-me"
-    database_url: str = f"sqlite+aiosqlite:///{(BASE_DIR / 'crawlerai.db').as_posix()}"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/crawl_db"
+    redis_url: str = "redis://localhost:6379/0"
     artifacts_dir: Path = Field(default=BASE_DIR / "artifacts")
     acquisition_cache_dir: Path = Field(
         default=BASE_DIR / "artifacts" / "acquisition_cache"
@@ -43,6 +44,9 @@ class Settings(BaseSettings):
     crawl_log_db_max_rows_per_run: int = 1000
     crawl_log_file_enabled: bool = True
     crawl_log_file_dir: Path = Field(default=BASE_DIR / "artifacts" / "run_logs")
+    default_admin_email: str = "admin@admin.com"
+    default_admin_password: str = "YourSecurePassword123!"
+    bootstrap_admin_once: bool = False
     # When false, POST /api/auth/register returns 403 (POC single-admin dev). Enable for production multi-tenant.
     registration_enabled: bool = False
 
@@ -54,26 +58,6 @@ def _resolve_project_path(value: str | Path, *, anchor: Path = PROJECT_ROOT) -> 
     raw_path = Path(value)
     return raw_path if raw_path.is_absolute() else (anchor / raw_path).resolve()
 
-
-def _normalize_sqlite_database_url(url: str, *, sqlite_anchor: Path = BASE_DIR) -> str:
-    prefixes = ("sqlite+aiosqlite:///", "sqlite:///")
-    prefix = next((item for item in prefixes if url.startswith(item)), "")
-    if not prefix:
-        return url
-    database_path = url[len(prefix) :]
-    if not database_path or database_path == ":memory:":
-        return url
-    if database_path.startswith("/") or (
-        len(database_path) > 1 and database_path[1] == ":"
-    ):
-        return url
-    if Path(database_path).is_absolute():
-        return url
-    normalized_path = (sqlite_anchor / database_path).resolve().as_posix()
-    return f"{prefix}{normalized_path}"
-
-
-settings.database_url = _normalize_sqlite_database_url(settings.database_url)
 settings.artifacts_dir = _resolve_project_path(
     settings.artifacts_dir, anchor=PROJECT_ROOT
 )

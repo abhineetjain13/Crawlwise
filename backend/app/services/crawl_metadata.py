@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import get_canonical_fields
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.schema_service import load_resolved_schema
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _clean_candidate_text(value: object) -> str:
@@ -21,23 +20,6 @@ def _compact_dict(payload: dict) -> dict:
         for key, value in payload.items()
         if value not in (None, "", [], {})
     }
-
-
-def _requested_field_coverage(
-    output_record: dict | None,
-    requested_fields: list[str] | None,
-) -> dict:
-    requested = [field for field in (requested_fields or []) if str(field).strip()]
-    if not requested:
-        return {"requested": 0, "found": 0, "missing": []}
-    output = output_record if isinstance(output_record, dict) else {}
-    found = [
-        field
-        for field in requested
-        if output.get(field) not in (None, "", [], {})
-    ]
-    missing = [field for field in requested if field not in found]
-    return {"requested": len(requested), "found": len(found), "missing": missing}
 
 
 async def load_domain_requested_fields(
@@ -108,6 +90,8 @@ def refresh_record_commit_metadata(
         ]
     requested_fields = list(run.requested_fields or [])
     if requested_fields:
+        from app.services.pipeline.field_normalization import _requested_field_coverage
+
         discovered_data["requested_field_coverage"] = _requested_field_coverage(
             record.data or {}, requested_fields
         )

@@ -353,6 +353,85 @@ FIELD_ALIASES = {
     "dealer_name": ["dealer_name", "dealer"],
 }
 
+# Fields that are only meaningful for ecommerce surfaces.
+# These must NOT be resolved on job_listing or job_detail surfaces.
+ECOMMERCE_ONLY_FIELDS: frozenset[str] = frozenset(
+    {
+        "availability",
+        "brand",
+        "color",
+        "color_variants",
+        "condition",
+        "currency",
+        "exterior_color",
+        "interior_color",
+        "part_number",
+        "price",
+        "price_original",
+        "original_price",
+        "sku",
+        "stock_quantity",
+    }
+)
+
+# Fields that are only meaningful for job surfaces.
+# These must NOT be resolved on ecommerce_listing or ecommerce_detail surfaces.
+JOB_ONLY_FIELDS: frozenset[str] = frozenset(
+    {
+        "apply_url",
+        "company",
+        "company_logo",
+        "employment_type",
+        "experience_level",
+        "job_function",
+        "job_id",
+        "location",
+        "posted_date",
+        "remote",
+        "salary",
+        "salary_currency",
+        "salary_max",
+        "salary_min",
+        "seniority_level",
+        "work_model",
+    }
+)
+
+# Fields that must NEVER appear in any user-facing output on any surface.
+INTERNAL_ONLY_FIELDS: frozenset[str] = frozenset(
+    {
+        "slug",
+        "_raw_item",
+        "_source",
+        "_score",
+    }
+)
+
+
+def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
+    """
+    Return FIELD_ALIASES filtered to only the fields appropriate for the given surface.
+
+    - Job surfaces: exclude all ECOMMERCE_ONLY_FIELDS and INTERNAL_ONLY_FIELDS.
+    - Ecommerce surfaces: exclude all JOB_ONLY_FIELDS and INTERNAL_ONLY_FIELDS.
+    - Unknown/unset surface: exclude only INTERNAL_ONLY_FIELDS.
+    """
+    normalized = (surface or "").strip().lower()
+    is_job = normalized in {"job_listing", "job_detail"}
+    is_ecommerce = normalized in {"ecommerce_listing", "ecommerce_detail"}
+
+    excluded: frozenset[str] = INTERNAL_ONLY_FIELDS
+    if is_job:
+        excluded = excluded | ECOMMERCE_ONLY_FIELDS
+    elif is_ecommerce:
+        excluded = excluded | JOB_ONLY_FIELDS
+
+    return {
+        canonical: aliases
+        for canonical, aliases in FIELD_ALIASES.items()
+        if canonical not in excluded
+    }
+
 COLLECTION_KEYS = [
     "products",
     "items",

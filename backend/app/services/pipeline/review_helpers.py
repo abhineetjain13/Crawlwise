@@ -16,7 +16,7 @@ from .field_normalization import (
     _normalize_review_value,
     _passes_detail_quality_gate,
 )
-from .utils import _clean_candidate_text, _normalize_committed_field_name, _compact_dict
+from .utils import _clean_candidate_text, _compact_dict, _normalize_committed_field_name
 from .verdict import _review_bucket_fingerprint
 
 

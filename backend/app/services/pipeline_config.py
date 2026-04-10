@@ -6,43 +6,91 @@ import re
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.extraction_rules import (
     COOKIE_POLICY as _COOKIE_POLICY,
+)
+from app.services.config.extraction_rules import (
     DISCOVERED_SOURCE_NOISE_TOKENS as _DISCOVERED_SOURCE_NOISE_TOKENS,
+)
+from app.services.config.extraction_rules import (
     ECOMMERCE_ONLY_JOB_LISTING_FIELDS as _ECOMMERCE_ONLY_JOB_LISTING_FIELDS,
+)
+from app.services.config.extraction_rules import (
     EMPTY_SENTINEL_VALUES as _EMPTY_SENTINEL_VALUES,
+)
+from app.services.config.extraction_rules import (
     EXTRACTION_RULES as _EXTRACTION_RULES,
+)
+from app.services.config.extraction_rules import (
     HYDRATED_STATE_PATTERNS as _HYDRATED_STATE_PATTERNS,
+)
+from app.services.config.extraction_rules import (
     LLM_TUNING as _LLM_TUNING,
+)
+from app.services.config.extraction_rules import (
     MAX_SELECTOR_ROWS_PER_FIELD as _MAX_SELECTOR_ROWS_PER_FIELD,
+)
+from app.services.config.extraction_rules import (
     NORMALIZATION_RULES as _NORM_RULES,
+)
+from app.services.config.extraction_rules import (
     PIPELINE_TUNING as _TUNING,
+)
+from app.services.config.extraction_rules import (
     REQUIRED_FIELDS_BY_SURFACE as _REQUIRED_FIELDS_BY_SURFACE,
+)
+from app.services.config.extraction_rules import (
     SITE_POLICY_REGISTRY as _SITE_POLICY_REGISTRY,
+)
+from app.services.config.extraction_rules import (
     VERDICT_RULES as _VERDICT_RULES,
+)
+from app.services.config.field_mappings import (
+    CANONICAL_SCHEMAS,
+)
+from app.services.config.field_mappings import (
+    COLLECTION_KEYS as _COLLECTION_KEYS_FILE,
+)
+from app.services.config.field_mappings import (
+    FIELD_ALIASES as _FIELD_ALIASES_FILE,
+)
+from app.services.config.field_mappings import (
+    REQUESTED_FIELD_ALIASES as _REQUESTED_FIELD_ALIASES_FILE,
+)
+from app.services.config.platform_readiness import (
+    PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES as _PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES,
+)
+from app.services.config.platform_readiness import (
+    PLATFORM_LISTING_READINESS_SELECTORS as _PLATFORM_LISTING_READINESS_SELECTORS,
 )
 from app.services.config.platform_registry import (
     browser_first_platform_families,
     job_platform_families,
     known_ats_domains,
 )
-from app.services.config.platform_readiness import (
-    PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES as _PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES,
-    PLATFORM_LISTING_READINESS_SELECTORS as _PLATFORM_LISTING_READINESS_SELECTORS,
-)
-from app.services.config.field_mappings import (
-    CANONICAL_SCHEMAS,
-    COLLECTION_KEYS,
-    FIELD_ALIASES as _FIELD_ALIASES_FILE,
-    REQUESTED_FIELD_ALIASES as _REQUESTED_FIELD_ALIASES_FILE,
-)
 from app.services.config.selectors import (
     ANCHOR_SELECTOR as _ANCHOR_SELECTOR,
+)
+from app.services.config.selectors import (
     CARD_SELECTORS as _CARD_SELECTORS,
+)
+from app.services.config.selectors import (
     CONSENT_SELECTORS as _CONSENT_SELECTORS,
+)
+from app.services.config.selectors import (
     DISCOVERIST_SCHEMA as _DISCOVERIST_SCHEMA,
+)
+from app.services.config.selectors import (
     DOM_PATTERNS as _DOM_PATTERNS,
+)
+from app.services.config.selectors import (
     MARKDOWN_VIEW as _MARKDOWN_VIEW,
+)
+from app.services.config.selectors import (
     PAGINATION_SELECTORS as _PAGINATION_SELECTORS,
+)
+from app.services.config.selectors import (
     REVIEW_CONTAINER_KEYS as _REVIEW_CONTAINER_KEYS,
+)
+from app.services.config.selectors import (
     TITLE_SELECTOR as _TITLE_SELECTOR,
 )
 
@@ -77,6 +125,32 @@ def _compile_extraction_rule_patterns(
             _compile_extraction_rule_pattern(pattern, setting_name=setting_name)
         )
     return compiled
+
+
+def _build_page_url_currency_hint_pattern(token: object) -> str:
+    raw_token = str(token or "").strip().lower()
+    if not raw_token:
+        raise RuntimeError(
+            "Invalid empty locale token in normalization_rules.page_url_currency_hints"
+        )
+    locale_segment = raw_token.strip("/")
+    if not locale_segment:
+        raise RuntimeError(
+            "Invalid slash-only locale token in normalization_rules.page_url_currency_hints"
+        )
+    return rf"(?:^|/){re.escape(locale_segment)}(?:/|$)"
+
+
+def _compile_page_url_currency_hints(
+    hints: object,
+) -> dict[re.Pattern[str], str]:
+    compiled_hints: dict[re.Pattern[str], str] = {}
+    normalized_hints = hints if isinstance(hints, dict) else {}
+    for token, currency in normalized_hints.items():
+        compiled_hints[
+            re.compile(_build_page_url_currency_hint_pattern(token), re.IGNORECASE)
+        ] = str(currency)
+    return compiled_hints
 
 
 def _currency_symbol_class(symbol_map: dict[object, object]) -> str:
@@ -306,6 +380,7 @@ if PROXY_FAILURE_COOLDOWN_MAX_MS < PROXY_FAILURE_COOLDOWN_BASE_MS:
 
 _FIELD_ALIASES_LEGACY = _EXTRACTION_RULES.get("field_aliases", {})
 FIELD_ALIASES = {**_FIELD_ALIASES_LEGACY, **_FIELD_ALIASES_FILE}
+COLLECTION_KEYS = list(_COLLECTION_KEYS_FILE)
 DOM_PATTERNS = _EXTRACTION_RULES.get("dom_patterns", _DOM_PATTERNS)
 CARD_SELECTORS_COMMERCE = _CARD_SELECTORS.get("ecommerce", [])
 CARD_SELECTORS_JOBS = _CARD_SELECTORS.get("jobs", [])
@@ -323,7 +398,9 @@ CURRENCY_CODES = set(_NORM_RULES.get("currency_codes", []))
 CURRENCY_SYMBOL_MAP = dict(_NORM_RULES.get("currency_symbol_map", {}))
 COLOR_NOISE_TOKENS = tuple(_NORM_RULES.get("color_noise_tokens", []))
 SIZE_NOISE_TOKENS = tuple(_NORM_RULES.get("size_noise_tokens", []))
-PAGE_URL_CURRENCY_HINTS = dict(_NORM_RULES.get("page_url_currency_hints", {}))
+PAGE_URL_CURRENCY_HINTS = _compile_page_url_currency_hints(
+    _NORM_RULES.get("page_url_currency_hints", {})
+)
 _NESTED_OBJECT_KEYS = _NORM_RULES.get("nested_object_keys", {})
 NESTED_TEXT_KEYS = tuple(
     _NESTED_OBJECT_KEYS.get(

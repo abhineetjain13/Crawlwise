@@ -8,14 +8,21 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin, urlparse
 
-from app.services.pipeline_config import COLLECTION_KEYS, FIELD_ALIASES, JSON_MAX_SEARCH_DEPTH
+from app.services.config.field_mappings import (
+    INTERNAL_ONLY_FIELDS,
+    get_surface_field_aliases,
+)
 from app.services.normalizers import validate_value
+from app.services.pipeline_config import COLLECTION_KEYS, JSON_MAX_SEARCH_DEPTH
 
 
 def extract_json_listing(
     json_data: dict | list,
     page_url: str = "",
     max_records: int = 100,
+    *,
+    surface: str = "",
+    requested_fields: list[str] | None = None,
 ) -> list[dict]:
     """Extract records from a JSON API response.
 
@@ -30,7 +37,7 @@ def extract_json_listing(
     for item in items[:max_records]:
         if not isinstance(item, dict):
             continue
-        record = _normalize_item(item, page_url)
+        record = _normalize_item(item, page_url, surface=surface)
         if record and any(v for k, v in record.items() if not k.startswith("_")):
             record["_source"] = "json_api"
             records.append(record)
@@ -41,6 +48,9 @@ def extract_json_listing(
 def extract_json_detail(
     json_data: dict | list,
     page_url: str = "",
+    *,
+    surface: str = "",
+    requested_fields: list[str] | None = None,
 ) -> list[dict]:
     """Extract a single record from a JSON API response (detail page)."""
     if isinstance(json_data, list):
@@ -51,7 +61,7 @@ def extract_json_detail(
     if not isinstance(json_data, dict):
         return []
 
-    record = _normalize_item(json_data, page_url)
+    record = _normalize_item(json_data, page_url, surface=surface)
     if record and any(v for k, v in record.items() if not k.startswith("_")):
         record["_source"] = "json_api"
         return [record]
@@ -107,12 +117,13 @@ def _find_items_array(data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH)
     return best
 
 
-def _normalize_item(item: dict, page_url: str) -> dict:
+def _normalize_item(item: dict, page_url: str, *, surface: str = "") -> dict:
     """Map an arbitrary JSON object to canonical fields."""
     record: dict = {}
     consumed_keys: set[str] = set()
     # Flatten one level of nesting for fields like {"company": {"name": "X"}}
     flat = _flatten_one_level(item)
+    surface_aliases = get_surface_field_aliases(surface)
     list_join_fields = {
         "description",
         "responsibilities",
@@ -128,7 +139,7 @@ def _normalize_item(item: dict, page_url: str) -> dict:
         "additional_images",
     }
 
-    for canonical, aliases in FIELD_ALIASES.items():
+    for canonical, aliases in surface_aliases.items():
         candidate_keys = [canonical, *aliases]
         values = _find_alias_values(flat, candidate_keys, max_depth=4)
         for value in values:
@@ -162,8 +173,9 @@ def _normalize_item(item: dict, page_url: str) -> dict:
             product_url = _derive_product_url(page_url, str(handle))
             if product_url:
                 record["url"] = product_url
-    if "url" not in record and record.get("slug"):
-        slug_url = _derive_slug_url(page_url, str(record["slug"]))
+    raw_slug = flat.get("slug")
+    if "url" not in record and raw_slug not in (None, "", [], {}):
+        slug_url = _derive_slug_url(page_url, str(raw_slug))
         if slug_url:
             record["url"] = slug_url
 
@@ -173,7 +185,7 @@ def _normalize_item(item: dict, page_url: str) -> dict:
     # Preserve unmapped scalar fields before applying any surface contract so the
     # contract can remove incompatible fields decisively.
     for key, value in item.items():
-        if key in consumed_keys or key.startswith("_"):
+        if key in consumed_keys or key.startswith("_") or key in INTERNAL_ONLY_FIELDS:
             continue
         if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value.strip()):
             record[key] = value

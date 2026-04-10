@@ -5,9 +5,8 @@ import asyncio
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from bs4 import BeautifulSoup
 
 try:
     from curl_cffi import requests as curl_requests

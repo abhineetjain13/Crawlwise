@@ -5,16 +5,19 @@
 # HTML but contain no useful data.
 from __future__ import annotations
 
+import logging
 import re
+
 from app.services.pipeline_config import (
     BLOCK_ACTIVE_PROVIDER_MARKERS,
     BLOCK_CDN_PROVIDER_MARKERS,
     BLOCK_PHRASES,
     BLOCK_TITLE_REGEXES,
 )
-
+from app.services.runtime_metrics import incr
 
 _BLOCK_TITLE_PATTERNS = [re.compile(pattern, re.I) for pattern in BLOCK_TITLE_REGEXES]
+logger = logging.getLogger(__name__)
 
 
 class BlockedPageResult:
@@ -65,6 +68,11 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
                 tag.decompose()
             visible = " ".join(soup.get_text(" ", strip=True).lower().split())
         except Exception:
+            incr("blocked_detector_parse_fallback_total")
+            logger.debug(
+                "Blocked-page parsing failed; falling back to bounded raw HTML scan",
+                exc_info=True,
+            )
             # Failsafe if BS4 hits a recursion limit on deeply nested malicious HTML
             visible = html_lower[:20000]
 

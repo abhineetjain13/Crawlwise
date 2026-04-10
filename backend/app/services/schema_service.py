@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 import logging
 import re
 import warnings
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.services.config.field_mappings import (
+    ECOMMERCE_ONLY_FIELDS,
+    INTERNAL_ONLY_FIELDS,
+    JOB_ONLY_FIELDS,
+)
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import get_canonical_fields
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,18 @@ def _supports_record_learning(surface: str) -> bool:
     return normalized not in {"job_listing", "job_detail"}
 
 
+def _field_allowed_for_surface(surface: str, field_name: str) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    normalized_field = str(field_name or "").strip().lower()
+    if not normalized_field or normalized_field in INTERNAL_ONLY_FIELDS:
+        return False
+    if normalized_surface in {"job_listing", "job_detail"}:
+        return normalized_field not in ECOMMERCE_ONLY_FIELDS
+    if normalized_surface in {"ecommerce_listing", "ecommerce_detail"}:
+        return normalized_field not in JOB_ONLY_FIELDS
+    return True
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -96,11 +112,43 @@ def _snapshot_to_resolved(
     saved_at = str(payload.get("saved_at") or "").strip() or None
     saved_at_dt = _parse_saved_at(saved_at)
     stale = bool(saved_at_dt and datetime.now(UTC) - saved_at_dt > _MAX_SCHEMA_AGE)
-    stored_fields = _dedupe_fields(payload.get("fields") if isinstance(payload.get("fields"), list) else [])
-    baseline = _dedupe_fields(payload.get("baseline_fields") if isinstance(payload.get("baseline_fields"), list) else baseline_fields)
-    new_fields = _dedupe_fields(payload.get("new_fields") if isinstance(payload.get("new_fields"), list) else [])
-    deprecated_fields = _dedupe_fields(payload.get("deprecated_fields") if isinstance(payload.get("deprecated_fields"), list) else [])
-    fields = _dedupe_fields([*baseline, *stored_fields, *explicit_fields])
+    stored_fields = _dedupe_fields(
+        field
+        for field in (
+            payload.get("fields") if isinstance(payload.get("fields"), list) else []
+        )
+        if _field_allowed_for_surface(surface, field)
+    )
+    baseline = _dedupe_fields(
+        field
+        for field in (
+            payload.get("baseline_fields")
+            if isinstance(payload.get("baseline_fields"), list)
+            else baseline_fields
+        )
+        if _field_allowed_for_surface(surface, field)
+    )
+    new_fields = _dedupe_fields(
+        field
+        for field in (
+            payload.get("new_fields") if isinstance(payload.get("new_fields"), list) else []
+        )
+        if _field_allowed_for_surface(surface, field)
+    )
+    deprecated_fields = _dedupe_fields(
+        field
+        for field in (
+            payload.get("deprecated_fields")
+            if isinstance(payload.get("deprecated_fields"), list)
+            else []
+        )
+        if _field_allowed_for_surface(surface, field)
+    )
+    fields = _dedupe_fields(
+        field
+        for field in [*baseline, *stored_fields, *explicit_fields]
+        if _field_allowed_for_surface(surface, field)
+    )
     if not new_fields:
         baseline_set = set(baseline)
         new_fields = [field for field in fields if field not in baseline_set]
@@ -139,9 +187,17 @@ async def load_resolved_schema(
     explicit_fields: list[str] | None = None,
 ) -> ResolvedSchema:
     del session
-    baseline_fields = _dedupe_fields(get_canonical_fields(surface))
+    baseline_fields = _dedupe_fields(
+        field
+        for field in get_canonical_fields(surface)
+        if _field_allowed_for_surface(surface, field)
+    )
     normalized_domain = normalize_domain(domain)
-    normalized_explicit = _dedupe_fields(explicit_fields)
+    normalized_explicit = _dedupe_fields(
+        field
+        for field in (explicit_fields or [])
+        if _field_allowed_for_surface(surface, field)
+    )
     if not normalized_domain:
         fields = _dedupe_fields([*baseline_fields, *normalized_explicit])
         return ResolvedSchema(
@@ -179,8 +235,16 @@ def learn_schema_from_record(
     explicit_fields: list[str] | None = None,
     sample_record: dict | None = None,
 ) -> ResolvedSchema:
-    baseline = _dedupe_fields(baseline_fields)
-    explicit = _dedupe_fields(explicit_fields)
+    baseline = _dedupe_fields(
+        field
+        for field in baseline_fields
+        if _field_allowed_for_surface(surface, field)
+    )
+    explicit = _dedupe_fields(
+        field
+        for field in (explicit_fields or [])
+        if _field_allowed_for_surface(surface, field)
+    )
     record = sample_record if isinstance(sample_record, dict) else {}
     normalized_record_values: dict[str, object] = {}
     discovered_new_fields: list[str] = []
@@ -194,6 +258,7 @@ def learn_schema_from_record(
             not allow_record_learning
             or
             not is_valid_schema_field_name(normalized)
+            or not _field_allowed_for_surface(surface, normalized)
             or normalized in baseline_set
             or normalized in discovered_new_fields
             or value in (None, "", [], {})

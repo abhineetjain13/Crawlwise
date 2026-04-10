@@ -1,30 +1,29 @@
 """Trace and manifest builder functions for crawl diagnostics."""
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
-
 from app.services.acquisition.acquirer import (
     AcquisitionResult,
     scrub_network_payloads_for_storage,
 )
 from app.services.extract.source_parsers import parse_page_sources
 from app.services.knowledge_base.store import get_canonical_fields
+from bs4 import BeautifulSoup
 
-from .utils import (
-    _compact_dict,
-    _clean_page_text,
-    _first_non_empty_text,
-    _clean_candidate_text,
-)
-from .field_normalization import _normalize_review_value, _requested_field_coverage
-from .verdict import _review_bucket_fingerprint
-from .review_helpers import _should_surface_discovered_field
+from .field_normalization import _normalize_review_value
 from .rendering import (
     _render_fallback_card_group,
     _render_fallback_node_markdown,
     _render_manifest_tables_markdown,
     _should_skip_fallback_node,
 )
+from .review_helpers import _should_surface_discovered_field
+from .utils import (
+    _clean_candidate_text,
+    _clean_page_text,
+    _compact_dict,
+    _first_non_empty_text,
+)
+from .verdict import _review_bucket_fingerprint
 
 
 def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
@@ -271,7 +270,7 @@ def _build_legible_listing_fallback_record(
     )
     if not title:
         title = _clean_page_text(
-            (soup.title.string if soup.title and soup.title.string else "")
+            soup.title.string if soup.title and soup.title.string else ""
         )
     description_meta = soup.select_one("meta[name='description']")
     description = _clean_page_text(

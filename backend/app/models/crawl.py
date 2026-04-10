@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -20,20 +21,9 @@ class CrawlRun(Base):
     url: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     surface: Mapped[str] = mapped_column(String(40))
-    settings: Mapped[dict] = mapped_column(JSON, default=dict)
-    requested_fields: Mapped[list] = mapped_column(JSON, default=list)
-    result_summary: Mapped[dict] = mapped_column(JSON, default=dict)
-    queue_owner: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
-    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    claim_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_claimed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    settings: Mapped[dict] = mapped_column(JSONB, default=dict)
+    requested_fields: Mapped[list] = mapped_column(JSONB, default=list)
+    result_summary: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -49,10 +39,10 @@ class CrawlRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True)
     source_url: Mapped[str] = mapped_column(Text)
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
-    raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
-    discovered_data: Mapped[dict] = mapped_column(JSON, default=dict)
-    source_trace: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    raw_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    discovered_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    source_trace: Mapped[dict] = mapped_column(JSONB, default=dict)
     raw_html_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
@@ -74,8 +64,8 @@ class ReviewPromotion(Base):
     run_id: Mapped[int] = mapped_column(ForeignKey(CRAWL_RUN_FK, ondelete="CASCADE"), index=True)
     domain: Mapped[str] = mapped_column(String(255), index=True)
     surface: Mapped[str] = mapped_column(String(40))
-    approved_schema: Mapped[dict] = mapped_column(JSON, default=dict)
-    field_mapping: Mapped[dict] = mapped_column(JSON, default=dict)
+    approved_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
+    field_mapping: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

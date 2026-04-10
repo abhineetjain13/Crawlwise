@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import re
-from bs4 import BeautifulSoup, NavigableString, Tag
-from lxml import etree, html as lxml_html
+
 import regex as regex_lib
+from bs4 import BeautifulSoup, NavigableString, Tag
+from lxml import etree
+from lxml import html as lxml_html
 
 logger = logging.getLogger(__name__)
 

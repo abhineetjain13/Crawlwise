@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.adp import ADPAdapter
+from app.services.adapters.amazon import AmazonAdapter
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.adapters.ebay import EbayAdapter
 from app.services.adapters.greenhouse import GreenhouseAdapter

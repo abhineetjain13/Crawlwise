@@ -3,23 +3,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from dataclasses import dataclass, field
 from datetime import UTC
 from email.utils import parsedate_to_datetime
-import time
 from json import loads as parse_json
-from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin, urlparse
-
-from curl_cffi.const import CurlOpt
-from curl_cffi import requests
-from curl_cffi.requests.errors import RequestsError as CurlRequestsError
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.cookie_store import load_cookies_for_http
 from app.services.pipeline_config import (
-    HTTP_MAX_RETRIES,
     HTTP_IMPERSONATION_PROFILES,
+    HTTP_MAX_RETRIES,
     HTTP_RETRY_BACKOFF_BASE_MS,
     HTTP_RETRY_BACKOFF_MAX_MS,
     HTTP_RETRY_STATUS_CODES,
@@ -28,6 +24,9 @@ from app.services.pipeline_config import (
     IMPERSONATION_TARGET,
 )
 from app.services.url_safety import ValidatedTarget, validate_public_target
+from curl_cffi import requests
+from curl_cffi.const import CurlOpt
+from curl_cffi.requests.errors import RequestsError as CurlRequestsError
 
 _MAX_REDIRECTS = 5
 _ALLOWED_REDIRECT_SCHEMES = {"http", "https"}

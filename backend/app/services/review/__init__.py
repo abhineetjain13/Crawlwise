@@ -3,21 +3,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
 from app.services.crawl_metadata import refresh_record_commit_metadata
 from app.services.crawl_utils import normalize_committed_field_name
+from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import (
     get_domain_mapping,
     save_domain_mapping,
 )
 from app.services.normalizers import normalize_value
 from app.services.pipeline_config import REVIEW_CONTAINER_KEYS
-from app.services.domain_utils import normalize_domain
 from app.services.schema_service import load_resolved_schema, persist_resolved_schema
-from app.services.db_utils import with_retry
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def build_review_payload(session: AsyncSession, run_id: int) -> dict | None:
@@ -108,28 +106,26 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
             stale=False,
         ),
     )
-    async def _operation(retry_session: AsyncSession) -> None:
-        retry_run = await retry_session.get(CrawlRun, run.id)
-        if retry_run is None:
-            raise RuntimeError(f"CrawlRun not found for review save: run_id={run.id}")
-        promotion = ReviewPromotion(
-            run_id=retry_run.id,
-            domain=domain,
-            surface=retry_run.surface,
-            approved_schema={
-                "fields": updated_schema.fields,
-                "baseline_fields": updated_schema.baseline_fields,
-                "new_fields": updated_schema.new_fields,
-                "deprecated_fields": updated_schema.deprecated_fields,
-                "source": updated_schema.source,
-                "saved_at": updated_schema.saved_at,
-            },
-            field_mapping=mapping,
-        )
-        retry_session.add(promotion)
-        await _promote_review_bucket_fields(retry_session, retry_run, mapping)
-
-    await with_retry(session, _operation)
+    db_run = await session.get(CrawlRun, run.id)
+    if db_run is None:
+        raise RuntimeError(f"CrawlRun not found for review save: run_id={run.id}")
+    promotion = ReviewPromotion(
+        run_id=db_run.id,
+        domain=domain,
+        surface=db_run.surface,
+        approved_schema={
+            "fields": updated_schema.fields,
+            "baseline_fields": updated_schema.baseline_fields,
+            "new_fields": updated_schema.new_fields,
+            "deprecated_fields": updated_schema.deprecated_fields,
+            "source": updated_schema.source,
+            "saved_at": updated_schema.saved_at,
+        },
+        field_mapping=mapping,
+    )
+    session.add(promotion)
+    await _promote_review_bucket_fields(session, db_run, mapping)
+    await session.commit()
     return {
         "run_id": run.id,
         "domain": domain,
@@ -251,7 +247,7 @@ async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, ma
             if value not in (None, "", [], {})
         }
 
-        for output_field, row in selected_values.items():
+        for output_field, _row in selected_values.items():
             refresh_record_commit_metadata(
                 record,
                 run=run,

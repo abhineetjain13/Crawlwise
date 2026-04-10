@@ -6,9 +6,8 @@ import logging
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
-from bs4 import BeautifulSoup, Tag
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from bs4 import BeautifulSoup, Tag
 from curl_cffi.requests.errors import RequestsError as CurlRequestsError
 
 try:

@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import io
-import tempfile
+from contextlib import asynccontextmanager
 
 import pytest
-from fastapi import HTTPException, UploadFile
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.api.crawls import (
     _mark_run_failed_with_retry,
     crawls_cancel,
@@ -17,121 +14,81 @@ from app.api.crawls import (
     crawls_pause,
     crawls_resume,
 )
-from app.core.database import Base
-from app.core.security import hash_password
 from app.models.crawl import CrawlRun
 from app.models.user import User
 from app.schemas.crawl import CrawlCreate
+from fastapi import HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio
-async def test_mark_run_failed_with_retry_sets_failed_status_and_error() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = f"{tmpdir}/test_crawls_background_1.db"
-        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
-        session_factory = async_sessionmaker(
-            engine,
-            expire_on_commit=False,
-            class_=AsyncSession,
-        )
-        try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+async def test_mark_run_failed_with_retry_sets_failed_status_and_error(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com",
+        status="running",
+        surface="ecommerce_detail",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
+    db_session.add(run)
+    await db_session.commit()
+    await db_session.refresh(run)
 
-            async with session_factory() as session:
-                user = User(
-                    email="bg-mark-failed@example.com",
-                    hashed_password=hash_password("password123"),
-                    role="admin",
-                )
-                session.add(user)
-                await session.commit()
-                await session.refresh(user)
+    @asynccontextmanager
+    async def _session_factory():
+        yield db_session
 
-                run = CrawlRun(
-                    user_id=user.id,
-                    run_type="crawl",
-                    url="https://example.com",
-                    status="running",
-                    surface="ecommerce_detail",
-                    settings={},
-                    requested_fields=[],
-                    result_summary={},
-                )
-                session.add(run)
-                await session.commit()
-                await session.refresh(run)
-                run_id = run.id
+    await _mark_run_failed_with_retry(
+        run_id=run.id,
+        error_message="boom",
+        session_factory=_session_factory,
+    )
 
-            await _mark_run_failed_with_retry(
-                run_id=run_id,
-                error_message="boom",
-                session_factory=session_factory,
-            )
-
-            async with session_factory() as verify:
-                refreshed = await verify.get(CrawlRun, run_id)
-                assert refreshed is not None
-                assert refreshed.status == "failed"
-                assert refreshed.result_summary.get("error") == "boom"
-                assert refreshed.result_summary.get("extraction_verdict") == "error"
-        finally:
-            await engine.dispose()
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.result_summary.get("error") == "boom"
+    assert run.result_summary.get("extraction_verdict") == "error"
 
 
 @pytest.mark.asyncio
-async def test_mark_run_failed_with_retry_keeps_terminal_status_unchanged() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = f"{tmpdir}/test_crawls_background_2.db"
-        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
-        session_factory = async_sessionmaker(
-            engine,
-            expire_on_commit=False,
-            class_=AsyncSession,
-        )
-        try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+async def test_mark_run_failed_with_retry_keeps_terminal_status_unchanged(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = CrawlRun(
+        user_id=test_user.id,
+        run_type="crawl",
+        url="https://example.com",
+        status="completed",
+        surface="ecommerce_detail",
+        settings={},
+        requested_fields=[],
+        result_summary={"existing": "value"},
+    )
+    db_session.add(run)
+    await db_session.commit()
+    await db_session.refresh(run)
 
-            async with session_factory() as session:
-                user = User(
-                    email="bg-mark-terminal@example.com",
-                    hashed_password=hash_password("password123"),
-                    role="admin",
-                )
-                session.add(user)
-                await session.commit()
-                await session.refresh(user)
+    @asynccontextmanager
+    async def _session_factory():
+        yield db_session
 
-                run = CrawlRun(
-                    user_id=user.id,
-                    run_type="crawl",
-                    url="https://example.com",
-                    status="completed",
-                    surface="ecommerce_detail",
-                    settings={},
-                    requested_fields=[],
-                    result_summary={"existing": "value"},
-                )
-                session.add(run)
-                await session.commit()
-                await session.refresh(run)
-                run_id = run.id
+    await _mark_run_failed_with_retry(
+        run_id=run.id,
+        error_message="should-not-apply",
+        session_factory=_session_factory,
+    )
 
-            await _mark_run_failed_with_retry(
-                run_id=run_id,
-                error_message="should-not-apply",
-                session_factory=session_factory,
-            )
-
-            async with session_factory() as verify:
-                refreshed = await verify.get(CrawlRun, run_id)
-                assert refreshed is not None
-                assert refreshed.status == "completed"
-                assert refreshed.result_summary.get("existing") == "value"
-                assert "error" not in refreshed.result_summary
-        finally:
-            await engine.dispose()
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("existing") == "value"
+    assert "error" not in run.result_summary
 
 
 @pytest.mark.asyncio

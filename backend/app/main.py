@@ -4,17 +4,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-logger = logging.getLogger("app")
-
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
 
 from app.api.auth import router as auth_router
 from app.api.crawls import router as crawls_router
@@ -24,51 +16,36 @@ from app.api.records import router as records_router
 from app.api.review import router as review_router
 from app.api.users import router as users_router
 from app.core.config import get_frontend_origins, settings
-from app.core.database import SessionLocal, ensure_sqlite_queue_lease_columns
+from app.core.redis import close_redis
+from app.core.database import SessionLocal
 from app.core.telemetry import (
     generate_correlation_id,
     reset_correlation_id,
     set_correlation_id,
 )
-from app.services.auth_service import bootstrap_admin_user
 from app.services.acquisition.browser_client import shutdown_browser_pool
 from app.services.acquisition.cookie_store import validate_cookie_policy_config
-from app.services.workers import CrawlWorkerLoop, QueueLeaseConfig, default_worker_id, recover_stale_leases
+from app.services.auth_service import bootstrap_admin_user
+
+logger = logging.getLogger("app")
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     validate_cookie_policy_config()
-    worker = CrawlWorkerLoop(
-        config=QueueLeaseConfig(worker_id=default_worker_id())
-    )
-    started = False
     async with SessionLocal() as session:
-        await ensure_sqlite_queue_lease_columns(session)
         await bootstrap_admin_user(session)
-        await recover_stale_inflight_runs(session)
     try:
-        await worker.start()
-        started = True
         yield
     finally:
-        if started:
-            try:
-                await worker.stop()
-            except Exception:
-                logger.exception("Worker stop failed during shutdown")
         await shutdown_browser_pool()
-
-
-async def recover_stale_inflight_runs(session) -> list[int]:
-    recovered_ids = await recover_stale_leases(session)
-    if recovered_ids:
-        logger.warning(
-            "Recovered %d stale leased run(s) on startup: %s",
-            len(recovered_ids),
-            recovered_ids,
-        )
-    return recovered_ids
+        await close_redis()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

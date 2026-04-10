@@ -6,26 +6,10 @@ from urllib.parse import urljoin
 
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.blocked_detector import detect_blocked_page
+
 from .utils import _clean_candidate_text
 
 HTTP_URL_PREFIXES = ("http://", "https://")
-
-_ECOMMERCE_ONLY_JOB_LISTING_FIELDS = frozenset(
-    {
-        "price",
-        "sale_price",
-        "original_price",
-        "currency",
-        "sku",
-        "part_number",
-        "color",
-        "availability",
-        "rating",
-        "review_count",
-        "image_url",
-        "additional_images",
-    }
-)
 
 
 def _listing_acquisition_blocked(acq: AcquisitionResult, html: str) -> bool:
@@ -96,10 +80,6 @@ def _sanitize_listing_record_fields(
     ):
         sanitized["salary"] = sanitized.get("price")
     
-    # Remove ecommerce-only fields from job listings
-    for field_name in _ECOMMERCE_ONLY_JOB_LISTING_FIELDS:
-        sanitized.pop(field_name, None)
-
     # Summarize job description
     description = _summarize_job_listing_description(sanitized.get("description"))
     if description:

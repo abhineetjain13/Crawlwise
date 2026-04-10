@@ -1,19 +1,26 @@
 from __future__ import annotations
 
-from collections import Counter
-from threading import Lock
+from app.core.redis import redis_fail_open, schedule_fail_open
 
-_COUNTERS: Counter[str] = Counter()
-_LOCK = Lock()
+_RUNTIME_METRICS_KEY = "crawl:runtime:metrics"
 
 
 def incr(metric_name: str, amount: int = 1) -> None:
     if not metric_name:
         return
-    with _LOCK:
-        _COUNTERS[metric_name] += int(amount)
+    schedule_fail_open(
+        lambda redis: redis.hincrby(_RUNTIME_METRICS_KEY, metric_name, int(amount)),
+        operation_name=f"runtime_metrics.incr:{metric_name}",
+    )
 
 
-def snapshot() -> dict[str, int]:
-    with _LOCK:
-        return dict(_COUNTERS)
+async def snapshot() -> dict[str, int]:
+    async def _snapshot(redis) -> dict[str, int]:
+        raw = await redis.hgetall(_RUNTIME_METRICS_KEY)
+        return {str(key): int(value) for key, value in raw.items()}
+
+    return await redis_fail_open(
+        _snapshot,
+        default={},
+        operation_name="runtime_metrics.snapshot",
+    )

@@ -4,9 +4,8 @@ import json
 import re
 from json import loads as parse_json
 
-from bs4 import BeautifulSoup, Tag
-
 from app.services.pipeline_config import HYDRATED_STATE_PATTERNS
+from bs4 import BeautifulSoup, Tag
 
 _DATALAYER_PUSH_RE = re.compile(r"dataLayer\.push\s*\(")
 _REACT_CREATE_ELEMENT_RE = re.compile(r"createElement\s*\(")
@@ -186,19 +185,27 @@ def _extract_datalayer_ecommerce_payload(ecommerce: dict[str, object]) -> dict[s
                 if isinstance(discount_value, str) and "%" in discount_value:
                     result["discount_percentage"] = discount_value.replace("%", "").strip()
                 else:
-                    price_val = 0.0
-                    disc_val = 0.0
+                    price_val: float | None = None
+                    disc_val: float | None = None
                     try:
                         if "price" in item:
                             price_val = float(item["price"])
+                    except (TypeError, ValueError):
+                        price_val = None
+                    try:
                         disc_val = float(discount_value)
                     except (TypeError, ValueError):
-                        pass
-                    if price_val > 0 and disc_val > price_val:
+                        disc_val = None
+                    if (
+                        price_val is not None
+                        and disc_val is not None
+                        and price_val > 0
+                        and disc_val > price_val
+                    ):
                         result["discount_percentage"] = discount_value
                     else:
                         result["discount_amount"] = discount_value
-                        if "price" in item and price_val >= 0 and disc_val >= 0:
+                        if price_val is not None and disc_val is not None and price_val >= 0 and disc_val >= 0:
                             result["sale_price"] = max(0, price_val - disc_val)
             if "item_category" in item:
                 result["category"] = item["item_category"]
@@ -556,10 +563,15 @@ def _infer_embedded_blob_family(
     visited = set(visited)
     visited.add(payload_id)
 
-    normalized_keys = {_normalize_embedded_blob_hint(key) for key in parsed.keys()}
+    normalized_key_map = {
+        _normalize_embedded_blob_hint(key): key
+        for key in parsed.keys()
+    }
+    normalized_keys = set(normalized_key_map)
     for key, family in _PRODUCT_CONTAINER_KEYS.items():
-        if key in normalized_keys and _payload_supports_embedded_family(
-            parsed.get(key),
+        original_key = normalized_key_map.get(key)
+        if original_key is not None and _payload_supports_embedded_family(
+            parsed.get(original_key),
             family,
             max_depth=max_depth - 1,
             _visited=visited,
@@ -682,9 +694,18 @@ def _extract_next_bootstrap_children(text: str) -> list[str]:
 
 
 def _extract_balanced_json_fragment(text: str) -> str:
-    candidate = str(text or "").lstrip()
+    source_text = str(text or "")
+    candidate = source_text.lstrip()
     if not candidate or candidate[0] not in "{[":
         return ""
+    start_index = len(source_text) - len(candidate)
+    try:
+        _, end_index = json.JSONDecoder().raw_decode(source_text, start_index)
+    except json.JSONDecodeError:
+        pass
+    else:
+        return source_text[start_index:end_index]
+
     closing = "}" if candidate[0] == "{" else "]"
     depth = 0
     in_string = False

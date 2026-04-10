@@ -4,8 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import loads as parse_json
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter

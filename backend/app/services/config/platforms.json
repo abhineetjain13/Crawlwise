@@ -34,7 +34,7 @@
       "requires_browser": false,
       "readiness_domains": ["fa.ocs.oraclecloud.com", "candidateexperience.oraclecloud.com"],
       "readiness_path_patterns": [
-        "^/hcmui/candidateexperience/.*/sites/cx_[^/]+/(?:jobs|requisitions)(?:/.*)?$"
+        "^/hcmui/candidateexperience/[^/]*(?:/[^/]+)*/sites/cx_[^/]+/(?:jobs|requisitions)(?:/[^/]+)*/*$"
       ]
     },
     {

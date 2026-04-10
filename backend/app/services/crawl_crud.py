@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-import csv
-import io
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.telemetry import generate_correlation_id, get_correlation_id
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.services.crawl_events import append_log_event
-from app.services.db_utils import with_retry
 from app.services.crawl_metadata import (
     load_domain_requested_fields,
     refresh_record_commit_metadata,
@@ -18,7 +12,6 @@ from app.services.crawl_utils import (
     collect_target_urls,
     normalize_committed_field_name,
     normalize_target_url,
-    parse_csv_urls,
     resolve_traversal_mode,
     validate_extraction_contract,
 )
@@ -32,6 +25,8 @@ from app.services.pipeline_config import (
 )
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.url_safety import ensure_public_crawl_targets
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 STAGE_FETCH = "FETCH"
 
@@ -114,35 +109,24 @@ async def create_crawl_run(
     run_type = payload.get("run_type")
     if not run_type:
         raise ValueError("run_type is required")
-    created_run_id: int | None = None
-
-    async def _operation(retry_session: AsyncSession) -> None:
-        nonlocal created_run_id
-        run = CrawlRun(
-            user_id=user_id,
-            run_type=run_type,
-            url=primary_url,
-            surface=normalized_surface,
-            status=CrawlStatus.PENDING.value,
-            settings=settings,
-            requested_fields=requested_fields,
-            result_summary={
-                "url_count": max(1, len(urls) or 1),
-                "progress": 0,
-                "current_stage": STAGE_FETCH,
-                "correlation_id": get_correlation_id() or generate_correlation_id(),
-            },
-        )
-        retry_session.add(run)
-        await retry_session.flush()
-        created_run_id = run.id
-
-    await with_retry(session, _operation)
-    if created_run_id is None:
-        raise RuntimeError("Failed to create crawl run")
-    run = await session.get(CrawlRun, created_run_id)
-    if run is None:
-        raise RuntimeError("Created crawl run not found")
+    run = CrawlRun(
+        user_id=user_id,
+        run_type=run_type,
+        url=primary_url,
+        surface=normalized_surface,
+        status=CrawlStatus.PENDING.value,
+        settings=settings,
+        requested_fields=requested_fields,
+        result_summary={
+            "url_count": max(1, len(urls) or 1),
+            "progress": 0,
+            "current_stage": STAGE_FETCH,
+            "correlation_id": get_correlation_id() or generate_correlation_id(),
+        },
+    )
+    session.add(run)
+    await session.flush()
+    await session.commit()
     await session.refresh(run)
     return run
 
@@ -189,15 +173,13 @@ async def get_run(session: AsyncSession, run_id: int) -> CrawlRun | None:
 
 
 async def delete_run(session: AsyncSession, run: CrawlRun) -> None:
-    async def _operation(retry_session: AsyncSession) -> None:
-        retry_run = await retry_session.get(CrawlRun, run.id)
-        if retry_run is None:
-            return
-        if normalize_status(retry_run.status) in ACTIVE_STATUSES:
-            raise ValueError(f"Cannot delete run in state: {retry_run.status}")
-        await retry_session.delete(retry_run)
-
-    await with_retry(session, _operation)
+    db_run = await session.get(CrawlRun, run.id)
+    if db_run is None:
+        return
+    if normalize_status(db_run.status) in ACTIVE_STATUSES:
+        raise ValueError(f"Cannot delete run in state: {db_run.status}")
+    await session.delete(db_run)
+    await session.commit()
 
 
 async def get_run_records(
@@ -262,58 +244,56 @@ async def commit_selected_fields(
         except (TypeError, ValueError):
             continue
     record_ids = sorted(set(valid_record_ids))
-    async def _operation(retry_session: AsyncSession) -> tuple[int, int]:
-        retry_run = await retry_session.get(CrawlRun, run.id)
-        if retry_run is None:
-            return (0, 0)
-        result = await retry_session.execute(
-            select(CrawlRecord).where(
-                CrawlRecord.run_id == retry_run.id, CrawlRecord.id.in_(record_ids)
-            )
+    db_run = await session.get(CrawlRun, run.id)
+    if db_run is None:
+        return 0, 0
+    result = await session.execute(
+        select(CrawlRecord).where(
+            CrawlRecord.run_id == db_run.id, CrawlRecord.id.in_(record_ids)
         )
-        records = {record.id: record for record in result.scalars().all()}
-        updated_fields = 0
-        updated_record_ids: set[int] = set()
+    )
+    records = {record.id: record for record in result.scalars().all()}
+    updated_fields = 0
+    updated_record_ids: set[int] = set()
 
-        for item in items:
-            raw_record_id = item.get("record_id")
-            if raw_record_id is None:
-                continue
-            try:
-                record_id = int(raw_record_id)
-            except (TypeError, ValueError):
-                continue
-            record = records.get(record_id)
-            if record is None:
-                continue
-            field_name = normalize_committed_field_name(item.get("field_name"))
-            if not field_name:
-                continue
-            value = item.get("value")
-            normalized_value = normalize_value(field_name, value)
-            data = dict(record.data or {})
-            data[field_name] = normalized_value
-            record.data = data
+    for item in items:
+        raw_record_id = item.get("record_id")
+        if raw_record_id is None:
+            continue
+        try:
+            record_id = int(raw_record_id)
+        except (TypeError, ValueError):
+            continue
+        record = records.get(record_id)
+        if record is None:
+            continue
+        field_name = normalize_committed_field_name(item.get("field_name"))
+        if not field_name:
+            continue
+        value = item.get("value")
+        normalized_value = normalize_value(field_name, value)
+        data = dict(record.data or {})
+        data[field_name] = normalized_value
+        record.data = data
 
-            refresh_record_commit_metadata(
-                record, run=retry_run, field_name=field_name, value=normalized_value
-            )
+        refresh_record_commit_metadata(
+            record, run=db_run, field_name=field_name, value=normalized_value
+        )
 
-            source_trace = dict(record.source_trace or {})
-            llm_suggestions = dict(source_trace.get("llm_cleanup_suggestions") or {})
-            if field_name in llm_suggestions:
-                suggestion = dict(llm_suggestions[field_name])
-                suggestion["status"] = "accepted"
-                suggestion["accepted_value"] = normalized_value
-                llm_suggestions[field_name] = suggestion
-                source_trace["llm_cleanup_suggestions"] = llm_suggestions
-                record.source_trace = source_trace
+        source_trace = dict(record.source_trace or {})
+        llm_suggestions = dict(source_trace.get("llm_cleanup_suggestions") or {})
+        if field_name in llm_suggestions:
+            suggestion = dict(llm_suggestions[field_name])
+            suggestion["status"] = "accepted"
+            suggestion["accepted_value"] = normalized_value
+            llm_suggestions[field_name] = suggestion
+            source_trace["llm_cleanup_suggestions"] = llm_suggestions
+            record.source_trace = source_trace
 
-            updated_fields += 1
-            updated_record_ids.add(record_id)
-        return (len(updated_record_ids), updated_fields)
-
-    updated_records, updated_fields = await with_retry(session, _operation)
+        updated_fields += 1
+        updated_record_ids.add(record_id)
+    updated_records = len(updated_record_ids)
+    await session.commit()
 
     if updated_fields:
         await append_log_event(

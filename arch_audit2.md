@@ -25,6 +25,20 @@ Robust fallback mechanisms for blocked pages, including public API recovery via 
 Assessment of Production Readiness:
 The pipeline is robust in its core data modeling and fallback mechanics, but it is not safely scalable in its current form. The intentional disabling of DNS pinning opens the infrastructure to severe SSRF attacks, and the memory-heavy approach to DOM traversal will buckle under modern virtualized e-commerce sites. Schema pollution is hardcoded into the pipeline's priority configuration (SOURCE_RANKING). Fixing these arbitration and security gaps will immediately elevate this to a highly resilient, enterprise-grade extraction system.
 ─────────────────────────────────────────────────────────────────
+2026-04-10 RECONCILIATION STATUS
+─────────────────────────────────────────────────────────────────
+This document is now historical. The authoritative live backlog is [docs/backend-audit-remediation-tracker.md](docs/backend-audit-remediation-tracker.md).
+
+| Legacy ID | Disposition |
+|---|---|
+| TODO-SIMP-001 | open -> `AUD-017` and `AUD-027` |
+| TODO-SIMP-002 | void 2026-04-10: the generic URL-based surface override path was superseded by the SignalInventory / platform-registry refactor and no standalone remediation item remains. |
+| TODO-001 | void 2026-04-10: the original DNS-pinning recommendation is superseded on this branch by initial-target validation, routed per-request public-target blocking, and service-worker blocking in the browser path. |
+| TODO-002 | closed 2026-04-10 via `AUD-001` |
+| TODO-003 | void 2026-04-10: traversal capture now prefers card outerHTML and DOM-diff fragments with bounded fallback, so the original full-page-only OOM path no longer matches current code. |
+| TODO-004 | void 2026-04-10: current `PAGE_URL_CURRENCY_HINTS` already compile strict boundary regexes via `_build_page_url_currency_hint_pattern()`. |
+| TODO-005 | void 2026-04-10: `source_parsers._extract_balanced_json_fragment()` now uses `json.JSONDecoder().raw_decode()` before the fallback scanner, which covers the cited string-brace failure mode. |
+─────────────────────────────────────────────────────────────────
 2) ARCHITECTURE FINDINGS (Ranked by Severity)
 ─────────────────────────────────────────────────────────────────
 1. Playwright TOCTOU SSRF Vulnerability

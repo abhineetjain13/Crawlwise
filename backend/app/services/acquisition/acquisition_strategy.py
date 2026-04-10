@@ -5,9 +5,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.crawl import CrawlRun
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @dataclass
@@ -82,8 +81,8 @@ class JsonApiStrategy(AcquisitionStrategy):
         # Import here to avoid circular dependencies
         from app.services.acquisition.acquirer import acquire
         from app.services.extract.json_extractor import (
-            extract_json_listing,
             extract_json_detail,
+            extract_json_listing,
         )
 
         # Acquire the JSON response

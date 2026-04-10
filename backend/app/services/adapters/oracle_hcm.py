@@ -1,16 +1,15 @@
 # Oracle HCM Candidate Experience adapter.
 from __future__ import annotations
 
-import asyncio
 import ast
+import asyncio
 import json
 import re
 from html import unescape
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from bs4 import BeautifulSoup
 
 try:
     from curl_cffi import requests as curl_requests

@@ -6,22 +6,31 @@ import re
 from copy import deepcopy
 from functools import lru_cache
 from json import loads as parse_json
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
-from bs4 import BeautifulSoup, Tag
-
-logger = logging.getLogger(__name__)
-
+from app.services.config.field_mappings import get_surface_field_aliases
+from app.services.extract.listing_identity import (
+    choose_primary_record_set,
+    merge_record_sets_on_identity,
+    strong_identity_key,
+)
+from app.services.extract.listing_normalize import normalize_listing_record
+from app.services.extract.listing_quality import (
+    is_meaningful_listing_record as _assess_meaningful_listing_record,
+)
+from app.services.extract.listing_quality import (
+    is_meaningful_structured_listing_record as _assess_meaningful_structured_listing_record,
+)
+from app.services.extract.source_parsers import parse_page_sources
 from app.services.pipeline_config import (
     CARD_SELECTORS_COMMERCE,
     CARD_SELECTORS_JOBS,
     COLLECTION_KEYS,
-    FIELD_ALIASES,
     LISTING_ALT_TEXT_TITLE_PATTERN,
+    LISTING_CARD_TITLE_SELECTORS,
     LISTING_CATEGORY_PATH_MARKERS,
     LISTING_COLOR_ACTION_PREFIXES,
     LISTING_COLOR_ACTION_VALUES,
-    LISTING_CARD_TITLE_SELECTORS,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_FACET_PATH_FRAGMENTS,
@@ -29,14 +38,9 @@ from app.services.pipeline_config import (
     LISTING_FILTER_OPTION_KEYS,
     LISTING_HUB_PATH_SEGMENTS,
     LISTING_IMAGE_EXCLUDE_TOKENS,
-    LISTING_JOB_SIGNAL_FIELDS,
     LISTING_MERCHANDISING_TITLE_PREFIXES,
-    LISTING_MINIMAL_VISUAL_FIELDS,
     LISTING_NAVIGATION_TITLE_HINTS,
-    LISTING_NON_LISTING_PATH_TOKENS,
-    LISTING_PRODUCT_SIGNAL_FIELDS,
     LISTING_SWATCH_CONTAINER_SELECTORS,
-    LISTING_WEAK_METADATA_FIELDS,
     LISTING_WEAK_TITLES,
     MAX_JSON_RECURSION_DEPTH,
     NESTED_CATEGORY_KEYS,
@@ -47,26 +51,16 @@ from app.services.pipeline_config import (
     NESTED_URL_KEYS,
     PAGE_URL_CURRENCY_HINTS,
 )
-from app.services.extract.listing_identity import (
-    choose_primary_record_set,
-    merge_record_sets_on_identity,
-    merge_listing_record,
-    strong_identity_key,
-)
-from app.services.extract.listing_normalize import normalize_listing_record
-from app.services.extract.listing_quality import (
-    assess_listing_record_quality,
-    is_meaningful_listing_record as _assess_meaningful_listing_record,
-    is_meaningful_structured_listing_record as _assess_meaningful_structured_listing_record,
-)
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.runtime_metrics import incr
+from bs4 import BeautifulSoup, Tag
+
+logger = logging.getLogger(__name__)
+
 _EMPTY_VALUES = (None, "", [], {})
 MIN_VIABLE_RECORDS = 2
+_MAX_REGEX_INPUT_LEN = 500
 
 _WEAK_LISTING_TITLES = LISTING_WEAK_TITLES
-
-# Listing page allowed fields - only these fields should be extracted on listing pages
-LISTING_PAGE_ALLOWED_FIELDS = {"url", "title", "price", "image_link"}
 
 # Detail-only fields that should not be extracted on listing pages
 DETAIL_ONLY_FIELDS = {"brand", "gtin", "variants", "specifications", "description"}
@@ -109,6 +103,7 @@ _LISTING_VARIANT_PROMPT_RE = re.compile(
 )
 
 
+# LISTING_PAGE_ALLOWED_FIELDS was removed because runtime enforcement only drops DETAIL_ONLY_FIELDS.
 def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
     """Filter listing page records to remove detail-only fields from DOM records.
 
@@ -171,7 +166,7 @@ def extract_listing_records(
     page_fragments = _split_paginated_html_fragments(html)
     if len(page_fragments) > 1:
         merged_records: list[dict] = []
-        for index, fragment in enumerate(page_fragments):
+        for _index, fragment in enumerate(page_fragments):
             merged_records.extend(
                 _extract_listing_records_single_page(
                     fragment,
@@ -1064,7 +1059,7 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
 
     record: dict = {}
 
-    for canonical, aliases in FIELD_ALIASES.items():
+    for canonical, aliases in get_surface_field_aliases(_surface).items():
         values = [
             *_preferred_generic_item_values(item, canonical, surface=_surface),
             *_find_alias_values(item, [canonical, *aliases], max_depth=4),
@@ -1096,13 +1091,14 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
             else:
                 record.pop("additional_images", None)
 
-    if record.get("url") in (None, "", [], {}) and record.get("slug") not in (
+    raw_slug = item.get("slug")
+    if record.get("url") in (None, "", [], {}) and raw_slug not in (
         None,
         "",
         [],
         {},
     ):
-        slug_url = _resolve_slug_url(str(record["slug"]), page_url=page_url)
+        slug_url = _resolve_slug_url(str(raw_slug), page_url=page_url)
         if slug_url:
             record["url"] = slug_url
 
@@ -1135,7 +1131,7 @@ def _normalize_generic_item(item: dict, _surface: str, page_url: str) -> dict | 
         if inferred_currency:
             record["currency"] = inferred_currency
 
-    slug_url = _resolve_slug_url(str(record.get("slug") or ""), page_url=page_url)
+    slug_url = _resolve_slug_url(str(raw_slug or ""), page_url=page_url)
     if (
         "ecommerce" in _surface
         and record.get("url") in (None, "", [], {})
@@ -1925,12 +1921,12 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
     best_selector = ""
     best_score: tuple[float, int] = (_MIN_CARD_SIGNAL_RATIO, 0)
 
-    PRIMARY_CONTAINER_SELECTOR = (
+    primary_container_selector = (
         "ul, ol, div.grid, div.row, div[class*='results'], "
         "div[class*='product'], div[class*='listing'], div[class*='search'], "
         "div[class*='tile'], div[class*='card']"
     )
-    FALLBACK_CONTAINER_SELECTOR = "main, section"
+    fallback_container_selector = "main, section"
 
     def _scan_containers(containers: list[Tag]) -> None:
         nonlocal best_cards, best_selector, best_score
@@ -1953,9 +1949,9 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
                     classes = ".".join(key[1]) if key[1] else ""
                     best_selector = f"{key[0]}.{classes}" if classes else key[0]
 
-    _scan_containers(soup_copy.select(PRIMARY_CONTAINER_SELECTOR))
+    _scan_containers(soup_copy.select(primary_container_selector))
     if not best_cards:
-        _scan_containers(soup_copy.select(FALLBACK_CONTAINER_SELECTOR))
+        _scan_containers(soup_copy.select(fallback_container_selector))
 
     if best_cards:
         return best_cards, best_selector
@@ -2118,13 +2114,45 @@ def _extract_from_card(
 ) -> dict:
     """Extract field values from a single listing card element."""
     record: dict = {}
-    is_job_surface = "job" in surface
+    normalized_surface = str(surface or "").lower()
+    is_job_surface = "job" in normalized_surface
+    is_ecommerce_surface = "ecommerce" in normalized_surface
 
-    if "ecommerce" in surface:
+    if is_ecommerce_surface:
         _extract_ecommerce_price_fields(card, record)
 
+    _extract_card_link_and_title(
+        card,
+        record,
+        page_url=page_url,
+        is_job_surface=is_job_surface,
+    )
+
+    if not is_job_surface:
+        _extract_card_image_fields(card, record, page_url=page_url)
+
+    _extract_card_common_metadata(card, record)
+    card_text_lines = _card_text_lines(card)
+    _extract_card_identifier_fields(record, card, card_text_lines)
+    if is_ecommerce_surface:
+        _extract_ecommerce_card_fields(record, card, card_text_lines, page_url=page_url)
+
+    if is_job_surface:
+        _extract_job_card_fields(card, record, card_text_lines=card_text_lines)
+        _finalize_job_card_record(record)
+
+    return record
+
+
+def _extract_card_link_and_title(
+    card: Tag,
+    record: dict,
+    *,
+    page_url: str,
+    is_job_surface: bool,
+) -> None:
     _extract_card_title(card, record)
-    if "title" not in record and "job" not in surface:
+    if "title" not in record and not is_job_surface:
         inferred_title = _infer_listing_title_from_links(card)
         if inferred_title:
             record["title"] = _normalize_listing_title_text(inferred_title)
@@ -2137,65 +2165,87 @@ def _extract_from_card(
         if inferred_title:
             record["title"] = _normalize_listing_title_text(inferred_title)
 
-    if not is_job_surface:
-        _extract_card_image_fields(card, record, page_url=page_url)
 
-    # Brand
-    brand_el = card.select_one(".brand, [itemprop='brand'], .product-brand")
-    if brand_el:
-        record["brand"] = brand_el.get_text(strip=True)
-
-    # Rating
-    rating_el = card.select_one(
-        "[aria-label*='star'], .rating, [itemprop='ratingValue']"
+def _extract_card_common_metadata(card: Tag, record: dict) -> None:
+    brand_text = _extract_card_text_value(
+        card,
+        ".brand, [itemprop='brand'], .product-brand",
+        include_aria=False,
     )
-    if rating_el:
-        record["rating"] = (
-            rating_el.get("content")
-            or rating_el.get("aria-label", "")
-            or rating_el.get_text(" ", strip=True)
-        )
+    if brand_text:
+        record["brand"] = brand_text
 
-    review_count_el = card.select_one(
-        "[itemprop='reviewCount'], [aria-label*='review'], .review-count, .count"
+    rating_text = _extract_card_text_value(
+        card,
+        "[aria-label*='star'], .rating, [itemprop='ratingValue']",
     )
-    if review_count_el:
-        record["review_count"] = (
-            review_count_el.get("content")
-            or review_count_el.get("aria-label", "")
-            or review_count_el.get_text(" ", strip=True)
-        )
+    if rating_text:
+        record["rating"] = rating_text
 
-    card_text_lines = _card_text_lines(card)
-    identifier_fields = _extract_card_identifiers(card, card_text_lines)
-    for field_name, value in identifier_fields.items():
+    review_count_text = _extract_card_text_value(
+        card,
+        "[itemprop='reviewCount'], [aria-label*='review'], .review-count, .count",
+    )
+    if review_count_text:
+        record["review_count"] = review_count_text
+
+
+def _extract_card_text_value(
+    card: Tag,
+    selector: str,
+    *,
+    include_aria: bool = True,
+) -> str:
+    element = card.select_one(selector)
+    if element is None:
+        return ""
+    value = element.get("content")
+    if include_aria and not value:
+        value = element.get("aria-label", "")
+    if not value:
+        value = element.get_text(" ", strip=True)
+    return " ".join(str(value or "").split()).strip()
+
+
+def _extract_card_identifier_fields(
+    record: dict,
+    card: Tag,
+    card_text_lines: list[str],
+) -> None:
+    for field_name, value in _extract_card_identifiers(card, card_text_lines).items():
         if value:
             record[field_name] = value
-    if "ecommerce" in surface:
-        color_text = _extract_card_color(card, card_text_lines)
-        if color_text:
-            record["color"] = color_text
 
-        size_text = _extract_card_size(card_text_lines)
-        if size_text:
-            record["size"] = size_text
 
-        dimensions_text = _match_dimensions_line(card_text_lines)
-        if dimensions_text:
-            record["dimensions"] = dimensions_text
-        if record.get("price") and not record.get("currency"):
-            inferred_currency = _infer_currency_from_page_url(page_url)
-            if inferred_currency:
-                record["currency"] = inferred_currency
+def _extract_ecommerce_card_fields(
+    record: dict,
+    card: Tag,
+    card_text_lines: list[str],
+    *,
+    page_url: str,
+) -> None:
+    color_text = _extract_card_color(card, card_text_lines)
+    if color_text:
+        record["color"] = color_text
 
-    if is_job_surface:
-        _extract_job_card_fields(card, record, card_text_lines=card_text_lines)
-        if record.get("url") and not record.get("apply_url"):
-            record["apply_url"] = str(record["url"])
-        record.pop("image_url", None)
-        record.pop("additional_images", None)
+    size_text = _extract_card_size(card_text_lines)
+    if size_text:
+        record["size"] = size_text
 
-    return record
+    dimensions_text = _match_dimensions_line(card_text_lines)
+    if dimensions_text:
+        record["dimensions"] = dimensions_text
+    if record.get("price") and not record.get("currency"):
+        inferred_currency = _infer_currency_from_page_url(page_url)
+        if inferred_currency:
+            record["currency"] = inferred_currency
+
+
+def _finalize_job_card_record(record: dict) -> None:
+    if record.get("url") and not record.get("apply_url"):
+        record["apply_url"] = str(record["url"])
+    record.pop("image_url", None)
+    record.pop("additional_images", None)
 
 
 def _extract_ecommerce_price_fields(card: Tag, record: dict) -> None:
@@ -2205,7 +2255,9 @@ def _extract_ecommerce_price_fields(card: Tag, record: dict) -> None:
     )
     if price_el:
         raw_price = price_el.get("content") or price_el.get_text(" ", strip=True)
-        record["price"] = _clean_price_text(raw_price)
+        price = _clean_price_text(raw_price)
+        if price is not None:
+            record["price"] = price
     original_price_el = card.select_one(
         ".original-price, .compare-price, .was-price, .strike, s, del, [data-original-price]"
     )
@@ -2213,7 +2265,9 @@ def _extract_ecommerce_price_fields(card: Tag, record: dict) -> None:
         raw_op = original_price_el.get("content") or original_price_el.get_text(
             " ", strip=True
         )
-        record["original_price"] = _clean_price_text(raw_op)
+        original_price = _clean_price_text(raw_op)
+        if original_price is not None:
+            record["original_price"] = original_price
 
 
 def _extract_card_title(card: Tag, record: dict) -> None:
@@ -2466,7 +2520,7 @@ def _find_alias_values(
                     {},
                 ):
                     values.append(value)
-            for key, value in node.items():
+            for _key, value in node.items():
                 _visit(value, depth - 1)
             return
         if isinstance(node, list):
@@ -2721,9 +2775,16 @@ def _compile_case_insensitive_regex(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern, re.I)
 
 
-def _clean_price_text(raw: str) -> str:
+def _clean_price_text(raw: str) -> str | None:
     """Extract the price portion from a string that may include surrounding text."""
     raw = raw.strip()
+    if len(raw) > _MAX_REGEX_INPUT_LEN:
+        incr("listing_price_regex_input_too_long_total")
+        logger.debug(
+            "Skipping price regex extraction for overlong input: len=%d",
+            len(raw),
+        )
+        return None
     # Prefer match with currency symbol
     m = _PRICE_WITH_CURRENCY_RE.search(raw)
     if m:
@@ -3199,10 +3260,13 @@ def _extract_card_identifiers(card: Tag, lines: list[str]) -> dict[str, str]:
 
 
 def _infer_currency_from_page_url(page_url: str) -> str:
-    lowered = str(page_url or "").strip().lower()
-    if not lowered:
+    raw_page_url = str(page_url or "").strip()
+    if not raw_page_url:
         return ""
-    for token, currency in PAGE_URL_CURRENCY_HINTS.items():
-        if token in lowered:
+    url_path = urlparse(raw_page_url).path.lower()
+    if not url_path:
+        return ""
+    for pattern, currency in PAGE_URL_CURRENCY_HINTS.items():
+        if pattern.search(url_path):
             return currency
     return ""

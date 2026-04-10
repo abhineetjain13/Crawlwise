@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import re
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from bs4 import BeautifulSoup
 
 
 class AmazonAdapter(BaseAdapter):

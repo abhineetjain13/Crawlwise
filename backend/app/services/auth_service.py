@@ -4,11 +4,11 @@ from __future__ import annotations
 import os
 import re
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.config import settings
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 DEFAULT_ADMIN_EMAIL = "DEFAULT_ADMIN_EMAIL"
 DEFAULT_ADMIN_PASSWORD = "DEFAULT_ADMIN_PASSWORD"
@@ -16,6 +16,8 @@ BOOTSTRAP_ADMIN_ONCE = "BOOTSTRAP_ADMIN_ONCE"
 
 
 def _env_flag(name: str) -> bool:
+    if name == BOOTSTRAP_ADMIN_ONCE:
+        return bool(settings.bootstrap_admin_once)
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -38,8 +40,8 @@ def _validate_default_admin_password(password: str) -> None:
 
 
 def _load_default_admin_credentials() -> tuple[str, str]:
-    email = os.getenv(DEFAULT_ADMIN_EMAIL, "").strip().lower()
-    password = os.getenv(DEFAULT_ADMIN_PASSWORD, "")
+    email = str(settings.default_admin_email or "").strip().lower()
+    password = str(settings.default_admin_password or "")
     if not email:
         raise RuntimeError(f"{DEFAULT_ADMIN_EMAIL} is required for admin bootstrap.")
     if not password:

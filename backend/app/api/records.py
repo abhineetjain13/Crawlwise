@@ -3,15 +3,11 @@ from __future__ import annotations
 
 import csv
 import json
-from typing import Annotated
-from io import StringIO
+import re
 from functools import lru_cache
 from html import unescape
-import re
-
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from io import StringIO
+from typing import Annotated
 
 from app.core.dependencies import get_current_user, get_db
 from app.models.crawl import CrawlRecord
@@ -20,6 +16,9 @@ from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.crawl import CrawlRecordProvenanceResponse, CrawlRecordResponse
 from app.services.crawl_crud import get_run, get_run_records
 from app.services.pipeline_config import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["records"])
 MAX_RECORD_PAGE_SIZE = 1000

@@ -1,9 +1,8 @@
 # Indeed job board adapter.
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from bs4 import BeautifulSoup
 
 
 class IndeedAdapter(BaseAdapter):

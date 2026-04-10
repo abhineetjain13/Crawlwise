@@ -6,16 +6,21 @@ preventing the need for runtime monkeypatching.
 """
 from __future__ import annotations
 
-from app.services.acquisition.acquirer import acquire as _acquire, AcquisitionResult
+from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.acquisition.acquirer import acquire as _acquire
+from app.services.adapters.registry import (
+    AdapterResult,
+)
+from app.services.adapters.registry import (
+    run_adapter as _run_adapter,
+)
+from app.services.adapters.registry import (
+    try_blocked_adapter_recovery as _try_blocked_adapter_recovery,
+)
 from app.services.pipeline_config import (
     DEFAULT_MAX_PAGES,
     DEFAULT_MAX_SCROLLS,
     DEFAULT_SLEEP_MS,
-)
-from app.services.adapters.registry import (
-    run_adapter as _run_adapter,
-    try_blocked_adapter_recovery as _try_blocked_adapter_recovery,
-    AdapterResult,
 )
 
 

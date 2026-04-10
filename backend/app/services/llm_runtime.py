@@ -2,19 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
-from json import loads as parse_json
 from dataclasses import dataclass
 from decimal import Decimal
+from json import loads as parse_json
 from string import Template
 from typing import Any
 
 import httpx
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import settings
-from app.models.crawl import CrawlRun
 from app.core.security import decrypt_secret
+from app.models.crawl import CrawlRun
 from app.models.llm import LLMConfig, LLMCostLog
 from app.services.knowledge_base.store import get_prompt_task, load_prompt_file
 from app.services.pipeline_config import (
@@ -29,7 +26,8 @@ from app.services.pipeline_config import (
     LLM_NVIDIA_MAX_TOKENS,
     LLM_NVIDIA_TEMPERATURE,
 )
-
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 _ERROR_PREFIX = "Error:"
 JSON_CONTENT_TYPE = "application/json"
@@ -330,7 +328,7 @@ async def _call_provider_with_retry(
     """Call provider once and fail fast on rate limits."""
     _ = base_delay_s
     last_error = ""
-    for attempt in range(max_retries):
+    for _attempt in range(max_retries):
         result, input_tokens, output_tokens = await _call_provider(
             provider=provider,
             model=model,

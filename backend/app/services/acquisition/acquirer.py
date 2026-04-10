@@ -7,50 +7,54 @@ import json
 import logging
 import re as _re
 import time
-from json import loads as parse_json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from json import loads as parse_json
 from pathlib import Path
 from urllib.parse import urlparse
-from bs4 import BeautifulSoup
-
-from playwright.async_api import Error as PlaywrightError
 
 from app.core.config import settings
-from app.services.exceptions import ProxyPoolExhaustedError
-from app.services.adapters.registry import resolve_adapter
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import BrowserResult, fetch_rendered_html
 from app.services.acquisition.browser_runtime import resolve_browser_runtime_options
-from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
-from app.services.runtime_metrics import incr
-
+from app.services.acquisition.pacing import wait_for_host_slot
+from app.services.adapters.registry import resolve_adapter
 from app.services.config.platform_registry import (
     acquisition_hint_tokens,
-    detect_platform_family as detect_platform_family_from_registry,
     is_job_platform_signal,
     resolve_platform_runtime_policy,
 )
+from app.services.config.platform_registry import (
+    detect_platform_family as detect_platform_family_from_registry,
+)
+from app.services.exceptions import (
+    AcquisitionFailureError,
+    AcquisitionTimeoutError,
+    ProxyPoolExhaustedError,
+)
 from app.services.pipeline_config import (
-    ACQUISITION_ATTEMPT_TIMEOUT_SECONDS,
     ACQUIRE_HOST_MIN_INTERVAL_MS,
+    ACQUISITION_ATTEMPT_TIMEOUT_SECONDS,
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
     BROWSER_FIRST_DOMAINS,
     DEFAULT_MAX_SCROLLS,
     JOB_ERROR_PAGE_HEADINGS,
     JOB_ERROR_PAGE_TITLES,
     JOB_PLATFORM_FAMILIES,
-    JS_GATE_PHRASES,
     JOB_REDIRECT_SHELL_CANONICAL_URLS,
     JOB_REDIRECT_SHELL_HEADINGS,
     JOB_REDIRECT_SHELL_TITLES,
+    JS_GATE_PHRASES,
     LISTING_MIN_ITEMS,
     PROXY_FAILURE_COOLDOWN_BASE_MS,
     PROXY_FAILURE_COOLDOWN_MAX_MS,
 )
+from app.services.runtime_metrics import incr
 from app.services.url_safety import validate_proxy_endpoint, validate_public_target
+from bs4 import BeautifulSoup
+from playwright.async_api import Error as PlaywrightError
 
 _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset(
     {
@@ -85,6 +89,7 @@ _SENSITIVE_KEY_TOKENS = (
     "passwd",
     "cookie",
     "set-cookie",
+    "session_id",
     "session",
     "jwt",
     "ssn",
@@ -98,7 +103,7 @@ _LONG_TOKEN_RE = _re.compile(
 _EMAIL_RE = _re.compile(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
 
 
-class ProxyPoolExhausted(ProxyPoolExhaustedError):
+class ProxyPoolExhausted(ProxyPoolExhaustedError):  # noqa: N818 - compatibility alias kept for existing imports.
     pass
 
 
@@ -319,6 +324,7 @@ async def acquire(
         proxy_candidates = [None]
 
     result: AcquisitionResult | None = None
+    last_timeout_error: asyncio.TimeoutError | None = None
     for proxy in proxy_candidates:
         try:
             result = await asyncio.wait_for(
@@ -343,13 +349,14 @@ async def acquire(
                 ),
                 timeout=float(ACQUISITION_ATTEMPT_TIMEOUT_SECONDS),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError as exc:
             logger.warning(
                 "Acquisition attempt timed out after %.1fs for %s (proxy=%s)",
                 float(ACQUISITION_ATTEMPT_TIMEOUT_SECONDS),
                 url,
                 "yes" if proxy else "no",
             )
+            last_timeout_error = exc
             if proxy:
                 await _mark_proxy_failed(proxy)
             result = None
@@ -374,7 +381,11 @@ async def acquire(
         if proxy_list:
             incr("proxy_exhaustion_total")
             raise ProxyPoolExhausted(f"All configured proxies failed for {url}")
-        raise RuntimeError(f"Unable to acquire content for {url}")
+        if last_timeout_error is not None:
+            raise AcquisitionTimeoutError(
+                f"Timed out acquiring content for {url}"
+            ) from last_timeout_error
+        raise AcquisitionFailureError(f"Unable to acquire content for {url}")
 
     path = _artifact_path(run_id, url)
     await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
@@ -1099,7 +1110,7 @@ async def _try_http(
             promoted_sources=[],
             diagnostics=diagnostics,
         )
-        setattr(normalized, "_acquirer_analysis", analysis)
+        normalized._acquirer_analysis = analysis
         return normalized
     decision_started_at = time.perf_counter()
 
@@ -1224,7 +1235,7 @@ async def _try_http(
             else None,
         }
     )
-    setattr(normalized, "_acquirer_analysis", analysis)
+    normalized._acquirer_analysis = analysis
     return normalized
 
 
@@ -1245,8 +1256,6 @@ def _needs_browser(
     visible_text = str(analysis.get("visible_text") or "")
     content_len = int(analysis.get("content_len") or 0)
     gate_phrases = bool(analysis.get("gate_phrases"))
-    adapter_hint = analysis.get("adapter_hint")
-    platform_family = analysis.get("platform_family")
     extractability = (
         analysis.get("extractability")
         if isinstance(analysis.get("extractability"), dict)
@@ -1399,7 +1408,12 @@ async def _try_browser(
                     message=log_message,
                 )
             except Exception:
-                pass  # Don't fail the acquisition if logging fails
+                incr("acquisition_log_event_failures_total")
+                logger.debug(
+                    "Failed to append browser acquisition fallback event for %s",
+                    url,
+                    exc_info=True,
+                )
         if diagnostics_sink is not None:
             diagnostics_sink["browser_exception"] = f"{type(exc).__name__}: {exc}"
             diagnostics_sink["browser_attempted"] = True
@@ -1411,21 +1425,7 @@ async def _try_browser(
     browser_network_payloads = (
         result.network_payloads if isinstance(result.network_payloads, list) else []
     )
-    setattr(
-        result,
-        "_acquirer_browser",
-        {
-            "html": browser_html,
-            "diagnostics": browser_diagnostics,
-            "network_payloads": browser_network_payloads,
-            "final_url": str(browser_diagnostics.get("final_url") or url).strip()
-            or url,
-            "blocked": bool(
-                browser_html and detect_blocked_page(browser_html).is_blocked
-            ),
-            "browser_total_ms": _elapsed_ms(browser_started_at),
-        },
-    )
+    result._acquirer_browser = {"html": browser_html, "diagnostics": browser_diagnostics, "network_payloads": browser_network_payloads, "final_url": str(browser_diagnostics.get("final_url") or url).strip() or url, "blocked": bool(browser_html and detect_blocked_page(browser_html).is_blocked), "browser_total_ms": _elapsed_ms(browser_started_at)}
     return result
 
 
@@ -1985,7 +1985,7 @@ def _write_failed_diagnostics(
 ) -> None:
     diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "run_id": run_id,
         "url": url,
         "status": "failed",
@@ -2019,7 +2019,7 @@ def _write_diagnostics(
         else None
     )
     payload = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "run_id": run_id,
         "url": url,
         "status": "completed",

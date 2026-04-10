@@ -14,13 +14,12 @@ import asyncio
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.config import settings
 from app.services.acquisition.acquirer import acquire
 from app.services.acquisition.blocked_detector import detect_blocked_page
-
 
 BATCHES: dict[str, list[tuple[str, str]]] = {
     "api": [
@@ -116,11 +115,11 @@ def _build_summary(overall: dict[str, list[dict]]) -> dict[str, dict[str, int]]:
 def _write_report(overall: dict[str, list[dict]], selected: list[str], timeout_seconds: int) -> Path:
     report_dir = _report_dir()
     report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     batch_slug = "-".join(selected)
     path = report_dir / f"{stamp}__{batch_slug}.json"
     payload = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "timeout_seconds": timeout_seconds,
         "batches": selected,
         "summary": _build_summary(overall),

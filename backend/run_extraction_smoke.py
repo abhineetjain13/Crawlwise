@@ -14,16 +14,15 @@ import asyncio
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.acquisition.acquirer import acquire
 from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.source_parsers import parse_page_sources
 from app.services.extract.service import extract_candidates
+from app.services.extract.source_parsers import parse_page_sources
 from app.services.semantic_detail_extractor import extract_semantic_detail_data
-
 
 TEST_SITES: list[dict] = [
     # --- Client demo URLs ---
@@ -248,7 +247,7 @@ async def main():
     # Write report
     report_dir = Path("artifacts/extraction_smoke")
     report_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report_path = report_dir / f"smoke_{ts}.json"
     report_path.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     print(f"\nReport: {report_path}")

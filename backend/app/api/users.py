@@ -3,13 +3,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.dependencies import get_db, require_admin
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.user import UserResponse, UserUpdate
 from app.services.user_service import delete_user, get_user, list_users, update_user
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 

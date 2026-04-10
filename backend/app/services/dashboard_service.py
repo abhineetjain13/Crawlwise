@@ -5,23 +5,20 @@ import logging
 import shutil
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import PROJECT_ROOT, settings
-from app.core.database import is_sqlite
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.llm import LLMCostLog
 from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.domain_utils import normalize_domain
 from app.services.knowledge_base.store import reset_learned_state
-from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
 from app.services.pipeline_config import (
     LONG_RUN_THRESHOLD_SECONDS,
     MAX_DURATION_SAMPLE_SIZE,
     STALLED_RUN_THRESHOLD_SECONDS,
 )
+from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -90,17 +87,8 @@ async def reset_application_data(session: AsyncSession) -> dict:
         promotions_deleted = await session.execute(delete(ReviewPromotion))
         llm_cost_deleted = await session.execute(delete(LLMCostLog))
         crawl_runs_deleted = await session.execute(delete(CrawlRun))
-        if is_sqlite:
-            await _reset_sqlite_sequences(session)
         await session.commit()
-        if is_sqlite:
-            try:
-                async with session.bind.connect() as connection:
-                    connection = await connection.execution_options(isolation_level="AUTOCOMMIT")
-                    await connection.execute(text("VACUUM"))
-            except (SQLAlchemyError, RuntimeError):
-                logger.exception("SQLite VACUUM failed after application data reset")
-    except SQLAlchemyError:
+    except Exception:
         await session.rollback()
         raise
 
@@ -150,22 +138,6 @@ def _reset_directory(path, *, create_if_missing: bool = True) -> int:
     return removed
 
 
-async def _reset_sqlite_sequences(session: AsyncSession) -> None:
-    sequence_table = await session.execute(
-        text("SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'")
-    )
-    if not sequence_table.scalar():
-        return
-    await session.execute(
-        text(
-            """
-            DELETE FROM sqlite_sequence
-            WHERE name IN ('crawl_runs', 'crawl_records', 'crawl_logs', 'review_promotions', 'llm_cost_log')
-            """
-        )
-    )
-
-
 def _legacy_artifact_paths() -> list[Path]:
     candidates = [
         PROJECT_ROOT / "backend" / "backend" / "artifacts",
@@ -183,7 +155,7 @@ def _legacy_artifact_paths() -> list[Path]:
 
 async def build_operational_metrics(session: AsyncSession) -> dict:
     """Build lightweight runtime + DB-backed operational metrics."""
-    runtime = runtime_metrics_snapshot()
+    runtime = await runtime_metrics_snapshot()
     long_run_threshold_seconds = LONG_RUN_THRESHOLD_SECONDS
     stalled_run_threshold_seconds = STALLED_RUN_THRESHOLD_SECONDS
     run_duration_rows = await session.execute(

@@ -10,10 +10,9 @@ import asyncio
 import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.config.platform_registry import detect_platform_family
+from bs4 import BeautifulSoup
 
 try:
     from curl_cffi import requests as curl_requests

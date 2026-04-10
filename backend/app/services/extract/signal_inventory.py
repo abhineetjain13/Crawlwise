@@ -6,13 +6,12 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from bs4 import BeautifulSoup
-
 from app.services.extract.source_parsers import (
     extract_hydrated_states,
     extract_json_ld,
     extract_next_data,
 )
+from bs4 import BeautifulSoup
 
 
 @dataclass

@@ -1,44 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.telemetry import (
     generate_correlation_id,
     get_correlation_id,
     reset_correlation_id,
     set_correlation_id,
 )
-from app.core.database import SessionLocal
-from app.services.exceptions import RunControlError
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.acquisition.acquirer import AcquisitionResult, ProxyPoolExhausted
-from app.services.crawl_state import (
-    CONTROL_REQUEST_KILL,
-    CONTROL_REQUEST_PAUSE,
-    CrawlStatus,
-    TERMINAL_STATUSES,
-    get_control_request,
-    normalize_status,
-    set_control_request,
-    update_run_status,
-)
-from app.services.crawl_utils import normalize_target_url, parse_csv_urls, resolve_traversal_mode
-from app.services.db_utils import with_retry
-from app.services.domain_utils import normalize_domain
 from app.services.crawl_metrics import (
     build_acquisition_profile,
     build_url_metrics,
     finalize_url_metrics,
 )
-from app.services.pipeline_config import DEFAULT_MAX_SCROLLS
-from app.services.pipeline_config import (
-    MAX_URL_PROCESS_TIMEOUT_SECONDS,
-    URL_BATCH_CONCURRENCY,
-    URL_PROCESS_TIMEOUT_SECONDS,
+from app.services.crawl_state import (
+    TERMINAL_STATUSES,
+    CrawlStatus,
+    normalize_status,
+    update_run_status,
 )
+from app.services.crawl_utils import normalize_target_url, parse_csv_urls, resolve_traversal_mode
+from app.services.domain_utils import normalize_domain
+from app.services.exceptions import RunControlError
 from app.services.pipeline import (
     STAGE_FETCH,
     VERDICT_BLOCKED,
@@ -52,16 +36,17 @@ from app.services.pipeline import (
     _mark_run_failed,
     _process_single_url,
     _set_stage,
-    _supports_parallel_batch_sessions,
 )
+from app.services.pipeline_config import (
+    DEFAULT_MAX_SCROLLS,
+    MAX_URL_PROCESS_TIMEOUT_SECONDS,
+    URL_PROCESS_TIMEOUT_SECONDS,
+)
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-_TRAVERSAL_MODES = {"auto", "scroll", "load_more", "paginate"}
-
-
-class RunControlSignal(RunControlError):
-    def __init__(self, request: str) -> None:
-        super().__init__(request)
-        self.request = request
+class RunControlSignal(RunControlError):  # noqa: N818 - kept for compatibility with exception hierarchy tests.
+    pass
 
 
 async def _log_with_retry(
@@ -71,11 +56,8 @@ async def _log_with_retry(
     message: str,
 ) -> None:
     tagged_message = _with_correlation_tag(message)
-
-    async def _operation(retry_session: AsyncSession) -> None:
-        await _log(retry_session, run_id, level, tagged_message)
-
-    await with_retry(session, _operation)
+    await _log(session, run_id, level, tagged_message)
+    await session.commit()
 
 
 def _with_correlation_tag(message: str) -> str:
@@ -93,28 +75,18 @@ async def _retry_run_update(
     run_id: int,
     mutate,
 ) -> None:
-    """Safely update a run using DB-level row locks (FOR UPDATE) and exponential backoff."""
-    async def _load_run_for_update(
-        retry_session: AsyncSession, target_run_id: int
-    ) -> CrawlRun | None:
-        bind = retry_session.bind
-        if bind is not None and bind.dialect.name != "sqlite":
-            result = await retry_session.execute(
-                select(CrawlRun)
-                .where(CrawlRun.id == target_run_id)
-                .with_for_update()
-            )
-            return result.scalar_one_or_none()
-        return await retry_session.get(CrawlRun, target_run_id)
-
-    async def _operation(retry_session: AsyncSession) -> None:
-        run = await _load_run_for_update(retry_session, run_id)
-        if run is None:
-            return
-        await mutate(retry_session, run)
-        await retry_session.flush()
-
-    await with_retry(session, _operation)
+    """Safely update a run using DB-level row locks (FOR UPDATE)."""
+    result = await session.execute(
+        select(CrawlRun)
+        .where(CrawlRun.id == run_id)
+        .with_for_update()
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
+        return
+    await mutate(session, run)
+    await session.flush()
+    await session.commit()
 
 
 async def _cleanup_run_lock(run_id: int) -> None:
@@ -123,14 +95,8 @@ async def _cleanup_run_lock(run_id: int) -> None:
     pass
 
 
-async def _run_control_checkpoint(session: AsyncSession, run: CrawlRun) -> None:
-    await session.refresh(run)
-    current_status = normalize_status(run.status)
-    control_request = get_control_request(run)
-    if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
-        raise RunControlSignal(CONTROL_REQUEST_PAUSE)
-    if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
-        raise RunControlSignal(CONTROL_REQUEST_KILL)
+async def _noop_checkpoint() -> None:
+    return None
 
 
 def _coerce_url_timeout_seconds(settings: dict) -> float:
@@ -241,51 +207,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             else {}
         )
 
-        async def _checkpoint_after_progress_update() -> None:
-            await session.refresh(run)
-            current_status = normalize_status(run.status)
-            control_request = get_control_request(run)
-            if (
-                current_status == CrawlStatus.PAUSED
-                or control_request == CONTROL_REQUEST_PAUSE
-            ):
-                update_run_status(run, CrawlStatus.PAUSED)
-                set_control_request(run, None)
-                async def _pause_mutation(
-                    retry_session: AsyncSession, retry_run: CrawlRun
-                ) -> None:
-                    update_run_status(retry_run, CrawlStatus.PAUSED)
-                    set_control_request(retry_run, None)
-                    await _log(
-                        retry_session,
-                        retry_run.id,
-                        "warning",
-                        "Run paused after checkpoint; partial output preserved",
-                    )
-
-                await _retry_run_update(session, run.id, _pause_mutation)
-                raise RunControlSignal(CONTROL_REQUEST_PAUSE)
-            if (
-                current_status == CrawlStatus.KILLED
-                or control_request == CONTROL_REQUEST_KILL
-            ):
-                update_run_status(run, CrawlStatus.KILLED)
-                set_control_request(run, None)
-                async def _kill_mutation(
-                    retry_session: AsyncSession, retry_run: CrawlRun
-                ) -> None:
-                    update_run_status(retry_run, CrawlStatus.KILLED)
-                    set_control_request(retry_run, None)
-                    await _log(
-                        retry_session,
-                        retry_run.id,
-                        "warning",
-                        "Run killed after checkpoint; partial output preserved",
-                    )
-
-                await _retry_run_update(session, run.id, _kill_mutation)
-                raise RunControlSignal(CONTROL_REQUEST_KILL)
-
         async def _apply_url_result(
             idx: int,
             url: str,
@@ -327,184 +248,59 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
 
             await _retry_run_update(session, run.id, _progress_mutation)
-            await _checkpoint_after_progress_update()
+        for idx, url in pending_items:
+            remaining_records = max(max_records - persisted_record_count, 0)
+            if remaining_records <= 0:
+                await _log(
+                    session,
+                    run.id,
+                    "info",
+                    f"Reached max_records ceiling ({max_records})",
+                )
+                break
 
-        async def _cancel_tasks(tasks: list[asyncio.Task]) -> None:
-            for task in tasks:
-                task.cancel()
-
-            # Give tasks a brief grace period to handle cancellation
-            if tasks:
-                done, pending = await asyncio.wait(tasks, timeout=0.5)
-                # Collect exceptions from completed tasks
-                for task in done:
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass  # Expected during cancellation
-                if pending:
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-
-        watchdog_active = False
-        if (
-            pending_items
-            and url_batch_concurrency > 1
-            and len(pending_items) > 1
-            and _supports_parallel_batch_sessions(session)
-        ):
-            watchdog_active = True
             await _log(
                 session,
                 run.id,
                 "info",
-                f"Processing {len(pending_items)} URLs with batch sub-concurrency={url_batch_concurrency}",
+                f"Processing URL {idx + 1}/{total_urls}: {url}",
             )
             await _set_stage(
                 session,
                 run,
                 STAGE_FETCH,
-                current_url=pending_items[0][1],
-                current_url_index=pending_items[0][0] + 1,
+                current_url=url,
+                current_url_index=idx + 1,
                 total_urls=total_urls,
             )
-            active_tasks: dict[asyncio.Task, tuple[int, str]] = {}
 
-            def _spawn_url_task(
-                idx: int, url: str, remaining_records: int
-            ) -> asyncio.Task:
-                return asyncio.create_task(
-                    _run_single_url_in_isolated_session(
-                        run_id=run.id,
-                        url=url,
-                        idx=idx,
-                        total_urls=total_urls,
-                        proxy_list=proxy_list,
-                        traversal_mode=traversal_mode,
-                        max_pages=max_pages,
-                        max_scrolls=max_scrolls,
-                        max_records=remaining_records,
-                        sleep_ms=sleep_ms,
-                        timeout_seconds=url_timeout_seconds,
-                    )
-                )
-
-            while pending_items or active_tasks:
-                while pending_items and len(active_tasks) < url_batch_concurrency:
-                    await _run_control_checkpoint(session, run)
-                    remaining_records = max(max_records - persisted_record_count, 0)
-                    if remaining_records <= 0:
-                        pending_items.clear()
-                        await _log(
-                            session,
-                            run.id,
-                            "info",
-                            f"Reached max_records ceiling ({max_records})",
-                        )
-                        break
-                    idx, url = pending_items.pop(0)
-                    task = _spawn_url_task(idx, url, remaining_records)
-                    active_tasks[task] = (idx, url)
-                if not active_tasks:
-                    break
-                done, pending = await asyncio.wait(
-                    active_tasks.keys(),
-                    return_when=asyncio.FIRST_COMPLETED,
-                    timeout=url_timeout_seconds + 2.0,
-                )
-                if not done:
-                    await _cancel_tasks(list(pending))
-                    raise asyncio.TimeoutError(
-                        f"Per-URL watchdog exceeded while waiting for URL task completion ({int(url_timeout_seconds)}s)"
-                    )
-                for task in done:
-                    idx, url = active_tasks.pop(task)
-                    try:
-                        records_count, verdict, url_metrics = await task
-                    except (
-                        RuntimeError,
-                        ValueError,
-                        TypeError,
-                        OSError,
-                        asyncio.TimeoutError,
-                    ):
-                        for active_task in active_tasks:
-                            active_task.cancel()
-                        if active_tasks:
-                            await asyncio.gather(
-                                *active_tasks.keys(), return_exceptions=True
-                            )
-                        raise
-                    await _apply_url_result(
-                        idx, url, records_count, verdict, url_metrics
-                    )
-                    if persisted_record_count >= max_records:
-                        pending_items.clear()
-                        await _log(
-                            session,
-                            run.id,
-                            "info",
-                            f"Stopped after reaching max_records={max_records}",
-                        )
-                        break
-        else:
-            for idx, url in pending_items:
-                await _run_control_checkpoint(session, run)
-                remaining_records = max(max_records - persisted_record_count, 0)
-                if remaining_records <= 0:
-                    await _log(
-                        session,
-                        run.id,
-                        "info",
-                        f"Reached max_records ceiling ({max_records})",
-                    )
-                    break
-
+            records, verdict, url_metrics = await asyncio.wait_for(
+                _process_single_url(
+                    session=session,
+                    run=run,
+                    url=url,
+                    proxy_list=proxy_list,
+                    traversal_mode=traversal_mode,
+                    max_pages=max_pages,
+                    max_scrolls=max_scrolls,
+                    max_records=remaining_records,
+                    sleep_ms=sleep_ms,
+                    checkpoint=_noop_checkpoint,
+                ),
+                timeout=url_timeout_seconds,
+            )
+            await _apply_url_result(idx, url, len(records), verdict, url_metrics)
+            if persisted_record_count >= max_records:
                 await _log(
                     session,
                     run.id,
                     "info",
-                    f"Processing URL {idx + 1}/{total_urls}: {url}",
+                    f"Stopped after reaching max_records={max_records}",
                 )
-                await _set_stage(
-                    session,
-                    run,
-                    STAGE_FETCH,
-                    current_url=url,
-                    current_url_index=idx + 1,
-                    total_urls=total_urls,
-                )
+                break
 
-                records, verdict, url_metrics = await asyncio.wait_for(
-                    _process_single_url(
-                        session=session,
-                        run=run,
-                        url=url,
-                        proxy_list=proxy_list,
-                        traversal_mode=traversal_mode,
-                        max_pages=max_pages,
-                        max_scrolls=max_scrolls,
-                        max_records=remaining_records,
-                        sleep_ms=sleep_ms,
-                        checkpoint=lambda: _run_control_checkpoint(session, run),
-                    ),
-                    timeout=url_timeout_seconds,
-                )
-                await _apply_url_result(idx, url, len(records), verdict, url_metrics)
-                if persisted_record_count >= max_records:
-                    await _log(
-                        session,
-                        run.id,
-                        "info",
-                        f"Stopped after reaching max_records={max_records}",
-                    )
-                    break
-
-                if sleep_ms > 0 and idx < total_urls - 1:
-                    await _sleep_with_checkpoint(
-                        sleep_ms, lambda: _run_control_checkpoint(session, run)
-                    )
+            if sleep_ms > 0 and idx < total_urls - 1:
+                await _sleep_with_checkpoint(sleep_ms, _noop_checkpoint)
 
         aggregate_verdict = _aggregate_verdict(url_verdicts)
         async def _finalize_mutation(
@@ -565,6 +361,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         run = await session.get(CrawlRun, run_id)
         if run is None:
             return
+        error_message = str(exc)
         async def _proxy_exhausted_mutation(
             retry_session: AsyncSession, retry_run: CrawlRun
         ) -> None:
@@ -572,26 +369,15 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             retry_run.result_summary = _merge_run_summary_patch(
                 retry_run.result_summary,
                 {
-                    "error": str(exc),
+                    "error": error_message,
                     "extraction_verdict": "proxy_exhausted",
                 },
             )
-            await _log(retry_session, retry_run.id, "error", str(exc))
+            await _log(retry_session, retry_run.id, "error", error_message)
 
         await _retry_run_update(session, run.id, _proxy_exhausted_mutation)
-    except asyncio.TimeoutError:
-        timeout_message = (
-            "URL processing timed out while watchdog was active"
-            if watchdog_active
-            else "URL processing timed out"
-        )
-        await _mark_run_failed(
-            session,
-            run_id,
-            timeout_message,
-        )
-    except RunControlSignal as signal:
-        await _handle_run_control_signal(session, run, signal.request)
+    except TimeoutError:
+        await _mark_run_failed(session, run_id, "URL processing timed out")
     except (
         RuntimeError,
         ValueError,
@@ -605,54 +391,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         await _cleanup_run_lock(run_id)
 
 
-async def _run_single_url_in_isolated_session(
-    *,
-    run_id: int,
-    url: str,
-    idx: int,
-    total_urls: int,
-    proxy_list: list[str],
-    traversal_mode: str | None,
-    max_pages: int,
-    max_scrolls: int,
-    max_records: int,
-    sleep_ms: int,
-    timeout_seconds: float,
-) -> tuple[int, str, dict]:
-    async with SessionLocal() as worker_session:
-        worker_run = await worker_session.get(CrawlRun, run_id)
-        if worker_run is None:
-            raise ValueError(f"Run {run_id} no longer exists")
-
-        async def _worker_checkpoint() -> None:
-            await _run_control_checkpoint(worker_session, worker_run)
-
-        await _log(
-            worker_session,
-            run_id,
-            "info",
-            f"Processing URL {idx + 1}/{total_urls}: {url}",
-        )
-        records, verdict, url_metrics = await asyncio.wait_for(
-            _process_single_url(
-                session=worker_session,
-                run=worker_run,
-                url=url,
-                proxy_list=proxy_list,
-                traversal_mode=traversal_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                max_records=max_records,
-                sleep_ms=sleep_ms,
-                checkpoint=_worker_checkpoint,
-                update_run_state=False,
-            ),
-            timeout=timeout_seconds,
-        )
-        await worker_session.commit()
-        return len(records), verdict, url_metrics
-
-
 async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
     remaining_ms = max(0, int(sleep_ms or 0))
     while remaining_ms > 0:
@@ -661,39 +399,6 @@ async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
         await asyncio.sleep(current_ms / 1000)
         remaining_ms -= current_ms
     await checkpoint()
-
-
-async def _handle_run_control_signal(
-    session: AsyncSession,
-    run: CrawlRun,
-    request: str,
-) -> None:
-    await session.refresh(run)
-    if request == CONTROL_REQUEST_PAUSE:
-        async def _pause_mutation(
-            retry_session: AsyncSession, retry_run: CrawlRun
-        ) -> None:
-            if normalize_status(retry_run.status) != CrawlStatus.PAUSED:
-                update_run_status(retry_run, CrawlStatus.PAUSED)
-            set_control_request(retry_run, None)
-
-        await _retry_run_update(session, run.id, _pause_mutation)
-        await _log_with_retry(
-            session, run.id, "warning", "Run paused during in-flight acquisition wait"
-        )
-        return
-    async def _killed_mutation(
-        retry_session: AsyncSession, retry_run: CrawlRun
-    ) -> None:
-        if normalize_status(retry_run.status) != CrawlStatus.KILLED:
-            update_run_status(retry_run, CrawlStatus.KILLED)
-        set_control_request(retry_run, None)
-
-    await _retry_run_update(session, run.id, _killed_mutation)
-    await _log_with_retry(
-        session, run.id, "warning", "Run killed during in-flight acquisition wait"
-    )
-
 
 async def _count_run_records(session: AsyncSession, run_id: int) -> int:
     return int(

@@ -24,6 +24,47 @@ Listing extraction avoids the common “detail-page fallback on listing page” 
 Production readiness:
 This backend is not ready for high-confidence production crawling at scale without a remediation pass. It has solid infrastructure instincts, but the shared extraction policy is not coherent enough yet: source priority, validation, traversal, and site-specific behavior are split across too many layers, and a few current choices actively bias the system toward wrong-but-non-null values rather than null-and-retry behavior.
 
+2026-04-10 RECONCILIATION STATUS
+This document is now a historical triage source. The authoritative live backlog is [docs/backend-audit-remediation-tracker.md](docs/backend-audit-remediation-tracker.md).
+
+Backlog items:
+| Legacy ID | Disposition |
+|---|---|
+| TODO-001 | closed 2026-04-10 via `AUD-001` |
+| TODO-002 | closed 2026-04-10 via `AUD-002` |
+| TODO-003 | open -> `AUD-003` |
+| TODO-004 | open -> `AUD-004` |
+| TODO-005 | closed 2026-04-10 via `AUD-005` |
+| TODO-006 | closed 2026-04-10 via `AUD-007` |
+| TODO-007 | closed 2026-04-10 via `AUD-008` |
+| TODO-008 | closed 2026-04-10 via `AUD-006` |
+| TODO-009 | closed 2026-04-10 via `AUD-011` |
+| TODO-010 | closed 2026-04-10 via `AUD-014` |
+| TODO-011 | closed 2026-04-10 via `AUD-009` |
+| TODO-012 | open -> `AUD-018` |
+| TODO-013 | open -> `AUD-019` |
+| TODO-014 | closed 2026-04-10 via `AUD-013` |
+| TODO-015 | closed 2026-04-10 via `AUD-020` |
+
+Reliability / security follow-ups:
+| Legacy ID | Disposition |
+|---|---|
+| TODO-REL-001 | open -> `AUD-025` |
+| TODO-REL-002 | open -> `AUD-025` |
+| TODO-REL-003 | closed 2026-04-10 via `AUD-016` |
+| TODO-REL-004 | open -> `AUD-025` |
+| TODO-REL-005 | open -> `AUD-025` |
+| TODO-REL-006 | open -> `AUD-025` |
+| TODO-REL-007 | open -> `AUD-025` |
+| TODO-REL-008 | open -> `AUD-025` |
+| TODO-REL-009 | open -> `AUD-025` |
+| TODO-REL-010 | open -> `AUD-025` |
+| TODO-SEC-001 | closed 2026-04-10 via `AUD-015` |
+| TODO-SEC-002 | closed 2026-04-10 via `AUD-015` |
+| TODO-SEC-003 | closed 2026-04-10 via `AUD-014` |
+| TODO-SEC-004 | open -> `AUD-037` |
+| TODO-SEC-005 | closed 2026-04-10 via `AUD-007` |
+
 2) ARCHITECTURE FINDINGS (Ranked by Severity)
 
 Severity: Critical

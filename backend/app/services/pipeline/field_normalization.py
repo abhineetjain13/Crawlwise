@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
 from app.services.pipeline_config import EMPTY_SENTINEL_VALUES
+
 from .utils import _clean_page_text, _compact_dict, _normalize_committed_field_name
 
 
@@ -47,11 +48,7 @@ def _normalize_record_fields(
         normalized[normalized_key] = validated_value
     
     normalized = _compact_dict(normalized)
-    
-    # Remove currency for job listings
-    if normalized_surface == "job" or normalized_surface.startswith("job_"):
-        normalized.pop("currency", None)
-    
+
     # Extract currency hint for non-job listings
     if (
         normalized_surface != "job"
@@ -101,14 +98,18 @@ def _public_record_fields(record: dict) -> dict:
 
 
 def _merge_record_fields(primary: dict, secondary: dict) -> dict:
-    """Merge two records, preferring primary but taking better secondary values."""
+    """Merge two records, preferring primary but taking better secondary values.
 
+    Uses FieldDecisionEngine for sanitisation-aware merge preference.
+    """
+    from app.services.extract.field_decision import FieldDecisionEngine
+
+    engine = FieldDecisionEngine()
     merged = dict(primary)
     for key, value in secondary.items():
         if key.startswith("_"):
             continue
-        if _should_prefer_secondary_field(key, merged.get(key), value):
-            merged[key] = value
+        merged[key] = engine.decide_merge_preference(key, merged.get(key), value)
     return merged
 
 

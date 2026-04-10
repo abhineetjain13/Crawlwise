@@ -2,34 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
-import re
 import time
-from html import unescape
-from urllib.parse import urljoin, urlparse
-import regex as regex_lib
-from bs4 import BeautifulSoup, NavigableString, Tag
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import SessionLocal
-from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
+from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.blocked_detector import detect_blocked_page
-from app.services.db_utils import with_retry
-from app.services.shared_acquisition import (
-    acquire,
-    run_adapter,
-    try_blocked_adapter_recovery,
-)
-from app.services.crawl_state import (
-    CrawlStatus,
-    TERMINAL_STATUSES,
-    normalize_status,
-    update_run_status,
-)
-from app.services.domain_utils import normalize_domain
 from app.services.crawl_events import (
     append_log_event,
     persist_run_summary_patch,
@@ -37,33 +16,37 @@ from app.services.crawl_events import (
 )
 from app.services.crawl_metrics import (
     build_acquisition_profile as _build_acquisition_profile,
+)
+from app.services.crawl_metrics import (
     build_url_metrics as _build_url_metrics,
+)
+from app.services.crawl_metrics import (
     finalize_url_metrics as _finalize_url_metrics,
 )
+from app.services.crawl_state import (
+    TERMINAL_STATUSES,
+    CrawlStatus,
+    normalize_status,
+    update_run_status,
+)
+from app.services.domain_utils import normalize_domain
+from app.services.exceptions import PipelineWriteError
 from app.services.extract.json_extractor import (
     extract_json_detail,
     extract_json_listing,
 )
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.listing_identity import strong_identity_key
-from app.services.extract.listing_quality import assess_listing_record_quality, listing_set_quality
+from app.services.extract.listing_quality import listing_set_quality
 from app.services.extract.service import (
-    candidate_source_rank,
     coerce_field_candidate_value,
     extract_candidates,
-    finalize_candidate_row,
 )
-from app.services.extract.source_parsers import parse_page_sources
 from app.services.knowledge_base.store import (
     get_canonical_fields,
     get_selector_defaults,
 )
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates
-from app.services.normalizers import (
-    extract_currency_hint,
-    normalize_value,
-    validate_value,
-)
 from app.services.pipeline_config import AUTO_DETECT_SURFACE
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.runtime_metrics import incr
@@ -76,75 +59,60 @@ from app.services.schema_service import (
     resolve_schema,
     schema_trace_payload,
 )
-from app.services.xpath_service import validate_xpath_candidate, validate_xpath_syntax
+from app.services.shared_acquisition import (
+    acquire,
+    run_adapter,
+    try_blocked_adapter_recovery,
+)
+from app.services.xpath_service import validate_xpath_candidate
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Import from sibling modules in pipeline package
-from .utils import (
-    _elapsed_ms,
-    _compact_dict,
-    _clean_page_text,
-    _first_non_empty_text,
-    _clean_candidate_text,
-)
 from .field_normalization import (
-    _normalize_review_value,
-    _review_values_equal,
-    _normalize_record_fields,
-    _raw_record_payload,
-    _public_record_fields,
     _merge_record_fields,
-    _should_prefer_secondary_field,
+    _normalize_record_fields,
+    _public_record_fields,
+    _raw_record_payload,
     _requested_field_coverage,
-)
-from .verdict import (
-    VERDICT_SUCCESS,
-    VERDICT_PARTIAL,
-    VERDICT_BLOCKED,
-    VERDICT_SCHEMA_MISS,
-    VERDICT_LISTING_FAILED,
-    VERDICT_EMPTY,
-    VERDICT_ERROR,
-    _compute_verdict,
-    _passes_core_verdict,
-    _aggregate_verdict,
-    _review_bucket_fingerprint,
 )
 from .listing_helpers import (
     _listing_acquisition_blocked,
     _looks_like_loading_listing_shell,
     _sanitize_listing_record_fields,
-    _summarize_job_listing_description,
-)
-from .rendering import (
-    _render_fallback_node_markdown,
-    _render_fallback_card_group,
-    _find_fallback_card_group,
-    _should_skip_fallback_node,
-    _normalize_target_url,
-    _render_manifest_tables_markdown,
 )
 from .llm_integration import (
     _apply_llm_suggestions_to_candidate_values,
     _build_llm_candidate_evidence,
     _build_llm_discovered_sources,
-    _snapshot_for_llm,
     _normalize_llm_cleanup_review,
-    _split_llm_cleanup_payload,
-    _normalize_llm_review_bucket_item,
     _select_llm_review_candidates,
-)
-from .trace_builders import (
-    _build_acquisition_trace,
-    _build_manifest_trace,
-    _build_review_bucket,
-    _review_bucket_source_for_field,
-    _build_field_discovery_summary,
+    _split_llm_cleanup_payload,
 )
 from .review_helpers import (
     _merge_review_bucket_entries,
-    _should_surface_discovered_field,
+)
+from .trace_builders import (
+    _build_acquisition_trace,
+    _build_field_discovery_summary,
+    _build_manifest_trace,
+    _build_review_bucket,
 )
 
+# Import from sibling modules in pipeline package
+from .utils import (
+    _clean_candidate_text,
+    _compact_dict,
+    _elapsed_ms,
+)
+from .verdict import (
+    VERDICT_BLOCKED,
+    VERDICT_ERROR,
+    VERDICT_LISTING_FAILED,
+    VERDICT_PARTIAL,
+    VERDICT_SCHEMA_MISS,
+    VERDICT_SUCCESS,
+    _compute_verdict,
+)
 
 logger = logging.getLogger(__name__)
 HTTP_URL_PREFIXES = ("http://", "https://")
@@ -152,29 +120,28 @@ _TRAVERSAL_MODES = {"auto", "scroll", "load_more", "paginate"}
 STAGE_FETCH = "FETCH"
 STAGE_ANALYZE = "ANALYZE"
 STAGE_SAVE = "SAVE"
+_ERROR_PAGE_TITLE_TOKENS = frozenset(
+    {
+        "account is locked",
+        "already applied",
+        "access denied",
+        "session expired",
+        "sign in to continue",
+        "you must be logged in",
+        "page not found",
+        "404",
+        "403",
+    }
+)
 # Batch runtime helpers now live directly in _batch_runtime.
 
-def _reclassify_surface_if_job(surface: str, acq: AcquisitionResult) -> str:
-    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
-    effective_surface = str(diagnostics.get("surface_effective") or "").strip().lower()
-    if effective_surface in {
-        "job_listing",
-        "job_detail",
-        "ecommerce_listing",
-        "ecommerce_detail",
-    }:
-        return effective_surface
-    normalized_surface = str(surface or "").strip().lower()
-    platform_family = str(
-        diagnostics.get("platform_family")
-        or diagnostics.get("curl_platform_family")
-        or ""
-    ).strip().lower()
-    if normalized_surface.endswith("listing") and "job" in platform_family:
-        return "job_listing"
-    if normalized_surface.endswith("detail") and "job" in platform_family:
-        return "job_detail"
-    return surface
+
+def _is_error_page_record(record: dict) -> bool:
+    """Return True if the record appears to be an error/blocked page, not real content."""
+    title = str(record.get("title") or "").lower()
+    description = str(record.get("description") or "").lower()
+    combined = title + " " + description
+    return any(token in combined for token in _ERROR_PAGE_TITLE_TOKENS)
 
 
 async def _process_single_url(
@@ -212,7 +179,6 @@ async def _process_single_url(
         await _set_stage(session, run, STAGE_FETCH)
     if persist_logs:
         await _log(session, run.id, "info", f"[FETCH] Fetching {url}")
-    await _sqlite_live_checkpoint(session, run)
     if prefetched_acquisition is None:
         acquisition_started_at = time.perf_counter()
         acq = await acquire(
@@ -255,8 +221,7 @@ async def _process_single_url(
     requested_surface = surface
     url_metrics["requested_surface"] = requested_surface
     if AUTO_DETECT_SURFACE:
-        surface = _resolve_listing_surface(surface=surface, url=url, html=acq.html, acq=acq)
-        surface = _reclassify_surface_if_job(surface, acq)
+        surface = _resolve_listing_surface(surface=surface, acq=acq)
         if surface != requested_surface:
             url_metrics["effective_surface"] = surface
             url_metrics["surface_remapped"] = True
@@ -410,7 +375,7 @@ async def _process_single_url(
             "info",
             f"[ANALYZE] Enumerating sources (method={acq.method})",
         )
-    await _sqlite_live_checkpoint(session, run)
+
 
     # Run platform adapter (rank 1 source)
     adapter_result = await run_adapter(url, html, surface)
@@ -421,7 +386,7 @@ async def _process_single_url(
         await _set_stage(session, run, STAGE_ANALYZE)
     if persist_logs:
         await _log(session, run.id, "info", "[ANALYZE] Extracting candidates")
-    await _sqlite_live_checkpoint(session, run)
+
 
     if is_listing:
         extraction_started_at = time.perf_counter()
@@ -449,7 +414,7 @@ async def _process_single_url(
                     "info",
                     "[ANALYZE] Listing extraction was weak/empty on curl_cffi — retrying with browser rendering",
                 )
-            await _sqlite_live_checkpoint(session, run)
+        
             browser_retry_started_at = time.perf_counter()
             browser_profile = dict(acquisition_profile or {})
             browser_profile["prefer_browser"] = True
@@ -516,12 +481,7 @@ async def _process_single_url(
 
 
 def _supports_parallel_batch_sessions(session: AsyncSession) -> bool:
-    bind = session.bind
-    if bind is None:
-        return False
-    if bind.dialect.name == "sqlite":
-        return False
-    return True
+    return session.bind is not None
 
 
 async def _process_json_response(
@@ -543,12 +503,16 @@ async def _process_json_response(
             acq.json_data,
             url,
             max_records,
+            surface=run.surface,
+            requested_fields=requested_fields,
         )
     else:
         extracted = await asyncio.to_thread(
             extract_json_detail,
             acq.json_data,
             url,
+            surface=run.surface,
+            requested_fields=requested_fields,
         )
 
     if not extracted:
@@ -619,6 +583,14 @@ async def _process_json_response(
                 allowed_fields=allowed_fields,
                 surface=run.surface,
             )
+            if not normalized:
+                continue
+            if _is_error_page_record(normalized):
+                logger.debug(
+                    "Skipping error-page record: title=%r",
+                    normalized.get("title"),
+                )
+                continue
             raw_data = _raw_record_payload(raw_record)
             requested_coverage = _requested_field_coverage(normalized, requested_fields)
             review_bucket = _build_review_bucket(
@@ -869,6 +841,51 @@ def _listing_quality_flags(
     return flags
 
 
+def _listing_fallback_identity_key(record: dict[str, object]) -> str:
+    return "|".join(
+        [
+            str(record.get("title") or "").strip().lower(),
+            str(record.get("url") or record.get("apply_url") or "").strip().lower(),
+        ]
+    ).strip("|")
+
+
+def _dedupe_listing_persistence_candidates(
+    candidates: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    deduped: list[dict[str, object]] = []
+    stats = {"duplicate_drops": 0}
+    seen_identity_keys: set[str] = set()
+    seen_fallback_keys: set[str] = set()
+
+    for candidate in candidates:
+        identity_key = str(candidate.get("identity_key") or "").strip()
+        fallback_key = str(candidate.get("fallback_key") or "").strip()
+        collision_key = ""
+
+        if identity_key and identity_key in seen_identity_keys:
+            collision_key = identity_key
+        elif fallback_key and fallback_key in seen_fallback_keys:
+            collision_key = fallback_key
+
+        if collision_key:
+            stats["duplicate_drops"] += 1
+            incr("listing_duplicate_drops_total")
+            logger.debug(
+                "Dropping duplicate listing record before persistence for identity key %s",
+                collision_key,
+            )
+            continue
+
+        if identity_key:
+            seen_identity_keys.add(identity_key)
+        if fallback_key:
+            seen_fallback_keys.add(fallback_key)
+        deduped.append(candidate)
+
+    return deduped, stats
+
+
 async def _save_listing_records(
     *,
     session: AsyncSession,
@@ -885,67 +902,70 @@ async def _save_listing_records(
     adapter_name: str | None = None,
     surface_requested: str | None = None,
 ) -> tuple[list[dict], dict[str, int]]:
-    saved: list[dict] = []
-    stats = {"duplicate_drops": 0}
-    seen_identity_keys: set[str] = set()
-    seen_fallback_keys: set[str] = set()
-    for raw_record in records:
-        if len(saved) >= max_records:
-            break
-        record_source_label = (
-            str(raw_record.get("_source") or source_label).strip() or source_label
-        )
-        public_record = _sanitize_listing_record_fields(
-            _public_record_fields(raw_record),
-            surface=surface,
-            page_base_url=url,
-        )
-        normalized = _normalize_record_fields(public_record, surface=surface)
-        if not normalized:
-            continue
-        identity_key = strong_identity_key(normalized)
-        fallback_key = ""
-        if not identity_key:
-            fallback_key = "|".join(
-                [
-                    str(normalized.get("title") or "").strip().lower(),
-                    str(normalized.get("url") or normalized.get("apply_url") or "").strip().lower(),
-                ]
-            ).strip("|")
-        if identity_key and identity_key in seen_identity_keys:
-            stats["duplicate_drops"] += 1
-            incr("listing_duplicate_drops_total")
-            continue
-        if fallback_key and fallback_key in seen_fallback_keys:
-            stats["duplicate_drops"] += 1
-            incr("listing_duplicate_drops_total")
-            continue
-        if identity_key:
-            seen_identity_keys.add(identity_key)
-        if fallback_key:
-            seen_fallback_keys.add(fallback_key)
-        db_record = CrawlRecord(
-            run_id=run.id,
-            source_url=raw_record.get("source_url") or raw_record.get("url", url),
-            data=normalized,
-            raw_data=_raw_record_payload(raw_record),
-            discovered_data={},
-            source_trace=_compact_dict(
+    try:
+        saved: list[dict] = []
+        persistence_candidates: list[dict[str, object]] = []
+        for raw_record in records:
+            record_source_label = (
+                str(raw_record.get("_source") or source_label).strip() or source_label
+            )
+            public_record = _sanitize_listing_record_fields(
+                _public_record_fields(raw_record),
+                surface=surface,
+                page_base_url=url,
+            )
+            normalized = _normalize_record_fields(public_record, surface=surface)
+            if not normalized:
+                continue
+            identity_key = strong_identity_key(normalized)
+            fallback_key = (
+                _listing_fallback_identity_key(normalized) if not identity_key else ""
+            )
+            persistence_candidates.append(
                 {
-                    "type": source_type,
-                    **acquisition_trace,
-                    "adapter": adapter_name,
-                    "source": record_source_label,
-                    "surface_used": surface,
-                    "surface_requested": surface_requested,
-                    "manifest_trace": manifest_trace or None,
+                    "source_url": raw_record.get("source_url") or raw_record.get("url", url),
+                    "data": normalized,
+                    "raw_data": _raw_record_payload(raw_record),
+                    "source_trace": _compact_dict(
+                        {
+                            "type": source_type,
+                            **acquisition_trace,
+                            "adapter": adapter_name,
+                            "source": record_source_label,
+                            "surface_used": surface,
+                            "surface_requested": surface_requested,
+                            "manifest_trace": manifest_trace or None,
+                        }
+                    ),
+                    "identity_key": identity_key,
+                    "fallback_key": fallback_key,
                 }
-            ),
-            raw_html_path=raw_html_path,
+            )
+
+        deduped_candidates, stats = _dedupe_listing_persistence_candidates(
+            persistence_candidates
         )
-        session.add(db_record)
-        saved.append(normalized)
-    return saved, stats
+        for candidate in deduped_candidates:
+            if len(saved) >= max_records:
+                break
+            db_record = CrawlRecord(
+                run_id=run.id,
+                source_url=str(candidate["source_url"]),
+                data=dict(candidate["data"]),
+                raw_data=dict(candidate["raw_data"]),
+                discovered_data={},
+                source_trace=dict(candidate["source_trace"]),
+                raw_html_path=raw_html_path,
+            )
+            session.add(db_record)
+            saved.append(dict(candidate["data"]))
+        return saved, stats
+    except PipelineWriteError:
+        raise
+    except Exception as exc:
+        raise PipelineWriteError(
+            f"Failed to persist listing records for run {run.id}"
+        ) from exc
 
 
 async def _extract_detail(
@@ -1079,6 +1099,14 @@ async def _extract_detail(
                 allowed_fields=persisted_field_names,
                 surface=surface,
             )
+            if not normalized:
+                continue
+            if _is_error_page_record(normalized):
+                logger.debug(
+                    "Skipping error-page record: title=%r",
+                    normalized.get("title"),
+                )
+                continue
             raw_data = _raw_record_payload(merged_record)
             requested_coverage = _requested_field_coverage(
                 normalized, additional_fields
@@ -1125,6 +1153,12 @@ async def _extract_detail(
             allowed_fields=persisted_field_names,
             surface=surface,
         )
+        if _is_error_page_record(normalized):
+            logger.debug(
+                "Skipping error-page record: title=%r",
+                normalized.get("title"),
+            )
+            normalized = {}
         raw_data = candidate_values
         requested_coverage = _requested_field_coverage(normalized, additional_fields)
         review_bucket = _merge_review_bucket_entries(
@@ -1141,27 +1175,28 @@ async def _extract_detail(
                 "requested_field_coverage": requested_coverage or None,
             }
         )
-        db_record = CrawlRecord(
-            run_id=run.id,
-            source_url=url,
-            data=normalized,
-            raw_data=raw_data,
-            discovered_data=discovered_data,
-            source_trace=_compact_dict(
-                {
-                    **source_trace,
-                    "type": "detail",
-                    "schema_resolution": schema_trace_payload(resolved_schema),
-                    "reconciliation": reconciliation or None,
-                    "requested_fields": additional_fields or None,
-                    "requested_field_coverage": requested_coverage or None,
-                    "manifest_trace": detail_manifest_trace or None,
-                }
-            ),
-            raw_html_path=acq.artifact_path,
-        )
-        session.add(db_record)
-        saved.append(normalized)
+        if normalized:
+            db_record = CrawlRecord(
+                run_id=run.id,
+                source_url=url,
+                data=normalized,
+                raw_data=raw_data,
+                discovered_data=discovered_data,
+                source_trace=_compact_dict(
+                    {
+                        **source_trace,
+                        "type": "detail",
+                        "schema_resolution": schema_trace_payload(resolved_schema),
+                        "reconciliation": reconciliation or None,
+                        "requested_fields": additional_fields or None,
+                        "requested_field_coverage": requested_coverage or None,
+                        "manifest_trace": detail_manifest_trace or None,
+                    }
+                ),
+                raw_html_path=acq.artifact_path,
+            )
+            session.add(db_record)
+            saved.append(normalized)
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
@@ -1218,19 +1253,14 @@ async def _extract_detail(
 
 
 async def _log(session: AsyncSession, run_id: int, level: str, message: str) -> None:
-    normalized_level, formatted_message, should_persist = prepare_log_event(
+    normalized_level, formatted_message, should_persist = await prepare_log_event(
         run_id, level, message
     )
     if not should_persist:
         return
-    if _use_isolated_event_writes(session):
-        await append_log_event(
-            run_id, normalized_level, formatted_message, preformatted=True
-        )
-    else:
-        session.add(
-            CrawlLog(run_id=run_id, level=normalized_level, message=formatted_message)
-        )
+    await append_log_event(
+        run_id, normalized_level, formatted_message, preformatted=True
+    )
 
 
 async def _set_stage(
@@ -1242,6 +1272,7 @@ async def _set_stage(
     current_url_index: int | None = None,
     total_urls: int | None = None,
 ) -> None:
+    run_id = int(run.id)
     summary_patch = {
         "current_stage": stage,
         **({"current_url": current_url} if current_url is not None else {}),
@@ -1252,44 +1283,7 @@ async def _set_stage(
         ),
         **({"total_urls": total_urls} if total_urls is not None else {}),
     }
-    if _use_isolated_event_writes(session):
-        await persist_run_summary_patch(run_id=run.id, summary_patch=summary_patch)
-        return
-
-    async def _operation(retry_session: AsyncSession) -> None:
-        retry_run = await retry_session.get(CrawlRun, run.id)
-        if retry_run is None:
-            return
-        result_summary = dict(retry_run.result_summary or {})
-        if all(result_summary.get(key) == value for key, value in summary_patch.items()):
-            return
-        result_summary.update(summary_patch)
-        retry_run.result_summary = result_summary
-
-    await with_retry(session, _operation)
-
-
-def _use_isolated_event_writes(session: AsyncSession) -> bool:
-    bind = session.bind
-    if bind is None:
-        return False
-    # SQLite must keep run/log writes in the same session transaction.
-    # Separate writer sessions can block against an in-flight stage flush
-    # and make FETCH appear stuck at "Processing URL ...".
-    return bind.dialect.name != "sqlite"
-
-
-async def _sqlite_live_checkpoint(session: AsyncSession, run: CrawlRun) -> None:
-    bind = session.bind
-    if bind is None or bind.dialect.name != "sqlite":
-        return
-    # Persist stage/log snapshots so polling UI can render live progress.
-    # Use unit-of-work retry semantics to avoid commit-only retry footguns.
-    async def _commit_only_operation(retry_session: AsyncSession) -> None:
-        return None
-
-    await with_retry(session, _commit_only_operation)
-    await session.refresh(run)
+    await persist_run_summary_patch(run_id=run_id, summary_patch=summary_patch)
 
 
 async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -> None:
@@ -1324,20 +1318,18 @@ async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -
 async def _persist_failure_state(
     session: AsyncSession, run_id: int, error_msg: str
 ) -> None:
-    """Write failure state with retry-safe full mutation retries."""
-
-    async def _mutation(retry_session: AsyncSession) -> None:
-        run = await retry_session.get(CrawlRun, run_id)
-        if run is None:
-            return
-        result_summary = dict(run.result_summary or {})
-        result_summary["error"] = error_msg
-        result_summary["progress"] = result_summary.get("progress", 0)
-        result_summary["extraction_verdict"] = VERDICT_ERROR
-        if normalize_status(run.status) not in TERMINAL_STATUSES:
-            update_run_status(run, CrawlStatus.FAILED)
-        run.result_summary = result_summary
-    await with_retry(session, _mutation)
+    """Write failure state."""
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return
+    result_summary = dict(run.result_summary or {})
+    result_summary["error"] = error_msg
+    result_summary["progress"] = result_summary.get("progress", 0)
+    result_summary["extraction_verdict"] = VERDICT_ERROR
+    if normalize_status(run.status) not in TERMINAL_STATUSES:
+        update_run_status(run, CrawlStatus.FAILED)
+    run.result_summary = result_summary
+    await session.commit()
 
 
 def _reconcile_detail_candidate_values(
@@ -1346,6 +1338,9 @@ def _reconcile_detail_candidate_values(
     allowed_fields: set[str],
     url: str,
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    from app.services.extract.field_decision import FieldDecisionEngine
+
+    engine = FieldDecisionEngine(base_url=url)
     reconciled: dict[str, object] = {}
     reconciliation: dict[str, dict[str, object]] = {}
 
@@ -1354,52 +1349,23 @@ def _reconcile_detail_candidate_values(
         if not rows:
             continue
 
-        accepted_rows: list[dict] = []
-        rejected_rows: list[dict[str, object]] = []
-        for row in rows:
-            original_value = row.get("value")
-            normalized_value, rejection_reason = finalize_candidate_row(
-                field_name,
-                row,
-                base_url=url,
-            )
-            if normalized_value in (None, "", [], {}):
-                rejected_rows.append(
-                    {
-                        "value": original_value,
-                        "reason": rejection_reason or "rejected",
-                        "source": row.get("source"),
-                    }
-                )
-                continue
-            accepted_rows.append({**row, "value": normalized_value})
+        decision = engine.decide_from_rows(field_name, rows)
 
-        if not accepted_rows:
-            if rejected_rows:
+        if not decision.accepted:
+            if decision.rejected_rows:
                 reconciliation[field_name] = {
                     "status": "rejected",
-                    "rejected": rejected_rows[:6],
+                    "rejected": decision.rejected_rows[:6],
                 }
             continue
 
-        accepted_row = accepted_rows[0]
-        accepted_rank = candidate_source_rank(field_name, accepted_row.get("source"))
-        for candidate_row in accepted_rows[1:]:
-            candidate_rank = candidate_source_rank(
-                field_name,
-                candidate_row.get("source"),
-            )
-            if candidate_rank > accepted_rank:
-                accepted_row = candidate_row
-                accepted_rank = candidate_rank
-
-        reconciled[field_name] = accepted_row["value"]
-        if rejected_rows:
+        reconciled[field_name] = decision.value
+        if decision.rejected_rows:
             reconciliation[field_name] = _compact_dict(
                 {
                     "status": "accepted_with_rejections",
-                    "accepted_source": accepted_row.get("source"),
-                    "rejected": rejected_rows[:6],
+                    "accepted_source": decision.source,
+                    "rejected": decision.rejected_rows[:6],
                 }
             )
 
@@ -1426,11 +1392,8 @@ def _split_detail_output_fields(
 def _resolve_listing_surface(
     *,
     surface: str,
-    url: str,
-    html: str,
     acq: AcquisitionResult,
 ) -> str:
-    _ = url, html
     diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
     effective_surface = str(diagnostics.get("surface_effective") or "").strip().lower()
     if effective_surface in {
@@ -1441,39 +1404,6 @@ def _resolve_listing_surface(
     }:
         return effective_surface
     return surface
-
-
-def _looks_like_job_listing_page(
-    *, url: str, html: str, acq: AcquisitionResult
-) -> bool:
-    _ = url, html, acq
-    # Kept only for compatibility with existing imports/tests.
-    return False
-
-
-def _validate_extraction_contract(contract_rows: list[dict]) -> None:
-    errors: list[str] = []
-    for index, row in enumerate(contract_rows, start=1):
-        field_name = str(row.get("field_name") or "").strip()
-        xpath = str(row.get("xpath") or "").strip()
-        regex = str(row.get("regex") or "").strip()
-        if not field_name:
-            errors.append(f"Row {index}: field_name is required")
-        if xpath:
-            valid_xpath, xpath_error = validate_xpath_syntax(xpath)
-            if not valid_xpath:
-                errors.append(
-                    f"Row {index} ({field_name or 'unnamed'}): invalid XPath ({xpath_error})"
-                )
-        if regex:
-            try:
-                regex_lib.compile(regex)
-            except regex_lib.error as exc:
-                errors.append(
-                    f"Row {index} ({field_name or 'unnamed'}): invalid regex ({exc})"
-                )
-    if errors:
-        raise ValueError("; ".join(errors))
 
 
 async def _collect_detail_llm_suggestions(

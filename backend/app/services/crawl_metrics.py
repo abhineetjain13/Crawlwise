@@ -3,23 +3,6 @@ from __future__ import annotations
 from app.services.acquisition.acquirer import AcquisitionResult
 
 
-def _requested_field_coverage(record: dict, requested_fields: list[str]) -> dict:
-    """Calculate coverage of requested fields in a record."""
-    if not requested_fields:
-        return {}
-    normalized_requested = [field for field in requested_fields if field]
-    found = [
-        field
-        for field in normalized_requested
-        if record.get(field) not in (None, "", [], {})
-    ]
-    return {
-        "requested": len(normalized_requested),
-        "found": len(found),
-        "missing": [field for field in normalized_requested if field not in found],
-    }
-
-
 def build_acquisition_profile(run_settings: dict | None) -> dict[str, object]:
     profile: dict[str, object] = {}
     settings = run_settings if isinstance(run_settings, dict) else {}
@@ -104,6 +87,8 @@ def finalize_url_metrics(
     records: list[dict],
     requested_fields: list[str],
 ) -> dict[str, object]:
+    from app.services.pipeline.field_normalization import _requested_field_coverage
+
     found_counts = [
         int(
             (_requested_field_coverage(record, requested_fields) or {}).get("found", 0)

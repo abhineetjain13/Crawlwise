@@ -7,13 +7,12 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlparse
 
-from bs4 import BeautifulSoup, Tag
-from cachetools import TTLCache
-
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.config.extraction_rules import KNOWN_ATS_PLATFORMS
 from app.services.extract.source_parsers import extract_json_ld
 from app.services.pipeline_config import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS
+from bs4 import BeautifulSoup, Tag
+from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +129,7 @@ def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
 
 
 def _cache_key(url: str, html: str) -> str:
-    return hashlib.sha256(f"{url}\0{html}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{url}\0{html}".encode()).hexdigest()
 
 
 def css_escape(value: str) -> str:

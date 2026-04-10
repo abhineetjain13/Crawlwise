@@ -9,7 +9,6 @@ import re
 from html import unescape
 
 import regex as regex_lib
-
 from app.services.xpath_service import validate_xpath_syntax
 
 HTTP_URL_PREFIXES = ("http://", "https://")

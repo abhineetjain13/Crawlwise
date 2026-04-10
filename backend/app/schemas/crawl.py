@@ -1,8 +1,8 @@
 # Crawl request and response schemas.
 from __future__ import annotations
 
-from datetime import datetime
 import json
+from datetime import datetime
 from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
@@ -38,7 +38,7 @@ class CrawlRunResponse(BaseModel):
     completed_at: datetime | None = None
 
     @model_validator(mode="after")
-    def _sanitize_settings(self) -> "CrawlRunResponse":
+    def _sanitize_settings(self) -> CrawlRunResponse:
         self.settings = _sanitize_crawl_settings(self.settings)
         return self
 
@@ -53,13 +53,13 @@ class CrawlRecordResponse(BaseModel):
     raw_data: dict
     discovered_data: dict
     source_trace: dict
-    review_bucket: list["UnverifiedAttribute"] = Field(default_factory=list)
+    review_bucket: list[UnverifiedAttribute] = Field(default_factory=list)
     provenance_available: bool = False
     raw_html_path: str | None = None
     created_at: datetime
 
     @model_validator(mode="after")
-    def _clean_for_display(self) -> "CrawlRecordResponse":
+    def _clean_for_display(self) -> CrawlRecordResponse:
         """Expose canonical data, a review bucket, and only light trace metadata."""
         self.data = {
             k: v for k, v in self.data.items()
@@ -174,7 +174,7 @@ class CrawlRecordProvenanceResponse(BaseModel):
     created_at: datetime
 
     @model_validator(mode="after")
-    def _expand_provenance(self) -> "CrawlRecordProvenanceResponse":
+    def _expand_provenance(self) -> CrawlRecordProvenanceResponse:
         self.raw_data = self.raw_data if isinstance(self.raw_data, dict) else {}
         self.discovered_data = self.discovered_data if isinstance(self.discovered_data, dict) else {}
         self.source_trace = self.source_trace if isinstance(self.source_trace, dict) else {}

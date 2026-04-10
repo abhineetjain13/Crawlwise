@@ -5,26 +5,9 @@ import asyncio
 import logging
 from typing import Annotated, NoReturn
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    HTTPException,
-    Query,
-    UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
-    File,
-    Form,
-    status,
-)
-from jose import JWTError
-from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.websockets import WebSocketState
-
 from app.core.database import SessionLocal
 from app.core.dependencies import get_current_user, get_db
 from app.core.security import decode_access_token
-from app.models.crawl import CrawlLog
 from app.models.user import User
 from app.schemas.common import LogEntryResponse, PaginatedResponse, PaginationMeta
 from app.schemas.crawl import (
@@ -43,19 +26,33 @@ from app.services.crawl_crud import (
     get_run,
     get_run_logs,
     list_runs,
-    parse_csv_urls,
 )
+from app.services.crawl_utils import parse_csv_urls
 from app.services.crawl_events import (
     serialize_log_event,
-    serialize_run_snapshot,
 )
-from app.services.crawl_state import TERMINAL_STATUSES, normalize_status
-from app.services.db_utils import with_retry
 from app.services.crawl_service import (
+    dispatch_run,
     kill_run,
     pause_run,
     resume_run,
 )
+from app.services.crawl_state import TERMINAL_STATUSES, normalize_status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from jose import JWTError
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.websockets import WebSocketState
 
 router = APIRouter(prefix="/api/crawls", tags=["crawls"])
 
@@ -98,9 +95,7 @@ async def _resolve_websocket_user(websocket: WebSocket) -> User | None:
         return user
 
 
-def _raise_http_from_value_error(
-    *, status_code: int, exc: ValueError
-) -> NoReturn:
+def _raise_http_from_value_error(*, status_code: int, exc: ValueError) -> NoReturn:
     """Translate validation/business ValueError into HTTPException preserving cause."""
     raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
@@ -129,6 +124,7 @@ async def crawls_create(
         data.setdefault("settings", {})["urls"] = payload.urls
     try:
         run = await create_crawl_run(session, user.id, data)
+        run = await dispatch_run(session, run)
     except ValueError as exc:
         _raise_http_from_value_error(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -143,24 +139,22 @@ async def _mark_run_failed_with_retry(
     error_message: str,
     session_factory=SessionLocal,
 ) -> None:
-    """Best-effort failure marking that retries status + summary mutation together."""
+    """Best-effort failure marking."""
     from app.models.crawl import CrawlRun
     from app.services.crawl_state import CrawlStatus, update_run_status
 
     async with session_factory() as error_session:
-        async def _mutation(retry_session: AsyncSession) -> None:
-            failed_run = await retry_session.get(CrawlRun, run_id)
-            if failed_run is None:
-                return
-            if normalize_status(failed_run.status) in TERMINAL_STATUSES:
-                return
-            update_run_status(failed_run, CrawlStatus.FAILED)
-            summary = dict(failed_run.result_summary or {})
-            summary["error"] = str(error_message or "background_crawl_error")
-            summary["extraction_verdict"] = "error"
-            failed_run.result_summary = summary
-
-        await with_retry(error_session, _mutation)
+        failed_run = await error_session.get(CrawlRun, run_id)
+        if failed_run is None:
+            return
+        if normalize_status(failed_run.status) in TERMINAL_STATUSES:
+            return
+        update_run_status(failed_run, CrawlStatus.FAILED)
+        summary = dict(failed_run.result_summary or {})
+        summary["error"] = str(error_message or "background_crawl_error")
+        summary["extraction_verdict"] = "error"
+        failed_run.result_summary = summary
+        await error_session.commit()
 
 
 @router.post(
@@ -208,6 +202,7 @@ async def crawls_create_csv(
     data["settings"]["urls"] = urls
     try:
         run = await create_crawl_run(session, user.id, data)
+        run = await dispatch_run(session, run)
     except ValueError as exc:
         _raise_http_from_value_error(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -423,12 +418,12 @@ async def crawls_logs(
 
 
 @router.websocket("/{run_id}/logs/ws")
-async def crawls_logs_ws(websocket: WebSocket, run_id: int, after_id: int | None = None) -> None:
+async def crawls_logs_ws(
+    websocket: WebSocket, run_id: int, after_id: int | None = None
+) -> None:
     user = await _resolve_websocket_user(websocket)
     if user is None:
-        await _close_websocket_safely(
-            websocket, code=1008, reason="Not authenticated"
-        )
+        await _close_websocket_safely(websocket, code=1008, reason="Not authenticated")
         return
 
     async with SessionLocal() as session:
@@ -446,10 +441,10 @@ async def crawls_logs_ws(websocket: WebSocket, run_id: int, after_id: int | None
             # rather than thrashing the connection pool 2 times a second.
             while True:
                 # Rollback resets the transaction snapshot so we see new rows
-                await session.rollback() 
+                await session.rollback()
                 rows = await get_run_logs(session, run_id, after_id=cursor, limit=500)
                 run = await get_run(session, run_id)
-                
+
                 for row in rows:
                     await websocket.send_json(serialize_log_event(row))
                     cursor = row.id
@@ -461,12 +456,16 @@ async def crawls_logs_ws(websocket: WebSocket, run_id: int, after_id: int | None
                     await websocket.close(code=1000, reason="Run completed")
                     return
                 await asyncio.sleep(0.75)
-                
+
         except WebSocketDisconnect:
             return
         except Exception as exc:
             logger.exception("Run logs websocket stream failed for run %s", run_id)
             try:
-                await websocket.close(code=1011, reason=f"stream_error: {type(exc).__name__}")
+                await websocket.close(
+                    code=1011, reason=f"stream_error: {type(exc).__name__}"
+                )
             except Exception:
-                logger.debug("Failed to close websocket after stream error", exc_info=True)
+                logger.debug(
+                    "Failed to close websocket after stream error", exc_info=True
+                )
