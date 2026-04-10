@@ -22,10 +22,9 @@ from app.services.extract.listing_quality import (
     is_meaningful_structured_listing_record as _assess_meaningful_structured_listing_record,
 )
 from app.services.extract.source_parsers import parse_page_sources
-from app.services.pipeline_config import (
-    CARD_SELECTORS_COMMERCE,
-    CARD_SELECTORS_JOBS,
-    COLLECTION_KEYS,
+from app.services.config.crawl_runtime import MAX_JSON_RECURSION_DEPTH
+from app.services.config.field_mappings import COLLECTION_KEYS
+from app.services.config.listing_heuristics import (
     LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_CARD_TITLE_SELECTORS,
     LISTING_CATEGORY_PATH_MARKERS,
@@ -42,7 +41,8 @@ from app.services.pipeline_config import (
     LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_SWATCH_CONTAINER_SELECTORS,
     LISTING_WEAK_TITLES,
-    MAX_JSON_RECURSION_DEPTH,
+)
+from app.services.config.nested_field_rules import (
     NESTED_CATEGORY_KEYS,
     NESTED_CURRENCY_KEYS,
     NESTED_ORIGINAL_PRICE_KEYS,
@@ -51,10 +51,14 @@ from app.services.pipeline_config import (
     NESTED_URL_KEYS,
     PAGE_URL_CURRENCY_HINTS,
 )
+from app.services.config.selectors import CARD_SELECTORS as _CARD_SELECTORS
 from app.services.runtime_metrics import incr
 from bs4 import BeautifulSoup, Tag
 
 logger = logging.getLogger(__name__)
+
+CARD_SELECTORS_COMMERCE = _CARD_SELECTORS.get("ecommerce", [])
+CARD_SELECTORS_JOBS = _CARD_SELECTORS.get("jobs", [])
 
 _EMPTY_VALUES = (None, "", [], {})
 MIN_VIABLE_RECORDS = 2

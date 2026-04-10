@@ -4,7 +4,7 @@ import json
 import re
 from json import loads as parse_json
 
-from app.services.pipeline_config import HYDRATED_STATE_PATTERNS
+from app.services.config.extraction_rules import HYDRATED_STATE_PATTERNS
 from bs4 import BeautifulSoup, Tag
 
 _DATALAYER_PUSH_RE = re.compile(r"dataLayer\.push\s*\(")

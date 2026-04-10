@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlparse
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.cookie_store import load_cookies_for_http
-from app.services.pipeline_config import (
+from app.services.config.crawl_runtime import (
     HTTP_IMPERSONATION_PROFILES,
     HTTP_MAX_RETRIES,
     HTTP_RETRY_BACKOFF_BASE_MS,

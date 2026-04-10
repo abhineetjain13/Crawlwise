@@ -2,27 +2,21 @@ from __future__ import annotations
 
 from app.core.telemetry import generate_correlation_id, get_correlation_id
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
+from app.models.crawl_settings import CrawlRunSettings
 from app.services.crawl_events import append_log_event
 from app.services.crawl_metadata import (
     load_domain_requested_fields,
     refresh_record_commit_metadata,
 )
-from app.services.crawl_state import ACTIVE_STATUSES, CrawlStatus, normalize_status
+from app.services.crawl_state import ACTIVE_STATUSES, CrawlStatus
+from app.models.crawl_settings import normalize_crawl_settings
 from app.services.crawl_utils import (
     collect_target_urls,
     normalize_committed_field_name,
     normalize_target_url,
-    resolve_traversal_mode,
     validate_extraction_contract,
 )
 from app.services.normalizers import normalize_value
-from app.services.pipeline_config import (
-    DEFAULT_MAX_PAGES,
-    DEFAULT_MAX_SCROLLS,
-    MAX_MAX_PAGES,
-    MIN_MAX_PAGES,
-    MIN_REQUEST_DELAY_MS,
-)
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.url_safety import ensure_public_crawl_targets
 from sqlalchemy import func, select
@@ -38,63 +32,21 @@ def _escape_like_pattern(value: str) -> str:
         .replace("%", "\\%")
         .replace("_", "\\_")
     )
-
-
-def _safe_int(value, default: int, minimum: int, maximum: int | None = None) -> int:
-    try:
-        result = max(minimum, int(value))
-        if maximum is not None:
-            result = min(result, maximum)
-        return result
-    except (ValueError, TypeError):
-        return default
-
-
 async def create_crawl_run(
     session: AsyncSession, user_id: int, payload: dict
 ) -> CrawlRun:
     payload = dict(payload or {})
-    settings = dict(payload.get("settings", {}))
+    settings = normalize_crawl_settings(payload.get("settings"))
+    settings_view = CrawlRunSettings.from_value(settings)
     payload["url"] = normalize_target_url(payload.get("url"))
     payload["urls"] = [
         normalize_target_url(value) for value in (payload.get("urls") or [])
     ]
-    settings["urls"] = [
-        normalize_target_url(value) for value in (settings.get("urls") or [])
-    ]
     urls = [value for value in (payload.get("urls") or []) if value]
     primary_url = payload.get("url") or (urls[0] if urls else "")
     normalized_surface = str(payload.get("surface") or "").strip()
-    await ensure_public_crawl_targets(collect_target_urls(payload, settings))
-    validate_extraction_contract(settings.get("extraction_contract") or [])
-    settings["max_pages"] = _safe_int(
-        settings.get("max_pages", DEFAULT_MAX_PAGES),
-        DEFAULT_MAX_PAGES,
-        MIN_MAX_PAGES,
-        MAX_MAX_PAGES,
-    )
-    settings["max_records"] = _safe_int(settings.get("max_records", 100), 100, 1)
-    settings["max_scrolls"] = _safe_int(
-        settings.get("max_scrolls", DEFAULT_MAX_SCROLLS), DEFAULT_MAX_SCROLLS, 1
-    )
-    settings["sleep_ms"] = _safe_int(
-        settings.get("sleep_ms", MIN_REQUEST_DELAY_MS),
-        MIN_REQUEST_DELAY_MS,
-        MIN_REQUEST_DELAY_MS,
-    )
-    requested_traversal_mode = str(
-        settings.get("traversal_mode") or settings.get("advanced_mode") or ""
-    ).strip().lower()
-    settings["traversal_mode"] = resolve_traversal_mode({
-        **settings,
-        "traversal_mode": requested_traversal_mode or None,
-    })
-    # Keep user-owned controls explicit in persisted settings.
-    if settings.get("advanced_enabled"):
-        settings["advanced_mode"] = settings["traversal_mode"]
-    else:
-        settings["advanced_mode"] = None
-    
+    await ensure_public_crawl_targets(collect_target_urls(payload, settings_view))
+    validate_extraction_contract(settings_view.extraction_contract())
     domain_requested_fields = await load_domain_requested_fields(
         session, url=primary_url, surface=normalized_surface
     )
@@ -105,7 +57,9 @@ async def create_crawl_run(
         ]
     )
     if domain_requested_fields:
-        settings["domain_requested_fields"] = domain_requested_fields
+        settings = settings_view.with_updates(
+            domain_requested_fields=domain_requested_fields
+        ).as_dict()
     run_type = payload.get("run_type")
     if not run_type:
         raise ValueError("run_type is required")
@@ -176,7 +130,7 @@ async def delete_run(session: AsyncSession, run: CrawlRun) -> None:
     db_run = await session.get(CrawlRun, run.id)
     if db_run is None:
         return
-    if normalize_status(db_run.status) in ACTIVE_STATUSES:
+    if db_run.is_active():
         raise ValueError(f"Cannot delete run in state: {db_run.status}")
     await session.delete(db_run)
     await session.commit()
@@ -327,7 +281,7 @@ async def active_jobs(
     result = await session.execute(query)
     rows = []
     for run in result.scalars().all():
-        result_summary = run.result_summary if isinstance(run.result_summary, dict) else {}
+        result_summary = run.summary_dict()
         rows.append(
             {
                 "run_id": run.id,

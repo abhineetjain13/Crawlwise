@@ -66,6 +66,24 @@ from .review_helpers import (
     _merge_review_bucket_entries,
     _should_surface_discovered_field,
 )
+from .types import (
+    AcquisitionMetrics,
+    ExtractionResult,
+    PipelineContext,
+    PipelineStage,
+    URLProcessingConfig,
+    URLProcessingResult,
+)
+from .runner import PipelineRunner, build_default_stages
+from .stages import (
+    AcquireStage,
+    AdapterStage,
+    BlockedDetectionStage,
+    ExtractStage,
+    ListingBrowserRetryStage,
+    ParseStage,
+    SurfaceValidationStage,
+)
 from .trace_builders import (
     _build_acquisition_trace,
     _build_field_discovery_summary,
@@ -81,7 +99,9 @@ from .utils import (
     _elapsed_ms,
     _first_non_empty_text,
     _normalize_committed_field_name,
+    _parse_html_sync,
     _review_bucket_fingerprint,
+    parse_html,
 )
 from .verdict import (
     VERDICT_BLOCKED,
@@ -102,8 +122,10 @@ __all__ = [
     "_clean_page_text",
     "_first_non_empty_text",
     "_normalize_committed_field_name",
+    "_parse_html_sync",
     "_review_bucket_fingerprint",
     "_clean_candidate_text",
+    "parse_html",
     # Field normalization
     "_normalize_review_value",
     "_review_values_equal",
@@ -170,4 +192,7 @@ __all__ = [
     "STAGE_FETCH",
     "STAGE_ANALYZE",
     "STAGE_SAVE",
+    # Typed pipeline boundary objects
+    "URLProcessingConfig",
+    "URLProcessingResult",
 ]

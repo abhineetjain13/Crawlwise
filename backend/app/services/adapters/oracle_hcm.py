@@ -35,7 +35,6 @@ class OracleHCMAdapter(BaseAdapter):
             any(domain in lowered_url for domain in self.domains),
             "/hcmui/candidateexperience/" in lowered_url,
             "var cx_config" in lowered_html,
-            "candidateexperience" in lowered_html and "oraclecloud.com" in lowered_html,
             "recruitingcejobrequisitions" in lowered_html,
         ))
 

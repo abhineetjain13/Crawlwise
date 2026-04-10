@@ -28,7 +28,6 @@ from app.services.crawl_state import (
     TERMINAL_STATUSES,
     CrawlStatus,
     set_control_request,
-    normalize_status,
     update_run_status,
 )
 from app.services.llm_integration.page_classifier import classify_page
@@ -52,18 +51,15 @@ def _new_task_id(run_id: int) -> str:
 
 
 def _get_task_id(run: CrawlRun) -> str | None:
-    summary = dict(run.result_summary or {})
-    task_id = str(summary.get(CELERY_TASK_ID_KEY) or "").strip()
+    task_id = str(run.get_summary(CELERY_TASK_ID_KEY) or "").strip()
     return task_id or None
 
 
 def _set_task_id(run: CrawlRun, task_id: str | None) -> None:
-    summary = dict(run.result_summary or {})
     if task_id:
-        summary[CELERY_TASK_ID_KEY] = task_id
+        run.update_summary(**{CELERY_TASK_ID_KEY: task_id})
     else:
-        summary.pop(CELERY_TASK_ID_KEY, None)
-    run.result_summary = summary
+        run.remove_summary_keys(CELERY_TASK_ID_KEY)
 
 
 async def _load_run_with_normalized_status(
@@ -72,7 +68,7 @@ async def _load_run_with_normalized_status(
     retry_run = await retry_session.get(CrawlRun, run_id)
     if retry_run is None:
         raise ValueError("Run not found")
-    return retry_run, normalize_status(retry_run.status)
+    return retry_run, retry_run.status_value
 
 
 async def _run_control_update(

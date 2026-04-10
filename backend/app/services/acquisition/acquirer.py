@@ -22,8 +22,27 @@ from app.services.acquisition.browser_runtime import resolve_browser_runtime_opt
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
 from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.adapters.registry import resolve_adapter
+from app.services.config.acquisition_guards import (
+    JOB_ERROR_PAGE_HEADINGS,
+    JOB_ERROR_PAGE_TITLES,
+    JOB_REDIRECT_SHELL_CANONICAL_URLS,
+    JOB_REDIRECT_SHELL_HEADINGS,
+    JOB_REDIRECT_SHELL_TITLES,
+)
+from app.services.config.crawl_runtime import (
+    ACQUIRE_HOST_MIN_INTERVAL_MS,
+    ACQUISITION_ATTEMPT_TIMEOUT_SECONDS,
+    BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
+    DEFAULT_MAX_SCROLLS,
+    JS_GATE_PHRASES,
+    LISTING_MIN_ITEMS,
+    PROXY_FAILURE_COOLDOWN_BASE_MS,
+    PROXY_FAILURE_COOLDOWN_MAX_MS,
+)
+from app.services.config.extraction_rules import SITE_POLICY_REGISTRY
 from app.services.config.platform_registry import (
     acquisition_hint_tokens,
+    job_platform_families,
     is_job_platform_signal,
     resolve_platform_runtime_policy,
 )
@@ -34,23 +53,6 @@ from app.services.exceptions import (
     AcquisitionFailureError,
     AcquisitionTimeoutError,
     ProxyPoolExhaustedError,
-)
-from app.services.pipeline_config import (
-    ACQUIRE_HOST_MIN_INTERVAL_MS,
-    ACQUISITION_ATTEMPT_TIMEOUT_SECONDS,
-    BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
-    BROWSER_FIRST_DOMAINS,
-    DEFAULT_MAX_SCROLLS,
-    JOB_ERROR_PAGE_HEADINGS,
-    JOB_ERROR_PAGE_TITLES,
-    JOB_PLATFORM_FAMILIES,
-    JOB_REDIRECT_SHELL_CANONICAL_URLS,
-    JOB_REDIRECT_SHELL_HEADINGS,
-    JOB_REDIRECT_SHELL_TITLES,
-    JS_GATE_PHRASES,
-    LISTING_MIN_ITEMS,
-    PROXY_FAILURE_COOLDOWN_BASE_MS,
-    PROXY_FAILURE_COOLDOWN_MAX_MS,
 )
 from app.services.runtime_metrics import incr
 from app.services.url_safety import validate_proxy_endpoint, validate_public_target
@@ -102,6 +104,15 @@ _LONG_TOKEN_RE = _re.compile(
     r"(?<![a-z0-9])[a-z0-9_\-]{32,}(?![a-z0-9])", _re.IGNORECASE
 )
 _EMAIL_RE = _re.compile(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
+_URL_CREDENTIALS_RE = _re.compile(
+    r"(?i)\b([a-z][a-z0-9+\-.]*://)([^/\s:@]+)(?::([^/\s@]*))?@"
+)
+JOB_PLATFORM_FAMILIES = frozenset({*job_platform_families(), "generic_jobs"})
+BROWSER_FIRST_DOMAINS = sorted(
+    domain
+    for domain, policy in SITE_POLICY_REGISTRY.items()
+    if isinstance(policy, dict) and bool(policy.get("browser_first"))
+)
 
 
 class ProxyPoolExhausted(ProxyPoolExhaustedError):  # noqa: N818 - compatibility alias kept for existing imports.
@@ -223,33 +234,93 @@ class AcquisitionResult:
     diagnostics: dict[str, object] = field(default_factory=dict)
 
 
-def _content_html_length(html: str) -> int:
-    """Return HTML length with non-content tag bodies removed for shell detection."""
-    stripped = _re.sub(
-        r"<(script|style|svg)\b[^>]*>.*?</\1\s*>",
-        "",
-        html,
-        flags=_re.IGNORECASE | _re.DOTALL,
-    )
-    return max(len(stripped), 1)
+@dataclass(slots=True)
+class AcquisitionRequest:
+    run_id: int
+    url: str
+    proxy_list: list[str] = field(default_factory=list)
+    surface: str | None = None
+    traversal_mode: str | None = None
+    max_pages: int = 5
+    max_scrolls: int = DEFAULT_MAX_SCROLLS
+    sleep_ms: int = 0
+    requested_fields: list[str] = field(default_factory=list)
+    requested_field_selectors: dict[str, list[dict]] = field(default_factory=dict)
+    acquisition_profile: dict[str, object] = field(default_factory=dict)
+    checkpoint: Callable[[], Awaitable[None]] | None = None
+
+    @classmethod
+    def from_legacy(
+        cls,
+        *,
+        run_id: int,
+        url: str,
+        proxy_list: list[str] | None = None,
+        surface: str | None = None,
+        traversal_mode: str | None = None,
+        max_pages: int = 5,
+        max_scrolls: int = DEFAULT_MAX_SCROLLS,
+        sleep_ms: int = 0,
+        requested_fields: list[str] | None = None,
+        requested_field_selectors: dict[str, list[dict]] | None = None,
+        acquisition_profile: dict[str, object] | None = None,
+        checkpoint: Callable[[], Awaitable[None]] | None = None,
+    ) -> "AcquisitionRequest":
+        return cls(
+            run_id=run_id,
+            url=url,
+            proxy_list=list(proxy_list or []),
+            surface=surface,
+            traversal_mode=traversal_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            sleep_ms=sleep_ms,
+            requested_fields=list(requested_fields or []),
+            requested_field_selectors=dict(requested_field_selectors or {}),
+            acquisition_profile=dict(acquisition_profile or {}),
+            checkpoint=checkpoint,
+        )
+
+    def with_profile_updates(self, **updates: object) -> "AcquisitionRequest":
+        profile = dict(self.acquisition_profile)
+        profile.update(updates)
+        return AcquisitionRequest(
+            run_id=self.run_id,
+            url=self.url,
+            proxy_list=list(self.proxy_list),
+            surface=self.surface,
+            traversal_mode=self.traversal_mode,
+            max_pages=self.max_pages,
+            max_scrolls=self.max_scrolls,
+            sleep_ms=self.sleep_ms,
+            requested_fields=list(self.requested_fields),
+            requested_field_selectors=dict(self.requested_field_selectors),
+            acquisition_profile=profile,
+            checkpoint=self.checkpoint,
+        )
 
 
-async def acquire_html(
-    run_id: int,
-    url: str,
-    proxy_list: list[str] | None = None,
-    surface: str | None = None,
-    traversal_mode: str | None = None,
-    max_pages: int = 5,
-    max_scrolls: int = DEFAULT_MAX_SCROLLS,
-    sleep_ms: int = 0,
-    requested_fields: list[str] | None = None,
-    requested_field_selectors: dict[str, list[dict]] | None = None,
-    acquisition_profile: dict[str, object] | None = None,
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> tuple[str, str, str, list[dict]]:
-    """Acquire HTML for a URL using the waterfall strategy."""
-    result = await acquire(
+def _coerce_acquisition_request(
+    *,
+    request: AcquisitionRequest | None,
+    run_id: int | None,
+    url: str | None,
+    proxy_list: list[str] | None,
+    surface: str | None,
+    traversal_mode: str | None,
+    max_pages: int,
+    max_scrolls: int,
+    sleep_ms: int,
+    requested_fields: list[str] | None,
+    requested_field_selectors: dict[str, list[dict]] | None,
+    acquisition_profile: dict[str, object] | None,
+    checkpoint: Callable[[], Awaitable[None]] | None,
+) -> AcquisitionRequest:
+    if request is not None:
+        return request
+    if run_id is None or url is None:
+        raise TypeError("run_id and url are required when request is not provided")
+    return AcquisitionRequest.from_legacy(
         run_id=run_id,
         url=url,
         proxy_list=proxy_list,
@@ -263,12 +334,22 @@ async def acquire_html(
         acquisition_profile=acquisition_profile,
         checkpoint=checkpoint,
     )
-    return result.html, result.method, result.artifact_path, result.network_payloads
 
 
-async def acquire(
-    run_id: int,
-    url: str,
+def _content_html_length(html: str) -> int:
+    """Return HTML length with non-content tag bodies removed for shell detection."""
+    stripped = _re.sub(
+        r"<(script|style|svg)\b[^>]*>.*?</\1\s*>",
+        "",
+        html,
+        flags=_re.IGNORECASE | _re.DOTALL,
+    )
+    return max(len(stripped), 1)
+
+
+async def acquire_html(
+    run_id: int | None = None,
+    url: str | None = None,
     proxy_list: list[str] | None = None,
     surface: str | None = None,
     traversal_mode: str | None = None,
@@ -279,10 +360,74 @@ async def acquire(
     requested_field_selectors: dict[str, list[dict]] | None = None,
     acquisition_profile: dict[str, object] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    request: AcquisitionRequest | None = None,
+) -> tuple[str, str, str, list[dict]]:
+    """Acquire HTML for a URL using the waterfall strategy."""
+    acquisition_request = _coerce_acquisition_request(
+        request=request,
+        run_id=run_id,
+        url=url,
+        proxy_list=proxy_list,
+        surface=surface,
+        traversal_mode=traversal_mode,
+        max_pages=max_pages,
+        max_scrolls=max_scrolls,
+        sleep_ms=sleep_ms,
+        requested_fields=requested_fields,
+        requested_field_selectors=requested_field_selectors,
+        acquisition_profile=acquisition_profile,
+        checkpoint=checkpoint,
+    )
+    result = await acquire(
+        request=acquisition_request,
+    )
+    return result.html, result.method, result.artifact_path, result.network_payloads
+
+
+async def acquire(
+    run_id: int | None = None,
+    url: str | None = None,
+    proxy_list: list[str] | None = None,
+    surface: str | None = None,
+    traversal_mode: str | None = None,
+    max_pages: int = 5,
+    max_scrolls: int = DEFAULT_MAX_SCROLLS,
+    sleep_ms: int = 0,
+    requested_fields: list[str] | None = None,
+    requested_field_selectors: dict[str, list[dict]] | None = None,
+    acquisition_profile: dict[str, object] | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+    request: AcquisitionRequest | None = None,
 ) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
+    acquisition_request = _coerce_acquisition_request(
+        request=request,
+        run_id=run_id,
+        url=url,
+        proxy_list=proxy_list,
+        surface=surface,
+        traversal_mode=traversal_mode,
+        max_pages=max_pages,
+        max_scrolls=max_scrolls,
+        sleep_ms=sleep_ms,
+        requested_fields=requested_fields,
+        requested_field_selectors=requested_field_selectors,
+        acquisition_profile=acquisition_profile,
+        checkpoint=checkpoint,
+    )
+    run_id = acquisition_request.run_id
+    url = acquisition_request.url
+    proxy_list = acquisition_request.proxy_list
+    surface = acquisition_request.surface
+    traversal_mode = acquisition_request.traversal_mode
+    max_pages = acquisition_request.max_pages
+    max_scrolls = acquisition_request.max_scrolls
+    sleep_ms = acquisition_request.sleep_ms
+    requested_fields = acquisition_request.requested_fields
+    requested_field_selectors = acquisition_request.requested_field_selectors
+    checkpoint = acquisition_request.checkpoint
     diagnostics_path = _diagnostics_path(run_id, url)
-    profile = dict(acquisition_profile or {})
+    profile = dict(acquisition_request.acquisition_profile)
     platform_family = _detect_platform_family(url)
     effective_surface = _resolve_effective_surface(
         surface,
@@ -2042,7 +2187,7 @@ def _write_diagnostics(
         else None,
         "network_payloads": len(result.network_payloads or []),
         "blocked": blocked,
-        "diagnostics": result.diagnostics,
+        "diagnostics": _scrub_payload_for_artifact(result.diagnostics),
     }
     diagnostics_path.write_text(
         json.dumps(payload, indent=2, default=str), encoding="utf-8"
@@ -2073,6 +2218,7 @@ def _looks_sensitive_key(key: str) -> bool:
 
 def _scrub_sensitive_text(text: str) -> str:
     scrubbed = str(text or "")
+    scrubbed = _URL_CREDENTIALS_RE.sub(r"\1***:***@", scrubbed)
     scrubbed = _BEARER_TOKEN_RE.sub(_REDACTED, scrubbed)
     scrubbed = _EMAIL_RE.sub(_REDACTED, scrubbed)
     scrubbed = _LONG_TOKEN_RE.sub(_REDACTED, scrubbed)

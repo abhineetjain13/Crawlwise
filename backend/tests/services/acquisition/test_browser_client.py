@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 from app.core.config import settings
-from app.services._batch_runtime import _merge_run_acquisition_metrics
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.browser_client import (
     _assess_challenge_signals,
@@ -34,6 +33,7 @@ from app.services.acquisition.browser_client import (
     _wait_for_listing_readiness,
     expand_all_interactive_elements,
 )
+from app.services._batch_progress import _merge_run_acquisition_metrics
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.cookie_store import validate_cookie_policy_config
 from app.services.acquisition.traversal import AdvanceResult, TraversalResult, apply_traversal_mode
@@ -903,11 +903,11 @@ async def test_paginate_run_summary(monkeypatch):
     run_summary = _merge_run_acquisition_metrics({}, url_metrics)
     result = {
         "pages_collected": traversal_result.summary["pages_collected"],
-        "traversal_succeeded": run_summary["traversal_succeeded"],
+        "traversal_attempted": run_summary["traversal_attempted"],
     }
 
     assert result["pages_collected"] == 2
-    assert result["traversal_succeeded"] == 1
+    assert result["traversal_attempted"] == 1
 
 
 @pytest.mark.asyncio

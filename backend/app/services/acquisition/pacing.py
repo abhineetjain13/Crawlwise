@@ -8,7 +8,7 @@ from math import ceil
 from uuid import uuid4
 
 from app.core.redis import get_redis, redis_fail_open
-from app.services.pipeline_config import (
+from app.services.config.crawl_runtime import (
     INTERRUPTIBLE_WAIT_POLL_MS,
     PACING_HOST_CACHE_TTL_SECONDS,
 )

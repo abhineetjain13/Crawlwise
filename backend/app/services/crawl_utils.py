@@ -7,12 +7,20 @@ import io
 import logging
 import re
 from html import unescape
+from typing import Any, Protocol
 
 import regex as regex_lib
 from app.services.xpath_service import validate_xpath_syntax
 
 HTTP_URL_PREFIXES = ("http://", "https://")
 logger = logging.getLogger(__name__)
+
+
+class _SettingsViewLike(Protocol):
+    def urls(self) -> list[str]: ...
+    def get(self, key: str, default: Any = None) -> Any: ...
+    def has(self, key: str) -> bool: ...
+    def advanced_enabled(self) -> bool: ...
 
 
 # CSV parsing
@@ -42,8 +50,23 @@ def normalize_target_url(value: object) -> str:
     return re.sub(r"\s+", "", text)
 
 
-def collect_target_urls(payload: dict, settings: dict) -> list[str]:
+def _settings_view(settings: object) -> _SettingsViewLike | dict:
+    if (
+        hasattr(settings, "urls")
+        and hasattr(settings, "get")
+        and hasattr(settings, "has")
+        and hasattr(settings, "advanced_enabled")
+    ):
+        return settings
+    return settings if isinstance(settings, dict) else {}
+
+
+def collect_target_urls(
+    payload: dict,
+    settings: object,
+) -> list[str]:
     """Collect and deduplicate all target URLs from payload and settings."""
+    settings_view = _settings_view(settings)
     candidates: list[str] = []
     
     # Direct URL from payload
@@ -58,13 +81,18 @@ def collect_target_urls(payload: dict, settings: dict) -> list[str]:
             candidates.append(candidate)
     
     # URLs array from settings
-    for value in settings.get("urls") or []:
+    setting_urls = (
+        settings_view.urls()
+        if hasattr(settings_view, "urls")
+        else (settings_view.get("urls") or [])
+    )
+    for value in setting_urls:
         candidate = normalize_target_url(value)
         if candidate:
             candidates.append(candidate)
     
     # CSV content from settings
-    csv_content = str(settings.get("csv_content") or "")
+    csv_content = str(settings_view.get("csv_content") or "")
     if csv_content:
         candidates.extend(parse_csv_urls(csv_content))
     
@@ -77,20 +105,27 @@ def collect_target_urls(payload: dict, settings: dict) -> list[str]:
 _TRAVERSAL_MODES = {"paginate", "scroll", "load_more"}
 
 
-def resolve_traversal_mode(settings: dict | None) -> str | None:
+def resolve_traversal_mode(settings: object) -> str | None:
     """Resolve and validate the traversal mode from settings."""
-    if not isinstance(settings, dict):
-        return None
-    advanced_enabled_value = settings.get("advanced_enabled")
-    advanced_enabled = bool(advanced_enabled_value)
-    advanced_flag_present = advanced_enabled_value is not None
+    settings_view = _settings_view(settings)
+    advanced_enabled_value = settings_view.get("advanced_enabled")
+    advanced_enabled = (
+        settings_view.advanced_enabled()
+        if hasattr(settings_view, "advanced_enabled")
+        else bool(advanced_enabled_value)
+    )
+    advanced_flag_present = (
+        settings_view.has("advanced_enabled")
+        if hasattr(settings_view, "has")
+        else advanced_enabled_value is not None
+    )
     if advanced_flag_present and not advanced_enabled:
         return None
     # Preserve user-owned advanced mode semantics from the unified crawl UI.
     # `auto` means "no explicit traversal helper requested".
     mode = str(
-        settings.get("traversal_mode")
-        or settings.get("advanced_mode")
+        settings_view.get("traversal_mode")
+        or settings_view.get("advanced_mode")
         or ""
     ).strip().lower()
     if mode in {"", "none", "single"}:

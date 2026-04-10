@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from app.services.extract.listing_quality import assess_listing_record_quality
-from app.services.pipeline_config import REQUIRED_FIELDS_BY_SURFACE
+from app.services.config.extraction_rules import REQUIRED_FIELDS_BY_SURFACE
 
 # Verdict constants
 VERDICT_SUCCESS = "success"

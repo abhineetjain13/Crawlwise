@@ -48,11 +48,19 @@ class Settings(BaseSettings):
     crawl_log_file_enabled: bool = True
     crawl_log_file_dir: Path = Field(default=BASE_DIR / "artifacts" / "run_logs")
     system_max_concurrent_urls: int = 8
-    default_admin_email: str = "admin@admin.com"
+    llm_cache_ttl_seconds: int = 86400
+    default_admin_email: str = "admin@example.invalid"
     default_admin_password: str | None = None
     bootstrap_admin_once: bool = False
     # When false, POST /api/auth/register returns 403 (POC single-admin dev). Enable for production multi-tenant.
     registration_enabled: bool = False
+
+    # Database pool tuning (ignored for SQLite).
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle_seconds: int = 600
+    db_pool_timeout_seconds: int = 10
+    db_pool_pre_ping: bool = True
 
 
 settings = Settings()
@@ -81,11 +89,16 @@ settings.crawl_log_file_dir = _resolve_project_path(
 # ---------------------------------------------------------------------------
 _INSECURE_DEFAULTS = {"change-me", "change-me-32-bytes-minimum-change-me"}
 _INSECURE_ADMIN_PASSWORD_DEFAULTS = {"YourSecurePassword123!"}
-_INSECURE_ADMIN_EMAIL_DEFAULTS = {"admin@admin.com"}
+_INSECURE_ADMIN_EMAIL_DEFAULTS = {"admin@admin.com", "admin@example.invalid"}
+
+
+def _is_non_dev_environment(env_name: str) -> bool:
+    normalized = str(env_name or "").strip().lower()
+    return normalized not in {"", "development", "dev", "local", "test", "testing"}
 
 
 def _check_secret_defaults() -> None:
-    """Warn loudly (or crash in production) if default secrets are still set."""
+    """Warn loudly (or crash outside dev/test) if default secrets are still set."""
     import logging
     import os
 
@@ -114,7 +127,7 @@ def _check_secret_defaults() -> None:
         + "\n  • ".join(issues)
         + '\nGenerate secure values: python -c "import secrets; print(secrets.token_urlsafe(64))"'
     )
-    if env == "production":
+    if _is_non_dev_environment(env):
         raise RuntimeError(msg)
     logger.warning(msg)
 

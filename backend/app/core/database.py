@@ -14,13 +14,16 @@ class Base(DeclarativeBase):
 
 
 _database_url = make_url(settings.database_url)
-_engine_kwargs = {
+_engine_kwargs: dict[str, object] = {
     "future": True,
     "echo": False,
 }
 if not _database_url.drivername.startswith("sqlite"):
-    _engine_kwargs["pool_size"] = 5
-    _engine_kwargs["max_overflow"] = 10
+    _engine_kwargs["pool_size"] = settings.db_pool_size
+    _engine_kwargs["max_overflow"] = settings.db_max_overflow
+    _engine_kwargs["pool_pre_ping"] = settings.db_pool_pre_ping
+    _engine_kwargs["pool_recycle"] = settings.db_pool_recycle_seconds
+    _engine_kwargs["pool_timeout"] = settings.db_pool_timeout_seconds
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 SessionLocal = async_sessionmaker(
@@ -29,6 +32,11 @@ SessionLocal = async_sessionmaker(
     class_=AsyncSession,
     autoflush=False,
 )
+
+
+async def dispose_engine() -> None:
+    """Dispose the connection pool. Call during application shutdown."""
+    await engine.dispose()
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

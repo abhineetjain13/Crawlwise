@@ -6,7 +6,7 @@ preventing the need for runtime monkeypatching.
 """
 from __future__ import annotations
 
-from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
 from app.services.acquisition.acquirer import acquire as _acquire
 from app.services.adapters.registry import (
     AdapterResult,
@@ -17,7 +17,7 @@ from app.services.adapters.registry import (
 from app.services.adapters.registry import (
     try_blocked_adapter_recovery as _try_blocked_adapter_recovery,
 )
-from app.services.pipeline_config import (
+from app.services.config.crawl_runtime import (
     DEFAULT_MAX_PAGES,
     DEFAULT_MAX_SCROLLS,
     DEFAULT_SLEEP_MS,
@@ -26,9 +26,9 @@ from app.services.pipeline_config import (
 
 async def acquire(
     *,
-    run_id: int,
-    url: str,
-    surface: str,
+    run_id: int | None = None,
+    url: str | None = None,
+    surface: str | None = None,
     proxy_list: list[str] | None = None,
     traversal_mode: str | None = None,
     max_pages: int = DEFAULT_MAX_PAGES,
@@ -38,12 +38,22 @@ async def acquire(
     requested_field_selectors: dict[str, list[str]] | None = None,
     acquisition_profile: dict[str, object] | None = None,
     checkpoint=None,
+    request: AcquisitionRequest | None = None,
 ) -> AcquisitionResult:
     """
     Acquire content from a URL using appropriate method (curl_cffi or playwright).
     
     This is a thin wrapper around the actual acquirer to provide a stable import point.
     """
+    if request is not None:
+        return await _acquire(request=request)
+
+    if run_id is None or url is None or surface is None:
+        raise ValueError(
+            "acquire requires either request=AcquisitionRequest(...) or non-None "
+            "run_id, url, and surface before calling _acquire"
+        )
+
     return await _acquire(
         run_id=run_id,
         url=url,

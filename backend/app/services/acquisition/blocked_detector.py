@@ -8,14 +8,15 @@ from __future__ import annotations
 import logging
 import re
 
-from app.services.pipeline_config import (
-    BLOCK_ACTIVE_PROVIDER_MARKERS,
-    BLOCK_CDN_PROVIDER_MARKERS,
-    BLOCK_PHRASES,
-    BLOCK_TITLE_REGEXES,
-)
+from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.runtime_metrics import incr
 
+BLOCK_PHRASES = tuple(BLOCK_SIGNATURES.get("phrases", []))
+BLOCK_ACTIVE_PROVIDER_MARKERS = tuple(
+    BLOCK_SIGNATURES.get("active_provider_markers", [])
+)
+BLOCK_CDN_PROVIDER_MARKERS = tuple(BLOCK_SIGNATURES.get("cdn_provider_markers", []))
+BLOCK_TITLE_REGEXES = tuple(BLOCK_SIGNATURES.get("title_regexes", []))
 _BLOCK_TITLE_PATTERNS = [re.compile(pattern, re.I) for pattern in BLOCK_TITLE_REGEXES]
 logger = logging.getLogger(__name__)
 

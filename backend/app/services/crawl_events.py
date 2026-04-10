@@ -68,7 +68,7 @@ def serialize_run_snapshot(run: CrawlRun) -> dict[str, Any]:
     return {
         "id": run.id,
         "status": run.status,
-        "result_summary": dict(run.result_summary or {}),
+        "result_summary": run.summary_dict(),
         "updated_at": _isoformat(run.updated_at),
         "completed_at": _isoformat(run.completed_at),
     }
@@ -259,11 +259,11 @@ async def persist_run_summary_patch(
         run = result.scalar_one_or_none()
         if run is None:
             return None
-        result_summary = dict(run.result_summary or {})
+        result_summary = run.summary_dict()
         merged_summary = _merge_run_summary_patch(result_summary, summary_patch)
         if merged_summary == result_summary:
             return run
-        run.result_summary = merged_summary
+        run.merge_summary_patch(summary_patch)
         await s.flush()
         return run
 

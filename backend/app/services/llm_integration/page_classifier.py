@@ -9,8 +9,8 @@ from urllib.parse import parse_qsl, urlparse
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.config.extraction_rules import KNOWN_ATS_PLATFORMS
+from app.services.config.selectors import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS
 from app.services.extract.source_parsers import extract_json_ld
-from app.services.pipeline_config import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS
 from bs4 import BeautifulSoup, Tag
 from cachetools import TTLCache
 

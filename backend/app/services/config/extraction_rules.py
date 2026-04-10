@@ -1,62 +1,13 @@
 from __future__ import annotations
 
-from app.services.config.platform_registry import known_ats_domains
+import re
 
-PIPELINE_TUNING = {
-    "http_timeout_seconds": 20,
-    "impersonation_target": "chrome131",
-    "http_impersonation_profiles": ["chrome110", "chrome116", "chrome123", "chrome131"],
-    "http_stealth_impersonation_profile": "chrome131",
-    "browser_fallback_visible_text_min": 500,
-    "browser_fallback_visible_text_ratio_max": 0.02,
-    "browser_fallback_html_size_threshold": 200000,
-    "js_gate_phrases": ["enable javascript", "<noscript>"],
-    "default_max_records": 100,
-    "default_sleep_ms": 0,
-    "min_request_delay_ms": 100,
-    "block_min_html_length": 100,
-    "block_low_content_text_max": 500,
-    "block_low_content_script_min": 3,
-    "block_low_content_link_max": 3,
-    "listing_min_items": 2,
-    "card_autodetect_min_siblings": 3,
-    "json_max_search_depth": 5,
-    "max_json_recursion_depth": 4,
-    "http_retry_status_codes": [403, 429, 503],
-    "http_max_retries": 2,
-    "http_retry_backoff_base_ms": 400,
-    "http_retry_backoff_max_ms": 3000,
-    "dns_resolution_retries": 1,
-    "dns_resolution_retry_delay_ms": 250,
-    "acquire_host_min_interval_ms": 250,
-    "pacing_host_cache_max_entries": 1024,
-    "pacing_host_cache_ttl_seconds": 3600,
-    "stealth_prefer_ttl_hours": 24,
-    "_timing_validation_note": "http_timeout_seconds, challenge_wait_max_seconds, surface_readiness_max_wait_ms, origin_warm_pause_ms, scroll_wait_min_ms, and load_more_wait_min_ms must be validated against production traffic before lowering further.",
-    "challenge_wait_max_seconds": 12,
-    "challenge_poll_interval_ms": 1000,
-    "surface_readiness_max_wait_ms": 12000,
-    "surface_readiness_poll_ms": 250,
-    "origin_warm_pause_ms": 2000,
-    "browser_error_retry_attempts": 1,
-    "browser_error_retry_delay_ms": 1000,
-    "browser_navigation_networkidle_timeout_ms": 30000,
-    "browser_navigation_load_timeout_ms": 15000,
-    "browser_navigation_domcontentloaded_timeout_ms": 15000,
-    "pagination_navigation_timeout_ms": 20000,
-    "listing_readiness_max_wait_ms": 6000,
-    "listing_readiness_poll_ms": 500,
-    "scroll_wait_min_ms": 1500,
-    "load_more_wait_min_ms": 2000,
-    "cookie_consent_prewait_ms": 400,
-    "cookie_consent_postclick_wait_ms": 600,
-    "shadow_dom_flatten_max_hosts": 100,
-    "default_max_scrolls": 10,
-    "max_candidates_per_field": 5,
-    "dynamic_field_name_max_tokens": 7,
-    "accordion_expand_max": 20,
-    "accordion_expand_wait_ms": 500,
-}
+from app.services.config.crawl_runtime import (
+    DYNAMIC_FIELD_NAME_MAX_TOKENS,
+    MAX_CANDIDATES_PER_FIELD,
+)
+from app.services.config.platform_registry import known_ats_domains
+from app.services.config.selectors import DOM_PATTERNS as _DOM_PATTERNS
 
 SITE_POLICY_REGISTRY = {}
 
@@ -1714,6 +1665,271 @@ NORMALIZATION_RULES = {
     },
 }
 
+_CANDIDATE_CLEANUP = EXTRACTION_RULES.get("candidate_cleanup", {})
+_CANDIDATE_FIELD_GROUPS = _CANDIDATE_CLEANUP.get("field_groups", {})
+CANDIDATE_FIELD_GROUPS = {
+    str(group): {str(field) for field in fields}
+    for group, fields in _CANDIDATE_FIELD_GROUPS.items()
+    if isinstance(fields, list)
+}
+_CANDIDATE_FIELD_NAME_PATTERNS = _CANDIDATE_CLEANUP.get("field_name_patterns", {})
+CANDIDATE_URL_SUFFIXES = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "url_suffixes", ["_url", "url", "_link", "link", "_href", "href"]
+    )
+)
+CANDIDATE_IMAGE_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "image_tokens", ["image", "images", "gallery", "photo", "thumbnail", "hero"]
+    )
+)
+CANDIDATE_IMAGE_COLLECTION_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "image_collection_tokens", ["images", "gallery", "photos", "media"]
+    )
+)
+CANDIDATE_CURRENCY_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get("currency_tokens", ["currency"])
+)
+CANDIDATE_PRICE_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get("price_tokens", ["price", "amount", "cost"])
+)
+CANDIDATE_SALARY_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "salary_tokens", ["salary", "pay", "rate", "compensation"]
+    )
+)
+CANDIDATE_REVIEW_COUNT_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "review_count_tokens", ["review_count", "reviews", "rating_count"]
+    )
+)
+CANDIDATE_RATING_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get("rating_tokens", ["rating", "score"])
+)
+CANDIDATE_AVAILABILITY_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get("availability_tokens", ["availability", "stock"])
+)
+CANDIDATE_CATEGORY_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "category_tokens", ["category", "department", "breadcrumb"]
+    )
+)
+CANDIDATE_IDENTIFIER_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get("identifier_tokens", ["sku", "id", "code", "vin", "mpn"])
+)
+GA_DATA_LAYER_KEYS = frozenset(_CANDIDATE_CLEANUP.get("ga_data_layer_keys", []))
+CANDIDATE_DESCRIPTION_TOKENS = tuple(
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "description_tokens", ["description", "summary", "overview", "details"]
+    )
+)
+CANDIDATE_UI_NOISE_PHRASES = tuple(_CANDIDATE_CLEANUP.get("ui_noise_phrases", []))
+CANDIDATE_IMAGE_NOISE_TOKENS = tuple(_CANDIDATE_CLEANUP.get("image_noise_tokens", []))
+CANDIDATE_IMAGE_URL_HINT_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("image_url_hint_tokens", [])
+)
+CANDIDATE_IMAGE_CANDIDATE_DICT_KEYS = tuple(
+    _CANDIDATE_CLEANUP.get("image_candidate_dict_keys", [])
+)
+CANDIDATE_COLOR_CSS_NOISE_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("color_css_noise_tokens", [])
+)
+CANDIDATE_SIZE_CSS_NOISE_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("size_css_noise_tokens", [])
+)
+CANDIDATE_SIZE_PACKAGE_TOKENS = tuple(_CANDIDATE_CLEANUP.get("size_package_tokens", []))
+CANDIDATE_AVAILABILITY_NOISE_PHRASES = tuple(
+    _CANDIDATE_CLEANUP.get("availability_noise_phrases", [])
+)
+CANDIDATE_CATEGORY_NOISE_PHRASES = tuple(
+    _CANDIDATE_CLEANUP.get("category_noise_phrases", [])
+)
+CANDIDATE_DESCRIPTION_META_SELECTORS = tuple(
+    _CANDIDATE_CLEANUP.get("description_meta_selectors", [])
+)
+CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS = tuple(
+    _CANDIDATE_CLEANUP.get("description_fallback_content_selectors", [])
+)
+CANDIDATE_TRACKING_PARAM_EXACT_KEYS = frozenset(
+    _CANDIDATE_CLEANUP.get("tracking_param_exact_keys", [])
+)
+CANDIDATE_TRACKING_PARAM_PREFIXES = tuple(
+    _CANDIDATE_CLEANUP.get("tracking_param_prefixes", [])
+)
+CANDIDATE_URL_ALLOWED_SCHEMES = frozenset(
+    _CANDIDATE_CLEANUP.get("candidate_url_allowed_schemes", ["http", "https"])
+)
+
+
+def _coerce_int_config(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT = _coerce_int_config(
+    _CANDIDATE_CLEANUP.get("deep_alias_list_scan_limit", 40),
+    40,
+)
+CANDIDATE_PLACEHOLDER_VALUES = tuple(_CANDIDATE_CLEANUP.get("placeholder_values", []))
+CANDIDATE_GENERIC_CATEGORY_VALUES = tuple(
+    _CANDIDATE_CLEANUP.get("generic_category_values", [])
+)
+CANDIDATE_GENERIC_TITLE_VALUES = tuple(_CANDIDATE_CLEANUP.get("generic_title_values", []))
+CANDIDATE_TITLE_NOISE_PHRASES = tuple(_CANDIDATE_CLEANUP.get("title_noise_phrases", []))
+CANDIDATE_PROMO_ONLY_TITLE_PATTERN = str(
+    _CANDIDATE_CLEANUP.get(
+        "promo_only_title_pattern",
+        r"^(?:[-–—]?\s*)?(?:\d{1,3}%\s*(?:off)?|sale|new(?:\s+in)?|view\s*\d+|best seller|top seller)\s*$",
+    )
+)
+CANDIDATE_RATING_WORD_TOKENS = tuple(
+    _CANDIDATE_CLEANUP.get("rating_word_tokens", ["one", "two", "three", "four", "five"])
+)
+CANDIDATE_ANALYTICS_DIMENSION_TOKEN_PATTERN = str(
+    _CANDIDATE_CLEANUP.get(
+        "analytics_dimension_token_pattern", r"dimension\d+|metric\d+|cd\d+|ev\d+"
+    )
+)
+CANDIDATE_ALPHA_CHAR_PATTERN = str(_CANDIDATE_CLEANUP.get("alpha_char_pattern", r"[A-Za-z]"))
+CANDIDATE_UI_NOISE_TOKEN_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("ui_noise_token_pattern", r"\b[a-z]+_[a-z0-9_]+\b")
+)
+CANDIDATE_UI_ICON_TOKEN_PATTERN = str(
+    _CANDIDATE_CLEANUP.get(
+        "ui_icon_token_pattern",
+        r"\b(corporate_fare|bar_chart|home_pin|location_on|travel_explore|business_center|storefront|schedule|payments|school|work|place)\b",
+    )
+)
+CANDIDATE_SCRIPT_NOISE_PATTERN = str(
+    _CANDIDATE_CLEANUP.get(
+        "script_noise_pattern",
+        r"\b(?:imageloader|document\.getelementbyid|fallback-image)\b",
+    )
+)
+CANDIDATE_URL_ABSOLUTE_PREFIXES = tuple(
+    _CANDIDATE_CLEANUP.get("candidate_url_absolute_prefixes", ["http://", "https://"])
+)
+CANDIDATE_ASSET_FILE_EXTENSIONS = tuple(
+    _CANDIDATE_CLEANUP.get(
+        "asset_file_extensions",
+        [".woff", ".woff2", ".ttf", ".otf", ".eot", ".css", ".js", ".map"],
+    )
+)
+CANDIDATE_IMAGE_FILE_EXTENSIONS = tuple(
+    _CANDIDATE_CLEANUP.get(
+        "image_file_extensions",
+        [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg"],
+    )
+)
+CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT = int(
+    _CANDIDATE_CLEANUP.get("nested_collection_scan_limit", 20)
+)
+CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("dynamic_numeric_field_pattern", r"\d+(?:[_-]\d+)*?")
+)
+CANDIDATE_DYNAMIC_FIELD_NAME_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("dynamic_field_name_pattern", r"[a-z][a-z0-9_]*")
+)
+CANDIDATE_COLOR_VARIANT_COUNT_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("color_variant_count_pattern", r"^\d+\s+colors?\b")
+)
+CANDIDATE_AVAILABILITY_TOKENS_LIMITED_STOCK = tuple(
+    _CANDIDATE_CLEANUP.get("availability_status_tokens", {}).get("limited_stock", [])
+)
+CANDIDATE_AVAILABILITY_TOKENS_IN_STOCK = tuple(
+    _CANDIDATE_CLEANUP.get("availability_status_tokens", {}).get("in_stock", [])
+)
+CANDIDATE_AVAILABILITY_TOKENS_OUT_OF_STOCK = tuple(
+    _CANDIDATE_CLEANUP.get("availability_status_tokens", {}).get("out_of_stock", [])
+)
+CANDIDATE_AVAILABILITY_TOKENS_PREORDER = tuple(
+    _CANDIDATE_CLEANUP.get("availability_status_tokens", {}).get("preorder", [])
+)
+
+_DISCOVERED_FIELD_CLEANUP = EXTRACTION_RULES.get("discovered_field_cleanup", {})
+DISCOVERED_FIELD_NOISE_TOKENS = set(
+    _DISCOVERED_FIELD_CLEANUP.get("field_noise_tokens", [])
+)
+DISCOVERED_VALUE_NOISE_PHRASES = tuple(
+    _DISCOVERED_FIELD_CLEANUP.get("value_noise_phrases", [])
+)
+
+def _currency_symbol_class(symbol_map: dict[object, object]) -> str:
+    symbols = sorted(
+        {str(symbol).strip() for symbol in symbol_map.keys() if str(symbol).strip()}
+    )
+    if not symbols:
+        return r"[$€£¥₹]"
+    single_char_symbols = [symbol for symbol in symbols if len(symbol) == 1]
+    multi_char_symbols = sorted(
+        [symbol for symbol in symbols if len(symbol) > 1], key=len, reverse=True
+    )
+    if multi_char_symbols:
+        alternates = [re.escape(symbol) for symbol in multi_char_symbols]
+        if single_char_symbols:
+            alternates.append(
+                "[" + "".join(re.escape(symbol) for symbol in single_char_symbols) + "]"
+            )
+        return "(?:" + "|".join(alternates) + ")"
+    return "[" + "".join(re.escape(symbol) for symbol in single_char_symbols) + "]"
+
+
+def _currency_code_alternation(currency_codes: object) -> str:
+    if not currency_codes:
+        normalized_codes: list[object] | tuple[object, ...] | set[object] = []
+    elif isinstance(currency_codes, str):
+        normalized_codes = [currency_codes]
+    elif isinstance(currency_codes, (list, tuple, set)):
+        normalized_codes = currency_codes
+    else:
+        normalized_codes = [currency_codes]
+    codes = sorted(
+        {str(code).strip().upper() for code in normalized_codes if str(code).strip()}
+    )
+    if not codes:
+        return r"[A-Z]{3}"
+    return "(?:" + "|".join(re.escape(code) for code in codes) + ")"
+
+
+def _coerce_symbol_map(value: object) -> dict[object, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _expand_salary_range_regex(rules: dict[str, object]) -> str:
+    raw_pattern = str(rules.get("salary_range_regex") or "").strip()
+    if not raw_pattern:
+        raw_pattern = (
+            r"(?:(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\s*\d[\d,.]*[kKmMbB]?\s*"
+            r"(?:[-–—]|to|until)\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\s*"
+            r"\d[\d,.]*[kKmMbB]?\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?"
+            r"(?:\s*/\s*[a-zA-Z]+)?|(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)\s*"
+            r"\d[\d,.]*[kKmMbB]?(?:\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?"
+            r"(?:\s*/\s*[a-zA-Z]+)?|\d[\d,.]*[kKmMbB]?(?:\s*(?:__CURRENCY_SYMBOL_CLASS__|"
+            r"__CURRENCY_CODE_ALT__))?(?:\s*/\s*[a-zA-Z]+)?)"
+        )
+    currency_symbol_map = _coerce_symbol_map(rules.get("currency_symbol_map"))
+    expanded = raw_pattern.replace(
+        "__CURRENCY_SYMBOL_CLASS__",
+        _currency_symbol_class(currency_symbol_map),
+    ).replace(
+        "__CURRENCY_CODE_ALT__",
+        _currency_code_alternation(rules.get("currency_codes", [])),
+    )
+    return expanded if expanded.startswith("(?i)") else f"(?i){expanded}"
+
+
+PRICE_FIELDS = tuple(NORMALIZATION_RULES.get("price_fields", []))
+PRICE_REGEX = str(NORMALIZATION_RULES.get("price_regex", r"\d[\d,.]*"))
+SALARY_RANGE_REGEX = _expand_salary_range_regex(NORMALIZATION_RULES)
+CURRENCY_CODES = tuple(NORMALIZATION_RULES.get("currency_codes", []))
+CURRENCY_SYMBOL_MAP = _coerce_symbol_map(NORMALIZATION_RULES.get("currency_symbol_map"))
+COLOR_NOISE_TOKENS = tuple(NORMALIZATION_RULES.get("color_noise_tokens", []))
+SIZE_NOISE_TOKENS = tuple(NORMALIZATION_RULES.get("size_noise_tokens", []))
+HTTP_URL_PREFIXES: tuple[str, str] = ("http://", "https://")
+
 VERDICT_RULES = {
     "detail_core_fields": ["title", "price", "brand"],
     "listing_core_fields": ["title"],
@@ -1805,3 +2021,340 @@ COOKIE_POLICY = {
 }
 
 KNOWN_ATS_PLATFORMS = known_ats_domains()
+
+
+def _compile_extraction_rule_pattern(pattern: object) -> re.Pattern[str]:
+    raw_pattern = str(pattern or "").strip()
+    if not raw_pattern:
+        raise RuntimeError("Invalid empty regex in extraction_rules.py")
+    return re.compile(raw_pattern, re.I)
+
+
+def _compile_extraction_rule_patterns(
+    patterns: object,
+) -> tuple[re.Pattern[str], ...]:
+    normalized_patterns = patterns if isinstance(patterns, (list, tuple)) else []
+    return tuple(
+        _compile_extraction_rule_pattern(pattern) for pattern in normalized_patterns
+    )
+
+
+DYNAMIC_FIELD_NAME_DROP_TOKENS = set(
+    EXTRACTION_RULES.get("dynamic_field_name_drop_tokens", [])
+)
+CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS = frozenset(
+    _CANDIDATE_CLEANUP.get("dynamic_field_name_hard_rejects", [])
+)
+_CANDIDATE_SCHEMA_NOISE_PATTERNS = _CANDIDATE_CLEANUP.get(
+    "dynamic_field_name_schema_noise_patterns", []
+)
+DYNAMIC_FIELD_NAME_SCHEMA_NOISE_REGEXES = tuple(
+    compiled
+    for compiled in (
+        _compile_extraction_rule_pattern(pattern)
+        for pattern in _CANDIDATE_SCHEMA_NOISE_PATTERNS
+    )
+    if compiled is not None
+)
+DYNAMIC_FIELD_NAME_TICKERLIKE_BLOCKLIST = frozenset(
+    str(x).strip().lower()
+    for x in _CANDIDATE_CLEANUP.get("dynamic_field_name_tickerlike_blocklist", [])
+    if str(x).strip()
+)
+DOM_PATTERNS = dict(_DOM_PATTERNS)
+
+FIELD_POLLUTION_RULES = dict(EXTRACTION_RULES.get("field_pollution_rules", {}))
+JSONLD_STRUCTURAL_KEYS = frozenset(
+    EXTRACTION_RULES.get(
+        "jsonld_structural_keys",
+        ["@type", "@context", "@id", "@graph", "@vocab", "@list", "@set"],
+    )
+)
+JSONLD_NON_PRODUCT_BLOCK_TYPES = frozenset(
+    EXTRACTION_RULES.get(
+        "jsonld_non_product_block_types",
+        [
+            "organization",
+            "website",
+            "webpage",
+            "breadcrumblist",
+            "searchaction",
+            "sitenavigationelement",
+            "imageobject",
+            "videoobject",
+            "faqpage",
+            "howto",
+            "person",
+            "localbusiness",
+            "store",
+        ],
+    )
+)
+JSONLD_TYPE_NOISE = set(EXTRACTION_RULES.get("jsonld_type_noise", []))
+PRODUCT_IDENTITY_FIELDS = frozenset(
+    EXTRACTION_RULES.get(
+        "product_identity_fields",
+        [
+            "title",
+            "price",
+            "sale_price",
+            "original_price",
+            "brand",
+            "description",
+            "sku",
+            "image_url",
+            "additional_images",
+            "availability",
+            "category",
+        ],
+    )
+)
+NESTED_NON_PRODUCT_KEYS = frozenset(
+    EXTRACTION_RULES.get(
+        "nested_non_product_keys",
+        [
+            "review",
+            "reviews",
+            "aggregaterating",
+            "aggregate_rating",
+            "author",
+            "publisher",
+            "creator",
+            "contributor",
+            "breadcrumb",
+            "breadcrumblist",
+            "itemlistelement",
+            "potentialaction",
+            "mainentityofpage",
+        ],
+    )
+)
+SOURCE_RANKING = dict(EXTRACTION_RULES.get("source_ranking", {}))
+
+_SEMANTIC_DETAIL_RULES = EXTRACTION_RULES.get("semantic_detail", {})
+SECTION_SKIP_PATTERNS = tuple(
+    _SEMANTIC_DETAIL_RULES.get(
+        "section_skip_patterns",
+        ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe"],
+    )
+)
+SECTION_ANCESTOR_STOP_TAGS = set(
+    _SEMANTIC_DETAIL_RULES.get(
+        "section_ancestor_stop_tags", ["footer", "header", "nav", "aside", "form"]
+    )
+)
+SECTION_ANCESTOR_STOP_TOKENS = set(
+    _SEMANTIC_DETAIL_RULES.get(
+        "section_ancestor_stop_tokens",
+        [
+            "footer",
+            "header",
+            "nav",
+            "menu",
+            "newsletter",
+            "breadcrumbs",
+            "breadcrumb",
+            "cookie",
+            "consent",
+        ],
+    )
+)
+SPEC_LABEL_BLOCK_PATTERNS = tuple(
+    _SEMANTIC_DETAIL_RULES.get(
+        "spec_label_block_patterns",
+        [
+            "play video",
+            "watch video",
+            "video",
+            "learn more",
+            "add to cart",
+            "buy now",
+            "primary guide",
+            "guide",
+            "discount",
+        ],
+    )
+)
+SPEC_DROP_LABELS = set(
+    _SEMANTIC_DETAIL_RULES.get("spec_drop_labels", ["qty", "quantity", "details"])
+)
+FEATURE_SECTION_ALIASES = set(
+    _SEMANTIC_DETAIL_RULES.get(
+        "feature_section_aliases",
+        ["features", "feature", "highlights", "key_features", "key features"],
+    )
+)
+DIMENSION_KEYWORDS = tuple(
+    _SEMANTIC_DETAIL_RULES.get(
+        "dimension_keywords",
+        [
+            "width",
+            "height",
+            "depth",
+            "length",
+            "diameter",
+            "weight",
+            "dimensions",
+            "size",
+            "measurement",
+            "measurements",
+        ],
+    )
+)
+SEMANTIC_AGGREGATE_SEPARATOR = str(
+    _SEMANTIC_DETAIL_RULES.get("aggregate_separator", " | ")
+)
+
+_LISTING_EXTRACTION_RULES = EXTRACTION_RULES.get("listing_extraction", {})
+LISTING_CARD_TITLE_SELECTORS = tuple(
+    _LISTING_EXTRACTION_RULES.get("card_title_selectors", [])
+)
+LISTING_DETAIL_PATH_MARKERS = tuple(
+    _LISTING_EXTRACTION_RULES.get("detail_path_markers", [])
+)
+LISTING_SWATCH_CONTAINER_SELECTORS = tuple(
+    _LISTING_EXTRACTION_RULES.get("swatch_container_selectors", [])
+)
+LISTING_IMAGE_EXCLUDE_TOKENS = tuple(
+    _LISTING_EXTRACTION_RULES.get("image_exclude_tokens", [])
+)
+LISTING_COLOR_ACTION_VALUES = frozenset(
+    _LISTING_EXTRACTION_RULES.get("color_action_values", [])
+)
+LISTING_COLOR_ACTION_PREFIXES = tuple(
+    _LISTING_EXTRACTION_RULES.get("color_action_prefixes", [])
+)
+LISTING_FILTER_OPTION_KEYS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("filter_option_keys", [])
+)
+LISTING_MINIMAL_VISUAL_FIELDS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("minimal_visual_fields", [])
+)
+LISTING_PRODUCT_SIGNAL_FIELDS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("product_signal_fields", [])
+)
+LISTING_JOB_SIGNAL_FIELDS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("job_signal_fields", [])
+)
+LISTING_NON_LISTING_PATH_TOKENS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("non_listing_path_tokens", [])
+)
+LISTING_HUB_PATH_SEGMENTS = frozenset(_LISTING_EXTRACTION_RULES.get("hub_path_segments", []))
+LISTING_WEAK_METADATA_FIELDS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("weak_metadata_fields", [])
+)
+LISTING_FACET_QUERY_KEYS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("facet_query_keys", [])
+)
+LISTING_FACET_PATH_FRAGMENTS = tuple(
+    _LISTING_EXTRACTION_RULES.get("facet_path_fragments", [])
+)
+LISTING_CATEGORY_PATH_MARKERS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("category_path_markers", [])
+)
+LISTING_BUY_BOX_HEADING_TEXTS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("buy_box_heading_texts", [])
+)
+LISTING_BUY_BOX_REQUIRED_TOKENS = tuple(
+    _LISTING_EXTRACTION_RULES.get("buy_box_required_tokens", [])
+)
+LISTING_BUY_BOX_PACK_SIZE_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_pack_size_pattern", r"Pack Size\s+(?P<value>.+?)\s+SKU(?:\s|$)"
+    )
+)
+LISTING_BUY_BOX_SKU_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_sku_pattern", r"SKU\s+(?P<value>[A-Za-z0-9-]{3,})"
+    )
+)
+LISTING_BUY_BOX_AVAILABILITY_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_availability_pattern",
+        r"Availability\s+(?P<value>.+?)\s+Price(?:\s|$)",
+    )
+)
+LISTING_BUY_BOX_PRICE_PATTERN = str(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_price_pattern", r"Price\s+(?P<value>[$€£₹]\s*[\d,.]+)"
+    )
+)
+LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP = dict(
+    _LISTING_EXTRACTION_RULES.get("buy_box_currency_symbol_map", {})
+)
+LISTING_PRODUCT_DETAIL_REQUIRED_KEYS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("product_detail_required_keys", [])
+)
+LISTING_PRODUCT_DETAIL_PRESENCE_ANY_KEYS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("product_detail_presence_any_keys", [])
+)
+LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT = int(
+    _LISTING_EXTRACTION_RULES.get("product_detail_list_scan_limit", 20)
+)
+LISTING_STRUCTURED_SPEC_GROUPS_KEY = str(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_groups_key", "specificationGroups")
+)
+LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH = int(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_search_max_depth", 7)
+)
+LISTING_STRUCTURED_SPEC_GROUP_LIMIT = int(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_group_limit", 8)
+)
+LISTING_STRUCTURED_SPEC_ROW_LIMIT = int(
+    _LISTING_EXTRACTION_RULES.get("structured_spec_row_limit", 24)
+)
+LISTING_PRODUCT_DETAIL_IMAGE_SOURCE_KEYS = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_image_source_keys",
+        ["images", "detailedImages", "colourAlternateViews", "variants"],
+    )
+)
+LISTING_PRODUCT_DETAIL_TOP_LEVEL_PAYLOAD_KEYS = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_top_level_payload_keys",
+        ["product", "item", "product group", "productgroup", "review"],
+    )
+)
+LISTING_PRODUCT_DETAIL_PROPS_PATH = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_props_path", ["props", "pageProps", "data", "getProductDetail"]
+    )
+)
+LISTING_PRODUCT_DETAIL_PRODUCT_BLOB_PATH = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "product_detail_product_blob_path", ["props", "pageProps", "product"]
+    )
+)
+LISTING_BUY_BOX_HEADING_SCAN_TAGS = tuple(
+    _LISTING_EXTRACTION_RULES.get(
+        "buy_box_heading_scan_tags", ["h2", "h3", "button", "p", "span"]
+    )
+)
+LISTING_DESCRIPTION_CANDIDATE_FIELDS = tuple(
+    _LISTING_EXTRACTION_RULES.get("description_candidate_fields", ["description", "summary"])
+)
+_LISTING_MATERIALS_AND_CARE_SECTION_LABELS = _LISTING_EXTRACTION_RULES.get(
+    "materials_and_care_section_labels", {}
+)
+LISTING_MATERIALS_SECTION_LABEL = str(
+    _LISTING_MATERIALS_AND_CARE_SECTION_LABELS.get("materials", "Materials:")
+)
+LISTING_CARE_SECTION_LABEL = str(
+    _LISTING_MATERIALS_AND_CARE_SECTION_LABELS.get("care", "Care:")
+)
+_LISTING_NOISE = EXTRACTION_RULES.get("listing_noise_filters", {})
+LISTING_NAVIGATION_TITLE_HINTS = frozenset(
+    _LISTING_NOISE.get("navigation_title_hints", [])
+)
+LISTING_MERCHANDISING_TITLE_PREFIXES = tuple(
+    _LISTING_NOISE.get("merchandising_title_prefixes", [])
+)
+LISTING_EDITORIAL_TITLE_PATTERNS = _compile_extraction_rule_patterns(
+    _LISTING_NOISE.get("editorial_title_patterns", [])
+)
+LISTING_ALT_TEXT_TITLE_PATTERN = (
+    _compile_extraction_rule_pattern(_LISTING_NOISE["alt_text_title_pattern"])
+    if _LISTING_NOISE.get("alt_text_title_pattern")
+    else None
+)
+LISTING_WEAK_TITLES = frozenset(_LISTING_NOISE.get("weak_listing_titles", []))

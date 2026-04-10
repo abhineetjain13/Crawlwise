@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import lru_cache
 from json import loads as parse_json
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
@@ -11,6 +12,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlu
 from app.services.config.field_mappings import (
     ECOMMERCE_ONLY_FIELDS,
     JOB_ONLY_FIELDS,
+    REQUESTED_FIELD_ALIASES,
     get_surface_field_aliases,
 )
 from app.services.exceptions import ExtractionError, ExtractionParseError
@@ -32,7 +34,7 @@ from app.services.normalizers import (
 from app.services.normalizers import (
     normalize_and_validate_value,
 )
-from app.services.pipeline_config import (
+from app.services.config.extraction_rules import (
     CANDIDATE_ASSET_FILE_EXTENSIONS,
     CANDIDATE_AVAILABILITY_NOISE_PHRASES,
     CANDIDATE_AVAILABILITY_TOKENS,
@@ -88,6 +90,14 @@ from app.services.pipeline_config import (
     JSONLD_NON_PRODUCT_BLOCK_TYPES,
     JSONLD_STRUCTURAL_KEYS,
     JSONLD_TYPE_NOISE,
+    MAX_CANDIDATES_PER_FIELD,
+    NESTED_NON_PRODUCT_KEYS,
+    PRODUCT_IDENTITY_FIELDS,
+    SEMANTIC_AGGREGATE_SEPARATOR,
+    SOURCE_RANKING,
+)
+from app.services.config.listing_heuristics import (
+    LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_BUY_BOX_AVAILABILITY_PATTERN,
     LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP,
     LISTING_BUY_BOX_HEADING_SCAN_TAGS,
@@ -110,12 +120,6 @@ from app.services.pipeline_config import (
     LISTING_STRUCTURED_SPEC_GROUPS_KEY,
     LISTING_STRUCTURED_SPEC_ROW_LIMIT,
     LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH,
-    MAX_CANDIDATES_PER_FIELD,
-    NESTED_NON_PRODUCT_KEYS,
-    PRODUCT_IDENTITY_FIELDS,
-    REQUESTED_FIELD_ALIASES,
-    SEMANTIC_AGGREGATE_SEPARATOR,
-    SOURCE_RANKING,
 )
 from app.services.requested_field_policy import (
     expand_requested_fields,
@@ -321,7 +325,9 @@ def candidate_source_rank(field_name: str, source: object) -> int:
     normalized_source = str(source or "").strip()
     if not normalized_source:
         return 0
-    source_parts = [part.strip() for part in normalized_source.split(",") if part.strip()]
+    source_parts = [
+        part.strip() for part in normalized_source.split(",") if part.strip()
+    ]
     if not source_parts:
         return 0
     overrides = _DETAIL_FIELD_SOURCE_RANK_OVERRIDES.get(field_name, {})
@@ -335,7 +341,11 @@ def candidate_source_rank(field_name: str, source: object) -> int:
         "shopify_variant": 10,
     }
     return max(
-        int(overrides.get(part, source_ranking_overrides.get(part, SOURCE_RANKING.get(part, 0))))
+        int(
+            overrides.get(
+                part, source_ranking_overrides.get(part, SOURCE_RANKING.get(part, 0))
+            )
+        )
         for part in source_parts
     )
 
@@ -424,7 +434,9 @@ def _dynamic_field_name_is_valid(normalized: str) -> bool:
         return False
     if normalized in JSONLD_TYPE_NOISE:
         return False
-    if normalized in _DYNAMIC_VARIANT_VALUE_FIELDS or _PACK_STYLE_DYNAMIC_RE.fullmatch(normalized):
+    if normalized in _DYNAMIC_VARIANT_VALUE_FIELDS or _PACK_STYLE_DYNAMIC_RE.fullmatch(
+        normalized
+    ):
         return False
     if _dynamic_field_name_is_schema_slug_noise(normalized):
         return False
@@ -464,6 +476,50 @@ _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS = {
     "variants",
 }
 _TRUE_VARIANT_AXES = {"color", "size", "waist", "width", "length", "inseam"}
+_HTML_LABEL_VALUE_FALLBACK_BLOCKED_FIELDS = frozenset(
+    {"description", "features", "materials", "specifications", "product_attributes"}
+)
+_NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
+    {
+        "about",
+        "about_us",
+        "accessibility_statement",
+        "contact",
+        "contact_us",
+        "customer_service",
+        "faq",
+        "faqs",
+        "policies",
+        "privacy",
+        "privacy_policy",
+        "return_policy",
+        "returns",
+        "shipping",
+        "shipping_policy",
+        "shopping_cart",
+        "store_locations",
+        "terms",
+        "terms_policies",
+    }
+)
+_NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES = (
+    "loading... read more",
+    "privacy policy",
+    "terms of service",
+    "shipping policy",
+    "return policy",
+    "request a catalog",
+    "join our team",
+    "account login",
+    "store locations",
+    "accessibility statement",
+)
+_NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS = (
+    "gift cards",
+    "press inquiries",
+    "the gazette",
+    "your privacy choices",
+)
 
 
 def _canonical_structured_key(value: object) -> str:
@@ -560,9 +616,7 @@ def _collect_candidates(
             base_url=url,
             surface=surface,
         )
-        _collect_datalayer_candidates(
-            rows, field_name=field_name, datalayer=datalayer
-        )
+        _collect_datalayer_candidates(rows, field_name=field_name, datalayer=datalayer)
         _collect_network_payload_candidates(
             rows,
             field_name=field_name,
@@ -1087,7 +1141,10 @@ def _sync_selected_variant_root_fields(final_candidates: dict[str, list[dict]]) 
     )
     if not isinstance(selected_variant, dict):
         return
-    source = str(selected_row.get("source") or "selected_variant").strip() or "selected_variant"
+    source = (
+        str(selected_row.get("source") or "selected_variant").strip()
+        or "selected_variant"
+    )
     for field_name in (
         "price",
         "original_price",
@@ -1103,7 +1160,9 @@ def _sync_selected_variant_root_fields(final_candidates: dict[str, list[dict]]) 
         final_candidates[field_name] = [{"value": value, "source": source}]
 
 
-def _sanitize_structured_variant_output(final_candidates: dict[str, list[dict]]) -> None:
+def _sanitize_structured_variant_output(
+    final_candidates: dict[str, list[dict]],
+) -> None:
     variant_axes_rows = final_candidates.get("variant_axes")
     if not isinstance(variant_axes_rows, list) or not variant_axes_rows:
         return
@@ -1116,7 +1175,9 @@ def _sanitize_structured_variant_output(final_candidates: dict[str, list[dict]])
         return
     cleaned_axes, moved_attributes = _split_variant_axes(axis_payload)
     if cleaned_axes:
-        final_candidates["variant_axes"] = [{**variant_axes_rows[0], "value": cleaned_axes}]
+        final_candidates["variant_axes"] = [
+            {**variant_axes_rows[0], "value": cleaned_axes}
+        ]
     else:
         final_candidates.pop("variant_axes", None)
     if moved_attributes:
@@ -1139,7 +1200,11 @@ def _merge_product_attributes_into_candidates(
     merged: dict[str, object] = {}
     existing_rows = final_candidates.get("product_attributes")
     if isinstance(existing_rows, list) and existing_rows:
-        current = existing_rows[0].get("value") if isinstance(existing_rows[0], dict) else None
+        current = (
+            existing_rows[0].get("value")
+            if isinstance(existing_rows[0], dict)
+            else None
+        )
         if isinstance(current, dict):
             merged.update(current)
     merged.update(attributes)
@@ -1150,7 +1215,9 @@ def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> Non
     product_rows = final_candidates.get("product_attributes")
     if not isinstance(product_rows, list) or not product_rows:
         return
-    payload = product_rows[0].get("value") if isinstance(product_rows[0], dict) else None
+    payload = (
+        product_rows[0].get("value") if isinstance(product_rows[0], dict) else None
+    )
     if not isinstance(payload, dict):
         final_candidates.pop("product_attributes", None)
         return
@@ -1164,10 +1231,35 @@ def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> Non
         normalized_key = _canonical_structured_key(key)
         if normalized_key in canonical_keys:
             sanitized.pop(key, None)
+            continue
+        if _is_noisy_product_attribute_entry(
+            normalized_key or str(key), sanitized.get(key)
+        ):
+            sanitized.pop(key, None)
     if sanitized:
-        final_candidates["product_attributes"] = [{**product_rows[0], "value": sanitized}]
+        final_candidates["product_attributes"] = [
+            {**product_rows[0], "value": sanitized}
+        ]
     else:
         final_candidates.pop("product_attributes", None)
+
+
+def _is_noisy_product_attribute_entry(key: object, value: object) -> bool:
+    normalized_key = normalize_requested_field(key)
+    text_value = _normalized_candidate_text(value).lower()
+    if not normalized_key or not text_value:
+        return True
+    if normalized_key in _NOISY_PRODUCT_ATTRIBUTE_KEYS:
+        return True
+    if normalized_key.startswith(("contact_", "customer_", "privacy_", "terms_")):
+        return True
+    if any(phrase in text_value for phrase in _NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES):
+        return True
+    if any(token in text_value for token in _NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS):
+        return True
+    if text_value.count(" - ") >= 2:
+        return True
+    return False
 
 
 def extract_candidates(
@@ -1179,17 +1271,23 @@ def extract_candidates(
     extraction_contract: list[dict] | None = None,
     resolved_fields: list[str] | None = None,
     adapter_records: list[dict] | None = None,
+    soup: "BeautifulSoup | None" = None,
 ) -> tuple[dict, dict]:
     """Extract candidate values for each target field.
 
     Sources are checked in deterministic priority order and every discovered
     value is preserved as its own candidate row.
 
+    Args:
+        soup: Optional pre-parsed BeautifulSoup object — avoids redundant
+              CPU-heavy DOM parsing when the caller already has one.
+
     Returns:
         (candidates, source_trace) — candidates maps field -> list of {value, source}
     """
     try:
-        soup = BeautifulSoup(html, "html.parser")
+        if soup is None:
+            soup = BeautifulSoup(html, "html.parser")
         page_sources = parse_page_sources(html, soup=soup)
         signal_inventory = build_signal_inventory(
             html,
@@ -1228,7 +1326,9 @@ def extract_candidates(
             page_url=url,
             adapter_records=adapter_records,
         )
-        semantic = _scoped_semantic_payload(semantic, url=url, adapter_records=adapter_records)
+        semantic = _scoped_semantic_payload(
+            semantic, url=url, adapter_records=adapter_records
+        )
         label_value_text_sources = _build_label_value_text_sources(
             url=url,
             soup=soup,
@@ -1297,10 +1397,18 @@ def _scope_adapter_records_for_url(url: str, adapter_records: list[dict]) -> lis
         if not isinstance(record, dict):
             continue
         record_url = str(record.get("url") or record.get("source_url") or "").strip()
-        if record_url and current_url_key and _scoped_url_key(record_url) != current_url_key:
+        if (
+            record_url
+            and current_url_key
+            and _scoped_url_key(record_url) != current_url_key
+        ):
             continue
         record_identifiers = _scoped_record_identifiers(record)
-        if current_identifiers and record_identifiers and current_identifiers.isdisjoint(record_identifiers):
+        if (
+            current_identifiers
+            and record_identifiers
+            and current_identifiers.isdisjoint(record_identifiers)
+        ):
             continue
         scoped.append(record)
     return scoped
@@ -1381,7 +1489,7 @@ def _extract_label_value_from_text(
     """Search description text and HTML-derived text from the raw HTML for label/value patterns."""
     label_variants = _label_value_variants(field_name, surface=surface)
     combined_text_sources = list(text_sources)
-    if html:
+    if html and field_name not in _HTML_LABEL_VALUE_FALLBACK_BLOCKED_FIELDS:
         combined_text_sources.append(_normalize_html_rich_text(html))
 
     for text in combined_text_sources:
@@ -1547,7 +1655,10 @@ def sanitize_field_value_with_reason(
 def finalize_candidate_row(
     field_name: str, row: dict, *, base_url: str = ""
 ) -> tuple[object | None, str | None]:
-    value = coerce_field_candidate_value(field_name, row.get("value"), base_url=base_url)
+    value = coerce_field_candidate_value(
+        field_name, row.get("value"), base_url=base_url
+    )
+    value = _normalize_embedded_cents_value(field_name, row, value)
     if value in (None, "", [], {}):
         return None, "empty_after_normalization"
     if isinstance(value, bool):
@@ -1556,6 +1667,34 @@ def finalize_candidate_row(
     if value in (None, "", [], {}):
         return None, rejection_reason or "sanitizer_rejected"
     return value, None
+
+
+def _normalize_embedded_cents_value(
+    field_name: str,
+    row: dict,
+    value: object,
+) -> object:
+    if field_name not in {"price", "original_price"}:
+        return value
+    if str(row.get("blob_family") or "").strip().lower() != "product_json":
+        return value
+    if isinstance(value, int):
+        cents_value = value
+    elif isinstance(value, str) and re.fullmatch(r"\d{4,}", value.strip()):
+        try:
+            cents_value = int(value.strip())
+        except ValueError:
+            return value
+    else:
+        return value
+    try:
+        normalized = (Decimal(cents_value) / Decimal("100")).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+    except (InvalidOperation, ValueError):
+        return value
+    return format(normalized, "f")
 
 
 def _normalize_html_rich_text(value: str) -> str:
@@ -1841,7 +1980,9 @@ def _append_source_candidates(
     actual_payload = _embedded_blob_payload(payload)
     # Skip brand/entity_name extraction from GA data layer — GA brand is the retailer's
     # name, not the product manufacturer. JSON-LD (rank 6) will supply the real brand.
-    if _field_is_type(field_name, "entity_name") and _looks_like_ga_data_layer(actual_payload):
+    if _field_is_type(field_name, "entity_name") and _looks_like_ga_data_layer(
+        actual_payload
+    ):
         return
     for match in _deep_get_all_aliases(
         actual_payload,
@@ -2267,7 +2408,9 @@ def _merge_dynamic_row_map(
         target.setdefault(field_name, []).extend(field_rows)
 
 
-def _find_variant_adapter_record(adapter_records: list[dict]) -> dict[str, object] | None:
+def _find_variant_adapter_record(
+    adapter_records: list[dict],
+) -> dict[str, object] | None:
     for record in adapter_records:
         if isinstance(record, dict) and isinstance(record.get("variants"), list):
             return record
@@ -2291,10 +2434,20 @@ def _build_adapter_variant_rows(
     selected_variant = record.get("selected_variant")
     if selected_variant:
         rows["selected_variant"] = [{"value": selected_variant, "source": source}]
-        for field_name in ("color", "size", "sku", "price", "original_price", "availability", "image_url"):
+        for field_name in (
+            "color",
+            "size",
+            "sku",
+            "price",
+            "original_price",
+            "availability",
+            "image_url",
+        ):
             value = selected_variant.get(field_name)
             if value not in (None, "", [], {}):
-                rows.setdefault(field_name, []).append({"value": value, "source": source})
+                rows.setdefault(field_name, []).append(
+                    {"value": value, "source": source}
+                )
     product_attributes = record.get("product_attributes")
     if isinstance(product_attributes, dict) and product_attributes:
         rows["product_attributes"] = [{"value": product_attributes, "source": source}]
@@ -2336,7 +2489,9 @@ def _build_demandware_variant_rows(
         ):
             value = selected_variant.get(field_name)
             if value not in (None, "", [], {}):
-                rows.setdefault(field_name, []).append({"value": value, "source": source})
+                rows.setdefault(field_name, []).append(
+                    {"value": value, "source": source}
+                )
     return rows
 
 
@@ -2395,10 +2550,16 @@ def _parse_demandware_variation_payload(
     if not _is_demandware_variation_payload_url(payload_url):
         return None
     body = payload.get("body")
-    root = body.get("product") if isinstance(body, dict) and isinstance(body.get("product"), dict) else body
+    root = (
+        body.get("product")
+        if isinstance(body, dict) and isinstance(body.get("product"), dict)
+        else body
+    )
     if not isinstance(root, dict):
         return None
-    variation_attributes = root.get("variationAttributes") or root.get("variation_attributes")
+    variation_attributes = root.get("variationAttributes") or root.get(
+        "variation_attributes"
+    )
     if not isinstance(variation_attributes, list) or not variation_attributes:
         return None
 
@@ -2497,7 +2658,9 @@ def _build_demandware_selected_variant(
     selected_values: dict[str, str],
 ) -> dict[str, object] | None:
     row: dict[str, object] = {}
-    variant_id = root.get("id") or root.get("productId") or root.get("pid") or root.get("sku")
+    variant_id = (
+        root.get("id") or root.get("productId") or root.get("pid") or root.get("sku")
+    )
     if variant_id not in (None, "", [], {}):
         row["variant_id"] = str(variant_id)
         row["sku"] = str(variant_id)
@@ -2517,7 +2680,9 @@ def _build_demandware_selected_variant(
         for axis_name in ("color", "size"):
             if option_values.get(axis_name):
                 row[axis_name] = option_values[axis_name]
-    price = _extract_demandware_price(root.get("price"), preferred_keys=("sales", "sale", "current"))
+    price = _extract_demandware_price(
+        root.get("price"), preferred_keys=("sales", "sale", "current")
+    )
     if price:
         row["price"] = price
     original_price = _extract_demandware_price(
@@ -2546,7 +2711,9 @@ def _extract_demandware_price(
         candidate = value.get(key)
         if isinstance(candidate, dict):
             for nested_key in ("formatted", "value", "amount", "price"):
-                normalized = normalize_and_validate_value("price", candidate.get(nested_key))
+                normalized = normalize_and_validate_value(
+                    "price", candidate.get(nested_key)
+                )
                 if normalized:
                     return normalized
         else:
@@ -2575,9 +2742,27 @@ def _extract_demandware_availability(root: dict[str, object]) -> str | None:
             normalized = normalize_and_validate_value("availability", model.get(key))
             if normalized:
                 return str(normalized)
-        if any(model.get(key) is True for key in ("readyToOrder", "ready_to_order", "orderable", "available", "inStock")):
+        if any(
+            model.get(key) is True
+            for key in (
+                "readyToOrder",
+                "ready_to_order",
+                "orderable",
+                "available",
+                "inStock",
+            )
+        ):
             return "in_stock"
-        if any(model.get(key) is False for key in ("readyToOrder", "ready_to_order", "orderable", "available", "inStock")):
+        if any(
+            model.get(key) is False
+            for key in (
+                "readyToOrder",
+                "ready_to_order",
+                "orderable",
+                "available",
+                "inStock",
+            )
+        ):
             return "out_of_stock"
         try:
             ats = model.get("ats") or model.get("stockLevel")
@@ -2590,7 +2775,9 @@ def _extract_demandware_availability(root: dict[str, object]) -> str | None:
     return None
 
 
-def _extract_demandware_image_url(root: dict[str, object], *, base_url: str) -> str | None:
+def _extract_demandware_image_url(
+    root: dict[str, object], *, base_url: str
+) -> str | None:
     images = root.get("images")
     if isinstance(images, dict):
         for key in ("large", "medium", "small"):
@@ -2606,7 +2793,9 @@ def _extract_demandware_image_url(root: dict[str, object], *, base_url: str) -> 
                     return resolved
     featured = root.get("image") or root.get("featuredImage")
     if isinstance(featured, dict):
-        return _resolve_candidate_url(featured.get("url") or featured.get("src"), base_url)
+        return _resolve_candidate_url(
+            featured.get("url") or featured.get("src"), base_url
+        )
     return _resolve_candidate_url(featured, base_url)
 
 
@@ -2624,7 +2813,9 @@ def _score_demandware_selected_variant(
             key = f"dwvar_{base_pid}_{axis_name}" if base_pid else ""
             if key and str(base_query.get(key) or "").strip() == str(value).strip():
                 score += 10
-    if variant.get("url") and _scoped_url_key(str(variant.get("url"))) == _scoped_url_key(base_url):
+    if variant.get("url") and _scoped_url_key(
+        str(variant.get("url"))
+    ) == _scoped_url_key(base_url):
         score += 5
     if variant.get("availability") == "in_stock":
         score += 1
@@ -2634,12 +2825,18 @@ def _score_demandware_selected_variant(
 
 
 def _split_variant_axes(
-    axis_values: dict[str, list[str]]
+    axis_values: dict[str, list[str]],
 ) -> tuple[dict[str, list[str]], dict[str, str]]:
     selectable: dict[str, list[str]] = {}
     product_attributes: dict[str, str] = {}
     for axis_name, values in axis_values.items():
-        cleaned_values = list(dict.fromkeys(_normalized_candidate_text(value) for value in values if _normalized_candidate_text(value)))
+        cleaned_values = list(
+            dict.fromkeys(
+                _normalized_candidate_text(value)
+                for value in values
+                if _normalized_candidate_text(value)
+            )
+        )
         if len(cleaned_values) > 1 or axis_name in _TRUE_VARIANT_AXES:
             selectable[axis_name] = cleaned_values
         elif len(cleaned_values) == 1:
@@ -2666,7 +2863,9 @@ def _variant_axis_name(button) -> str:
         return "color"
     if "size" in aria_label:
         return "size"
-    attr_name = _normalized_candidate_text(button.get("name") or button.get("data-name"))
+    attr_name = _normalized_candidate_text(
+        button.get("name") or button.get("data-name")
+    )
     normalized_attr_name = normalize_requested_field(attr_name)
     if normalized_attr_name:
         return normalized_attr_name
@@ -2674,9 +2873,13 @@ def _variant_axis_name(button) -> str:
 
 
 def _variant_button_label(button, *, axis_name: str) -> str:
-    span = button.find(attrs={"data-displayvalue": True}) or button.find(attrs={"data-display-value": True})
+    span = button.find(attrs={"data-displayvalue": True}) or button.find(
+        attrs={"data-display-value": True}
+    )
     if span:
-        label = _normalized_candidate_text(span.get("data-displayvalue") or span.get("data-display-value"))
+        label = _normalized_candidate_text(
+            span.get("data-displayvalue") or span.get("data-display-value")
+        )
         if label:
             return label
     described = button.find("span", class_="description")
@@ -2703,9 +2906,10 @@ def _variant_button_selected(button) -> bool:
         return True
     assistive = button.select_one(".selected-assistive-text")
     if assistive:
-        return "selected" in _normalized_candidate_text(
-            assistive.get_text(" ", strip=True)
-        ).lower()
+        return (
+            "selected"
+            in _normalized_candidate_text(assistive.get_text(" ", strip=True)).lower()
+        )
     return False
 
 
@@ -2716,9 +2920,7 @@ def _selected_dom_variant(
         return None
     row: dict[str, object] = {"url": base_url}
     option_values = {
-        axis_name: value
-        for axis_name, value in selected_values.items()
-        if value
+        axis_name: value for axis_name, value in selected_values.items() if value
     }
     row.update(option_values)
     if option_values:
@@ -2985,7 +3187,9 @@ def _rich_text_from_node(node) -> str:
 
     if node.name == "li":
         parts = [
-            _rich_text_from_node(child) if isinstance(child, Tag) else _normalized_candidate_text(child)
+            _rich_text_from_node(child)
+            if isinstance(child, Tag)
+            else _normalized_candidate_text(child)
             for child in node.children
         ]
         return " ".join(part for part in parts if part).strip()
@@ -3016,12 +3220,19 @@ def _build_dom_section_rows(soup: BeautifulSoup) -> dict[str, list[dict]]:
         normalized_header = normalize_requested_field(header_text)
         if not normalized_header or not content_text:
             continue
+        if _is_noisy_product_attribute_entry(normalized_header, content_text):
+            continue
         if normalized_header in {"description", "summary", "overview"}:
             rows.setdefault("description", []).append(
                 {"value": content_text, "source": "dom_section"}
             )
             continue
-        if normalized_header in {"details", "specifications", "product_details", "technical_details"}:
+        if normalized_header in {
+            "details",
+            "specifications",
+            "product_details",
+            "technical_details",
+        }:
             rows.setdefault("specifications", []).append(
                 {"value": content_text, "source": "dom_section"}
             )
@@ -3032,7 +3243,12 @@ def _build_dom_section_rows(soup: BeautifulSoup) -> dict[str, list[dict]]:
                 {"value": content_text, "source": "dom_section"}
             )
             continue
-        if normalized_header in {"materials", "material_composition", "fabric", "composition"}:
+        if normalized_header in {
+            "materials",
+            "material_composition",
+            "fabric",
+            "composition",
+        }:
             rows.setdefault("materials", []).append(
                 {"value": content_text, "source": "dom_section"}
             )
@@ -3069,9 +3285,14 @@ def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
             for child in details.children
             if child is not summary and isinstance(child, Tag)
         ]
-        _append(_normalized_candidate_text(summary.get_text(" ", strip=True)), "\n\n".join(part for part in body_parts if part))
+        _append(
+            _normalized_candidate_text(summary.get_text(" ", strip=True)),
+            "\n\n".join(part for part in body_parts if part),
+        )
 
-    for node in soup.select("[data-tab], [data-tab-content], [data-panel], [role='tabpanel']"):
+    for node in soup.select(
+        "[data-tab], [data-tab-content], [data-panel], [role='tabpanel']"
+    ):
         if not isinstance(node, Tag):
             continue
         label = _normalized_candidate_text(
@@ -3079,8 +3300,9 @@ def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
             or node.get("data-title")
             or node.get("aria-label")
             or (
-                node.find_previous(["button", "h2", "h3", "h4"])
-                .get_text(" ", strip=True)
+                node.find_previous(["button", "h2", "h3", "h4"]).get_text(
+                    " ", strip=True
+                )
                 if node.find_previous(["button", "h2", "h3", "h4"])
                 else ""
             )
@@ -3143,7 +3365,9 @@ def _build_shopify_content_rows(
     product: dict[str, object], *, base_url: str
 ) -> dict[str, list[dict]]:
     del base_url
-    content = product.get("content") or product.get("description") or product.get("body_html")
+    content = (
+        product.get("content") or product.get("description") or product.get("body_html")
+    )
     if not isinstance(content, str) or not content.strip():
         return {}
 
@@ -3175,7 +3399,9 @@ def _build_shopify_content_rows(
     product_attributes: dict[str, object] = {}
     materials_value = ""
     for bullet in bullets:
-        label_match = re.match(r"^(?P<label>[A-Za-z][A-Za-z0-9 /'&-]{1,40})\s*:\s*(?P<value>.+)$", bullet)
+        label_match = re.match(
+            r"^(?P<label>[A-Za-z][A-Za-z0-9 /'&-]{1,40})\s*:\s*(?P<value>.+)$", bullet
+        )
         if label_match:
             label = normalize_requested_field(label_match.group("label"))
             value = _normalized_candidate_text(label_match.group("value"))
@@ -3185,7 +3411,17 @@ def _build_shopify_content_rows(
         lowered = bullet.lower()
         if not materials_value and (
             "%" in bullet
-            or any(token in lowered for token in ("cotton", "polyester", "elastane", "nylon", "wool", "linen"))
+            or any(
+                token in lowered
+                for token in (
+                    "cotton",
+                    "polyester",
+                    "elastane",
+                    "nylon",
+                    "wool",
+                    "linen",
+                )
+            )
         ):
             materials_value = bullet
             product_attributes.setdefault("materials", bullet)
@@ -3410,7 +3646,7 @@ def _product_detail_features(value: object) -> str | None:
         label = _normalized_candidate_text(row.get("label"))
         bullet_rows = row.get("value")
         bullets: list[str] = []
-        for item in (bullet_rows if isinstance(bullet_rows, list) else []):
+        for item in bullet_rows if isinstance(bullet_rows, list) else []:
             if isinstance(item, str):
                 cleaned = _normalize_html_rich_text(item)
             else:
@@ -3563,9 +3799,13 @@ def _extract_buy_box_candidates(soup: BeautifulSoup) -> dict[str, str]:
             candidates["availability"] = availability
     else:
         # Fallback for when "Price" is not the next token
-        alt_match = re.search(r"Availability\s+(?P<value>.+?)(?:\s+[A-Z][a-z]+|$)", normalized_text, re.I)
+        alt_match = re.search(
+            r"Availability\s+(?P<value>.+?)(?:\s+[A-Z][a-z]+|$)", normalized_text, re.I
+        )
         if alt_match:
-            candidates["availability"] = _normalized_candidate_text(alt_match.group("value"))
+            candidates["availability"] = _normalized_candidate_text(
+                alt_match.group("value")
+            )
     price_match = re.search(LISTING_BUY_BOX_PRICE_PATTERN, normalized_text)
     if price_match:
         price_text = _normalized_candidate_text(price_match.group("value"))
@@ -3678,7 +3918,10 @@ def _payload_matches_page_scope(payload: object, *, base_url: str) -> bool:
     if normalized_urls:
         if page_scope in normalized_urls:
             return True
-        if any(token and any(token in scoped_url for scoped_url in normalized_urls) for token in page_tokens):
+        if any(
+            token and any(token in scoped_url for scoped_url in normalized_urls)
+            for token in page_tokens
+        ):
             return True
         return False
     if normalized_handles:
@@ -3696,7 +3939,9 @@ def _page_scope_tokens(base_url: str) -> set[str]:
     return {token for token in tokens if token}
 
 
-def _payload_scope_hints(payload: object, *, max_depth: int = 4) -> tuple[set[str], set[str]]:
+def _payload_scope_hints(
+    payload: object, *, max_depth: int = 4
+) -> tuple[set[str], set[str]]:
     urls: set[str] = set()
     handles: set[str] = set()
     if max_depth <= 0 or payload in (None, "", [], {}):
@@ -3708,14 +3953,22 @@ def _payload_scope_hints(payload: object, *, max_depth: int = 4) -> tuple[set[st
                 cleaned = str(value).strip()
                 if normalized_key and normalized_key.endswith("url") and cleaned:
                     urls.add(cleaned)
-                if normalized_key in {"handle", "slug", "product_handle", "product_slug"} and cleaned:
+                if (
+                    normalized_key
+                    in {"handle", "slug", "product_handle", "product_slug"}
+                    and cleaned
+                ):
                     handles.add(cleaned)
-            child_urls, child_handles = _payload_scope_hints(value, max_depth=max_depth - 1)
+            child_urls, child_handles = _payload_scope_hints(
+                value, max_depth=max_depth - 1
+            )
             urls.update(child_urls)
             handles.update(child_handles)
     elif isinstance(payload, list):
         for item in payload[:LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT]:
-            child_urls, child_handles = _payload_scope_hints(item, max_depth=max_depth - 1)
+            child_urls, child_handles = _payload_scope_hints(
+                item, max_depth=max_depth - 1
+            )
             urls.update(child_urls)
             handles.update(child_handles)
     return urls, handles

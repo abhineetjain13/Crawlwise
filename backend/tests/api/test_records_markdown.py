@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.api.records import _render_markdown_block
+from app.services.record_export_service import _render_markdown_block
 
 
 def test_render_markdown_block_preserves_single_blank_lines() -> None:

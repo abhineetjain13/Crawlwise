@@ -12,7 +12,7 @@ from app.services.knowledge_base.store import (
     save_domain_mapping,
 )
 from app.services.normalizers import normalize_value
-from app.services.pipeline_config import REVIEW_CONTAINER_KEYS
+from app.services.config.selectors import REVIEW_CONTAINER_KEYS
 from app.services.schema_service import load_resolved_schema, persist_resolved_schema
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

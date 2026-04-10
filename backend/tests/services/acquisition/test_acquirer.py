@@ -12,6 +12,8 @@ import pytest
 import pytest_asyncio
 from app.services.acquisition.acquirer import (
     _PROXY_FAILURE_STATE,
+    AcquisitionRequest,
+    AcquisitionResult,
     ProxyRotator,
     _artifact_path,
     _diagnose_job_surface_page,
@@ -21,6 +23,7 @@ from app.services.acquisition.acquirer import (
     _mark_proxy_succeeded,
     _network_payload_path,
     _requires_browser_first,
+    _write_diagnostics,
     _write_network_payloads,
     acquire,
     acquire_html,
@@ -804,6 +807,29 @@ async def test_acquire_json_content_type(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_acquire_accepts_typed_request(tmp_path, monkeypatch):
+    html = "<html><body><h1>Typed</h1><p>" + ("x" * 600) + "</p></body></html>"
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+
+    with patch(
+        "app.services.acquisition.acquirer._fetch_with_content_type",
+        new_callable=AsyncMock,
+        return_value=HttpFetchResult(text=html, status_code=200, content_type="html"),
+    ):
+        result = await acquire(
+            request=AcquisitionRequest(
+                run_id=21,
+                url="https://example.com/typed",
+                surface="ecommerce_detail",
+                requested_fields=["title"],
+            )
+        )
+
+    assert result.method == "curl_cffi"
+    assert result.artifact_path.endswith(".html")
+
+
+@pytest.mark.asyncio
 async def test_acquire_writes_diagnostics_artifact(tmp_path, monkeypatch):
     html = "<html><body><h1>Product</h1><p>" + ("x" * 600) + "</p></body></html>"
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
@@ -890,6 +916,70 @@ async def test_acquire_scrubs_session_and_cookie_keys_before_artifact_write(tmp_
     assert persisted[0]["body"]["X-Session-ID"] == "[REDACTED]"
     assert persisted[0]["body"]["sessionid"] == "[REDACTED]"
     assert persisted[0]["body"]["__session"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_acquire_scrubs_proxy_credentials_in_network_payload_artifacts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    payloads = [
+        {
+            "url": "https://api.example.com/data",
+            "proxy": "http://user:secret@proxy.example:8080",
+            "headers": {
+                "x-upstream-proxy": "https://alice:token@proxy2.example:8181",
+            },
+            "body": {
+                "proxy_url": "socks5://bob:hunter2@proxy3.example:1080",
+                "note": "retry via http://user:secret@proxy.example:8080 if primary fails",
+            },
+        }
+    ]
+    _write_network_payloads(42, "https://example.com/product", payloads)
+
+    payload_path = _network_payload_path(42, "https://example.com/product")
+    persisted = json.loads(payload_path.read_text(encoding="utf-8"))
+    assert persisted[0]["proxy"] == "http://***:***@proxy.example:8080"
+    assert (
+        persisted[0]["headers"]["x-upstream-proxy"]
+        == "https://***:***@proxy2.example:8181"
+    )
+    assert persisted[0]["body"]["proxy_url"] == "socks5://***:***@proxy3.example:1080"
+    assert "http://***:***@proxy.example:8080" in persisted[0]["body"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_write_diagnostics_scrubs_proxy_credentials(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    url = "https://example.com/product"
+    diagnostics_path = _diagnostics_path(42, url)
+    artifact_path = _artifact_path(42, url)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("<html><body>ok</body></html>", encoding="utf-8")
+
+    result = AcquisitionResult(
+        html="<html><body>ok</body></html>",
+        method="curl_cffi",
+        diagnostics={
+            "proxy_url": "http://user:secret@proxy.example:8080",
+            "browser_diagnostics": {
+                "upstream_proxy": "https://alice:token@proxy2.example:8181"
+            },
+            "note": "proxy fallback used http://user:secret@proxy.example:8080",
+        },
+    )
+
+    _write_diagnostics(42, url, result, artifact_path, diagnostics_path)
+
+    persisted = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    diagnostics = persisted["diagnostics"]
+    assert diagnostics["proxy_url"] == "http://***:***@proxy.example:8080"
+    assert (
+        diagnostics["browser_diagnostics"]["upstream_proxy"]
+        == "https://***:***@proxy2.example:8181"
+    )
+    assert "http://***:***@proxy.example:8080" in diagnostics["note"]
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ functions can be reused without circular dependencies.
 
 from __future__ import annotations
 
-from app.services.pipeline_config import (
+from app.services.config.extraction_rules import (
     DISCOVERED_FIELD_NOISE_TOKENS,
     DISCOVERED_SOURCE_NOISE_TOKENS,
     DISCOVERED_VALUE_NOISE_PHRASES,

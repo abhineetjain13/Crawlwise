@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from collections.abc import Mapping
 
 from sqlalchemy import DDL, event
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
@@ -9,6 +10,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.models.crawl_domain import (
+    ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    CrawlStatus,
+    normalize_status,
+    transition_status,
+)
+from app.models.crawl_settings import CrawlRunSettings
 
 CRAWL_RUN_FK = "crawl_runs.id"
 
@@ -37,6 +46,128 @@ class CrawlRun(Base):
         onupdate=lambda: datetime.now(UTC),
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def status_value(self) -> CrawlStatus:
+        return normalize_status(self.status)
+
+    @property
+    def settings_view(self) -> CrawlRunSettings:
+        return CrawlRunSettings.from_value(self.settings)
+
+    def is_active(self) -> bool:
+        return self.status_value in ACTIVE_STATUSES
+
+    def is_terminal(self) -> bool:
+        return self.status_value in TERMINAL_STATUSES
+
+    def can_transition_to(self, target: str | CrawlStatus) -> bool:
+        try:
+            transition_status(self.status, target)
+        except ValueError:
+            return False
+        return True
+
+    def set_status(self, target: str | CrawlStatus) -> CrawlStatus:
+        next_status = transition_status(self.status, target)
+        self.status = next_status.value
+        return next_status
+
+    def get_setting(self, key: str, default: object = None) -> object:
+        settings = self.settings if isinstance(self.settings, Mapping) else {}
+        return settings.get(key, default)
+
+    def update_settings(self, **updates: object) -> dict[str, object]:
+        merged = dict(self.settings if isinstance(self.settings, dict) else {})
+        merged.update(updates)
+        self.settings = merged
+        return merged
+
+    def summary_dict(self) -> dict[str, object]:
+        return dict(self.result_summary if isinstance(self.result_summary, Mapping) else {})
+
+    def get_summary(self, key: str, default: object = None) -> object:
+        return self.summary_dict().get(key, default)
+
+    def update_summary(self, **updates: object) -> dict[str, object]:
+        merged = self.summary_dict()
+        merged.update(updates)
+        self.result_summary = merged
+        return merged
+
+    def remove_summary_keys(self, *keys: str) -> dict[str, object]:
+        merged = self.summary_dict()
+        for key in keys:
+            merged.pop(key, None)
+        self.result_summary = merged
+        return merged
+
+    def merge_summary_patch(self, patch: Mapping[str, object]) -> dict[str, object]:
+        merged = _merge_summary_patch(self.summary_dict(), dict(patch))
+        self.result_summary = merged
+        return merged
+
+
+def _merge_summary_patch(current: object, patch: dict[str, object]) -> dict[str, object]:
+    summary = dict(current) if isinstance(current, dict) else {}
+    merged = {**summary, **patch}
+
+    for key in ("url_count", "record_count", "progress", "processed_urls", "completed_urls"):
+        if key in summary or key in patch:
+            merged[key] = max(_as_int(summary.get(key)), _as_int(patch.get(key)))
+
+    if "remaining_urls" in patch:
+        prev_remaining = summary.get("remaining_urls")
+        if prev_remaining is None:
+            merged["remaining_urls"] = _as_int(patch.get("remaining_urls"))
+        else:
+            merged["remaining_urls"] = min(
+                _as_int(prev_remaining),
+                _as_int(patch.get("remaining_urls")),
+            )
+
+    if "url_verdicts" in patch or "url_verdicts" in summary:
+        merged["url_verdicts"] = _merge_url_verdicts(
+            summary.get("url_verdicts"),
+            patch.get("url_verdicts"),
+        )
+
+    if "verdict_counts" in patch or "verdict_counts" in summary:
+        merged["verdict_counts"] = _merge_verdict_counts(
+            summary.get("verdict_counts"),
+            patch.get("verdict_counts"),
+        )
+
+    return merged
+
+
+def _merge_url_verdicts(current: object, patch: object) -> list[str]:
+    current_list = list(current) if isinstance(current, list) else []
+    patch_list = list(patch) if isinstance(patch, list) else []
+    max_len = max(len(current_list), len(patch_list))
+    merged: list[str] = []
+    for idx in range(max_len):
+        patch_value = str(patch_list[idx] or "").strip() if idx < len(patch_list) else ""
+        current_value = str(current_list[idx] or "").strip() if idx < len(current_list) else ""
+        merged.append(patch_value or current_value)
+    return merged
+
+
+def _merge_verdict_counts(current: object, patch: object) -> dict[str, int]:
+    current_map = dict(current) if isinstance(current, dict) else {}
+    patch_map = dict(patch) if isinstance(patch, dict) else {}
+    keys = set(current_map) | set(patch_map)
+    merged: dict[str, int] = {}
+    for key in keys:
+        merged[str(key)] = max(_as_int(current_map.get(key)), _as_int(patch_map.get(key)))
+    return merged
+
+
+def _as_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 class CrawlRecord(Base):
@@ -91,19 +222,23 @@ event.listen(
             configured_max integer;
             current_count integer;
         BEGIN
-            SELECT NULLIF(crawl_runs.settings->>'max_records', '')::integer
+            EXECUTE format(
+                'SELECT NULLIF(settings->>''max_records'', '''')::integer FROM %%I.crawl_runs WHERE id = $1',
+                TG_TABLE_SCHEMA
+            )
             INTO configured_max
-            FROM crawl_runs
-            WHERE crawl_runs.id = NEW.run_id;
+            USING NEW.run_id;
 
             IF configured_max IS NULL THEN
                 RETURN NEW;
             END IF;
 
-            SELECT COUNT(*)
+            EXECUTE format(
+                'SELECT COUNT(*) FROM %%I.crawl_records WHERE run_id = $1',
+                TG_TABLE_SCHEMA
+            )
             INTO current_count
-            FROM crawl_records
-            WHERE crawl_records.run_id = NEW.run_id;
+            USING NEW.run_id;
 
             IF current_count > configured_max THEN
                 RAISE EXCEPTION 'max_records exceeded for run %%', NEW.run_id;
@@ -144,10 +279,12 @@ event.listen(
                 RETURN NEW;
             END IF;
 
-            SELECT COUNT(*)
+            EXECUTE format(
+                'SELECT COUNT(*) FROM %%I.crawl_records WHERE run_id = $1',
+                TG_TABLE_SCHEMA
+            )
             INTO current_count
-            FROM crawl_records
-            WHERE crawl_records.run_id = NEW.id;
+            USING NEW.id;
 
             IF current_count > configured_max THEN
                 RAISE EXCEPTION 'max_records below existing record count for run %%', NEW.id;

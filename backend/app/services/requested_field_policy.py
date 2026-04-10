@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.services.pipeline_config import REQUESTED_FIELD_ALIASES
+from app.services.config.field_mappings import REQUESTED_FIELD_ALIASES
 
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<!^)(?=[A-Z])")
 _NON_FIELD_RE = re.compile(r"[^a-z0-9.]+")

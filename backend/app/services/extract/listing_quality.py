@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
-from app.services.pipeline_config import (
+from app.services.config.listing_heuristics import (
     LISTING_JOB_SIGNAL_FIELDS,
     LISTING_MINIMAL_VISUAL_FIELDS,
     LISTING_NON_LISTING_PATH_TOKENS,

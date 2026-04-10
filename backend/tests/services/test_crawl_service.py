@@ -10,7 +10,7 @@ from app.core.security import hash_password
 from app.core.telemetry import reset_correlation_id, set_correlation_id
 from app.models.crawl import CrawlLog, CrawlRecord
 from app.models.user import User
-from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.crawl_service import (
     kill_run,
@@ -416,7 +416,15 @@ async def test_list_runs_url_search_treats_wildcards_as_literals(db_session: Asy
 
 
 @pytest.mark.asyncio
-async def test_pause_resume_and_kill_run(db_session: AsyncSession, test_user):
+async def test_pause_resume_and_kill_run(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("app.services.crawl_service.settings.celery_dispatch_enabled", True)
+    monkeypatch.setattr(
+        "app.services.crawl_service.settings.legacy_inprocess_runner_enabled", False
+    )
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl", "url": "https://example.com", "surface": "ecommerce_detail",
     })
@@ -1638,8 +1646,12 @@ async def test_process_run_listing_retries_with_browser_after_weak_curl_listing(
     assert run.status == "completed"
     assert run.result_summary.get("record_count") == 2
     assert acquire_mock.await_count == 2
-    assert acquire_mock.await_args_list[0].kwargs["traversal_mode"] is None
-    assert acquire_mock.await_args_list[1].kwargs["traversal_mode"] is None
+    first_request = acquire_mock.await_args_list[0].kwargs["request"]
+    second_request = acquire_mock.await_args_list[1].kwargs["request"]
+    assert isinstance(first_request, AcquisitionRequest)
+    assert isinstance(second_request, AcquisitionRequest)
+    assert first_request.traversal_mode is None
+    assert second_request.traversal_mode is None
     records = (await db_session.execute(
         select(CrawlRecord).where(CrawlRecord.run_id == run.id)
     )).scalars().all()
@@ -1816,7 +1828,9 @@ async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession,
     ):
         await process_run(db_session, run.id)
 
-    assert acquire_mock.await_args.kwargs["max_pages"] == 3
+    request = acquire_mock.await_args.kwargs["request"]
+    assert isinstance(request, AcquisitionRequest)
+    assert request.max_pages == 3
 
 
 @pytest.mark.asyncio
@@ -1834,8 +1848,10 @@ async def test_process_run_does_not_infer_traversal_mode_from_unrelated_toggle_a
     ):
         await process_run(db_session, run.id)
 
-    assert acquire_mock.await_args.kwargs["traversal_mode"] is None
-    assert acquire_mock.await_args.kwargs["max_scrolls"] == 9
+    request = acquire_mock.await_args.kwargs["request"]
+    assert isinstance(request, AcquisitionRequest)
+    assert request.traversal_mode is None
+    assert request.max_scrolls == 9
 
 
 @pytest.mark.asyncio
@@ -1852,7 +1868,9 @@ async def test_process_run_normalizes_html_escaped_target_url_before_acquire(db_
     ):
         await process_run(db_session, run.id)
 
-    assert acquire_mock.await_args.kwargs["url"] == "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&ccId=19000101_000001&type=MP"
+    request = acquire_mock.await_args.kwargs["request"]
+    assert isinstance(request, AcquisitionRequest)
+    assert request.url == "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&ccId=19000101_000001&type=MP"
 
 
 @pytest.mark.asyncio
@@ -1883,8 +1901,12 @@ async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_ex
         await process_run(db_session, run.id)
 
     record = (await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))).scalars().one()
-    assert record.data["wire_gauge"] == "26 AWG"
-    assert record.discovered_data.get("review_bucket") in (None, [])
+    assert "wire_gauge" not in record.data
+    review_bucket = record.discovered_data.get("review_bucket") or []
+    assert any(
+        row.get("key") == "wire_gauge" and row.get("value") == "26 AWG"
+        for row in review_bucket
+    )
     assert record.source_trace["manifest_trace"]["tables"][0]["rows"][0]["cells"][1]["text"] == "26 AWG"
     assert record.source_trace["schema_resolution"]["resolved_fields"]
 

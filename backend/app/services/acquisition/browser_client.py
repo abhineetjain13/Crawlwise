@@ -12,10 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
-try:
-    import psutil
-except ImportError:  # pragma: no cover - optional dependency fallback
-    psutil = None
+import psutil  # Hard dependency — zombie browser cleanup requires psutil
 
 from app.core.config import settings
 from app.services.acquisition.blocked_detector import detect_blocked_page
@@ -66,37 +63,34 @@ from app.services.acquisition.traversal import (
     snapshot_pagination_state as _snapshot_pagination_state_shared,
 )
 from app.services.exceptions import BrowserError, BrowserNavigationError
-from app.services.pipeline_config import (
+from app.services.config.block_signatures import BLOCK_SIGNATURES
+from app.services.config.crawl_runtime import (
     ACCORDION_EXPAND_WAIT_MS,
-    BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS,
-    BLOCK_BROWSER_CHALLENGE_WEAK_MARKERS,
     BLOCK_MIN_HTML_LENGTH,
     BROWSER_ERROR_RETRY_ATTEMPTS,
     BROWSER_ERROR_RETRY_DELAY_MS,
     BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
     BROWSER_NAVIGATION_LOAD_TIMEOUT_MS,
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
-    CARD_SELECTORS_COMMERCE,
-    CARD_SELECTORS_JOBS,
     CHALLENGE_POLL_INTERVAL_MS,
     CHALLENGE_WAIT_MAX_SECONDS,
-    COOKIE_CONSENT_POSTCLICK_WAIT_MS,
-    COOKIE_CONSENT_PREWAIT_MS,
-    COOKIE_CONSENT_SELECTORS,
     DEFAULT_MAX_SCROLLS,
-    DOM_PATTERNS,
     INTERRUPTIBLE_WAIT_POLL_MS,
     LISTING_MIN_ITEMS,
     LISTING_READINESS_MAX_WAIT_MS,
     LISTING_READINESS_POLL_MS,
-    LOAD_MORE_SELECTORS,
     LOAD_MORE_WAIT_MIN_MS,
     ORIGIN_WARM_PAUSE_MS,
-    PAGINATION_NEXT_SELECTORS,
     SCROLL_WAIT_MIN_MS,
     SHADOW_DOM_FLATTEN_MAX_HOSTS,
     SURFACE_READINESS_MAX_WAIT_MS,
     SURFACE_READINESS_POLL_MS,
+)
+from app.services.config.selectors import (
+    CARD_SELECTORS,
+    COOKIE_CONSENT_SELECTORS,
+    DOM_PATTERNS,
+    PAGINATION_SELECTORS,
 )
 from app.services.runtime_metrics import incr
 from app.services.url_safety import validate_public_target
@@ -111,6 +105,17 @@ from playwright.async_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS = dict(
+    BLOCK_SIGNATURES.get("browser_challenge_strong_markers", {})
+)
+BLOCK_BROWSER_CHALLENGE_WEAK_MARKERS = dict(
+    BLOCK_SIGNATURES.get("browser_challenge_weak_markers", {})
+)
+CARD_SELECTORS_COMMERCE = list(CARD_SELECTORS.get("ecommerce", []))
+CARD_SELECTORS_JOBS = list(CARD_SELECTORS.get("jobs", []))
+PAGINATION_NEXT_SELECTORS = list(PAGINATION_SELECTORS.get("next_page", []))
+LOAD_MORE_SELECTORS = list(PAGINATION_SELECTORS.get("load_more", []))
 
 _RETRYABLE_PAGE_CONTENT_ERROR_RE = re.compile(
     r"(page is navigating|changing the content)",
@@ -136,25 +141,95 @@ def _traversal_config() -> TraversalConfig:
 class _PooledBrowser:
     browser: object
     last_used_monotonic: float
+    active_contexts: int = 0
 
 
-@dataclass
-class _BrowserPoolState:
-    pid: int
-    pool: dict[str, _PooledBrowser] = field(default_factory=dict)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    task_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    cleanup_task: asyncio.Task | None = None
+_BROWSER_POOL_MAX_CONTEXTS_PER_BROWSER = 4
 
 
-_BROWSER_POOL_STATE = _BrowserPoolState(pid=os.getpid())
+class BrowserPool:
+    """Structured browser pool with LRU eviction, health probing, and context limits.
+
+    Replaces the flat ``dict`` pool to centralise lifecycle management.
+    """
+
+    def __init__(self, *, pid: int) -> None:
+        self.pid = pid
+        self._pool: dict[str, _PooledBrowser] = dict()
+        self._lock = asyncio.Lock()
+        self._task_lock = asyncio.Lock()
+        self._cleanup_task: asyncio.Task | None = None
+
+    # -- pool dict facade for backward-compat internal callers --
+    @property
+    def pool(self) -> dict[str, _PooledBrowser]:
+        return self._pool
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        return self._lock
+
+    @property
+    def task_lock(self) -> asyncio.Lock:
+        return self._task_lock
+
+    @property
+    def cleanup_task(self) -> asyncio.Task | None:
+        return self._cleanup_task
+
+    @cleanup_task.setter
+    def cleanup_task(self, value: asyncio.Task | None) -> None:
+        self._cleanup_task = value
+
+    # -- context accounting --
+
+    def context_acquired(self, key: str) -> None:
+        """Record that a new browser context was opened for *key*."""
+        entry = self._pool.get(key)
+        if entry is not None:
+            entry.active_contexts += 1
+
+    def context_released(self, key: str) -> None:
+        """Record that a browser context was closed for *key*."""
+        entry = self._pool.get(key)
+        if entry is not None:
+            entry.active_contexts = max(0, entry.active_contexts - 1)
+
+    def can_open_context(self, key: str) -> bool:
+        """Return True if *key* is below the per-browser context limit."""
+        entry = self._pool.get(key)
+        if entry is None:
+            return True  # will be created
+        return entry.active_contexts < _BROWSER_POOL_MAX_CONTEXTS_PER_BROWSER
+
+    # -- observability --
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "size": len(self._pool),
+            "max_size": _BROWSER_POOL_MAX_SIZE,
+            "max_contexts_per_browser": _BROWSER_POOL_MAX_CONTEXTS_PER_BROWSER,
+            "entries": {
+                key: {
+                    "active_contexts": entry.active_contexts,
+                    "connected": _browser_is_connected(entry.browser),
+                    "idle_seconds": round(
+                        time.monotonic() - entry.last_used_monotonic, 1
+                    ),
+                }
+                for key, entry in self._pool.items()
+            },
+        }
 
 
-def _browser_pool_state() -> _BrowserPoolState:
+_BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
+
+
+def _browser_pool_state() -> BrowserPool:
     global _BROWSER_POOL_STATE
     pid = os.getpid()
     if _BROWSER_POOL_STATE.pid != pid:
-        _BROWSER_POOL_STATE = _BrowserPoolState(pid=pid)
+        _BROWSER_POOL_STATE = BrowserPool(pid=pid)
     return _BROWSER_POOL_STATE
 
 
@@ -255,8 +330,12 @@ async def _fetch_rendered_html_with_fallback(
     for index, profile in enumerate(profiles):
         navigation_strategies = (
             _shortened_navigation_strategies()
-            if _should_shorten_navigation_after_profile_failure(first_profile_failure_reason)
-            else _navigation_strategies(browser_channel=str(profile.get("channel") or "").strip() or None)
+            if _should_shorten_navigation_after_profile_failure(
+                first_profile_failure_reason
+            )
+            else _navigation_strategies(
+                browser_channel=str(profile.get("channel") or "").strip() or None
+            )
         )
         try:
             result = await _fetch_rendered_html_attempt(
@@ -279,7 +358,9 @@ async def _fetch_rendered_html_with_fallback(
                 run_id=run_id,
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
-            if index < len(profiles) - 1 and _should_retry_launch_profile(result, surface=surface):
+            if index < len(profiles) - 1 and _should_retry_launch_profile(
+                result, surface=surface
+            ):
                 first_profile_failure_reason = "low_value_result"
                 logger.info(
                     "Playwright %s produced a low-value result for %s; trying next launch profile",
@@ -291,7 +372,9 @@ async def _fetch_rendered_html_with_fallback(
         except (PlaywrightError, RuntimeError, ValueError, TypeError, OSError) as exc:
             last_error = exc
             first_profile_failure_reason = _classify_profile_failure_reason(exc)
-            logger.warning("Playwright %s failed for %s: %s", profile["label"], url, exc)
+            logger.warning(
+                "Playwright %s failed for %s: %s", profile["label"], url, exc
+            )
             continue
     if last_error is not None:
         raise last_error
@@ -348,7 +431,7 @@ async def _fetch_rendered_html_attempt(
                     runtime_options=runtime_options,
                 )
             ),
-            timeout=15.0
+            timeout=15.0,
         )
     except (TimeoutError, PlaywrightError):
         # Browser in pool may have died or hung; evict and retry once.
@@ -367,9 +450,9 @@ async def _fetch_rendered_html_attempt(
                     runtime_options=runtime_options,
                 )
             ),
-            timeout=15.0
+            timeout=15.0,
         )
-        
+
     original_domain = _domain(url)
     try:
         await _load_cookies(context, original_domain)
@@ -403,13 +486,19 @@ async def _fetch_rendered_html_attempt(
             if "application/json" in content_type:
                 try:
                     body = await response.json()
-                    intercepted.append({
-                        "url": response.url,
-                        "status": response.status,
-                        "body": body,
-                    })
+                    intercepted.append(
+                        {
+                            "url": response.url,
+                            "status": response.status,
+                            "body": body,
+                        }
+                    )
                 except (PlaywrightError, ValueError):
-                    logger.debug("Failed to parse intercepted JSON response from %s", response.url, exc_info=True)
+                    logger.debug(
+                        "Failed to parse intercepted JSON response from %s",
+                        response.url,
+                        exc_info=True,
+                    )
 
         page.on("response", _on_response)
 
@@ -422,7 +511,9 @@ async def _fetch_rendered_html_attempt(
             timings_ms["browser_origin_warm_ms"] = 0
         else:
             origin_warm_started_at = time.perf_counter()
-            result.origin_warmed = await _maybe_warm_origin(page, url, checkpoint=checkpoint)
+            result.origin_warmed = await _maybe_warm_origin(
+                page, url, checkpoint=checkpoint
+            )
             timings_ms["browser_origin_warm_ms"] = _elapsed_ms(origin_warm_started_at)
 
         navigation_started_at = time.perf_counter()
@@ -430,14 +521,19 @@ async def _fetch_rendered_html_attempt(
             page,
             url,
             surface=surface,
-            strategies=navigation_strategies or _navigation_strategies(browser_channel=browser_channel),
+            strategies=navigation_strategies
+            or _navigation_strategies(browser_channel=browser_channel),
             checkpoint=checkpoint,
         )
         timings_ms["browser_navigation_ms"] = _elapsed_ms(navigation_started_at)
         await _dismiss_cookie_consent(page, checkpoint=checkpoint)
         if runtime_options.wait_for_challenge:
             challenge_started_at = time.perf_counter()
-            challenge_ok, challenge_state, reasons = await _wait_for_challenge_resolution(
+            (
+                challenge_ok,
+                challenge_state,
+                reasons,
+            ) = await _wait_for_challenge_resolution(
                 page,
                 surface=surface,
                 checkpoint=checkpoint,
@@ -461,16 +557,26 @@ async def _fetch_rendered_html_attempt(
             return result
         if runtime_options.wait_for_readiness and _is_listing_surface(surface):
             readiness_started_at = time.perf_counter()
-            listing_readiness = await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
-            timings_ms["browser_listing_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
+            listing_readiness = await _wait_for_listing_readiness(
+                page, surface, checkpoint=checkpoint
+            )
+            timings_ms["browser_listing_readiness_wait_ms"] = _elapsed_ms(
+                readiness_started_at
+            )
             if listing_readiness is not None:
                 result.diagnostics["listing_readiness"] = listing_readiness
                 result.diagnostics["surface_readiness"] = listing_readiness
-            if listing_readiness and not bool(listing_readiness.get("ready")) and await _page_looks_low_value(page):
+            if (
+                listing_readiness
+                and not bool(listing_readiness.get("ready"))
+                and await _page_looks_low_value(page)
+            ):
                 await _populate_result(result, page, intercepted, checkpoint=checkpoint)
                 timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
                 result.diagnostics["timings_ms"] = timings_ms
-                await _persist_context_cookies(context, page.url or url, original_domain)
+                await _persist_context_cookies(
+                    context, page.url or url, original_domain
+                )
                 return result
         elif runtime_options.wait_for_readiness:
             readiness_started_at = time.perf_counter()
@@ -479,11 +585,15 @@ async def _fetch_rendered_html_attempt(
                 surface=surface,
                 checkpoint=checkpoint,
             )
-            timings_ms["browser_surface_readiness_wait_ms"] = _elapsed_ms(readiness_started_at)
+            timings_ms["browser_surface_readiness_wait_ms"] = _elapsed_ms(
+                readiness_started_at
+            )
             if surface_readiness is not None:
                 result.diagnostics["surface_readiness"] = surface_readiness
         await _pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
-        interactive_expansion = await expand_all_interactive_elements(page, checkpoint=checkpoint)
+        interactive_expansion = await expand_all_interactive_elements(
+            page, checkpoint=checkpoint
+        )
         if interactive_expansion:
             result.diagnostics["interactive_expansion"] = interactive_expansion
         await _flatten_shadow_dom(page)
@@ -528,7 +638,9 @@ async def _fetch_rendered_html_attempt(
         timings_ms["browser_traversal_ms"] = _elapsed_ms(traversal_started_at)
         combined_html = traversal_result.html
         traversal_summary = _normalize_traversal_summary(
-            traversal_result.summary if isinstance(traversal_result.summary, dict) else {},
+            traversal_result.summary
+            if isinstance(traversal_result.summary, dict)
+            else {},
             traversal_mode=traversal_mode,
             combined_html=combined_html,
         )
@@ -545,6 +657,7 @@ async def _fetch_rendered_html_attempt(
         if run_id is not None and traversal_summary.get("attempted"):
             try:
                 from app.services.crawl_events import append_log_event
+
                 _ts_mode = traversal_summary.get("mode_used") or traversal_mode or "?"
                 _ts_pages = traversal_summary.get("pages_collected", 0)
                 _ts_stop = traversal_summary.get("stop_reason") or "unknown"
@@ -553,11 +666,13 @@ async def _fetch_rendered_html_attempt(
                 _ts_parts = [f"mode={_ts_mode}"]
                 if _ts_iters:
                     _ts_parts.append(f"scroll_iterations={_ts_iters}")
-                _ts_parts.extend([
-                    f"pages_collected={_ts_pages}",
-                    f"stop_reason={_ts_stop}",
-                    f"time={_ts_ms}ms",
-                ])
+                _ts_parts.extend(
+                    [
+                        f"pages_collected={_ts_pages}",
+                        f"stop_reason={_ts_stop}",
+                        f"time={_ts_ms}ms",
+                    ]
+                )
                 await append_log_event(
                     run_id=run_id,
                     level="info",
@@ -590,12 +705,12 @@ async def _fetch_rendered_html_attempt(
             )
             result.diagnostics["traversal_fallback_used"] = True
             result.diagnostics["traversal_fallback_reason"] = fallback_reason
-        
+
         # Always record traversal context when traversal was attempted
         if traversal_mode:
             result.diagnostics["traversal_mode"] = traversal_mode
             result.diagnostics["max_pages"] = max_pages
-        
+
         if combined_html is not None:
             result.html = combined_html
             result.network_payloads = intercepted
@@ -621,9 +736,9 @@ async def _fetch_rendered_html_attempt(
         timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
         result.diagnostics["timings_ms"] = timings_ms
         if blocked_non_public_requests:
-            result.diagnostics["blocked_non_public_requests"] = blocked_non_public_requests[
-                :10
-            ]
+            result.diagnostics["blocked_non_public_requests"] = (
+                blocked_non_public_requests[:10]
+            )
             result.diagnostics["blocked_non_public_request_count"] = len(
                 blocked_non_public_requests
             )
@@ -707,7 +822,10 @@ async def _shutdown_browser_pool() -> None:
 async def _browser_pool_healthcheck_loop() -> None:
     while True:
         await asyncio.sleep(_BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS)
-        await _evict_idle_or_dead_browsers()
+        try:
+            await _evict_idle_or_dead_browsers()
+        except Exception:
+            logger.warning("Browser pool healthcheck iteration failed", exc_info=True)
 
 
 async def reset_browser_pool_state() -> None:
@@ -760,7 +878,11 @@ async def _acquire_browser(
     async with state.lock:
         now = time.monotonic()
         pooled = state.pool.get(browser_pool_key)
-        if not force_new and pooled is not None and _browser_is_connected(pooled.browser):
+        if (
+            not force_new
+            and pooled is not None
+            and _browser_is_connected(pooled.browser)
+        ):
             pooled.last_used_monotonic = now
             to_close.append(browser)
             browser = pooled.browser
@@ -804,7 +926,9 @@ def _browser_launch_profiles(
     if bool(getattr(target, "dns_resolved", False)) and bool(
         getattr(target, "resolved_ips", None)
     ):
-        return [{"label": "bundled_chromium", "browser_type": "chromium", "channel": None}]
+        return [
+            {"label": "bundled_chromium", "browser_type": "chromium", "channel": None}
+        ]
 
     # Make system_chrome the primary profile to avoid ERR_HTTP2_PROTOCOL_ERROR
     # and TLS fingerprinting blocks from CDNs like Akamai (Myntra/Target/etc).
@@ -825,15 +949,19 @@ def _is_listing_surface(surface: str | None) -> bool:
 def _should_retry_launch_profile(result: BrowserResult, *, surface: str | None) -> bool:
     result_html = str(getattr(result, "html", "") or "")
     diagnostics = (
-        result.diagnostics if isinstance(getattr(result, "diagnostics", None), dict) else {}
+        result.diagnostics
+        if isinstance(getattr(result, "diagnostics", None), dict)
+        else {}
     )
     if detect_blocked_page(result_html).is_blocked:
         return True
     if _is_listing_surface(surface):
         readiness = diagnostics.get("listing_readiness")
-        if isinstance(readiness, dict) and (
-            not bool(readiness.get("ready")) or bool(readiness.get("shell_like"))
-        ) and _html_looks_low_value(result_html):
+        if (
+            isinstance(readiness, dict)
+            and (not bool(readiness.get("ready")) or bool(readiness.get("shell_like")))
+            and _html_looks_low_value(result_html)
+        ):
             return True
     return False
 
@@ -842,7 +970,10 @@ async def _page_looks_low_value(page) -> bool:
     try:
         html = await _page_content_with_retry(page)
     except PlaywrightError:
-        logger.debug("Failed to inspect page content for low-value result detection", exc_info=True)
+        logger.debug(
+            "Failed to inspect page content for low-value result detection",
+            exc_info=True,
+        )
         return False
     return _html_looks_low_value(html)
 
@@ -851,7 +982,10 @@ async def _collect_frame_sources(page) -> tuple[str, list[dict], list[dict]]:
     try:
         main_html = await _page_content_with_retry(page)
     except PlaywrightError:
-        logger.debug("Failed to read main page content while collecting frame sources", exc_info=True)
+        logger.debug(
+            "Failed to read main page content while collecting frame sources",
+            exc_info=True,
+        )
         return "", [], []
 
     main_origin = _origin_url(str(getattr(page, "url", "") or ""))
@@ -874,19 +1008,23 @@ async def _collect_frame_sources(page) -> tuple[str, list[dict], list[dict]]:
         frame_sources.append(frame_entry)
         if same_origin and frame_html:
             same_origin_fragments.append(
-                "\n".join([
-                    f"<!-- FRAME START: {frame_url} -->",
-                    frame_html,
-                    f"<!-- FRAME END: {frame_url} -->",
-                ])
+                "\n".join(
+                    [
+                        f"<!-- FRAME START: {frame_url} -->",
+                        frame_html,
+                        f"<!-- FRAME END: {frame_url} -->",
+                    ]
+                )
             )
         if not same_origin or not frame_html:
-            promoted_sources.append({
-                "kind": "iframe",
-                "url": frame_url,
-                "same_origin": same_origin,
-                "html_available": bool(frame_html),
-            })
+            promoted_sources.append(
+                {
+                    "kind": "iframe",
+                    "url": frame_url,
+                    "same_origin": same_origin,
+                    "html_available": bool(frame_html),
+                }
+            )
     combined_html = main_html
     if same_origin_fragments:
         combined_html = "\n".join([main_html, *same_origin_fragments])
@@ -908,10 +1046,14 @@ def _html_looks_low_value(html: str) -> bool:
         "not available",
         "just a moment",
     )
-    return len(html_lower) < 1200 and any(phrase in visible for phrase in low_value_phrases)
+    return len(html_lower) < 1200 and any(
+        phrase in visible for phrase in low_value_phrases
+    )
 
 
-def _build_launch_kwargs(proxy: str | None, target, *, browser_channel: str | None = None) -> dict:
+def _build_launch_kwargs(
+    proxy: str | None, target, *, browser_channel: str | None = None
+) -> dict:
     launch_kwargs: dict = {"headless": settings.playwright_headless}
     if proxy:
         launch_kwargs["proxy"] = {"server": proxy}
@@ -1086,8 +1228,10 @@ async def _wait_for_listing_readiness(
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object] | None:
-    from app.services.config.platform_readiness import resolve_listing_readiness_override
-    
+    from app.services.config.platform_readiness import (
+        resolve_listing_readiness_override,
+    )
+
     normalized_surface = str(surface or "").strip().lower()
     if not normalized_surface.endswith("listing"):
         return None
@@ -1097,22 +1241,22 @@ async def _wait_for_listing_readiness(
         else CARD_SELECTORS_COMMERCE
     )
     page_url = str(getattr(page, "url", "") or "").lower()
-    
+
     # Apply platform overrides from config pattern matching.
     override = resolve_listing_readiness_override(page_url)
     if override is not None:
         selectors = [*selectors, *list(override.get("selectors") or [])]
-    
+
     if not selectors:
         return None
     elapsed = 0
     poll_ms = max(100, LISTING_READINESS_POLL_MS)
     max_wait_ms = max(0, LISTING_READINESS_MAX_WAIT_MS)
-    
+
     # Apply max_wait_ms override from configuration
     if override is not None:
         max_wait_ms = max(max_wait_ms, int(override.get("max_wait_ms", 0) or 0))
-    
+
     best_selector = ""
     best_count = 0
     stable_windows = 0
@@ -1125,7 +1269,11 @@ async def _wait_for_listing_readiness(
             try:
                 count = await page.locator(selector).count()
             except PlaywrightError:
-                logger.debug("Listing readiness count failed for selector %s", selector, exc_info=True)
+                logger.debug(
+                    "Listing readiness count failed for selector %s",
+                    selector,
+                    exc_info=True,
+                )
                 continue
             if count > current_best_count:
                 current_best_count = count
@@ -1257,11 +1405,16 @@ async def _snapshot_listing_page_metrics(page) -> dict[str, object]:
         return {}
 
 
-def _listing_metrics_stable(previous: dict[str, object] | None, current: dict[str, object] | None) -> bool:
+def _listing_metrics_stable(
+    previous: dict[str, object] | None, current: dict[str, object] | None
+) -> bool:
     if not previous or not current:
         return False
     keys = ("link_count", "cardish_count", "text_length")
-    return all(int(previous.get(key, -1) or 0) == int(current.get(key, -2) or 0) for key in keys)
+    return all(
+        int(previous.get(key, -1) or 0) == int(current.get(key, -2) or 0)
+        for key in keys
+    )
 
 
 def _listing_metrics_look_shell_like(metrics: dict[str, object] | None) -> bool:
@@ -1277,9 +1430,17 @@ def _listing_metrics_look_shell_like(metrics: dict[str, object] | None) -> bool:
 def _detail_readiness_selectors(surface: str | None) -> list[str]:
     normalized_surface = str(surface or "").strip().lower()
     if normalized_surface == "job_detail":
-        selectors = [DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("company", ""), DOM_PATTERNS.get("salary", "")]
+        selectors = [
+            DOM_PATTERNS.get("title", ""),
+            DOM_PATTERNS.get("company", ""),
+            DOM_PATTERNS.get("salary", ""),
+        ]
     elif normalized_surface == "ecommerce_detail":
-        selectors = [DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("price", ""), DOM_PATTERNS.get("sku", "")]
+        selectors = [
+            DOM_PATTERNS.get("title", ""),
+            DOM_PATTERNS.get("price", ""),
+            DOM_PATTERNS.get("sku", ""),
+        ]
     else:
         selectors = [DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("price", "")]
     return [selector for selector in selectors if str(selector).strip()]
@@ -1297,14 +1458,23 @@ async def _wait_for_surface_readiness(
         return None
     if normalized_surface.endswith("listing"):
         if max_wait_ms == 0:
-            selectors = CARD_SELECTORS_JOBS if normalized_surface == "job_listing" else CARD_SELECTORS_COMMERCE
+            selectors = (
+                CARD_SELECTORS_JOBS
+                if normalized_surface == "job_listing"
+                else CARD_SELECTORS_COMMERCE
+            )
             for selector in selectors:
                 try:
                     count = await page.locator(selector).count()
                 except PlaywrightError:
                     continue
                 if count >= LISTING_MIN_ITEMS:
-                    return {"ready": True, "selector": selector, "count": count, "waited_ms": 0}
+                    return {
+                        "ready": True,
+                        "selector": selector,
+                        "count": count,
+                        "waited_ms": 0,
+                    }
             return {"ready": False, "selector": None, "count": 0, "waited_ms": 0}
         return await _wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
     selectors = _detail_readiness_selectors(surface)
@@ -1312,7 +1482,9 @@ async def _wait_for_surface_readiness(
         return None
     elapsed = 0
     poll_ms = max(100, SURFACE_READINESS_POLL_MS)
-    max_wait_ms = max(0, SURFACE_READINESS_MAX_WAIT_MS if max_wait_ms is None else max_wait_ms)
+    max_wait_ms = max(
+        0, SURFACE_READINESS_MAX_WAIT_MS if max_wait_ms is None else max_wait_ms
+    )
     while elapsed <= max_wait_ms:
         for selector in selectors:
             try:
@@ -1324,7 +1496,11 @@ async def _wait_for_surface_readiness(
                         "waited_ms": elapsed,
                     }
             except PlaywrightError:
-                logger.debug("Surface readiness check failed for selector %s", selector, exc_info=True)
+                logger.debug(
+                    "Surface readiness check failed for selector %s",
+                    selector,
+                    exc_info=True,
+                )
                 continue
         if elapsed >= max_wait_ms:
             break
@@ -1353,7 +1529,9 @@ async def _snapshot_pagination_state(page) -> dict[str, object]:
     return await _snapshot_pagination_state_shared(page)
 
 
-def _pagination_state_changed(previous: dict[str, object] | None, current: dict[str, object] | None) -> bool:
+def _pagination_state_changed(
+    previous: dict[str, object] | None, current: dict[str, object] | None
+) -> bool:
     return _pagination_state_changed_shared(previous, current)
 
 
@@ -1427,7 +1605,9 @@ async def expand_all_interactive_elements(
             "expanded_count": int(expanded_count or 0),
         }
     except PlaywrightError:
-        logger.debug("Interactive element expansion failed (non-critical)", exc_info=True)
+        logger.debug(
+            "Interactive element expansion failed (non-critical)", exc_info=True
+        )
     return {}
 
 
@@ -1517,7 +1697,11 @@ async def _populate_result(
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    result.html, result.frame_sources, result.promoted_sources = await _collect_frame_sources(page)
+    (
+        result.html,
+        result.frame_sources,
+        result.promoted_sources,
+    ) = await _collect_frame_sources(page)
     result.network_payloads = intercepted
     result.diagnostics["final_url"] = str(page.url or "").strip() or None
     result.diagnostics["frame_sources"] = len(result.frame_sources)
@@ -1548,7 +1732,10 @@ async def _page_content_with_retry(
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=2000)
             except PlaywrightError:
-                logger.debug("Timed out waiting for domcontentloaded before retrying page.content()", exc_info=True)
+                logger.debug(
+                    "Timed out waiting for domcontentloaded before retrying page.content()",
+                    exc_info=True,
+                )
             if attempt + 1 >= max(1, attempts):
                 break
             await _cooperative_page_wait(page, wait_ms, checkpoint=checkpoint)
@@ -1567,15 +1754,24 @@ def _normalize_traversal_summary(
     combined_html: str | None,
 ) -> dict[str, object]:
     normalized = dict(summary or {})
-    mode_used = str(normalized.get("mode_used") or normalized.get("mode") or traversal_mode or "").strip() or None
+    mode_used = (
+        str(
+            normalized.get("mode_used")
+            or normalized.get("mode")
+            or traversal_mode
+            or ""
+        ).strip()
+        or None
+    )
     pages_collected = int(
-        normalized.get("pages_collected", 0) or (
-            str(combined_html or "").count("<!-- PAGE BREAK:") if combined_html else 0
-        )
+        normalized.get("pages_collected", 0)
+        or (str(combined_html or "").count("<!-- PAGE BREAK:") if combined_html else 0)
     )
     stop_reason = str(normalized.get("stop_reason") or "").strip() or None
     fallback_used = bool(normalized.get("fallback_used"))
-    scroll_iterations = int(normalized.get("scroll_iterations") or normalized.get("attempt_count") or 0)
+    scroll_iterations = int(
+        normalized.get("scroll_iterations") or normalized.get("attempt_count") or 0
+    )
     normalized["mode_used"] = mode_used
     normalized["pages_collected"] = pages_collected
     normalized["scroll_iterations"] = scroll_iterations
@@ -1584,14 +1780,18 @@ def _normalize_traversal_summary(
     return {key: value for key, value in normalized.items() if value is not None}
 
 
-async def _persist_context_cookies(context, final_url: str, original_domain: str) -> None:
+async def _persist_context_cookies(
+    context, final_url: str, original_domain: str
+) -> None:
     final_domain = _domain(final_url)
     await _save_cookies(context, final_domain)
     if final_domain != original_domain:
         await _save_cookies(context, original_domain)
 
 
-def _navigation_strategies(*, browser_channel: str | None = None) -> list[tuple[str, int]]:
+def _navigation_strategies(
+    *, browser_channel: str | None = None
+) -> list[tuple[str, int]]:
     if browser_channel:
         return [
             ("domcontentloaded", BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS),
@@ -1695,7 +1895,9 @@ async def _retryable_browser_error_reason(page) -> str | None:
     try:
         html = await page.content()
     except PlaywrightError:
-        logger.debug("Failed to inspect page content for browser error markers", exc_info=True)
+        logger.debug(
+            "Failed to inspect page content for browser error markers", exc_info=True
+        )
         return None
     text = (html or "")[:20_000].lower().replace("’", "'")
     markers = {
@@ -1788,7 +1990,9 @@ async def _dismiss_cookie_consent(
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     try:
-        await _cooperative_page_wait(page, COOKIE_CONSENT_PREWAIT_MS, checkpoint=checkpoint)
+        await _cooperative_page_wait(
+            page, COOKIE_CONSENT_PREWAIT_MS, checkpoint=checkpoint
+        )
     except PlaywrightError:
         logger.debug("Cookie consent pre-wait failed", exc_info=True)
         return
@@ -1804,12 +2008,16 @@ async def _dismiss_cookie_consent(
                 )
                 return
         except PlaywrightError:
-            logger.debug("Cookie consent click failed for selector %s", selector, exc_info=True)
+            logger.debug(
+                "Cookie consent click failed for selector %s", selector, exc_info=True
+            )
             continue
     try:
         await page.keyboard.press("Escape")
     except PlaywrightError:
-        logger.debug("Escape key press failed during cookie consent dismissal", exc_info=True)
+        logger.debug(
+            "Escape key press failed during cookie consent dismissal", exc_info=True
+        )
 
 
 async def _wait_for_challenge_resolution(
@@ -1822,7 +2030,9 @@ async def _wait_for_challenge_resolution(
     try:
         html = await page.content()
     except PlaywrightError:
-        logger.debug("Failed to read page content for challenge detection", exc_info=True)
+        logger.debug(
+            "Failed to read page content for challenge detection", exc_info=True
+        )
         return True, "none", []
 
     assessment = _assess_challenge_signals(html)
@@ -1838,7 +2048,9 @@ async def _wait_for_challenge_resolution(
         try:
             html = await page.content()
         except PlaywrightError:
-            logger.debug("Failed to read page content during challenge polling", exc_info=True)
+            logger.debug(
+                "Failed to read page content during challenge polling", exc_info=True
+            )
             break
         assessment = _assess_challenge_signals(html)
         if assessment.state == "blocked_signal":
@@ -1892,25 +2104,45 @@ def _assess_challenge_signals(html: str) -> ChallengeAssessment:
         reasons = strong_hits or weak_hits or ["blocked_detector"]
         if short_html:
             reasons.append("short_html")
-        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=reasons)
+        return ChallengeAssessment(
+            state="waiting_unresolved", should_wait=True, reasons=reasons
+        )
     has_provider_signature = bool(blocked_verdict.provider)
     if blocked_verdict.is_blocked and short_html and has_provider_signature:
-        reasons = strong_hits or weak_hits or [str(blocked_verdict.provider), "blocked_detector"]
-        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=reasons)
+        reasons = (
+            strong_hits
+            or weak_hits
+            or [str(blocked_verdict.provider), "blocked_detector"]
+        )
+        return ChallengeAssessment(
+            state="waiting_unresolved", should_wait=True, reasons=reasons
+        )
     if blocked_verdict.is_blocked:
-        return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits or weak_hits or ["blocked_detector"])
+        return ChallengeAssessment(
+            state="blocked_signal",
+            should_wait=False,
+            reasons=strong_hits or weak_hits or ["blocked_detector"],
+        )
     if short_html and strong_hits:
-        return ChallengeAssessment(state="blocked_signal", should_wait=False, reasons=strong_hits + ["short_html"])
+        return ChallengeAssessment(
+            state="blocked_signal",
+            should_wait=False,
+            reasons=strong_hits + ["short_html"],
+        )
     if len(strong_hits) >= 2:
         reasons = strong_hits[:]
         if short_html:
             reasons.append("short_html")
-        return ChallengeAssessment(state="waiting_unresolved", should_wait=True, reasons=reasons)
+        return ChallengeAssessment(
+            state="waiting_unresolved", should_wait=True, reasons=reasons
+        )
     if strong_hits or weak_hits:
         reasons = (strong_hits + weak_hits)[:]
         if short_html:
             reasons.append("short_html")
-        return ChallengeAssessment(state="weak_signal_ignored", should_wait=False, reasons=reasons)
+        return ChallengeAssessment(
+            state="weak_signal_ignored", should_wait=False, reasons=reasons
+        )
     return ChallengeAssessment(state="none", should_wait=False, reasons=[])
 
 
@@ -1967,7 +2199,9 @@ async def _load_cookies(context, domain: str) -> bool:
     try:
         await context.add_cookies(cookies)
     except PlaywrightError:
-        logger.debug("Failed to add cookies to context for domain %s", domain, exc_info=True)
+        logger.debug(
+            "Failed to add cookies to context for domain %s", domain, exc_info=True
+        )
         return False
     return True
 
@@ -1976,7 +2210,9 @@ async def _save_cookies(context, domain: str) -> None:
     try:
         cookies = await context.cookies()
     except PlaywrightError:
-        logger.debug("Failed to read cookies from context for domain %s", domain, exc_info=True)
+        logger.debug(
+            "Failed to read cookies from context for domain %s", domain, exc_info=True
+        )
         return
     await asyncio.to_thread(save_cookies_payload, cookies, domain=domain)
 
@@ -1990,16 +2226,15 @@ def _check_memory_available() -> None:
 
 
 def _traversal_artifact_dir(run_id: int | None) -> Path:
-    run_token = str(run_id) if run_id is not None else f"adhoc-{os.getpid()}-{time.time_ns()}"
+    run_token = (
+        str(run_id) if run_id is not None else f"adhoc-{os.getpid()}-{time.time_ns()}"
+    )
     return settings.acquisition_cache_dir / "traversal_html" / run_token
 
 
-def browser_pool_snapshot() -> dict[str, int]:
+def browser_pool_snapshot() -> dict[str, object]:
     state = _browser_pool_state()
-    return {
-        "size": len(state.pool),
-        "max_size": _BROWSER_POOL_MAX_SIZE,
-    }
+    return state.snapshot()
 
 
 def _cookie_store_path(domain: str) -> Path | None:
@@ -2041,11 +2276,19 @@ def _cookie_name_blocked(name: str, policy: dict[str, object]) -> bool:
     normalized = str(name or "").strip().lower()
     if not normalized:
         return True
-    blocked_prefixes = [str(value).strip().lower() for value in policy.get("blocked_name_prefixes", []) if str(value).strip()]
+    blocked_prefixes = [
+        str(value).strip().lower()
+        for value in policy.get("blocked_name_prefixes", [])
+        if str(value).strip()
+    ]
     for prefix in blocked_prefixes:
         if normalized.startswith(prefix):
             return True
-    blocked_substrings = [str(value).strip().lower() for value in policy.get("blocked_name_contains", []) if str(value).strip()]
+    blocked_substrings = [
+        str(value).strip().lower()
+        for value in policy.get("blocked_name_contains", [])
+        if str(value).strip()
+    ]
     for fragment in blocked_substrings:
         if fragment in normalized:
             return True
@@ -2071,10 +2314,7 @@ def _cookie_domain_matches(cookie_domain: str, requested_domain: str) -> bool:
     requested_host = str(requested_domain or "").strip().lower().lstrip(".")
     if not cookie_host or not requested_host:
         return False
-    return (
-        cookie_host == requested_host
-        or requested_host.endswith(f".{cookie_host}")
-    )
+    return cookie_host == requested_host or requested_host.endswith(f".{cookie_host}")
 
 
 def _domain(url: str) -> str:
@@ -2093,13 +2333,57 @@ async def shutdown_browser_pool() -> None:
     await _shutdown_browser_pool()
 
 
+def _kill_orphaned_browser_processes() -> None:
+    """Terminate any Chromium/chrome child processes owned by this PID.
+
+    Called during worker init to clean up leaked browsers from a prior
+    crashed worker, and during sync shutdown when the async path cannot run.
+    """
+    current_pid = os.getpid()
+    killed = 0
+    try:
+        current = psutil.Process(current_pid)
+        for child in current.children(recursive=True):
+            try:
+                name = (child.name() or "").lower()
+                if any(tag in name for tag in ("chrom", "firefox", "webkit")):
+                    child.kill()
+                    killed += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    if killed:
+        logger.info(
+            "Killed %d orphaned browser process(es) for PID %d", killed, current_pid
+        )
+
+
 def prepare_browser_pool_for_worker_process() -> None:
     global _BROWSER_POOL_STATE
-    _BROWSER_POOL_STATE = _BrowserPoolState(pid=os.getpid())
+    _kill_orphaned_browser_processes()
+    _BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
 
 
 def shutdown_browser_pool_sync() -> None:
     try:
         asyncio.run(_shutdown_browser_pool())
     except RuntimeError:
-        prepare_browser_pool_for_worker_process()
+        logger.warning(
+            "Async shutdown unavailable; force-killing browser child processes"
+        )
+        _kill_orphaned_browser_processes()
+        global _BROWSER_POOL_STATE
+        _BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
+
+
+def shutdown_browser_pool_sync() -> None:
+    try:
+        asyncio.run(_shutdown_browser_pool())
+    except RuntimeError:
+        logger.warning(
+            "Async shutdown unavailable; force-killing browser child processes"
+        )
+        _kill_orphaned_browser_processes()
+        global _BROWSER_POOL_STATE
+        _BROWSER_POOL_STATE = _BrowserPoolState(pid=os.getpid())

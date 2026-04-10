@@ -1,18 +1,16 @@
 from __future__ import annotations
 
+from app.models.crawl_settings import CrawlRunSettings
 from app.services.acquisition.acquirer import AcquisitionResult
 
 
-def build_acquisition_profile(run_settings: dict | None) -> dict[str, object]:
-    profile: dict[str, object] = {}
-    settings = run_settings if isinstance(run_settings, dict) else {}
-    if "anti_bot_enabled" in settings:
-        profile["anti_bot_enabled"] = bool(settings.get("anti_bot_enabled"))
-    if "ignore_https_errors" in settings:
-        profile["ignore_https_errors"] = bool(settings.get("ignore_https_errors"))
-    if "bypass_csp" in settings:
-        profile["bypass_csp"] = bool(settings.get("bypass_csp"))
-    return profile
+def build_acquisition_profile(run_settings: dict | CrawlRunSettings | None) -> dict[str, object]:
+    settings_view = (
+        run_settings
+        if isinstance(run_settings, CrawlRunSettings)
+        else CrawlRunSettings.from_value(run_settings)
+    )
+    return settings_view.acquisition_profile()
 
 
 def build_url_metrics(

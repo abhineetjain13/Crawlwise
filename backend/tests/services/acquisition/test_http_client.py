@@ -443,3 +443,46 @@ async def test_fetch_html_result_rejects_non_http_redirect_targets(monkeypatch):
     assert result.status_code == 302
     # validate_public_target should only run for the initial request URL.
     assert validate_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_rejects_redirect_targets_with_embedded_credentials(monkeypatch):
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            _ = kwargs
+            return FakeResponse(
+                status_code=302,
+                text="",
+                headers={
+                    "location": "https://user:pass@example.com/next",
+                    "content-type": "text/html",
+                },
+                url=str(url),
+            )
+
+    validate_mock = AsyncMock(
+        return_value=ValidatedTarget(
+            hostname="example.com",
+            scheme="https",
+            port=443,
+            resolved_ips=("93.184.216.34",),
+        )
+    )
+    monkeypatch.setattr("app.services.acquisition.http_client.validate_public_target", validate_mock)
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+
+    result = await fetch_html_result("https://example.com/start", allow_stealth_retry=False)
+
+    assert result.error == "invalid_redirect_target"
+    assert result.status_code == 302
+    assert validate_mock.await_count == 1

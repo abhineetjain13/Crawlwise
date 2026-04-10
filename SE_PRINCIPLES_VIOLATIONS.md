@@ -2,6 +2,18 @@
 
 **Focus:** SOLID principles, Separation of Concerns, Configuration Management, Architectural Patterns
 
+## Status Snapshot - 2026-04-10
+
+This audit is still directionally valid, but it is no longer fully current.
+
+- Route/controller extraction has been implemented: CSV ingestion moved to `backend/app/services/crawl_ingestion_service.py`, and export formatting/streaming moved to `backend/app/services/record_export_service.py`.
+- The biggest configuration issue has been materially reduced: operational crawl/acquisition/browser/LLM tuning is now env-backed through `backend/app/services/config/runtime_settings.py`, `backend/app/services/config/crawl_runtime.py`, and `backend/app/services/config/llm_runtime.py`, and the old `pipeline_config.py` facade has been removed.
+- Crawl domain/config refactoring has started: typed crawl-domain and crawl-settings wrappers now exist in `backend/app/models/crawl_domain.py` and `backend/app/models/crawl_settings.py`.
+- Batch runtime orchestration has been decomposed: `backend/app/services/_batch_runtime.py` now delegates run bootstrap/context loading, progress persistence, and finalization/failure handling to narrower helpers plus `backend/app/services/_batch_progress.py`.
+- The acquisition hot path now has a typed boundary: `backend/app/services/acquisition/acquirer.py` exposes `AcquisitionRequest`, and `pipeline/core.py` uses that value object instead of repeatedly passing a wide acquisition kwargs bag.
+- Database `max_records` triggers were fixed to be schema-safe across pooled Postgres sessions.
+- Remaining large items are still open: incomplete DI below the route layer and stale/outlier acquisition strategy code that still needs to converge on the typed boundary.
+
 ---
 
 ## CRITICAL VIOLATIONS OF FIRST PRINCIPLES
@@ -67,6 +79,16 @@ class CrawlerConfig(BaseSettings):
 
 **Files:** `backend/app/api/crawls.py`, `backend/app/api/records.py`  
 **Severity:** CRITICAL - Violates Separation of Concerns, Single Responsibility
+
+**Current status (2026-04-10):** Substantially addressed and now closed as a critical hotspot.
+
+- CSV ingestion has already been extracted to `backend/app/services/crawl_ingestion_service.py`.
+- Export formatting and streaming now live in `backend/app/services/record_export_service.py`.
+- Route-level run/record access checks are centralized behind `backend/app/services/crawl_access_service.py`, which removes repeated ownership/business checks from the controllers.
+- `backend/app/api/records.py` now delegates export response construction to service helpers such as `build_json_export_response()` / `build_csv_export_response()` instead of assembling per-format responses inline.
+- `backend/app/api/crawls.py` now uses a shared `_require_accessible_run()` seam over the centralized access policy instead of duplicating run lookup + authorization logic in each endpoint.
+
+The historical examples below describe the pre-refactor state and are no longer an accurate representation of the current route layer.
 
 **Issue:** API route handlers contain complex business logic, data transformation, and formatting
 
@@ -342,6 +364,14 @@ async def prepare_execution_context(run):
         # ...
     )
 ```
+
+**Current status (2026-04-10):** Materially addressed.
+
+- `process_run()` now acts as orchestration over extracted seams instead of carrying the full state machine inline.
+- Run bootstrap and context loading moved behind `_load_batch_run_context()` / `_build_batch_run_context()`.
+- Per-URL progress bookkeeping and monotonic summary merges moved into `backend/app/services/_batch_progress.py` via `BatchRunProgressState`.
+- Finalization and exception mapping moved into `_finalize_batch_run()` and `_handle_batch_run_exception()`.
+- The function still coordinates the batch loop, but the original mixed-abstraction hotspot is no longer present in the same form.
 
 ---
 

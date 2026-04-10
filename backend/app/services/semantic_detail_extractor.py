@@ -5,10 +5,9 @@ from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
 
-from app.services.pipeline_config import (
+from app.services.config.extraction_rules import (
     DIMENSION_KEYWORDS,
     FEATURE_SECTION_ALIASES,
-    REQUESTED_FIELD_ALIASES,
     SECTION_ANCESTOR_STOP_TAGS,
     SECTION_ANCESTOR_STOP_TOKENS,
     SECTION_SKIP_PATTERNS,
@@ -16,11 +15,12 @@ from app.services.pipeline_config import (
     SPEC_DROP_LABELS,
     SPEC_LABEL_BLOCK_PATTERNS,
 )
+from app.services.config.field_mappings import FIELD_ALIASES, REQUESTED_FIELD_ALIASES
 from app.services.requested_field_policy import normalize_requested_field
 from bs4 import BeautifulSoup, Tag
 
 _CANONICAL_TO_ALIASES: dict[str, set[str]] = {}
-for canonical, aliases in REQUESTED_FIELD_ALIASES.items():
+for canonical, aliases in {**FIELD_ALIASES, **REQUESTED_FIELD_ALIASES}.items():
     canonical_key = normalize_requested_field(canonical)
     alias_set = _CANONICAL_TO_ALIASES.setdefault(canonical_key, set())
     alias_set.add(canonical_key)

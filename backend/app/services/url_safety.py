@@ -7,7 +7,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from app.services.pipeline_config import DNS_RESOLUTION_RETRIES, DNS_RESOLUTION_RETRY_DELAY_MS
+from app.services.config.crawl_runtime import (
+    DNS_RESOLUTION_RETRIES,
+    DNS_RESOLUTION_RETRY_DELAY_MS,
+)
 
 _ALLOWED_SCHEMES = {"http", "https"}
 _ALLOWED_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}

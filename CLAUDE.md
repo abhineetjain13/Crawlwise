@@ -13,6 +13,7 @@ CrawlerAI is a POC crawler stack with:
 
 - `docs/backend-architecture.md`: current backend architecture and invariants only.
 - `docs/backend-pending-items.md`: the single consolidated backend backlog for bugs, refactors, and follow-up architecture work.
+- `docs/audit-remediation-slice-tracker.md`: audit remediation status, including external phase mapping.
 - Root audit files are historical inputs, not the canonical backlog.
 
 ## Development authentication (POC)
@@ -196,6 +197,36 @@ Code should continue to import from `pipeline_config.py`, not duplicate config v
 - Acquisition hardening remains active: curl-first waterfall, TLS-safe hostname pinning, fail-closed URL safety, observational diagnostics artifacts, policy-driven cookies.
 - LLM/runtime behavior remains fail-fast on 429; dynamic field quality gates and JSON-LD structural filtering remain enforced.
 
+### Database pool hardening
+
+- Postgres engine uses `pool_pre_ping=True`, `pool_recycle=600s`, `pool_timeout=10s` (all configurable via `DB_POOL_*` env vars in `app/core/config.py`).
+- Engine is explicitly disposed during application shutdown via `dispose_engine()` in the lifespan handler.
+- Composite indexes exist on `crawl_logs(run_id, created_at)`, `crawl_logs(run_id, level)`, and `crawl_runs(user_id, created_at)` (migration `20260410_0010`).
+
+### Browser worker lifecycle
+
+- `shutdown_browser_pool_sync()` force-kills Chromium/Firefox/WebKit child processes via psutil when the async shutdown path fails (RuntimeError in Celery workers).
+- `prepare_browser_pool_for_worker_process()` cleans up orphaned browser processes from prior crashed workers on init.
+- Browser pool healthcheck loop catches and logs exceptions instead of dying silently.
+- This closes the external todo item "Phase 8: Browser Pool Hardening".
+
+### LLM runtime resilience
+
+- Per-provider circuit breaker: trips after 5 consecutive failures, cooldown 120s, half-open probe. `circuit_breaker_snapshot()` for observability.
+- `LLMErrorCategory` StrEnum classifies errors: `rate_limited`, `timeout`, `auth_failure`, `provider_error`, `parse_failure`, `validation_failure`, `circuit_open`, `missing_config`.
+- `llm_config_snapshot` is stamped into `run.settings` at pipeline start when LLM is enabled. Runs use the snapshot instead of re-reading active config from the database mid-run.
+- Rate limits still fail fast (architecture invariant 18).
+
+### Pipeline boundary types
+
+- `URLProcessingResult` (dataclass in `services/pipeline/types.py`): typed replacement for the raw `(list[dict], str, dict)` tuple returned by `_process_single_url` and its sub-functions. Fields: `records`, `verdict`, `url_metrics`. Supports tuple destructuring for backward compatibility.
+- `URLProcessingConfig` (dataclass in `services/pipeline/types.py`): groups the 8 positional settings parameters into a typed config object. `_process_single_url` accepts either `config: URLProcessingConfig` or legacy kwargs.
+
+### CPU offloading
+
+- The pipeline hot path now treats HTML parsing as CPU-bound work and routes shared BeautifulSoup parsing through off-thread helpers in `services/pipeline/utils.py` and stage helpers instead of constructing DOMs inline on the event loop.
+- This closes the external todo item "Phase 1: CPU Offloading" for the active pipeline flow.
+
 ## Tests
 
 Run backend tests with:
@@ -254,7 +285,10 @@ These MUST be preserved across all changes:
 15. **Field extraction is first-match, not score-based.** For each field, resolution order is adapter → XHR/JSON payload → JSON-LD → hydrated state → DOM selector defaults → LLM fallback. First valid hit wins.
 16. **Playwright expansion is generic, not field-routed.** No code path may use requested field names to decide what to click before capture; the browser path runs the same interactive expansion pass on every session.
 17. **Deleted subsystems stay deleted.** Do not reintroduce site memory, selector CRUD, discovery manifests, evidence buckets, or runtime-editable per-domain extraction logic under new names.
-18. **LLM calls must fail fast.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. Re-evaluate when using paid API keys.
+18. **LLM calls must fail fast on rate limits.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. The per-provider circuit breaker handles repeated non-rate-limit failures separately. Re-evaluate retry behavior when using paid API keys.
 19. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to config, not hardcoded.
 20. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
+21. **Pipeline boundaries must use typed objects.** `_process_single_url` and its sub-functions return `URLProcessingResult`, not raw tuples. New pipeline config parameters should be added to `URLProcessingConfig`, not as additional positional arguments.
+22. **Database pool must be pre-ping enabled for Postgres.** `pool_pre_ping=True` catches stale connections before use. Engine must be disposed on application shutdown via `dispose_engine()`.
+23. **LLM config must be snapshot-stable within a run.** Once a run starts, `llm_config_snapshot` is stamped into `run.settings`. Mid-run config changes must not affect in-flight extraction.
 

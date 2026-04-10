@@ -18,25 +18,24 @@ from app.schemas.crawl import (
     LLMCommitRequest,
     LLMCommitResponse,
 )
+from app.services.crawl_access_service import (
+    RUN_NOT_FOUND_DETAIL,
+    user_can_access_run,
+)
 from app.services.crawl_crud import (
     commit_llm_suggestions,
     commit_selected_fields,
-    create_crawl_run,
     delete_run,
     get_run,
     get_run_logs,
     list_runs,
 )
-from app.services.crawl_utils import parse_csv_urls
-from app.services.crawl_events import (
-    serialize_log_event,
+from app.services.crawl_events import serialize_log_event
+from app.services.crawl_ingestion_service import (
+    create_crawl_run_from_csv,
+    create_crawl_run_from_payload,
 )
-from app.services.crawl_service import (
-    dispatch_run,
-    kill_run,
-    pause_run,
-    resume_run,
-)
+from app.services.crawl_service import kill_run, pause_run, resume_run
 from app.services.crawl_state import TERMINAL_STATUSES, normalize_status
 from fastapi import (
     APIRouter,
@@ -58,7 +57,6 @@ router = APIRouter(prefix="/api/crawls", tags=["crawls"])
 
 logger = logging.getLogger("app.api.crawls")
 
-RUN_NOT_FOUND_DETAIL = "Run not found"
 RUN_CONFLICT_DETAIL = "Run cannot be cancelled in its current state"
 RUN_NOT_FOUND_RESPONSE = {
     status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
@@ -118,13 +116,8 @@ async def crawls_create(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    data = payload.model_dump()
-    # For batch runs, store URLs in settings so in-process runner can access them
-    if payload.run_type == "batch" and payload.urls:
-        data.setdefault("settings", {})["urls"] = payload.urls
     try:
-        run = await create_crawl_run(session, user.id, data)
-        run = await dispatch_run(session, run)
+        run = await create_crawl_run_from_payload(session, user.id, payload.model_dump())
     except ValueError as exc:
         _raise_http_from_value_error(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -147,14 +140,26 @@ async def _mark_run_failed_with_retry(
         failed_run = await error_session.get(CrawlRun, run_id)
         if failed_run is None:
             return
-        if normalize_status(failed_run.status) in TERMINAL_STATUSES:
+        if failed_run.status_value in TERMINAL_STATUSES:
             return
         update_run_status(failed_run, CrawlStatus.FAILED)
-        summary = dict(failed_run.result_summary or {})
-        summary["error"] = str(error_message or "background_crawl_error")
-        summary["extraction_verdict"] = "error"
-        failed_run.result_summary = summary
+        failed_run.update_summary(
+            error=str(error_message or "background_crawl_error"),
+            extraction_verdict="error",
+        )
         await error_session.commit()
+
+
+async def _require_accessible_run(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    user: User,
+):
+    run = await get_run(session, run_id)
+    if run is None or not user_can_access_run(user=user, run=run):
+        raise ValueError(RUN_NOT_FOUND_DETAIL)
+    return run
 
 
 @router.post(
@@ -174,41 +179,22 @@ async def crawls_create_csv(
     settings_json: Annotated[str, Form()] = "{}",
 ) -> dict:
     """Create a crawl run from an uploaded CSV file."""
-    import json
-
     content = (await file.read()).decode("utf-8", errors="ignore")
-    urls = parse_csv_urls(content)
-    if not urls:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No valid URLs found in CSV",
+    try:
+        run, url_count = await create_crawl_run_from_csv(
+            session,
+            user.id,
+            csv_content=content,
+            surface=surface,
+            additional_fields=additional_fields,
+            settings_json=settings_json,
         )
-
-    extra_fields = [f.strip() for f in additional_fields.split(",") if f.strip()]
-    try:
-        crawl_settings = json.loads(settings_json)
-    except json.JSONDecodeError:
-        crawl_settings = {}
-    crawl_settings["csv_content"] = content
-
-    data = {
-        "run_type": "csv",
-        "url": urls[0],
-        "urls": urls,
-        "surface": surface,
-        "settings": crawl_settings,
-        "additional_fields": extra_fields,
-    }
-    data["settings"]["urls"] = urls
-    try:
-        run = await create_crawl_run(session, user.id, data)
-        run = await dispatch_run(session, run)
     except ValueError as exc:
         _raise_http_from_value_error(
             status_code=status.HTTP_400_BAD_REQUEST,
             exc=exc,
         )
-    return {"run_id": run.id, "url_count": len(urls)}
+    return {"run_id": run.id, "url_count": url_count}
 
 
 @router.get("")
@@ -239,11 +225,12 @@ async def crawls_detail(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> CrawlRunResponse:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        run = await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     return CrawlRunResponse.model_validate(run, from_attributes=True)
 
 
@@ -255,11 +242,12 @@ async def crawls_delete(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        run = await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     try:
         await delete_run(session, run)
     except ValueError as exc:
@@ -275,11 +263,12 @@ async def crawls_pause(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        run = await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     try:
         updated = await pause_run(session, run)
     except ValueError as exc:
@@ -297,11 +286,12 @@ async def crawls_llm_commit(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> LLMCommitResponse:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        run = await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     updated_records, updated_fields = await commit_llm_suggestions(
         session,
         run=run,
@@ -319,11 +309,12 @@ async def crawls_commit_fields(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> FieldCommitResponse:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        run = await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     updated_records, updated_fields = await commit_selected_fields(
         session,
         run=run,
@@ -340,11 +331,12 @@ async def crawls_resume(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        run = await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     try:
         updated = await resume_run(session, run)
     except ValueError as exc:
@@ -369,11 +361,12 @@ async def crawls_kill(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        run = await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     try:
         updated = await kill_run(session, run)
     except ValueError as exc:
@@ -407,11 +400,12 @@ async def crawls_logs(
     after_id: int | None = None,
     limit: int = 500,
 ) -> list[LogEntryResponse]:
-    run = await get_run(session, run_id)
-    if run is None or (user.role != "admin" and run.user_id != user.id):
+    try:
+        await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     safe_limit = max(1, min(limit, 2000))
     rows = await get_run_logs(session, run_id, after_id=after_id, limit=safe_limit)
     return [LogEntryResponse.model_validate(row, from_attributes=True) for row in rows]
@@ -427,8 +421,9 @@ async def crawls_logs_ws(
         return
 
     async with SessionLocal() as session:
-        run = await get_run(session, run_id)
-        if run is None or (user.role != "admin" and run.user_id != user.id):
+        try:
+            run = await _require_accessible_run(session, run_id=run_id, user=user)
+        except ValueError:
             await _close_websocket_safely(
                 websocket, code=1008, reason=RUN_NOT_FOUND_DETAIL
             )
@@ -452,7 +447,7 @@ async def crawls_logs_ws(
                 if run is None:
                     await websocket.close(code=1008, reason=RUN_NOT_FOUND_DETAIL)
                     return
-                if normalize_status(run.status) in TERMINAL_STATUSES and not rows:
+                if run.status_value in TERMINAL_STATUSES and not rows:
                     await websocket.close(code=1000, reason="Run completed")
                     return
                 await asyncio.sleep(0.75)

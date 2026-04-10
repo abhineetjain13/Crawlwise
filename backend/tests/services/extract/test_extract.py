@@ -12,6 +12,7 @@ from app.services.extract.service import (
     _extract_image_urls,
     _extract_label_value_from_text,
     _finalize_candidate_rows,
+    finalize_candidate_row,
     _label_value_pattern,
     _normalize_color_candidate,
     _normalize_html_rich_text,
@@ -1797,3 +1798,81 @@ def test_extract_selected_variant_overwrites_root_scalars_and_cleans_product_att
         "fit": "Slim",
         "style": "KN4991300",
     }
+
+
+def test_extract_shopify_footer_sections_do_not_pollute_product_attributes():
+    html = """
+    <html><body>
+      <h1>Portuguese Terry Quarter-Zip Sweatshirt</h1>
+      <h2>Customer Service</h2>
+      <ul>
+        <li>Account Login</li>
+        <li>Shipping Policy</li>
+        <li>Return Policy</li>
+        <li>Gift Cards</li>
+      </ul>
+      <h2>Contact</h2>
+      <p>Join Our Team Contact Us Press Inquiries</p>
+      <h2>Reviews</h2>
+      <p>Love it Loading... Read more</p>
+    </body></html>
+    """
+    manifest = _manifest(
+        adapter_data=[
+            {
+                "_source": "adapter",
+                "title": "Portuguese Terry Quarter-Zip Sweatshirt",
+                "product_attributes": {"style": "KN4991300-429", "color": "Light Grey Mix"},
+                "color": "Light Grey Mix",
+            }
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.toddsnyder.com/products/zip-mocklight-grey-mix",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert candidates["product_attributes"][0]["value"] == {"style": "KN4991300-429"}
+
+
+def test_extract_text_pattern_does_not_promote_long_form_fields_from_raw_html_fallback():
+    html = """
+    <html><body>
+      <h1>Portuguese Terry Quarter-Zip Sweatshirt</h1>
+      <script type="application/json">
+        {
+          "related_copy": "Materials: This cotton-cashmere yarn is breathable and luxuriously soft. Specifications: an extra tab closure at the hem."
+        }
+      </script>
+    </body></html>
+    """
+    manifest = _manifest()
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.toddsnyder.com/products/zip-mocklight-grey-mix",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert "materials" not in candidates
+    assert "specifications" not in candidates
+
+
+def test_finalize_candidate_row_normalizes_product_json_cents_values():
+    value, reason = finalize_candidate_row(
+        "original_price",
+        {
+            "value": 15800,
+            "source": "embedded_json",
+            "blob_family": "product_json",
+        },
+    )
+
+    assert reason is None
+    assert value == "158.00"

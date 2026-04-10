@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from app.services.config.runtime_settings import crawler_runtime_settings
+
+HTTP_TIMEOUT_SECONDS = crawler_runtime_settings.http_timeout_seconds
+ACQUISITION_ATTEMPT_TIMEOUT_SECONDS = (
+    crawler_runtime_settings.acquisition_attempt_timeout_seconds
+)
+IMPERSONATION_TARGET = crawler_runtime_settings.impersonation_target
+HTTP_IMPERSONATION_PROFILES = crawler_runtime_settings.http_impersonation_profiles
+HTTP_STEALTH_IMPERSONATION_PROFILE = (
+    crawler_runtime_settings.http_stealth_impersonation_profile
+)
+BROWSER_FALLBACK_VISIBLE_TEXT_MIN = (
+    crawler_runtime_settings.browser_fallback_visible_text_min
+)
+BROWSER_FALLBACK_VISIBLE_TEXT_RATIO_MAX = (
+    crawler_runtime_settings.browser_fallback_visible_text_ratio_max
+)
+BROWSER_FALLBACK_HTML_SIZE_THRESHOLD = (
+    crawler_runtime_settings.browser_fallback_html_size_threshold
+)
+JS_GATE_PHRASES = crawler_runtime_settings.js_gate_phrases
+DEFAULT_MAX_RECORDS = crawler_runtime_settings.default_max_records
+DEFAULT_MAX_PAGES = crawler_runtime_settings.default_max_pages
+MIN_MAX_PAGES = crawler_runtime_settings.min_max_pages
+MAX_MAX_PAGES = crawler_runtime_settings.max_max_pages
+DEFAULT_SLEEP_MS = crawler_runtime_settings.default_sleep_ms
+MIN_REQUEST_DELAY_MS = crawler_runtime_settings.min_request_delay_ms
+DEFAULT_MAX_SCROLLS = crawler_runtime_settings.default_max_scrolls
+AUTO_DETECT_SURFACE = bool(crawler_runtime_settings.auto_detect_surface)
+BATCH_URL_CONCURRENCY = crawler_runtime_settings.batch_url_concurrency
+URL_BATCH_CONCURRENCY = int(crawler_runtime_settings.url_batch_concurrency)
+URL_PROCESS_TIMEOUT_SECONDS = float(crawler_runtime_settings.url_process_timeout_seconds)
+MAX_URL_PROCESS_TIMEOUT_SECONDS = float(
+    crawler_runtime_settings.max_url_process_timeout_seconds
+)
+WORKER_MAX_CONCURRENT_JOBS = crawler_runtime_settings.worker_max_concurrent_jobs
+WORKER_ORPHAN_RECOVERY_GRACE_SECONDS = (
+    crawler_runtime_settings.worker_orphan_recovery_grace_seconds
+)
+MAX_CANDIDATES_PER_FIELD = crawler_runtime_settings.max_candidates_per_field
+DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_tokens
+ACCORDION_EXPAND_MAX = crawler_runtime_settings.accordion_expand_max
+ACCORDION_EXPAND_WAIT_MS = crawler_runtime_settings.accordion_expand_wait_ms
+BLOCK_MIN_HTML_LENGTH = crawler_runtime_settings.block_min_html_length
+BLOCK_LOW_CONTENT_TEXT_MAX = crawler_runtime_settings.block_low_content_text_max
+BLOCK_LOW_CONTENT_SCRIPT_MIN = crawler_runtime_settings.block_low_content_script_min
+BLOCK_LOW_CONTENT_LINK_MAX = crawler_runtime_settings.block_low_content_link_max
+LISTING_MIN_ITEMS = crawler_runtime_settings.listing_min_items
+CARD_AUTODETECT_MIN_SIBLINGS = crawler_runtime_settings.card_autodetect_min_siblings
+JSON_MAX_SEARCH_DEPTH = crawler_runtime_settings.json_max_search_depth
+MAX_JSON_RECURSION_DEPTH = crawler_runtime_settings.max_json_recursion_depth
+HTTP_RETRY_STATUS_CODES = crawler_runtime_settings.http_retry_status_codes
+HTTP_MAX_RETRIES = crawler_runtime_settings.http_max_retries
+HTTP_RETRY_BACKOFF_BASE_MS = crawler_runtime_settings.http_retry_backoff_base_ms
+HTTP_RETRY_BACKOFF_MAX_MS = crawler_runtime_settings.http_retry_backoff_max_ms
+PROXY_FAILURE_COOLDOWN_BASE_MS = crawler_runtime_settings.proxy_failure_cooldown_base_ms
+PROXY_FAILURE_COOLDOWN_MAX_MS = crawler_runtime_settings.proxy_failure_cooldown_max_ms
+DNS_RESOLUTION_RETRIES = crawler_runtime_settings.dns_resolution_retries
+DNS_RESOLUTION_RETRY_DELAY_MS = crawler_runtime_settings.dns_resolution_retry_delay_ms
+ACQUIRE_HOST_MIN_INTERVAL_MS = crawler_runtime_settings.acquire_host_min_interval_ms
+PACING_HOST_CACHE_MAX_ENTRIES = crawler_runtime_settings.pacing_host_cache_max_entries
+PACING_HOST_CACHE_TTL_SECONDS = crawler_runtime_settings.pacing_host_cache_ttl_seconds
+STEALTH_PREFER_TTL_HOURS = crawler_runtime_settings.stealth_prefer_ttl_hours
+STEALTH_MIN_TTL_HOURS = 1
+CHALLENGE_WAIT_MAX_SECONDS = crawler_runtime_settings.challenge_wait_max_seconds
+CHALLENGE_POLL_INTERVAL_MS = crawler_runtime_settings.challenge_poll_interval_ms
+SURFACE_READINESS_MAX_WAIT_MS = crawler_runtime_settings.surface_readiness_max_wait_ms
+SURFACE_READINESS_POLL_MS = crawler_runtime_settings.surface_readiness_poll_ms
+ORIGIN_WARM_PAUSE_MS = crawler_runtime_settings.origin_warm_pause_ms
+BROWSER_ERROR_RETRY_ATTEMPTS = crawler_runtime_settings.browser_error_retry_attempts
+BROWSER_ERROR_RETRY_DELAY_MS = crawler_runtime_settings.browser_error_retry_delay_ms
+BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS = (
+    crawler_runtime_settings.browser_navigation_networkidle_timeout_ms
+)
+BROWSER_NAVIGATION_LOAD_TIMEOUT_MS = crawler_runtime_settings.browser_navigation_load_timeout_ms
+BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS = (
+    crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms
+)
+BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS = (
+    crawler_runtime_settings.browser_navigation_optimistic_wait_ms
+)
+INTERRUPTIBLE_WAIT_POLL_MS = crawler_runtime_settings.interruptible_wait_poll_ms
+PAGINATION_NAVIGATION_TIMEOUT_MS = (
+    crawler_runtime_settings.pagination_navigation_timeout_ms
+)
+LISTING_READINESS_MAX_WAIT_MS = crawler_runtime_settings.listing_readiness_max_wait_ms
+LISTING_READINESS_POLL_MS = crawler_runtime_settings.listing_readiness_poll_ms
+SCROLL_WAIT_MIN_MS = crawler_runtime_settings.scroll_wait_min_ms
+LOAD_MORE_WAIT_MIN_MS = crawler_runtime_settings.load_more_wait_min_ms
+COOKIE_CONSENT_PREWAIT_MS = crawler_runtime_settings.cookie_consent_prewait_ms
+COOKIE_CONSENT_POSTCLICK_WAIT_MS = (
+    crawler_runtime_settings.cookie_consent_postclick_wait_ms
+)
+SHADOW_DOM_FLATTEN_MAX_HOSTS = crawler_runtime_settings.shadow_dom_flatten_max_hosts
+LONG_RUN_THRESHOLD_SECONDS: int = 30 * 60
+STALLED_RUN_THRESHOLD_SECONDS: int = 2 * 60
+MAX_DURATION_SAMPLE_SIZE: int = 1000
+
+
+def coerce_url_timeout_seconds(value: object) -> float:
+    return crawler_runtime_settings.coerce_url_timeout_seconds(value)

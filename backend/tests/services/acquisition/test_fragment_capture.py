@@ -338,7 +338,10 @@ async def test_job_surface_uses_job_card_selectors():
     """When surface contains 'job', _card_selectors_for_surface should
     return the jobs selector list."""
     from app.services.acquisition.traversal import _card_selectors_for_surface
-    from app.services.pipeline_config import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS
+    from app.services.config.selectors import (
+        CARD_SELECTORS_COMMERCE,
+        CARD_SELECTORS_JOBS,
+    )
 
     assert _card_selectors_for_surface("job_listing") == list(CARD_SELECTORS_JOBS)
     assert _card_selectors_for_surface("ecommerce_listing") == list(CARD_SELECTORS_COMMERCE)

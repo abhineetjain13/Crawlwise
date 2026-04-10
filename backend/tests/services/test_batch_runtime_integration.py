@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 import pytest
+from app.models.crawl import CrawlRun
 from app.services.crawl_service import CELERY_TASK_ID_KEY, dispatch_run
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+
+def _make_run(*, run_id: int, status: str) -> CrawlRun:
+    return CrawlRun(
+        id=run_id,
+        user_id=1,
+        run_type="crawl",
+        url="https://example.com",
+        status=status,
+        surface="ecommerce_detail",
+        settings={},
+        requested_fields=[],
+        result_summary={},
+    )
 
 
 @pytest.mark.asyncio
@@ -11,6 +26,14 @@ async def test_dispatch_run_enqueues_celery_task_and_persists_task_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorded: dict[str, object] = {}
+    monkeypatch.setattr(
+        "app.services.crawl_service.settings.celery_dispatch_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.crawl_service.settings.legacy_inprocess_runner_enabled",
+        False,
+    )
 
     def _fake_apply_async(*, args, task_id):
         recorded["args"] = list(args)
@@ -22,7 +45,7 @@ async def test_dispatch_run_enqueues_celery_task_and_persists_task_id(
         _fake_apply_async,
     )
 
-    run = SimpleNamespace(id=7, status="pending", result_summary={})
+    run = _make_run(run_id=7, status="pending")
     session = SimpleNamespace(
         commit=AsyncMock(),
         refresh=AsyncMock(),
@@ -52,11 +75,15 @@ async def test_dispatch_run_rejects_terminal_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
+        "app.services.crawl_service.settings.celery_dispatch_enabled",
+        True,
+    )
+    monkeypatch.setattr(
         "app.services.crawl_service.process_run_task.apply_async",
         lambda **_kwargs: None,
     )
 
-    run = SimpleNamespace(id=9, status="completed", result_summary={})
+    run = _make_run(run_id=9, status="completed")
     session = SimpleNamespace(
         commit=AsyncMock(),
         refresh=AsyncMock(),
@@ -78,7 +105,7 @@ async def test_dispatch_run_rejects_terminal_runs(
 async def test_dispatch_run_falls_back_to_local_runner_when_celery_enqueue_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run = SimpleNamespace(id=11, status="pending", result_summary={})
+    run = _make_run(run_id=11, status="pending")
     session = SimpleNamespace(
         commit=AsyncMock(),
         refresh=AsyncMock(),
@@ -107,6 +134,10 @@ async def test_dispatch_run_falls_back_to_local_runner_when_celery_enqueue_fails
     monkeypatch.setattr(
         "app.services.crawl_service._track_local_run_task",
         _fake_track_local_run_task,
+    )
+    monkeypatch.setattr(
+        "app.services.crawl_service.settings.celery_dispatch_enabled",
+        True,
     )
     monkeypatch.setattr(
         "app.services.crawl_service.settings.legacy_inprocess_runner_enabled",

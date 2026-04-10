@@ -447,6 +447,24 @@ async def test_oracle_hcm_can_handle():
 
 
 @pytest.mark.asyncio
+async def test_oracle_hcm_does_not_match_commerce_page_with_footer_careers_link():
+    adapter = OracleHCMAdapter()
+    html = """
+    <html><body>
+      <a href="https://hcml.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/AEO-Careers/requisitions?keyword=Todd+Snyder">
+        Join Our Team
+      </a>
+      <script>Shopify.theme = {};</script>
+    </body></html>
+    """
+
+    assert not await adapter.can_handle(
+        "https://www.toddsnyder.com/products/zip-mocklight-grey-mix",
+        html,
+    )
+
+
+@pytest.mark.asyncio
 async def test_oracle_hcm_extract_listing_uses_public_requisitions_endpoint():
     adapter = OracleHCMAdapter()
     html = """
@@ -674,6 +692,26 @@ async def test_registry_resolves_amazon():
 @pytest.mark.asyncio
 async def test_registry_resolves_shopify_by_signal():
     adapter = await resolve_adapter("https://custom-store.com/products/shirt", '<script>Shopify.theme = {}</script>')
+    assert adapter is not None
+    assert adapter.name == "shopify"
+
+
+@pytest.mark.asyncio
+async def test_registry_prefers_shopify_when_page_only_contains_external_oracle_hcm_link():
+    html = """
+    <html><body>
+      <a href="https://hcml.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/AEO-Careers/requisitions">
+        Careers
+      </a>
+      <script>Shopify.theme = {};</script>
+    </body></html>
+    """
+
+    adapter = await resolve_adapter(
+        "https://www.toddsnyder.com/products/zip-mocklight-grey-mix",
+        html,
+    )
+
     assert adapter is not None
     assert adapter.name == "shopify"
 

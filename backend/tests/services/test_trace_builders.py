@@ -59,3 +59,23 @@ def test_build_manifest_trace_scrubs_session_and_cookie_payload_keys():
     assert row["body"]["session_id"] == "[REDACTED]"
     assert row["body"]["sessionid"] == "[REDACTED]"
     assert row["body"]["__session"] == "[REDACTED]"
+
+
+def test_build_manifest_trace_scrubs_proxy_credentials_from_payload_urls():
+    manifest = _build_manifest_trace(
+        html="<html><body><h1>ok</h1></body></html>",
+        xhr_payloads=[
+            {
+                "url": "https://api.example.com/data",
+                "body": {
+                    "proxy_url": "socks5://alice:token@proxy2.example.com:1080",
+                    "note": "via https://bob:hunter2@proxy3.example.com:8181",
+                },
+            }
+        ],
+        adapter_records=[],
+    )
+
+    row = manifest["network_payloads"][0]
+    assert row["body"]["proxy_url"] == "socks5://***:***@proxy2.example.com:1080"
+    assert "https://***:***@proxy3.example.com:8181" in row["body"]["note"]

@@ -5,7 +5,10 @@ import time
 from urllib.parse import urlparse
 
 from app.core.redis import get_redis, redis_fail_open
-from app.services.pipeline_config import STEALTH_MIN_TTL_HOURS, STEALTH_PREFER_TTL_HOURS
+from app.services.config.crawl_runtime import (
+    STEALTH_MIN_TTL_HOURS,
+    STEALTH_PREFER_TTL_HOURS,
+)
 
 _HOST_MEMORY_KEY_PREFIX = "crawl:host-memory:stealth"
 

@@ -8,17 +8,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin
 
-from app.services.pipeline_config import (
+from app.services.config.crawl_runtime import (
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
-    CARD_SELECTORS_COMMERCE,
-    CARD_SELECTORS_JOBS,
     LISTING_MIN_ITEMS,
-    LOAD_MORE_SELECTORS,
     LOAD_MORE_WAIT_MIN_MS,
     PAGINATION_NAVIGATION_TIMEOUT_MS,
-    PAGINATION_NEXT_SELECTORS,
     SCROLL_WAIT_MIN_MS,
 )
+from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
 from app.services.runtime_metrics import incr
 from app.services.url_safety import validate_public_target
 from playwright.async_api import (
@@ -29,6 +26,10 @@ from playwright.async_api import (
 )
 
 logger = logging.getLogger(__name__)
+CARD_SELECTORS_COMMERCE = list(CARD_SELECTORS.get("ecommerce", []))
+CARD_SELECTORS_JOBS = list(CARD_SELECTORS.get("jobs", []))
+PAGINATION_NEXT_SELECTORS = list(PAGINATION_SELECTORS.get("next_page", []))
+LOAD_MORE_SELECTORS = list(PAGINATION_SELECTORS.get("load_more", []))
 _MAX_TRAVERSAL_FRAGMENTS = 50
 _MAX_TRAVERSAL_FRAGMENT_BYTES = 2_000_000
 _MAX_TRAVERSAL_TOTAL_BYTES = 6_000_000

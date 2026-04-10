@@ -6,7 +6,7 @@ import re
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from app.services.pipeline_config import (
+from app.services.config.extraction_rules import (
     CANDIDATE_ALPHA_CHAR_PATTERN,
     CANDIDATE_ANALYTICS_DIMENSION_TOKEN_PATTERN,
     CANDIDATE_ASSET_FILE_EXTENSIONS,

@@ -84,6 +84,9 @@ CARD_SELECTORS = {
     ],
 }
 
+CARD_SELECTORS_COMMERCE = list(CARD_SELECTORS.get("ecommerce", []))
+CARD_SELECTORS_JOBS = list(CARD_SELECTORS.get("jobs", []))
+
 PAGINATION_SELECTORS = {
     "next_page": [
         "a[rel='next']",

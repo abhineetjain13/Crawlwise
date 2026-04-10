@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, Histogram, generate_latest
+    from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 except ImportError:  # pragma: no cover - optional dependency fallback
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
     CollectorRegistry = None
+    Counter = None
     Gauge = None
     Histogram = None
     generate_latest = None
@@ -26,6 +27,9 @@ class _NoopMetric:
         return None
 
     def observe(self, _: float) -> None:
+        return None
+
+    def inc(self, _: float = 1.0) -> None:
         return None
 
 
@@ -57,12 +61,55 @@ acquisition_duration_seconds = (Histogram(
     "Acquisition duration in seconds.",
     registry=_registry,
 ) if Histogram is not None else _NoopMetric())
+llm_task_duration_seconds = (Histogram(
+    "llm_task_duration_seconds",
+    "LLM task duration in seconds.",
+    labelnames=("task_type", "provider", "outcome"),
+    registry=_registry,
+) if Histogram is not None else _NoopMetric())
+llm_task_outcomes_total = (Counter(
+    "llm_task_outcomes_total",
+    "LLM task outcomes grouped by task, provider, and error category.",
+    labelnames=("task_type", "provider", "outcome", "error_category"),
+    registry=_registry,
+) if Counter is not None else _NoopMetric())
 
 
 def observe_acquisition_duration(seconds: float) -> None:
     if seconds < 0:
         return
     acquisition_duration_seconds.observe(seconds)
+
+
+def observe_llm_task_duration(
+    *,
+    task_type: str,
+    provider: str,
+    outcome: str,
+    seconds: float,
+) -> None:
+    if seconds < 0:
+        return
+    llm_task_duration_seconds.labels(
+        task_type=str(task_type or "unknown"),
+        provider=str(provider or "unknown"),
+        outcome=str(outcome or "unknown"),
+    ).observe(seconds)
+
+
+def record_llm_task_outcome(
+    *,
+    task_type: str,
+    provider: str,
+    outcome: str,
+    error_category: str,
+) -> None:
+    llm_task_outcomes_total.labels(
+        task_type=str(task_type or "unknown"),
+        provider=str(provider or "unknown"),
+        outcome=str(outcome or "unknown"),
+        error_category=str(error_category or "none"),
+    ).inc()
 
 
 def _database_connections_checked_out() -> int:

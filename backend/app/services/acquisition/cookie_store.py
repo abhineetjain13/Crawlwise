@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
-from app.services.pipeline_config import COOKIE_POLICY
+from app.services.config.extraction_rules import COOKIE_POLICY
 
 logger = logging.getLogger(__name__)
 

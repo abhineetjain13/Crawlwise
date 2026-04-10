@@ -9,13 +9,13 @@ from app.core.config import PROJECT_ROOT, settings
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
 from app.models.llm import LLMCostLog
 from app.services.crawl_state import ACTIVE_STATUSES
-from app.services.domain_utils import normalize_domain
-from app.services.knowledge_base.store import reset_learned_state
-from app.services.pipeline_config import (
+from app.services.config.crawl_runtime import (
     LONG_RUN_THRESHOLD_SECONDS,
     MAX_DURATION_SAMPLE_SIZE,
     STALLED_RUN_THRESHOLD_SECONDS,
 )
+from app.services.domain_utils import normalize_domain
+from app.services.knowledge_base.store import reset_learned_state
 from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession

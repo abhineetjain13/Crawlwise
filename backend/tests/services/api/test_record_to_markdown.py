@@ -1,4 +1,4 @@
-from app.api.records import _record_to_markdown
+from app.services.record_export_service import _record_to_markdown
 from app.models.crawl import CrawlRecord
 
 

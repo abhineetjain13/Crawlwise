@@ -23,7 +23,7 @@ from app.core.metrics import (
     render_prometheus_metrics,
 )
 from app.core.redis import close_redis
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, dispose_engine
 from app.core.telemetry import (
     configure_logging,
     generate_correlation_id,
@@ -55,6 +55,7 @@ async def lifespan(_: FastAPI):
     finally:
         await shutdown_browser_pool()
         await close_redis()
+        await dispose_engine()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

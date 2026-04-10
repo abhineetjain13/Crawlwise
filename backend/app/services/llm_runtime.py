@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from hashlib import sha256
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 from json import loads as parse_json
 from string import Template
 from typing import Any
 
 import httpx
 from app.core.config import settings
+from app.core.metrics import observe_llm_task_duration, record_llm_task_outcome
+from app.core.redis import redis_fail_open, redis_is_enabled
 from app.core.security import decrypt_secret
 from app.models.crawl import CrawlRun
 from app.models.llm import LLMConfig, LLMCostLog
 from app.services.knowledge_base.store import get_prompt_task, load_prompt_file
-from app.services.pipeline_config import (
+from app.services.config.llm_runtime import (
     LLM_ANTHROPIC_MAX_TOKENS,
     LLM_ANTHROPIC_TEMPERATURE,
     LLM_CANDIDATE_EVIDENCE_MAX_CHARS,
@@ -33,7 +38,111 @@ _ERROR_PREFIX = "Error:"
 JSON_CONTENT_TYPE = "application/json"
 SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 logger = logging.getLogger(__name__)
+_PAGE_CLASSIFICATION_TYPES = {"listing", "detail", "challenge", "error", "unknown"}
+_LLM_CACHE_KEY_PREFIX = "crawl:llm:result"
 
+
+# ---------------------------------------------------------------------------
+# Typed LLM error categories
+# ---------------------------------------------------------------------------
+
+class LLMErrorCategory(StrEnum):
+    NONE = "none"
+    RATE_LIMITED = "rate_limited"
+    TIMEOUT = "timeout"
+    AUTH_FAILURE = "auth_failure"
+    PROVIDER_ERROR = "provider_error"
+    PARSE_FAILURE = "parse_failure"
+    VALIDATION_FAILURE = "validation_failure"
+    CIRCUIT_OPEN = "circuit_open"
+    MISSING_CONFIG = "missing_config"
+
+
+def _classify_error(raw: str) -> LLMErrorCategory:
+    """Classify an error string into a typed category."""
+    lowered = raw.lower()
+    if "circuit_open" in lowered or "circuit breaker" in lowered:
+        return LLMErrorCategory.CIRCUIT_OPEN
+    if "429" in raw or "rate" in lowered:
+        return LLMErrorCategory.RATE_LIMITED
+    if "timeout" in lowered or "timed out" in lowered:
+        return LLMErrorCategory.TIMEOUT
+    if "401" in raw or "403" in raw or "unauthorized" in lowered or "forbidden" in lowered:
+        return LLMErrorCategory.AUTH_FAILURE
+    if raw.startswith(_ERROR_PREFIX):
+        return LLMErrorCategory.PROVIDER_ERROR
+    return LLMErrorCategory.NONE
+
+
+# ---------------------------------------------------------------------------
+# Per-provider circuit breaker
+# ---------------------------------------------------------------------------
+
+_CIRCUIT_FAILURE_THRESHOLD = 5
+_CIRCUIT_COOLDOWN_SECONDS = 120
+
+
+@dataclass
+class _CircuitState:
+    consecutive_failures: int = 0
+    opened_at: float = 0.0
+    total_failures: int = 0
+    total_successes: int = 0
+    last_error_category: LLMErrorCategory = LLMErrorCategory.NONE
+
+
+_provider_circuits: dict[str, _CircuitState] = {}
+
+
+def _get_circuit(provider: str) -> _CircuitState:
+    if provider not in _provider_circuits:
+        _provider_circuits[provider] = _CircuitState()
+    return _provider_circuits[provider]
+
+
+def _circuit_is_open(provider: str) -> bool:
+    circuit = _get_circuit(provider)
+    if circuit.consecutive_failures < _CIRCUIT_FAILURE_THRESHOLD:
+        return False
+    elapsed = time.monotonic() - circuit.opened_at
+    if elapsed >= _CIRCUIT_COOLDOWN_SECONDS:
+        logger.info("Circuit half-open for provider=%s — allowing probe request", provider)
+        return False
+    return True
+
+
+def _record_success(provider: str) -> None:
+    circuit = _get_circuit(provider)
+    circuit.consecutive_failures = 0
+    circuit.opened_at = 0.0
+    circuit.total_successes += 1
+
+
+def _record_failure(provider: str, category: LLMErrorCategory) -> None:
+    circuit = _get_circuit(provider)
+    circuit.consecutive_failures += 1
+    circuit.total_failures += 1
+    circuit.last_error_category = category
+    if circuit.consecutive_failures >= _CIRCUIT_FAILURE_THRESHOLD and circuit.opened_at == 0.0:
+        circuit.opened_at = time.monotonic()
+        logger.warning(
+            "Circuit OPEN for provider=%s after %d consecutive failures (last=%s)",
+            provider, circuit.consecutive_failures, category,
+        )
+
+
+def circuit_breaker_snapshot() -> dict[str, dict]:
+    """Return a snapshot of all circuit breaker states for observability."""
+    return {
+        provider: {
+            "consecutive_failures": s.consecutive_failures,
+            "total_failures": s.total_failures,
+            "total_successes": s.total_successes,
+            "is_open": _circuit_is_open(provider),
+            "last_error_category": s.last_error_category,
+        }
+        for provider, s in _provider_circuits.items()
+    }
 
 
 @dataclass
@@ -44,6 +153,7 @@ class LLMTaskResult:
     provider: str = ""
     model: str = ""
     error_message: str = ""
+    error_category: LLMErrorCategory = LLMErrorCategory.NONE
 
 
 async def resolve_active_config(session: AsyncSession, task_type: str) -> LLMConfig | None:
@@ -81,12 +191,11 @@ async def resolve_run_config(
     if run_id is not None:
         run = await session.get(CrawlRun, run_id)
         if run is not None:
-            snapshot = (run.settings or {}).get("llm_config_snapshot")
-            if isinstance(snapshot, dict):
-                for candidate in [task_type, "general"]:
-                    config_snapshot = snapshot.get(candidate)
-                    if isinstance(config_snapshot, dict):
-                        return config_snapshot
+            snapshot = run.settings_view.llm_config_snapshot()
+            for candidate in [task_type, "general"]:
+                config_snapshot = snapshot.get(candidate)
+                if isinstance(config_snapshot, dict):
+                    return config_snapshot
     config = await resolve_active_config(session, task_type)
     if config is None:
         return None
@@ -101,17 +210,36 @@ async def run_prompt_task(
     domain: str,
     variables: dict[str, Any],
 ) -> LLMTaskResult:
+    started_at = time.monotonic()
+
+    def _finish(result: LLMTaskResult) -> LLMTaskResult:
+        provider_label = str(result.provider or "unknown")
+        outcome = "success" if not result.error_message else "error"
+        record_llm_task_outcome(
+            task_type=task_type,
+            provider=provider_label,
+            outcome=outcome,
+            error_category=str(result.error_category or LLMErrorCategory.NONE),
+        )
+        observe_llm_task_duration(
+            task_type=task_type,
+            provider=provider_label,
+            outcome=outcome,
+            seconds=time.monotonic() - started_at,
+        )
+        return result
+
     config = await resolve_run_config(session, run_id=run_id, task_type=task_type)
     task = get_prompt_task(task_type)
     if config is None:
-        return LLMTaskResult(payload=None, error_message=f"No LLM config available for task {task_type}")
+        return _finish(LLMTaskResult(payload=None, error_message=f"No LLM config available for task {task_type}", error_category=LLMErrorCategory.MISSING_CONFIG))
     if task is None:
-        return LLMTaskResult(payload=None, error_message=f"No prompt registered for task {task_type}")
+        return _finish(LLMTaskResult(payload=None, error_message=f"No prompt registered for task {task_type}", error_category=LLMErrorCategory.MISSING_CONFIG))
 
     system_prompt = load_prompt_file(str(task.get("system_file") or ""))
     user_template = load_prompt_file(str(task.get("user_file") or ""))
     if not system_prompt.strip() or not user_template.strip():
-        return LLMTaskResult(payload=None, error_message=f"Prompt files missing for task {task_type}")
+        return _finish(LLMTaskResult(payload=None, error_message=f"Prompt files missing for task {task_type}", error_category=LLMErrorCategory.MISSING_CONFIG))
 
     rendered_user_prompt = Template(user_template).safe_substitute({
         key: _stringify_prompt_value(value) for key, value in variables.items()
@@ -120,42 +248,71 @@ async def run_prompt_task(
     # We use a conservative character-to-token ratio (4 chars = 1 token).
     # Groq's 8b/70b models often have a 6k-8k limit on some tiers.
     safe_user_prompt = _enforce_token_limit(rendered_user_prompt, limit=5600)
+    provider = str(config.get("provider") or "")
+    model = str(config.get("model") or "")
+    response_type = str(task.get("response_type") or "object")
+    cache_key = _build_llm_cache_key(
+        task_type=task_type,
+        domain=domain,
+        provider=provider,
+        model=model,
+        response_type=response_type,
+        data_key=str(task.get("data_key") or ""),
+        system_prompt=system_prompt,
+        user_prompt=safe_user_prompt,
+        variables=variables,
+    )
+    cached_result = await _load_cached_llm_result(cache_key)
+    if cached_result is not None:
+        return _finish(cached_result)
     
     raw, input_tokens, output_tokens = await _call_provider_with_retry(
-        provider=str(config.get("provider") or ""),
-        model=str(config.get("model") or ""),
+        provider=provider,
+        model=model,
         api_key=_resolve_provider_api_key(
-            provider=str(config.get("provider") or ""),
+            provider=provider,
             encrypted_value=str(config.get("api_key_encrypted") or ""),
         ),
         system_prompt=system_prompt,
         user_prompt=safe_user_prompt,
     )
     if raw.startswith(_ERROR_PREFIX):
-        return LLMTaskResult(
+        return _finish(LLMTaskResult(
             payload=None,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            provider=str(config.get("provider") or ""),
-            model=str(config.get("model") or ""),
+            provider=provider,
+            model=model,
             error_message=raw,
-        )
+            error_category=_classify_error(raw),
+        ))
 
-    response_type = str(task.get("response_type") or "object")
     payload = _parse_payload(raw, response_type=response_type)
     if payload is None:
-        return LLMTaskResult(
+        return _finish(LLMTaskResult(
             payload=None,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            provider=str(config.get("provider") or ""),
-            model=str(config.get("model") or ""),
+            provider=provider,
+            model=model,
             error_message="Error: Provider response could not be parsed as structured JSON.",
-        )
+            error_category=LLMErrorCategory.PARSE_FAILURE,
+        ))
     if isinstance(payload, dict) and task.get("data_key"):
         inner = payload.get(str(task["data_key"]))
         if isinstance(inner, (dict, list)):
             payload = inner
+    validation_error = _validate_task_payload(task_type, payload)
+    if validation_error:
+        return _finish(LLMTaskResult(
+            payload=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            provider=provider,
+            model=model,
+            error_message=f"Error: {validation_error}",
+            error_category=LLMErrorCategory.VALIDATION_FAILURE,
+        ))
 
     persisted_run_id = run_id
     if run_id is not None:
@@ -165,14 +322,14 @@ async def run_prompt_task(
     session.add(
         LLMCostLog(
             run_id=persisted_run_id,
-            provider=str(config.get("provider") or ""),
-            model=str(config.get("model") or ""),
+            provider=provider,
+            model=model,
             task_type=task_type,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_usd=_estimate_cost_usd(
-                str(config.get("provider") or ""),
-                str(config.get("model") or ""),
+                provider,
+                model,
                 input_tokens,
                 output_tokens,
             ),
@@ -180,12 +337,126 @@ async def run_prompt_task(
         )
     )
     await session.flush()
-    return LLMTaskResult(
+    result = LLMTaskResult(
         payload=payload,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        provider=str(config.get("provider") or ""),
-        model=str(config.get("model") or ""),
+        provider=provider,
+        model=model,
+    )
+    await _store_cached_llm_result(cache_key, result)
+    return _finish(result)
+
+
+def _build_llm_cache_key(
+    *,
+    task_type: str,
+    domain: str,
+    provider: str,
+    model: str,
+    response_type: str,
+    data_key: str,
+    system_prompt: str,
+    user_prompt: str,
+    variables: dict[str, Any],
+) -> str:
+    payload = {
+        "task_type": str(task_type or "").strip(),
+        "domain": str(domain or "").strip().lower(),
+        "provider": str(provider or "").strip().lower(),
+        "model": str(model or "").strip(),
+        "response_type": str(response_type or "").strip(),
+        "data_key": str(data_key or "").strip(),
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "variables": _normalize_cache_value(variables),
+    }
+    digest = sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    return f"{_LLM_CACHE_KEY_PREFIX}:{digest}"
+
+
+def _normalize_cache_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_cache_value(value[key])
+            for key in sorted(value)
+        }
+    if isinstance(value, list):
+        return [_normalize_cache_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_cache_value(item) for item in value]
+    if isinstance(value, set):
+        return sorted(_normalize_cache_value(item) for item in value)
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+async def _load_cached_llm_result(cache_key: str) -> LLMTaskResult | None:
+    if not redis_is_enabled():
+        return None
+
+    async def _load(redis) -> LLMTaskResult | None:
+        raw = await redis.get(cache_key)
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        error_category = payload.get("error_category")
+        return LLMTaskResult(
+            payload=payload.get("payload") if isinstance(payload.get("payload"), (dict, list)) or payload.get("payload") is None else None,
+            input_tokens=int(payload.get("input_tokens") or 0),
+            output_tokens=int(payload.get("output_tokens") or 0),
+            provider=str(payload.get("provider") or ""),
+            model=str(payload.get("model") or ""),
+            error_message=str(payload.get("error_message") or ""),
+            error_category=LLMErrorCategory(str(error_category or LLMErrorCategory.NONE)),
+        )
+
+    return await redis_fail_open(
+        _load,
+        default=None,
+        operation_name="llm_result_cache_get",
+    )
+
+
+async def _store_cached_llm_result(cache_key: str, result: LLMTaskResult) -> None:
+    if not redis_is_enabled():
+        return
+    ttl_seconds = max(1, int(settings.llm_cache_ttl_seconds or 0))
+
+    async def _store(redis) -> bool:
+        return await redis.set(
+            cache_key,
+            json.dumps(
+                {
+                    "payload": result.payload,
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "error_message": result.error_message,
+                    "error_category": str(result.error_category or LLMErrorCategory.NONE),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ),
+            ex=ttl_seconds,
+        )
+
+    await redis_fail_open(
+        _store,
+        default=False,
+        operation_name="llm_result_cache_set",
     )
 
 
@@ -330,10 +601,23 @@ async def _call_provider_with_retry(
     max_retries: int = 1,
     base_delay_s: float = 0.0,
 ) -> tuple[str, int, int]:
-    """Call provider once and fail fast on rate limits."""
+    """Call provider with circuit breaker protection.
+
+    - Rate limits (429) fail fast per architecture invariant 18.
+    - Transient errors are retried up to ``max_retries``.
+    - Circuit breaker trips after repeated consecutive failures and
+      short-circuits calls for a cooldown period.
+    """
     _ = base_delay_s
+    normalized_provider = str(provider or "").strip().lower()
+
+    if _circuit_is_open(normalized_provider):
+        msg = f"{_ERROR_PREFIX} Circuit breaker open for provider {provider} (circuit_open)"
+        logger.warning(msg)
+        return msg, 0, 0
+
     last_error = ""
-    for _attempt in range(max_retries):
+    for attempt in range(max(1, max_retries)):
         result, input_tokens, output_tokens = await _call_provider(
             provider=provider,
             model=model,
@@ -342,18 +626,25 @@ async def _call_provider_with_retry(
             user_prompt=user_prompt,
         )
         if not result.startswith(_ERROR_PREFIX):
+            _record_success(normalized_provider)
             return result, input_tokens, output_tokens
-        if "429" in result or "rate" in result.lower():
-            last_error = result
+
+        category = _classify_error(result)
+        _record_failure(normalized_provider, category)
+
+        if category == LLMErrorCategory.RATE_LIMITED:
             logger.warning(
                 "LLM rate limited for provider=%s model=%s; failing fast",
-                provider,
-                model,
+                provider, model,
             )
-            break
-        return result, input_tokens, output_tokens
-    # Return accurate message reflecting immediate break behavior
-    return last_error or f"{_ERROR_PREFIX} Rate limited (failing fast)", 0, 0
+            return result, input_tokens, output_tokens
+
+        if category == LLMErrorCategory.AUTH_FAILURE:
+            return result, input_tokens, output_tokens
+
+        last_error = result
+
+    return last_error or f"{_ERROR_PREFIX} Provider call failed", 0, 0
 
 
 def _provider_dispatch(provider: str):
@@ -477,6 +768,137 @@ def _parse_payload(raw_text: str, *, response_type: str) -> dict | list | None:
     if response_type == "array":
         return _parse_json_array(raw_text)
     return _parse_json_object(raw_text)
+
+
+def _validate_task_payload(task_type: str, payload: object) -> str | None:
+    validators = {
+        "xpath_discovery": _validate_xpath_discovery_payload,
+        "missing_field_extraction": _validate_missing_field_extraction_payload,
+        "field_cleanup_review": _validate_field_cleanup_review_payload,
+        "page_classification": _validate_page_classification_payload,
+        "schema_inference": _validate_schema_inference_payload,
+    }
+    validator = validators.get(str(task_type or "").strip())
+    if validator is None:
+        return None
+    return validator(payload)
+
+
+def _validate_xpath_discovery_payload(payload: object) -> str | None:
+    if not isinstance(payload, list):
+        return "xpath_discovery payload must be a list of selector objects"
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            return f"xpath_discovery selectors[{index}] must be an object"
+        field_name = str(row.get("field_name") or "").strip()
+        xpath = str(row.get("xpath") or "").strip()
+        if not field_name:
+            return f"xpath_discovery selectors[{index}].field_name is required"
+        if not xpath:
+            return f"xpath_discovery selectors[{index}].xpath is required"
+    return None
+
+
+def _validate_missing_field_extraction_payload(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return "missing_field_extraction payload must be an object"
+    for key in payload:
+        normalized_key = str(key or "").strip()
+        if not normalized_key or normalized_key.startswith("_"):
+            return "missing_field_extraction payload contains an invalid field key"
+    return None
+
+
+def _validate_field_cleanup_review_payload(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return "field_cleanup_review payload must be an object"
+    allowed_keys = {"canonical", "review_bucket"}
+    if set(payload) - allowed_keys:
+        unexpected = sorted(set(payload) - allowed_keys)[0]
+        return f"field_cleanup_review payload has unexpected key '{unexpected}'"
+    canonical = payload.get("canonical", {})
+    if canonical not in ({}, None) and not isinstance(canonical, dict):
+        return "field_cleanup_review canonical must be an object"
+    if isinstance(canonical, dict):
+        for field_name, row in canonical.items():
+            normalized_field = str(field_name or "").strip()
+            if not normalized_field or normalized_field.startswith("_"):
+                return "field_cleanup_review canonical contains an invalid field key"
+            if not isinstance(row, dict):
+                return f"field_cleanup_review canonical['{normalized_field}'] must be an object"
+            if row.get("suggested_value") in (None, "", [], {}):
+                return f"field_cleanup_review canonical['{normalized_field}'].suggested_value is required"
+            source = str(row.get("source") or "").strip()
+            if not source:
+                return f"field_cleanup_review canonical['{normalized_field}'].source is required"
+            supporting_sources = row.get("supporting_sources")
+            if supporting_sources is not None:
+                if not isinstance(supporting_sources, list):
+                    return f"field_cleanup_review canonical['{normalized_field}'].supporting_sources must be a list"
+                if any(not str(item or "").strip() for item in supporting_sources):
+                    return f"field_cleanup_review canonical['{normalized_field}'].supporting_sources contains an invalid source"
+    review_bucket = payload.get("review_bucket", [])
+    if review_bucket not in (None, []) and not isinstance(review_bucket, list):
+        return "field_cleanup_review review_bucket must be a list"
+    if isinstance(review_bucket, list):
+        for index, row in enumerate(review_bucket):
+            if not isinstance(row, dict):
+                return f"field_cleanup_review review_bucket[{index}] must be an object"
+            key = str(row.get("key") or "").strip()
+            source = str(row.get("source") or "").strip()
+            if not key:
+                return f"field_cleanup_review review_bucket[{index}].key is required"
+            if row.get("value") in (None, "", [], {}):
+                return f"field_cleanup_review review_bucket[{index}].value is required"
+            if not source:
+                return f"field_cleanup_review review_bucket[{index}].source is required"
+    return None
+
+
+def _validate_page_classification_payload(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return "page_classification payload must be an object"
+    required_keys = {
+        "page_type",
+        "has_secondary_listing",
+        "wait_selector_hint",
+        "reasoning",
+    }
+    missing_keys = sorted(required_keys - set(payload))
+    if missing_keys:
+        return f"page_classification payload missing key '{missing_keys[0]}'"
+    page_type = str(payload.get("page_type") or "").strip()
+    if page_type not in _PAGE_CLASSIFICATION_TYPES:
+        return "page_classification page_type is invalid"
+    if not isinstance(payload.get("has_secondary_listing"), bool):
+        return "page_classification has_secondary_listing must be a boolean"
+    if not isinstance(payload.get("wait_selector_hint"), str):
+        return "page_classification wait_selector_hint must be a string"
+    if not isinstance(payload.get("reasoning"), str):
+        return "page_classification reasoning must be a string"
+    return None
+
+
+def _validate_schema_inference_payload(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return "schema_inference payload must be an object"
+    required_keys = {"confirmed_fields", "new_fields", "absent_fields"}
+    missing_keys = sorted(required_keys - set(payload))
+    if missing_keys:
+        return f"schema_inference payload missing key '{missing_keys[0]}'"
+    for key in sorted(required_keys):
+        value = payload.get(key)
+        if not isinstance(value, list):
+            return f"schema_inference {key} must be a list"
+        for field_name in value:
+            normalized = str(field_name or "").strip()
+            if not normalized or not _is_valid_schema_field_name(normalized):
+                return f"schema_inference {key} contains an invalid field name"
+    return None
+
+
+def _is_valid_schema_field_name(value: str) -> bool:
+    return bool(value) and len(value) <= 40 and value.replace("_", "").isalnum() and value.lower() == value and not value.startswith("_") and not value.isdigit()
 
 
 def _parse_json_object(raw_text: str) -> dict | None:

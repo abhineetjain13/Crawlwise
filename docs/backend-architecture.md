@@ -1,6 +1,6 @@
 # CrawlerAI Backend Architecture
 
-> **Last Updated:** 2026-04-10
+> **Last Updated:** 2026-04-11
 > **Stack:** Python 3.14+, FastAPI, SQLAlchemy 2.0 (async), Postgres, Redis, Celery, Playwright, curl_cffi
 > **Test Status:** Active targeted suites green on 2026-04-10
 
@@ -112,6 +112,7 @@ backend/
 - Exposes `crawl.process_run`
 - Creates an async SQLAlchemy session per task and calls `_batch_runtime.process_run(session, run_id)`
 - Initializes and tears down the Playwright browser pool per Celery worker process
+- Worker process browser shutdown is hardened with psutil-backed orphan cleanup and force-kill fallback when async teardown cannot complete cleanly
 
 ### 3.4 Run Dispatch / Control (`app/services/crawl_service.py`)
 
@@ -292,6 +293,12 @@ Field resolution is strict first-match:
 5. DOM selector defaults
 6. LLM fallback
 
+#### CPU Offloading In The Pipeline Hot Path
+
+- Shared HTML parsing is treated as CPU-bound work, not cheap async bookkeeping.
+- The active pipeline path uses off-thread parsing helpers in `services/pipeline/utils.py` and `services/pipeline/stages.py` so BeautifulSoup construction and other synchronous parsing work do not block the asyncio event loop.
+- This is the implemented resolution for the external todo item "Phase 1: CPU Offloading".
+
 #### JSON Extraction (`json_extractor.py`)
 
 - First-class JSON API extraction
@@ -374,6 +381,7 @@ Policy stance:
 | **Fail-Closed URL Safety** | DNS failure → reject |
 | **Policy-Driven Cookies** | Domain policy allowlists + filtered persistence |
 | **Redis Shared State** | Pacing, host memory, event counters, runtime metrics |
+| **CPU Offloading** | `asyncio.to_thread()` for synchronous parsing and compatible hot-path sync helpers |
 
 ---
 
@@ -444,6 +452,7 @@ These MUST be preserved across all changes:
 18. **Deleted subsystems stay deleted** — do not reintroduce selector CRUD, site memory persistence, or runtime-editable per-domain extraction logic
 19. **LLM calls fail fast on 429** — no retry/backoff sleep loops on rate limits
 20. **Generic crawler paths stay generic** — no tenant/site hacks in production acquisition or extraction paths
+21. **CPU-bound parsing stays off the event loop** — shared BeautifulSoup parsing in async hot paths must go through the off-thread helpers rather than inline DOM construction
 
 ---
 

@@ -1,8 +1,8 @@
 """Field normalization and validation functions."""
 from __future__ import annotations
 
+from app.services.config.extraction_rules import EMPTY_SENTINEL_VALUES
 from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
-from app.services.pipeline_config import EMPTY_SENTINEL_VALUES
 
 from .utils import _clean_page_text, _compact_dict, _normalize_committed_field_name
 

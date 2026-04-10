@@ -28,7 +28,7 @@
       "family": "oracle_hcm",
       "domain_patterns": ["fa.ocs.oraclecloud.com", "candidateexperience.oraclecloud.com"],
       "url_contains": ["/hcmui/candidateexperience/", "/sites/cx_"],
-      "html_contains": ["oraclecloud.com", "candidateexperience"],
+      "html_contains": ["var CX_CONFIG", "recruitingCEJobRequisitions"],
       "adapter_names": ["oracle_hcm"],
       "job_platform": true,
       "requires_browser": false,

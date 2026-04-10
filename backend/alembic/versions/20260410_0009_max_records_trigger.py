@@ -19,19 +19,23 @@ def upgrade() -> None:
             configured_max integer;
             current_count integer;
         BEGIN
-            SELECT NULLIF(crawl_runs.settings->>'max_records', '')::integer
+            EXECUTE format(
+                'SELECT NULLIF(settings->>''max_records'', '''')::integer FROM %I.crawl_runs WHERE id = $1',
+                TG_TABLE_SCHEMA
+            )
             INTO configured_max
-            FROM crawl_runs
-            WHERE crawl_runs.id = NEW.run_id;
+            USING NEW.run_id;
 
             IF configured_max IS NULL THEN
                 RETURN NEW;
             END IF;
 
-            SELECT COUNT(*)
+            EXECUTE format(
+                'SELECT COUNT(*) FROM %I.crawl_records WHERE run_id = $1',
+                TG_TABLE_SCHEMA
+            )
             INTO current_count
-            FROM crawl_records
-            WHERE crawl_records.run_id = NEW.run_id;
+            USING NEW.run_id;
 
             IF current_count > configured_max THEN
                 RAISE EXCEPTION 'max_records exceeded for run %', NEW.run_id;
@@ -64,10 +68,12 @@ def upgrade() -> None:
                 RETURN NEW;
             END IF;
 
-            SELECT COUNT(*)
+            EXECUTE format(
+                'SELECT COUNT(*) FROM %I.crawl_records WHERE run_id = $1',
+                TG_TABLE_SCHEMA
+            )
             INTO current_count
-            FROM crawl_records
-            WHERE crawl_records.run_id = NEW.id;
+            USING NEW.id;
 
             IF current_count > configured_max THEN
                 RAISE EXCEPTION 'max_records below existing record count for run %', NEW.id;

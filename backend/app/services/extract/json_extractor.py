@@ -10,10 +10,11 @@ from urllib.parse import urljoin, urlparse
 
 from app.services.config.field_mappings import (
     INTERNAL_ONLY_FIELDS,
+    COLLECTION_KEYS,
     get_surface_field_aliases,
 )
+from app.services.config.crawl_runtime import JSON_MAX_SEARCH_DEPTH
 from app.services.normalizers import validate_value
-from app.services.pipeline_config import COLLECTION_KEYS, JSON_MAX_SEARCH_DEPTH
 
 
 def extract_json_listing(

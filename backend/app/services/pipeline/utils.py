@@ -1,10 +1,16 @@
 """Utility functions for pipeline processing."""
+
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
 from html import unescape
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bs4 import BeautifulSoup
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -56,7 +62,7 @@ def _normalize_committed_field_name(value: object) -> str:
 def _review_bucket_fingerprint(value: object) -> str:
     """Generate a fingerprint for review bucket deduplication."""
     from .field_normalization import _normalize_review_value
-    
+
     normalized_value = _normalize_review_value(value)
     try:
         return json.dumps(normalized_value, sort_keys=True, default=str)
@@ -70,3 +76,31 @@ def _clean_candidate_text(value: object, *, limit: int | None = None) -> str:
     if limit is not None and len(text) > limit:
         return text[:limit].strip()
     return text
+
+
+# ---------------------------------------------------------------------------
+# Shared HTML parsing — CPU-bound, always offloaded from the async event loop
+# ---------------------------------------------------------------------------
+
+
+def _parse_html_sync(html: str) -> "BeautifulSoup":
+    """Parse HTML into a BeautifulSoup object (synchronous, CPU-bound).
+
+    This is the **single** canonical HTML parse function for the pipeline.
+    It must never be called directly from an ``async`` function — use
+    :func:`parse_html` instead.
+    """
+    from bs4 import BeautifulSoup as _BS
+
+    return _BS(html, "html.parser")
+
+
+async def parse_html(html: str) -> "BeautifulSoup":
+    """Parse HTML into a BeautifulSoup object, offloaded to a thread.
+
+    All pipeline code that needs a parsed DOM should call this function
+    rather than constructing ``BeautifulSoup`` directly.  Offloading the
+    CPU-heavy parse to ``asyncio.to_thread`` prevents event-loop starvation
+    under concurrent load.
+    """
+    return await asyncio.to_thread(_parse_html_sync, html)

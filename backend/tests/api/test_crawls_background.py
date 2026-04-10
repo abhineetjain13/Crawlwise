@@ -100,7 +100,9 @@ async def test_crawls_create_preserves_value_error_as_http_cause(
     async def _raise_value_error(*_args, **_kwargs):
         raise source_error
 
-    monkeypatch.setattr("app.api.crawls.create_crawl_run", _raise_value_error)
+    monkeypatch.setattr(
+        "app.api.crawls.create_crawl_run_from_payload", _raise_value_error
+    )
 
     payload = CrawlCreate(
         run_type="crawl",
@@ -129,7 +131,9 @@ async def test_crawls_create_csv_preserves_parse_error_as_http_cause(
     async def _raise_value_error(*_args, **_kwargs):
         raise source_error
 
-    monkeypatch.setattr("app.api.crawls.create_crawl_run", _raise_value_error)
+    monkeypatch.setattr(
+        "app.api.crawls.create_crawl_run_from_csv", _raise_value_error
+    )
     upload = UploadFile(filename="urls.csv", file=io.BytesIO(b"https://example.com\n"))
     user = User(id=1, email="csv-cause-check@example.com", hashed_password="x", role="admin")
 

@@ -8,7 +8,7 @@ import time
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun
-from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.crawl_events import (
     append_log_event,
@@ -48,7 +48,7 @@ from app.services.knowledge_base.store import (
     get_selector_defaults,
 )
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates
-from app.services.pipeline_config import AUTO_DETECT_SURFACE
+from app.services.config.crawl_runtime import AUTO_DETECT_SURFACE
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.runtime_metrics import incr
 from app.services.schema_service import (
@@ -101,7 +101,9 @@ from .utils import (
     _clean_candidate_text,
     _compact_dict,
     _elapsed_ms,
+    parse_html,
 )
+from .types import URLProcessingConfig, URLProcessingResult
 from .verdict import (
     VERDICT_BLOCKED,
     VERDICT_ERROR,
@@ -153,31 +155,62 @@ async def _process_single_url(
     session: AsyncSession,
     run: CrawlRun,
     url: str,
-    proxy_list: list[str],
-    traversal_mode: str | None,
-    max_pages: int,
-    max_scrolls: int,
-    max_records: int,
-    sleep_ms: int,
+    config: URLProcessingConfig | None = None,
+    *,
+    # Legacy keyword arguments — prefer passing a URLProcessingConfig instead.
+    proxy_list: list[str] | None = None,
+    traversal_mode: str | None = None,
+    max_pages: int = 5,
+    max_scrolls: int = 3,
+    max_records: int = 100,
+    sleep_ms: int = 0,
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
     prefetched_acquisition: AcquisitionResult | None = None,
-) -> tuple[list[dict], str, dict]:
+) -> URLProcessingResult:
     """Run the single-URL pipeline.
 
-    Returns (saved_records, extraction_verdict).
+    Returns a ``URLProcessingResult`` with records, verdict, and metrics.
     """
+    # Resolve config: typed object takes precedence over legacy kwargs.
+    if config is not None:
+        proxy_list = config.proxy_list
+        traversal_mode = config.traversal_mode
+        max_pages = config.max_pages
+        max_scrolls = config.max_scrolls
+        max_records = config.max_records
+        sleep_ms = config.sleep_ms
+        update_run_state = config.update_run_state
+        persist_logs = config.persist_logs
+    if proxy_list is None:
+        proxy_list = []
+
     surface = run.surface
+    settings_view = run.settings_view
     additional_fields = expand_requested_fields(run.requested_fields or [])
-    extraction_contract = (run.settings or {}).get("extraction_contract", [])
+    extraction_contract = settings_view.extraction_contract()
     is_listing = surface in ("ecommerce_listing", "job_listing")
     requested_field_selectors = {
         field_name: get_selector_defaults(normalize_domain(url), field_name)
         for field_name in additional_fields
         if field_name
     }
-    acquisition_profile = _build_acquisition_profile(run.settings or {})
+    acquisition_profile = _build_acquisition_profile(settings_view)
+    base_acquisition_request = AcquisitionRequest(
+        run_id=run.id,
+        url=url,
+        surface=surface,
+        proxy_list=list(proxy_list or []),
+        traversal_mode=traversal_mode,
+        max_pages=max_pages,
+        max_scrolls=max_scrolls,
+        sleep_ms=sleep_ms,
+        requested_fields=list(additional_fields),
+        requested_field_selectors=dict(requested_field_selectors),
+        acquisition_profile=dict(acquisition_profile or {}),
+        checkpoint=checkpoint,
+    )
 
     # ── STAGE 1: FETCH ──
     if update_run_state:
@@ -187,18 +220,7 @@ async def _process_single_url(
     if prefetched_acquisition is None:
         acquisition_started_at = time.perf_counter()
         acq = await acquire(
-            run_id=run.id,
-            url=url,
-            surface=surface,
-            proxy_list=proxy_list or None,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            sleep_ms=sleep_ms,
-            requested_fields=additional_fields,
-            requested_field_selectors=requested_field_selectors,
-            acquisition_profile=acquisition_profile,
-            checkpoint=checkpoint,
+            request=base_acquisition_request,
         )
         acquisition_ms = _elapsed_ms(acquisition_started_at)
     else:
@@ -244,22 +266,11 @@ async def _process_single_url(
                     "[BLOCKED] Listing page matched blocked signals on initial acquire; retrying once with browser-first recovery",
                 )
             browser_retry_started_at = time.perf_counter()
-            browser_profile = dict(acquisition_profile or {})
-            browser_profile["prefer_browser"] = True
-            browser_profile["anti_bot_enabled"] = True
             browser_acq = await acquire(
-                run_id=run.id,
-                url=url,
-                surface=surface,
-                proxy_list=proxy_list or None,
-                traversal_mode=traversal_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                sleep_ms=sleep_ms,
-                requested_fields=additional_fields,
-                requested_field_selectors=requested_field_selectors,
-                acquisition_profile=browser_profile,
-                checkpoint=checkpoint,
+                request=base_acquisition_request.with_profile_updates(
+                    prefer_browser=True,
+                    anti_bot_enabled=True,
+                ),
             )
             browser_retry_ms = _elapsed_ms(browser_retry_started_at)
             browser_blocked = (
@@ -270,7 +281,9 @@ async def _process_single_url(
             if not (browser_blocked and browser_blocked.is_blocked):
                 acq = browser_acq
                 acquisition_ms += browser_retry_ms
-                url_metrics = _build_url_metrics(acq, requested_fields=additional_fields)
+                url_metrics = _build_url_metrics(
+                    acq, requested_fields=additional_fields
+                )
                 url_metrics["acquisition_ms"] = acquisition_ms
                 if persist_logs:
                     await _log(
@@ -279,7 +292,11 @@ async def _process_single_url(
                         "info",
                         "[BLOCKED] Browser-first recovery succeeded; continuing listing extraction",
                     )
-                blocked = detect_blocked_page(acq.html) if acq.content_type != "json" else blocked
+                blocked = (
+                    detect_blocked_page(acq.html)
+                    if acq.content_type != "json"
+                    else blocked
+                )
         if blocked.is_blocked:
             recovered = (
                 None if proxy_list else await try_blocked_adapter_recovery(url, surface)
@@ -342,7 +359,7 @@ async def _process_single_url(
             )
             session.add(record)
             await session.flush()
-            return [], VERDICT_BLOCKED, url_metrics
+            return URLProcessingResult([], VERDICT_BLOCKED, url_metrics)
 
     # ── STAGE 2: ANALYZE ──
     if acq.content_type == "json" and acq.json_data is not None:
@@ -354,7 +371,7 @@ async def _process_single_url(
                 "[ANALYZE] JSON-first path — API response detected",
             )
         extraction_started_at = time.perf_counter()
-        records, verdict, url_metrics = await _process_json_response(
+        result = await _process_json_response(
             session,
             run,
             url,
@@ -366,8 +383,8 @@ async def _process_single_url(
             update_run_state=update_run_state,
             persist_logs=persist_logs,
         )
-        url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
-        return records, verdict, url_metrics
+        result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        return result
 
     html = acq.html
     # ── STAGE 2: ANALYZE ──
@@ -381,7 +398,6 @@ async def _process_single_url(
             f"[ANALYZE] Enumerating sources (method={acq.method})",
         )
 
-
     # Run platform adapter (rank 1 source)
     adapter_result = await run_adapter(url, html, surface)
     adapter_records = adapter_result.records if adapter_result else []
@@ -392,10 +408,9 @@ async def _process_single_url(
     if persist_logs:
         await _log(session, run.id, "info", "[ANALYZE] Extracting candidates")
 
-
     if is_listing:
         extraction_started_at = time.perf_counter()
-        records, verdict, url_metrics = await _extract_listing(
+        result = await _extract_listing(
             session,
             run,
             url,
@@ -410,8 +425,8 @@ async def _process_single_url(
             update_run_state=update_run_state,
             persist_logs=persist_logs,
         )
-        url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
-        if verdict == VERDICT_LISTING_FAILED and acq.method == "curl_cffi":
+        result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        if result.verdict == VERDICT_LISTING_FAILED and acq.method == "curl_cffi":
             if persist_logs:
                 await _log(
                     session,
@@ -419,23 +434,12 @@ async def _process_single_url(
                     "info",
                     "[ANALYZE] Listing extraction was weak/empty on curl_cffi — retrying with browser rendering",
                 )
-        
+
             browser_retry_started_at = time.perf_counter()
-            browser_profile = dict(acquisition_profile or {})
-            browser_profile["prefer_browser"] = True
             browser_acq = await acquire(
-                run_id=run.id,
-                url=url,
-                surface=surface,
-                proxy_list=proxy_list or None,
-                traversal_mode=traversal_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                sleep_ms=sleep_ms,
-                requested_fields=additional_fields,
-                requested_field_selectors=requested_field_selectors,
-                acquisition_profile=browser_profile,
-                checkpoint=checkpoint,
+                request=base_acquisition_request.with_profile_updates(
+                    prefer_browser=True,
+                ),
             )
             browser_retry_ms = _elapsed_ms(browser_retry_started_at)
             browser_html = browser_acq.html
@@ -444,7 +448,7 @@ async def _process_single_url(
                 browser_adapter_result.records if browser_adapter_result else []
             )
             extraction_started_at = time.perf_counter()
-            records, verdict, url_metrics = await _extract_listing(
+            result = await _extract_listing(
                 session,
                 run,
                 url,
@@ -459,14 +463,16 @@ async def _process_single_url(
                 update_run_state=update_run_state,
                 persist_logs=persist_logs,
             )
-            url_metrics["listing_browser_retry"] = True
-            url_metrics["listing_browser_retry_method"] = browser_acq.method
-            url_metrics["listing_browser_retry_acquisition_ms"] = browser_retry_ms
-            url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
-        return records, verdict, url_metrics
+            result.url_metrics["listing_browser_retry"] = True
+            result.url_metrics["listing_browser_retry_method"] = browser_acq.method
+            result.url_metrics["listing_browser_retry_acquisition_ms"] = (
+                browser_retry_ms
+            )
+            result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        return result
     else:
         extraction_started_at = time.perf_counter()
-        records, verdict, url_metrics = await _extract_detail(
+        result = await _extract_detail(
             session,
             run,
             url,
@@ -481,8 +487,8 @@ async def _process_single_url(
             update_run_state=update_run_state,
             persist_logs=persist_logs,
         )
-        url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
-        return records, verdict, url_metrics
+        result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started_at)
+        return result
 
 
 def _supports_parallel_batch_sessions(session: AsyncSession) -> bool:
@@ -528,7 +534,7 @@ async def _process_json_response(
                 "warning",
                 "[ANALYZE] JSON response parsed but no records found",
             )
-        return [], VERDICT_SCHEMA_MISS, url_metrics
+        return URLProcessingResult([], VERDICT_SCHEMA_MISS, url_metrics)
 
     if update_run_state:
         await _set_stage(session, run, STAGE_ANALYZE)
@@ -567,7 +573,7 @@ async def _process_json_response(
             sample_record=extracted[0]
             if extracted and isinstance(extracted[0], dict)
             else None,
-            llm_enabled=bool((run.settings or {}).get("llm_enabled")),
+            llm_enabled=run.settings_view.llm_enabled(),
         )
         for raw_record in extracted:
             if len(saved) >= max_records:
@@ -650,7 +656,7 @@ async def _process_json_response(
         )
     await session.flush()
     _finalize_url_metrics(url_metrics, records=saved, requested_fields=requested_fields)
-    return saved, verdict, url_metrics
+    return URLProcessingResult(saved, verdict, url_metrics)
 
 
 async def _extract_listing(
@@ -704,7 +710,7 @@ async def _extract_listing(
                     "warning",
                     "[ANALYZE] Listing extraction found 0 records because the acquired page was blocked",
                 )
-            return [], VERDICT_BLOCKED, url_metrics
+            return URLProcessingResult([], VERDICT_BLOCKED, url_metrics)
         if _looks_like_loading_listing_shell(html, surface=effective_surface):
             if persist_logs:
                 await _log(
@@ -713,7 +719,7 @@ async def _extract_listing(
                     "warning",
                     "[ANALYZE] Listing extraction found 0 records on a loading shell; skipping page fallback so browser retry/failure is explicit",
                 )
-            return [], VERDICT_LISTING_FAILED, url_metrics
+            return URLProcessingResult([], VERDICT_LISTING_FAILED, url_metrics)
         if effective_surface == "job_listing":
             if persist_logs:
                 await _log(
@@ -722,7 +728,7 @@ async def _extract_listing(
                     "warning",
                     "[ANALYZE] Job listing extraction found 0 records; skipping page fallback so browser retry/failure is explicit",
                 )
-            return [], VERDICT_LISTING_FAILED, url_metrics
+            return URLProcessingResult([], VERDICT_LISTING_FAILED, url_metrics)
         if persist_logs:
             await _log(
                 session,
@@ -730,7 +736,7 @@ async def _extract_listing(
                 "warning",
                 "[ANALYZE] Listing extraction found 0 records — marking as listing_detection_failed",
             )
-        return [], VERDICT_LISTING_FAILED, url_metrics
+        return URLProcessingResult([], VERDICT_LISTING_FAILED, url_metrics)
 
     # Save each listing record
     if update_run_state:
@@ -793,7 +799,7 @@ async def _extract_listing(
     _finalize_url_metrics(
         url_metrics, records=saved, requested_fields=additional_fields
     )
-    return saved, verdict, url_metrics
+    return URLProcessingResult(saved, verdict, url_metrics)
 
 
 def _listing_quality_flags(
@@ -822,7 +828,10 @@ def _listing_quality_flags(
             "category",
         }
         if not any(
-            any(record.get(field_name) not in (None, "", [], {}) for field_name in strong_job_fields)
+            any(
+                record.get(field_name) not in (None, "", [], {})
+                for field_name in strong_job_fields
+            )
             for record in records
         ):
             flags.add("job_payload_missing_context")
@@ -920,7 +929,8 @@ async def _save_listing_records(
             )
             persistence_candidates.append(
                 {
-                    "source_url": raw_record.get("source_url") or raw_record.get("url", url),
+                    "source_url": raw_record.get("source_url")
+                    or raw_record.get("url", url),
                     "data": normalized,
                     "raw_data": _raw_record_payload(raw_record),
                     "source_trace": _compact_dict(
@@ -992,9 +1002,12 @@ async def _extract_detail(
         sample_record=adapter_records[0]
         if adapter_records and isinstance(adapter_records[0], dict)
         else None,
-        llm_enabled=bool((run.settings or {}).get("llm_enabled")),
+        llm_enabled=run.settings_view.llm_enabled(),
     )
 
+    # Parse HTML once and reuse the soup object for all downstream extractors.
+    # Offloaded to a thread to avoid blocking the async event loop.
+    soup = await parse_html(html) if html else None
     candidates, source_trace = await asyncio.to_thread(
         extract_candidates,
         url,
@@ -1005,6 +1018,7 @@ async def _extract_detail(
         extraction_contract,
         resolved_fields=resolved_schema.fields,
         adapter_records=adapter_records,
+        soup=soup,
     )
     persisted_field_names = set(resolved_schema.fields)
     candidate_values, reconciliation = _reconcile_detail_candidate_values(
@@ -1046,7 +1060,7 @@ async def _extract_detail(
         extracted_records = []
 
     llm_review_bucket: list[dict[str, object]] = []
-    if html and (run.settings or {}).get("llm_enabled"):
+    if html and run.settings_view.llm_enabled():
         source_trace, llm_review_bucket = await _collect_detail_llm_suggestions(
             session=session,
             run=run,
@@ -1200,14 +1214,15 @@ async def _extract_detail(
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
     verdict = _compute_verdict(saved, surface, is_listing=False)
-    
+
     if persist_logs:
         # Add critical telemetry revealing which extraction layer won arbitration
         winning_sources = []
         if saved:
             for field in saved[0].keys():
-                src_map = source_trace.get("committed_fields", {}).get(field) or \
-                          source_trace.get("field_discovery", {}).get(field, {})
+                src_map = source_trace.get("committed_fields", {}).get(
+                    field
+                ) or source_trace.get("field_discovery", {}).get(field, {})
                 if isinstance(src_map, dict):
                     # Check for "source" first, then "sources"
                     source = src_map.get("source")
@@ -1223,21 +1238,23 @@ async def _extract_detail(
                             winning_sources.append(f"{field}:unknown")
                 else:
                     winning_sources.append(f"{field}:unknown")
-                
-        source_summary = ", ".join(winning_sources[:5]) + ("..." if len(winning_sources)>5 else "")
-        
+
+        source_summary = ", ".join(winning_sources[:5]) + (
+            "..." if len(winning_sources) > 5 else ""
+        )
+
         await _log(
             session,
             run.id,
             "info",
             f"[SAVE] Saved {len(saved)} detail records (verdict={verdict}). Sources: [{source_summary}]",
         )
-        
+
     await session.flush()
     _finalize_url_metrics(
         url_metrics, records=saved, requested_fields=additional_fields
     )
-    return saved, verdict, url_metrics
+    return URLProcessingResult(saved, verdict, url_metrics)
 
 
 # ---------------------------------------------------------------------------
@@ -1292,8 +1309,7 @@ async def _set_stage(
         ),
         **({"total_urls": total_urls} if total_urls is not None else {}),
     }
-    current_summary = dict(run.result_summary or {})
-    run.result_summary = {**current_summary, **summary_patch}
+    run.update_summary(**summary_patch)
     await session.flush()
 
 
@@ -1333,13 +1349,14 @@ async def _persist_failure_state(
     run = await session.get(CrawlRun, run_id)
     if run is None:
         return
-    result_summary = dict(run.result_summary or {})
-    result_summary["error"] = error_msg
-    result_summary["progress"] = result_summary.get("progress", 0)
-    result_summary["extraction_verdict"] = VERDICT_ERROR
-    if normalize_status(run.status) not in TERMINAL_STATUSES:
+    result_summary = run.summary_dict()
+    run.update_summary(
+        error=error_msg,
+        progress=result_summary.get("progress", 0),
+        extraction_verdict=VERDICT_ERROR,
+    )
+    if run.status_value not in TERMINAL_STATUSES:
         update_run_status(run, CrawlStatus.FAILED)
-    run.result_summary = result_summary
     await session.commit()
 
 

@@ -5,6 +5,15 @@ import json
 
 import pytest
 from app.api.records import (
+    export_artifacts_json,
+    export_csv,
+    export_json,
+    export_markdown,
+    export_tables_csv,
+    record_provenance,
+    router,
+)
+from app.services.record_export_service import (
     EXPORT_PAGING_HEADER,
     EXPORT_PARTIAL_HEADER,
     EXPORT_TOTAL_HEADER,
@@ -15,13 +24,6 @@ from app.api.records import (
     _collect_export_rows,
     _legacy_fallback_markdown_rows,
     _stream_export_csv,
-    export_artifacts_json,
-    export_csv,
-    export_json,
-    export_markdown,
-    export_tables_csv,
-    record_provenance,
-    router,
 )
 from app.core.security import hash_password
 from app.models.crawl import CrawlRecord, CrawlRun
@@ -105,7 +107,7 @@ async def test_export_json_includes_all_rows_and_paging_headers(db_session, test
         )
     await db_session.commit()
 
-    response = await export_json(run.id, session=db_session, _=test_user)
+    response = await export_json(run.id, session=db_session, current_user=test_user)
     payload = json.loads(await _read_streaming_body(response))
 
     assert len(payload) == total_records
@@ -144,7 +146,7 @@ async def test_export_csv_includes_all_rows_and_paging_headers(db_session, test_
         )
     await db_session.commit()
 
-    response = await export_csv(run.id, session=db_session, _=test_user)
+    response = await export_csv(run.id, session=db_session, current_user=test_user)
     payload = await _read_streaming_body(response)
 
     assert payload.count("\n") == total_records + 1
@@ -190,7 +192,7 @@ async def test_export_markdown_includes_clean_sections_fields_and_headers(db_ses
     )
     await db_session.commit()
 
-    response = await export_markdown(run.id, session=db_session, _=test_user)
+    response = await export_markdown(run.id, session=db_session, current_user=test_user)
     payload = await _read_streaming_body(response)
 
     assert "# Sylan 2 Shoe Men's" in payload
@@ -213,7 +215,7 @@ async def test_stream_export_csv_consumes_row_stream_once(monkeypatch):
         def __init__(self, data):
             self.data = data
 
-    monkeypatch.setattr("app.api.records.MAX_RECORD_PAGE_SIZE", 1)
+    monkeypatch.setattr("app.services.record_export_service.MAX_RECORD_PAGE_SIZE", 1)
     page_calls: list[int] = []
 
     async def _fake_get_run_records(_session, _run_id, page, limit):
@@ -225,7 +227,9 @@ async def test_stream_export_csv_consumes_row_stream_once(monkeypatch):
             return ([DummyRow({"title": "Item 2", "description": "Desc 2"})], 2)
         return ([], 2)
 
-    monkeypatch.setattr("app.api.records.get_run_records", _fake_get_run_records)
+    monkeypatch.setattr(
+        "app.services.record_export_service.get_run_records", _fake_get_run_records
+    )
 
     chunks: list[str] = []
     async for chunk in _stream_export_csv(session=None, run_id=123):
@@ -288,7 +292,7 @@ async def test_export_csv_discovers_fields_beyond_first_page(db_session, test_us
         )
     await db_session.commit()
 
-    response = await export_csv(run.id, session=db_session, _=test_user)
+    response = await export_csv(run.id, session=db_session, current_user=test_user)
     payload = await _read_streaming_body(response)
     header = payload.splitlines()[0]
 
@@ -334,7 +338,7 @@ async def test_export_csv_does_not_fall_back_to_typed_table_rows(db_session, tes
     )
     await db_session.commit()
 
-    response = await export_csv(run.id, session=db_session, _=test_user)
+    response = await export_csv(run.id, session=db_session, current_user=test_user)
     payload = await _read_streaming_body(response)
 
     assert payload == ""
@@ -378,7 +382,7 @@ async def test_export_tables_csv_returns_flattened_rows(db_session, test_user):
     db_session.add(record)
     await db_session.commit()
 
-    response = await export_tables_csv(run.id, session=db_session, _=test_user)
+    response = await export_tables_csv(run.id, session=db_session, current_user=test_user)
     payload = await _read_streaming_body(response)
 
     assert "Current" in payload
@@ -418,7 +422,7 @@ async def test_export_artifacts_json_includes_typed_bundles(db_session, test_use
     db_session.add(record)
     await db_session.commit()
 
-    response = await export_artifacts_json(run.id, session=db_session, _=test_user)
+    response = await export_artifacts_json(run.id, session=db_session, current_user=test_user)
     payload = json.loads(await _read_streaming_body(response))
 
     assert payload[0]["structured_record"]["title"] == "Widget"
