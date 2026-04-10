@@ -337,7 +337,7 @@ export default function SelectorsPage() {
                           <button
                             type="button"
                             onClick={() => removeFieldRow(row.key)}
-                            className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-white transition hover:bg-danger/10"
+                            className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border bg-danger text-white transition hover:bg-danger/90"
                             aria-label="Delete field row"
                           >
                             <Trash2 className="size-3.5" />

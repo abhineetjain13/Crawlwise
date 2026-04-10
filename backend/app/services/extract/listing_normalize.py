@@ -25,6 +25,8 @@ _NAVIGATION_VALUES = {
     "view color",
 }
 _VARIANT_COUNT_RE = re.compile(r"^\(?\d+\)?(?:\s+)?(?:colors?|sizes?)?$", re.I)
+_DIMENSION_MEASUREMENT_RE = re.compile(r"(?i)\b(?:cm|mm|in|inch|inches|ft|oz|kg|g|lb|lbs|height|width|depth|length|diameter)\b|[0-9]\s*[x×]\s*[0-9]")
+_SIZE_TOKEN_RE = re.compile(r"(?i)\b(?:eu[-\s]?)?\d{1,2}(?:\.\d+)?\b|(?:xs|s|m|l|xl|xxl|xxxl)\b")
 
 _BASE_FIELDS = {
     "title",
@@ -104,8 +106,12 @@ def normalize_listing_record(
         normalized.pop("additional_images", None)
         if normalized.get("price") not in _EMPTY_VALUES and normalized.get("salary") in _EMPTY_VALUES:
             normalized["salary"] = normalized.pop("price")
-        for field_name in ("price", "sale_price", "original_price", "brand", "color", "size", "sku", "part_number", "availability", "rating", "review_count"):
+        for field_name in ("price", "sale_price", "original_price", "brand", "color", "size", "sku", "part_number", "availability", "rating", "review_count", "discount_amount", "discount_percentage"):
             normalized.pop(field_name, None)
+
+    # Drop dimensions if it duplicates size
+    if _dimensions_duplicate_size(normalized.get("dimensions"), normalized.get("size")):
+        normalized.pop("dimensions", None)
 
     return normalized
 
@@ -148,3 +154,31 @@ def _should_reject_text_value(field_name: str, value: object) -> bool:
     if field_name in {"color", "size"} and _VARIANT_COUNT_RE.fullmatch(text):
         return True
     return False
+
+
+def _dimensions_duplicate_size(dimensions: object, size: object) -> bool:
+    dimensions_text = " ".join(str(dimensions or "").split()).strip()
+    size_text = " ".join(str(size or "").split()).strip()
+    if not dimensions_text or not size_text:
+        return False
+    if dimensions_text == size_text:
+        return True
+    if _DIMENSION_MEASUREMENT_RE.search(dimensions_text):
+        return False
+
+    dimension_tokens = _normalized_size_tokens(dimensions_text)
+    size_tokens = _normalized_size_tokens(size_text)
+    if not dimension_tokens or not size_tokens:
+        return False
+    overlap = len(dimension_tokens & size_tokens)
+    baseline = max(len(dimension_tokens), len(size_tokens))
+    return baseline > 0 and (overlap / baseline) >= 0.8
+
+
+def _normalized_size_tokens(value: str) -> set[str]:
+    tokens: set[str] = set()
+    for match in _SIZE_TOKEN_RE.finditer(value or ""):
+        token = match.group(0).strip().lower().replace(" ", "")
+        token = token.replace("eu", "eu-") if token.startswith("eu") and "-" not in token else token
+        tokens.add(token)
+    return tokens

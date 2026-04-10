@@ -9,7 +9,7 @@ from app.services.extract.service import _finalize_candidates
 def test_finalize_candidates_prefers_higher_trust_source_over_first_row_bias() -> None:
     candidates = {
         "title": [
-            {"value": "Cookie Manager Banner", "source": "datalayer"},
+            {"value": "Cookie Manager Banner", "source": "selector"},
             {"value": "Arc'teryx Beta LT Jacket", "source": "json_ld"},
         ]
     }
@@ -28,14 +28,14 @@ def test_finalize_candidates_prefers_higher_trust_source_over_first_row_bias() -
         soup=BeautifulSoup("<html><body></body></html>", "html.parser"),
     )
 
-    # Phase-0 expectation: json_ld value should win over noisy datalayer candidate.
+    # json_ld (rank 9) should win over selector (rank 4).
     assert final_candidates["title"][0]["value"] == "Arc'teryx Beta LT Jacket"
 
 
 def test_reconcile_detail_candidate_values_prefers_better_downstream_brand() -> None:
     candidates = {
         "brand": [
-            {"value": "House Brand", "source": "datalayer"},
+            {"value": "House Brand", "source": "selector"},
             {"value": "Nike", "source": "json_ld"},
         ]
     }
@@ -46,6 +46,6 @@ def test_reconcile_detail_candidate_values_prefers_better_downstream_brand() -> 
         url="https://example.com/products/shoe-1",
     )
 
-    # Phase-0 expectation: downstream higher-quality candidate should override sticky early source.
+    # json_ld (rank 9) should win over selector (rank 4).
     assert reconciled["brand"] == "Nike"
 

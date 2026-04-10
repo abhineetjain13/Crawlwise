@@ -349,7 +349,8 @@ async def _call_provider_with_retry(
             )
             break
         return result, input_tokens, output_tokens
-    return last_error or f"{_ERROR_PREFIX} Rate limited after {max_retries} attempts", 0, 0
+    # Return accurate message reflecting immediate break behavior
+    return last_error or f"{_ERROR_PREFIX} Rate limited (failing fast)", 0, 0
 
 
 def _provider_dispatch(provider: str):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -22,6 +23,9 @@ from app.services.pipeline_config import (
 from app.services.url_safety import validate_public_target
 
 logger = logging.getLogger(__name__)
+_MAX_TRAVERSAL_FRAGMENTS = 12
+_MAX_TRAVERSAL_FRAGMENT_BYTES = 2_000_000
+_MAX_TRAVERSAL_TOTAL_BYTES = 6_000_000
 
 
 @dataclass
@@ -68,16 +72,56 @@ async def apply_traversal_mode(
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> TraversalResult:
     config = _resolved_config(config)
+    logger.info("[traversal] starting mode=%s surface=%s", traversal_mode, surface)
+
+    def _log_and_return(result: TraversalResult) -> TraversalResult:
+        logger.info(
+            "[traversal] done mode=%s html_len=%s stop_reason=%s",
+            result.summary.get("mode", traversal_mode),
+            len(result.html or "") if result.html else 0,
+            result.summary.get("stop_reason"),
+        )
+        return result
+
     normalized_surface = str(surface or "").strip().lower()
     if normalized_surface.endswith("_detail"):
-        return TraversalResult(
+        return _log_and_return(TraversalResult(
             summary={
                 "mode": traversal_mode,
                 "attempted": False,
                 "stop_reason": "detail_surface",
             }
-        )
+        ))
+    collected_fragments: list[str] = []
+    seen_fragment_hashes: set[str] = set()
+    captured_fragment_bytes = 0
+
+    async def _capture_fragment(page, marker: str) -> None:
+        nonlocal captured_fragment_bytes
+        if len(collected_fragments) >= _MAX_TRAVERSAL_FRAGMENTS:
+            return
+        html = await page_content_with_retry(page, checkpoint=checkpoint)
+        if not isinstance(html, str) or not html:
+            return
+        encoded_size = len(html.encode("utf-8", errors="ignore"))
+        if encoded_size > _MAX_TRAVERSAL_FRAGMENT_BYTES:
+            return
+        if captured_fragment_bytes + encoded_size > _MAX_TRAVERSAL_TOTAL_BYTES:
+            return
+        fingerprint = hashlib.sha1(html.encode("utf-8", errors="ignore")).hexdigest()
+        if fingerprint in seen_fragment_hashes:
+            return
+        seen_fragment_hashes.add(fingerprint)
+        captured_fragment_bytes += encoded_size
+        collected_fragments.append(f"<!-- PAGE BREAK:traversal:{marker}:{getattr(page, 'url', '')} -->\n{html}")
+
+    async def _capture_initial_fragment(page, marker: str) -> None:
+        if collected_fragments:
+            return
+        await _capture_fragment(page, marker)
+
     if traversal_mode == "scroll":
+        await _capture_initial_fragment(page, "scroll-initial")
         summary = await scroll_to_bottom(
             page,
             max_scrolls,
@@ -85,10 +129,21 @@ async def apply_traversal_mode(
             request_delay_ms=request_delay_ms,
             cooperative_sleep_ms=cooperative_sleep_ms,
             snapshot_listing_page_metrics=snapshot_listing_page_metrics,
+            capture_dom_fragment=lambda current_page, index: _capture_fragment(
+                current_page, f"scroll-{index}"
+            ),
             checkpoint=checkpoint,
         )
-        return TraversalResult(summary=summary)
+        await _capture_fragment(page, "scroll-final")
+        summary["pages_collected"] = len(collected_fragments)
+        summary["captured_fragment_bytes"] = captured_fragment_bytes
+        return _log_and_return(TraversalResult(
+            html="\n".join(collected_fragments) if collected_fragments else await page_content_with_retry(page, checkpoint=checkpoint),
+            summary=summary,
+        ))
+
     if traversal_mode == "load_more":
+        await _capture_initial_fragment(page, "load-more-initial")
         summary = await click_load_more(
             page,
             max_scrolls,
@@ -96,11 +151,21 @@ async def apply_traversal_mode(
             request_delay_ms=request_delay_ms,
             cooperative_sleep_ms=cooperative_sleep_ms,
             snapshot_listing_page_metrics=snapshot_listing_page_metrics,
+            capture_dom_fragment=lambda current_page, index: _capture_fragment(
+                current_page, f"load-more-{index}"
+            ),
             checkpoint=checkpoint,
         )
-        return TraversalResult(summary=summary)
+        await _capture_fragment(page, "load-more-final")
+        summary["pages_collected"] = len(collected_fragments)
+        summary["captured_fragment_bytes"] = captured_fragment_bytes
+        return _log_and_return(TraversalResult(
+            html="\n".join(collected_fragments) if collected_fragments else await page_content_with_retry(page, checkpoint=checkpoint),
+            summary=summary,
+        ))
+
     if traversal_mode == "paginate":
-        return await collect_paginated_html(
+        return _log_and_return(await collect_paginated_html(
             page,
             config=config,
             surface=surface,
@@ -115,9 +180,11 @@ async def apply_traversal_mode(
             expand_all_interactive_elements=expand_all_interactive_elements,
             flatten_shadow_dom=flatten_shadow_dom,
             checkpoint=checkpoint,
-        )
+        ))
     if traversal_mode == "auto":
         auto_steps: list[dict[str, object]] = []
+        await _capture_initial_fragment(page, "auto-initial")
+
         scroll_summary = await scroll_to_bottom(
             page,
             max_scrolls,
@@ -125,6 +192,9 @@ async def apply_traversal_mode(
             request_delay_ms=request_delay_ms,
             cooperative_sleep_ms=cooperative_sleep_ms,
             snapshot_listing_page_metrics=snapshot_listing_page_metrics,
+            capture_dom_fragment=lambda current_page, index: _capture_fragment(
+                current_page, f"auto-scroll-{index}"
+            ),
             checkpoint=checkpoint,
         )
         auto_steps.append(scroll_summary)
@@ -136,9 +206,16 @@ async def apply_traversal_mode(
                 request_delay_ms=request_delay_ms,
                 cooperative_sleep_ms=cooperative_sleep_ms,
                 snapshot_listing_page_metrics=snapshot_listing_page_metrics,
+                capture_dom_fragment=lambda current_page, index: _capture_fragment(
+                    current_page, f"auto-load-more-{index}"
+                ),
                 checkpoint=checkpoint,
             )
             auto_steps.append(load_more_summary)
+        
+        await _capture_fragment(page, "auto-pre-pagination")
+        pre_pagination_html = "\n".join(collected_fragments) if collected_fragments else await page_content_with_retry(page, checkpoint=checkpoint)
+        
         next_page_url = await click_and_observe_next_page(
             page,
             checkpoint=checkpoint,
@@ -160,28 +237,39 @@ async def apply_traversal_mode(
                 flatten_shadow_dom=flatten_shadow_dom,
                 checkpoint=checkpoint,
             )
+            if pre_pagination_html:
+                paginated.html = f"<!-- PAGE BREAK: auto pre-pagination -->\n{pre_pagination_html}\n" + (paginated.html or "")
+            
             paginated.summary.setdefault("steps", [])
             paginated.summary["steps"] = [
                 *auto_steps,
                 *list(paginated.summary.get("steps") or []),
             ]
             paginated.summary.setdefault("mode", "auto")
-            return paginated
-        return TraversalResult(
+            paginated.summary["pages_collected"] = int(
+                paginated.summary.get("pages_collected", 0) or 0
+            ) + len(collected_fragments)
+            paginated.summary["captured_fragment_bytes"] = captured_fragment_bytes
+            return _log_and_return(paginated)
+
+        return _log_and_return(TraversalResult(
+            html=pre_pagination_html,
             summary={
                 "mode": "auto",
                 "attempted": True,
                 "steps": auto_steps,
+                "pages_collected": len(collected_fragments),
+                "captured_fragment_bytes": captured_fragment_bytes,
                 "stop_reason": "no_pagination_after_scroll_or_load_more",
             }
-        )
-    return TraversalResult(
+        ))
+    return _log_and_return(TraversalResult(
         summary={
             "mode": traversal_mode,
             "attempted": False,
             "stop_reason": "mode_not_enabled",
         }
-    )
+    ))
 
 
 async def collect_paginated_html(
@@ -535,6 +623,7 @@ async def scroll_to_bottom(
     request_delay_ms: int,
     cooperative_sleep_ms: Callable[..., Awaitable[None]],
     snapshot_listing_page_metrics: Callable[..., Awaitable[dict[str, object]]],
+    capture_dom_fragment: Callable[..., Awaitable[None]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object]:
     config = _resolved_config(config)
@@ -561,20 +650,23 @@ async def scroll_to_bottom(
             current_height=current_height,
             force_probe=forced_probe_used,
         )
+        
+        # FIX: Force a mandatory sleep so the browser's JS has time to trigger the API fetch
+        # before we check for networkidle, avoiding instant 0ms returns.
+        await cooperative_sleep_ms(max(500, request_delay_ms), checkpoint=checkpoint)
+        
         # FIX: Wait for network idle to ensure XHRs for new items complete,
         # falling back to the cooperative sleep if it times out.
         if hasattr(page, "wait_for_load_state"):
             try:
                 from playwright.async_api import TimeoutError as PwTimeoutError
-                await page.wait_for_load_state("networkidle", timeout=max(request_delay_ms, config.scroll_wait_min_ms))
-            except (PwTimeoutError, Exception):
-                await cooperative_sleep_ms(
-                    max(request_delay_ms, config.scroll_wait_min_ms),
-                    checkpoint=checkpoint,
-                )
+                await page.wait_for_load_state("networkidle", timeout=config.scroll_wait_min_ms)
+            except (PwTimeoutError, PlaywrightError, OSError):
+                # FIX: Do nothing! The time has already elapsed during wait_for_load_state timeout
+                pass
         else:
             await cooperative_sleep_ms(
-                max(request_delay_ms, config.scroll_wait_min_ms),
+                config.scroll_wait_min_ms,
                 checkpoint=checkpoint,
             )
         next_height = await current_scroll_height(page)
@@ -636,6 +728,13 @@ async def scroll_to_bottom(
                 "progressed": progressed,
             }
         )
+        # Capture DOM fragment after each scroll to preserve items that
+        # virtualized grids may remove from the DOM on subsequent scrolls.
+        if capture_dom_fragment and progressed:
+            try:
+                await capture_dom_fragment(page, index + 1)
+            except Exception:
+                logger.debug("DOM fragment capture failed at scroll %s", index + 1, exc_info=True)
         prev_height = next_height
         previous_metrics = next_metrics
         if not progressed:
@@ -776,6 +875,7 @@ async def click_load_more(
     request_delay_ms: int,
     cooperative_sleep_ms: Callable[..., Awaitable[None]],
     snapshot_listing_page_metrics: Callable[..., Awaitable[dict[str, object]]],
+    capture_dom_fragment: Callable[..., Awaitable[None]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object]:
     config = _resolved_config(config)
@@ -789,20 +889,22 @@ async def click_load_more(
                 button = page.locator(selector).first
                 if await button.is_visible():
                     await button.click()
+                    
+                    # FIX: Force mandatory sleep so browser's JS has time to trigger API fetch
+                    await cooperative_sleep_ms(max(500, request_delay_ms), checkpoint=checkpoint)
+                    
                     # FIX: Wait for network idle to ensure XHRs for new items complete,
                     # falling back to the cooperative sleep if it times out.
                     if hasattr(page, "wait_for_load_state"):
                         try:
                             from playwright.async_api import TimeoutError as PwTimeoutError
-                            await page.wait_for_load_state("networkidle", timeout=max(request_delay_ms, config.load_more_wait_min_ms))
-                        except (PwTimeoutError, Exception):
-                            await cooperative_sleep_ms(
-                                max(request_delay_ms, config.load_more_wait_min_ms),
-                                checkpoint=checkpoint,
-                            )
+                            await page.wait_for_load_state("networkidle", timeout=config.load_more_wait_min_ms)
+                        except (PwTimeoutError, PlaywrightError, OSError):
+                            # FIX: Do nothing! The time has already elapsed during wait_for_load_state timeout
+                            pass
                     else:
                         await cooperative_sleep_ms(
-                            max(request_delay_ms, config.load_more_wait_min_ms),
+                            config.load_more_wait_min_ms,
                             checkpoint=checkpoint,
                         )
                     current_metrics = await snapshot_listing_page_metrics(page)
@@ -837,6 +939,13 @@ async def click_load_more(
                             "steps": steps,
                             "stop_reason": stop_reason,
                         }
+                    # Capture DOM fragment after each successful load-more
+                    # to preserve items that may be replaced on next click.
+                    if capture_dom_fragment:
+                        try:
+                            await capture_dom_fragment(page, index + 1)
+                        except Exception:
+                            logger.debug("DOM fragment capture failed at load_more %s", index + 1, exc_info=True)
                     break
             except PlaywrightError:
                 logger.debug(

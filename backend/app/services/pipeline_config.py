@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 
 from app.services.config.block_signatures import BLOCK_SIGNATURES
@@ -39,6 +40,20 @@ from app.services.config.selectors import (
     PLATFORM_LISTING_READINESS_URL_PATTERNS as _PLATFORM_LISTING_READINESS_URL_PATTERNS,
     REVIEW_CONTAINER_KEYS as _REVIEW_CONTAINER_KEYS,
     TITLE_SELECTOR as _TITLE_SELECTOR,
+)
+
+logger = logging.getLogger(__name__)
+
+JOB_PLATFORM_FAMILIES = frozenset(
+    {
+        "icims",
+        "adp",
+        "oracle_hcm",
+        "paycom",
+        "ultipro_ukg",
+        "greenhouse",
+        "generic_jobs",
+    }
 )
 
 
@@ -242,10 +257,10 @@ BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS = _TUNING.get(
     "browser_navigation_networkidle_timeout_ms", 30000
 )
 BROWSER_NAVIGATION_LOAD_TIMEOUT_MS = _TUNING.get(
-    "browser_navigation_load_timeout_ms", 15000
+    "browser_navigation_load_timeout_ms", 30000
 )
 BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS = _TUNING.get(
-    "browser_navigation_domcontentloaded_timeout_ms", 15000
+    "browser_navigation_domcontentloaded_timeout_ms", 30000
 )
 BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS = _TUNING.get(
     "browser_navigation_optimistic_wait_ms", 3000
@@ -387,7 +402,7 @@ CANDIDATE_PLACEHOLDER_VALUES = set(
 CANDIDATE_GENERIC_CATEGORY_VALUES = set(
     _CANDIDATE_CLEANUP.get(
         "generic_category_values",
-        ["detail-page", "detail_page", "product", "page", "pdp"],
+        ["detail-page", "detail_page", "product", "page", "pdp", "productgroup", "review"],
     )
 )
 CANDIDATE_GENERIC_TITLE_VALUES = set(
@@ -503,10 +518,27 @@ CANDIDATE_DYNAMIC_FIELD_NAME_HARD_REJECTS = frozenset(
 _CANDIDATE_SCHEMA_NOISE_PATTERNS = _CANDIDATE_CLEANUP.get(
     "dynamic_field_name_schema_noise_patterns", []
 )
+
+def _safe_compile_schema_noise_pattern(pattern: object) -> re.Pattern[str] | None:
+    """Safely compile a schema noise pattern, logging errors instead of raising."""
+    if not isinstance(pattern, str) or not pattern.strip():
+        return None
+    try:
+        return _compile_extraction_rule_pattern(
+            pattern, setting_name="dynamic_field_name_schema_noise_patterns"
+        )
+    except RuntimeError as exc:
+        logger.exception(
+            "Failed to compile schema noise pattern %r via _compile_extraction_rule_pattern: %s",
+            pattern,
+            exc,
+        )
+        return None
+
 DYNAMIC_FIELD_NAME_SCHEMA_NOISE_REGEXES = tuple(
-    re.compile(p)
-    for p in _CANDIDATE_SCHEMA_NOISE_PATTERNS
-    if isinstance(p, str) and p.strip()
+    compiled
+    for compiled in (_safe_compile_schema_noise_pattern(p) for p in _CANDIDATE_SCHEMA_NOISE_PATTERNS)
+    if compiled is not None
 )
 DYNAMIC_FIELD_NAME_TICKERLIKE_BLOCKLIST = frozenset(
     str(x).strip().lower()
@@ -705,7 +737,7 @@ LISTING_PRODUCT_DETAIL_IMAGE_SOURCE_KEYS = tuple(
 )
 LISTING_PRODUCT_DETAIL_TOP_LEVEL_PAYLOAD_KEYS = tuple(
     _LISTING_EXTRACTION_RULES.get(
-        "product_detail_top_level_payload_keys", ["getProductDetail", "product"]
+        "product_detail_top_level_payload_keys", ["product", "item", "product group", "productgroup", "review"]
     )
 )
 LISTING_PRODUCT_DETAIL_PROPS_PATH = tuple(

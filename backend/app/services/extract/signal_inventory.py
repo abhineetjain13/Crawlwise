@@ -113,16 +113,12 @@ def classify_page_type(inventory: SignalInventory) -> str:
             # GA4 schema has items array for listing pages
             if "items" in ecommerce and isinstance(ecommerce["items"], list):
                 items = ecommerce["items"]
-                detail_hint_fields = {
-                    "item_id",
-                    "item_name",
-                    "item_variant",
-                    "item_brand",
-                    "item_category",
-                    "currency",
-                    "value",
-                }
-                has_detail_hint = event_name == "view_item" or any(key in ecommerce for key in detail_hint_fields)
+                # Check item-level fields on items[0] and top-level fields on ecommerce
+                item_level_fields = {"item_id", "item_name", "item_variant", "item_brand", "item_category"}
+                top_level_fields = {"currency", "value"}
+                has_item_hint = items and isinstance(items[0], dict) and any(key in items[0] for key in item_level_fields)
+                has_top_hint = any(key in ecommerce for key in top_level_fields)
+                has_detail_hint = event_name == "view_item" or has_item_hint or has_top_hint
                 if len(items) > 1:
                     return "listing"
                 if len(items) == 1 and has_detail_hint:

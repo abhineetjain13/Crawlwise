@@ -40,6 +40,25 @@ type CrawlConfigScreenProps = {
 };
 
 const ADVANCED_MODE_OPTIONS = new Set<AdvancedCrawlMode>(["auto", "scroll", "load_more", "view_all", "paginate"]);
+const JOB_URL_HINTS = [
+  "careers",
+  "jobs",
+  "jobboard",
+  "job-board",
+  "job",
+  "opening",
+  "openings",
+  "greenhouse.io",
+  "icims.com",
+  "ultipro.com",
+  "adp.com",
+  "paycom",
+  "oraclecloud.com",
+  "workdayjobs",
+  "lever.co",
+  "rippling.com",
+  "saashr.com",
+];
 
 export function CrawlConfigScreen({
   requestedTab,
@@ -559,9 +578,25 @@ export function CrawlConfigScreen({
 
 function isSurfaceMismatch(module: CrawlConfig["module"], surface: CrawlSurface) {
   if (module === "category") {
-    return surface !== "ecommerce_listing";
+    return !surface.endsWith("listing");
   }
-  return surface !== "ecommerce_detail";
+  return !surface.endsWith("detail");
+}
+
+function looksLikeJobUrl(value: string) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return JOB_URL_HINTS.some((hint) => normalized.includes(hint));
+}
+
+function resolveDispatchSurface(config: CrawlConfig, urls: string[]) {
+  const jobLike = urls.some((value) => looksLikeJobUrl(value));
+  if (!jobLike) {
+    return config.surface;
+  }
+  return config.module === "category" ? "job_listing" : "job_detail";
 }
 
 function inferRunTypeHint(config: CrawlConfig) {
@@ -608,7 +643,11 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
     throw new Error(`Invalid additional field "${invalidAdditionalField}": ${reason}`);
   }
   const resolvedAdvancedMode = config.advanced_enabled ? config.advanced_mode : null;
-  const surface = config.surface;
+  const candidateUrls = [
+    config.target_url.trim(),
+    ...parseLines(config.bulk_urls),
+  ].filter(Boolean);
+  const surface = resolveDispatchSurface(config, candidateUrls);
   const commonSettings = {
     llm_enabled: config.smart_extraction,
     advanced_enabled: config.advanced_enabled,

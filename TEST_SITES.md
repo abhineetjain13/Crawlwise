@@ -72,9 +72,9 @@ Small, high-signal set to validate traversal behavior before interpreting broade
 
 | # | URL | Surface | Traversal Mode Focus | What It Tests |
 |---|---|---|---|---|
-| TC01 | `https://books.toscrape.com/` | Listing | `paginate` | Classic numbered pagination (distinct from S01 sandbox host) |
+| TC01 | `https://books.toscrape.com/` | Listing | `paginate` | Classic numbered pagination from root path (cf. S05 which starts at page-1) |
 | TC02 | `https://www.myntra.com/hand-towels` | Listing | `paginate` | Real commerce pagination, duplicate-page suppression, stable card counting |
-| TC03 | `https://in.puma.com/in/en/classics-collection?filter_gender=%3E{unisex;unisex_0_adults;male;unisex0_kids}&offset=96` | Listing | `scroll` | Real infinite scroll, async settling, item-growth stop conditions |
+| TC03 | https://in.puma.com/in/en/mens/mens-shoes/mens-shoes-sneakers | Listing | `scroll` | Real infinite scroll, async settling, item-growth stop conditions |
 | TC04 | `https://quotes.toscrape.com/scroll` | Infinite scroll | `scroll` | Low-noise infinite scroll baseline |
 | TC05 | `https://webscraper.io/test-sites/e-commerce/scroll/computers/laptops` | Infinite scroll | `scroll` / `load_more` | Scroll-triggered growth with repeatable sandbox behavior |
 

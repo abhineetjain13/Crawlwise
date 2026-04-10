@@ -39,14 +39,10 @@ def build_url_metrics(
         if isinstance(diagnostics.get("timings_ms"), dict)
         else {}
     )
-    traversal_summary = (
-        diagnostics.get("browser_diagnostics", {}).get("traversal_summary")
-        if isinstance(diagnostics.get("browser_diagnostics"), dict)
-        and isinstance(
-            diagnostics.get("browser_diagnostics", {}).get("traversal_summary"), dict
-        )
-        else {}
-    )
+    # Prefer top-level traversal_summary (surfaced by acquirer) over nested browser_diagnostics
+    _browser_diag = diagnostics.get("browser_diagnostics") if isinstance(diagnostics.get("browser_diagnostics"), dict) else {}
+    _raw_ts = diagnostics.get("traversal_summary") or _browser_diag.get("traversal_summary")
+    traversal_summary = _raw_ts if isinstance(_raw_ts, dict) else {}
     mode_used = str(traversal_summary.get("mode_used") or "").strip() or None
     fallback_used = bool(traversal_summary.get("fallback_used"))
     pages_collected = int(traversal_summary.get("pages_collected", 0) or 0)
@@ -57,6 +53,10 @@ def build_url_metrics(
             "method": acq.method,
             "content_type": acq.content_type,
             "platform_family": str(diagnostics.get("curl_platform_family") or "").strip()
+            or None,
+            "requested_surface": str(diagnostics.get("surface_requested") or "").strip()
+            or None,
+            "effective_surface": str(diagnostics.get("surface_effective") or "").strip()
             or None,
             "browser_attempted": bool(diagnostics.get("browser_attempted")),
             "browser_used": acq.method == "playwright",
@@ -88,6 +88,7 @@ def build_url_metrics(
             "traversal_pages_collected": pages_collected,
             "traversal_mode_used": mode_used,
             "traversal_stop_reason": stop_reason,
+            "surface_remapped": bool(diagnostics.get("surface_remapped")),
         }.items()
         if value not in (None, "", [], {})
     }

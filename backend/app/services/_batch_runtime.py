@@ -26,7 +26,7 @@ from app.services.crawl_state import (
     update_run_status,
 )
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls, resolve_traversal_mode
-from app.services.db_utils import with_retry
+from app.services.db_utils import sqlite_write_lock, with_retry
 from app.services.domain_utils import normalize_domain
 from app.services.crawl_metrics import (
     build_acquisition_profile,
@@ -108,13 +108,19 @@ async def _retry_run_update(
         return await retry_session.get(CrawlRun, target_run_id)
 
     async def _operation(retry_session: AsyncSession) -> None:
-        retry_run = await _load_run_for_update(retry_session, run_id)
-        if retry_run is None:
+        run = await _load_run_for_update(retry_session, run_id)
+        if run is None:
             return
-        await mutate(retry_session, retry_run)
+        await mutate(retry_session, run)
+        await retry_session.flush()
 
-    # Directly use the DB retry mechanism without the broken in-memory lock
-    await with_retry(session, _operation)
+    bind = session.bind
+    if bind is not None and bind.dialect.name == "sqlite":
+        async with sqlite_write_lock:
+            # Directly use the DB retry mechanism without the broken in-memory lock
+            await with_retry(session, _operation)
+    else:
+        await with_retry(session, _operation)
 
 
 async def _cleanup_run_lock(run_id: int) -> None:
@@ -333,11 +339,15 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             for task in tasks:
                 task.cancel()
             
-            # FIX: Do NOT await asyncio.gather here.
-            # Tasks running CPU-bound code in asyncio.to_thread cannot be preempted
-            # by cancellation. Awaiting them guarantees the worker hangs indefinitely.
-            # Python will garbage collect the task once the background thread completes.
-            pass
+            # Give tasks a brief grace period to handle cancellation
+            if tasks:
+                done, pending = await asyncio.wait(tasks, timeout=0.5)
+                # Collect exceptions from completed tasks
+                for task in done:
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass  # Expected during cancellation
 
         watchdog_active = False
         if (
@@ -817,10 +827,24 @@ def _merge_run_acquisition_metrics(
         platform_families[platform_family] = (
             int(platform_families.get(platform_family, 0) or 0) + 1
         )
+    requested_surfaces = dict(current.get("requested_surfaces") or {})
+    requested_surface = str(url_metrics.get("requested_surface") or "").strip()
+    if requested_surface:
+        requested_surfaces[requested_surface] = int(
+            requested_surfaces.get(requested_surface, 0) or 0
+        ) + 1
+    effective_surfaces = dict(current.get("effective_surfaces") or {})
+    effective_surface = str(url_metrics.get("effective_surface") or "").strip()
+    if effective_surface:
+        effective_surfaces[effective_surface] = int(
+            effective_surfaces.get(effective_surface, 0) or 0
+        ) + 1
 
     summary = {
         "methods": methods,
         "platform_families": platform_families,
+        "requested_surfaces": requested_surfaces,
+        "effective_surfaces": effective_surfaces,
         "browser_attempted_urls": int(current.get("browser_attempted_urls", 0) or 0)
         + int(bool(url_metrics.get("browser_attempted"))),
         "browser_used_urls": int(current.get("browser_used_urls", 0) or 0)
@@ -880,6 +904,8 @@ def _merge_run_acquisition_metrics(
         + int(bool(url_metrics.get("traversal_attempted"))),
         "traversal_fell_back": int(current.get("traversal_fell_back", 0) or 0)
         + int(bool(url_metrics.get("traversal_fallback_used"))),
+        "surface_remapped_urls": int(current.get("surface_remapped_urls", 0) or 0)
+        + int(bool(url_metrics.get("surface_remapped"))),
     }
     traversal_succeeded_increment = int(
         bool(url_metrics.get("traversal_attempted"))

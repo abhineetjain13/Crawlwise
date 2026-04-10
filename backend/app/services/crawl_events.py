@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import json
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlLog, CrawlRun
-from app.services.db_utils import with_retry
+from app.services.db_utils import sqlite_write_lock, with_retry
 
 logger = logging.getLogger("app.crawl.events")
 _LEVEL_ORDER = {
@@ -131,7 +132,12 @@ def prepare_log_event(run_id: int, level: str, message: str) -> tuple[str, str, 
 
 
 async def append_log_event(
-    run_id: int, level: str, message: str, *, preformatted: bool = False
+    run_id: int,
+    level: str,
+    message: str,
+    *,
+    preformatted: bool = False,
+    session: AsyncSession | None = None,
 ) -> dict[str, Any]:
     if preformatted:
         normalized_level, formatted_message, should_persist = (
@@ -165,20 +171,26 @@ async def append_log_event(
             "message": formatted_message,
             "created_at": created_at.isoformat(),
         }
-    async with SessionLocal() as session:
 
-        async def _operation(retry_session: AsyncSession) -> CrawlLog:
-            row = CrawlLog(
-                run_id=run_id,
-                level=normalized_level,
-                message=formatted_message,
-            )
-            retry_session.add(row)
-            await retry_session.flush()
-            return row
+    async def _operation(retry_session: AsyncSession) -> CrawlLog:
+        row = CrawlLog(
+            run_id=run_id,
+            level=normalized_level,
+            message=formatted_message,
+        )
+        retry_session.add(row)
+        await retry_session.flush()
+        return row
 
-        row = await with_retry(session, _operation)
-        await session.refresh(row)
+    if session is not None:
+        row = await _operation(session)
+        # We don't commit here because it's the caller's session.
+        # But we do need to return serialized log.
+        return serialize_log_event(row)
+
+    async with SessionLocal() as new_session:
+        row = await with_retry(new_session, _operation)
+        await new_session.refresh(row)
         return serialize_log_event(row)
 
 
@@ -186,32 +198,49 @@ async def persist_run_summary_patch(
     *,
     run_id: int,
     summary_patch: dict[str, Any],
+    session: AsyncSession | None = None,
 ) -> dict[str, Any] | None:
-    async with SessionLocal() as session:
-
-        async def _operation(retry_session: AsyncSession) -> CrawlRun | None:
-            bind = retry_session.bind
-            if bind is not None and bind.dialect.name != "sqlite":
-                result = await retry_session.execute(
-                    select(CrawlRun).where(CrawlRun.id == run_id).with_for_update()
-                )
-                run = result.scalar_one_or_none()
-            else:
-                run = await retry_session.get(CrawlRun, run_id)
-            if run is None:
-                return None
-            result_summary = dict(run.result_summary or {})
-            merged_summary = _merge_run_summary_patch(result_summary, summary_patch)
-            if merged_summary == result_summary:
-                return run
-            run.result_summary = merged_summary
-            await retry_session.flush()
-            return run
-
-        run = await with_retry(session, _operation)
+    async def _operation(retry_session: AsyncSession) -> CrawlRun | None:
+        bind = retry_session.bind
+        is_sqlite = bind is not None and bind.dialect.name == "sqlite"
+        if not is_sqlite:
+            result = await retry_session.execute(
+                select(CrawlRun).where(CrawlRun.id == run_id).with_for_update()
+            )
+            run = result.scalar_one_or_none()
+        else:
+            run = await retry_session.get(CrawlRun, run_id)
         if run is None:
             return None
-        await session.refresh(run)
+        result_summary = dict(run.result_summary or {})
+        merged_summary = _merge_run_summary_patch(result_summary, summary_patch)
+        if merged_summary == result_summary:
+            return run
+        run.result_summary = merged_summary
+        await retry_session.flush()
+        return run
+
+    if session is not None:
+        bind = session.bind
+        if bind is not None and bind.dialect.name == "sqlite":
+            async with sqlite_write_lock:
+                run = await _operation(session)
+        else:
+            run = await _operation(session)
+        if run is None:
+            return None
+        return serialize_run_snapshot(run)
+
+    async with SessionLocal() as new_session:
+        bind = new_session.bind
+        if bind is not None and bind.dialect.name == "sqlite":
+            async with sqlite_write_lock:
+                run = await with_retry(new_session, _operation)
+        else:
+            run = await with_retry(new_session, _operation)
+        if run is None:
+            return None
+        await new_session.refresh(run)
         return serialize_run_snapshot(run)
 
 

@@ -35,6 +35,16 @@ describe("buildDispatch", () => {
     expect(dispatch.url).toBe("https://example.com/collections/chairs");
   });
 
+  it("promotes category job URLs to job listing surface", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        target_url: "https://workforcenow.adp.com/careers",
+      }),
+    );
+
+    expect(dispatch.surface).toBe("job_listing");
+  });
+
   it("preserves advanced_mode auto when auto is selected", () => {
     const dispatch = buildDispatch(
       baseConfig({
@@ -73,6 +83,20 @@ describe("buildDispatch", () => {
     expect(dispatch.surface).toBe("ecommerce_detail");
     expect(dispatch.urls).toEqual(["https://example.com/p/1", "https://example.com/p/2"]);
     expect(dispatch.settings.urls).toEqual(["https://example.com/p/1", "https://example.com/p/2"]);
+  });
+
+  it("promotes pdp batch job URLs to job detail surface", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        module: "pdp",
+        surface: "ecommerce_detail",
+        mode: "batch",
+        target_url: "",
+        bulk_urls: "https://recruiting.ultipro.com/org/JobBoard/id/OpportunityDetail?opportunityId=1",
+      }),
+    );
+
+    expect(dispatch.surface).toBe("job_detail");
   });
 
   it("throws when batch mode has no URLs", () => {

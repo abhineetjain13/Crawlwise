@@ -14,6 +14,18 @@ VERDICT_SCHEMA_MISS = "schema_miss"
 VERDICT_LISTING_FAILED = "listing_detection_failed"
 VERDICT_EMPTY = "empty"
 
+__all__ = [
+    "VERDICT_SUCCESS",
+    "VERDICT_PARTIAL",
+    "VERDICT_BLOCKED",
+    "VERDICT_SCHEMA_MISS",
+    "VERDICT_LISTING_FAILED",
+    "VERDICT_EMPTY",
+    "_compute_verdict",
+    "_passes_core_verdict",
+    "_aggregate_verdict",
+]
+
 
 def _compute_verdict(records: list[dict], surface: str, *, is_listing: bool) -> str:
     """Compute extraction quality verdict for a single URL.

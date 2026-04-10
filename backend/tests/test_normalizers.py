@@ -58,7 +58,9 @@ def test_extract_currency_hint_prefers_adjacent_code_over_symbol():
 def test_normalize_size_and_color_option_text():
     assert normalize_value("size", "Choose an option XS S M L XL") == "XS, S, M, L, XL"
     assert normalize_value("size", "(max-width: 416px) 100vw, 416px") == ""
+    assert normalize_value("title", "Select a Size") == ""
     assert normalize_value("color", "Choose an option Black Gray Orange Clear") == "Black Gray Orange"
+    assert normalize_value("color", "Size S, .") == ""
 
 
 def test_validate_image_collection_filters_each_url_individually():
@@ -74,3 +76,19 @@ def test_validate_image_collection_filters_each_url_individually():
 def test_validate_http_url_accepts_valid_http_urls_without_site_hacks():
     assert validate_value("url", "https://www.shopify.com/pricing") == "https://www.shopify.com/pricing"
     assert validate_value("url", "https://www.linkedin.com/jobs/view/123") == "https://www.linkedin.com/jobs/view/123"
+
+
+def test_validate_brand_allows_single_slash_brand_names_but_rejects_breadcrumb_paths():
+    assert validate_value("brand", "3M/Scotch") == "3M/Scotch"
+    assert validate_value("brand", "Home / Brands / 3M") is None
+
+
+def test_validate_color_hex_accepts_only_valid_css_hex_lengths():
+    assert validate_value("color", "#abc") == "#abc"
+    assert validate_value("color", "#abcd") == "#abcd"
+    assert validate_value("color", "#abcdef") == "#abcdef"
+    assert validate_value("color", "#abcdef12") == "#abcdef12"
+    assert validate_value("color", "Select a Size") is None
+    assert validate_value("color", "Size S, .") is None
+    assert validate_value("color", "#abcde") is None
+    assert validate_value("color", "#abcdefg") is None

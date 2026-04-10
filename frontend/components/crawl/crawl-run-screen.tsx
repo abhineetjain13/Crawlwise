@@ -703,7 +703,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                 value={outputTab}
                 onChange={(value) => setOutputTab(value as OutputTabKey)}
                 options={[
-                  { value: "table", label: `Table (${summary.fields})` },
+                  { value: "table", label: `Table (${summary.records})` },
                   { value: "json", label: "JSON" },
                   { value: "markdown", label: "Markdown" },
                   { value: "logs", label: "Logs" },

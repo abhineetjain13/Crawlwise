@@ -39,9 +39,12 @@ def _escape_like_pattern(value: str) -> str:
     )
 
 
-def _safe_int(value, default: int, minimum: int) -> int:
+def _safe_int(value, default: int, minimum: int, maximum: int | None = None) -> int:
     try:
-        return max(minimum, int(value))
+        result = max(minimum, int(value))
+        if maximum is not None:
+            result = min(result, maximum)
+        return result
     except (ValueError, TypeError):
         return default
 
@@ -63,7 +66,7 @@ async def create_crawl_run(
     normalized_surface = str(payload.get("surface") or "").strip()
     await ensure_public_crawl_targets(collect_target_urls(payload, settings))
     validate_extraction_contract(settings.get("extraction_contract") or [])
-    settings["max_pages"] = _safe_int(settings.get("max_pages", 5), 5, 1)
+    settings["max_pages"] = _safe_int(settings.get("max_pages", 5), 5, 1, 20)  # Cap at 20 to prevent OOM
     settings["max_records"] = _safe_int(settings.get("max_records", 100), 100, 1)
     settings["max_scrolls"] = _safe_int(
         settings.get("max_scrolls", DEFAULT_MAX_SCROLLS), DEFAULT_MAX_SCROLLS, 1
@@ -76,8 +79,10 @@ async def create_crawl_run(
     requested_traversal_mode = str(
         settings.get("traversal_mode") or settings.get("advanced_mode") or ""
     ).strip().lower()
-    settings["traversal_mode"] = requested_traversal_mode or None
-    settings["traversal_mode"] = resolve_traversal_mode(settings)
+    settings["traversal_mode"] = resolve_traversal_mode({
+        **settings,
+        "traversal_mode": requested_traversal_mode or None,
+    })
     # Keep user-owned controls explicit in persisted settings.
     if settings.get("advanced_enabled"):
         settings["advanced_mode"] = settings["traversal_mode"]
@@ -304,6 +309,7 @@ async def commit_selected_fields(
             run_id=run.id,
             level="info",
             message=f"[FIELDS] Committed {updated_fields} selected field value(s)",
+            session=session,
         )
     return updated_records, updated_fields
 

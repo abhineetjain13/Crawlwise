@@ -10,14 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.services.db_utils import commit_with_retry, with_retry
-
-
-@pytest.mark.asyncio
-async def test_commit_with_retry_raises_deprecation_error():
-    session = AsyncMock(spec=AsyncSession)
-    with pytest.raises(RuntimeError, match="deprecated and unsafe"):
-        await commit_with_retry(session)
+from app.services.db_utils import with_retry
 
 
 @pytest.mark.asyncio

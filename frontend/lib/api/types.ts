@@ -19,7 +19,11 @@ export type RunStatus =
 export type CrawlPhase = "config" | "running" | "complete";
 
 export type CrawlModule = "category" | "pdp";
-export type CrawlSurface = "ecommerce_listing" | "ecommerce_detail";
+export type CrawlSurface =
+  | "ecommerce_listing"
+  | "ecommerce_detail"
+  | "job_listing"
+  | "job_detail";
 
 export type CrawlMode = "single" | "sitemap" | "bulk" | "batch" | "csv";
 export type AdvancedCrawlMode = "auto" | "scroll" | "load_more" | "paginate" | "view_all";

@@ -72,6 +72,43 @@ LISTING_PAGE_ALLOWED_FIELDS = {"url", "title", "price", "image_link"}
 
 # Detail-only fields that should not be extracted on listing pages
 DETAIL_ONLY_FIELDS = {"brand", "gtin", "variants", "specifications", "description"}
+_LISTING_SOCIAL_HOST_SUFFIXES = (
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "pinterest.com",
+    "x.com",
+    "twitter.com",
+    "youtube.com",
+    "youtu.be",
+)
+_LISTING_HOST_TOKEN_STOPWORDS = {
+    "www",
+    "m",
+    "amp",
+    "api",
+    "cdn",
+    "img",
+    "images",
+    "static",
+    "backend",
+    "edge",
+    "shop",
+    "store",
+    "merchant",
+    "com",
+    "net",
+    "org",
+    "co",
+    "io",
+    "app",
+}
+_LISTING_VARIANT_PROMPT_RE = re.compile(
+    r"^(?:select|choose|pick)\s+(?:a|an|the|your)?\s*"
+    r"(?:size|sizes|color|colors|colour|colours|option|options|variant|variants|"
+    r"style|styles|fit|fits|waist|length|width)\b",
+    re.IGNORECASE,
+)
 
 
 def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
@@ -91,6 +128,8 @@ def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list
         return records
 
     filtered_records = []
+    all_dropped_fields: set[str] = set()
+    drop_count = 0
 
     for record in records:
         # Check if this is a DOM-extracted record
@@ -103,18 +142,21 @@ def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list
             continue
 
         # For DOM records, drop detail-only fields
+        dropped_fields = {k for k in record.keys() if k in DETAIL_ONLY_FIELDS}
         filtered_record = {
             k: v for k, v in record.items() if k not in DETAIL_ONLY_FIELDS
         }
-
-        # Log warning if detail fields were dropped
-        dropped_fields = [k for k in record.keys() if k in DETAIL_ONLY_FIELDS]
         if dropped_fields:
-            logger.warning(
-                f"Listing page contract violation: dropped detail-only fields {dropped_fields} from DOM record"
-            )
+            all_dropped_fields.update(dropped_fields)
+            drop_count += 1
 
         filtered_records.append(filtered_record)
+
+    if drop_count:
+        logger.warning(
+            "Listing page contract violation: dropped detail-only fields %s from %d DOM records",
+            sorted(all_dropped_fields), drop_count,
+        )
 
     return filtered_records
 
@@ -383,6 +425,7 @@ def _extract_from_structured_sources(
                     break
 
     for payload in xhr_payloads:
+        payload_url = str(payload.get("url") or "").strip()
         body = payload.get("body")
         if not isinstance(body, (dict, list)):
             continue
@@ -400,9 +443,14 @@ def _extract_from_structured_sources(
                 for record in net_records
                 if _is_meaningful_structured_listing_record(record, surface=surface)
             ]
+            filtered_net_records = _filter_relevant_network_record_set(
+                filtered_net_records,
+                payload_url=payload_url,
+                page_url=page_url,
+                surface=surface,
+            )
             if filtered_net_records:
                 structured_groups.append(filtered_net_records)
-                break
 
     if not structured_groups:
         return []
@@ -1192,6 +1240,37 @@ def _preferred_generic_item_values(
                     preferred_values.append(location)
                     break
         return preferred_values
+    if canonical == "url":
+        preferred_keys = (
+            "product_full_url",
+            "product_short_url",
+            "productUrl",
+            "product_url",
+            "detailUrl",
+            "detail_url",
+            "applyUrl",
+            "apply_url",
+            "url",
+            "href",
+        )
+        return [
+            item[key]
+            for key in preferred_keys
+            if key in item and item[key] not in (None, "", [], {})
+        ]
+    if canonical == "image_url":
+        preferred_keys = (
+            "imageUrl",
+            "image_url",
+            "primaryImage",
+            "primary_image",
+            "product_images",
+        )
+        return [
+            item[key]
+            for key in preferred_keys
+            if key in item and item[key] not in (None, "", [], {})
+        ]
     if canonical == "job_id" and "job" in str(surface or "").lower():
         preferred_keys = (
             "jobId",
@@ -1207,6 +1286,27 @@ def _preferred_generic_item_values(
             "opening_id",
             "id",
         )
+        return [
+            item[key]
+            for key in preferred_keys
+            if key in item and item[key] not in (None, "", [], {})
+        ]
+    if canonical == "category" and "job" in str(surface or "").lower():
+        preferred_keys = ("jobCategoryName", "jobCategory", "categoryName", "category")
+        return [
+            item[key]
+            for key in preferred_keys
+            if key in item and item[key] not in (None, "", [], {})
+        ]
+    if canonical == "posted_date" and "job" in str(surface or "").lower():
+        preferred_keys = ("postedDate", "PostedDate", "publishDate", "datePosted")
+        return [
+            item[key]
+            for key in preferred_keys
+            if key in item and item[key] not in (None, "", [], {})
+        ]
+    if canonical == "description" and "job" in str(surface or "").lower():
+        preferred_keys = ("briefDescription", "BriefDescription", "description", "summary")
         return [
             item[key]
             for key in preferred_keys
@@ -1615,6 +1715,86 @@ def _looks_like_detail_record_url(url_value: str) -> bool:
     if _looks_like_category_url(lowered):
         return False
     return any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS)
+
+
+def _filter_relevant_network_record_set(
+    records: list[dict],
+    *,
+    payload_url: str,
+    page_url: str,
+    surface: str,
+) -> list[dict]:
+    if not records or "job" in str(surface or "").lower():
+        return records
+    if _is_social_listing_url(payload_url):
+        return []
+    if _hosts_look_related(payload_url, page_url):
+        return records
+
+    relevant_records = [
+        record
+        for record in records
+        if _record_url_matches_listing_page(record, page_url=page_url)
+    ]
+    if len(relevant_records) >= MIN_VIABLE_RECORDS:
+        return relevant_records
+    return []
+
+
+def _record_url_matches_listing_page(record: dict, *, page_url: str) -> bool:
+    record_url = str(record.get("url") or record.get("apply_url") or "").strip()
+    if not record_url:
+        return False
+    if _is_social_listing_url(record_url):
+        return False
+    if not _hosts_look_related(record_url, page_url):
+        return False
+    has_primary_listing_data = any(
+        record.get(field_name) not in _EMPTY_VALUES
+        for field_name in ("title", "price", "brand")
+    )
+    return _looks_like_detail_record_url(record_url) or has_primary_listing_data
+
+
+def _is_social_listing_url(value: str) -> bool:
+    host = urlparse(str(value or "").strip()).netloc.lower()
+    if not host:
+        return False
+    return any(
+        host == suffix or host.endswith(f".{suffix}")
+        for suffix in _LISTING_SOCIAL_HOST_SUFFIXES
+    )
+
+
+def _hosts_look_related(left: str, right: str) -> bool:
+    def _host_like_value(value: str) -> str:
+        raw = str(value or "").strip().lower()
+        parsed_host = urlparse(raw).netloc.lower()
+        if parsed_host:
+            return parsed_host
+        if re.fullmatch(r"[a-z0-9.-]+", raw) and "." in raw and ".." not in raw:
+            return raw
+        return ""
+
+    left_host = _host_like_value(left)
+    right_host = _host_like_value(right)
+    if not left_host or not right_host:
+        return False
+    if left_host == right_host:
+        return True
+    if left_host.endswith(f".{right_host}") or right_host.endswith(f".{left_host}"):
+        return True
+    left_tokens = _listing_host_tokens(left_host)
+    right_tokens = _listing_host_tokens(right_host)
+    return len(left_tokens & right_tokens) >= 2
+
+
+def _listing_host_tokens(host: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", str(host or "").lower())
+        if len(token) >= 2 and token not in _LISTING_HOST_TOKEN_STOPWORDS
+    }
 
 
 def _looks_like_navigation_or_action_title(title: str, url: str = "") -> bool:
@@ -2044,11 +2224,32 @@ def _extract_card_title(card: Tag, record: dict) -> None:
         title_el = card.select_one(selector)
         if not title_el:
             continue
-        text = title_el.get_text(" ", strip=True)
-        if text and not _PRICE_LIKE_RE.match(text):
+        if title_el.name == "meta":
+            continue
+        text = _extract_listing_title_text(title_el)
+        if (
+            text
+            and not _PRICE_LIKE_RE.match(text)
+            and not _LISTING_VARIANT_PROMPT_RE.match(text)
+        ):
             record["title"] = _normalize_listing_title_text(text)
             record["_selector_title"] = selector
             return
+
+
+def _extract_listing_title_text(node: Tag) -> str:
+    text = node.get_text(" ", strip=True)
+    if text:
+        return text
+    for attr in ("alt", "title", "aria-label", "content"):
+        value = " ".join(str(node.get(attr) or "").split()).strip()
+        if value:
+            return value
+    if node.name != "img":
+        image = node.select_one("img[alt], img[title]")
+        if image is not None:
+            return _extract_listing_title_text(image)
+    return ""
 
 
 def _extract_card_image_fields(card: Tag, record: dict, *, page_url: str) -> None:

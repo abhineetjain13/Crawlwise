@@ -13,6 +13,10 @@ from app.services.runtime_metrics import incr
 
 T = TypeVar('T')
 
+# Global lock for serializing writes on SQLite to avoid "database is locked" and data loss
+# during concurrent updates to the same row (since FOR UPDATE is not supported in SQLite).
+sqlite_write_lock = asyncio.Lock()
+
 
 def escape_like_pattern(value: str) -> str:
     text = str(value or "")

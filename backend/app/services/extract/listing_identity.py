@@ -7,6 +7,20 @@ _EMPTY_VALUES = (None, "", [], {})
 _STRONG_IDENTITY_FIELDS = ("job_id", "sku", "part_number", "id", "url", "apply_url")
 _LONG_TEXT_FIELDS = {"description", "company", "location", "salary", "department"}
 _WHITESPACE_RE = re.compile(r"\s+")
+_JOB_PRIMARY_SIGNAL_FIELDS = frozenset(
+    {
+        "company",
+        "location",
+        "salary",
+        "job_id",
+        "apply_url",
+        "job_type",
+        "posted_date",
+        "department",
+        "category",
+        "description",
+    }
+)
 
 
 def strong_identity_key(record: dict) -> str:
@@ -49,8 +63,7 @@ def choose_primary_record_set(
             surface_count = sum(
                 1
                 for record in records
-                if record.get("company") not in _EMPTY_VALUES
-                or record.get("salary") not in _EMPTY_VALUES
+                if any(record.get(field_name) not in _EMPTY_VALUES for field_name in _JOB_PRIMARY_SIGNAL_FIELDS)
             )
         else:
             surface_count = sum(

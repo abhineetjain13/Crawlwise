@@ -1,10 +1,12 @@
 # Tests for listing page extraction.
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import pytest
 
 import app.services.extract.listing_extractor as listing_extractor
+import app.services.extract.listing_normalize as listing_normalize
 from unittest.mock import patch
 
 from app.services.extract.listing_extractor import extract_listing_records as _extract_listing_records_impl
@@ -81,6 +83,80 @@ def test_extract_product_cards():
     assert records[0]["title"] == "Widget A"
     assert records[1]["title"] == "Widget B"
     assert "price" in records[0]
+
+
+def test_extract_product_cards_falls_back_to_image_alt_for_title():
+    html = """
+    <html><body>
+    <div class="product-card">
+        <a href="/product/1"><img src="https://img.example.com/a.jpg" alt="Widget Alt Title" /></a>
+        <span class="price">$10.00</span>
+    </div>
+    <div class="product-card">
+        <a href="/product/2"><img src="https://img.example.com/b.jpg" alt="Widget B" /></a>
+        <span class="price">$20.00</span>
+    </div>
+    </body></html>
+    """
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        max_records=5,
+    )
+    assert len(records) == 2
+    assert records[0]["title"] == "Widget Alt Title"
+    assert records[0]["url"] == "https://example.com/product/1"
+
+
+def test_extract_listing_records_ignores_third_party_social_network_payload_records():
+    html = """
+    <html><body>
+    <div class="product-card">
+        <a href="/product/1"><img src="https://img.example.com/a.jpg" alt="Widget A" /></a>
+        <span class="price">$10.00</span>
+    </div>
+    <div class="product-card">
+        <a href="/product/2"><img src="https://img.example.com/b.jpg" alt="Widget B" /></a>
+        <span class="price">$20.00</span>
+    </div>
+    </body></html>
+    """
+    manifest = _sources(
+        network_payloads=[
+            {
+                "url": "https://edge.curalate.com/v1/media/foo",
+                "body": [
+                    {
+                        "title": "Wrong Offsite Product",
+                        "url": "https://www.facebook.com/reel/123",
+                        "price": "89.99",
+                        "brand": "Jonnie",
+                    },
+                    {
+                        "title": "Another Offsite Product",
+                        "url": "https://www.instagram.com/p/abc",
+                        "price": "99.99",
+                        "brand": "Mooloola",
+                    },
+                ],
+            }
+        ]
+    )
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        max_records=5,
+        manifest=manifest,
+    )
+
+    assert len(records) == 2
+    assert records[0]["title"] == "Widget A"
+    assert records[0]["url"] == "https://example.com/product/1"
 
 
 def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_item():
@@ -252,6 +328,55 @@ def test_extract_listing_records_maps_generic_job_ids_without_emitting_sku():
     assert records[0]["location"] == "Catoosa"
     assert records[0]["category"] == "Operations"
     assert "sku" not in records[0]
+
+
+def test_extract_listing_records_citybeach_artifact_stays_onsite_and_keeps_titles():
+    backend_root = Path(__file__).resolve().parents[3]
+    html_path = backend_root / "artifacts" / "html" / "www-citybeach-com-14ac9113c3-run_56.html"
+    network_path = backend_root / "artifacts" / "network" / "www-citybeach-com-14ac9113c3-run_56.json"
+    html = html_path.read_text(encoding="utf-8", errors="ignore")
+    payloads = json.loads(network_path.read_text(encoding="utf-8", errors="ignore"))
+
+    records = _extract_listing_records_impl(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.citybeach.com/au/mens/swimwear/",
+        max_records=10,
+        xhr_payloads=payloads,
+        adapter_records=[],
+    )
+
+    assert len(records) == 10
+    for record in records[:5]:
+        assert record["title"]
+        assert record["url"].startswith("https://www.citybeach.com/")
+        assert "facebook.com" not in record["url"]
+        assert "instagram.com" not in record["url"]
+
+
+def test_extract_listing_records_myntra_artifact_preserves_primary_results():
+    backend_root = Path(__file__).resolve().parents[3]
+    html_path = backend_root / "artifacts" / "html" / "www-myntra-com-0c765a4e01-run_52.html"
+    network_path = backend_root / "artifacts" / "network" / "www-myntra-com-0c765a4e01-run_52.json"
+    html = html_path.read_text(encoding="utf-8", errors="ignore")
+    payloads = json.loads(network_path.read_text(encoding="utf-8", errors="ignore"))
+
+    records = _extract_listing_records_impl(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.myntra.com/hand-towels",
+        max_records=10,
+        xhr_payloads=payloads,
+        adapter_records=[],
+    )
+
+    assert len(records) == 10
+    for record in records[:5]:
+        assert record["title"]
+        assert record["url"].startswith("https://www.myntra.com/")
+        assert record["brand"]
 
 
 @pytest.mark.skip(reason="UltiPro-specific URL synthesis was intentionally removed in Fix 10 (Batch 2) - site-specific logic belongs in Adapters")
@@ -1812,6 +1937,39 @@ def test_clean_price_text_strips_surrounding_text():
     assert listing_extractor._clean_price_text("£29.99") == "£29.99"
     assert listing_extractor._clean_price_text("€1,299.00 Free shipping") == "€1,299.00"
     assert listing_extractor._clean_price_text("$0.99") == "$0.99"
+
+
+def test_normalize_generic_item_prefers_product_full_url_over_nested_shop_url():
+    record = listing_extractor._normalize_generic_item(
+        {
+            "product_name": "NIRUN (นิรัน)",
+            "product_full_url": "https://www.shop.ving.run/product/nirun/11000742818002390",
+            "product_short_url": "https://www.shop.ving.run/product/11000742818002390",
+            "product_images": "https://cdn.example.com/nirun.jpg",
+            "shop": {"url": "https://www.shop.ving.run/nirun"},
+        },
+        "ecommerce_listing",
+        "https://www.shop.ving.run/search",
+    )
+
+    assert record is not None
+    assert record["url"] == "https://www.shop.ving.run/product/nirun/11000742818002390"
+
+
+def test_normalize_listing_record_drops_dimensions_when_it_duplicates_size_choices():
+    normalized = listing_normalize.normalize_listing_record(
+        {
+            "title": "NIRUN (นิรัน)",
+            "url": "https://www.shop.ving.run/product/nirun/11000742818002390",
+            "size": "EU-36, EU-37, EU-38, EU-39, EU-40, EU-41, EU-42, EU-43",
+            "dimensions": "EU-36, EU-37, EU-38, EU-39, EU-40, EU-41/42, EU-43",
+        },
+        surface="ecommerce_listing",
+        page_url="https://www.shop.ving.run/search",
+        target_fields=set(),
+    )
+
+    assert "dimensions" not in normalized
 
 
 # -----------------------------------------------------------------------

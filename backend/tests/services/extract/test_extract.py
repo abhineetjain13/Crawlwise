@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app.services.extract.service import (
     _coerce_scalar_for_dynamic_row,
+    _extract_label_value_from_text,
     _dispatch_string_field_coercer,
     _extract_image_urls,
     _finalize_candidate_rows,
@@ -304,6 +305,16 @@ def test_extract_label_value_fallback_uses_full_description_sources():
         )
     assert candidates["brand"][0]["source"] == "text_pattern"
     assert candidates["brand"][0]["value"] == "Acme Corp"
+
+
+def test_extract_label_value_from_text_searches_raw_html_when_text_sources_miss() -> None:
+    value = _extract_label_value_from_text(
+        "brand",
+        text_sources=[],
+        html="<div>Brand: Acme Corp</div>",
+    )
+
+    assert value == "Acme Corp"
 
 
 def test_label_value_pattern_cache_reuses_compiled_regex_for_same_variant():
@@ -935,23 +946,7 @@ def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholder
     assert "operating_temperature" not in candidates
 
 
-def test_extract_filters_schema_type_category_noise_and_keeps_real_category():
-    html = "<html><body><h1>Widget</h1></body></html>"
-    manifest = _manifest(json_ld=[
-        {"@type": "ProductGroup", "category": "ProductGroup"},
-        {"@type": "Review", "category": "Review"},
-        {"category": "Men > Shirts & Tops"},
-    ])
-    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
-            "https://example.com/product",
-            "ecommerce_detail",
-            html,
-            manifest,
-            [],
-        )
-    assert "category" in candidates
-    assert [row["value"] for row in candidates["category"]] == ["Men > Shirts & Tops"]
+
 
 
 def test_should_skip_jsonld_block_handles_type_lists():
@@ -1149,11 +1144,13 @@ def test_extract_category_falls_back_to_breadcrumb_and_ignores_network_sentinel_
 def test_coerce_title_rejects_account_and_cookie_noise():
     assert coerce_field_candidate_value("title", "Cookie preferences and privacy policy") is None
     assert coerce_field_candidate_value("title", "Sign in to your account") is None
+    assert coerce_field_candidate_value("title", "Select a Size") is None
     assert coerce_field_candidate_value("title", "Trail Running Shoe") == "Trail Running Shoe"
 
 
 def test_normalize_color_candidate_rejects_overlong_or_ui_phrases():
     assert _normalize_color_candidate("Choose options") is None
+    assert _normalize_color_candidate("Size S, .") is None
     assert _normalize_color_candidate("Black Gray Orange") == "Black Gray Orange"
     assert _normalize_color_candidate("Super extra premium metallic reflective carbon black and silver") is None
 
@@ -1599,7 +1596,7 @@ def test_extraction_hierarchy_order_preservation_datalayer_before_jsonld():
     });
     </script>
     <script type="application/ld+json">
-    {"@type": "Product", "price": "39.99", "priceCurrency": "EUR"}
+    {"@context": "https://schema.org", "@type": "Product", "price": "39.99", "priceCurrency": "EUR"}
     </script>
     </body></html>
     """

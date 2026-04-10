@@ -1,18 +1,15 @@
 import pytest
-from bs4 import BeautifulSoup
 from app.services.extract.service import extract_candidates
-from app.services.pipeline_config import EXTRACTION_RULES
 
-@pytest.mark.asyncio
-async def test_schema_arbitration_rejects_datalayer_pollution():
+def test_schema_arbitration_rejects_datalayer_pollution():
     """
-    Tests that a noisy/garbage string in a high-priority source (datalayer) 
-    is correctly rejected by the validator, allowing a clean lower-priority 
+    Tests that a noisy/garbage string in a high-priority source (datalayer)
+    is correctly rejected by the validator, allowing a clean lower-priority
     source (DOM) to win arbitration.
     """
     url = "https://www.example-store.com/product/nike-shoes"
     surface = "ecommerce_detail"
-    
+
     # Mock HTML containing both a polluted datalayer and a clean DOM
     html = """
     <html>
@@ -38,9 +35,9 @@ async def test_schema_arbitration_rejects_datalayer_pollution():
         </body>
     </html>
     """
-    
+
     # Execute the extraction pipeline
-    candidates, source_trace = await extract_candidates(
+    candidates, source_trace = extract_candidates(
         url=url,
         surface=surface,
         html=html,
@@ -65,8 +62,7 @@ async def test_schema_arbitration_rejects_datalayer_pollution():
     assert final_candidates["category"][0]["value"] == "Sneakers"
     assert "dom" in final_candidates["category"][0]["source"] or "selector" in final_candidates["category"][0]["source"]
 
-@pytest.mark.asyncio
-async def test_should_prefer_secondary_field_logic():
+def test_should_prefer_secondary_field_logic():
     """Tests the merge logic ensuring short noise doesn't overwrite short facts."""
     from app.services.pipeline.field_normalization import _should_prefer_secondary_field
     

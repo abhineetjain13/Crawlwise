@@ -47,17 +47,24 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
 
     html_lower = html.lower()
     
-    # FIX: Removed the catastrophic backtracking Regex that strips scripts.
-    # Replaced with a highly performant, non-blocking string slicing approach.
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style", "noscript", "svg"]):
-            tag.decompose()
-        visible = " ".join(soup.get_text(" ", strip=True).lower().split())
-    except Exception:
-        # Failsafe if BS4 hits a recursion limit on deeply nested malicious HTML
-        visible = html_lower[:20000]
+    # FIX: Optimized visible text extraction for large HTML
+    if len(html) > 100000:
+        # For very large HTML, use a faster regex-based approach to get some visible text
+        # rather than parsing the entire DOM with BeautifulSoup.
+        stripped = re.sub(r"<script.*?</script>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+        stripped = re.sub(r"<style.*?</style>", " ", stripped, flags=re.DOTALL | re.IGNORECASE)
+        stripped = re.sub(r"<.*?>", " ", stripped, flags=re.DOTALL)
+        visible = " ".join(stripped.lower().split())[:50000]
+    else:
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            for tag in soup(["script", "style", "noscript", "svg"]):
+                tag.decompose()
+            visible = " ".join(soup.get_text(" ", strip=True).lower().split())
+        except Exception:
+            # Failsafe if BS4 hits a recursion limit on deeply nested malicious HTML
+            visible = html_lower[:20000]
 
     provider = ""
     title_reason = ""

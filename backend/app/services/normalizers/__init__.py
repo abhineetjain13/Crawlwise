@@ -57,8 +57,20 @@ _PROMO_ONLY_TITLE_RE = (
 _CURRENCY_TOKEN_RE = re.compile(r"\b[A-Z]{3}\b")
 _CURRENCY_AFTER_AMOUNT_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*([A-Z]{3})\b")
 _CURRENCY_BEFORE_AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*\d[\d,]*(?:\.\d+)?\b")
-_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+_HEX_COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b")
+_BREADCRUMB_SEPARATOR_RE = re.compile(r"\s>\s|(?:[^/]+/){2,}[^/]+|[^/]+/[^/]+/[^/]*")
 _NUMERIC_ONLY_RE = re.compile(r"^\d+$")
+_VARIANT_SELECTOR_PROMPT_RE = re.compile(
+    r"^(?:select|choose|pick)\s+(?:a|an|the|your)?\s*"
+    r"(?:size|sizes|color|colors|colour|colours|option|options|variant|variants|"
+    r"style|styles|fit|fits|waist|length|width)\s*$",
+    re.IGNORECASE,
+)
+_CROSSFIELD_VARIANT_VALUE_RE = re.compile(
+    r"^(?:size|sizes|waist|length|width|fit|fits)\s*[:\-]?\s*"
+    r"[A-Za-z0-9.+/-]{1,8}(?:\s*,\s*\.?)?$",
+    re.IGNORECASE,
+)
 _TITLE_NOISE_WORDS = {
     "home",
     "cart",
@@ -169,7 +181,7 @@ def validate_value(field_name: str, value: object) -> object | None:
             return value
         if len(text) > 60:
             return None
-        if ">" in text or "/" in text:  # Rejects breadcrumbs
+        if _BREADCRUMB_SEPARATOR_RE.search(text):  # Reject breadcrumb/path-like text
             return None
         if "cookie" in lowered or "privacy" in lowered:
             return None
@@ -180,13 +192,15 @@ def validate_value(field_name: str, value: object) -> object | None:
             return value
         if len(text) > 40:
             return None
+        if _looks_like_variant_selector_text(text):
+            return None
         # First reject CSS-like tokens
         if re.search(r"[{};]|rgb\(|rgba\(", lowered):
             return None
-        # If a hex pattern is present, allow it only if it's a valid full-string hex color
+        # If a hex pattern is present, validate using the same regex as extraction
         if "#" in lowered:
-            if re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", lowered):
-                return text  # Valid standalone hex color
+            if _HEX_COLOR_RE.fullmatch(lowered):
+                return text  # Valid standalone hex color (3-8 hex digits)
             else:
                 return None  # Invalid or partial hex pattern
         if "cookie" in lowered or "select" in lowered:
@@ -196,7 +210,7 @@ def validate_value(field_name: str, value: object) -> object | None:
         if not isinstance(value, str):
             # Allow non-string values to pass through for availability
             return value
-        if len(text) > 50:
+        if len(text) > 150:
             return None
         if re.search(r"dimension\d+|metric\d+", lowered):  # Rejects GA metrics
             return None
@@ -209,6 +223,11 @@ def validate_value(field_name: str, value: object) -> object | None:
             return None
         if "cookie" in lowered or "sign in" in lowered:
             return None
+        # Reject GA tracking codes and generic page-type labels
+        if lowered in {"detail-page", "product", "category", "page", "object"}:
+            return None
+        if re.fullmatch(r"e\d+", lowered):
+            return None
     
     # 3. Legacy validation for other fields (only for string values)
     if not isinstance(value, str):
@@ -218,6 +237,8 @@ def validate_value(field_name: str, value: object) -> object | None:
     
     if _is_title_field(field_name) or _is_entity_name_field(field_name):
         if len(text) < 3 or len(text) > 250:
+            return None
+        if _is_title_field(field_name) and _looks_like_variant_selector_text(text):
             return None
         if lowered in _TITLE_NOISE_WORDS or _NUMERIC_ONLY_RE.fullmatch(text):
             return None
@@ -365,6 +386,8 @@ def _clean_title_text(value: str) -> str:
     cleaned = _strip_ui_noise(_strip_html(value))
     if not cleaned:
         return ""
+    if _looks_like_variant_selector_text(cleaned):
+        return ""
     if cleaned.lower() in CANDIDATE_GENERIC_TITLE_VALUES:
         return ""
     if _PROMO_ONLY_TITLE_RE and _PROMO_ONLY_TITLE_RE.match(cleaned):
@@ -380,6 +403,8 @@ def _clean_description_text(value: str) -> str:
 
 def _normalize_color_text(value: str) -> str:
     cleaned = _strip_ui_noise(_strip_html(value))
+    if _looks_like_variant_selector_text(cleaned):
+        return ""
     lowered = cleaned.lower()
 
     hex_match = _HEX_COLOR_RE.search(lowered)
@@ -408,6 +433,16 @@ def _normalize_size_text(value: str) -> str:
     if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):
         return ", ".join(tokens)
     return cleaned
+
+
+def _looks_like_variant_selector_text(value: str) -> bool:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return False
+    return bool(
+        _VARIANT_SELECTOR_PROMPT_RE.match(text)
+        or _CROSSFIELD_VARIANT_VALUE_RE.match(text)
+    )
 
 
 def _normalize_availability(value: str) -> str:

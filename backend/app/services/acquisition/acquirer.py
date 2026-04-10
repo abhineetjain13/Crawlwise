@@ -15,6 +15,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
+from playwright.async_api import Error as PlaywrightError
+
 from app.core.config import settings
 from app.services.exceptions import ProxyPoolExhaustedError
 from app.services.adapters.registry import resolve_adapter
@@ -33,6 +35,7 @@ from app.services.pipeline_config import (
     DEFAULT_MAX_SCROLLS,
     JOB_ERROR_PAGE_HEADINGS,
     JOB_ERROR_PAGE_TITLES,
+    JOB_PLATFORM_FAMILIES,
     JS_GATE_PHRASES,
     JOB_REDIRECT_SHELL_CANONICAL_URLS,
     JOB_REDIRECT_SHELL_HEADINGS,
@@ -63,6 +66,21 @@ _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset(
 _JS_SHELL_MIN_CONTENT_LEN = 100_000
 _JS_SHELL_VISIBLE_RATIO_MAX = 0.15
 _MIN_DETAIL_FIELD_SIGNAL_COUNT = 2
+_JOB_ADAPTER_HINTS = frozenset(
+    {
+        "adp",
+        "greenhouse",
+        "icims",
+        "indeed",
+        "jibe",
+        "linkedin",
+        "oracle_hcm",
+        "paycom",
+        "remotive",
+        "saashr",
+        "ultipro_ukg",
+    }
+)
 
 logger = logging.getLogger(__name__)
 _REDACTED = "[REDACTED]"
@@ -88,7 +106,9 @@ _SENSITIVE_KEY_TOKENS = (
     "phone",
 )
 _BEARER_TOKEN_RE = _re.compile(r"(?i)\bbearer\s+[a-z0-9\-\._~\+/]+=*")
-_LONG_TOKEN_RE = _re.compile(r"(?<![a-z0-9])[a-z0-9_\-]{32,}(?![a-z0-9])", _re.IGNORECASE)
+_LONG_TOKEN_RE = _re.compile(
+    r"(?<![a-z0-9])[a-z0-9_\-]{32,}(?![a-z0-9])", _re.IGNORECASE
+)
 _EMAIL_RE = _re.compile(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
 
 
@@ -129,7 +149,7 @@ def _proxy_backoff_seconds(failure_count: int) -> float:
     if failure_count <= 0:
         return 0.0
     exponent = min(failure_count - 1, _MAX_PROXY_BACKOFF_EXPONENT)
-    delay_ms = PROXY_FAILURE_COOLDOWN_BASE_MS * (2 ** exponent)
+    delay_ms = PROXY_FAILURE_COOLDOWN_BASE_MS * (2**exponent)
     bounded_ms = min(delay_ms, PROXY_FAILURE_COOLDOWN_MAX_MS)
     return max(0.0, bounded_ms / 1000)
 
@@ -138,7 +158,11 @@ def _evict_stale_proxy_entries(now: float) -> None:
     stale_cutoff = now - _PROXY_FAILURE_STATE_TTL_SECONDS
     stale_keys = [
         key
-        for key, (_failures, last_failure_time, _cooldown_until) in _PROXY_FAILURE_STATE.items()
+        for key, (
+            _failures,
+            last_failure_time,
+            _cooldown_until,
+        ) in _PROXY_FAILURE_STATE.items()
         if last_failure_time <= stale_cutoff
     ]
     for key in stale_keys:
@@ -147,9 +171,9 @@ def _evict_stale_proxy_entries(now: float) -> None:
     if len(_PROXY_FAILURE_STATE) <= _PROXY_FAILURE_STATE_MAX_ENTRIES:
         return
     overflow = len(_PROXY_FAILURE_STATE) - _PROXY_FAILURE_STATE_MAX_ENTRIES
-    for key, _state in sorted(_PROXY_FAILURE_STATE.items(), key=lambda item: item[1][1])[
-        :overflow
-    ]:
+    for key, _state in sorted(
+        _PROXY_FAILURE_STATE.items(), key=lambda item: item[1][1]
+    )[:overflow]:
         _PROXY_FAILURE_STATE.pop(key, None)
 
 
@@ -267,6 +291,11 @@ async def acquire(
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
     profile = dict(acquisition_profile or {})
+    effective_surface = _resolve_effective_surface(
+        surface,
+        platform_family=_detect_platform_family(url),
+        adapter_hint=None,
+    )
 
     # Domain-based fast track: known problematic domains should use the
     # hardened browser runtime, not the minimal default browser settings.
@@ -274,7 +303,7 @@ async def acquire(
     browser_first = (
         _matches_domain_policy(domain, BROWSER_FIRST_DOMAINS)
         or _memory_prefers_browser(profile)
-        or _requires_browser_first(url, surface)
+        or _requires_browser_first(url, effective_surface)
     )
     if browser_first:
         # Browser-first targets require hardened challenge/runtime handling.
@@ -305,7 +334,8 @@ async def acquire(
                     run_id=run_id,
                     url=url,
                     proxy=proxy,
-                    surface=surface,
+                    requested_surface=surface,
+                    surface=effective_surface,
                     traversal_mode=traversal_mode,
                     max_pages=max_pages,
                     max_scrolls=max_scrolls,
@@ -355,18 +385,24 @@ async def acquire(
 
     path = _artifact_path(run_id, url)
     await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
-    
+
     if result.content_type == "json" and result.json_data is not None:
         path = path.with_suffix(".json")
         await asyncio.to_thread(
-            path.write_text, json.dumps(result.json_data, indent=2, default=str), encoding="utf-8"
+            path.write_text,
+            json.dumps(result.json_data, indent=2, default=str),
+            encoding="utf-8",
         )
     else:
         await asyncio.to_thread(path.write_text, result.html, encoding="utf-8")
-        
+
     # FIX: Offload network payload and diagnostics disk I/O
-    await asyncio.to_thread(_write_network_payloads, run_id, url, result.network_payloads)
-    await asyncio.to_thread(_write_diagnostics, run_id, url, result, path, diagnostics_path)
+    await asyncio.to_thread(
+        _write_network_payloads, run_id, url, result.network_payloads
+    )
+    await asyncio.to_thread(
+        _write_diagnostics, run_id, url, result, path, diagnostics_path
+    )
 
     result.artifact_path = str(path)
     result.diagnostics_path = str(diagnostics_path)
@@ -378,6 +414,7 @@ async def _acquire_once(
     run_id: int,
     url: str,
     proxy: str | None,
+    requested_surface: str | None,
     surface: str | None,
     traversal_mode: str | None,
     max_pages: int,
@@ -392,11 +429,19 @@ async def _acquire_once(
     checkpoint: Callable[[], Awaitable[None]] | None,
 ) -> AcquisitionResult | None:
     started = time.perf_counter()
+    requested_surface = str(requested_surface or "").strip().lower() or None
 
     def _finalize_diagnostics_payload(
         diagnostics: dict[str, object] | None,
     ) -> dict[str, object]:
         payload = dict(diagnostics or {})
+        payload["surface_requested"] = requested_surface
+        payload["surface_effective"] = str(surface or "").strip().lower() or None
+        payload["surface_remapped"] = bool(
+            requested_surface
+            and payload.get("surface_effective")
+            and requested_surface != payload.get("surface_effective")
+        )
         timings = _merge_timing_maps(payload.get("timings_ms"))
         total_ms = max(0, _elapsed_ms(started))
         if not timings.get("acquisition_total_ms"):
@@ -433,6 +478,7 @@ async def _acquire_once(
             requested_fields=requested_fields,
             requested_field_selectors=requested_field_selectors,
             checkpoint=checkpoint,
+            run_id=run_id,
             failure_log_message="Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi",
         )
         if browser_first
@@ -509,25 +555,30 @@ async def _acquire_once(
                 }
             ),
         )
-    http_result = await _try_http(
-        url,
-        proxy,
-        surface,
-        run_id=run_id,
-        traversal_mode=traversal_mode,
-        prefer_stealth=prefer_stealth,
-        sleep_ms=sleep_ms,
-        browser_first=browser_first,
-        acquisition_profile=acquisition_profile,
-        runtime_options=runtime_options,
-        host_wait_seconds=host_wait,
-        checkpoint=checkpoint,
-    )
+    if _should_force_browser_for_traversal(traversal_mode):
+        http_result = None
+        analysis = {}
+    else:
+        http_result = await _try_http(
+            url,
+            proxy,
+            surface,
+            run_id=run_id,
+            traversal_mode=traversal_mode,
+            prefer_stealth=prefer_stealth,
+            sleep_ms=sleep_ms,
+            browser_first=browser_first,
+            acquisition_profile=acquisition_profile,
+            runtime_options=runtime_options,
+            host_wait_seconds=host_wait,
+            checkpoint=checkpoint,
+        )
     analysis = (
         getattr(http_result, "_acquirer_analysis", {})
         if http_result is not None
         else {}
     )
+
     promoted_source_result = await _try_promoted_source_acquire(
         url=url,
         proxy=proxy,
@@ -599,10 +650,58 @@ async def _acquire_once(
         requested_fields=requested_fields,
         requested_field_selectors=requested_field_selectors,
         checkpoint=checkpoint,
+        run_id=run_id,
         diagnostics_sink=curl_result.diagnostics if curl_result is not None else None,
     )
     if browser_result is None:
-        return curl_result
+        if http_result is None:
+            http_result = await _try_http(
+                url,
+                proxy,
+                surface,
+                run_id=run_id,
+                traversal_mode=traversal_mode,
+                prefer_stealth=prefer_stealth,
+                sleep_ms=sleep_ms,
+                browser_first=browser_first,
+                acquisition_profile=acquisition_profile,
+                runtime_options=runtime_options,
+                host_wait_seconds=host_wait,
+                checkpoint=checkpoint,
+            )
+            if http_result is None:
+                return None
+            analysis = getattr(http_result, "_acquirer_analysis", {})
+            curl_result = (
+                analysis.get("curl_result")
+                if isinstance(analysis.get("curl_result"), AcquisitionResult)
+                else None
+            )
+            curl_diagnostics = (
+                analysis.get("curl_diagnostics")
+                if isinstance(analysis.get("curl_diagnostics"), dict)
+                else {}
+            )
+        if curl_result is not None:
+            if curl_result.diagnostics is None:
+                curl_result.diagnostics = {}
+            else:
+                curl_result.diagnostics = dict(curl_result.diagnostics)
+            curl_result.diagnostics = _finalize_diagnostics_payload(
+                curl_result.diagnostics
+            )
+            return curl_result
+        return AcquisitionResult(
+            html=http_result.text,
+            json_data=http_result.json_data,
+            content_type=http_result.content_type,
+            method="curl_cffi",
+            artifact_path=path,
+            promoted_sources=list(
+                (analysis.get("extractability") or {}).get("promoted_sources") or []
+            ),
+            diagnostics=_finalize_diagnostics_payload(curl_diagnostics),
+        )
     browser_data = getattr(browser_result, "_acquirer_browser", {})
     browser_html = str(browser_data.get("html") or "")
     browser_final_url = str(browser_data.get("final_url") or url).strip() or url
@@ -650,6 +749,10 @@ async def _acquire_once(
                 ),
             }
         )
+        # Surface traversal diagnostics at top level for pipeline/frontend consumers
+        for _tkey in ("traversal_mode", "traversal_summary", "traversal_fallback_used", "traversal_fallback_reason"):
+            if _tkey in browser_diag:
+                merged[_tkey] = browser_diag[_tkey]
         return AcquisitionResult(
             html=browser_html,
             content_type="html",
@@ -684,7 +787,11 @@ async def _acquire_once(
             "Playwright returned blocked/empty for %s — using curl_cffi fallback", url
         )
         return None if bool(analysis.get("invalid_surface_page")) else curl_result
-    if browser_data.get("blocked") and not browser_redirect_shell and browser_public_target:
+    if (
+        browser_data.get("blocked")
+        and not browser_redirect_shell
+        and browser_public_target
+    ):
         blocked = dict(curl_diagnostics)
         blocked.update(
             {
@@ -735,6 +842,16 @@ async def _acquire_once(
             ),
             diagnostics=_finalize_diagnostics_payload(curl_diagnostics),
         )
+    # FINAL FALLBACK: If we have a curl result and browser failed or was rejected, return curl.
+    if curl_result is not None:
+        if curl_result.diagnostics is None:
+            curl_result.diagnostics = {}
+        else:
+            curl_result.diagnostics = dict(curl_result.diagnostics)
+        curl_result.diagnostics["browser_failed"] = True
+        curl_result.diagnostics = _finalize_diagnostics_payload(curl_result.diagnostics)
+        return curl_result
+
     return None
 
 
@@ -964,12 +1081,12 @@ async def _try_http(
         setattr(normalized, "_acquirer_analysis", analysis)
         return normalized
     decision_started_at = time.perf_counter()
-    
+
     # FIX: Offload CPU-bound HTML parsing to prevent Event Loop Starvation
     blocked = await asyncio.to_thread(detect_blocked_page, html)
     visible_text, gate_phrases = await asyncio.to_thread(_analyze_html_sync, html)
     content_len = _content_html_length(html)
-    
+
     visible_len = len(visible_text)
     js_shell_detected = (
         content_len >= _JS_SHELL_MIN_CONTENT_LEN
@@ -978,17 +1095,26 @@ async def _try_http(
     )
     adapter_hint = await _resolve_adapter_hint(url, html)
     platform_family = _detect_platform_family(url, html)
-    
+    effective_surface = _resolve_effective_surface(
+        surface,
+        platform_family=platform_family,
+        adapter_hint=adapter_hint,
+    )
+
     # FIX: Offload extractability check
     extractability = await asyncio.to_thread(
-        _assess_extractable_html, html, url=url, surface=surface, adapter_hint=adapter_hint
+        _assess_extractable_html,
+        html,
+        url=url,
+        surface=effective_surface,
+        adapter_hint=adapter_hint,
     )
-    
+
     invalid_surface_page = _is_invalid_surface_page(
         requested_url=url,
         final_url=str(normalized.final_url or url).strip() or url,
         html=html,
-        surface=surface,
+        surface=effective_surface,
     )
     diagnostics.update(
         {
@@ -999,6 +1125,13 @@ async def _try_http(
             "curl_gate_phrases": gate_phrases,
             "curl_adapter_hint": adapter_hint,
             "curl_platform_family": platform_family,
+            "surface_requested": str(surface or "").strip().lower() or None,
+            "surface_effective": effective_surface,
+            "surface_remapped": bool(
+                str(surface or "").strip()
+                and effective_surface
+                and str(surface or "").strip().lower() != effective_surface
+            ) or None,
             "invalid_surface_page": invalid_surface_page or None,
             "extractability": extractability,
             "promoted_sources": extractability.get("promoted_sources"),
@@ -1092,7 +1225,8 @@ def _needs_browser(
     missing_data_requires_browser = (
         supported_surface
         and not extractability.get("has_extractable_data")
-        and str(extractability.get("reason") or "") in {
+        and str(extractability.get("reason") or "")
+        in {
             "listing_search_shell_without_records",
             "iframe_shell",
             "frameset_shell",
@@ -1125,21 +1259,20 @@ def _needs_browser(
         needs_browser, reason = True, "low_visible_text"
     elif gate_phrases:
         needs_browser, reason = True, "js_gate_phrases"
-    elif (
-        js_shell_detected
-        and adapter_hint is None
-        and platform_family is None
-        and len(visible_text) < 1000
-    ):
+    elif js_shell_detected and len(visible_text) < 1000:
         needs_browser, reason = True, "js_shell"
     elif http_result.error:
         needs_browser, reason = True, "http_error"
+    extractability_reason = str(extractability.get("reason") or "")
+    # Do NOT cancel browser escalation for JS shells when the only evidence
+    # of extractable data is an adapter hint — the adapter needs rendered HTML.
     structured_override = (
         needs_browser
+        and reason != "js_shell"
         and not getattr(blocked, "is_blocked", False)
         and not str(surface or "").strip().lower().endswith("detail")
         and bool(extractability.get("has_extractable_data"))
-        and str(extractability.get("reason") or "") != "surface_unspecified"
+        and extractability_reason not in {"surface_unspecified", "adapter_hint"}
     )
     if structured_override:
         needs_browser, reason = False, "structured_data_found"
@@ -1178,9 +1311,11 @@ async def _try_browser(
     requested_fields: list[str] | None,
     requested_field_selectors: dict[str, list[dict]] | None,
     checkpoint: Callable[[], Awaitable[None]] | None,
+    run_id: int | None = None,
     diagnostics_sink: dict[str, object] | None = None,
     failure_log_message: str = "Playwright failed for %s: %s — falling back to curl_cffi result",
 ) -> BrowserResult | None:
+    logger.info("[browser] attempting url=%s traversal_mode=%s", url, traversal_mode)
     try:
         await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
         browser_started_at = time.perf_counter()
@@ -1197,10 +1332,29 @@ async def _try_browser(
             requested_fields=requested_fields,
             requested_field_selectors=requested_field_selectors,
             checkpoint=checkpoint,
+            run_id=run_id,
         )
-    except (OSError, RuntimeError, ValueError, TypeError) as exc:
-        logger.warning(failure_log_message, url, exc)
+    except (PlaywrightError, OSError, RuntimeError, ValueError, TypeError) as exc:
+        logger.warning("[browser] FAILED type=%s msg=%s", type(exc).__name__, exc)
         incr("browser_launch_failures_total")
+        # Surface to crawl log so users can see traversal was abandoned
+        if run_id is not None:
+            from app.services.crawl_events import append_log_event
+
+            try:
+                traversal_failure = _should_force_browser_for_traversal(traversal_mode)
+                log_message = (
+                    f"[traversal] Browser acquisition failed, falling back to curl: {type(exc).__name__}: {exc}"
+                    if traversal_failure
+                    else f"Browser acquisition failed: {type(exc).__name__}: {exc}"
+                )
+                await append_log_event(
+                    run_id=run_id,
+                    level="warning",
+                    message=log_message,
+                )
+            except Exception:
+                pass  # Don't fail the acquisition if logging fails
         if diagnostics_sink is not None:
             diagnostics_sink["browser_exception"] = f"{type(exc).__name__}: {exc}"
             diagnostics_sink["browser_attempted"] = True
@@ -1232,7 +1386,39 @@ async def _try_browser(
 
 def _should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
     normalized_mode = str(traversal_mode or "").strip().lower()
-    return normalized_mode in {"scroll", "load_more", "paginate"}
+    return normalized_mode in {"auto", "scroll", "load_more", "paginate"}
+
+
+def _resolve_effective_surface(
+    surface: str | None,
+    *,
+    platform_family: str | None,
+    adapter_hint: str | None,
+) -> str | None:
+    requested_surface = str(surface or "").strip().lower()
+    if not requested_surface:
+        return None
+    if requested_surface not in {
+        "ecommerce_listing",
+        "ecommerce_detail",
+        "job_listing",
+        "job_detail",
+    }:
+        return requested_surface
+
+    normalized_platform = str(platform_family or "").strip().lower()
+    normalized_hint = str(adapter_hint or "").strip().lower()
+    is_job_like = (
+        normalized_platform in JOB_PLATFORM_FAMILIES
+        or normalized_hint in _JOB_ADAPTER_HINTS
+    )
+    if not is_job_like:
+        return requested_surface
+    if requested_surface.endswith("listing"):
+        return "job_listing"
+    if requested_surface.endswith("detail"):
+        return "job_detail"
+    return requested_surface
 
 
 async def _cooperative_sleep_ms(
@@ -1920,7 +2106,9 @@ def _matches_domain_policy(domain: str, candidates: list[str]) -> bool:
     for candidate in (
         str(candidate or "").strip().lower() for candidate in candidates if candidate
     ):
-        if normalized_domain == candidate or normalized_domain.endswith(f".{candidate}"):
+        if normalized_domain == candidate or normalized_domain.endswith(
+            f".{candidate}"
+        ):
             return True
     return False
 

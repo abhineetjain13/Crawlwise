@@ -45,7 +45,7 @@ from app.services.extract.json_extractor import (
     extract_json_listing,
 )
 from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.listing_quality import assess_listing_record_quality
+from app.services.extract.listing_quality import assess_listing_record_quality, listing_set_quality
 from app.services.extract.service import (
     coerce_field_candidate_value,
     extract_candidates,
@@ -61,7 +61,7 @@ from app.services.normalizers import (
     normalize_value,
     validate_value,
 )
-from app.services.pipeline_config import SOURCE_RANKING
+from app.services.pipeline_config import JOB_PLATFORM_FAMILIES, SOURCE_RANKING
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.schema_service import (
     ResolvedSchema,
@@ -95,6 +95,7 @@ from .field_normalization import (
 )
 from .verdict import (
     VERDICT_SUCCESS,
+    VERDICT_PARTIAL,
     VERDICT_BLOCKED,
     VERDICT_SCHEMA_MISS,
     VERDICT_LISTING_FAILED,
@@ -148,6 +149,29 @@ STAGE_FETCH = "FETCH"
 STAGE_ANALYZE = "ANALYZE"
 STAGE_SAVE = "SAVE"
 # Batch runtime helpers now live directly in _batch_runtime.
+
+def _reclassify_surface_if_job(surface: str, acq: AcquisitionResult) -> str:
+    """Remap commerce surfaces to job surfaces when diagnostics prove the page is a job surface."""
+    platform = str(
+        (acq.diagnostics or {}).get("surface_effective")
+        or (acq.diagnostics or {}).get("curl_platform_family")
+        or (acq.diagnostics or {}).get("platform_family")
+        or ""
+    ).strip().lower()
+    if platform in {"job_listing", "job_detail"}:
+        return platform
+    platform = str(
+        (acq.diagnostics or {}).get("curl_platform_family")
+        or (acq.diagnostics or {}).get("platform_family")
+        or ""
+    ).strip().lower()
+    if platform not in JOB_PLATFORM_FAMILIES:
+        return surface
+    if surface.endswith("listing"):
+        return "job_listing"
+    if surface.endswith("detail"):
+        return "job_detail"
+    return surface
 
 
 async def _process_single_url(
@@ -208,6 +232,30 @@ async def _process_single_url(
         acquisition_ms = 0
     url_metrics = _build_url_metrics(acq, requested_fields=additional_fields)
     url_metrics["acquisition_ms"] = acquisition_ms
+
+    # Log traversal progress as a crawl event (visible in UI)
+    if persist_logs and url_metrics.get("traversal_attempted"):
+        _t_mode = url_metrics.get("traversal_mode_used") or traversal_mode or "?"
+        _t_pages = url_metrics.get("traversal_pages_collected", 0)
+        _t_stop = url_metrics.get("traversal_stop_reason") or "unknown"
+        _t_fallback = url_metrics.get("traversal_fallback_used", False)
+        _t_ms = url_metrics.get("browser_traversal_ms", 0)
+        _t_msg = (
+            f"[TRAVERSAL] mode={_t_mode}, pages_collected={_t_pages}, "
+            f"stop_reason={_t_stop}, time={_t_ms}ms"
+        )
+        if _t_fallback:
+            _t_msg += " (fallback to single-page)"
+        await _log(session, run.id, "info", _t_msg)
+
+    # ── STAGE 1.2: SURFACE VALIDATION ──
+    requested_surface = surface
+    surface = _resolve_listing_surface(surface=surface, url=url, html=acq.html, acq=acq)
+    surface = _reclassify_surface_if_job(surface, acq)
+    url_metrics["requested_surface"] = requested_surface
+    url_metrics["effective_surface"] = surface
+    if surface != requested_surface:
+        url_metrics["surface_remapped"] = True
 
     # ── STAGE 1.5: BLOCKED PAGE DETECTION ──
     # For JSON responses, skip blocked detection (APIs don't serve challenge pages)
@@ -738,6 +786,23 @@ async def _extract_listing(
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
     verdict = _compute_verdict(saved, effective_surface, is_listing=True)
+    quality_flags = _listing_quality_flags(
+        saved,
+        surface=effective_surface,
+        network_payload_count=len(acq.network_payloads or []),
+    )
+    if quality_flags:
+        url_metrics["listing_quality_flags"] = sorted(quality_flags)
+    if verdict == VERDICT_SUCCESS and quality_flags:
+        verdict = VERDICT_PARTIAL
+        if persist_logs:
+            await _log(
+                session,
+                run.id,
+                "warning",
+                "[SAVE] Listing quality gates downgraded verdict to partial: "
+                + ", ".join(sorted(quality_flags)),
+            )
     if persist_logs:
         await _log(
             session,
@@ -750,6 +815,48 @@ async def _extract_listing(
         url_metrics, records=saved, requested_fields=additional_fields
     )
     return saved, verdict, url_metrics
+
+
+def _listing_quality_flags(
+    records: list[dict],
+    *,
+    surface: str,
+    network_payload_count: int,
+) -> set[str]:
+    flags: set[str] = set()
+    normalized_surface = str(surface or "").strip().lower()
+    if not records:
+        return flags
+    if listing_set_quality(records, surface=normalized_surface) != "meaningful":
+        flags.add("non_meaningful_listing_set")
+    if normalized_surface == "job_listing" and network_payload_count > 0:
+        strong_job_fields = {
+            "company",
+            "location",
+            "salary",
+            "department",
+            "job_id",
+            "posted_date",
+            "job_type",
+            "apply_url",
+            "description",
+            "category",
+        }
+        if not any(
+            any(record.get(field_name) not in (None, "", [], {}) for field_name in strong_job_fields)
+            for record in records
+        ):
+            flags.add("job_payload_missing_context")
+    if "ecommerce" in normalized_surface:
+        urls = [
+            str(record.get("url") or "").strip().lower()
+            for record in records
+            if str(record.get("url") or "").strip()
+        ]
+        distinct_urls = {url for url in urls if url}
+        if urls and len(distinct_urls) < len(urls):
+            flags.add("duplicate_listing_urls")
+    return flags
 
 
 async def _save_listing_records(
@@ -1027,14 +1134,27 @@ async def _extract_detail(
     verdict = _compute_verdict(saved, surface, is_listing=False)
     
     if persist_logs:
-        # FIX: Add critical telemetry revealing which extraction layer won arbitration
+        # Add critical telemetry revealing which extraction layer won arbitration
         winning_sources = []
         if saved:
-            for field, val in saved[0].items():
+            for field in saved[0].keys():
                 src_map = source_trace.get("committed_fields", {}).get(field) or \
                           source_trace.get("field_discovery", {}).get(field, {})
-                srcs = src_map.get("sources", ["unknown"]) if isinstance(src_map, dict) else ["unknown"]
-                winning_sources.append(f"{field}:{srcs[0]}")
+                if isinstance(src_map, dict):
+                    # Check for "source" first, then "sources"
+                    source = src_map.get("source")
+                    if source:
+                        winning_sources.append(f"{field}:{source}")
+                    else:
+                        sources = src_map.get("sources")
+                        if isinstance(sources, list) and sources:
+                            winning_sources.append(f"{field}:{sources[0]}")
+                        elif isinstance(sources, str):
+                            winning_sources.append(f"{field}:{sources}")
+                        else:
+                            winning_sources.append(f"{field}:unknown")
+                else:
+                    winning_sources.append(f"{field}:unknown")
                 
         source_summary = ", ".join(winning_sources[:5]) + ("..." if len(winning_sources)>5 else "")
         
@@ -1289,8 +1409,17 @@ def _resolve_listing_surface(
     html: str,
     acq: AcquisitionResult,
 ) -> str:
-    _ = url, html, acq
-    # User-owned surface contract: never rewrite requested surface in backend.
+    _ = url, html
+    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    effective_surface = str(diagnostics.get("surface_effective") or "").strip().lower()
+    if effective_surface in {"job_listing", "job_detail", "ecommerce_listing", "ecommerce_detail"}:
+        return effective_surface
+    adapter_hint = str(diagnostics.get("curl_adapter_hint") or "").strip().lower()
+    if adapter_hint in {"adp", "greenhouse", "icims", "indeed", "jibe", "linkedin", "oracle_hcm", "paycom", "remotive", "saashr", "ultipro_ukg"}:
+        if surface.endswith("listing"):
+            return "job_listing"
+        if surface.endswith("detail"):
+            return "job_detail"
     return surface
 
 

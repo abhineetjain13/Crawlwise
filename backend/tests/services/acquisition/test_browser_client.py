@@ -647,9 +647,9 @@ async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypat
 
     async def fake_attempt(*_args, launch_profile, navigation_strategies=None, **_kwargs):
         attempt_calls.append((str(launch_profile["label"]), navigation_strategies))
-        if launch_profile["label"] == "bundled_chromium":
+        if launch_profile["label"] == "system_chrome":
             raise RuntimeError("browser_navigation_error:dns_name_not_resolved")
-        return type("Result", (), {"diagnostics": {}})()
+        return type("Result", (), {"html": "<html></html>", "diagnostics": {}})()
 
     monkeypatch.setattr(
         "app.services.acquisition.browser_client._fetch_rendered_html_attempt",
@@ -671,12 +671,12 @@ async def test_fetch_rendered_html_with_fallback_retries_system_chrome(monkeypat
         requested_field_selectors={},
     )
 
-    assert attempt_calls[0][0] == "bundled_chromium"
+    assert attempt_calls[0][0] == "system_chrome"
     assert attempt_calls[1] == (
-        "system_chrome",
+        "bundled_chromium",
         [("domcontentloaded", 12000), ("commit", 8000)],
     )
-    assert result.diagnostics["browser_launch_profile"] == "system_chrome"
+    assert result.diagnostics["browser_launch_profile"] == "bundled_chromium"
 
 
 @pytest.mark.asyncio
@@ -685,9 +685,9 @@ async def test_fetch_rendered_html_with_fallback_keeps_default_navigation_after_
 
     async def fake_attempt(*_args, launch_profile, navigation_strategies=None, **_kwargs):
         attempt_calls.append((str(launch_profile["label"]), navigation_strategies))
-        if launch_profile["label"] == "bundled_chromium":
+        if launch_profile["label"] == "system_chrome":
             raise RuntimeError("net::ERR_HTTP2_PROTOCOL_ERROR")
-        return type("Result", (), {"diagnostics": {}})()
+        return type("Result", (), {"html": "<html></html>", "diagnostics": {}})()
 
     monkeypatch.setattr(
         "app.services.acquisition.browser_client._fetch_rendered_html_attempt",
@@ -709,8 +709,8 @@ async def test_fetch_rendered_html_with_fallback_keeps_default_navigation_after_
         requested_field_selectors={},
     )
 
-    assert attempt_calls[0][0] == "bundled_chromium"
-    assert attempt_calls[1] == ("system_chrome", [("domcontentloaded", 15000), ("commit", 15000)])
+    assert attempt_calls[0][0] == "system_chrome"
+    assert attempt_calls[1] == ("bundled_chromium", [("load", 15000), ("domcontentloaded", 15000)])
 
 
 @pytest.mark.asyncio

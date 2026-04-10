@@ -158,7 +158,7 @@ export function Button({
       {...props}
       className={cn(
         "focus-ring inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-md)] font-medium",
-        "transition-all disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-80",
+        "transition-all disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 disabled:grayscale",
         onAccent && "ui-on-accent-surface",
         variants[variant],
         sizes[size],

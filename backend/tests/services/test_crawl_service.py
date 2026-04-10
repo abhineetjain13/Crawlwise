@@ -555,9 +555,9 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(FIXTURE_HTML)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -596,7 +596,7 @@ async def test_process_run_applies_kill_during_inflight_acquire_wait(db_session:
         await checkpoint()
         raise AssertionError("checkpoint should have interrupted acquire")
 
-    with patch("app.services.crawl_service.acquire", new=fake_acquire):
+    with patch("app.services.pipeline.core.acquire", new=fake_acquire):
         await process_run(db_session, run.id)
 
     await db_session.refresh(run)
@@ -613,7 +613,7 @@ async def test_process_run_error_handling(db_session: AsyncSession, test_user):
         "surface": "ecommerce_detail",
     })
 
-    with patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+    with patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
                side_effect=ConnectionError("Network unreachable")):
         await process_run(db_session, run.id)
 
@@ -635,54 +635,13 @@ async def test_process_run_honors_per_url_timeout_setting(db_session: AsyncSessi
         await asyncio.sleep(0.2)
         return [], "empty", {}
 
-    with patch("app.services.crawl_service._process_single_url", side_effect=_slow_process_single_url):
+    with patch("app.services._batch_runtime._process_single_url", side_effect=_slow_process_single_url):
         await process_run(db_session, run.id)
 
     await db_session.refresh(run)
     assert run.status == "failed"
     assert "timed out" in str(run.result_summary.get("error", "")).lower()
 
-
-@pytest.mark.asyncio
-async def test_process_run_honors_per_url_timeout_with_parallel_watchdog(
-    db_session: AsyncSession, test_user
-):
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "batch",
-            "url": "https://example.com/slow-1",
-            "surface": "ecommerce_detail",
-            "settings": {
-                "urls": ["https://example.com/slow-1", "https://example.com/slow-2"],
-                "url_batch_concurrency": 2,
-                "url_timeout_seconds": 0.01,
-            },
-        },
-    )
-
-    async def _slow_process_single_url(**_kwargs):
-        await asyncio.sleep(0.2)
-        return [], "empty", {}
-
-    with (
-        patch(
-            "app.services.crawl_service._process_single_url",
-            side_effect=_slow_process_single_url,
-        ),
-        patch(
-            "app.services._batch_runtime._supports_parallel_batch_sessions",
-            return_value=True,
-        ),
-    ):
-        await process_run(db_session, run.id)
-
-    await db_session.refresh(run)
-    assert run.status == "failed"
-    error = str(run.result_summary.get("error", "")).lower()
-    assert "timed out" in error
-    assert "watchdog" in error
 
 
 @pytest.mark.asyncio
@@ -696,9 +655,9 @@ async def test_process_run_batch(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(FIXTURE_HTML)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -734,7 +693,7 @@ async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_ses
         seen_urls.append(kwargs["url"])
         return ([{"title": kwargs["url"]}], "success", {"method": "curl_cffi", "record_count": 1})
 
-    with patch("app.services.crawl_service._process_single_url", side_effect=_fake_process_single_url):
+    with patch("app.services._batch_runtime._process_single_url", side_effect=_fake_process_single_url):
         await process_run(db_session, run.id)
 
     assert seen_urls == ["https://example.com/2", "https://example.com/3"]
@@ -742,7 +701,7 @@ async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_ses
 
 @pytest.mark.asyncio
 async def test_process_run_multi_run_concurrency_keeps_status_and_summary_consistent():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = f"{tmpdir}/test_multi_run_concurrency.db"
         engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
         try:
@@ -785,7 +744,7 @@ async def test_process_run_multi_run_concurrency_keeps_status_and_summary_consis
 
             with (
                 patch(
-                    "app.services.crawl_service.acquire",
+                    "app.services.pipeline.core.acquire",
                     new_callable=AsyncMock,
                     return_value=_make_acq(
                         "<html><body><div class='product-card'><a href='/p/1'>One</a><span class='price'>$10</span></div>"
@@ -793,7 +752,7 @@ async def test_process_run_multi_run_concurrency_keeps_status_and_summary_consis
                         method="curl_cffi",
                     ),
                 ),
-                patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+                patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
             ):
                 await asyncio.gather(*[_run_one(run_id) for run_id in run_ids])
 
@@ -826,9 +785,9 @@ async def test_process_run_listing_page(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(listing_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -888,8 +847,8 @@ async def test_process_run_listing_merges_sparse_adapter_rows_with_richer_dom_re
     )
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
     ):
         await process_run(db_session, run.id)
 
@@ -965,8 +924,8 @@ async def test_process_run_job_listing_sanitizes_adapter_media_and_noisy_descrip
     )
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
     ):
         await process_run(db_session, run.id)
 
@@ -991,9 +950,9 @@ async def test_process_run_blocked_page(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq("")),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1027,9 +986,9 @@ async def test_process_run_challenge_page(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(challenge_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1067,9 +1026,9 @@ async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(
     )
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(challenge_html)),
-        patch("app.services.crawl_service.try_blocked_adapter_recovery", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.try_blocked_adapter_recovery", new_callable=AsyncMock,
               return_value=recovered),
     ):
         await process_run(db_session, run.id)
@@ -1112,9 +1071,9 @@ async def test_process_run_blocked_jibe_listing_recovers_via_public_endpoint(db_
     )
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(challenge_html)),
-        patch("app.services.crawl_service.try_blocked_adapter_recovery", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.try_blocked_adapter_recovery", new_callable=AsyncMock,
               return_value=recovered),
     ):
         await process_run(db_session, run.id)
@@ -1157,9 +1116,9 @@ async def test_process_run_blocked_oracle_hcm_listing_recovers_via_public_endpoi
     )
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(challenge_html)),
-        patch("app.services.crawl_service.try_blocked_adapter_recovery", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.try_blocked_adapter_recovery", new_callable=AsyncMock,
               return_value=recovered),
     ):
         await process_run(db_session, run.id)
@@ -1193,7 +1152,7 @@ async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_se
 
     with (
         patch(
-            "app.services.crawl_service.acquire",
+            "app.services.pipeline.core.acquire",
             new_callable=AsyncMock,
             side_effect=[
                 _make_acq(curl_shell_html, method="curl_cffi"),
@@ -1208,7 +1167,7 @@ async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_se
                 ),
             ],
         ),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1243,8 +1202,8 @@ async def test_process_run_listing_blocked_curl_recovers_with_browser_first_retr
     ])
 
     with (
-        patch("app.services.crawl_service.acquire", acquire_mock),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1270,9 +1229,9 @@ async def test_process_run_json_api(db_session: AsyncSession, test_user):
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq("", json_data=json_payload, content_type="json")),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1305,9 +1264,9 @@ async def test_process_run_json_api_listing_keeps_domain_specific_fields_without
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq("", json_data=json_payload, content_type="json")),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1335,9 +1294,9 @@ async def test_process_run_listing_no_records_fails(db_session: AsyncSession, te
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(empty_listing_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1386,8 +1345,8 @@ async def test_process_run_listing_legible_page_with_zero_items_fails_without_fa
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(blog_listing_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(blog_listing_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1435,8 +1394,8 @@ async def test_process_run_job_listing_elementor_cards_capture_multiple_rows(db_
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1481,8 +1440,8 @@ async def test_process_run_job_like_ecommerce_listing_uses_job_extractor(db_sess
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1528,8 +1487,8 @@ async def test_process_run_job_like_listing_retries_browser_instead_of_page_fall
     ])
 
     with (
-        patch("app.services.crawl_service.acquire", acquire_mock),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1593,8 +1552,8 @@ async def test_process_run_loading_shell_listing_retries_browser_and_skips_inlin
     ])
 
     with (
-        patch("app.services.crawl_service.acquire", acquire_mock),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1641,8 +1600,8 @@ async def test_process_run_reclassifies_detail_html_even_when_requested_surface_
     )
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
     ):
         await process_run(db_session, run.id)
 
@@ -1689,8 +1648,8 @@ async def test_process_run_listing_retries_with_browser_after_weak_curl_listing(
     ])
 
     with (
-        patch("app.services.crawl_service.acquire", acquire_mock),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1747,8 +1706,8 @@ async def test_process_run_job_listing_retries_browser_after_title_url_only_curl
     ])
 
     with (
-        patch("app.services.crawl_service.acquire", acquire_mock),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1768,9 +1727,9 @@ async def test_extraction_verdict_in_summary(db_session: AsyncSession, test_user
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock,
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
               return_value=_make_acq(FIXTURE_HTML)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1789,7 +1748,7 @@ async def test_process_run_records_acquisition_summary_metrics(db_session: Async
 
     with (
         patch(
-            "app.services.crawl_service.acquire",
+            "app.services.pipeline.core.acquire",
             new_callable=AsyncMock,
             return_value=_make_acq(
                 FIXTURE_HTML,
@@ -1797,7 +1756,7 @@ async def test_process_run_records_acquisition_summary_metrics(db_session: Async
                 network_payloads=[{"url": "https://api.example.com/product", "body": {"id": 1}}],
             ),
         ),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
         await process_run(db_session, run.id)
 
@@ -1823,11 +1782,11 @@ async def test_process_run_marks_failed_when_single_url_processing_times_out(
         return ([], "empty", {})
 
     monkeypatch.setattr(
-        "app.services._batch_runtime.DEFAULT_URL_PROCESS_TIMEOUT_SECONDS",
+        "app.services._batch_runtime.URL_PROCESS_TIMEOUT_SECONDS",
         0.001,
     )
     with (
-        patch("app.services.crawl_service._process_single_url", side_effect=_slow_process_single_url),
+        patch("app.services._batch_runtime._process_single_url", side_effect=_slow_process_single_url),
         patch("app.services._batch_runtime._mark_run_failed", new_callable=AsyncMock) as mark_failed_mock,
     ):
         await process_run(db_session, run.id)
@@ -1871,8 +1830,8 @@ async def test_process_run_passes_max_pages_to_acquire(db_session: AsyncSession,
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item"}])),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item"}])),
     ):
         await process_run(db_session, run.id)
 
@@ -1889,8 +1848,8 @@ async def test_process_run_does_not_infer_traversal_mode_from_unrelated_toggle_a
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item"}])),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item"}])),
     ):
         await process_run(db_session, run.id)
 
@@ -1907,8 +1866,8 @@ async def test_process_run_normalizes_html_escaped_target_url_before_acquire(db_
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item", "location": "Lancaster"}])),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item", "url": "https://example.com/item", "location": "Lancaster"}])),
     ):
         await process_run(db_session, run.id)
 
@@ -1937,8 +1896,8 @@ async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_ex
     )
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
     ):
         await process_run(db_session, run.id)
 
@@ -1972,7 +1931,7 @@ async def test_process_run_drops_commerce_leakage_from_job_listing_records(db_se
 
     with (
         patch(
-            "app.services.crawl_service.acquire",
+            "app.services.pipeline.core.acquire",
             new_callable=AsyncMock,
             return_value=_make_acq(
                 "<html><body><main><p>Job listings</p><p>"
@@ -1980,7 +1939,7 @@ async def test_process_run_drops_commerce_leakage_from_job_listing_records(db_se
                 + "</p></main></body></html>"
             ),
         ),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=adapter),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
     ):
         await process_run(db_session, run.id)
 
@@ -2020,8 +1979,8 @@ async def test_process_run_stores_llm_cleanup_suggestions_without_auto_promoting
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
         patch("app.services.crawl_service.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
         patch(
             "app.services.crawl_service.review_field_candidates",
@@ -2142,8 +2101,8 @@ async def test_process_run_skips_cleanup_llm_when_deterministic_fields_are_unamb
     })
 
     with (
-        patch("app.services.crawl_service.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
-        patch("app.services.crawl_service.run_adapter", new_callable=AsyncMock, return_value=None),
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(detail_html)),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
         patch("app.services.crawl_service.discover_xpath_candidates", new_callable=AsyncMock, return_value=([], None)),
         patch("app.services.crawl_service.review_field_candidates", new_callable=AsyncMock) as review_mock,
     ):

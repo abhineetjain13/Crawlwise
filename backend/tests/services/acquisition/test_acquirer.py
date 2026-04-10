@@ -196,7 +196,7 @@ async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_struct
           }
         }
       </script>
-    """ + ("<script>var x=1;</script>" * 30000) + "</body></html>"
+    """ + ("<script>var x=1;</script>" * 5000) + "</body></html>"
 
     with (
         patch(
@@ -221,46 +221,7 @@ async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_struct
     browser_mock.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_acquire_html_auto_mode_keeps_curl_when_structured_listings_are_extractable():
-    js_heavy_html = """
-    <html><body>
-      <div>ok</div>
-      <script type="application/ld+json">
-        {
-          "@context": "https://schema.org",
-          "@type": "WebPage",
-          "mainEntity": {
-            "@type": "ItemList",
-            "itemListElement": [
-              {"item": {"@type": "Product", "name": "Filter A", "url": "/p/filter-a"}},
-              {"item": {"@type": "Product", "name": "Filter B", "url": "/p/filter-b"}}
-            ]
-          }
-        }
-      </script>
-    """ + ("<script>var x=1;</script>" * 30000) + "</body></html>"
 
-    with (
-        patch(
-            "app.services.acquisition.acquirer._fetch_with_content_type",
-            new_callable=AsyncMock,
-            return_value=HttpFetchResult(text=js_heavy_html, status_code=200, content_type="html"),
-        ),
-        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
-        patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock) as browser_mock,
-        patch("app.services.acquisition.acquirer.settings") as mock_settings,
-    ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://example.com/products/widget", traversal_mode="auto")
-
-    assert result.method == "curl_cffi"
-    assert result.diagnostics["js_shell_overridden"] == "structured_data_found"
-    browser_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

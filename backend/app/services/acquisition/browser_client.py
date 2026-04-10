@@ -149,6 +149,7 @@ async def fetch_rendered_html(
     requested_fields: list[str] | None = None,
     requested_field_selectors: dict[str, list[dict]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    run_id: int | None = None,
 ) -> BrowserResult:
     """Render a page with Playwright and intercept XHR/fetch responses.
 
@@ -176,6 +177,7 @@ async def fetch_rendered_html(
             requested_fields=requested_fields or [],
             requested_field_selectors=requested_field_selectors or {},
             checkpoint=checkpoint,
+            run_id=run_id,
         )
 
 
@@ -195,6 +197,7 @@ async def _fetch_rendered_html_with_fallback(
     requested_fields: list[str],
     requested_field_selectors: dict[str, list[dict]],
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    run_id: int | None = None,
 ) -> BrowserResult:
     last_error: Exception | None = None
     first_profile_failure_reason: str | None = None
@@ -224,6 +227,7 @@ async def _fetch_rendered_html_with_fallback(
                 launch_profile=profile,
                 navigation_strategies=navigation_strategies,
                 checkpoint=checkpoint,
+                run_id=run_id,
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
             if index < len(profiles) - 1 and _should_retry_launch_profile(result, surface=surface):
@@ -263,6 +267,7 @@ async def _fetch_rendered_html_attempt(
     launch_profile: dict[str, str | None],
     navigation_strategies: list[tuple[str, int]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    run_id: int | None = None,
 ) -> BrowserResult:
     result = BrowserResult()
     intercepted: list[dict] = []
@@ -467,8 +472,37 @@ async def _fetch_rendered_html_attempt(
         )
         if traversal_summary:
             result.diagnostics["traversal_summary"] = traversal_summary
+
+        # Emit traversal progress as a crawl event (visible in UI)
+        if run_id is not None and traversal_summary.get("attempted"):
+            try:
+                from app.services.crawl_events import append_log_event
+                _ts_mode = traversal_summary.get("mode_used") or traversal_mode or "?"
+                _ts_pages = traversal_summary.get("pages_collected", 0)
+                _ts_stop = traversal_summary.get("stop_reason") or "unknown"
+                _ts_ms = timings_ms.get("browser_traversal_ms", 0)
+                _ts_iters = traversal_summary.get("scroll_iterations", 0)
+                _ts_parts = [f"mode={_ts_mode}"]
+                if _ts_iters:
+                    _ts_parts.append(f"scroll_iterations={_ts_iters}")
+                _ts_parts.extend([
+                    f"pages_collected={_ts_pages}",
+                    f"stop_reason={_ts_stop}",
+                    f"time={_ts_ms}ms",
+                ])
+                await append_log_event(
+                    run_id=run_id,
+                    level="info",
+                    message=f"[TRAVERSAL] {', '.join(_ts_parts)}",
+                )
+            except Exception:
+                pass  # Don't fail the acquisition if logging fails
+
+        # Only apply fallback detection for paginated modes (auto, paginate)
+        # scroll/load_more mutate the page in-place and don't collect separate pages
+        _paginated_modes = {"paginate", "auto"}
         if (
-            traversal_mode
+            traversal_mode in _paginated_modes
             and traversal_summary.get("attempted")
             and int(traversal_summary.get("pages_collected", 0) or 0) <= 0
             and combined_html is None
@@ -483,16 +517,20 @@ async def _fetch_rendered_html_attempt(
             )
             result.diagnostics["traversal_fallback_used"] = True
             result.diagnostics["traversal_fallback_reason"] = fallback_reason
+        
+        # Always record traversal context when traversal was attempted
+        if traversal_mode:
+            result.diagnostics["traversal_mode"] = traversal_mode
+            result.diagnostics["max_pages"] = max_pages
+        
         if combined_html is not None:
             result.html = combined_html
             result.network_payloads = intercepted
-            traversal_html, frame_sources, promoted_sources = await _collect_frame_sources(page)
-            if traversal_html and traversal_html != result.html:
-                result.html = "\n".join([result.html, traversal_html])
+            # FIX: Fetch frame sources but DO NOT append traversal_html to avoid duplication
+            # combined_html already contains all pages stitched together
+            _, frame_sources, promoted_sources = await _collect_frame_sources(page)
             result.frame_sources = frame_sources
             result.promoted_sources = promoted_sources
-            result.diagnostics["traversal_mode"] = traversal_mode
-            result.diagnostics["max_pages"] = max_pages
             result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") if combined_html else 0
             result.diagnostics["frame_sources"] = len(frame_sources)
             result.diagnostics["promoted_sources"] = len(promoted_sources)
@@ -501,6 +539,7 @@ async def _fetch_rendered_html_attempt(
             await _persist_context_cookies(context, page.url or url, original_domain)
             return result
 
+        # Scroll/load-more: page was mutated in-place; read current state
         await _populate_result(result, page, intercepted, checkpoint=checkpoint)
         timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
         result.diagnostics["timings_ms"] = timings_ms
@@ -657,13 +696,16 @@ async def _evict_browser(browser_pool_key: str, browser) -> None:
 
 
 def _browser_launch_profiles(runtime_options: BrowserRuntimeOptions) -> list[dict[str, str | None]]:
+    # Make system_chrome the primary profile to avoid ERR_HTTP2_PROTOCOL_ERROR
+    # and TLS fingerprinting blocks from CDNs like Akamai (Myntra/Target/etc).
+    # If real Chrome is missing or fails, it will fall back to bundled_chromium.
     profiles = [
-        {"label": "bundled_chromium", "browser_type": "chromium", "channel": None},
         {"label": "system_chrome", "browser_type": "chromium", "channel": "chrome"},
+        {"label": "bundled_chromium", "browser_type": "chromium", "channel": None},
     ]
-    if runtime_options.retry_launch_profiles:
-        return profiles
-    return profiles[:1]
+    
+    # Always return both to ensure maximum resilience
+    return profiles
 
 
 def _is_listing_surface(surface: str | None) -> bool:
@@ -671,13 +713,17 @@ def _is_listing_surface(surface: str | None) -> bool:
 
 
 def _should_retry_launch_profile(result: BrowserResult, *, surface: str | None) -> bool:
-    if detect_blocked_page(result.html or "").is_blocked:
+    result_html = str(getattr(result, "html", "") or "")
+    diagnostics = (
+        result.diagnostics if isinstance(getattr(result, "diagnostics", None), dict) else {}
+    )
+    if detect_blocked_page(result_html).is_blocked:
         return True
     if _is_listing_surface(surface):
-        readiness = result.diagnostics.get("listing_readiness")
+        readiness = diagnostics.get("listing_readiness")
         if isinstance(readiness, dict) and (
             not bool(readiness.get("ready")) or bool(readiness.get("shell_like"))
-        ) and _html_looks_low_value(result.html):
+        ) and _html_looks_low_value(result_html):
             return True
     return False
 
@@ -761,11 +807,16 @@ def _build_launch_kwargs(proxy: str | None, target, *, browser_channel: str | No
         launch_kwargs["proxy"] = {"server": proxy}
     if browser_channel:
         launch_kwargs["channel"] = browser_channel
-    if target.dns_resolved and target.resolved_ips and not browser_channel:
-        pinned_ip = target.resolved_ips[0]
-        launch_kwargs["args"] = [
-            f"--host-resolver-rules=MAP {target.hostname} {_chromium_host_rule_ip(pinned_ip)}",
-        ]
+    # Disabled DNS pinning as it causes HTTP2 errors with some sites (e.g., Myntra)
+    # if target.dns_resolved and target.resolved_ips and not browser_channel:
+    #     pinned_ip = target.resolved_ips[0]
+    #     launch_kwargs["args"] = [
+    #         f"--host-resolver-rules=MAP {target.hostname} {_chromium_host_rule_ip(pinned_ip)}",
+    #     ]
+    
+    # NOTE: --disable-http2 was removed as it triggers anti-bot detection
+    # HTTP/2 multiplexing is a key browser fingerprint that anti-bot systems check
+    
     return launch_kwargs
 
 
@@ -1341,7 +1392,7 @@ def _normalize_traversal_summary(
     )
     stop_reason = str(normalized.get("stop_reason") or "").strip() or None
     fallback_used = bool(normalized.get("fallback_used"))
-    scroll_iterations = int(normalized.get("scroll_iterations", 0) or 0)
+    scroll_iterations = int(normalized.get("scroll_iterations") or normalized.get("attempt_count") or 0)
     normalized["mode_used"] = mode_used
     normalized["pages_collected"] = pages_collected
     normalized["scroll_iterations"] = scroll_iterations

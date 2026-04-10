@@ -625,7 +625,7 @@ export function ManualFieldEditor({
           type="button"
           onClick={onDelete}
           aria-label={`Delete ${row.fieldName || "manual field"}`}
-          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-white hover:bg-danger/10"
+          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-danger hover:bg-danger/10"
         >
           <Trash2 className="size-3.5" aria-hidden="true" />
         </button>

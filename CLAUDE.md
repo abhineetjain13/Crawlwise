@@ -257,6 +257,3 @@ These MUST be preserved across all changes:
 19. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to config, not hardcoded.
 20. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. `_deep_get_all_aliases` skips them before alias matching. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
 
-## Backlog Reference
-
-Open backend bugs, architecture gaps, and refactoring work are tracked in `docs/backend-pending-items.md`. Keep this file focused on the current implemented contract and invariants.

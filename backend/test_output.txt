@@ -1,0 +1,172 @@
+SECURITY WARNING ù insecure default secrets detected:
+  ò jwt_secret_key is set to a default value
+  ò encryption_key is set to a default value
+Generate secure values: python -c "import secrets; print(secrets.token_urlsafe(64))"
+============================= test session starts =============================
+platform win32 -- Python 3.14.3, pytest-8.4.2, pluggy-1.6.0 -- C:\Python314\python.exe
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: C:\Projects\pre_poc_ai_crawler\backend
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.11.0, hypothesis-6.140.2, asyncio-1.3.0, cov-7.0.0, timeout-2.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+timeout: 30.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 690 items
+
+tests/api/test_auth_register.py::test_register_forbidden_when_registration_disabled PASSED
+tests/api/test_crawls_background.py::test_mark_run_failed_with_retry_sets_failed_status_and_error PASSED
+tests/api/test_crawls_background.py::test_mark_run_failed_with_retry_keeps_terminal_status_unchanged PASSED
+tests/api/test_crawls_background.py::test_crawls_create_preserves_value_error_as_http_cause PASSED
+tests/api/test_crawls_background.py::test_crawls_create_csv_preserves_parse_error_as_http_cause PASSED
+tests/api/test_crawls_background.py::test_conflict_endpoints_preserve_value_error_as_http_cause[delete-crawls_delete-app.api.crawls.delete_run] PASSED
+tests/api/test_crawls_background.py::test_conflict_endpoints_preserve_value_error_as_http_cause[pause-crawls_pause-app.api.crawls.pause_run] PASSED
+tests/api/test_crawls_background.py::test_conflict_endpoints_preserve_value_error_as_http_cause[resume-crawls_resume-app.api.crawls.resume_run] PASSED
+tests/api/test_crawls_background.py::test_conflict_endpoints_preserve_value_error_as_http_cause[kill-crawls_kill-app.api.crawls.kill_run] PASSED
+tests/api/test_crawls_background.py::test_conflict_endpoints_preserve_value_error_as_http_cause[cancel-crawls_cancel-app.api.crawls.kill_run] PASSED
+tests/api/test_records_exports.py::test_collect_export_rows_pages_until_total PASSED
+tests/api/test_records_exports.py::test_export_json_includes_all_rows_and_paging_headers PASSED
+tests/api/test_records_exports.py::test_export_csv_includes_all_rows_and_paging_headers PASSED
+tests/api/test_records_exports.py::test_export_markdown_includes_clean_sections_fields_and_headers PASSED
+tests/api/test_records_exports.py::test_stream_export_csv_consumes_row_stream_once PASSED
+tests/api/test_records_exports.py::test_clean_export_data_preserves_duplicate_alias_fields PASSED
+tests/api/test_records_exports.py::test_export_csv_discovers_fields_beyond_first_page PASSED
+tests/api/test_records_exports.py::test_export_csv_does_not_fall_back_to_typed_table_rows PASSED
+tests/api/test_records_exports.py::test_export_tables_csv_returns_flattened_rows PASSED
+tests/api/test_records_exports.py::test_export_artifacts_json_includes_typed_bundles PASSED
+tests/api/test_records_exports.py::test_artifact_table_rows_flattens_manifest_tables PASSED
+tests/api/test_records_exports.py::test_legacy_fallback_markdown_rows_extracts_structured_rows PASSED
+tests/api/test_records_exports.py::test_record_provenance_returns_manifest_trace PASSED
+tests/api/test_records_exports.py::test_record_provenance_masks_unauthorized_run_access PASSED
+tests/api/test_records_exports.py::test_record_provenance_route_documents_combined_404_description PASSED
+tests/api/test_records_markdown.py::test_render_markdown_block_preserves_single_blank_lines PASSED
+tests/services/acquisition/test_acquirer.py::TestProxyRotator::test_no_proxies PASSED
+tests/services/acquisition/test_acquirer.py::TestProxyRotator::test_none_proxies PASSED
+tests/services/acquisition/test_acquirer.py::TestProxyRotator::test_returns_proxy PASSED
+tests/services/acquisition/test_acquirer.py::TestProxyRotator::test_returns_from_list PASSED
+tests/services/acquisition/test_acquirer.py::TestProxyRotator::test_strips_whitespace PASSED
+tests/services/acquisition/test_acquirer.py::TestProxyRotator::test_cycle_once_skips_proxies_in_cooldown PASSED
+tests/services/acquisition/test_acquirer.py::TestProxyRotator::test_cycle_once_returns_candidates_when_cooldown_disabled PASSED
+tests/services/acquisition/test_acquirer.py::test_mark_proxy_succeeded_clears_failure_state PASSED
+tests/services/acquisition/test_acquirer.py::test_json_ld_listing_count_handles_type_arrays_and_empty_itemlists PASSED
+tests/services/acquisition/test_acquirer.py::test_requires_browser_first_for_confirmed_job_boards PASSED
+tests/services/acquisition/test_acquirer.py::test_acquire_html_curl_success PASSED
+tests/services/acquisition/test_acquirer.py::test_acquire_html_falls_back_to_playwright PASSED
+tests/services/acquisition/test_acquirer.py::test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html +++++++++++++++++++++++++++++++++++ Timeout +++++++++++++++++++++++++++++++++++
+~~~~~~~~~~~~~~~~~~~~~~~~~ Stack of asyncio_0 (31620) ~~~~~~~~~~~~~~~~~~~~~~~~~~
+  File "C:\Python314\Lib\threading.py", line 1044, in _bootstrap
+    self._bootstrap_inner()
+  File "C:\Python314\Lib\threading.py", line 1082, in _bootstrap_inner
+    self._context.run(self.run)
+  File "C:\Python314\Lib\threading.py", line 1024, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Python314\Lib\concurrent\futures\thread.py", line 119, in _worker
+    work_item.run(ctx)
+  File "C:\Python314\Lib\concurrent\futures\thread.py", line 86, in run
+    result = ctx.run(self.task)
+  File "C:\Python314\Lib\concurrent\futures\thread.py", line 73, in run
+    return fn(*args, **kwargs)
+  File "C:\Projects\pre_poc_ai_crawler\backend\app\services\acquisition\acquirer.py", line 1759, in _write_diagnostics
+    detect_blocked_page(result.html).as_dict()
+  File "C:\Projects\pre_poc_ai_crawler\backend\app\services\acquisition\blocked_detector.py", line 54, in detect_blocked_page
+    soup = BeautifulSoup(html, "html.parser")
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\bs4\__init__.py", line 473, in __init__
+    self._feed()
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\bs4\__init__.py", line 658, in _feed
+    self.builder.feed(self.markup)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\bs4\builder\_htmlparser.py", line 467, in feed
+    parser.feed(markup)
+  File "C:\Python314\Lib\html\parser.py", line 169, in feed
+    self.goahead(0)
+  File "C:\Python314\Lib\html\parser.py", line 251, in goahead
+    k = self.parse_starttag(i)
+  File "C:\Python314\Lib\html\parser.py", line 469, in parse_starttag
+    self.set_cdata_mode(tag, escapable=False)
+  File "C:\Python314\Lib\html\parser.py", line 191, in set_cdata_mode
+    re.IGNORECASE|re.ASCII)
+  File "C:\Python314\Lib\enum.py", line 1592, in __or__
+    return self.__class__(value | other_value)
+  File "C:\Python314\Lib\enum.py", line 677, in __call__
+    def __call__(cls, value, names=_not_given, *values, module=None, qualname=None, type=None, start=1, boundary=None):
+~~~~~~~~~~~~~~~~~~~~~~~~~ Stack of MainThread (24296) ~~~~~~~~~~~~~~~~~~~~~~~~~
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\Scripts\pytest.exe\__main__.py", line 5, in <module>
+    sys.exit(console_main())
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\config\__init__.py", line 201, in console_main
+    code = main()
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\config\__init__.py", line 175, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\main.py", line 336, in pytest_cmdline_main
+    return wrap_session(config, _main)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\main.py", line 289, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\main.py", line 343, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\main.py", line 367, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\runner.py", line 117, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\runner.py", line 136, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\runner.py", line 245, in call_and_report
+    call = CallInfo.from_call(
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\runner.py", line 344, in from_call
+    result: TResult | None = func()
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\runner.py", line 246, in <lambda>
+    lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\runner.py", line 178, in pytest_runtest_call
+    item.runtest()
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pytest_asyncio\plugin.py", line 469, in runtest
+    super().runtest()
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\python.py", line 1671, in runtest
+    self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pluggy\_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\_pytest\python.py", line 157, in pytest_pyfunc_call
+    result = testfunction(**testargs)
+  File "C:\Users\abhij\AppData\Roaming\Python\Python314\site-packages\pytest_asyncio\plugin.py", line 716, in inner
+    runner.run(coro, context=context)
+  File "C:\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+  File "C:\Python314\Lib\asyncio\base_events.py", line 706, in run_until_complete
+    self.run_forever()
+  File "C:\Python314\Lib\asyncio\base_events.py", line 677, in run_forever
+    self._run_once()
+  File "C:\Python314\Lib\asyncio\base_events.py", line 2008, in _run_once
+    event_list = self._selector.select(timeout)
+  File "C:\Python314\Lib\asyncio\windows_events.py", line 446, in select
+    self._poll(timeout)
+  File "C:\Python314\Lib\asyncio\windows_events.py", line 775, in _poll
+    status = _overlapped.GetQueuedCompletionStatus(self._iocp, ms)
++++++++++++++++++++++++++++++++++++ Timeout +++++++++++++++++++++++++++++++++++

@@ -200,6 +200,17 @@ _SALARY_MONEY_RE = _build_salary_money_re()
 _COLOR_VARIANT_COUNT_RE = re.compile(
     CANDIDATE_COLOR_VARIANT_COUNT_PATTERN, re.IGNORECASE
 )
+_VARIANT_SELECTOR_PROMPT_RE = re.compile(
+    r"^(?:select|choose|pick)\s+(?:a|an|the|your)?\s*"
+    r"(?:size|sizes|color|colors|colour|colours|option|options|variant|variants|"
+    r"style|styles|fit|fits|waist|length|width)\s*$",
+    re.IGNORECASE,
+)
+_CROSSFIELD_VARIANT_VALUE_RE = re.compile(
+    r"^(?:size|sizes|waist|length|width|fit|fits)\s*[:\-]?\s*"
+    r"[A-Za-z0-9.+/-]{1,8}(?:\s*,\s*\.?)?$",
+    re.IGNORECASE,
+)
 _TITLE_NOISE_PHRASES = tuple(CANDIDATE_TITLE_NOISE_PHRASES)
 _CATEGORY_NOISE_PHRASES = tuple(CANDIDATE_CATEGORY_NOISE_PHRASES)
 _AVAILABILITY_NOISE_PHRASES = tuple(CANDIDATE_AVAILABILITY_NOISE_PHRASES)
@@ -359,6 +370,8 @@ def _collect_candidates(
 
     for field_name in target_fields:
         rows: list[dict] = []
+
+        # 1-2. Contract and adapter are authoritative — first-match wins.
         if _collect_contract_candidates(
             rows,
             field_name=field_name,
@@ -373,28 +386,26 @@ def _collect_candidates(
         ):
             candidates[field_name] = rows
             continue
-        if _collect_datalayer_candidates(
-            rows, field_name=field_name, datalayer=datalayer
-        ):
-            candidates[field_name] = rows
-            continue
-        if _collect_network_payload_candidates(
-            rows,
-            field_name=field_name,
-            network_payloads=network_payloads,
-            base_url=url,
-        ):
-            candidates[field_name] = rows
-            continue
-        if _collect_jsonld_candidates(
+
+        # 3-6. Collect from ALL remaining structured sources so
+        # _finalize_candidates can pick the highest-ranked candidate
+        # via SOURCE_RANKING (e.g. json_ld=6 beats datalayer=2).
+        _collect_jsonld_candidates(
             rows,
             field_name=field_name,
             json_ld=json_ld,
             base_url=url,
-        ):
-            candidates[field_name] = rows
-            continue
-        if _collect_structured_state_candidates(
+        )
+        _collect_datalayer_candidates(
+            rows, field_name=field_name, datalayer=datalayer
+        )
+        _collect_network_payload_candidates(
+            rows,
+            field_name=field_name,
+            network_payloads=network_payloads,
+            base_url=url,
+        )
+        _collect_structured_state_candidates(
             rows,
             field_name=field_name,
             next_data=next_data,
@@ -402,9 +413,7 @@ def _collect_candidates(
             embedded_json=embedded_json,
             network_payloads=network_payloads,
             base_url=url,
-        ):
-            candidates[field_name] = rows
-            continue
+        )
 
         # 7. DOM selectors
         _collect_dom_and_meta_candidates(
@@ -895,11 +904,13 @@ def _extract_label_value_from_text(
     text_sources: list[str],
     html: str,
 ) -> str | None:
-    """Search description text and raw HTML for 'Label: Value' patterns matching field_name."""
+    """Search description text and HTML-derived text from the raw HTML for label/value patterns."""
     label_variants = _label_value_variants(field_name)
+    combined_text_sources = list(text_sources)
+    if html:
+        combined_text_sources.append(_normalize_html_rich_text(html))
 
-    # Also search raw HTML for meta/og description
-    for text in text_sources:
+    for text in combined_text_sources:
         for variant in label_variants:
             pattern = _label_value_pattern(variant)
             match = pattern.search(text)
@@ -914,7 +925,8 @@ def _extract_label_value_from_text(
 @lru_cache(maxsize=512)
 def _label_value_pattern(variant: str) -> re.Pattern[str]:
     return re.compile(
-        re.escape(variant) + r"\s*:\s*(.+?)(?:\n|$|[.]\s|\u2022)", re.IGNORECASE
+        re.escape(variant) + r"\s*:\s*(.+?)(?=\s+[A-Za-z]+:|\s+\(|\n|$|[.]\s|\u2022)",
+        re.IGNORECASE,
     )
 
 
@@ -989,7 +1001,7 @@ def _finalize_candidate_rows(
             field_name, row.get("value"), base_url=base_url
         )
         if value in (None, "", [], {}):
-            value = _normalized_candidate_value(row.get("value"))
+            continue
         if isinstance(value, bool):
             continue
         if value in (None, "", [], {}):
@@ -1514,6 +1526,8 @@ def _coerce_title_field(value: str) -> str | None:
     cleaned = _strip_ui_noise(value)
     if not cleaned or cleaned.lower() in CANDIDATE_GENERIC_TITLE_VALUES:
         return None
+    if _looks_like_variant_selector_text(cleaned):
+        return None
     lowered = cleaned.lower()
     if any(phrase in lowered for phrase in _TITLE_NOISE_PHRASES):
         return None
@@ -2016,9 +2030,21 @@ def _strip_ui_noise(value: str) -> str:
     return text
 
 
+def _looks_like_variant_selector_text(value: str) -> bool:
+    text = _normalized_candidate_text(value)
+    if not text:
+        return False
+    return bool(
+        _VARIANT_SELECTOR_PROMPT_RE.match(text)
+        or _CROSSFIELD_VARIANT_VALUE_RE.match(text)
+    )
+
+
 def _normalize_color_candidate(value: str) -> str | None:
     cleaned = _strip_ui_noise(value)
     if not cleaned:
+        return None
+    if _looks_like_variant_selector_text(cleaned):
         return None
     lowered = cleaned.lower()
     tokens = cleaned.split()
@@ -2054,7 +2080,7 @@ def _normalize_size_candidate(value: str) -> str | None:
     lowered = cleaned.lower()
 
     # FIX: Reject specification blobs masquerading as simple sizes
-    if len(cleaned) > 25:
+    if len(cleaned) > 100:
         return None
     if "gsm:" in lowered or "weight:" in lowered or "lbs" in lowered:
         return None
@@ -2663,6 +2689,11 @@ def _extract_buy_box_candidates(soup: BeautifulSoup) -> dict[str, str]:
         availability = _normalized_candidate_text(availability_match.group("value"))
         if availability:
             candidates["availability"] = availability
+    else:
+        # Fallback for when "Price" is not the next token
+        alt_match = re.search(r"Availability\s+(?P<value>.+?)(?:\s+[A-Z][a-z]+|$)", normalized_text, re.I)
+        if alt_match:
+            candidates["availability"] = _normalized_candidate_text(alt_match.group("value"))
     price_match = re.search(LISTING_BUY_BOX_PRICE_PATTERN, normalized_text)
     if price_match:
         price_text = _normalized_candidate_text(price_match.group("value"))

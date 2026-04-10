@@ -70,7 +70,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   const authQuery = useQuery(getAuthSessionQueryOptions(pathname));
 
   useEffect(() => {
-    if (!authRoute && httpErrorStatus(authQuery.error) === 401) {
+    if (!authRoute && authQuery.error && httpErrorStatus(authQuery.error) === 401) {
       router.replace("/login");
     }
   }, [authQuery.error, authRoute, router]);
@@ -131,7 +131,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
     );
   }
 
-  if (authQuery.error instanceof ApiError && authQuery.error.isUnauthorized) {
+  if (authQuery.error && httpErrorStatus(authQuery.error) === 401) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--bg-base)] px-4 text-center">
         <div className="max-w-sm rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] p-6 shadow-[var(--shadow-card-value)]">

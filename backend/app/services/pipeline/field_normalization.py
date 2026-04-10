@@ -157,8 +157,8 @@ def _should_prefer_secondary_field(
 
     # 3. List-based fields (images)
     if field_name == "additional_images":
-        existing_count = len([p for p in (existing if isinstance(existing, (list, tuple)) else str(existing or "").split(",")) if p])
-        candidate_count = len([p for p in (candidate if isinstance(candidate, (list, tuple)) else str(candidate or "").split(",")) if p])
+        existing_count = len([p.strip() for p in (existing if isinstance(existing, (list, tuple)) else str(existing or "").split(",")) if p.strip()])
+        candidate_count = len([p.strip() for p in (candidate if isinstance(candidate, (list, tuple)) else str(candidate or "").split(",")) if p.strip()])
         return candidate_count > existing_count
         
     return False
