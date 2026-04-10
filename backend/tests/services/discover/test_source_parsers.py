@@ -142,7 +142,34 @@ def test_parse_page_sources_embedded_json_from_data_attribute():
     </body></html>
     """
     page_sources = parse_page_sources(html)
-    assert page_sources["embedded_json"][0]["name"] == "Attr Widget"
+    assert page_sources["embedded_json"][0]["_blob_family"] == "product_json"
+    assert page_sources["embedded_json"][0]["_blob_origin"] == "data_attr"
+    assert page_sources["embedded_json"][0]["_blob_payload"]["name"] == "Attr Widget"
+
+
+def test_parse_page_sources_rejects_generic_config_data_attribute_blob():
+    html = """
+    <html><body>
+    <div data-config='{"title":"Cookie Banner","theme":"light"}'></div>
+    </body></html>
+    """
+    page_sources = parse_page_sources(html)
+    assert page_sources["embedded_json"] == []
+
+
+def test_parse_page_sources_embedded_json_keeps_raw_product_script_with_family():
+    html = """
+    <html><body>
+    <script id="product-json">
+    {"product":{"name":"Widget","price":"19.99","brand":"Acme"}}
+    </script>
+    </body></html>
+    """
+    page_sources = parse_page_sources(html)
+    assert len(page_sources["embedded_json"]) == 1
+    assert page_sources["embedded_json"][0]["_blob_family"] == "product_json"
+    assert page_sources["embedded_json"][0]["_blob_origin"] == "script"
+    assert page_sources["embedded_json"][0]["_blob_payload"]["product"]["name"] == "Widget"
 
 
 def test_parse_page_sources_deduplicates_application_json_between_hydrated_and_embedded():

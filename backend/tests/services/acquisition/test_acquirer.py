@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import itertools
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -13,18 +16,38 @@ from app.services.acquisition.acquirer import (
     _mark_proxy_failed,
     _mark_proxy_succeeded,
     _artifact_path,
+    _diagnose_job_surface_page,
     _diagnostics_path,
     _json_ld_listing_count,
-    _write_network_payloads,
-    _requires_browser_first,
-    _is_invalid_job_surface_page,
     _network_payload_path,
+    _requires_browser_first,
+    _write_network_payloads,
     acquire,
     acquire_html,
 )
 from app.services.acquisition.http_client import HttpFetchResult
 from app.services.acquisition.host_memory import host_prefers_stealth, remember_stealth_host, reset_host_memory
 from app.services.acquisition.pacing import reset_pacing_state
+
+
+_TMP_COUNTER = itertools.count()
+_WORKSPACE_TMP_ROOT = (
+    Path(__file__).resolve().parents[3] / ".pytest-tmp" / "test_acquirer"
+)
+
+
+@pytest.fixture
+def tmp_path() -> Path:
+    path = _WORKSPACE_TMP_ROOT / f"case-{next(_TMP_COUNTER)}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _redirect_tempdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    yield
+    monkeypatch.setattr(tempfile, "tempdir", None)
 
 
 class TestProxyRotator:
@@ -104,7 +127,7 @@ def test_requires_browser_first_for_confirmed_job_boards():
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_curl_success():
+async def test_acquire_html_curl_success(tmp_path):
     """curl_cffi success path — no Playwright fallback needed."""
     html = "<html><body><h1>Product</h1><p>Long enough content to pass threshold check" + "x" * 500 + "</p></body></html>"
     with (
@@ -112,18 +135,15 @@ async def test_acquire_html_curl_success():
               new_callable=AsyncMock, return_value=HttpFetchResult(text=html, status_code=200, content_type="html")),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result_html, method, path, payloads = await acquire_html(1, "https://example.com/product")
+        mock_settings.artifacts_dir = tmp_path
+        result_html, method, path, payloads = await acquire_html(1, "https://example.com/product")
     assert method == "curl_cffi"
     assert "Product" in result_html
     assert payloads == []
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_falls_back_to_playwright():
+async def test_acquire_html_falls_back_to_playwright(tmp_path):
     """Short HTML triggers Playwright fallback."""
     short_html = "<html><body>tiny</body></html>"
     full_html = "<html><body>" + "x" * 600 + "</body></html>"
@@ -136,17 +156,14 @@ async def test_acquire_html_falls_back_to_playwright():
         patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, return_value=BrowserResult(html=full_html, network_payloads=[{"url": "https://api.example.com", "body": {}}])),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result_html, method, path, payloads = await acquire_html(1, "https://example.com/spa-page")
+        mock_settings.artifacts_dir = tmp_path
+        result_html, method, path, payloads = await acquire_html(1, "https://example.com/spa-page")
     assert method == "playwright"
     assert len(payloads) == 1
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html():
+async def test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html(tmp_path):
     js_heavy_html = (
         "<html><body>"
         + ("<script>var x=1;</script>" * 30000)
@@ -166,11 +183,8 @@ async def test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html():
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
         resolve_adapter_mock.return_value = type("Adapter", (), {"name": "shopify"})()
-        from pathlib import Path
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://example.com/products/widget")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://example.com/products/widget")
 
     assert result.method == "curl_cffi"
     assert result.diagnostics["curl_adapter_hint"] == "shopify"
@@ -179,7 +193,7 @@ async def test_acquire_html_keeps_curl_when_adapter_can_handle_js_heavy_html():
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_structured_data():
+async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_structured_data(tmp_path):
     js_heavy_html = """
     <html><body>
       <div>ok</div>
@@ -208,12 +222,8 @@ async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_struct
         patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://example.com/products/widget")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://example.com/products/widget")
 
     assert result.method == "curl_cffi"
     assert result.diagnostics["curl_needs_browser"] is False
@@ -225,7 +235,7 @@ async def test_acquire_html_keeps_curl_when_js_shell_contains_extractable_struct
 
 
 @pytest.mark.asyncio
-async def test_acquire_listing_search_shell_without_extractable_records_escalates_to_browser():
+async def test_acquire_listing_search_shell_without_extractable_records_escalates_to_browser(tmp_path):
     shell_html = """
     <html data-jibe-search-version="4.11.178">
       <body>
@@ -263,19 +273,15 @@ async def test_acquire_listing_search_shell_without_extractable_records_escalate
         ) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://example.com/jobs?keywords=Dough%20Bird", surface="job_listing")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://example.com/jobs?keywords=Dough%20Bird", surface="job_listing")
 
     assert result.method == "playwright"
     browser_mock.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_acquire_job_listing_iframe_shell_escalates_to_browser():
+async def test_acquire_job_listing_iframe_shell_escalates_to_browser(tmp_path):
     shell_html = """
     <html><body>
       <main>
@@ -314,12 +320,8 @@ async def test_acquire_job_listing_iframe_shell_escalates_to_browser():
         ) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://example.com/careers", surface="job_listing")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://example.com/careers", surface="job_listing")
 
     assert result.method == "playwright"
     assert result.promoted_sources
@@ -328,7 +330,7 @@ async def test_acquire_job_listing_iframe_shell_escalates_to_browser():
 
 
 @pytest.mark.asyncio
-async def test_acquire_job_listing_iframe_shell_still_escalates_with_adapter_hint():
+async def test_acquire_job_listing_iframe_shell_still_escalates_with_adapter_hint(tmp_path):
     shell_html = """
     <html><body>
       <main>
@@ -365,12 +367,8 @@ async def test_acquire_job_listing_iframe_shell_still_escalates_with_adapter_hin
         ) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
 
     assert result.method == "playwright"
     assert result.diagnostics["browser_retry_reason"] == "iframe_shell"
@@ -378,7 +376,7 @@ async def test_acquire_job_listing_iframe_shell_still_escalates_with_adapter_hin
 
 
 @pytest.mark.asyncio
-async def test_acquire_iframe_shell_promoted_source_used_before_browser():
+async def test_acquire_iframe_shell_promoted_source_used_before_browser(tmp_path):
     shell_html = """
     <html><body>
       <main>
@@ -416,12 +414,8 @@ async def test_acquire_iframe_shell_promoted_source_used_before_browser():
         ) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
 
     assert result.method == "curl_cffi"
     assert result.diagnostics.get("promoted_source_used")
@@ -429,7 +423,7 @@ async def test_acquire_iframe_shell_promoted_source_used_before_browser():
 
 
 @pytest.mark.asyncio
-async def test_acquire_detail_requested_fields_are_not_overridden_by_listing_structured_data():
+async def test_acquire_detail_requested_fields_are_not_overridden_by_listing_structured_data(tmp_path):
     js_heavy_html = """
     <html><body>
       <div>ok</div>
@@ -470,24 +464,20 @@ async def test_acquire_detail_requested_fields_are_not_overridden_by_listing_str
         ) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(
-                1,
-                "https://example.com/products/widget",
-                surface="ecommerce_detail",
-                requested_fields=["returns"],
-            )
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(
+            1,
+            "https://example.com/products/widget",
+            surface="ecommerce_detail",
+            requested_fields=["returns"],
+        )
 
     assert result.method == "playwright"
     browser_mock.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_traversal_mode_tries_curl_then_playwright():
+async def test_acquire_html_traversal_mode_tries_curl_then_playwright(tmp_path):
     """Traversal mode tries curl_cffi first, then escalates to Playwright."""
     curl_html = "<html><body>" + "x" * 600 + "</body></html>"
     playwright_html = "<html><body>" + "y" * 600 + "</body></html>"
@@ -500,19 +490,16 @@ async def test_acquire_html_traversal_mode_tries_curl_then_playwright():
         patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, return_value=BrowserResult(html=playwright_html)),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result_html, method, path, payloads = await acquire_html(
-                1, "https://example.com/spa", traversal_mode="scroll"
-            )
+        mock_settings.artifacts_dir = tmp_path
+        result_html, method, path, payloads = await acquire_html(
+            1, "https://example.com/spa", traversal_mode="scroll"
+        )
     # Playwright is preferred when traversal mode is set, even though curl worked
     assert method == "playwright"
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_passes_max_scrolls_to_playwright():
+async def test_acquire_html_passes_max_scrolls_to_playwright(tmp_path):
     curl_html = "<html><body>" + "x" * 600 + "</body></html>"
     playwright_html = "<html><body>" + "y" * 600 + "</body></html>"
 
@@ -531,17 +518,14 @@ async def test_acquire_html_passes_max_scrolls_to_playwright():
         ) as fetch_rendered_html_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            await acquire_html(1, "https://example.com/spa", traversal_mode="scroll", max_scrolls=23)
+        mock_settings.artifacts_dir = tmp_path
+        await acquire_html(1, "https://example.com/spa", traversal_mode="scroll", max_scrolls=23)
 
     assert fetch_rendered_html_mock.await_args.kwargs["max_scrolls"] == 23
 
 
 @pytest.mark.asyncio
-async def test_acquire_html_traversal_mode_falls_back_to_curl_on_playwright_failure():
+async def test_acquire_html_traversal_mode_falls_back_to_curl_on_playwright_failure(tmp_path):
     """When traversal mode Playwright crashes, fall back to curl_cffi result."""
     curl_html = "<html><body><h1>Product</h1>" + "x" * 600 + "</body></html>"
 
@@ -553,19 +537,16 @@ async def test_acquire_html_traversal_mode_falls_back_to_curl_on_playwright_fail
         patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock, side_effect=RuntimeError("ERR_HTTP2_PROTOCOL_ERROR")),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result_html, method, path, payloads = await acquire_html(
-                1, "https://example.com/spa", traversal_mode="auto"
-            )
+        mock_settings.artifacts_dir = tmp_path
+        result_html, method, path, payloads = await acquire_html(
+            1, "https://example.com/spa", traversal_mode="auto"
+        )
     assert method == "curl_cffi"
     assert "Product" in result_html
 
 
 @pytest.mark.asyncio
-async def test_acquire_listing_page_does_not_escalate_from_text_only_card_count_heuristics():
+async def test_acquire_listing_page_does_not_escalate_from_text_only_card_count_heuristics(tmp_path):
     html = """
     <html><body>
       <main>
@@ -586,18 +567,14 @@ async def test_acquire_listing_page_does_not_escalate_from_text_only_card_count_
         patch("app.services.acquisition.acquirer.fetch_rendered_html", new_callable=AsyncMock) as browser_mock,
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://example.com/listings", surface="listing")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://example.com/listings", surface="listing")
 
     assert result.method == "curl_cffi"
     browser_mock.assert_not_awaited()
 
 
-def test_is_invalid_job_surface_page_detects_homepage_login_redirect():
+def test_diagnose_job_surface_page_detects_homepage_login_redirect():
     html = """
     <html>
       <head>
@@ -608,15 +585,18 @@ def test_is_invalid_job_surface_page_detects_homepage_login_redirect():
     </html>
     """
 
-    assert _is_invalid_job_surface_page(
+    warning = _diagnose_job_surface_page(
         requested_url="https://www.governmentjobs.com/careers/california/jobs/4817400",
         final_url="https://www.governmentjobs.com/",
         html=html,
         surface="job_detail",
-    ) is True
+    )
+    assert warning is not None
+    assert "redirected_to_root" in warning["signals"]
+    assert "auth_wall_heading" in warning["signals"]
 
 
-def test_is_invalid_job_surface_page_detects_soft_404_job_page():
+def test_diagnose_job_surface_page_detects_soft_404_job_page():
     html = """
     <html>
       <head><title>Sorry. The page you requested could not be found.</title></head>
@@ -624,16 +604,19 @@ def test_is_invalid_job_surface_page_detects_soft_404_job_page():
     </html>
     """
 
-    assert _is_invalid_job_surface_page(
+    warning = _diagnose_job_surface_page(
         requested_url="https://www.higheredjobs.com/jobs/details.cfm?JobCode=178200990",
         final_url="https://www.higheredjobs.com/jobs/details.cfm?JobCode=178200990",
         html=html,
         surface="job_detail",
-    ) is True
+    )
+    assert warning is not None
+    assert "soft_404_title" in warning["signals"]
+    assert "soft_404_heading" in warning["signals"]
 
 
 @pytest.mark.asyncio
-async def test_acquire_discards_job_redirect_shell_results(tmp_path, monkeypatch):
+async def test_acquire_keeps_job_redirect_shell_results_but_records_surface_warning(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
     shell_html = """
     <html>
@@ -667,8 +650,17 @@ async def test_acquire_discards_job_redirect_shell_results(tmp_path, monkeypatch
             ),
         ),
     ):
-        with pytest.raises(RuntimeError, match="Unable to acquire content"):
-            await acquire(42, "https://www.governmentjobs.com/careers/california/jobs/4817400", surface="job_detail")
+        result = await acquire(
+            42,
+            "https://www.governmentjobs.com/careers/california/jobs/4817400",
+            surface="job_detail",
+        )
+
+    assert result.method == "playwright"
+    warnings = result.diagnostics.get("surface_selection_warnings") or []
+    assert warnings
+    assert warnings[0]["surface_requested"] == "job_detail"
+    assert "redirect_shell_title" in warnings[0]["signals"]
 
 
 @pytest.mark.asyncio
@@ -712,7 +704,7 @@ async def test_acquire_discards_commerce_root_redirect_shell_results(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_acquire_with_proxy():
+async def test_acquire_with_proxy(tmp_path):
     """Proxy is passed through to HTTP client."""
     html = "<html><body>" + "x" * 600 + "</body></html>"
     with (
@@ -721,11 +713,8 @@ async def test_acquire_with_proxy():
         patch("app.services.acquisition.acquirer.validate_proxy_endpoint", new_callable=AsyncMock),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            await acquire_html(1, "https://example.com", proxy_list=["http://myproxy:8080"])
+        mock_settings.artifacts_dir = tmp_path
+        await acquire_html(1, "https://example.com", proxy_list=["http://myproxy:8080"])
     mock_fetch.assert_called_once()
     call_args = mock_fetch.call_args
     assert call_args.args[0] == "https://example.com"
@@ -778,7 +767,7 @@ async def test_acquire_rejects_browser_non_public_final_url_and_keeps_curl_fallb
 
 
 @pytest.mark.asyncio
-async def test_acquire_json_content_type():
+async def test_acquire_json_content_type(tmp_path):
     """JSON content type should be detected and returned."""
     json_text = '{"jobs": [{"title": "Engineer"}]}'
     json_data = {"jobs": [{"title": "Engineer"}]}
@@ -787,12 +776,9 @@ async def test_acquire_json_content_type():
               new_callable=AsyncMock, return_value=HttpFetchResult(text=json_text, status_code=200, content_type="json", json_data=json_data)),
         patch("app.services.acquisition.acquirer.settings") as mock_settings,
     ):
-        from pathlib import Path
-        import tempfile
         from app.services.acquisition.acquirer import acquire
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_settings.artifacts_dir = Path(tmpdir)
-            result = await acquire(1, "https://api.example.com/jobs")
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://api.example.com/jobs")
     assert result.content_type == "json"
     assert result.json_data == json_data
     assert result.method == "curl_cffi"

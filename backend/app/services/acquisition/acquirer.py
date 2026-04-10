@@ -27,6 +27,12 @@ from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
 from app.services.runtime_metrics import incr
 
+from app.services.config.platform_registry import (
+    acquisition_hint_tokens,
+    detect_platform_family as detect_platform_family_from_registry,
+    is_job_platform_signal,
+    resolve_platform_runtime_policy,
+)
 from app.services.pipeline_config import (
     ACQUISITION_ATTEMPT_TIMEOUT_SECONDS,
     ACQUIRE_HOST_MIN_INTERVAL_MS,
@@ -41,12 +47,8 @@ from app.services.pipeline_config import (
     JOB_REDIRECT_SHELL_HEADINGS,
     JOB_REDIRECT_SHELL_TITLES,
     LISTING_MIN_ITEMS,
-    PLATFORM_BROWSER_FIRST,
     PROXY_FAILURE_COOLDOWN_BASE_MS,
     PROXY_FAILURE_COOLDOWN_MAX_MS,
-)
-from app.services.config.extraction_rules import (
-    PLATFORM_FAMILIES as PLATFORM_FAMILY_RULES,
 )
 from app.services.url_safety import validate_proxy_endpoint, validate_public_target
 
@@ -66,22 +68,6 @@ _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset(
 _JS_SHELL_MIN_CONTENT_LEN = 100_000
 _JS_SHELL_VISIBLE_RATIO_MAX = 0.15
 _MIN_DETAIL_FIELD_SIGNAL_COUNT = 2
-_JOB_ADAPTER_HINTS = frozenset(
-    {
-        "adp",
-        "greenhouse",
-        "icims",
-        "indeed",
-        "jibe",
-        "linkedin",
-        "oracle_hcm",
-        "paycom",
-        "remotive",
-        "saashr",
-        "ultipro_ukg",
-    }
-)
-
 logger = logging.getLogger(__name__)
 _REDACTED = "[REDACTED]"
 _MAX_PROXY_BACKOFF_EXPONENT = 8
@@ -291,9 +277,15 @@ async def acquire(
     """Acquire content for a URL using the waterfall strategy."""
     diagnostics_path = _diagnostics_path(run_id, url)
     profile = dict(acquisition_profile or {})
+    platform_family = _detect_platform_family(url)
     effective_surface = _resolve_effective_surface(
         surface,
-        platform_family=_detect_platform_family(url),
+        platform_family=platform_family,
+        adapter_hint=None,
+    )
+    suggested_surface = _suggest_surface_from_hints(
+        surface,
+        platform_family=platform_family,
         adapter_hint=None,
     )
 
@@ -336,6 +328,7 @@ async def acquire(
                     proxy=proxy,
                     requested_surface=surface,
                     surface=effective_surface,
+                    suggested_surface=suggested_surface,
                     traversal_mode=traversal_mode,
                     max_pages=max_pages,
                     max_scrolls=max_scrolls,
@@ -406,6 +399,9 @@ async def acquire(
 
     result.artifact_path = str(path)
     result.diagnostics_path = str(diagnostics_path)
+    diagnostics = result.diagnostics if isinstance(result.diagnostics, dict) else {}
+    if bool(diagnostics.get("browser_blocked")) or bool(diagnostics.get("curl_blocked")):
+        incr("blocked_page_result_total")
     return result
 
 
@@ -416,6 +412,7 @@ async def _acquire_once(
     proxy: str | None,
     requested_surface: str | None,
     surface: str | None,
+    suggested_surface: str | None,
     traversal_mode: str | None,
     max_pages: int,
     max_scrolls: int,
@@ -430,17 +427,26 @@ async def _acquire_once(
 ) -> AcquisitionResult | None:
     started = time.perf_counter()
     requested_surface = str(requested_surface or "").strip().lower() or None
+    suggested_surface = str(suggested_surface or "").strip().lower() or None
 
     def _finalize_diagnostics_payload(
         diagnostics: dict[str, object] | None,
     ) -> dict[str, object]:
         payload = dict(diagnostics or {})
         payload["surface_requested"] = requested_surface
-        payload["surface_effective"] = str(surface or "").strip().lower() or None
-        payload["surface_remapped"] = bool(
+        payload["surface_effective"] = surface or requested_surface
+        payload["suggested_surface"] = (
+            suggested_surface
+            if requested_surface and suggested_surface and requested_surface != suggested_surface
+            else None
+        )
+        payload["surface_mismatch_detected"] = bool(
             requested_surface
-            and payload.get("surface_effective")
-            and requested_surface != payload.get("surface_effective")
+            and suggested_surface
+            and requested_surface != suggested_surface
+        )
+        payload["surface_remapped"] = bool(
+            requested_surface and surface and requested_surface != surface
         )
         timings = _merge_timing_maps(payload.get("timings_ms"))
         total_ms = max(0, _elapsed_ms(started))
@@ -502,6 +508,12 @@ async def _acquire_once(
         if first_extractability
         else False
     )
+    browser_first_surface_warnings = _surface_selection_warnings(
+        requested_url=url,
+        final_url=str(first_data.get("final_url") or url),
+        html=first_html,
+        surface=surface,
+    )
     if (
         browser_first_result is not None
         and first_data.get("html")
@@ -550,6 +562,7 @@ async def _acquire_once(
                         "prefer_stealth": prefer_stealth,
                         "anti_bot_enabled": runtime_options.anti_bot_enabled,
                         "proxy_used": bool(proxy),
+                        "surface_selection_warnings": browser_first_surface_warnings or None,
                     }.items()
                     if v is not None
                 }
@@ -727,6 +740,12 @@ async def _acquire_once(
         html=browser_html,
         surface=surface,
     )
+    browser_surface_warnings = _surface_selection_warnings(
+        requested_url=url,
+        final_url=browser_final_url,
+        html=browser_html,
+        surface=surface,
+    )
     if (
         browser_html
         and not browser_data.get("blocked")
@@ -741,6 +760,7 @@ async def _acquire_once(
                 "browser_origin_warmed": browser_result.origin_warmed,
                 "browser_network_payloads": len(browser_payloads),
                 "browser_diagnostics": browser_diag,
+                "surface_selection_warnings": browser_surface_warnings or None,
                 "timings_ms": _merge_timing_maps(
                     curl_diagnostics.get("timings_ms"),
                     {"browser_total_ms": browser_data.get("browser_total_ms")},
@@ -774,6 +794,7 @@ async def _acquire_once(
                 "browser_blocked": browser_data.get("blocked") or None,
                 "browser_redirect_shell": browser_redirect_shell or None,
                 "browser_non_public_target": (not browser_public_target) or None,
+                "surface_selection_warnings": browser_surface_warnings or None,
                 "timings_ms": _merge_timing_maps(
                     curl_result.diagnostics.get("timings_ms"),
                     {"browser_total_ms": browser_data.get("browser_total_ms")},
@@ -1100,13 +1121,18 @@ async def _try_http(
         platform_family=platform_family,
         adapter_hint=adapter_hint,
     )
+    suggested_surface = _suggest_surface_from_hints(
+        surface,
+        platform_family=platform_family,
+        adapter_hint=adapter_hint,
+    )
 
     # FIX: Offload extractability check
     extractability = await asyncio.to_thread(
         _assess_extractable_html,
         html,
         url=url,
-        surface=effective_surface,
+        surface=surface,
         adapter_hint=adapter_hint,
     )
 
@@ -1114,7 +1140,13 @@ async def _try_http(
         requested_url=url,
         final_url=str(normalized.final_url or url).strip() or url,
         html=html,
-        surface=effective_surface,
+        surface=surface,
+    )
+    surface_selection_warnings = _surface_selection_warnings(
+        requested_url=url,
+        final_url=str(normalized.final_url or url).strip() or url,
+        html=html,
+        surface=surface,
     )
     diagnostics.update(
         {
@@ -1127,12 +1159,25 @@ async def _try_http(
             "curl_platform_family": platform_family,
             "surface_requested": str(surface or "").strip().lower() or None,
             "surface_effective": effective_surface,
-            "surface_remapped": bool(
+            "suggested_surface": (
+                suggested_surface
+                if str(surface or "").strip().lower()
+                and suggested_surface
+                and str(surface or "").strip().lower() != suggested_surface
+                else None
+            ),
+            "surface_mismatch_detected": bool(
                 str(surface or "").strip()
+                and suggested_surface
+                and str(surface or "").strip().lower() != suggested_surface
+            ),
+            "surface_remapped": bool(
+                str(surface or "").strip().lower()
                 and effective_surface
                 and str(surface or "").strip().lower() != effective_surface
-            ) or None,
+            ),
             "invalid_surface_page": invalid_surface_page or None,
+            "surface_selection_warnings": surface_selection_warnings or None,
             "extractability": extractability,
             "promoted_sources": extractability.get("promoted_sources"),
         }
@@ -1398,6 +1443,23 @@ def _resolve_effective_surface(
     requested_surface = str(surface or "").strip().lower()
     if not requested_surface:
         return None
+    suggested_surface = _suggest_surface_from_hints(
+        requested_surface,
+        platform_family=platform_family,
+        adapter_hint=adapter_hint,
+    )
+    return suggested_surface or requested_surface
+
+
+def _suggest_surface_from_hints(
+    surface: str | None,
+    *,
+    platform_family: str | None,
+    adapter_hint: str | None,
+) -> str | None:
+    requested_surface = str(surface or "").strip().lower()
+    if not requested_surface:
+        return None
     if requested_surface not in {
         "ecommerce_listing",
         "ecommerce_detail",
@@ -1408,10 +1470,10 @@ def _resolve_effective_surface(
 
     normalized_platform = str(platform_family or "").strip().lower()
     normalized_hint = str(adapter_hint or "").strip().lower()
-    is_job_like = (
-        normalized_platform in JOB_PLATFORM_FAMILIES
-        or normalized_hint in _JOB_ADAPTER_HINTS
-    )
+    is_job_like = is_job_platform_signal(
+        platform_family=normalized_platform,
+        adapter_hint=normalized_hint,
+    ) or normalized_platform in JOB_PLATFORM_FAMILIES
     if not is_job_like:
         return requested_surface
     if requested_surface.endswith("listing"):
@@ -1449,12 +1511,7 @@ def _is_invalid_surface_page(
     html: str,
     surface: str | None,
 ) -> bool:
-    return _is_invalid_job_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        html=html,
-        surface=surface,
-    ) or _is_invalid_commerce_surface_page(
+    return _is_invalid_commerce_surface_page(
         requested_url=requested_url,
         final_url=final_url,
         surface=surface,
@@ -1462,16 +1519,35 @@ def _is_invalid_surface_page(
     )
 
 
-def _is_invalid_job_surface_page(
+def _surface_selection_warnings(
     *,
     requested_url: str,
     final_url: str,
     html: str,
     surface: str | None,
-) -> bool:
+) -> list[dict[str, object]]:
+    warnings: list[dict[str, object]] = []
+    job_warning = _diagnose_job_surface_page(
+        requested_url=requested_url,
+        final_url=final_url,
+        html=html,
+        surface=surface,
+    )
+    if job_warning is not None:
+        warnings.append(job_warning)
+    return warnings
+
+
+def _diagnose_job_surface_page(
+    *,
+    requested_url: str,
+    final_url: str,
+    html: str,
+    surface: str | None,
+) -> dict[str, object] | None:
     normalized_surface = str(surface or "").strip().lower()
     if normalized_surface not in {"job_listing", "job_detail"}:
-        return False
+        return None
     requested = urlparse(requested_url)
     final = urlparse(final_url or requested_url)
     redirected_to_root = (
@@ -1480,8 +1556,19 @@ def _is_invalid_job_surface_page(
         and requested.path.rstrip("/") != final.path.rstrip("/")
         and final.path.rstrip("/") == ""
     )
+    if not html and not redirected_to_root:
+        return None
+    warning_signals: list[str] = []
+    if redirected_to_root:
+        warning_signals.append("redirected_to_root")
     if not html:
-        return redirected_to_root
+        return {
+            "surface_requested": normalized_surface,
+            "warning": "surface_selection_may_be_low_confidence",
+            "signals": warning_signals,
+            "requested_url": requested_url,
+            "final_url": final_url or requested_url,
+        }
     soup = BeautifulSoup(html, "html.parser")
     title_text = " ".join(
         (soup.title.get_text(" ", strip=True) if soup.title else "").split()
@@ -1501,11 +1588,27 @@ def _is_invalid_job_surface_page(
     error_heading_match = any(
         heading in JOB_ERROR_PAGE_HEADINGS for heading in headings
     )
-    return (
-        (redirected_to_root and (title_match or canonical_match or heading_match))
-        or error_title_match
-        or error_heading_match
-    )
+    if title_match:
+        warning_signals.append("redirect_shell_title")
+    if canonical_match:
+        warning_signals.append("redirect_shell_canonical")
+    if heading_match:
+        warning_signals.append("auth_wall_heading")
+    if error_title_match:
+        warning_signals.append("soft_404_title")
+    if error_heading_match:
+        warning_signals.append("soft_404_heading")
+    if not warning_signals:
+        return None
+    return {
+        "surface_requested": normalized_surface,
+        "warning": "surface_selection_may_be_low_confidence",
+        "signals": warning_signals,
+        "requested_url": requested_url,
+        "final_url": final_url or requested_url,
+        "title": title_text or None,
+        "canonical_url": canonical_url or None,
+    }
 
 
 def _is_invalid_commerce_surface_page(
@@ -1620,24 +1723,8 @@ def _find_promotable_iframe_sources(html: str, *, surface: str | None) -> list[d
 
 def _promotable_job_iframe_tokens() -> tuple[str, ...]:
     base_tokens = {"job", "jobs", "career", "careers"}
-    family_domain_tokens = {
-        str(pattern or "").strip().lower()
-        for patterns in PLATFORM_FAMILY_RULES.get("domain_rules", {}).values()
-        if isinstance(patterns, list)
-        for pattern in patterns
-        if str(pattern or "").strip()
-    }
-    family_url_tokens = {
-        str(pattern or "").strip().lower().strip("/")
-        for patterns in PLATFORM_FAMILY_RULES.get("url_contains_rules", {}).values()
-        if isinstance(patterns, list)
-        for pattern in patterns
-        if str(pattern or "").strip()
-    }
     merged = {
-        token
-        for token in (base_tokens | family_domain_tokens | family_url_tokens)
-        if len(token) >= 3
+        token for token in (base_tokens | set(acquisition_hint_tokens())) if len(token) >= 3
     }
     return tuple(sorted(merged))
 
@@ -2097,8 +2184,8 @@ def _requires_browser_first(url: str, surface: str | None) -> bool:
     configured_domain_match = _matches_domain_policy(domain, BROWSER_FIRST_DOMAINS)
     if configured_domain_match:
         return True
-    platform_family = _detect_platform_family(url)
-    return bool(platform_family and platform_family in PLATFORM_BROWSER_FIRST)
+    policy = resolve_platform_runtime_policy(url)
+    return bool(policy.get("requires_browser"))
 
 
 def _matches_domain_policy(domain: str, candidates: list[str]) -> bool:
@@ -2144,40 +2231,4 @@ def _normalize_patterns(values: object) -> list[str]:
 
 
 def _detect_platform_family(url: str, html: str = "") -> str | None:
-    normalized_url = str(url or "").strip().lower()
-    normalized_html = str(html or "").lower()
-    domain = urlparse(normalized_url).netloc.lower().replace("www.", "")
-
-    domain_rules = PLATFORM_FAMILY_RULES.get("domain_rules", {})
-    for family, patterns in domain_rules.items():
-        if any(
-            pattern and pattern in domain for pattern in _normalize_patterns(patterns)
-        ):
-            return str(family)
-
-    url_rules = PLATFORM_FAMILY_RULES.get("url_contains_rules", {})
-    for family, patterns in url_rules.items():
-        if any(
-            pattern and pattern in normalized_url
-            for pattern in _normalize_patterns(patterns)
-        ):
-            return str(family)
-
-    html_rules = PLATFORM_FAMILY_RULES.get("html_contains_rules", {})
-    for family, patterns in html_rules.items():
-        if any(
-            pattern and pattern in normalized_html
-            for pattern in _normalize_patterns(patterns)
-        ):
-            return str(family)
-
-    generic_rules = PLATFORM_FAMILY_RULES.get("generic_rules", {})
-    jobs_tokens = _normalize_patterns(generic_rules.get("jobs_url_tokens", []))
-    if any(token and token in normalized_url for token in jobs_tokens):
-        return "generic_jobs"
-
-    commerce_tokens = _normalize_patterns(generic_rules.get("commerce_url_tokens", []))
-    if any(token and token in normalized_url for token in commerce_tokens):
-        return "generic_commerce"
-
-    return None
+    return detect_platform_family_from_registry(url, html)

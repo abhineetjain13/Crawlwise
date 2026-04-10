@@ -14,6 +14,7 @@ from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.paycom import PaycomAdapter
+from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
@@ -34,6 +35,7 @@ _ADAPTERS: list[BaseAdapter] = [
     LinkedInAdapter(),
     GreenhouseAdapter(),
     RemotiveAdapter(),
+    RemoteOkAdapter(),
     ShopifyAdapter(),  # last — uses HTML signals, not domain matching
 ]
 

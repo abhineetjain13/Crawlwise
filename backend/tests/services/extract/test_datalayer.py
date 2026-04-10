@@ -230,3 +230,45 @@ def test_datalayer_skips_invalid_push_and_uses_next_valid_payload():
     assert result["price"] == 29.99
     assert result["price_currency"] == "EUR"
     assert result["google_product_category"] == "Shoes"
+
+
+def test_datalayer_prefers_richer_later_ecommerce_push_and_records_selected_index():
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "event": "view_item_list",
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 19.99
+                }
+            ]
+        }
+    });
+    dataLayer.push({
+        "event": "view_item",
+        "ecommerce": {
+            "currencyCode": "USD",
+            "detail": {
+                "products": [
+                    {
+                        "price": 29.99,
+                        "category": "Cameras",
+                        "availability": "InStock"
+                    }
+                ]
+            }
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    result = parse_datalayer(html)
+
+    assert result["price"] == 29.99
+    assert result["price_currency"] == "USD"
+    assert result["google_product_category"] == "Cameras"
+    assert result["availability"] == "InStock"
+    assert result["_selected_push_index"] == 1

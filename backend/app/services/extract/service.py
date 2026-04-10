@@ -108,7 +108,9 @@ from app.services.pipeline_config import (
     LISTING_STRUCTURED_SPEC_ROW_LIMIT,
     LISTING_STRUCTURED_SPEC_SEARCH_MAX_DEPTH,
 )
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.extract.source_parsers import (
+    parse_page_sources,
+)
 from app.services.extract.signal_inventory import (
     build_signal_inventory,
     classify_page_type,
@@ -226,6 +228,31 @@ _GENERIC_SENTINEL_VALUES = {
     "n/a",
     "na",
 }
+_RISKY_DETAIL_FIELDS = frozenset({"title", "brand", "category", "availability", "color"})
+_DETAIL_FIELD_SOURCE_RANK_OVERRIDES: dict[str, dict[str, int]] = {
+    field_name: {"datalayer": 8} for field_name in _RISKY_DETAIL_FIELDS
+}
+_COMMON_DETAIL_REJECT_PHRASES = (
+    "cookie",
+    "privacy",
+    "sign in",
+    "log in",
+    "my account",
+    "analytics",
+    "pageview",
+    "gtm",
+)
+_DETAIL_FIELD_REJECT_PHRASES: dict[str, tuple[str, ...]] = {
+    "title": ("add to cart", "shop now", "view cart", "menu"),
+    "brand": ("home >", "home /", "policy"),
+    "category": ("page type", "page category", "detail page"),
+    "availability": ("add to cart", "choose options", "select options", "view details"),
+    "color": ("add to cart", "choose options", "select options"),
+}
+_BREADCRUMB_STYLE_BRAND_RE = re.compile(r"\s(?:>|/)\s")
+_EMBEDDED_BLOB_PAYLOAD_KEY = "_blob_payload"
+_EMBEDDED_BLOB_FAMILY_KEY = "_blob_family"
+_EMBEDDED_BLOB_ORIGIN_KEY = "_blob_origin"
 
 
 def _coerce_scalar_for_dynamic_row(value: object) -> str | int | float | None:
@@ -257,11 +284,71 @@ def _coerce_scalar_for_dynamic_row(value: object) -> str | int | float | None:
     return None
 
 
+def candidate_source_rank(field_name: str, source: object) -> int:
+    normalized_source = str(source or "").strip()
+    if not normalized_source:
+        return 0
+    source_parts = [part.strip() for part in normalized_source.split(",") if part.strip()]
+    if not source_parts:
+        return 0
+    overrides = _DETAIL_FIELD_SOURCE_RANK_OVERRIDES.get(field_name, {})
+    return max(int(overrides.get(part, SOURCE_RANKING.get(part, 0))) for part in source_parts)
+
+
+def _sanitize_detail_field_value(
+    field_name: str, value: object
+) -> tuple[object | None, str | None]:
+    if field_name not in _RISKY_DETAIL_FIELDS or not isinstance(value, str):
+        return value, None
+
+    text = _normalized_candidate_text(value)
+    if not text:
+        return None, "empty_after_sanitization"
+    lowered = text.casefold()
+    reject_phrases = (
+        *_COMMON_DETAIL_REJECT_PHRASES,
+        *(_DETAIL_FIELD_REJECT_PHRASES.get(field_name) or ()),
+    )
+    if any(phrase in lowered for phrase in reject_phrases):
+        return None, "detail_field_noise"
+    if field_name == "brand" and _BREADCRUMB_STYLE_BRAND_RE.search(text):
+        return None, "breadcrumb_like_brand"
+    if field_name == "availability" and lowered in {
+        "availability",
+        "select size",
+        "select color",
+        "select colour",
+    }:
+        return None, "availability_shell_text"
+    if field_name == "color" and len(text.split()) > 4:
+        return None, "improbable_color_label"
+    return text, None
+
+
 def _looks_like_ga_data_layer(payload: object) -> bool:
     """Return True if the payload looks like a Google Analytics data layer push."""
     if not isinstance(payload, dict):
         return False
     return bool(GA_DATA_LAYER_KEYS & set(payload.keys()))
+
+
+def _embedded_blob_payload(payload: object) -> object:
+    if isinstance(payload, dict) and _EMBEDDED_BLOB_PAYLOAD_KEY in payload:
+        return payload.get(_EMBEDDED_BLOB_PAYLOAD_KEY)
+    return payload
+
+
+def _embedded_blob_metadata(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    family = payload.get(_EMBEDDED_BLOB_FAMILY_KEY)
+    origin = payload.get(_EMBEDDED_BLOB_ORIGIN_KEY)
+    metadata: dict[str, object] = {}
+    if family:
+        metadata["blob_family"] = family
+    if origin:
+        metadata["blob_origin"] = origin
+    return metadata
 
 
 def _dynamic_field_name_is_schema_slug_noise(normalized: str) -> bool:
@@ -567,13 +654,18 @@ def _collect_structured_state_candidates(
     field_name: str,
     next_data: dict | None,
     hydrated_states: list[dict],
-    embedded_json: list[dict],
+    embedded_json: list[object],
     network_payloads: list[dict],
     base_url: str,
 ) -> bool:
     for payload in embedded_json:
         _append_source_candidates(
-            rows, field_name, payload, "embedded_json", base_url=base_url
+            rows,
+            field_name,
+            payload,
+            "embedded_json",
+            base_url=base_url,
+            source_metadata=_embedded_blob_metadata(payload),
         )
     if next_data:
         _append_source_candidates(
@@ -695,23 +787,17 @@ def _finalize_candidates(
     Returns: (candidates, source_trace)
     """
 
-    def _row_rank(row: dict) -> int:
-        source = str(row.get("source") or "").strip()
-        if not source:
-            return 0
-        source_parts = [part.strip() for part in source.split(",") if part.strip()]
-        if not source_parts:
-            return 0
-        return max(int(SOURCE_RANKING.get(part, 0)) for part in source_parts)
-
     # Choose the highest-ranked candidate per field.
     final_candidates: dict[str, list[dict]] = {}
     for field_name, rows in candidates.items():
         if rows:
             best_row = rows[0]
-            best_rank = _row_rank(best_row)
+            best_rank = candidate_source_rank(field_name, best_row.get("source"))
             for candidate_row in rows[1:]:
-                candidate_rank = _row_rank(candidate_row)
+                candidate_rank = candidate_source_rank(
+                    field_name,
+                    candidate_row.get("source"),
+                )
                 if candidate_rank > best_rank:
                     best_row = candidate_row
                     best_rank = candidate_rank
@@ -818,8 +904,15 @@ def extract_candidates(
     Returns:
         (candidates, source_trace) — candidates maps field -> list of {value, source}
     """
-    # Build signal inventory and classify page type before extraction
-    signal_inventory = build_signal_inventory(html, url, surface)
+    soup = BeautifulSoup(html, "html.parser")
+    page_sources = parse_page_sources(html, soup=soup)
+    signal_inventory = build_signal_inventory(
+        html,
+        url,
+        surface,
+        soup=soup,
+        page_sources=page_sources,
+    )
     page_type = classify_page_type(signal_inventory)
 
     if "listing" in str(surface or "").lower():
@@ -831,9 +924,7 @@ def extract_candidates(
             "page_type": page_type,
         }
 
-    soup = BeautifulSoup(html, "html.parser")
     tree = _build_xpath_tree(html)
-    page_sources = parse_page_sources(html)
     adapter_records = adapter_records or []
     network_payloads = xhr_payloads or []
 
@@ -846,7 +937,9 @@ def extract_candidates(
 
     contract_by_field = _index_extraction_contract(extraction_contract or [])
     semantic = extract_semantic_detail_data(
-        html, requested_fields=sorted(target_fields)
+        html,
+        requested_fields=sorted(target_fields),
+        soup=soup,
     )
     label_value_text_sources = _build_label_value_text_sources(
         url=url,
@@ -997,19 +1090,11 @@ def _finalize_candidate_rows(
     filtered: list[dict] = []
     filtered_index: dict[str, int] = {}
     for row in rows:
-        value = coerce_field_candidate_value(
-            field_name, row.get("value"), base_url=base_url
+        value, _reason = finalize_candidate_row(
+            field_name,
+            row,
+            base_url=base_url,
         )
-        if value in (None, "", [], {}):
-            continue
-        if isinstance(value, bool):
-            continue
-        if value in (None, "", [], {}):
-            continue
-        value = validate_value(field_name, value)
-        if value in (None, "", [], {}):
-            continue
-        value = sanitize_field_value(field_name, value)
         if value in (None, "", [], {}):
             continue
         source_parts = _source_labels(row)
@@ -1053,12 +1138,19 @@ def _normalized_candidate_text(value: object) -> str:
 
 
 def sanitize_field_value(field_name: str, value: object) -> object | None:
+    sanitized, _reason = sanitize_field_value_with_reason(field_name, value)
+    return sanitized
+
+
+def sanitize_field_value_with_reason(
+    field_name: str, value: object
+) -> tuple[object | None, str | None]:
     """Apply config-driven noise phrase filtering for string candidates."""
     if not isinstance(value, str):
-        return value
+        return value, None
     text = _normalized_candidate_text(value)
     if not text:
-        return None
+        return None, "empty_after_sanitization"
     rules = FIELD_POLLUTION_RULES.get(field_name) or {}
     reject_phrases = [
         str(item).strip().casefold()
@@ -1067,8 +1159,25 @@ def sanitize_field_value(field_name: str, value: object) -> object | None:
     ]
     lowered = text.casefold()
     if any(phrase in lowered for phrase in reject_phrases):
-        return None
-    return text
+        return None, "field_pollution_rule"
+    return _sanitize_detail_field_value(field_name, text)
+
+
+def finalize_candidate_row(
+    field_name: str, row: dict, *, base_url: str = ""
+) -> tuple[object | None, str | None]:
+    value = coerce_field_candidate_value(field_name, row.get("value"), base_url=base_url)
+    if value in (None, "", [], {}):
+        return None, "empty_after_normalization"
+    if isinstance(value, bool):
+        return None, "invalid_boolean"
+    value = validate_value(field_name, value)
+    if value in (None, "", [], {}):
+        return None, "validation_rejected"
+    value, rejection_reason = sanitize_field_value_with_reason(field_name, value)
+    if value in (None, "", [], {}):
+        return None, rejection_reason or "sanitizer_rejected"
+    return value, None
 
 
 def _normalize_html_rich_text(value: str) -> str:
@@ -1348,15 +1457,20 @@ def _append_source_candidates(
     source: str,
     *,
     base_url: str = "",
+    source_metadata: dict[str, object] | None = None,
 ) -> None:
+    actual_payload = _embedded_blob_payload(payload)
     # Skip brand/entity_name extraction from GA data layer — GA brand is the retailer's
     # name, not the product manufacturer. JSON-LD (rank 6) will supply the real brand.
-    if _field_is_type(field_name, "entity_name") and _looks_like_ga_data_layer(payload):
+    if _field_is_type(field_name, "entity_name") and _looks_like_ga_data_layer(actual_payload):
         return
-    for match in _deep_get_all_aliases(payload, field_name):
+    for match in _deep_get_all_aliases(actual_payload, field_name):
         value = coerce_field_candidate_value(field_name, match, base_url=base_url)
         if value is not None:
-            rows.append({"value": value, "source": source})
+            row = {"value": value, "source": source}
+            if source_metadata:
+                row.update(source_metadata)
+            rows.append(row)
 
 
 # Type-specific coercion functions for field value normalization
@@ -1384,9 +1498,9 @@ def _coerce_price_field(value: str) -> str | None:
     numeric = re.search(PRICE_REGEX, text)
     if not numeric:
         return None
-    # Reject tiny bare numerics from JSON payload counters (e.g. "2"),
-    # which commonly masquerade as price fields in large nested payloads.
-    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+    # Reject tiny integer counters from noisy payloads (e.g. "2"), but allow
+    # legitimate low prices such as 9.99 or 0.99.
+    if re.fullmatch(r"\d+", text):
         try:
             amount = float(text)
         except (TypeError, ValueError):
@@ -2120,13 +2234,13 @@ def _structured_source_candidates(
 ) -> list[dict]:
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    sources: list[tuple[str, object]] = _structured_source_payloads(
+    sources: list[tuple[str, object, dict[str, object]]] = _structured_source_payloads(
         next_data=next_data,
         hydrated_states=hydrated_states,
         embedded_json=embedded_json,
         network_payloads=network_payloads,
     )
-    for source, payload in sources:
+    for source, payload, metadata in sources:
         value = _extract_structured_field_value(payload, field_name)
         normalized = _normalized_candidate_text(value)
         if not normalized:
@@ -2135,7 +2249,10 @@ def _structured_source_candidates(
         if key in seen:
             continue
         seen.add(key)
-        rows.append({"value": value, "source": source})
+        row = {"value": value, "source": source}
+        if metadata:
+            row.update(metadata)
+        rows.append(row)
     return rows
 
 
@@ -2202,19 +2319,23 @@ def _build_dynamic_semantic_rows(
             coerced = _coerce_scalar_for_dynamic_row(value)
             if coerced is None:
                 continue
-            rows.setdefault(normalized, []).append(
-                {
-                    "value": coerced,
-                    "source": "semantic_spec",
-                    "display_label": _normalized_candidate_text(row.get("label"))
-                    or normalized,
-                    "group_label": group_label or None,
-                    "href": _normalized_candidate_text(row.get("href")) or None,
-                    "preserve_visible": bool(row.get("preserve_visible")),
-                    "row_index": row.get("row_index"),
-                    "table_index": group.get("table_index"),
-                }
-            )
+            display_label = _normalized_candidate_text(row.get("label")) or normalized
+            target_fields = [normalized]
+            if normalized == "dimensions" and display_label.casefold() == "size":
+                target_fields.append("size")
+            for target_field in target_fields:
+                rows.setdefault(target_field, []).append(
+                    {
+                        "value": coerced,
+                        "source": "semantic_spec",
+                        "display_label": display_label,
+                        "group_label": group_label or None,
+                        "href": _normalized_candidate_text(row.get("href")) or None,
+                        "preserve_visible": bool(row.get("preserve_visible")),
+                        "row_index": row.get("row_index"),
+                        "table_index": group.get("table_index"),
+                    }
+                )
 
     # Only emit specification/dimension aggregates when the semantic extractor
     # found real spec entries (tables, dl, data-attributes). Skip phantom
@@ -2259,7 +2380,7 @@ def _build_dynamic_structured_rows(
     network_payloads: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {}
-    for source, payload in _structured_source_payloads(
+    for source, payload, metadata in _structured_source_payloads(
         next_data=next_data,
         hydrated_states=hydrated_states,
         embedded_json=embedded_json,
@@ -2270,24 +2391,26 @@ def _build_dynamic_structured_rows(
             continue
         spec_lines = [f"{label}: {value}" for label, value in spec_map.items()]
         if spec_lines and not str(surface or "").lower().startswith("job_"):
-            rows.setdefault("specifications", []).append(
-                {
-                    "value": SEMANTIC_AGGREGATE_SEPARATOR.join(spec_lines),
-                    "source": source,
-                }
-            )
+            row = {
+                "value": SEMANTIC_AGGREGATE_SEPARATOR.join(spec_lines),
+                "source": source,
+            }
+            if metadata:
+                row.update(metadata)
+            rows.setdefault("specifications", []).append(row)
         dimension_lines = [
             f"{label}: {value}"
             for label, value in spec_map.items()
             if any(token in label.lower() for token in DIMENSION_KEYWORDS)
         ]
         if dimension_lines:
-            rows.setdefault("dimensions", []).append(
-                {
-                    "value": SEMANTIC_AGGREGATE_SEPARATOR.join(dimension_lines),
-                    "source": source,
-                }
-            )
+            row = {
+                "value": SEMANTIC_AGGREGATE_SEPARATOR.join(dimension_lines),
+                "source": source,
+            }
+            if metadata:
+                row.update(metadata)
+            rows.setdefault("dimensions", []).append(row)
         for field_name, value in spec_map.items():
             normalized = normalize_requested_field(field_name)
             if not normalized or _DYNAMIC_NUMERIC_FIELD_RE.fullmatch(normalized):
@@ -2297,7 +2420,10 @@ def _build_dynamic_structured_rows(
             coerced = _coerce_scalar_for_dynamic_row(value)
             if coerced is None:
                 continue
-            rows.setdefault(normalized, []).append({"value": coerced, "source": source})
+            row = {"value": coerced, "source": source}
+            if metadata:
+                row.update(metadata)
+            rows.setdefault(normalized, []).append(row)
     return rows
 
 
@@ -2311,7 +2437,7 @@ def _build_product_detail_rows(
     network_payloads: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {}
-    for source, payload in _structured_source_payloads(
+    for source, payload, metadata in _structured_source_payloads(
         next_data=next_data,
         hydrated_states=hydrated_states,
         embedded_json=embedded_json,
@@ -2327,9 +2453,10 @@ def _build_product_detail_rows(
             if coerced is None:
                 continue
             normalized_source = "product_detail" if field_name == "sku" else source
-            rows.setdefault(field_name, []).append(
-                {"value": coerced, "source": normalized_source}
-            )
+            row = {"value": coerced, "source": normalized_source}
+            if metadata:
+                row.update(metadata)
+            rows.setdefault(field_name, []).append(row)
 
     for field_name, value in _extract_buy_box_candidates(soup).items():
         rows.setdefault(field_name, []).append(
@@ -2761,17 +2888,24 @@ def _structured_source_payloads(
     hydrated_states: list[object],
     embedded_json: list[object],
     network_payloads: list[dict],
-) -> list[tuple[str, object]]:
-    sources: list[tuple[str, object]] = [("next_data", next_data)]
-    sources.extend(("hydrated_state", payload) for payload in hydrated_states)
-    sources.extend(("embedded_json", payload) for payload in embedded_json)
+) -> list[tuple[str, object, dict[str, object]]]:
+    sources: list[tuple[str, object, dict[str, object]]] = [("next_data", next_data, {})]
+    sources.extend(("hydrated_state", payload, {}) for payload in hydrated_states)
+    sources.extend(
+        (
+            "embedded_json",
+            _embedded_blob_payload(payload),
+            _embedded_blob_metadata(payload),
+        )
+        for payload in embedded_json
+    )
     for payload in network_payloads:
         if not isinstance(payload, dict):
             continue
         payload_url = str(payload.get("url") or "").lower()
         if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
             continue
-        sources.append(("network_intercept", payload.get("body")))
+        sources.append(("network_intercept", payload.get("body"), {}))
     return sources
 
 

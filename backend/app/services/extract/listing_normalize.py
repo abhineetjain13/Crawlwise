@@ -26,7 +26,7 @@ _NAVIGATION_VALUES = {
 }
 _VARIANT_COUNT_RE = re.compile(r"^\(?\d+\)?(?:\s+)?(?:colors?|sizes?)?$", re.I)
 _DIMENSION_MEASUREMENT_RE = re.compile(r"(?i)\b(?:cm|mm|in|inch|inches|ft|oz|kg|g|lb|lbs|height|width|depth|length|diameter)\b|[0-9]\s*[x×]\s*[0-9]")
-_SIZE_TOKEN_RE = re.compile(r"(?i)\b(?:eu[-\s]?)?\d{1,2}(?:\.\d+)?\b|(?:xs|s|m|l|xl|xxl|xxxl)\b")
+_SIZE_TOKEN_RE = re.compile(r"(?i)\b(?:eu[-\s]?)?\d{1,2}(?:\.\d+)?\b|\b(?:xs|s|m|l|xl|xxl|xxxl)\b")
 
 _BASE_FIELDS = {
     "title",

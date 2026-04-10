@@ -28,6 +28,13 @@ async def test_cannot_handle_unrelated():
 
 
 @pytest.mark.asyncio
+async def test_cannot_handle_unrelated_html_with_greenhouse_marker_only():
+    adapter = GreenhouseAdapter()
+    html = "<html><body><div id='grnhse_app'></div><p>greenhouse careers</p></body></html>"
+    assert not await adapter.can_handle("https://example.com/jobs", html)
+
+
+@pytest.mark.asyncio
 async def test_extract_from_api():
     adapter = GreenhouseAdapter()
     response = Mock()

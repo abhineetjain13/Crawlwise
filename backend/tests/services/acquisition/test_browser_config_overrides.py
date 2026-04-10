@@ -1,10 +1,14 @@
-# Integration tests for per-domain listing readiness overrides
+# Integration tests for family-keyed listing readiness overrides
 from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.services.config.selectors import LISTING_READINESS_OVERRIDES
+from app.services.config.platform_readiness import (
+    LISTING_READINESS_OVERRIDES,
+    load_platform_readiness,
+    resolve_listing_readiness_override,
+)
 
 
 class FakePage:
@@ -51,16 +55,16 @@ async def test_oracle_hcm_override_uses_configured_selectors(monkeypatch):
     Validates: Requirements 5.3, 5.4, 5.5
     
     Verifies that Oracle HCM listing pages use the configured selectors from
-    LISTING_READINESS_OVERRIDES instead of hardcoded domain checks.
+    LISTING_READINESS_OVERRIDES after registry-based family detection.
     """
     from app.services.acquisition.browser_client import _wait_for_listing_readiness
     
     # Oracle HCM URL
     oracle_url = "https://candidateexperience.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/requisitions"
     
-    # Verify configuration exists
-    assert "candidateexperience.oraclecloud.com" in LISTING_READINESS_OVERRIDES
-    oracle_config = LISTING_READINESS_OVERRIDES["candidateexperience.oraclecloud.com"]
+    # Verify family configuration exists
+    assert "oracle_hcm" in LISTING_READINESS_OVERRIDES
+    oracle_config = LISTING_READINESS_OVERRIDES["oracle_hcm"]
     assert "a[href*='/job/']" in oracle_config["selectors"]
     assert oracle_config["max_wait_ms"] == 25000
     
@@ -94,16 +98,16 @@ async def test_adp_override_uses_configured_selectors(monkeypatch):
     Validates: Requirements 5.2, 5.3
     
     Verifies that ADP listing pages use the configured selectors from
-    LISTING_READINESS_OVERRIDES instead of hardcoded domain checks.
+    LISTING_READINESS_OVERRIDES after registry-based family detection.
     """
     from app.services.acquisition.browser_client import _wait_for_listing_readiness
     
     # ADP URL
     adp_url = "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html"
     
-    # Verify configuration exists
-    assert "workforcenow.adp.com" in LISTING_READINESS_OVERRIDES
-    adp_config = LISTING_READINESS_OVERRIDES["workforcenow.adp.com"]
+    # Verify family configuration exists
+    assert "adp" in LISTING_READINESS_OVERRIDES
+    adp_config = LISTING_READINESS_OVERRIDES["adp"]
     assert ".current-openings-item" in adp_config["selectors"]
     assert "[id^='lblTitle_']" in adp_config["selectors"]
     assert adp_config["max_wait_ms"] == 20000
@@ -145,7 +149,7 @@ async def test_generic_listing_page_without_override(monkeypatch):
     # Generic job listing URL (not in overrides)
     generic_url = "https://example.com/careers"
     
-    # Verify this domain is NOT in overrides
+    # Verify this unrelated host is not a configured family key
     assert "example.com" not in LISTING_READINESS_OVERRIDES
     
     # Create page with generic job card selector
@@ -182,7 +186,7 @@ async def test_oracle_hcm_override_applies_max_wait_ms(monkeypatch):
     the correct max_wait_ms value that will be used by _wait_for_listing_readiness.
     """
     # Verify the override configuration has the correct max_wait_ms
-    oracle_config = LISTING_READINESS_OVERRIDES["candidateexperience.oraclecloud.com"]
+    oracle_config = LISTING_READINESS_OVERRIDES["oracle_hcm"]
     assert oracle_config["max_wait_ms"] == 25000
     
     # Verify it's higher than the default
@@ -200,9 +204,39 @@ async def test_adp_override_applies_max_wait_ms(monkeypatch):
     the correct max_wait_ms value that will be used by _wait_for_listing_readiness.
     """
     # Verify the override configuration has the correct max_wait_ms
-    adp_config = LISTING_READINESS_OVERRIDES["workforcenow.adp.com"]
+    adp_config = LISTING_READINESS_OVERRIDES["adp"]
     assert adp_config["max_wait_ms"] == 20000
     
     # Verify it's higher than the default
     from app.services.acquisition.browser_client import LISTING_READINESS_MAX_WAIT_MS
     assert adp_config["max_wait_ms"] > LISTING_READINESS_MAX_WAIT_MS
+
+
+def test_listing_readiness_override_requires_matching_domain_not_query_tokens() -> None:
+    spoofed_url = (
+        "https://example.com/jobs"
+        "?source=candidateexperience"
+        "&target=oraclecloud.com"
+    )
+
+    assert resolve_listing_readiness_override(spoofed_url) is None
+
+
+def test_listing_readiness_override_accepts_expected_oracle_candidateexperience_shape() -> None:
+    oracle_url = (
+        "https://candidateexperience.oraclecloud.com/"
+        "hcmUI/CandidateExperience/en/sites/CX_1/requisitions"
+    )
+
+    override = resolve_listing_readiness_override(oracle_url)
+
+    assert override is not None
+    assert override["platform"] == "oracle_hcm"
+
+
+def test_platform_readiness_config_is_loaded_from_dedicated_section() -> None:
+    document = load_platform_readiness()
+
+    assert document.version == 1
+    assert "adp" in document.families
+    assert ".current-openings-item" in document.families["adp"].selectors

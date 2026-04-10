@@ -11,15 +11,22 @@ from app.services.config.extraction_rules import (
     EMPTY_SENTINEL_VALUES as _EMPTY_SENTINEL_VALUES,
     EXTRACTION_RULES as _EXTRACTION_RULES,
     HYDRATED_STATE_PATTERNS as _HYDRATED_STATE_PATTERNS,
-    KNOWN_ATS_PLATFORMS as _KNOWN_ATS_PLATFORMS,
     LLM_TUNING as _LLM_TUNING,
     MAX_SELECTOR_ROWS_PER_FIELD as _MAX_SELECTOR_ROWS_PER_FIELD,
     NORMALIZATION_RULES as _NORM_RULES,
     PIPELINE_TUNING as _TUNING,
-    PLATFORM_BROWSER_POLICIES as _PLATFORM_BROWSER_POLICIES,
     REQUIRED_FIELDS_BY_SURFACE as _REQUIRED_FIELDS_BY_SURFACE,
     SITE_POLICY_REGISTRY as _SITE_POLICY_REGISTRY,
     VERDICT_RULES as _VERDICT_RULES,
+)
+from app.services.config.platform_registry import (
+    browser_first_platform_families,
+    job_platform_families,
+    known_ats_domains,
+)
+from app.services.config.platform_readiness import (
+    PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES as _PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES,
+    PLATFORM_LISTING_READINESS_SELECTORS as _PLATFORM_LISTING_READINESS_SELECTORS,
 )
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
@@ -35,26 +42,13 @@ from app.services.config.selectors import (
     DOM_PATTERNS as _DOM_PATTERNS,
     MARKDOWN_VIEW as _MARKDOWN_VIEW,
     PAGINATION_SELECTORS as _PAGINATION_SELECTORS,
-    PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES as _PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES,
-    PLATFORM_LISTING_READINESS_SELECTORS as _PLATFORM_LISTING_READINESS_SELECTORS,
-    PLATFORM_LISTING_READINESS_URL_PATTERNS as _PLATFORM_LISTING_READINESS_URL_PATTERNS,
     REVIEW_CONTAINER_KEYS as _REVIEW_CONTAINER_KEYS,
     TITLE_SELECTOR as _TITLE_SELECTOR,
 )
 
 logger = logging.getLogger(__name__)
 
-JOB_PLATFORM_FAMILIES = frozenset(
-    {
-        "icims",
-        "adp",
-        "oracle_hcm",
-        "paycom",
-        "ultipro_ukg",
-        "greenhouse",
-        "generic_jobs",
-    }
-)
+JOB_PLATFORM_FAMILIES = frozenset({*job_platform_families(), "generic_jobs"})
 
 
 def _compile_extraction_rule_pattern(
@@ -189,8 +183,8 @@ BROWSER_FIRST_DOMAINS = sorted(
     for domain, policy in SITE_POLICY_REGISTRY.items()
     if isinstance(policy, dict) and bool(policy.get("browser_first"))
 )
-PLATFORM_BROWSER_FIRST = set(_PLATFORM_BROWSER_POLICIES.get("browser_first", []))
-KNOWN_ATS_PLATFORMS = list(_KNOWN_ATS_PLATFORMS)
+PLATFORM_BROWSER_FIRST = set(browser_first_platform_families())
+KNOWN_ATS_PLATFORMS = list(known_ats_domains())
 BROWSER_FALLBACK_VISIBLE_TEXT_MIN = _TUNING.get(
     "browser_fallback_visible_text_min", _P["browser_fallback_visible_text_min"]
 )
@@ -203,9 +197,12 @@ BROWSER_FALLBACK_HTML_SIZE_THRESHOLD = _TUNING.get(
 JS_GATE_PHRASES = _TUNING.get("js_gate_phrases", ["enable javascript", "<noscript>"])
 DEFAULT_MAX_RECORDS = _TUNING.get("default_max_records", 100)
 DEFAULT_MAX_PAGES = _TUNING.get("default_max_pages", 5)
+MIN_MAX_PAGES = _TUNING.get("min_max_pages", 1)
+MAX_MAX_PAGES = _TUNING.get("max_max_pages", 20)
 DEFAULT_SLEEP_MS = _TUNING.get("default_sleep_ms", 0)
 MIN_REQUEST_DELAY_MS = _TUNING.get("min_request_delay_ms", 100)
 DEFAULT_MAX_SCROLLS = _TUNING.get("default_max_scrolls", 10)
+AUTO_DETECT_SURFACE = bool(_TUNING.get("auto_detect_surface", False))
 BATCH_URL_CONCURRENCY = _TUNING.get("batch_url_concurrency", 8)
 URL_BATCH_CONCURRENCY = int(_TUNING.get("url_batch_concurrency", 4))
 URL_PROCESS_TIMEOUT_SECONDS = float(_TUNING.get("url_process_timeout_seconds", 90.0))
@@ -315,10 +312,6 @@ CARD_SELECTORS_JOBS = _CARD_SELECTORS.get("jobs", [])
 PAGINATION_NEXT_SELECTORS = _PAGINATION_SELECTORS.get("next_page", [])
 LOAD_MORE_SELECTORS = _PAGINATION_SELECTORS.get("load_more", [])
 PLATFORM_LISTING_READINESS_SELECTORS = dict(_PLATFORM_LISTING_READINESS_SELECTORS)
-PLATFORM_LISTING_READINESS_URL_PATTERNS = {
-    str(platform_family): [list(group) for group in groups]
-    for platform_family, groups in _PLATFORM_LISTING_READINESS_URL_PATTERNS.items()
-}
 PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES = dict(
     _PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES
 )

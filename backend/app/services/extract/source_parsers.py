@@ -18,10 +18,81 @@ _HYDRATED_ASSIGNMENT_PATTERNS = tuple(
     re.compile(rf"(?:window\.)?{re.escape(pattern)}\s*=\s*", re.DOTALL)
     for pattern in HYDRATED_STATE_PATTERNS
 )
+_EMBEDDED_BLOB_PAYLOAD_KEY = "_blob_payload"
+_EMBEDDED_BLOB_FAMILY_KEY = "_blob_family"
+_EMBEDDED_BLOB_ORIGIN_KEY = "_blob_origin"
+_APPROVED_EMBEDDED_ATTR_TOKENS = (
+    "product",
+    "item",
+    "variant",
+    "offer",
+    "inventory",
+    "price",
+    "sku",
+    "spec",
+    "detail",
+    "gallery",
+    "media",
+)
+_APPROVED_EMBEDDED_SCRIPT_ID_TOKENS = _APPROVED_EMBEDDED_ATTR_TOKENS
+_PRODUCT_CONTAINER_KEYS = {
+    "product": "product_json",
+    "products": "product_json",
+    "item": "product_json",
+    "items": "product_json",
+    "pdp": "product_json",
+    "productdetail": "product_detail_json",
+    "productdetails": "product_detail_json",
+    "detail": "product_detail_json",
+    "variant": "variant_json",
+    "variants": "variant_json",
+    "offer": "offer_json",
+    "offers": "offer_json",
+    "inventory": "inventory_json",
+    "media": "media_json",
+    "gallery": "media_json",
+    "images": "media_json",
+    "image": "media_json",
+    "specifications": "spec_json",
+    "specs": "spec_json",
+    "attributes": "spec_json",
+    "details": "spec_json",
+}
+_PRODUCT_STRONG_SIGNAL_KEYS = {
+    "price",
+    "saleprice",
+    "sale_price",
+    "originalprice",
+    "original_price",
+    "compareatprice",
+    "compare_at_price",
+    "currency",
+    "pricecurrency",
+    "price_currency",
+    "brand",
+    "brandname",
+    "sku",
+    "mpn",
+    "availability",
+    "category",
+    "images",
+    "image",
+    "media",
+    "gallery",
+}
+_PRODUCT_SUPPORTING_SIGNAL_KEYS = {
+    "name",
+    "title",
+    "description",
+}
 
 
-def parse_page_sources(html: str) -> dict[str, object]:
-    soup = BeautifulSoup(html or "", "html.parser")
+def parse_page_sources(
+    html: str,
+    *,
+    soup: BeautifulSoup | None = None,
+) -> dict[str, object]:
+    soup = soup if soup is not None else BeautifulSoup(html or "", "html.parser")
     hydrated_states, hydrated_script_ids = extract_hydrated_states(soup)
     # Extract Apollo state from meta tags used by GraphQL-driven apps
     apollo_state = extract_apollo_state_from_meta(soup)
@@ -70,9 +141,12 @@ def parse_datalayer(html: str) -> dict[str, object]:
     
     Returns empty dict if dataLayer absent or malformed.
     """
-    # Parse the first valid ecommerce payload from dataLayer.push(...) calls.
-    # Iterate lazily to avoid materializing all regex matches on large pages.
-    for match in _DATALAYER_PUSH_RE.finditer(html):
+    best_result: dict[str, object] = {}
+    best_score: tuple[int, int, int] | None = None
+
+    # Parse all valid ecommerce payloads from dataLayer.push(...) calls and prefer
+    # the richest product/detail payload rather than the first valid push.
+    for push_index, match in enumerate(_DATALAYER_PUSH_RE.finditer(html)):
         start_pos = match.end()
         # Extract balanced JSON fragment starting from the opening brace
         json_fragment = _extract_balanced_json_fragment(html[start_pos:])
@@ -87,78 +161,100 @@ def parse_datalayer(html: str) -> dict[str, object]:
         ecommerce = parsed.get("ecommerce")
         if not isinstance(ecommerce, dict):
             continue
-        
-        result: dict[str, object] = {}
-        
-        # GA4 schema: items array
-        items = ecommerce.get("items")
-        if isinstance(items, list) and len(items) > 0:
-            item = items[0]
-            if isinstance(item, dict):
-                if "price" in item:
-                    result["price"] = item["price"]
-                if "discount" in item:
-                    discount_value = item["discount"]
-                    
-                    # FIX: Mathematical safety routing for discount amount vs percentage
-                    if isinstance(discount_value, str) and "%" in discount_value:
-                        result["discount_percentage"] = discount_value.replace("%", "").strip()
+        result = _extract_datalayer_ecommerce_payload(ecommerce)
+        if not result:
+            continue
+        score = _score_datalayer_payload(result, push_index=push_index)
+        if best_score is None or score > best_score:
+            best_result = result
+            best_score = score
+
+    return best_result
+
+
+def _extract_datalayer_ecommerce_payload(ecommerce: dict[str, object]) -> dict[str, object]:
+    result: dict[str, object] = {}
+
+    items = ecommerce.get("items")
+    if isinstance(items, list) and items:
+        item = items[0]
+        if isinstance(item, dict):
+            if "price" in item:
+                result["price"] = item["price"]
+            if "discount" in item:
+                discount_value = item["discount"]
+                if isinstance(discount_value, str) and "%" in discount_value:
+                    result["discount_percentage"] = discount_value.replace("%", "").strip()
+                else:
+                    price_val = 0.0
+                    disc_val = 0.0
+                    try:
+                        if "price" in item:
+                            price_val = float(item["price"])
+                        disc_val = float(discount_value)
+                    except (TypeError, ValueError):
+                        pass
+                    if price_val > 0 and disc_val > price_val:
+                        result["discount_percentage"] = discount_value
                     else:
-                        price_val = 0.0
-                        disc_val = 0.0
-                        try:
-                            if "price" in item:
-                                price_val = float(item["price"])
-                            disc_val = float(discount_value)
-                        except (TypeError, ValueError):
-                            pass
-                        
-                        # If the discount number is larger than the item price,
-                        # it is physically impossible for it to be a flat currency amount.
-                        # It MUST be a percentage (e.g., Price: $40, Discount: 46 -> 46% off)
-                        if price_val > 0 and disc_val > price_val:
-                            result["discount_percentage"] = discount_value
-                        else:
-                            # Standard fallback
-                            result["discount_amount"] = discount_value
-                            if "price" in item and price_val >= 0 and disc_val >= 0:
-                                result["sale_price"] = max(0, price_val - disc_val)
-                if "item_category" in item:
-                    result["category"] = item["item_category"]
-                    result["google_product_category"] = item["item_category"]
-                if "currency" in item:
-                    result["price_currency"] = item["currency"]
-                availability_value = item.get("availability") or item.get("itemAvailability")
+                        result["discount_amount"] = discount_value
+                        if "price" in item and price_val >= 0 and disc_val >= 0:
+                            result["sale_price"] = max(0, price_val - disc_val)
+            if "item_category" in item:
+                result["category"] = item["item_category"]
+                result["google_product_category"] = item["item_category"]
+            if "currency" in item:
+                result["price_currency"] = item["currency"]
+            availability_value = item.get("availability") or item.get("itemAvailability")
+            if availability_value not in (None, "", [], {}):
+                result["availability"] = availability_value
+
+    detail = ecommerce.get("detail")
+    if isinstance(detail, dict):
+        products = detail.get("products")
+        if isinstance(products, list) and products:
+            product = products[0]
+            if isinstance(product, dict):
+                if "price" in product:
+                    result["price"] = product["price"]
+                if "category" in product:
+                    result["category"] = product["category"]
+                    result["google_product_category"] = product["category"]
+                availability_value = product.get("availability") or product.get(
+                    "itemAvailability"
+                )
                 if availability_value not in (None, "", [], {}):
                     result["availability"] = availability_value
-        
-        # UA schema: detail.products array
-        detail = ecommerce.get("detail")
-        if isinstance(detail, dict):
-            products = detail.get("products")
-            if isinstance(products, list) and len(products) > 0:
-                product = products[0]
-                if isinstance(product, dict):
-                    if "price" in product:
-                        result["price"] = product["price"]
-                    if "category" in product:
-                        result["category"] = product["category"]
-                        result["google_product_category"] = product["category"]
-                    availability_value = product.get("availability") or product.get(
-                        "itemAvailability"
-                    )
-                    if availability_value not in (None, "", [], {}):
-                        result["availability"] = availability_value
-        
-        # UA schema: currencyCode at ecommerce level
-        if "currencyCode" in ecommerce:
-            result["price_currency"] = ecommerce["currencyCode"]
-        
-        # Return first valid ecommerce data found
-        if result:
-            return result
-    
-    return {}
+
+    if "currencyCode" in ecommerce:
+        result["price_currency"] = ecommerce["currencyCode"]
+
+    return result
+
+
+def _score_datalayer_payload(
+    result: dict[str, object], *, push_index: int
+) -> tuple[int, int, int]:
+    weighted_fields = {
+        "price": 3,
+        "sale_price": 2,
+        "discount_amount": 1,
+        "discount_percentage": 1,
+        "price_currency": 2,
+        "availability": 2,
+        "category": 1,
+        "google_product_category": 1,
+    }
+    populated_fields = {
+        key
+        for key, value in result.items()
+        if key != "_selected_push_index" and value not in (None, "", [], {})
+    }
+    weighted_score = sum(
+        weight for key, weight in weighted_fields.items() if key in populated_fields
+    )
+    result["_selected_push_index"] = push_index
+    return weighted_score, len(populated_fields), push_index
 
 
 def extract_apollo_state_from_meta(soup: BeautifulSoup) -> dict | None:
@@ -216,8 +312,10 @@ def extract_hydrated_states(soup: BeautifulSoup) -> tuple[list[dict | list], set
     return blobs, seen_script_ids
 
 
-def extract_embedded_json(soup: BeautifulSoup, seen_script_ids: set[str] | None = None) -> list[dict | list]:
-    blobs: list[dict | list] = []
+def extract_embedded_json(
+    soup: BeautifulSoup, seen_script_ids: set[str] | None = None
+) -> list[dict[str, object]]:
+    blobs: list[dict[str, object]] = []
     seen: set[str] = set()
     seen_script_ids = set(seen_script_ids or ())
     for node in soup.find_all("script"):
@@ -228,15 +326,33 @@ def extract_embedded_json(soup: BeautifulSoup, seen_script_ids: set[str] | None 
         text = node.string or node.get_text(" ", strip=True) or ""
         if not text or script_type == "application/ld+json":
             continue
-        if script_type == "application/json" or any(token in script_id for token in ("state", "data", "props", "product")):
-            for candidate_text in [text, *_extract_next_bootstrap_children(text)]:
+        should_probe_script = script_type == "application/json" or any(
+            token in script_id for token in _APPROVED_EMBEDDED_SCRIPT_ID_TOKENS
+        )
+        if should_probe_script:
+            for candidate_text in [text]:
                 parsed = _parse_json_blob(candidate_text)
-                if parsed is not None:
-                    fingerprint = json.dumps(parsed, sort_keys=True, default=str)
-                    if _normalized_script_identifier(node, text, fingerprint) in seen_script_ids:
-                        continue
-                    _append_unique_blob(blobs, seen, parsed)
-    data_attr_tokens = ("json", "state", "props", "product", "config", "schema", "payload")
+                if parsed is None:
+                    continue
+                fingerprint = json.dumps(parsed, sort_keys=True, default=str)
+                if (
+                    _normalized_script_identifier(node, text, fingerprint)
+                    in seen_script_ids
+                ):
+                    continue
+                family = _classify_embedded_blob_family(
+                    parsed,
+                    attr_or_id_hint=script_id,
+                )
+                if not family:
+                    continue
+                _append_unique_embedded_blob(
+                    blobs,
+                    seen,
+                    parsed,
+                    family=family,
+                    origin="script",
+                )
     for node in soup.find_all(True):
         if not isinstance(node, Tag):
             continue
@@ -244,15 +360,30 @@ def extract_embedded_json(soup: BeautifulSoup, seen_script_ids: set[str] | None 
             if not str(attr_name or "").startswith("data-"):
                 continue
             attr_name_lower = str(attr_name).lower()
-            if not any(token in attr_name_lower for token in data_attr_tokens):
+            if not any(
+                token in attr_name_lower for token in _APPROVED_EMBEDDED_ATTR_TOKENS
+            ):
                 continue
             if isinstance(attr_value, list):
                 attr_text = " ".join(str(item) for item in attr_value)
             else:
                 attr_text = str(attr_value or "")
             parsed = _parse_json_blob(attr_text)
-            if parsed is not None:
-                _append_unique_blob(blobs, seen, parsed)
+            if parsed is None:
+                continue
+            family = _classify_embedded_blob_family(
+                parsed,
+                attr_or_id_hint=attr_name_lower,
+            )
+            if not family:
+                continue
+            _append_unique_embedded_blob(
+                blobs,
+                seen,
+                parsed,
+                family=family,
+                origin="data_attr",
+            )
     return blobs
 
 
@@ -353,6 +484,149 @@ def _append_unique_blob(blobs: list[dict | list], seen: set[str], parsed: dict |
         return
     seen.add(fingerprint)
     blobs.append(parsed)
+
+
+def _append_unique_embedded_blob(
+    blobs: list[dict[str, object]],
+    seen: set[str],
+    parsed: dict | list,
+    *,
+    family: str,
+    origin: str,
+) -> None:
+    fingerprint = json.dumps(parsed, sort_keys=True, default=str)
+    if fingerprint in seen:
+        return
+    seen.add(fingerprint)
+    blobs.append(
+        {
+            _EMBEDDED_BLOB_PAYLOAD_KEY: parsed,
+            _EMBEDDED_BLOB_FAMILY_KEY: family,
+            _EMBEDDED_BLOB_ORIGIN_KEY: origin,
+        }
+    )
+
+
+def _classify_embedded_blob_family(
+    parsed: dict | list,
+    *,
+    attr_or_id_hint: str = "",
+) -> str | None:
+    normalized_hint = _normalize_embedded_blob_hint(attr_or_id_hint)
+    hinted_family = _family_from_hint(normalized_hint)
+    if hinted_family and _payload_supports_embedded_family(parsed, hinted_family):
+        return hinted_family
+    return _infer_embedded_blob_family(parsed)
+
+
+def _family_from_hint(hint: str) -> str | None:
+    for token, family in _PRODUCT_CONTAINER_KEYS.items():
+        if token in hint:
+            return family
+    return None
+
+
+def _infer_embedded_blob_family(
+    parsed: dict | list,
+    *,
+    max_depth: int = 5,
+    _visited: set[int] | None = None,
+) -> str | None:
+    if max_depth < 0:
+        return None
+    if isinstance(parsed, list):
+        visited = _visited or set()
+        payload_id = id(parsed)
+        if payload_id in visited:
+            return None
+        visited = set(visited)
+        visited.add(payload_id)
+        for item in parsed[:5]:
+            family = _infer_embedded_blob_family(item, max_depth=max_depth - 1, _visited=visited)
+            if family:
+                return family
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    visited = _visited or set()
+    payload_id = id(parsed)
+    if payload_id in visited:
+        return None
+    visited = set(visited)
+    visited.add(payload_id)
+
+    normalized_keys = {_normalize_embedded_blob_hint(key) for key in parsed.keys()}
+    for key, family in _PRODUCT_CONTAINER_KEYS.items():
+        if key in normalized_keys and _payload_supports_embedded_family(
+            parsed.get(key),
+            family,
+            max_depth=max_depth - 1,
+            _visited=visited,
+        ):
+            return family
+
+    strong_signal_count = len(normalized_keys & _PRODUCT_STRONG_SIGNAL_KEYS)
+    supporting_signal_count = len(normalized_keys & _PRODUCT_SUPPORTING_SIGNAL_KEYS)
+    if "specifications" in normalized_keys or "specs" in normalized_keys:
+        return "spec_json"
+    if {"image", "images", "media", "gallery"} & normalized_keys and (
+        {"price", "brand", "sku"} & normalized_keys or "name" in normalized_keys
+    ):
+        return "media_json"
+    if "availability" in normalized_keys and (
+        {"price", "sku", "inventory"} & normalized_keys
+    ):
+        return "inventory_json"
+    if strong_signal_count >= 2 and supporting_signal_count >= 1:
+        return "product_json"
+    if strong_signal_count >= 3:
+        return "product_json"
+    if strong_signal_count >= 1 and supporting_signal_count >= 1:
+        return "product_json"
+    return None
+
+
+def _payload_supports_embedded_family(
+    payload: object,
+    family: str,
+    *,
+    max_depth: int = 5,
+    _visited: set[int] | None = None,
+) -> bool:
+    if max_depth < 0:
+        return False
+    if family == "spec_json":
+        return isinstance(payload, (dict, list))
+    if family == "media_json":
+        return isinstance(payload, (dict, list))
+    if family in {"product_json", "product_detail_json", "variant_json", "offer_json", "inventory_json"}:
+        return _has_embedded_product_signals(payload, max_depth=max_depth - 1, _visited=_visited)
+    return False
+
+
+def _normalize_embedded_blob_hint(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _has_embedded_product_signals(
+    payload: object,
+    *,
+    max_depth: int = 5,
+    _visited: set[int] | None = None,
+) -> bool:
+    if max_depth < 0:
+        return False
+    family = _infer_embedded_blob_family(payload, max_depth=max_depth, _visited=_visited)
+    return family in {
+        "product_json",
+        "product_detail_json",
+        "variant_json",
+        "offer_json",
+        "inventory_json",
+        "media_json",
+        "spec_json",
+    }
 
 
 def _parse_json_blob(text: str) -> dict | list | None:

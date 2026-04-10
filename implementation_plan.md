@@ -73,16 +73,16 @@ Regression risk: Low.
 ─────────────────────────────────────────────────────────────────
 | ID | Location (file:function) | Domain/Pattern Matched | Classification | Risk | Consolidation Action |
 |---|---|---|---|---|---|
-| H1 | extraction_rules.py:PLATFORM_FAMILIES | adp, icims, paycom, greenhouse | SMELL | Medium | Move to a JSON/YAML PlatformRegistry. |
-| H2 | selectors.py:_build_listing_readiness_overrides | oraclecloud.com, adp.com, ultipro.com | SMELL | Medium | Move to PlatformRegistry under listing_readiness_rules. |
-| H3 | browser_client.py:_is_invalid_job_surface_page | Titles: "GovernmentJobs", "City, State..." | DANGEROUS | High | Remove hardcoded titles. Use behavioral heuristics (e.g., detecting auth walls) or config-driven overrides. |
-| H4 | pipeline_config.py:BROWSER_FIRST_DOMAINS | careers.clarkassociatesinc.biz (via tests/config) | SMELL | Low | Move to PlatformRegistry under requires_browser: true. |
+| H1 | extraction_rules.py:PLATFORM_FAMILIES | adp, icims, paycom, greenhouse | SMELL | Medium | Move acquisition matching and browser-first policy into an acquisition-only PlatformRegistry. |
+| H2 | selectors.py:_build_listing_readiness_overrides | oraclecloud.com, adp.com, ultipro.com | SMELL | Medium | Remove domain matching from selectors.py; let selectors.py stay family-keyed and have PlatformRegistry supply only acquisition family detection. |
+| H3 | acquirer.py:_is_invalid_job_surface_page / pipeline/core.py surface remap helpers | Titles: "GovernmentJobs", "City, State..." and other redirect-shell heuristics | DANGEROUS | High | Keep backend surface normalization URL/platform-driven (listing vs detail comes from the request, job vs commerce comes from backend detection), and downgrade redirect-shell title/canonical checks to diagnostics only rather than letting them own remap decisions. |
+| H4 | pipeline_config.py:BROWSER_FIRST_DOMAINS | careers.clarkassociatesinc.biz (via tests/config) | SMELL | Low | Move browser-first acquisition flags into PlatformRegistry under acquisition-only fields such as requires_browser. |
 | H5 | cookie_store.py:cookie_policy_for_domain | your-domain.com | JUSTIFIED | Low | Extract this entirely into an environment-loaded dictionary so open-source/core code doesn't reference specific clients. |
 Consolidation Strategy:
-Define Schema: Create a PlatformConfig Pydantic model encapsulating url_patterns, requires_browser, readiness_selectors, max_wait_ms, and noise_filters.
-Extract: Remove all domain strings from python dictionaries in extraction_rules.py and selectors.py.
-Load: Load these rules dynamically at crawler startup via a platforms.json file.
-Adapter Pattern: For complex hacks (like the USAJobs custom payload extractor found in tests), formalize the AdapterResult pattern and route traffic to a dedicated USAJobsAdapter rather than adding if "usajobs" in url inside the core extractor.
+Define Schema: Create a PlatformConfig model for acquisition-only policy and family detection. Keep fields limited to acquisition concerns such as family matchers, requires_browser, and optional proxy_policy. Do not put extraction selectors, noise filters, or schema/site-memory in the registry.
+Extract: Remove raw domain strings from python dictionaries in extraction_rules.py and selectors.py. selectors.py may keep family-keyed readiness selectors/max-wait values, but family detection must come from the registry.
+Load: Load platform family rules dynamically from a platforms.json file via app/services/config/platform_registry.py.
+Adapter Pattern: For complex extraction special cases (for example USAJobs), keep explicit adapters outside the registry rather than expanding the registry into an extraction-rule store.
 ─────────────────────────────────────────────────────────────────
 4) SCHEMA POLLUTION TRACE REPORT
 ─────────────────────────────────────────────────────────────────
@@ -99,6 +99,9 @@ Priority: P0 | Effort: S
 ─────────────────────────────────────────────────────────────────
 5) BROWSER TRAVERSAL MODE — BUG TRACE & FIX PLAN
 ─────────────────────────────────────────────────────────────────
+Preamble:
+Traversal helpers are explicit opt-in behavior only. `paginate`, `scroll_to_bottom`, and `click_load_more` / `load_more` may execute only when the user has set `settings.advanced_mode` (or the normalized traversal mode derived from that field). Initial browser rendering for acquisition/readiness does not imply traversal permission and must remain independent from traversal execution.
+
 Paginated (collect_paginated_html)
 Status: Partial
 Evidence: browser_client.py::_click_and_observe_next_page
@@ -173,10 +176,11 @@ Problem: Infinite scroll only captures the final DOM state. Virtualized grids re
 Action:
 Open app/services/acquisition/traversal.py.
 Modify scroll_to_bottom to accept a callback capture_dom_fragment.
-Inside the scroll_to_bottom loop, after cooperative_sleep_ms settles, call await capture_dom_fragment(page).
+Only perform scroll traversal or invoke capture_dom_fragment when traversal was explicitly enabled by `settings.advanced_mode` / the normalized traversal mode.
+Inside the scroll_to_bottom loop, after the settle window completes, call await capture_dom_fragment(page).
 Open browser_client.py and implement the callback to push await page.content() into a list of strings.
 Merge the list of strings using \n<!-- PAGE BREAK... -->\n similar to how collect_paginated_html works.
-Acceptance criteria: A run against a virtualized grid returns all items loaded during the scroll, not just the last 20.
+Acceptance criteria: `advanced_mode=true` with `advanced_mode="scroll"` (or equivalent normalized traversal mode) accumulates all DOM fragments seen during traversal, while `advanced_mode=false` skips scroll traversal entirely and falls back to normal single-page acquisition.
 Depends on: none
 TODO-003: Strict Schema Validation Gate
 Priority: P0
@@ -200,10 +204,10 @@ File(s): app/services/config/extraction_rules.py, app/services/config/selectors.
 Problem: Codebase uses specific domain strings (e.g. "adp", "icims") scattered across multiple files.
 Action:
 Create app/services/config/platform_registry.py.
-Define a dictionary mapping domain patterns to configuration (e.g. requires_browser, readiness_selectors).
-Migrate PLATFORM_FAMILIES and PLATFORM_LISTING_READINESS_URL_PATTERNS into this unified registry.
+Define a registry for acquisition-only family detection and policy (for example family matchers, requires_browser, proxy_policy).
+Migrate PLATFORM_FAMILIES and PLATFORM_LISTING_READINESS_URL_PATTERNS into this acquisition registry for family detection only.
 Update _requires_browser_first and resolve_listing_readiness_override to query this single source of truth.
-Acceptance criteria: No raw domain strings (like "adp.com") exist in extraction_rules.py or selectors.py.
+Acceptance criteria: No raw domain strings (like "adp.com") exist in extraction_rules.py or selectors.py; platform_registry.py is explicitly not used for extraction selectors, noise filters, or schema/site-memory logic.
 Depends on: none
 TODO-005: Remove Side-Effects from Pydantic Responses
 Priority: P2

@@ -53,7 +53,9 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
         # rather than parsing the entire DOM with BeautifulSoup.
         stripped = re.sub(r"<script.*?</script>", " ", html, flags=re.DOTALL | re.IGNORECASE)
         stripped = re.sub(r"<style.*?</style>", " ", stripped, flags=re.DOTALL | re.IGNORECASE)
-        stripped = re.sub(r"<.*?>", " ", stripped, flags=re.DOTALL)
+        stripped = re.sub(r"<noscript.*?</noscript>", " ", stripped, flags=re.DOTALL | re.IGNORECASE)
+        stripped = re.sub(r"<svg.*?</svg>", " ", stripped, flags=re.DOTALL | re.IGNORECASE)
+        stripped = re.sub(r"<[^>]*?>", " ", stripped, flags=re.DOTALL)
         visible = " ".join(stripped.lower().split())[:50000]
     else:
         try:
@@ -93,7 +95,7 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
     for item in BLOCK_CDN_PROVIDER_MARKERS:
         marker = str(item.get("marker") or "")
         marker_provider = str(item.get("provider") or "")
-        if marker in html_lower:
+        if marker and marker in html_lower:
             provider_marker = marker
             provider = marker_provider
             break

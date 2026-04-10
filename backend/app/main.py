@@ -32,11 +32,13 @@ from app.core.telemetry import (
 )
 from app.services.auth_service import bootstrap_admin_user
 from app.services.acquisition.browser_client import shutdown_browser_pool
+from app.services.acquisition.cookie_store import validate_cookie_policy_config
 from app.services.workers import CrawlWorkerLoop, QueueLeaseConfig, default_worker_id, recover_stale_leases
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    validate_cookie_policy_config()
     worker = CrawlWorkerLoop(
         config=QueueLeaseConfig(worker_id=default_worker_id())
     )

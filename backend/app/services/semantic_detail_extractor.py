@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 from typing import Any
 
@@ -70,20 +71,21 @@ def extract_semantic_detail_data(
     html: str,
     *,
     requested_fields: list[str] | None = None,
+    soup: BeautifulSoup | None = None,
 ) -> dict[str, Any]:
     """Extract page-local semantic content from detail pages.
 
     The result is intentionally compact and is designed to feed the field
     candidate extractor rather than replace it.
     """
-    if not html:
+    if not html and soup is None:
         return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}, "aggregates": {}, "table_groups": []}
 
-    soup = BeautifulSoup(html, "html.parser")
-    _strip_non_content_nodes(soup)
-    sections = _extract_sections(soup)
-    table_groups = _extract_table_groups(soup)
-    specifications = _extract_specifications(soup, table_groups)
+    working_soup = deepcopy(soup) if soup is not None else BeautifulSoup(html, "html.parser")
+    _strip_non_content_nodes(working_soup)
+    sections = _extract_sections(working_soup)
+    table_groups = _extract_table_groups(working_soup)
+    specifications = _extract_specifications(working_soup, table_groups)
     promoted = _promote_semantic_fields(sections, specifications, requested_fields or [])
     coverage = _build_coverage(requested_fields or [], sections, specifications, promoted)
     aggregates = _build_semantic_aggregates(sections, specifications)

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.services.acquisition.acquirer import AcquisitionResult
-from app.services.pipeline.core import VERDICT_LISTING_FAILED, _extract_listing
+from app.services.pipeline.core import VERDICT_LISTING_FAILED, _extract_listing, _save_listing_records
 
 
 @pytest.mark.asyncio
@@ -45,7 +45,10 @@ async def test_extract_listing_downgrades_sparse_job_payload_records(monkeypatch
         "app.services.pipeline.core.extract_listing_records",
         lambda **_: [{"title": "Quality Inspector I - 2nd shift", "url": "https://example.com/jobs/1"}],
     )
-    monkeypatch.setattr("app.services.pipeline.core._save_listing_records", AsyncMock(return_value=[{"title": "Quality Inspector I - 2nd shift", "url": "https://example.com/jobs/1"}]))
+    monkeypatch.setattr(
+        "app.services.pipeline.core._save_listing_records",
+        AsyncMock(return_value=([{"title": "Quality Inspector I - 2nd shift", "url": "https://example.com/jobs/1"}], {"duplicate_drops": 0})),
+    )
 
     records, verdict, metrics = await _extract_listing(
         session=SimpleNamespace(flush=AsyncMock()),
@@ -70,4 +73,29 @@ async def test_extract_listing_downgrades_sparse_job_payload_records(monkeypatch
     assert records == [{"title": "Quality Inspector I - 2nd shift", "url": "https://example.com/jobs/1"}]
     assert verdict == "partial"
     assert "job_payload_missing_context" in metrics["listing_quality_flags"]
+
+
+@pytest.mark.asyncio
+async def test_save_listing_records_deduplicates_by_strong_identity() -> None:
+    session = SimpleNamespace(add=lambda _record: None)
+    saved, stats = await _save_listing_records(
+        session=session,
+        run=SimpleNamespace(id=2001),
+        records=[
+            {"title": "Role A", "url": "https://example.com/jobs/1", "job_id": "abc"},
+            {"title": "Role A duplicate", "url": "https://example.com/jobs/1#fragment", "job_id": "abc"},
+            {"title": "Role B", "url": "https://example.com/jobs/2", "job_id": "def"},
+        ],
+        source_type="listing",
+        source_label="listing",
+        url="https://example.com/jobs",
+        surface="job_listing",
+        max_records=20,
+        raw_html_path=None,
+        acquisition_trace={},
+        manifest_trace=None,
+    )
+
+    assert [record["job_id"] for record in saved] == ["abc", "def"]
+    assert stats["duplicate_drops"] == 1
 

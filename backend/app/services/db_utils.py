@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import random
 from typing import TypeVar, Callable, Awaitable
 
@@ -35,6 +36,13 @@ def _is_retryable_sqlite_lock_error(exc: OperationalError) -> bool:
         or "database schema is locked" in message
         or ("sqlite" in message and "locked" in message)
     )
+
+
+def _session_uses_sqlite(session: AsyncSession) -> bool:
+    with suppress(Exception):
+        bind = session.bind
+        return bind is not None and bind.dialect.name == "sqlite"
+    return False
 
 
 async def with_retry(
@@ -77,8 +85,13 @@ async def with_retry(
 
     for attempt in range(max_retries):
         try:
-            result = await operation(session)
-            await session.commit()
+            if _session_uses_sqlite(session):
+                async with sqlite_write_lock:
+                    result = await operation(session)
+                    await session.commit()
+            else:
+                result = await operation(session)
+                await session.commit()
             return result
         except OperationalError as exc:
             if not _is_retryable_sqlite_lock_error(exc):

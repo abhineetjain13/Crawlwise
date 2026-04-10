@@ -26,7 +26,7 @@ from app.services.crawl_state import (
     update_run_status,
 )
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls, resolve_traversal_mode
-from app.services.db_utils import sqlite_write_lock, with_retry
+from app.services.db_utils import with_retry
 from app.services.domain_utils import normalize_domain
 from app.services.crawl_metrics import (
     build_acquisition_profile,
@@ -114,13 +114,7 @@ async def _retry_run_update(
         await mutate(retry_session, run)
         await retry_session.flush()
 
-    bind = session.bind
-    if bind is not None and bind.dialect.name == "sqlite":
-        async with sqlite_write_lock:
-            # Directly use the DB retry mechanism without the broken in-memory lock
-            await with_retry(session, _operation)
-    else:
-        await with_retry(session, _operation)
+    await with_retry(session, _operation)
 
 
 async def _cleanup_run_lock(run_id: int) -> None:
@@ -338,7 +332,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         async def _cancel_tasks(tasks: list[asyncio.Task]) -> None:
             for task in tasks:
                 task.cancel()
-            
+
             # Give tasks a brief grace period to handle cancellation
             if tasks:
                 done, pending = await asyncio.wait(tasks, timeout=0.5)
@@ -348,6 +342,10 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                         await task
                     except (asyncio.CancelledError, Exception):
                         pass  # Expected during cancellation
+                if pending:
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
 
         watchdog_active = False
         if (

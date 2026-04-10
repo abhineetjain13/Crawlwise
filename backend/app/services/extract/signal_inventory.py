@@ -25,7 +25,14 @@ class SignalInventory:
     page_type: str | None = None
 
 
-def build_signal_inventory(html: str, url: str, surface: str) -> SignalInventory:
+def build_signal_inventory(
+    html: str,
+    url: str,
+    surface: str,
+    *,
+    soup: BeautifulSoup | None = None,
+    page_sources: dict[str, Any] | None = None,
+) -> SignalInventory:
     """Collect all signals before classification.
 
     Returns SignalInventory with:
@@ -33,12 +40,19 @@ def build_signal_inventory(html: str, url: str, surface: str) -> SignalInventory
     - dom_patterns: {card_count, detail_markers, url_patterns}
     - metadata: {link_count, text_ratio, domain}
     """
-    soup = BeautifulSoup(html or "", "html.parser")
+    soup = soup if soup is not None else BeautifulSoup(html or "", "html.parser")
+    page_sources = page_sources if isinstance(page_sources, dict) else {}
 
     # Collect structured data signals
-    json_ld = extract_json_ld(soup)
-    next_data = extract_next_data(soup)
-    hydrated_states, _ = extract_hydrated_states(soup)
+    json_ld = page_sources.get("json_ld")
+    if not isinstance(json_ld, list):
+        json_ld = extract_json_ld(soup)
+    next_data = page_sources.get("next_data")
+    if next_data is None:
+        next_data = extract_next_data(soup)
+    hydrated_states = page_sources.get("hydrated_states")
+    if not isinstance(hydrated_states, list):
+        hydrated_states, _ = extract_hydrated_states(soup)
     datalayer = _extract_datalayer_signal(html)
 
     structured_data = {
@@ -118,7 +132,9 @@ def classify_page_type(inventory: SignalInventory) -> str:
                 top_level_fields = {"currency", "value"}
                 has_item_hint = items and isinstance(items[0], dict) and any(key in items[0] for key in item_level_fields)
                 has_top_hint = any(key in ecommerce for key in top_level_fields)
-                has_detail_hint = event_name == "view_item" or has_item_hint or has_top_hint
+                has_detail_hint = event_name == "view_item" or has_item_hint or (
+                    event_name != "view_item_list" and has_top_hint
+                )
                 if len(items) > 1:
                     return "listing"
                 if len(items) == 1 and has_detail_hint:

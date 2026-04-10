@@ -13,6 +13,7 @@ VERDICT_BLOCKED = "blocked"
 VERDICT_SCHEMA_MISS = "schema_miss"
 VERDICT_LISTING_FAILED = "listing_detection_failed"
 VERDICT_EMPTY = "empty"
+VERDICT_ERROR = "error"
 
 __all__ = [
     "VERDICT_SUCCESS",
@@ -21,6 +22,7 @@ __all__ = [
     "VERDICT_SCHEMA_MISS",
     "VERDICT_LISTING_FAILED",
     "VERDICT_EMPTY",
+    "VERDICT_ERROR",
     "_compute_verdict",
     "_passes_core_verdict",
     "_aggregate_verdict",

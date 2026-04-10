@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+from pathlib import Path
+import tempfile
 
 import pytest
 import pytest_asyncio
@@ -12,11 +15,29 @@ from app.core.database import Base
 from app.models.user import User
 
 
+_TMP_COUNTER = itertools.count()
+_WORKSPACE_TMP_ROOT = Path(__file__).resolve().parents[1] / ".pytest-tmp"
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture
+def tmp_path() -> Path:
+    path = _WORKSPACE_TMP_ROOT / f"case-{next(_TMP_COUNTER)}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _redirect_tempfile_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    yield
+    monkeypatch.setattr(tempfile, "tempdir", None)
 
 
 @pytest.fixture(autouse=True)

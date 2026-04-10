@@ -28,6 +28,29 @@ _MAX_TRAVERSAL_FRAGMENT_BYTES = 2_000_000
 _MAX_TRAVERSAL_TOTAL_BYTES = 6_000_000
 
 
+def _identity_tokens(metrics: dict[str, object] | None) -> set[str]:
+    if not metrics:
+        return set()
+    raw = metrics.get("identities")
+    if not isinstance(raw, list):
+        return set()
+    return {
+        str(token).strip().lower()
+        for token in raw
+        if str(token).strip()
+    }
+
+
+def _identity_growth(
+    seen_identities: set[str],
+    metrics: dict[str, object] | None,
+) -> int:
+    current = _identity_tokens(metrics)
+    before = len(seen_identities)
+    seen_identities.update(current)
+    return max(0, len(seen_identities) - before)
+
+
 @dataclass
 class TraversalResult:
     html: str | None = None
@@ -61,6 +84,7 @@ async def apply_traversal_mode(
     page_content_with_retry: Callable[..., Awaitable[str]],
     wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]],
     wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]],
+    peek_next_page_signal: Callable[..., Awaitable[dict[str, object] | None]],
     click_and_observe_next_page: Callable[..., Awaitable[str]],
     has_load_more_control: Callable[..., Awaitable[bool]],
     dismiss_cookie_consent: Callable[..., Awaitable[None]],
@@ -216,11 +240,8 @@ async def apply_traversal_mode(
         await _capture_fragment(page, "auto-pre-pagination")
         pre_pagination_html = "\n".join(collected_fragments) if collected_fragments else await page_content_with_retry(page, checkpoint=checkpoint)
         
-        next_page_url = await click_and_observe_next_page(
-            page,
-            checkpoint=checkpoint,
-        )
-        if next_page_url:
+        next_page_signal = await peek_next_page_signal(page)
+        if next_page_signal:
             paginated = await collect_paginated_html(
                 page,
                 config=config,
@@ -381,6 +402,7 @@ async def collect_paginated_html(
         summary={
             "mode": "paginate",
             "attempted": True,
+            "pages_collected": len(fragments),
             "page_count": len(fragments),
             "visited_urls": len(visited_urls),
             "steps": steps,
@@ -442,6 +464,45 @@ async def find_next_page_url_anchor_only(
         logger.debug("Failed to evaluate DOM for next-page link", exc_info=True)
         return ""
     return str(href or "").strip()
+
+
+async def _find_clickable_pagination_target(page, *, config: TraversalConfig | None = None):
+    config = _resolved_config(config)
+    click_selectors = [
+        *config.pagination_next_selectors,
+        '[aria-label*="next" i]',
+        'button[class*="next"]',
+        '[role="button"][class*="next"]',
+        'button:has-text("Next")',
+        '[data-testid*="next"]',
+    ]
+    for selector in click_selectors:
+        try:
+            locator = page.locator(selector).first
+            if await locator.count():
+                return selector, locator
+        except PlaywrightError:
+            logger.debug(
+                "Failed to inspect clickable pagination selector %s",
+                selector,
+                exc_info=True,
+            )
+    return None, None
+
+
+async def peek_next_page_signal(
+    page,
+    *,
+    config: TraversalConfig | None = None,
+) -> dict[str, object] | None:
+    config = _resolved_config(config)
+    next_page_url = await find_next_page_url_anchor_only(page, config=config)
+    if next_page_url:
+        return {"kind": "url", "next_page_url": next_page_url}
+    selector, target = await _find_clickable_pagination_target(page, config=config)
+    if target is None:
+        return None
+    return {"kind": "click", "selector": selector}
 
 
 async def snapshot_pagination_state(page) -> dict[str, object]:
@@ -553,27 +614,7 @@ async def click_and_observe_next_page(
             )
             return None
 
-    click_selectors = [
-        *config.pagination_next_selectors,
-        '[aria-label*="next" i]',
-        'button[class*="next"]',
-        '[role="button"][class*="next"]',
-        'button:has-text("Next")',
-        '[data-testid*="next"]',
-    ]
-    target = None
-    for selector in click_selectors:
-        try:
-            locator = page.locator(selector).first
-            if await locator.count():
-                target = locator
-                break
-        except PlaywrightError:
-            logger.debug(
-                "Failed to inspect clickable pagination selector %s",
-                selector,
-                exc_info=True,
-            )
+    _selector, target = await _find_clickable_pagination_target(page, config=config)
     if target is None:
         return ""
 
@@ -633,12 +674,16 @@ async def scroll_to_bottom(
     stop_reason = "max_scrolls_reached"
     forced_probe_used = False
     weak_progress_streak = 0
+    seen_identities: set[str] = set()
     max_iterations = min(max(0, int(max_scrolls or 0)), 50)
     for index in range(max_iterations):
         current_height = await current_scroll_height(page)
         current_metrics = await snapshot_listing_page_metrics(page)
+        current_identity_growth = _identity_growth(seen_identities, current_metrics)
         if current_height == prev_height and not listing_progressed(
-            previous_metrics, current_metrics
+            previous_metrics,
+            current_metrics,
+            identity_growth=current_identity_growth,
         ):
             if steps and not forced_probe_used:
                 forced_probe_used = True
@@ -661,9 +706,11 @@ async def scroll_to_bottom(
             try:
                 from playwright.async_api import TimeoutError as PwTimeoutError
                 await page.wait_for_load_state("networkidle", timeout=config.scroll_wait_min_ms)
-            except (PwTimeoutError, PlaywrightError, OSError):
+            except (PwTimeoutError, PlaywrightError):
                 # FIX: Do nothing! The time has already elapsed during wait_for_load_state timeout
                 pass
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                logger.warning("Ignoring transient OS error during scroll wait_for_load_state: %s", exc)
         else:
             await cooperative_sleep_ms(
                 config.scroll_wait_min_ms,
@@ -671,11 +718,13 @@ async def scroll_to_bottom(
             )
         next_height = await current_scroll_height(page)
         next_metrics = await snapshot_listing_page_metrics(page)
+        identity_growth = _identity_growth(seen_identities, next_metrics)
         progress_kind = classify_progress(
             previous=current_metrics,
             current=next_metrics,
             height_before=current_height,
             height_after=next_height,
+            identity_growth=identity_growth,
         )
         progressed = progress_kind != "none"
         if not progressed:
@@ -683,17 +732,20 @@ async def scroll_to_bottom(
             await cooperative_sleep_ms(500, checkpoint=checkpoint)
             settled_height = await current_scroll_height(page)
             settled_metrics = await snapshot_listing_page_metrics(page)
+            settled_identity_growth = _identity_growth(seen_identities, settled_metrics)
             settled_progress_kind = classify_progress(
                 previous=current_metrics,
                 current=settled_metrics,
                 height_before=next_height,
                 height_after=settled_height,
+                identity_growth=settled_identity_growth,
             )
             if settled_progress_kind != "none":
                 progressed = True
                 progress_kind = settled_progress_kind
                 next_height = settled_height
                 next_metrics = settled_metrics
+                identity_growth = settled_identity_growth
 
         if progress_kind == "height_only":
             weak_progress_streak += 1
@@ -725,6 +777,13 @@ async def scroll_to_bottom(
                 "cardish_count_after": int(
                     (next_metrics or {}).get("cardish_count", 0) or 0
                 ),
+                "identity_count_before": int(
+                    (current_metrics or {}).get("identity_count", 0) or 0
+                ),
+                "identity_count_after": int(
+                    (next_metrics or {}).get("identity_count", 0) or 0
+                ),
+                "identity_growth": identity_growth,
                 "progressed": progressed,
             }
         )
@@ -843,11 +902,17 @@ async def current_scroll_height(page) -> int:
 
 
 def listing_progressed(
-    previous: dict[str, object] | None, current: dict[str, object] | None
+    previous: dict[str, object] | None,
+    current: dict[str, object] | None,
+    *,
+    identity_growth: int = 0,
+    dom_mutated: bool = False,
 ) -> bool:
+    if identity_growth > 0 or dom_mutated:
+        return True
     if not previous or not current:
         return False
-    for key in ("link_count", "cardish_count", "text_length", "html_length"):
+    for key in ("identity_count", "link_count", "cardish_count", "text_length", "html_length"):
         if int(current.get(key, 0) or 0) > int(previous.get(key, 0) or 0):
             return True
     return False
@@ -859,8 +924,19 @@ def classify_progress(
     current: dict[str, object] | None,
     height_before: int,
     height_after: int,
+    identity_growth: int = 0,
 ) -> str:
-    if listing_progressed(previous, current):
+    dom_mutated = bool(
+        previous
+        and current
+        and previous.get("dom_signature") != current.get("dom_signature")
+    )
+    if listing_progressed(
+        previous,
+        current,
+        identity_growth=identity_growth,
+        dom_mutated=dom_mutated,
+    ):
         return "content"
     if height_after > height_before:
         return "height_only"
@@ -881,9 +957,11 @@ async def click_load_more(
     config = _resolved_config(config)
     steps: list[dict[str, object]] = []
     stop_reason = "max_clicks_reached"
+    seen_identities: set[str] = set()
     for index in range(max_clicks):
         clicked = False
         previous_metrics = await snapshot_listing_page_metrics(page)
+        _identity_growth(seen_identities, previous_metrics)
         for selector in config.load_more_selectors:
             try:
                 button = page.locator(selector).first
@@ -899,16 +977,30 @@ async def click_load_more(
                         try:
                             from playwright.async_api import TimeoutError as PwTimeoutError
                             await page.wait_for_load_state("networkidle", timeout=config.load_more_wait_min_ms)
-                        except (PwTimeoutError, PlaywrightError, OSError):
+                        except (PwTimeoutError, PlaywrightError):
                             # FIX: Do nothing! The time has already elapsed during wait_for_load_state timeout
                             pass
+                        except (BrokenPipeError, ConnectionResetError) as exc:
+                            logger.warning("Ignoring transient OS error during load-more wait_for_load_state: %s", exc)
                     else:
                         await cooperative_sleep_ms(
                             config.load_more_wait_min_ms,
                             checkpoint=checkpoint,
                         )
                     current_metrics = await snapshot_listing_page_metrics(page)
-                    progressed = listing_progressed(previous_metrics, current_metrics)
+                    identity_growth = _identity_growth(seen_identities, current_metrics)
+                    button_still_visible = await button.is_visible()
+                    dom_mutated = bool(
+                        previous_metrics
+                        and current_metrics
+                        and previous_metrics.get("dom_signature") != current_metrics.get("dom_signature")
+                    )
+                    progressed = listing_progressed(
+                        previous_metrics,
+                        current_metrics,
+                        identity_growth=identity_growth,
+                        dom_mutated=dom_mutated or not button_still_visible,
+                    )
                     steps.append(
                         {
                             "action": "load_more",
@@ -926,6 +1018,15 @@ async def click_load_more(
                             "cardish_count_after": int(
                                 (current_metrics or {}).get("cardish_count", 0) or 0
                             ),
+                            "identity_count_before": int(
+                                (previous_metrics or {}).get("identity_count", 0) or 0
+                            ),
+                            "identity_count_after": int(
+                                (current_metrics or {}).get("identity_count", 0) or 0
+                            ),
+                            "identity_growth": identity_growth,
+                            "button_disappeared": not button_still_visible,
+                            "dom_mutated": dom_mutated,
                             "progressed": progressed,
                         }
                     )

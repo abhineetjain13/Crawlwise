@@ -15,7 +15,9 @@ from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.paycom import PaycomAdapter
+from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.registry import resolve_adapter
+from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 
 
@@ -651,6 +653,34 @@ async def test_registry_resolves_adp_by_domain():
     )
     assert adapter is not None
     assert adapter.name == "adp"
+
+
+@pytest.mark.asyncio
+async def test_registry_resolves_remotive_by_domain():
+    adapter = await resolve_adapter("https://remotive.com/api/remote-jobs", "")
+    assert adapter is not None
+    assert adapter.name == "remotive"
+
+
+@pytest.mark.asyncio
+async def test_registry_resolves_remoteok_by_domain():
+    adapter = await resolve_adapter("https://remoteok.com/api", "")
+    assert adapter is not None
+    assert adapter.name == "remoteok"
+
+
+@pytest.mark.asyncio
+async def test_remotive_adapter_only_handles_remotive_domains():
+    adapter = RemotiveAdapter()
+    assert await adapter.can_handle("https://remotive.com/api/remote-jobs", "")
+    assert not await adapter.can_handle("https://remoteok.com/api", "")
+
+
+@pytest.mark.asyncio
+async def test_remoteok_adapter_only_handles_remoteok_domains():
+    adapter = RemoteOkAdapter()
+    assert await adapter.can_handle("https://remoteok.com/api", "")
+    assert not await adapter.can_handle("https://remotive.com/api/remote-jobs", "")
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.config.platform_registry import known_ats_domains
+
 PIPELINE_TUNING = {
     "http_timeout_seconds": 20,
     "impersonation_target": "chrome131",
@@ -297,11 +299,13 @@ EXTRACTION_RULES = {
             "material",
             "fabric",
             "composition",
+            "fabric content",
         ],
         "care": [
             "care",
             "care_instructions",
             "product_care",
+            "care instructions",
             "washing instructions",
         ],
         "features": [
@@ -309,6 +313,7 @@ EXTRACTION_RULES = {
             "feature",
             "highlights",
             "key_features",
+            "key features",
         ],
         "gsm": [
             "gsm",
@@ -404,16 +409,6 @@ EXTRACTION_RULES = {
             "product details",
             "the details",
         ],
-        "features": ["features", "feature", "highlights", "key features"],
-        "materials": [
-            "materials",
-            "material",
-            "fabric",
-            "composition",
-            "fabric content",
-        ],
-        "care": ["care", "care instructions", "product care", "washing instructions"],
-        "dimensions": ["dimensions", "sizing", "measurements"],
         "remote": ["remote", "work from home", "wfh"],
         "requirements": ["requirements", "job_requirements", "prerequisites"],
     },
@@ -1805,74 +1800,7 @@ COOKIE_POLICY = {
     "harvest_name_contains": [],
     "blocked_rules_precede_harvest": True,
     "reuse_in_http_client": True,
-    "domain_overrides": {
-        "your-domain.com": {
-            "allowed_cookie_names": ["consent_state", "locale", "currency"],
-            "harvest_cookie_names": [],
-        }
-    },
-    "template": True,
-    "note": "Replace your-domain.com with the real production domain(s) before enabling domain-specific cookie overrides. blocked_name_prefixes and blocked_name_contains always take precedence over harvest_* rules.",
+    "domain_overrides": {},
 }
 
-PLATFORM_FAMILIES = {
-    "domain_rules": {
-        "icims": ["icims.com"],
-        "adp": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com"],
-        "oracle_hcm": ["fa.ocs.oraclecloud.com"],
-        "paycom": ["paycomonline.net"],
-        "ultipro_ukg": ["recruiting.ultipro.com"],
-        "greenhouse": ["boards.greenhouse.io", "boards-api.greenhouse.io"],
-    },
-    "url_contains_rules": {
-        "icims": ["/jobs/search", "/jobs/", "/ajax/joblisting/"],
-        "adp": ["/recruitment/recruitment.html", "/srccar/public/", "/srccsh/public/"],
-        "oracle_hcm": ["/hcmui/candidateexperience/", "/sites/cx_"],
-        "paycom": ["/ats/web.php/portal/", "/career-page"],
-        "ultipro_ukg": ["/jobboard/"],
-        "greenhouse": ["/embed/job_board", "/jobs/"],
-    },
-    "html_contains_rules": {
-        "icims": ["icims_jobstable", "icims_mainwrapper", "/ajax/joblisting/"],
-        "adp": [
-            "myjobs.adp.com",
-            "recruitment/recruitment.html",
-            "workforcenow.adp.com",
-        ],
-        "oracle_hcm": ["oraclecloud.com", "candidateexperience"],
-        "paycom": ["paycomonline.net", "career-page"],
-        "ultipro_ukg": ["recruiting.ultipro.com"],
-        "greenhouse": ["boards.greenhouse.io", "grnhse_app"],
-    },
-    "generic_rules": {
-        "jobs_url_tokens": [
-            "/jobs",
-            "/careers",
-            "/career",
-            "job-search",
-            "jobboard",
-            "recruitment",
-            "currentopenings",
-        ],
-        "commerce_url_tokens": [
-            "/product",
-            "/product/",
-            "/products/",
-            "/shop/",
-            "/collections/",
-        ],
-    },
-}
-
-PLATFORM_BROWSER_POLICIES = {
-    "browser_first": ["adp"],
-}
-
-KNOWN_ATS_PLATFORMS = sorted(
-    {
-        str(pattern or "").strip().lower()
-        for family in PLATFORM_FAMILIES.get("domain_rules", {}).keys()
-        for pattern in PLATFORM_FAMILIES.get("domain_rules", {}).get(family, [])
-        if str(pattern or "").strip()
-    }
-)
+KNOWN_ATS_PLATFORMS = known_ats_domains()

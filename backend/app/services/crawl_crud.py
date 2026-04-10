@@ -23,7 +23,13 @@ from app.services.crawl_utils import (
     validate_extraction_contract,
 )
 from app.services.normalizers import normalize_value
-from app.services.pipeline_config import DEFAULT_MAX_SCROLLS, MIN_REQUEST_DELAY_MS
+from app.services.pipeline_config import (
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_SCROLLS,
+    MAX_MAX_PAGES,
+    MIN_MAX_PAGES,
+    MIN_REQUEST_DELAY_MS,
+)
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.url_safety import ensure_public_crawl_targets
 
@@ -66,7 +72,12 @@ async def create_crawl_run(
     normalized_surface = str(payload.get("surface") or "").strip()
     await ensure_public_crawl_targets(collect_target_urls(payload, settings))
     validate_extraction_contract(settings.get("extraction_contract") or [])
-    settings["max_pages"] = _safe_int(settings.get("max_pages", 5), 5, 1, 20)  # Cap at 20 to prevent OOM
+    settings["max_pages"] = _safe_int(
+        settings.get("max_pages", DEFAULT_MAX_PAGES),
+        DEFAULT_MAX_PAGES,
+        MIN_MAX_PAGES,
+        MAX_MAX_PAGES,
+    )
     settings["max_records"] = _safe_int(settings.get("max_records", 100), 100, 1)
     settings["max_scrolls"] = _safe_int(
         settings.get("max_scrolls", DEFAULT_MAX_SCROLLS), DEFAULT_MAX_SCROLLS, 1

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 TITLE_SELECTOR = "h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5"
 ANCHOR_SELECTOR = "a[href]"
 
@@ -156,107 +154,6 @@ CONSENT_SELECTORS = [
 ]
 
 COOKIE_CONSENT_SELECTORS = CONSENT_SELECTORS
-
-PLATFORM_LISTING_READINESS_SELECTORS: dict[str, list[str]] = {
-    "oracle_hcm": [
-        "a[href*='/job/']",
-    ],
-    "adp": [
-        ".current-openings-item",
-        "[id^='lblTitle_']",
-    ],
-    "paycom": [
-        "a[href*='/jobs/']",
-    ],
-    "ultipro_ukg": [
-        "a[href*='/jobboard/jobdetails/']",
-        "a[href*='/jobboard/']",
-        "[data-testid*='job' i]",
-    ],
-}
-
-PLATFORM_LISTING_READINESS_URL_PATTERNS: dict[str, list[list[str]]] = {
-    "oracle_hcm": [["candidateexperience", "oraclecloud.com"]],
-    "adp": [["workforcenow.adp.com"]],
-    "paycom": [["paycomonline.net"]],
-    "ultipro_ukg": [["recruiting.ultipro.com"]],
-}
-
-PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES: dict[str, int] = {
-    "oracle_hcm": 25_000,
-    "adp": 20_000,
-    "paycom": 20_000,
-    "ultipro_ukg": 20_000,
-}
-
-
-def _build_listing_readiness_overrides() -> dict[str, dict[str, object]]:
-    """Backward-compatible domain lookup map derived from platform patterns."""
-    overrides: dict[str, dict[str, object]] = {}
-    for platform, pattern_groups in PLATFORM_LISTING_READINESS_URL_PATTERNS.items():
-        selectors = PLATFORM_LISTING_READINESS_SELECTORS.get(platform) or []
-        if not selectors:
-            continue
-        max_wait_ms = int(PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES.get(platform, 0) or 0)
-        groups = pattern_groups if isinstance(pattern_groups, list) else []
-        for group in groups:
-            if not isinstance(group, list):
-                continue
-            normalized_group = [
-                str(token or "").strip().lower()
-                for token in group
-                if str(token or "").strip()
-            ]
-            domain_tokens = [
-                token
-                for token in normalized_group
-                if "." in token
-            ]
-            prefix_tokens = [token for token in normalized_group if "." not in token]
-            for domain in domain_tokens:
-                overrides[domain] = {
-                    "platform": platform,
-                    "selectors": list(selectors),
-                    "max_wait_ms": max_wait_ms,
-                }
-                for prefix in prefix_tokens:
-                    combined = f"{prefix}.{domain}"
-                    overrides[combined] = {
-                        "platform": platform,
-                        "selectors": list(selectors),
-                        "max_wait_ms": max_wait_ms,
-                    }
-    return overrides
-
-
-LISTING_READINESS_OVERRIDES: dict[str, dict[str, object]] = _build_listing_readiness_overrides()
-
-def resolve_listing_readiness_override(page_url: str) -> dict[str, object] | None:
-    """Return platform override using configured URL patterns and selector maps."""
-    normalized_url = str(page_url or "").strip().lower()
-    if not normalized_url:
-        return None
-    domain = str(urlparse(normalized_url).netloc or "").strip().lower()
-    for platform, pattern_groups in PLATFORM_LISTING_READINESS_URL_PATTERNS.items():
-        groups = pattern_groups if isinstance(pattern_groups, list) else []
-        if not any(
-            isinstance(group, list)
-            and group
-            and all(str(token or "").strip().lower() in normalized_url for token in group)
-            for group in groups
-        ):
-            continue
-        selectors = PLATFORM_LISTING_READINESS_SELECTORS.get(platform) or []
-        max_wait_ms = int(PLATFORM_LISTING_READINESS_MAX_WAIT_OVERRIDES.get(platform, 0) or 0)
-        if not selectors:
-            continue
-        return {
-            "platform": platform,
-            "domain": domain,
-            "selectors": list(selectors),
-            "max_wait_ms": max_wait_ms,
-        }
-    return None
 
 REVIEW_CONTAINER_KEYS = [
     "adapter_data",

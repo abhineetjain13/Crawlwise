@@ -198,9 +198,10 @@ def validate_value(field_name: str, value: object) -> object | None:
         if re.search(r"[{};]|rgb\(|rgba\(", lowered):
             return None
         # If a hex pattern is present, validate using the same regex as extraction
+        # for 3, 4, 6, or 8 hex digits.
         if "#" in lowered:
             if _HEX_COLOR_RE.fullmatch(lowered):
-                return text  # Valid standalone hex color (3-8 hex digits)
+                return text  # Valid standalone hex color.
             else:
                 return None  # Invalid or partial hex pattern
         if "cookie" in lowered or "select" in lowered:

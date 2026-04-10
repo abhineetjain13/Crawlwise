@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from json import loads as parse_json
 from pathlib import Path
@@ -11,6 +12,39 @@ from app.core.config import settings
 from app.services.pipeline_config import COOKIE_POLICY
 
 logger = logging.getLogger(__name__)
+
+_COOKIE_OVERRIDE_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+)
+_COOKIE_OVERRIDE_PLACEHOLDERS = {
+    "your-domain.com",
+    "www.your-domain.com",
+}
+
+
+def validate_cookie_policy_config(policy: dict[str, object] | None = None) -> None:
+    raw_policy = policy if isinstance(policy, dict) else COOKIE_POLICY
+    overrides = raw_policy.get("domain_overrides", {})
+    if overrides in (None, ""):
+        return
+    if not isinstance(overrides, dict):
+        raise ValueError("COOKIE_POLICY domain_overrides must be a dict")
+    for override_domain, override_values in overrides.items():
+        normalized = str(override_domain or "").strip().lower().lstrip(".")
+        if not normalized:
+            raise ValueError("COOKIE_POLICY domain_overrides cannot contain an empty domain")
+        if normalized in _COOKIE_OVERRIDE_PLACEHOLDERS:
+            raise ValueError(
+                f"COOKIE_POLICY domain_overrides contains placeholder domain {override_domain!r}"
+            )
+        if not _COOKIE_OVERRIDE_DOMAIN_RE.fullmatch(normalized):
+            raise ValueError(
+                f"COOKIE_POLICY domain_overrides contains malformed domain {override_domain!r}"
+            )
+        if not isinstance(override_values, dict):
+            raise ValueError(
+                f"COOKIE_POLICY domain_overrides[{override_domain!r}] must be a dict"
+            )
 
 
 def cookie_policy_for_domain(domain: str) -> dict[str, object]:

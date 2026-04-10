@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.config.platform_registry import detect_platform_family
 
 try:
     from curl_cffi import requests as curl_requests
@@ -26,12 +27,7 @@ class GreenhouseAdapter(BaseAdapter):
     domains = [greenhouse_board_host, "boards-api.greenhouse.io"]
 
     async def can_handle(self, url: str, html: str) -> bool:
-        if any(d in url for d in self.domains):
-            return True
-        # Embedded Greenhouse boards on company domains
-        if "greenhouse.io" in html and ("grnhse_app" in html or "greenhouse" in html.lower()):
-            return True
-        return False
+        return detect_platform_family(url, html) == self.name
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records: list[dict] = []

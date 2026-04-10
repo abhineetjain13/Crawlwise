@@ -708,6 +708,31 @@ def test_extract_embedded_json_source():
     assert embedded_title["value"] == "Embedded Title"
 
 
+def test_extract_embedded_json_candidate_keeps_blob_family_trace():
+    html = """
+    <html><body>
+    <script id="product-json">
+    {"product":{"title":"Embedded Title","brand":"EmbedCo","price":"19.99"}}
+    </script>
+    </body></html>
+    """
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+    embedded_title = next(
+        (item for item in candidates["title"] if item["source"] == "embedded_json"),
+        None,
+    )
+    assert embedded_title is not None
+    assert embedded_title["blob_family"] == "product_json"
+    assert embedded_title["blob_origin"] == "script"
+
+
 def test_extract_semantic_specifications_from_inline_list_pairs():
     html = """
     <html><body>
@@ -1084,6 +1109,8 @@ def test_coerce_category_rejects_nav_breadcrumb_noise():
 def test_coerce_price_rejects_boolean_values():
     assert coerce_field_candidate_value("price", False) is None
     assert coerce_field_candidate_value("price", "2") is None
+    assert coerce_field_candidate_value("price", "9.99") == "9.99"
+    assert coerce_field_candidate_value("price", "0.99") == "0.99"
     assert coerce_field_candidate_value("price", "2500") == "2500"
 
 
@@ -1616,3 +1643,71 @@ def test_extraction_hierarchy_order_preservation_datalayer_before_jsonld():
     assert len(candidates["price"]) == 1
     assert candidates["price"][0]["source"] == "datalayer"
     assert candidates["price"][0]["value"] == 29.99
+
+
+def test_extract_prefers_json_ld_when_datalayer_category_and_availability_are_polluted():
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "item_category": "page",
+                    "availability": "Add to cart"
+                }
+            ]
+        }
+    });
+    </script>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        "category": "Mirrorless Cameras",
+        "offers": {
+            "availability": "https://schema.org/InStock"
+        }
+    }
+    </script>
+    </body></html>
+    """
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["category"][0]["source"] == "json_ld"
+    assert candidates["category"][0]["value"] == "Mirrorless Cameras"
+    assert candidates["availability"][0]["source"] == "json_ld"
+    assert str(candidates["availability"][0]["value"]).endswith("InStock")
+
+
+def test_extract_ignores_generic_config_blob_pollution_from_data_attributes():
+    html = """
+    <html>
+      <body>
+        <div data-config='{"title":"Cookie Banner","category":"page","availability":"Add to cart"}'></div>
+        <h1>Canon EOS R8</h1>
+      </body>
+    </html>
+    """
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["title"][0]["source"] == "dom"
+    assert candidates["title"][0]["value"] == "Canon EOS R8"
+    assert "category" not in candidates
+    assert "availability" not in candidates

@@ -16,6 +16,7 @@ backend/.venv/
 backend/.hypothesis/
 backend/__pycache__/
 backend/.pytest_cache/
+backend/.pytest-tmp/
 backend/.mypy_cache/
 backend/.ruff_cache/
 backend/alembic.ini

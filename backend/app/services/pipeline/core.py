@@ -45,10 +45,13 @@ from app.services.extract.json_extractor import (
     extract_json_listing,
 )
 from app.services.extract.listing_extractor import extract_listing_records
+from app.services.extract.listing_identity import strong_identity_key
 from app.services.extract.listing_quality import assess_listing_record_quality, listing_set_quality
 from app.services.extract.service import (
+    candidate_source_rank,
     coerce_field_candidate_value,
     extract_candidates,
+    finalize_candidate_row,
 )
 from app.services.extract.source_parsers import parse_page_sources
 from app.services.knowledge_base.store import (
@@ -61,8 +64,9 @@ from app.services.normalizers import (
     normalize_value,
     validate_value,
 )
-from app.services.pipeline_config import JOB_PLATFORM_FAMILIES, SOURCE_RANKING
+from app.services.pipeline_config import AUTO_DETECT_SURFACE
 from app.services.requested_field_policy import expand_requested_fields
+from app.services.runtime_metrics import incr
 from app.services.schema_service import (
     ResolvedSchema,
     _supports_record_learning,
@@ -86,7 +90,6 @@ from .field_normalization import (
     _normalize_review_value,
     _review_values_equal,
     _normalize_record_fields,
-    _passes_detail_quality_gate,
     _raw_record_payload,
     _public_record_fields,
     _merge_record_fields,
@@ -100,6 +103,7 @@ from .verdict import (
     VERDICT_SCHEMA_MISS,
     VERDICT_LISTING_FAILED,
     VERDICT_EMPTY,
+    VERDICT_ERROR,
     _compute_verdict,
     _passes_core_verdict,
     _aggregate_verdict,
@@ -151,25 +155,24 @@ STAGE_SAVE = "SAVE"
 # Batch runtime helpers now live directly in _batch_runtime.
 
 def _reclassify_surface_if_job(surface: str, acq: AcquisitionResult) -> str:
-    """Remap commerce surfaces to job surfaces when diagnostics prove the page is a job surface."""
-    platform = str(
-        (acq.diagnostics or {}).get("surface_effective")
-        or (acq.diagnostics or {}).get("curl_platform_family")
-        or (acq.diagnostics or {}).get("platform_family")
+    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    effective_surface = str(diagnostics.get("surface_effective") or "").strip().lower()
+    if effective_surface in {
+        "job_listing",
+        "job_detail",
+        "ecommerce_listing",
+        "ecommerce_detail",
+    }:
+        return effective_surface
+    normalized_surface = str(surface or "").strip().lower()
+    platform_family = str(
+        diagnostics.get("platform_family")
+        or diagnostics.get("curl_platform_family")
         or ""
     ).strip().lower()
-    if platform in {"job_listing", "job_detail"}:
-        return platform
-    platform = str(
-        (acq.diagnostics or {}).get("curl_platform_family")
-        or (acq.diagnostics or {}).get("platform_family")
-        or ""
-    ).strip().lower()
-    if platform not in JOB_PLATFORM_FAMILIES:
-        return surface
-    if surface.endswith("listing"):
+    if normalized_surface.endswith("listing") and "job" in platform_family:
         return "job_listing"
-    if surface.endswith("detail"):
+    if normalized_surface.endswith("detail") and "job" in platform_family:
         return "job_detail"
     return surface
 
@@ -250,12 +253,13 @@ async def _process_single_url(
 
     # ── STAGE 1.2: SURFACE VALIDATION ──
     requested_surface = surface
-    surface = _resolve_listing_surface(surface=surface, url=url, html=acq.html, acq=acq)
-    surface = _reclassify_surface_if_job(surface, acq)
     url_metrics["requested_surface"] = requested_surface
-    url_metrics["effective_surface"] = surface
-    if surface != requested_surface:
-        url_metrics["surface_remapped"] = True
+    if AUTO_DETECT_SURFACE:
+        surface = _resolve_listing_surface(surface=surface, url=url, html=acq.html, acq=acq)
+        surface = _reclassify_surface_if_job(surface, acq)
+        if surface != requested_surface:
+            url_metrics["effective_surface"] = surface
+            url_metrics["surface_remapped"] = True
 
     # ── STAGE 1.5: BLOCKED PAGE DETECTION ──
     # For JSON responses, skip blocked detection (APIs don't serve challenge pages)
@@ -562,7 +566,7 @@ async def _process_json_response(
     if persist_logs:
         await _log(session, run.id, "info", "[ANALYZE] Normalizing JSON records")
     if is_listing:
-        saved = await _save_listing_records(
+        saved, save_stats = await _save_listing_records(
             session=session,
             run=run,
             records=extracted,
@@ -580,6 +584,9 @@ async def _process_json_response(
                 extra={"content_type": "json"},
             ),
         )
+        duplicate_drops = int(save_stats.get("duplicate_drops", 0) or 0)
+        if duplicate_drops:
+            url_metrics["duplicate_listing_drops"] = duplicate_drops
     else:
         saved = []
         resolved_schema = await resolve_schema(
@@ -767,7 +774,7 @@ async def _extract_listing(
         xhr_payloads=acq.network_payloads,
         adapter_records=adapter_records,
     )
-    saved = await _save_listing_records(
+    saved, save_stats = await _save_listing_records(
         session=session,
         run=run,
         records=extracted_records,
@@ -782,6 +789,9 @@ async def _extract_listing(
         adapter_name=adapter_name,
         surface_requested=surface if effective_surface != surface else None,
     )
+    duplicate_drops = int(save_stats.get("duplicate_drops", 0) or 0)
+    if duplicate_drops:
+        url_metrics["duplicate_listing_drops"] = duplicate_drops
 
     if update_run_state:
         await _set_stage(session, run, STAGE_SAVE)
@@ -874,8 +884,11 @@ async def _save_listing_records(
     manifest_trace: dict | None,
     adapter_name: str | None = None,
     surface_requested: str | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], dict[str, int]]:
     saved: list[dict] = []
+    stats = {"duplicate_drops": 0}
+    seen_identity_keys: set[str] = set()
+    seen_fallback_keys: set[str] = set()
     for raw_record in records:
         if len(saved) >= max_records:
             break
@@ -890,6 +903,27 @@ async def _save_listing_records(
         normalized = _normalize_record_fields(public_record, surface=surface)
         if not normalized:
             continue
+        identity_key = strong_identity_key(normalized)
+        fallback_key = ""
+        if not identity_key:
+            fallback_key = "|".join(
+                [
+                    str(normalized.get("title") or "").strip().lower(),
+                    str(normalized.get("url") or normalized.get("apply_url") or "").strip().lower(),
+                ]
+            ).strip("|")
+        if identity_key and identity_key in seen_identity_keys:
+            stats["duplicate_drops"] += 1
+            incr("listing_duplicate_drops_total")
+            continue
+        if fallback_key and fallback_key in seen_fallback_keys:
+            stats["duplicate_drops"] += 1
+            incr("listing_duplicate_drops_total")
+            continue
+        if identity_key:
+            seen_identity_keys.add(identity_key)
+        if fallback_key:
+            seen_fallback_keys.add(fallback_key)
         db_record = CrawlRecord(
             run_id=run.id,
             source_url=raw_record.get("source_url") or raw_record.get("url", url),
@@ -911,7 +945,7 @@ async def _save_listing_records(
         )
         session.add(db_record)
         saved.append(normalized)
-    return saved
+    return saved, stats
 
 
 async def _extract_detail(
@@ -1299,7 +1333,7 @@ async def _persist_failure_state(
         result_summary = dict(run.result_summary or {})
         result_summary["error"] = error_msg
         result_summary["progress"] = result_summary.get("progress", 0)
-        result_summary["extraction_verdict"] = "error"
+        result_summary["extraction_verdict"] = VERDICT_ERROR
         if normalize_status(run.status) not in TERMINAL_STATUSES:
             update_run_status(run, CrawlStatus.FAILED)
         run.result_summary = result_summary
@@ -1312,15 +1346,6 @@ def _reconcile_detail_candidate_values(
     allowed_fields: set[str],
     url: str,
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
-    def _row_rank(row: dict) -> int:
-        source = str(row.get("source") or "").strip()
-        if not source:
-            return 0
-        source_parts = [part.strip() for part in source.split(",") if part.strip()]
-        if not source_parts:
-            return 0
-        return max(int(SOURCE_RANKING.get(part, 0)) for part in source_parts)
-
     reconciled: dict[str, object] = {}
     reconciliation: dict[str, dict[str, object]] = {}
 
@@ -1332,24 +1357,17 @@ def _reconcile_detail_candidate_values(
         accepted_rows: list[dict] = []
         rejected_rows: list[dict[str, object]] = []
         for row in rows:
-            value = row.get("value")
-            normalized_value = coerce_field_candidate_value(
-                field_name, value, base_url=url
+            original_value = row.get("value")
+            normalized_value, rejection_reason = finalize_candidate_row(
+                field_name,
+                row,
+                base_url=url,
             )
             if normalized_value in (None, "", [], {}):
                 rejected_rows.append(
                     {
-                        "value": value,
-                        "reason": "empty_after_normalization",
-                        "source": row.get("source"),
-                    }
-                )
-                continue
-            if not _passes_detail_quality_gate(field_name, normalized_value):
-                rejected_rows.append(
-                    {
-                        "value": normalized_value,
-                        "reason": "quality_gate_rejected",
+                        "value": original_value,
+                        "reason": rejection_reason or "rejected",
                         "source": row.get("source"),
                     }
                 )
@@ -1365,9 +1383,12 @@ def _reconcile_detail_candidate_values(
             continue
 
         accepted_row = accepted_rows[0]
-        accepted_rank = _row_rank(accepted_row)
+        accepted_rank = candidate_source_rank(field_name, accepted_row.get("source"))
         for candidate_row in accepted_rows[1:]:
-            candidate_rank = _row_rank(candidate_row)
+            candidate_rank = candidate_source_rank(
+                field_name,
+                candidate_row.get("source"),
+            )
             if candidate_rank > accepted_rank:
                 accepted_row = candidate_row
                 accepted_rank = candidate_rank
@@ -1412,14 +1433,13 @@ def _resolve_listing_surface(
     _ = url, html
     diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
     effective_surface = str(diagnostics.get("surface_effective") or "").strip().lower()
-    if effective_surface in {"job_listing", "job_detail", "ecommerce_listing", "ecommerce_detail"}:
+    if effective_surface in {
+        "job_listing",
+        "job_detail",
+        "ecommerce_listing",
+        "ecommerce_detail",
+    }:
         return effective_surface
-    adapter_hint = str(diagnostics.get("curl_adapter_hint") or "").strip().lower()
-    if adapter_hint in {"adp", "greenhouse", "icims", "indeed", "jibe", "linkedin", "oracle_hcm", "paycom", "remotive", "saashr", "ultipro_ukg"}:
-        if surface.endswith("listing"):
-            return "job_listing"
-        if surface.endswith("detail"):
-            return "job_detail"
     return surface
 
 
@@ -1842,5 +1862,3 @@ def _refresh_record_commit_metadata(
 
 # Domain normalisation delegated to app.services.domain_utils.normalize_domain
 _domain = normalize_domain
-
-

@@ -1,0 +1,125 @@
+{
+  "platforms": [
+    {
+      "family": "icims",
+      "domain_patterns": ["icims.com"],
+      "url_contains": ["/jobs/search", "/jobs/", "/ajax/joblisting/"],
+      "html_contains": ["icims_jobstable", "icims_mainwrapper", "/ajax/joblisting/"],
+      "adapter_names": ["icims"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "adp",
+      "domain_patterns": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com"],
+      "url_contains": ["/recruitment/recruitment.html", "/srccar/public/", "/srccsh/public/"],
+      "html_contains": ["myjobs.adp.com", "recruitment/recruitment.html", "workforcenow.adp.com"],
+      "adapter_names": ["adp"],
+      "job_platform": true,
+      "requires_browser": true,
+      "readiness_domains": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com"],
+      "readiness_path_patterns": [
+        "^/mascsr/default/mdf/recruitment/recruitment\\.html$",
+        "^/srccar/public/.*$",
+        "^/srccsh/public/.*$"
+      ]
+    },
+    {
+      "family": "oracle_hcm",
+      "domain_patterns": ["fa.ocs.oraclecloud.com", "candidateexperience.oraclecloud.com"],
+      "url_contains": ["/hcmui/candidateexperience/", "/sites/cx_"],
+      "html_contains": ["oraclecloud.com", "candidateexperience"],
+      "adapter_names": ["oracle_hcm"],
+      "job_platform": true,
+      "requires_browser": false,
+      "readiness_domains": ["fa.ocs.oraclecloud.com", "candidateexperience.oraclecloud.com"],
+      "readiness_path_patterns": [
+        "^/hcmui/candidateexperience/.*/sites/cx_[^/]+/(?:jobs|requisitions)(?:/.*)?$"
+      ]
+    },
+    {
+      "family": "paycom",
+      "domain_patterns": ["paycomonline.net"],
+      "url_contains": ["/ats/web.php/portal/", "/career-page"],
+      "html_contains": ["paycomonline.net", "career-page"],
+      "adapter_names": ["paycom"],
+      "job_platform": true,
+      "requires_browser": false,
+      "readiness_domains": ["paycomonline.net"],
+      "readiness_path_patterns": [
+        "^/v4/ats/web\\.php/portal/.+/career-page(?:/.*)?$",
+        "^/v4/ats/web\\.php/portal/.+/jobs(?:/.*)?$"
+      ]
+    },
+    {
+      "family": "ultipro_ukg",
+      "domain_patterns": ["recruiting.ultipro.com"],
+      "url_contains": ["/jobboard/"],
+      "html_contains": ["recruiting.ultipro.com"],
+      "adapter_names": ["ultipro_ukg"],
+      "job_platform": true,
+      "requires_browser": false,
+      "readiness_domains": ["recruiting.ultipro.com"],
+      "readiness_path_patterns": [
+        "^/jobboard(?:/.*)?$"
+      ]
+    },
+    {
+      "family": "greenhouse",
+      "domain_patterns": ["boards.greenhouse.io", "boards-api.greenhouse.io"],
+      "url_contains": ["/embed/job_board", "/jobs/"],
+      "html_regex": ["boards\\.greenhouse\\.io/embed/job_board\\?for=[a-z0-9_-]+"],
+      "adapter_names": ["greenhouse"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "saashr",
+      "domain_patterns": ["saashr.com"],
+      "html_contains": ["secure7.saashr.com", "inframeset=1"],
+      "adapter_names": ["saashr"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "jibe",
+      "domain_patterns": ["jibeapply.com"],
+      "html_contains": ["data-jibe-search-version", "window._jibe", "window.searchconfig", "/dist/js/search.common.js", "/api/jobs"],
+      "adapter_names": ["jibe"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "indeed",
+      "domain_patterns": ["indeed.com", "indeed.co.uk", "indeed.ca", "indeed.com.au", "indeed.co.in"],
+      "url_contains": ["/jobs", "/viewjob"],
+      "adapter_names": ["indeed"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "linkedin",
+      "domain_patterns": ["linkedin.com"],
+      "url_contains": ["/jobs/", "/job/"],
+      "adapter_names": ["linkedin"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "remotive",
+      "domain_patterns": ["remotive.com"],
+      "url_contains": ["/api/remote-jobs", "/remote-jobs"],
+      "adapter_names": ["remotive"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "remoteok",
+      "domain_patterns": ["remoteok.com"],
+      "url_contains": ["/api"],
+      "adapter_names": ["remoteok"],
+      "job_platform": true,
+      "requires_browser": false
+    }
+  ]
+}

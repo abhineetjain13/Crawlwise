@@ -33,6 +33,7 @@ from app.services.acquisition.browser_client import (
     _wait_for_listing_readiness,
     expand_all_interactive_elements,
 )
+from app.services.acquisition.cookie_store import validate_cookie_policy_config
 
 
 class FakePage:
@@ -247,7 +248,19 @@ def test_context_kwargs_uses_locale_instead_of_overriding_headers():
 
     assert kwargs["locale"] == "en-US"
     assert kwargs["timezone_id"] == "UTC"
+    assert kwargs["ignore_https_errors"] is False
+    assert "bypass_csp" not in kwargs
     assert "extra_http_headers" not in kwargs
+
+
+def test_context_kwargs_only_relaxes_security_when_explicitly_enabled():
+    kwargs = _context_kwargs(
+        prefer_stealth=False,
+        runtime_options=BrowserRuntimeOptions(ignore_https_errors=True, bypass_csp=True),
+    )
+
+    assert kwargs["ignore_https_errors"] is True
+    assert kwargs["bypass_csp"] is True
 
 
 def test_build_launch_kwargs_skips_host_pinning_for_system_chrome():
@@ -364,10 +377,11 @@ class FakeClickableLocator:
         return self
 
     async def count(self):
-        return 1 if self._exists else 0
+        exists = self._exists() if callable(self._exists) else self._exists
+        return 1 if exists else 0
 
     async def is_visible(self):
-        return self._exists
+        return self._exists() if callable(self._exists) else self._exists
 
     async def click(self, timeout: int | None = None):
         self._page.click_calls.append(timeout or 0)
@@ -432,8 +446,10 @@ class FakeScrollPage:
 
 
 class FakeLoadMorePage:
-    def __init__(self, metrics: list[dict[str, int]]):
+    def __init__(self, metrics: list[dict[str, int]], *, hide_after_click: bool = False):
         self._metrics = metrics
+        self._visible = True
+        self._hide_after_click = hide_after_click
         self.click_calls: list[int] = []
         self.wait_calls: list[int] = []
 
@@ -442,8 +458,10 @@ class FakeLoadMorePage:
             async def _after_click():
                 if len(self._metrics) > 1:
                     self._metrics.pop(0)
+                if self._hide_after_click:
+                    self._visible = False
 
-            return FakeClickableLocator(self, exists=True, click_callback=_after_click)
+            return FakeClickableLocator(self, exists=lambda: self._visible, click_callback=_after_click)
         return FakeClickableLocator(self, exists=False)
 
     async def evaluate(self, _script: str, *_args):
@@ -544,10 +562,53 @@ async def test_save_cookies_persists_explicitly_allowed_clearance_cookie(tmp_pat
     ]
 
 
-def test_cookie_policy_domain_override_matches_subdomain():
-    policy = _cookie_policy_for_domain("www.your-domain.com")
+def test_cookie_policy_domain_override_matches_subdomain(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.acquisition.cookie_store.COOKIE_POLICY",
+        {
+            "persist_session_cookies": False,
+            "max_persisted_ttl_seconds": 2592000,
+            "blocked_name_prefixes": [],
+            "blocked_name_contains": [],
+            "harvest_cookie_names": [],
+            "domain_overrides": {
+                "example.org": {
+                    "allowed_cookie_names": ["consent_state"],
+                    "harvest_cookie_names": [],
+                }
+            },
+        },
+    )
+
+    policy = _cookie_policy_for_domain("www.example.org")
 
     assert "consent_state" in policy["allowed_cookie_names"]
+
+
+def test_validate_cookie_policy_config_rejects_placeholder_override():
+    with pytest.raises(ValueError, match="placeholder domain"):
+        validate_cookie_policy_config(
+            {
+                "domain_overrides": {
+                    "your-domain.com": {
+                        "allowed_cookie_names": ["consent_state"],
+                    }
+                }
+            }
+        )
+
+
+def test_validate_cookie_policy_config_rejects_malformed_override():
+    with pytest.raises(ValueError, match="malformed domain"):
+        validate_cookie_policy_config(
+            {
+                "domain_overrides": {
+                    "https://example.com/path": {
+                        "allowed_cookie_names": ["consent_state"],
+                    }
+                }
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -770,7 +831,7 @@ async def test_collect_paginated_html_stops_at_max_pages(monkeypatch):
     assert "Page 2" in result.html
     assert "Page 3" not in result.html
     assert page.goto_calls == ["https://example.com/products?page=2"]
-    assert result.summary["page_count"] == 2
+    assert result.summary["pages_collected"] == 2
 
 
 @pytest.mark.asyncio
@@ -829,7 +890,7 @@ async def test_collect_paginated_html_allows_in_place_pagination_without_goto(mo
     assert "Page 1" in result.html
     assert "Page 2" in result.html
     assert page.goto_calls == []
-    assert result.summary["page_count"] >= 2
+    assert result.summary["pages_collected"] >= 2
 
 
 @pytest.mark.asyncio
@@ -853,6 +914,24 @@ async def test_scroll_to_bottom_stops_when_listing_progress_stalls(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scroll_to_bottom_treats_identity_growth_as_progress(monkeypatch):
+    page = FakeScrollPage(
+        heights=[1000, 1200, 1200],
+        metrics=[
+            {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600, "identity_count": 2, "identities": ["job-1", "job-2"], "dom_signature": "a"},
+            {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600, "identity_count": 2, "identities": ["job-3", "job-4"], "dom_signature": "b"},
+            {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600, "identity_count": 2, "identities": ["job-3", "job-4"], "dom_signature": "b"},
+        ],
+    )
+    monkeypatch.setattr("app.services.acquisition.browser_client.SCROLL_WAIT_MIN_MS", 1)
+
+    summary = await _scroll_to_bottom(page, 5, request_delay_ms=0)
+
+    assert summary["steps"][0]["identity_growth"] == 2
+    assert summary["steps"][0]["progressed"] is True
+
+
+@pytest.mark.asyncio
 async def test_click_load_more_stops_when_click_adds_no_new_listing_progress(monkeypatch):
     page = FakeLoadMorePage([
         {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600},
@@ -867,6 +946,25 @@ async def test_click_load_more_stops_when_click_adds_no_new_listing_progress(mon
     assert summary["attempt_count"] == 1
     assert summary["stop_reason"] == "no_progress_after_click"
     assert summary["steps"][0]["progressed"] is False
+
+
+@pytest.mark.asyncio
+async def test_click_load_more_accepts_replacement_when_button_disappears(monkeypatch):
+    page = FakeLoadMorePage(
+        [
+            {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600, "identity_count": 2, "identities": ["item-1", "item-2"], "dom_signature": "before"},
+            {"link_count": 10, "cardish_count": 12, "text_length": 800, "html_length": 1600, "identity_count": 2, "identities": ["item-3", "item-4"], "dom_signature": "after"},
+        ],
+        hide_after_click=True,
+    )
+    monkeypatch.setattr("app.services.acquisition.browser_client.LOAD_MORE_SELECTORS", ["[data-load-more]"])
+    monkeypatch.setattr("app.services.acquisition.browser_client.LOAD_MORE_WAIT_MIN_MS", 1)
+
+    summary = await _click_load_more(page, 3, request_delay_ms=0)
+
+    assert summary["steps"][0]["progressed"] is True
+    assert summary["steps"][0]["button_disappeared"] is True
+    assert summary["stop_reason"] in {"no_load_more_control", "max_clicks_reached"}
 
 
 @pytest.mark.asyncio
@@ -897,6 +995,7 @@ async def test_apply_traversal_mode_auto_combines_scroll_and_paginate_steps(monk
         page_content_with_retry=AsyncMock(),
         wait_for_surface_readiness=AsyncMock(),
         wait_for_listing_readiness=AsyncMock(),
+        peek_next_page_signal=AsyncMock(return_value={"kind": "click", "selector": "button.next"}),
         click_and_observe_next_page=AsyncMock(return_value="https://example.com/products?page=2"),
         has_load_more_control=AsyncMock(return_value=False),
         dismiss_cookie_consent=AsyncMock(),
@@ -937,6 +1036,7 @@ async def test_apply_traversal_mode_auto_stops_without_pagination_when_no_next_p
         page_content_with_retry=AsyncMock(),
         wait_for_surface_readiness=AsyncMock(),
         wait_for_listing_readiness=AsyncMock(),
+        peek_next_page_signal=AsyncMock(return_value=None),
         click_and_observe_next_page=AsyncMock(return_value=""),
         has_load_more_control=AsyncMock(return_value=True),
         dismiss_cookie_consent=AsyncMock(),

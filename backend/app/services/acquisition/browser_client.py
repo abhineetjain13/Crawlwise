@@ -31,6 +31,7 @@ from app.services.acquisition.traversal import (
     find_next_page_url_anchor_only as _find_next_page_url_anchor_only_shared,
     has_load_more_control as _has_load_more_control_shared,
     pagination_state_changed as _pagination_state_changed_shared,
+    peek_next_page_signal as _peek_next_page_signal_shared,
     scroll_to_bottom as _scroll_to_bottom_shared,
     snapshot_pagination_state as _snapshot_pagination_state_shared,
 )
@@ -41,6 +42,7 @@ from app.services.acquisition.cookie_store import (
     load_cookies_for_context,
     save_cookies_payload,
 )
+from app.services.runtime_metrics import incr
 from app.services.pipeline_config import (
     ACCORDION_EXPAND_WAIT_MS,
     BLOCK_MIN_HTML_LENGTH,
@@ -292,7 +294,13 @@ async def _fetch_rendered_html_attempt(
     try:
         # FIX: Wrap context creation in a strict timeout to prevent zombie browsers
         context = await asyncio.wait_for(
-            browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel)),
+            browser.new_context(
+                **_context_kwargs(
+                    prefer_stealth,
+                    browser_channel=browser_channel,
+                    runtime_options=runtime_options,
+                )
+            ),
             timeout=15.0
         )
     except (PlaywrightError, asyncio.TimeoutError):
@@ -305,7 +313,13 @@ async def _fetch_rendered_html_attempt(
             force_new=True,
         )
         context = await asyncio.wait_for(
-            browser.new_context(**_context_kwargs(prefer_stealth, browser_channel=browser_channel)),
+            browser.new_context(
+                **_context_kwargs(
+                    prefer_stealth,
+                    browser_channel=browser_channel,
+                    runtime_options=runtime_options,
+                )
+            ),
             timeout=15.0
         )
         
@@ -472,6 +486,12 @@ async def _fetch_rendered_html_attempt(
         )
         if traversal_summary:
             result.diagnostics["traversal_summary"] = traversal_summary
+            if traversal_summary.get("attempted"):
+                incr("traversal_attempt_total")
+                if int(traversal_summary.get("pages_collected", 0) or 0) > 0:
+                    incr("traversal_success_total")
+                if traversal_summary.get("fallback_used"):
+                    incr("traversal_fallback_total")
 
         # Emit traversal progress as a crawl event (visible in UI)
         if run_id is not None and traversal_summary.get("attempted"):
@@ -531,7 +551,11 @@ async def _fetch_rendered_html_attempt(
             _, frame_sources, promoted_sources = await _collect_frame_sources(page)
             result.frame_sources = frame_sources
             result.promoted_sources = promoted_sources
-            result.diagnostics["page_count"] = combined_html.count("<!-- PAGE BREAK:") if combined_html else 0
+            stitched_page_count = (
+                combined_html.count("<!-- PAGE BREAK:") if combined_html else 0
+            )
+            result.diagnostics["page_count"] = stitched_page_count
+            result.diagnostics["pages_collected"] = stitched_page_count
             result.diagnostics["frame_sources"] = len(frame_sources)
             result.diagnostics["promoted_sources"] = len(promoted_sources)
             timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
@@ -900,6 +924,7 @@ async def _apply_traversal_mode(
         page_content_with_retry=_page_content_with_retry,
         wait_for_surface_readiness=_wait_for_surface_readiness,
         wait_for_listing_readiness=_wait_for_listing_readiness,
+        peek_next_page_signal=_peek_next_page_signal,
         click_and_observe_next_page=_click_and_observe_next_page,
         has_load_more_control=lambda p, _cfg: _has_load_more_control(p),
         dismiss_cookie_consent=_dismiss_cookie_consent,
@@ -950,13 +975,18 @@ async def _collect_paginated_html(
     )
 
 
+async def _peek_next_page_signal(page) -> dict[str, object] | None:
+    traversal_config = _traversal_config()
+    return await _peek_next_page_signal_shared(page, config=traversal_config)
+
+
 async def _wait_for_listing_readiness(
     page,
     surface: str | None,
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object] | None:
-    from app.services.config.selectors import resolve_listing_readiness_override
+    from app.services.config.platform_readiness import resolve_listing_readiness_override
     
     normalized_surface = str(surface or "").strip().lower()
     if not normalized_surface.endswith("listing"):
@@ -1072,11 +1102,36 @@ async def _snapshot_listing_page_metrics(page) -> dict[str, object]:
                 const loadingText = text.toLowerCase();
                 const loading = /loading|searching|please wait|just a moment/.test(loadingText);
                 const htmlLength = (root && root.innerHTML ? root.innerHTML.length : 0);
+                const identities = Array.from((root || document).querySelectorAll("a[href], [data-job-id], [data-id], [data-testid], article, li"))
+                    .map((node) => {
+                        if (!(node instanceof Element)) return "";
+                        const href = node.getAttribute("href") || node.querySelector("a[href]")?.getAttribute("href") || "";
+                        const dataId = node.getAttribute("data-job-id")
+                            || node.getAttribute("data-id")
+                            || node.getAttribute("data-testid")
+                            || "";
+                        const heading = node.querySelector("h1, h2, h3, h4, [role='heading']")?.textContent || "";
+                        const textSample = (heading || node.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120);
+                        const token = (href || dataId || textSample).trim().toLowerCase();
+                        return token;
+                    })
+                    .filter((token, index, arr) => token && arr.indexOf(token) === index)
+                    .slice(0, 200);
+                const domSignature = JSON.stringify({
+                    linkCount,
+                    cardishCount,
+                    htmlLength,
+                    identities: identities.slice(0, 20),
+                    textSample: text.slice(0, 240),
+                });
                 return {
                     link_count: linkCount,
                     cardish_count: cardishCount,
                     text_length: text.length,
                     html_length: htmlLength,
+                    identity_count: identities.length,
+                    identities: identities,
+                    dom_signature: domSignature,
                     loading: loading,
                 };
             }
@@ -1731,11 +1786,17 @@ def _assess_challenge_signals(html: str) -> ChallengeAssessment:
     return ChallengeAssessment(state="none", should_wait=False, reasons=[])
 
 
-def _context_kwargs(prefer_stealth: bool, *, browser_channel: str | None = None) -> dict:
+def _context_kwargs(
+    prefer_stealth: bool,
+    *,
+    browser_channel: str | None = None,
+    runtime_options: BrowserRuntimeOptions | None = None,
+) -> dict:
+    options = runtime_options or BrowserRuntimeOptions()
     if browser_channel:
         kwargs = {
             "java_script_enabled": True,
-            "ignore_https_errors": True,
+            "ignore_https_errors": bool(options.ignore_https_errors),
             "viewport": {"width": 1365, "height": 900},
             "device_scale_factor": 1,
             "is_mobile": False,
@@ -1747,8 +1808,7 @@ def _context_kwargs(prefer_stealth: bool, *, browser_channel: str | None = None)
         return kwargs
     kwargs = {
         "java_script_enabled": True,
-        "ignore_https_errors": True,
-        "bypass_csp": True,
+        "ignore_https_errors": bool(options.ignore_https_errors),
         "locale": "en-US",
         "timezone_id": "UTC",
         "viewport": {"width": 1365, "height": 900},
@@ -1758,6 +1818,8 @@ def _context_kwargs(prefer_stealth: bool, *, browser_channel: str | None = None)
         "color_scheme": "light",
         "service_workers": "block",  # FIX: Prevent Service Worker SSRF bypasses
     }
+    if options.bypass_csp:
+        kwargs["bypass_csp"] = True
     if prefer_stealth:
         kwargs["user_agent"] = _STEALTH_USER_AGENT
     return kwargs

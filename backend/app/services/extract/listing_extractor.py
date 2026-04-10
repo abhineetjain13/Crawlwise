@@ -60,8 +60,6 @@ from app.services.extract.listing_quality import (
     is_meaningful_structured_listing_record as _assess_meaningful_structured_listing_record,
 )
 from app.services.extract.source_parsers import parse_page_sources
-from app.services.config.extraction_rules import PLATFORM_FAMILIES
-
 _EMPTY_VALUES = (None, "", [], {})
 MIN_VIABLE_RECORDS = 2
 
@@ -210,11 +208,10 @@ def _extract_listing_records_single_page(
     xhr_payloads: list[dict] | None = None,
     adapter_records: list[dict] | None = None,
 ) -> list[dict]:
-    page_sources = parse_page_sources(html)
+    soup = BeautifulSoup(html, "html.parser")
+    page_sources = parse_page_sources(html, soup=soup)
     adapter_records = adapter_records or []
     xhr_payloads = xhr_payloads or []
-
-    soup = BeautifulSoup(html, "html.parser")
     json_ld_records = _extract_from_json_ld(soup, surface, page_url)
     structured_records = _extract_from_structured_sources(
         page_sources=page_sources,
