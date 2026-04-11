@@ -209,6 +209,7 @@ _SALARY_MONEY_RE = _build_salary_money_re()
 _COLOR_VARIANT_COUNT_RE = re.compile(
     CANDIDATE_COLOR_VARIANT_COUNT_PATTERN, re.IGNORECASE
 )
+_UNRESOLVED_TEMPLATE_VALUE_RE = re.compile(r"\{[A-Za-z0-9_.-]+\}")
 _VARIANT_SELECTOR_PROMPT_RE = re.compile(
     r"^(?:select|choose|pick)\s+(?:a|an|the|your)?\s*"
     r"(?:size|sizes|color|colors|colour|colours|option|options|variant|variants|"
@@ -1020,6 +1021,7 @@ def _finalize_candidates(
         soup=soup,
         adapter_records=adapter_records or [],
         network_payloads=network_payloads,
+        structured_sources=structured_sources,
     )
 
     # Merge dynamic rows
@@ -1129,8 +1131,8 @@ def _finalize_candidates(
     # Apply domain field mappings
     domain = _domain(url)
     mappings = get_domain_mapping(domain, surface)
+    _reconcile_variant_bundle(final_candidates, base_url=url)
     _sync_selected_variant_root_fields(final_candidates)
-    _sanitize_structured_variant_output(final_candidates)
     _sanitize_product_attributes(final_candidates)
 
     return final_candidates, {
@@ -1254,6 +1256,289 @@ def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> Non
         ]
     else:
         final_candidates.pop("product_attributes", None)
+
+
+def _reconcile_variant_bundle(
+    final_candidates: dict[str, list[dict]],
+    *,
+    base_url: str,
+) -> None:
+    variants_row = _first_candidate_row(final_candidates.get("variants"))
+    selected_row = _first_candidate_row(final_candidates.get("selected_variant"))
+    axes_row = _first_candidate_row(final_candidates.get("variant_axes"))
+
+    variants = _normalized_variant_rows_payload(
+        variants_row.get("value") if variants_row else None,
+        base_url=base_url,
+    )
+    selected_variant = _normalized_selected_variant_payload(
+        selected_row.get("value") if selected_row else None,
+        base_url=base_url,
+    )
+    variant_axes = _normalized_variant_axes_payload(
+        axes_row.get("value") if axes_row else None,
+        base_url=base_url,
+    )
+
+    if variants:
+        matched_index = (
+            _find_matching_variant_index(variants, selected_variant)
+            if selected_variant
+            else -1
+        )
+        if selected_variant and matched_index >= 0:
+            merged_selected = _merge_variant_records(variants[matched_index], selected_variant)
+            variants[matched_index] = merged_selected
+            selected_variant = merged_selected
+        elif selected_variant and _is_meaningful_variant_record(selected_variant):
+            variants.append(selected_variant)
+        if selected_variant is None:
+            selected_variant = _choose_default_variant(variants)
+
+        raw_axis_values = _collect_variant_axis_values(variants)
+        merged_axis_values = _merge_variant_axis_values(
+            discovered_axes=raw_axis_values,
+            declared_axes=variant_axes,
+        )
+        if merged_axis_values:
+            variant_axes, variant_attributes = _split_variant_axes(merged_axis_values)
+            if variant_axes:
+                source = _row_source_label(variants_row, fallback="variants")
+                final_candidates["variant_axes"] = [{"value": variant_axes, "source": source}]
+            else:
+                final_candidates.pop("variant_axes", None)
+            if variant_attributes:
+                _merge_product_attributes_into_candidates(
+                    final_candidates,
+                    variant_attributes,
+                    source=_row_source_label(variants_row, fallback="variants"),
+                )
+        else:
+            final_candidates.pop("variant_axes", None)
+
+        final_candidates["variants"] = [
+            {
+                "value": variants,
+                "source": _row_source_label(variants_row, fallback="variants"),
+            }
+        ]
+        if selected_variant:
+            final_candidates["selected_variant"] = [
+                {
+                    "value": selected_variant,
+                    "source": _row_source_label(selected_row or variants_row, fallback="selected_variant"),
+                }
+            ]
+        else:
+            final_candidates.pop("selected_variant", None)
+        return
+
+    if selected_variant:
+        final_candidates["selected_variant"] = [
+            {
+                "value": selected_variant,
+                "source": _row_source_label(selected_row, fallback="selected_variant"),
+            }
+        ]
+    else:
+        final_candidates.pop("selected_variant", None)
+
+    if variant_axes:
+        cleaned_axes, moved_attributes = _split_variant_axes(variant_axes)
+        if cleaned_axes:
+            final_candidates["variant_axes"] = [
+                {
+                    "value": cleaned_axes,
+                    "source": _row_source_label(axes_row, fallback="variant_axes"),
+                }
+            ]
+        else:
+            final_candidates.pop("variant_axes", None)
+        if moved_attributes:
+            _merge_product_attributes_into_candidates(
+                final_candidates,
+                moved_attributes,
+                source=_row_source_label(axes_row, fallback="variant_axes"),
+            )
+    else:
+        final_candidates.pop("variant_axes", None)
+
+
+def _merge_variant_axis_values(
+    *,
+    discovered_axes: dict[str, list[str]],
+    declared_axes: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    if not discovered_axes:
+        return dict(declared_axes)
+    merged: dict[str, list[str]] = {
+        axis_name: list(values) for axis_name, values in discovered_axes.items()
+    }
+    for axis_name, values in declared_axes.items():
+        normalized_axis = _canonical_structured_key(axis_name)
+        if not normalized_axis or normalized_axis not in discovered_axes:
+            continue
+        bucket = merged.setdefault(normalized_axis, [])
+        for value in values:
+            cleaned = _normalized_candidate_text(value)
+            if cleaned and cleaned not in bucket:
+                bucket.append(cleaned)
+    return merged
+
+
+def _first_candidate_row(rows: object) -> dict[str, object] | None:
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
+    return None
+
+
+def _row_source_label(row: dict[str, object] | None, *, fallback: str) -> str:
+    if not isinstance(row, dict):
+        return fallback
+    return str(row.get("source") or fallback).strip() or fallback
+
+
+def _normalized_variant_rows_payload(
+    value: object,
+    *,
+    base_url: str,
+) -> list[dict[str, object]]:
+    normalized = coerce_field_candidate_value("variants", value, base_url=base_url)
+    if not isinstance(normalized, list):
+        return []
+    reconciled: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for variant in normalized:
+        if not _is_meaningful_variant_record(variant):
+            continue
+        fingerprint = _variant_record_fingerprint(variant)
+        if fingerprint and fingerprint in seen:
+            continue
+        if fingerprint:
+            seen.add(fingerprint)
+        reconciled.append(dict(variant))
+    return reconciled
+
+
+def _normalized_selected_variant_payload(
+    value: object,
+    *,
+    base_url: str,
+) -> dict[str, object] | None:
+    normalized = coerce_field_candidate_value("selected_variant", value, base_url=base_url)
+    if not isinstance(normalized, dict) or not _is_meaningful_variant_record(normalized):
+        return None
+    return dict(normalized)
+
+
+def _normalized_variant_axes_payload(
+    value: object,
+    *,
+    base_url: str,
+) -> dict[str, list[str]]:
+    normalized = coerce_field_candidate_value("variant_axes", value, base_url=base_url)
+    return normalized if isinstance(normalized, dict) else {}
+
+
+def _is_meaningful_variant_record(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if value.get("variant_id") not in (None, "", [], {}):
+        return True
+    if value.get("sku") not in (None, "", [], {}):
+        return True
+    option_values = value.get("option_values")
+    if isinstance(option_values, dict) and option_values:
+        return True
+    for key in ("color", "size", "price", "original_price", "availability", "image_url"):
+        if value.get(key) not in (None, "", [], {}):
+            return True
+    return False
+
+
+def _variant_record_fingerprint(value: dict[str, object]) -> str:
+    variant_id = str(value.get("variant_id") or "").strip()
+    if variant_id:
+        return f"id:{variant_id}"
+    sku = str(value.get("sku") or "").strip()
+    option_values = value.get("option_values")
+    if sku and isinstance(option_values, dict) and option_values:
+        return json.dumps({"sku": sku, "option_values": option_values}, sort_keys=True, default=str)
+    if sku:
+        return f"sku:{sku}"
+    if isinstance(option_values, dict) and option_values:
+        return json.dumps({"option_values": option_values}, sort_keys=True, default=str)
+    fallback = {
+        key: value.get(key)
+        for key in ("color", "size", "price", "original_price", "availability", "image_url")
+        if value.get(key) not in (None, "", [], {})
+    }
+    return json.dumps(fallback, sort_keys=True, default=str) if fallback else ""
+
+
+def _find_matching_variant_index(
+    variants: list[dict[str, object]],
+    selected_variant: dict[str, object] | None,
+) -> int:
+    if not selected_variant:
+        return -1
+    selected_fingerprint = _variant_record_fingerprint(selected_variant)
+    if selected_fingerprint:
+        for index, variant in enumerate(variants):
+            if _variant_record_fingerprint(variant) == selected_fingerprint:
+                return index
+    selected_options = selected_variant.get("option_values")
+    if isinstance(selected_options, dict) and selected_options:
+        for index, variant in enumerate(variants):
+            if variant.get("option_values") == selected_options:
+                return index
+    return -1
+
+
+def _merge_variant_records(
+    primary: dict[str, object],
+    secondary: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(primary)
+    for key, value in secondary.items():
+        if merged.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+            merged[key] = value
+    if isinstance(primary.get("option_values"), dict) and isinstance(secondary.get("option_values"), dict):
+        merged["option_values"] = {
+            **primary["option_values"],
+            **secondary["option_values"],
+        }
+    return merged
+
+
+def _choose_default_variant(
+    variants: list[dict[str, object]],
+) -> dict[str, object] | None:
+    if not variants:
+        return None
+    return next(
+        (variant for variant in variants if variant.get("availability") == "in_stock"),
+        variants[0],
+    )
+
+
+def _collect_variant_axis_values(
+    variants: list[dict[str, object]],
+) -> dict[str, list[str]]:
+    axis_values: dict[str, list[str]] = {}
+    for variant in variants:
+        option_values = variant.get("option_values")
+        if not isinstance(option_values, dict):
+            continue
+        for axis_name, value in option_values.items():
+            normalized_axis = _canonical_structured_key(axis_name)
+            cleaned_value = _normalized_candidate_text(value)
+            if not normalized_axis or not cleaned_value:
+                continue
+            bucket = axis_values.setdefault(normalized_axis, [])
+            if cleaned_value not in bucket:
+                bucket.append(cleaned_value)
+    return axis_values
 
 
 def _is_noisy_product_attribute_entry(key: object, value: object) -> bool:
@@ -1692,6 +1977,8 @@ def finalize_candidate_row(
         return None, "empty_after_normalization"
     if isinstance(value, bool):
         return None, "invalid_boolean"
+    if isinstance(value, str) and _contains_unresolved_template_value(value):
+        return None, "unresolved_template_value"
     value, rejection_reason = sanitize_field_value_with_reason(field_name, value)
     if value in (None, "", [], {}):
         return None, rejection_reason or "sanitizer_rejected"
@@ -2433,7 +2720,7 @@ def _structured_source_candidates(
     for source, payload, metadata in sources:
         value = _extract_structured_field_value(payload, field_name)
         normalized = _normalized_candidate_text(value)
-        if not normalized:
+        if not normalized or _contains_unresolved_template_value(normalized):
             continue
         key = (source, normalized)
         if key in seen:
@@ -2452,6 +2739,7 @@ def _build_variant_rows(
     soup: BeautifulSoup,
     adapter_records: list[dict],
     network_payloads: list[dict],
+    structured_sources: list[tuple[str, object, dict[str, object]]] | None = None,
 ) -> dict[str, list[dict]]:
     rows: dict[str, list[dict]] = {}
     adapter_variant_rows = _build_adapter_variant_rows(adapter_records)
@@ -2464,6 +2752,17 @@ def _build_variant_rows(
     )
     if demandware_rows:
         _merge_dynamic_row_map(rows, demandware_rows)
+
+    structured_rows = _build_structured_variant_rows(
+        structured_sources or [],
+        base_url=base_url,
+    )
+    if structured_rows:
+        _merge_dynamic_row_map(rows, structured_rows)
+
+    dom_rows = _build_dom_variant_rows(soup, base_url=base_url)
+    if dom_rows:
+        _merge_dynamic_row_map(rows, dom_rows)
 
     return rows
 
@@ -2972,6 +3271,21 @@ def _variant_axis_name(button) -> str:
         return "color"
     if "size-attribute" in class_names:
         return "size"
+    attr_blob = " ".join(
+        filter(
+            None,
+            (
+                class_names,
+                str(button.get("id") or ""),
+                str(button.get("data-testid") or ""),
+                str(button.get("data-reactid") or ""),
+            ),
+        )
+    ).lower()
+    if "colour" in attr_blob or "color" in attr_blob or "swatch" in attr_blob:
+        return "color"
+    if "size" in attr_blob:
+        return "size"
     aria_label = str(button.get("aria-label") or "").lower()
     if "color" in aria_label:
         return "color"
@@ -2987,6 +3301,20 @@ def _variant_axis_name(button) -> str:
 
 
 def _variant_button_label(button, *, axis_name: str) -> str:
+    for attr_name in (
+        "data-size",
+        "data-color",
+        "data-colour",
+        "data-value",
+        "data-label",
+        "data-name",
+        "title",
+        "value",
+        "aria-label",
+    ):
+        label = _normalized_candidate_text(button.get(attr_name))
+        if label:
+            return label
     span = button.find(attrs={"data-displayvalue": True}) or button.find(
         attrs={"data-display-value": True}
     )
@@ -3040,6 +3368,640 @@ def _selected_dom_variant(
     if option_values:
         row["option_values"] = option_values
     return row
+
+
+def _build_dom_variant_rows(
+    soup: BeautifulSoup, *, base_url: str
+) -> dict[str, list[dict]]:
+    axis_values, selected_values = _extract_dom_variant_axes(soup)
+    if not axis_values:
+        return {}
+
+    selectable_axes, product_attributes = _split_variant_axes(axis_values)
+    rows: dict[str, list[dict]] = {}
+    if selectable_axes:
+        rows["variant_axes"] = [{"value": selectable_axes, "source": "dom_variant"}]
+    if product_attributes:
+        rows["product_attributes"] = [
+            {"value": product_attributes, "source": "dom_variant"}
+        ]
+
+    selected_variant = _selected_dom_variant(base_url, selected_values=selected_values)
+    if selected_variant:
+        rows["selected_variant"] = [
+            {"value": selected_variant, "source": "dom_variant"}
+        ]
+
+    return rows
+
+
+def _build_structured_variant_rows(
+    structured_sources: list[tuple[str, object, dict[str, object]]],
+    *,
+    base_url: str,
+) -> dict[str, list[dict]]:
+    parsed_variants = _extract_structured_variants_from_sources(
+        structured_sources,
+        base_url=base_url,
+    )
+    if not parsed_variants:
+        return {}
+
+    source = "structured_variant"
+    rows: dict[str, list[dict]] = {}
+    variants = parsed_variants.get("variants")
+    if isinstance(variants, list) and variants:
+        rows["variants"] = [{"value": variants, "source": source}]
+    selectable_axes = parsed_variants.get("variant_axes")
+    if isinstance(selectable_axes, dict) and selectable_axes:
+        rows["variant_axes"] = [{"value": selectable_axes, "source": source}]
+    product_attributes = parsed_variants.get("product_attributes")
+    if isinstance(product_attributes, dict) and product_attributes:
+        rows["product_attributes"] = [{"value": product_attributes, "source": source}]
+    selected_variant = parsed_variants.get("selected_variant")
+    if isinstance(selected_variant, dict) and selected_variant:
+        rows["selected_variant"] = [{"value": selected_variant, "source": source}]
+        for field_name in (
+            "color",
+            "size",
+            "sku",
+            "price",
+            "original_price",
+            "availability",
+            "image_url",
+        ):
+            value = selected_variant.get(field_name)
+            if value not in (None, "", [], {}):
+                rows.setdefault(field_name, []).append(
+                    {"value": value, "source": source}
+                )
+    return rows
+
+
+def _extract_structured_variants_from_sources(
+    structured_sources: list[tuple[str, object, dict[str, object]]],
+    *,
+    base_url: str,
+) -> dict[str, object]:
+    variants: list[dict[str, object]] = []
+    axis_values: dict[str, list[str]] = {}
+    seen_variants: set[str] = set()
+    selected_variant: dict[str, object] | None = None
+    selected_score = -1
+    selection_hints = _structured_variant_selection_hints(base_url)
+
+    for _source_name, payload, _metadata in structured_sources:
+        for container in _iter_structured_variant_containers(payload):
+            parsed = _parse_structured_variant_container(
+                container,
+                base_url=base_url,
+                selection_hints=selection_hints,
+            )
+            if not parsed:
+                continue
+            for variant in parsed.get("variants") or []:
+                if not isinstance(variant, dict):
+                    continue
+                fingerprint = json.dumps(variant, sort_keys=True, default=str)
+                if fingerprint in seen_variants:
+                    continue
+                seen_variants.add(fingerprint)
+                variants.append(variant)
+            for axis_name, values in (parsed.get("axis_values") or {}).items():
+                cleaned_axis = _canonical_structured_key(axis_name)
+                if not cleaned_axis:
+                    continue
+                target = axis_values.setdefault(cleaned_axis, [])
+                for value in values:
+                    cleaned_value = _normalized_candidate_text(value)
+                    if cleaned_value and cleaned_value not in target:
+                        target.append(cleaned_value)
+            score = int(parsed.get("selection_score") or 0)
+            candidate = parsed.get("selected_variant")
+            if isinstance(candidate, dict) and candidate and score >= selected_score:
+                selected_variant = candidate
+                selected_score = score
+
+    selectable_axes, product_attributes = _split_variant_axes(axis_values)
+    result: dict[str, object] = {}
+    if variants:
+        result["variants"] = variants
+    if selectable_axes:
+        result["variant_axes"] = selectable_axes
+    if product_attributes:
+        result["product_attributes"] = product_attributes
+    if selected_variant:
+        result["selected_variant"] = selected_variant
+    return result
+
+
+def _iter_structured_variant_containers(
+    payload: object,
+    *,
+    max_depth: int = 8,
+) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    seen_objects: set[int] = set()
+    seen_strings: set[str] = set()
+
+    def walk(node: object, depth: int) -> None:
+        if depth < 0 or node in (None, "", [], {}):
+            return
+        if isinstance(node, dict):
+            node_id = id(node)
+            if node_id in seen_objects:
+                return
+            seen_objects.add(node_id)
+            if _looks_like_structured_variant_container(node):
+                results.append(node)
+            for value in node.values():
+                walk(value, depth - 1)
+            return
+        if isinstance(node, list):
+            for item in node[:200]:
+                walk(item, depth - 1)
+            return
+        if not isinstance(node, str):
+            return
+        parsed = _parse_json_like_value(node)
+        if not isinstance(parsed, (dict, list)):
+            return
+        cache_key = str(node[:500])
+        if cache_key in seen_strings:
+            return
+        seen_strings.add(cache_key)
+        walk(parsed, depth - 1)
+
+    walk(payload, max_depth)
+    return results
+
+
+def _looks_like_structured_variant_container(payload: dict[str, object]) -> bool:
+    variations = payload.get("variations")
+    if not isinstance(variations, list) or not variations:
+        return False
+    dict_variations = [item for item in variations[:20] if isinstance(item, dict)]
+    if not dict_variations:
+        return False
+    return any(
+        key in payload
+        for key in ("colors", "name", "id", "product", "orderable", "configureID")
+    ) or any(
+        any(
+            token in variation
+            for token in (
+                "variantId",
+                "id",
+                "sku",
+                "ean",
+                "colorValue",
+                "colorName",
+                "price",
+                "salePrice",
+            )
+        )
+        for variation in dict_variations
+    )
+
+
+def _parse_structured_variant_container(
+    payload: dict[str, object],
+    *,
+    base_url: str,
+    selection_hints: dict[str, str],
+) -> dict[str, object] | None:
+    variations = payload.get("variations")
+    if not isinstance(variations, list) or not variations:
+        return None
+
+    axis_values: dict[str, list[str]] = {}
+    for color_name in _structured_color_axis_values(payload.get("colors")):
+        axis_values.setdefault("color", [])
+        if color_name not in axis_values["color"]:
+            axis_values["color"].append(color_name)
+
+    parsed_variants: list[dict[str, object]] = []
+    selected_variant: dict[str, object] | None = None
+    selected_score = -1
+    for item in variations:
+        if not isinstance(item, dict):
+            continue
+        variant = _build_structured_variant_row(
+            item,
+            base_url=base_url,
+            selection_hints=selection_hints,
+        )
+        if not variant:
+            continue
+        parsed_variants.append(variant)
+        option_values = variant.get("option_values")
+        if isinstance(option_values, dict):
+            for axis_name, value in option_values.items():
+                cleaned_axis = _canonical_structured_key(axis_name)
+                cleaned_value = _normalized_candidate_text(value)
+                if not cleaned_axis or not cleaned_value:
+                    continue
+                target = axis_values.setdefault(cleaned_axis, [])
+                if cleaned_value not in target:
+                    target.append(cleaned_value)
+        score = _score_structured_selected_variant(
+            variant,
+            raw_variant=item,
+            base_url=base_url,
+            selection_hints=selection_hints,
+        )
+        if score >= selected_score:
+            selected_variant = variant
+            selected_score = score
+
+    if not parsed_variants:
+        return None
+    return {
+        "variants": parsed_variants,
+        "axis_values": axis_values,
+        "selected_variant": selected_variant,
+        "selection_score": selected_score,
+    }
+
+
+def _structured_color_axis_values(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    colors: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _normalized_candidate_text(
+            item.get("name")
+            or item.get("label")
+            or item.get("colorName")
+            or item.get("displayValue")
+        )
+        if name and name not in colors:
+            colors.append(name)
+    return colors
+
+
+def _structured_variant_selection_hints(base_url: str) -> dict[str, str]:
+    hints: dict[str, str] = {}
+    parsed = urlsplit(str(base_url or "").strip())
+    for key, value in parse_qsl(parsed.query, keep_blank_values=False):
+        normalized_key = normalize_requested_field(key)
+        cleaned_value = _normalized_candidate_text(value)
+        if not normalized_key or not cleaned_value:
+            continue
+        if normalized_key in {"swatch", "color", "colour"}:
+            hints["color"] = cleaned_value
+        elif normalized_key == "size":
+            hints["size"] = cleaned_value
+        elif normalized_key in {"variant", "variant_id", "sku", "pid", "vid", "id"}:
+            hints["variant_id"] = cleaned_value
+    return hints
+
+
+def _build_structured_variant_row(
+    payload: dict[str, object],
+    *,
+    base_url: str,
+    selection_hints: dict[str, str],
+) -> dict[str, object] | None:
+    row: dict[str, object] = {}
+    variant_id = _normalized_candidate_text(
+        payload.get("variantId")
+        or payload.get("ean")
+        or payload.get("sku")
+        or payload.get("id")
+    )
+    if variant_id:
+        row["variant_id"] = variant_id
+        row["sku"] = variant_id
+
+    option_values = _structured_variant_option_values(payload)
+    if option_values:
+        row["option_values"] = option_values
+        for axis_name in ("color", "size"):
+            if option_values.get(axis_name):
+                row[axis_name] = option_values[axis_name]
+
+    url = _structured_variant_url(payload, base_url=base_url, selection_hints=selection_hints)
+    if url:
+        row["url"] = url
+
+    price = normalize_and_validate_value(
+        "price",
+        payload.get("salePrice") or payload.get("price"),
+    )
+    if price:
+        row["price"] = price
+    original_price = normalize_and_validate_value(
+        "price",
+        payload.get("listPrice")
+        or payload.get("originalPrice")
+        or payload.get("compareAtPrice")
+        or payload.get("compare_at_price"),
+    )
+    if original_price:
+        row["original_price"] = original_price
+    availability = _structured_variant_availability(payload)
+    if availability:
+        row["availability"] = availability
+    image_url = _structured_variant_image_url(payload, base_url=base_url)
+    if image_url:
+        row["image_url"] = image_url
+    return row or None
+
+
+def _structured_variant_option_values(payload: dict[str, object]) -> dict[str, str]:
+    option_values: dict[str, str] = {}
+    raw_option_values = payload.get("option_values") or payload.get("optionValues")
+    if isinstance(raw_option_values, dict):
+        for key, value in raw_option_values.items():
+            axis_name = _canonical_structured_key(key)
+            cleaned_value = _normalized_candidate_text(value)
+            if axis_name and cleaned_value:
+                option_values[axis_name] = cleaned_value
+    for axis_name, raw_value in (
+        ("color", payload.get("colorName") or payload.get("color") or payload.get("colour")),
+        ("size", payload.get("sizeName") or payload.get("size") or payload.get("displaySize")),
+        ("waist", payload.get("waist")),
+        ("length", payload.get("length")),
+        ("width", payload.get("width")),
+    ):
+        cleaned_value = _normalized_candidate_text(raw_value)
+        if cleaned_value:
+            option_values[axis_name] = cleaned_value
+    return option_values
+
+
+def _structured_variant_url(
+    payload: dict[str, object],
+    *,
+    base_url: str,
+    selection_hints: dict[str, str],
+) -> str | None:
+    for field_name in ("url", "href", "permalink", "link"):
+        resolved = _resolve_candidate_url(payload.get(field_name), base_url)
+        if resolved:
+            return resolved
+    if not base_url:
+        return None
+    parsed = urlsplit(str(base_url or "").strip())
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if "swatch" in query:
+        swatch_value = _normalized_candidate_text(payload.get("colorValue"))
+        if swatch_value:
+            query["swatch"] = swatch_value
+    elif selection_hints.get("color") and payload.get("colorValue"):
+        query["color"] = _normalized_candidate_text(payload.get("colorValue"))
+    encoded_query = urlencode(query, doseq=True)
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, encoded_query, parsed.fragment)
+    )
+
+
+def _structured_variant_availability(payload: dict[str, object]) -> str | None:
+    for field_name in ("availability", "stockLevelStatus", "stock_status", "status"):
+        normalized = normalize_and_validate_value("availability", payload.get(field_name))
+        if normalized:
+            return str(normalized)
+    if any(payload.get(key) is True for key in ("orderable", "available", "inStock")):
+        return "in_stock"
+    if any(payload.get(key) is False for key in ("orderable", "available", "inStock")):
+        return "out_of_stock"
+    return None
+
+
+def _structured_variant_image_url(
+    payload: dict[str, object], *, base_url: str
+) -> str | None:
+    for field_name in ("preview", "image", "image_url", "imageUrl"):
+        value = payload.get(field_name)
+        if isinstance(value, dict):
+            resolved = _resolve_candidate_url(
+                value.get("href") or value.get("url") or value.get("src"),
+                base_url,
+            )
+        else:
+            resolved = _resolve_candidate_url(value, base_url)
+        if resolved:
+            return resolved
+    images = payload.get("images")
+    if isinstance(images, list):
+        for item in images:
+            if isinstance(item, dict):
+                resolved = _resolve_candidate_url(
+                    item.get("href") or item.get("url") or item.get("src"),
+                    base_url,
+                )
+            else:
+                resolved = _resolve_candidate_url(item, base_url)
+            if resolved:
+                return resolved
+    return None
+
+
+def _score_structured_selected_variant(
+    variant: dict[str, object],
+    *,
+    raw_variant: dict[str, object],
+    base_url: str,
+    selection_hints: dict[str, str],
+) -> int:
+    score = 0
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict):
+        for axis_name, selected_value in selection_hints.items():
+            option_value = _normalized_candidate_text(option_values.get(axis_name))
+            if option_value and option_value.casefold() == selected_value.casefold():
+                score += 10
+    raw_color_value = _normalized_candidate_text(raw_variant.get("colorValue"))
+    if raw_color_value and selection_hints.get("color"):
+        if raw_color_value.casefold() == selection_hints["color"].casefold():
+            score += 12
+    for key in ("variant_id", "sku"):
+        value = _normalized_candidate_text(variant.get(key))
+        if value and selection_hints.get("variant_id"):
+            if value.casefold() == selection_hints["variant_id"].casefold():
+                score += 12
+    if variant.get("availability") == "in_stock":
+        score += 1
+    if variant.get("url") and _scoped_url_key(str(variant.get("url"))) == _scoped_url_key(base_url):
+        score += 5
+    return score
+
+
+def _extract_dom_variant_axes(
+    soup: BeautifulSoup,
+) -> tuple[dict[str, list[str]], dict[str, str]]:
+    axis_values: dict[str, list[str]] = {}
+    selected_values: dict[str, str] = {}
+
+    for select in soup.find_all("select"):
+        if not isinstance(select, Tag) or _is_inside_site_chrome(select):
+            continue
+        axis_name = _variant_axis_name(select) or _variant_axis_name_from_context(select)
+        if not axis_name:
+            continue
+        for option in select.find_all("option"):
+            label = _variant_button_label(option, axis_name=axis_name)
+            if not _dom_variant_value_is_valid(label, axis_name=axis_name):
+                continue
+            values = axis_values.setdefault(axis_name, [])
+            if label not in values:
+                values.append(label)
+            if option.has_attr("selected"):
+                selected_values[axis_name] = label
+
+    candidate_nodes = soup.select(
+        ",".join(
+            (
+                "[data-size]",
+                "[data-color]",
+                "[data-colour]",
+                "[data-attr]",
+                "[data-value]",
+                "[role='radio']",
+                "[role='option']",
+                "button",
+                "label",
+                "li",
+                "div",
+            )
+        )
+    )
+    for node in candidate_nodes:
+        if not isinstance(node, Tag) or _is_inside_site_chrome(node):
+            continue
+        if not _looks_like_dom_variant_button(node):
+            continue
+        axis_name = _variant_axis_name(node) or _variant_axis_name_from_context(node)
+        if not axis_name:
+            continue
+        label = _variant_button_label(node, axis_name=axis_name)
+        if not _dom_variant_value_is_valid(label, axis_name=axis_name):
+            continue
+        values = axis_values.setdefault(axis_name, [])
+        if label not in values:
+            values.append(label)
+        if _variant_button_selected(node):
+            selected_values[axis_name] = label
+
+    for axis_name, values in axis_values.items():
+        if axis_name in selected_values:
+            continue
+        if values:
+            selected_values[axis_name] = values[0]
+
+    return axis_values, selected_values
+
+
+def _variant_axis_name_from_context(node: Tag) -> str:
+    candidates = [
+        node.get("aria-label"),
+        node.get("title"),
+        node.get("name"),
+        node.get("id"),
+        " ".join(node.get("class", [])),
+    ]
+    for candidate in candidates:
+        axis_name = _normalized_variant_axis_token(candidate)
+        if axis_name:
+            return axis_name
+
+    for sibling in list(node.previous_siblings)[:4]:
+        if not isinstance(sibling, Tag):
+            continue
+        axis_name = _normalized_variant_axis_token(sibling.get_text(" ", strip=True))
+        if axis_name:
+            return axis_name
+
+    parent = node.parent
+    steps = 0
+    while isinstance(parent, Tag) and steps < 4:
+        axis_name = _normalized_variant_axis_token(
+            " ".join(
+                filter(
+                    None,
+                    (
+                        parent.get("aria-label"),
+                        parent.get("title"),
+                        parent.get("id"),
+                        " ".join(parent.get("class", [])),
+                    ),
+                )
+            )
+        )
+        if axis_name:
+            return axis_name
+        heading = parent.find(["legend", "label", "h2", "h3", "h4", "p", "span"])
+        if isinstance(heading, Tag):
+            axis_name = _normalized_variant_axis_token(
+                heading.get_text(" ", strip=True)
+            )
+            if axis_name:
+                return axis_name
+        parent = parent.parent
+        steps += 1
+    return ""
+
+
+def _normalized_variant_axis_token(value: object) -> str:
+    text = _normalized_candidate_text(value).lower()
+    if not text:
+        return ""
+    if any(token in text for token in ("size", "fit")):
+        return "size"
+    if any(token in text for token in ("color", "colour", "swatch")):
+        return "color"
+    return ""
+
+
+def _looks_like_dom_variant_button(node: Tag) -> bool:
+    if node.name not in {"button", "option", "label", "li"}:
+        direct_children = node.find_all(["button", "option", "label", "li"], recursive=False)
+        if direct_children:
+            return False
+    attr_blob = " ".join(
+        filter(
+            None,
+            (
+                str(node.get("aria-label") or ""),
+                str(node.get("title") or ""),
+                str(node.get("name") or ""),
+                str(node.get("id") or ""),
+                " ".join(node.get("class", [])),
+            ),
+        )
+    ).lower()
+    if any(
+        token in attr_blob
+        for token in ("size", "color", "colour", "swatch", "variant", "option")
+    ):
+        return True
+    return any(
+        node.has_attr(attr_name)
+        for attr_name in (
+            "data-size",
+            "data-color",
+            "data-colour",
+            "data-attr",
+            "data-value",
+        )
+    )
+
+
+def _dom_variant_value_is_valid(value: str, *, axis_name: str) -> bool:
+    text = _normalized_candidate_text(value)
+    if not text:
+        return False
+    lowered = text.casefold()
+    if lowered in {"select size", "choose size", "size", "select color", "color"}:
+        return False
+    if _VARIANT_SELECTOR_PROMPT_RE.match(text):
+        return False
+    if axis_name == "size" and re.fullmatch(r"[A-Za-z0-9.+/-]{1,8}", text):
+        return True
+    return len(text.split()) <= 5
 
 
 def _build_dynamic_semantic_rows(
@@ -4133,11 +5095,22 @@ def _extract_structured_spec_map(payload: object) -> dict[str, str]:
                 title = normalize_requested_field(
                     _normalized_candidate_text(row.get("title"))
                 )
-                content = _normalized_candidate_text(row.get("content"))
-                if not title or not content:
+                content = _normalize_html_rich_text(str(row.get("content") or ""))
+                if (
+                    not title
+                    or not content
+                    or _contains_unresolved_template_value(content)
+                ):
                     continue
                 structured.setdefault(title, content)
     return structured
+
+
+def _contains_unresolved_template_value(value: object) -> bool:
+    text = _normalized_candidate_text(value)
+    if not text:
+        return False
+    return bool(_UNRESOLVED_TEMPLATE_VALUE_RE.search(text))
 
 
 def _domain(url: str) -> str:

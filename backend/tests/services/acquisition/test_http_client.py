@@ -257,7 +257,9 @@ def test_build_attempt_order_rejects_empty_impersonation_profiles(monkeypatch):
         )
 
 
-def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(caplog, monkeypatch):
+def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(monkeypatch):
+    import logging
+    from unittest.mock import patch
     future = 4102444800
     monkeypatch.setattr(
         "app.services.acquisition.cookie_store.COOKIE_POLICY",
@@ -272,14 +274,14 @@ def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(caplog, monkeypatc
         },
     )
 
-    with caplog.at_level("WARNING"):
+    with patch("app.services.acquisition.cookie_store._log_for_pytest") as mock_log:
         allowed = is_persistable_cookie(
             {"name": "prefs", "value": "1", "domain": "example.com", "path": "/", "expires": future},
             domain="example.com",
         )
-
-    assert allowed is True
-    assert "max_persisted_ttl_seconds" in caplog.text
+        assert allowed is True
+        assert mock_log.called
+        assert "max_persisted_ttl_seconds" in mock_log.call_args[0][2]
 
 
 def test_retry_backoff_seconds_is_bounded(monkeypatch):

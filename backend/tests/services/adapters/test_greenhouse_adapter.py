@@ -36,9 +36,7 @@ async def test_cannot_handle_unrelated_html_with_greenhouse_marker_only():
 @pytest.mark.asyncio
 async def test_extract_from_api():
     adapter = GreenhouseAdapter()
-    response = Mock()
-    response.status_code = 200
-    response.json.return_value = {
+    data = {
         "jobs": [
             {
                 "title": "Software Engineer",
@@ -56,7 +54,7 @@ async def test_extract_from_api():
             },
         ]
     }
-    with patch("app.services.adapters.greenhouse.curl_requests.get", return_value=response) as mock_get:
+    with patch("app.services.adapters.base.BaseAdapter._request_json", return_value=data) as mock_req:
         result = await adapter.extract(
             "https://boards.greenhouse.io/stripe",
             "",
@@ -66,7 +64,7 @@ async def test_extract_from_api():
     assert result.records[0]["title"] == "Software Engineer"
     assert result.records[0]["location"] == "San Francisco, CA"
     assert result.records[1]["category"] == "Product"
-    assert "boards-api.greenhouse.io" in mock_get.call_args.args[0]
+    assert "boards-api.greenhouse.io" in mock_req.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -84,7 +82,7 @@ async def test_extract_from_html_fallback():
     </div>
     </body></html>
     """
-    with patch("app.services.adapters.greenhouse.curl_requests.get", side_effect=Exception("API down")):
+    with patch("app.services.adapters.base.BaseAdapter._request_json", side_effect=Exception("API down")):
         result = await adapter.extract(
             "https://boards.greenhouse.io/stripe",
             html,
@@ -116,7 +114,7 @@ async def test_extract_from_embedded_html_fallback():
     </div>
     </body></html>
     """
-    with patch("app.services.adapters.greenhouse.curl_requests.get", side_effect=Exception("API down")):
+    with patch("app.services.adapters.base.BaseAdapter._request_json", side_effect=Exception("API down")):
         result = await adapter.extract(
             "https://boards.greenhouse.io/embed/job_board?for=stripe",
             html,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRightCircle, ChevronsDown, Copy, Download } from "lucide-react";
+import { ArrowRightCircle, ChevronsDown, Copy, Download, Info } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -19,7 +19,7 @@ import {
   StatusDot,
   TabBar,
 } from "../ui/patterns";
-import { Badge, Button, Card, Input } from "../ui/primitives";
+import { Badge, Button, Card, Input, Tooltip } from "../ui/primitives";
 import { api } from "../../lib/api";
 import { getApiWebSocketBaseUrl } from "../../lib/api/client";
 import type { CrawlLog, CrawlRecord, CrawlRun } from "../../lib/api/types";
@@ -50,6 +50,8 @@ import {
   progressPercent,
   qualityTone,
   RecordsTable,
+  scoreFieldQuality,
+  scoreRecordQuality,
   scrollViewportToBottom,
   stringifyCell,
   uniqueNumbers,
@@ -85,6 +87,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const [logItems, setLogItems] = useState<CrawlLog[]>([]);
   const [logCursorAfterId, setLogCursorAfterId] = useState<number | undefined>(undefined);
   const [logSocketConnected, setLogSocketConnected] = useState(false);
+  const [qualityFilter, setQualityFilter] = useState<"low" | "medium" | "high">("low");
   const logCursorRef = useRef<number | undefined>(undefined);
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const sessionStartMsRef = useRef<number>(Date.now());
@@ -385,11 +388,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   }, [runId]);
 
   useEffect(() => {
-    const availableRecordIds = new Set(
-      (outputTab === "table" ? tableRecords : records).map((record) => record.id),
-    );
-    setSelectedIds((current) => current.filter((id) => availableRecordIds.has(id)));
-  }, [outputTab, records, tableRecords]);
+    if (!run) {
+      return;
+    }
+    if ((run.status === "failed" || run.status === "proxy_exhausted") && outputTab === "table") {
+      setOutputTab("logs");
+    }
+  }, [outputTab, run]);
 
   const recordsForAnalysis = outputTab === "table" ? tableRecords : records.slice(0, CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4);
   const visibleColumns = useMemo(() => {
@@ -409,21 +414,38 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       return scores;
     }
     for (const column of visibleColumns) {
-      let populated = 0;
-      for (const record of recordsForAnalysis) {
-        const value = record.data?.[column] ?? record.raw_data?.[column];
-        if (value !== null && value !== undefined && String(value).trim() !== "") {
-          populated += 1;
-        }
-      }
-      scores[column] = populated / recordsForAnalysis.length;
+      scores[column] = scoreFieldQuality(recordsForAnalysis, column);
     }
     return scores;
   }, [recordsForAnalysis, visibleColumns]);
+  const tableRecordScores = useMemo(
+    () =>
+      Object.fromEntries(
+        tableRecords.map((record) => [record.id, scoreRecordQuality(record, visibleColumns)]),
+      ),
+    [tableRecords, visibleColumns],
+  );
+  const filteredTableRecords = useMemo(() => {
+    const minimumScore = qualityFilter === "high" ? 0.8 : qualityFilter === "medium" ? 0.5 : 0;
+    return tableRecords.filter((record) => (tableRecordScores[record.id] ?? 0) >= minimumScore);
+  }, [qualityFilter, tableRecordScores, tableRecords]);
+
+  useEffect(() => {
+    const availableRecordIds = new Set(
+      (outputTab === "table" ? filteredTableRecords : records).map((record) => record.id),
+    );
+    setSelectedIds((current) => {
+      const next = current.filter((id) => availableRecordIds.has(id));
+      if (next.length === current.length && next.every((id, index) => id === current[index])) {
+        return current;
+      }
+      return next;
+    });
+  }, [filteredTableRecords, outputTab, records]);
 
   const selectedRecords = useMemo(
-    () => (outputTab === "table" ? tableRecords : records).filter((record) => selectedIds.includes(record.id)),
-    [outputTab, records, selectedIds, tableRecords],
+    () => (outputTab === "table" ? filteredTableRecords : records).filter((record) => selectedIds.includes(record.id)),
+    [filteredTableRecords, outputTab, records, selectedIds],
   );
   const resultUrls = useMemo(
     () => uniqueStrings((outputTab === "table" ? tableRecords : records).map((record) => extractRecordUrl(record))),
@@ -435,6 +457,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   );
   const listingRun = useMemo(() => isListingRun(run), [run]);
   const verdict = extractionVerdict(run);
+  const runErrorMessage =
+    typeof run?.result_summary?.error === "string" ? run.result_summary.error : "";
   const quality = useMemo(
     () => estimateDataQuality(recordsForAnalysis, visibleColumns),
     [recordsForAnalysis, visibleColumns],
@@ -551,7 +575,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   return (
     <div className="space-y-4">
       <PageHeader
-        title={run?.url ? `Run Details: ${getDomain(run.url)}` : "Crawl Results"}
+        title={run?.url ? (
+          <span className="flex items-center gap-1.5">
+            Run Details: <a href={run.url} target="_blank" rel="noreferrer" className="font-mono text-[13px] text-[var(--accent)] underline-offset-2 hover:underline">{getDomain(run.url)}</a>
+          </span>
+        ) : "Crawl Results"}
         actions={
           <Button variant="secondary" size="sm" type="button" onClick={resetToConfig}>
             New Crawl
@@ -590,7 +618,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       {!showRunLoadingState && !terminal ? (
         <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.32fr)_minmax(0,0.68fr)]">
           <Card className="space-y-4">
-            <SectionHeader title="Progress" description={run ? `Run ${run.id} is ${humanizeStatus(run.status)}.` : "Loading run state..."} />
+            <SectionHeader title="Progress" description={run ? <ProgressBar percent={progressPercent(run)} /> : "Loading run state..."} />
             <PreviewRow label="Run ID" value={run ? `#${run.id}` : "--"} mono />
             <PreviewRow
               label="Status"
@@ -606,7 +634,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               }
             />
             <PreviewRow label="Crawl Type" value={run?.run_type ?? "--"} />
-            <PreviewRow label="Target" value={run?.url ?? "--"} mono />
+
             <PreviewRow label="Records" value={String(summary.records)} />
             <PreviewRow label="Pages" value={String(summary.pages)} />
             <PreviewRow label="Elapsed" value={summary.duration} />
@@ -621,21 +649,20 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             <PreviewRow
               label="Data Quality"
               value={
-                <Badge tone={qualityTone(quality.level)}>
-                  {humanizeQuality(quality.level)} ({Math.round(quality.score * 100)}%)
-                </Badge>
+                <span className="inline-flex items-center gap-2">
+                  <Badge tone={qualityTone(quality.level)}>
+                    {humanizeQuality(quality.level)} ({Math.round(quality.score * 100)}%)
+                  </Badge>
+                  <Tooltip content="Quality reflects how complete and useful the extracted rows are. High means rows are consistently rich. Low can still be usable, but it is sparser.">
+                    <button type="button" aria-label="Explain data quality" className="text-muted transition-colors hover:text-foreground">
+                      <Info className="size-3.5" aria-hidden="true" />
+                    </button>
+                  </Tooltip>
+                </span>
               }
             />
-            <ProgressBar percent={progressPercent(run)} />
+
             {runActionError ? <InlineAlert message={runActionError} /> : null}
-            <div className="flex flex-wrap gap-2">
-              <ActionButton
-                label={runActionPending === "kill" ? "Killing..." : "Hard Kill"}
-                onClick={() => void runControl()}
-                disabled={!run || !ACTIVE_STATUSES.has(run.status) || runActionPending !== null}
-                danger
-              />
-            </div>
           </Card>
 
           <Card className="space-y-4">
@@ -643,19 +670,27 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               title="Live Log Stream"
               description="Auto-scrolls while you stay at the bottom."
               action={
-                liveJumpAvailable ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      scrollViewportToBottom(logViewportRef);
-                      setLiveJumpAvailable(false);
-                    }}
-                    className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs"
-                  >
-                    <ChevronsDown className="size-3.5" aria-hidden="true" />
-                    Jump to Latest
-                  </button>
-                ) : null
+                <div className="flex items-center gap-2">
+                  {liveJumpAvailable ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        scrollViewportToBottom(logViewportRef);
+                        setLiveJumpAvailable(false);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs"
+                    >
+                      <ChevronsDown className="size-3.5" aria-hidden="true" />
+                      Jump to Latest
+                    </button>
+                  ) : null}
+                  <ActionButton
+                    label={runActionPending === "kill" ? "Killing..." : "Hard Kill"}
+                    onClick={() => void runControl()}
+                    disabled={!run || !ACTIVE_STATUSES.has(run.status) || runActionPending !== null}
+                    danger
+                  />
+                </div>
               }
             />
             <LogTerminal logs={logs} live viewportRef={logViewportRef} />
@@ -665,6 +700,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
       {!showRunLoadingState && terminal ? (
         <Card className="space-y-4">
+          {runErrorMessage ? <InlineAlert tone="danger" message={runErrorMessage} /> : null}
           <RunWorkspaceShell
             header={
               run?.url ? (
@@ -730,12 +766,40 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       <DataRegionLoading count={5} className="px-0" />
                     ) : tableRecords.length ? (
                       <div className="space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2">
+                          <div className="flex items-center gap-2 text-sm text-muted">
+                            <span className="font-medium text-foreground">Shown rows</span>
+                            <select
+                              aria-label="Minimum row quality"
+                              value={qualityFilter}
+                              onChange={(event) => {
+                                const next = event.target.value;
+                                if (next === "low" || next === "medium" || next === "high") {
+                                  setQualityFilter(next);
+                                }
+                              }}
+                              className="control-select focus-ring h-9 min-w-[150px]"
+                            >
+                              <option value="low">Low to High</option>
+                              <option value="medium">Medium to High</option>
+                              <option value="high">High Only</option>
+                            </select>
+                            <Tooltip content="Quality means how complete and useful a row is for review. This only filters what you see in the table. Exported data and extraction output stay unchanged.">
+                              <button type="button" aria-label="Explain row quality filter" className="text-muted transition-colors hover:text-foreground">
+                                <Info className="size-3.5" aria-hidden="true" />
+                              </button>
+                            </Tooltip>
+                          </div>
+                          <div className="text-xs text-muted">
+                            Showing {filteredTableRecords.length} of {tableRecords.length} loaded rows
+                          </div>
+                        </div>
                         <RecordsTable
-                          records={tableRecords}
+                          records={filteredTableRecords}
                           visibleColumns={visibleColumns}
                           fieldQualityScores={fieldQualityScores}
                           selectedIds={selectedIds}
-                          onSelectAll={(checked) => setSelectedIds(checked ? tableRecords.map((record) => record.id) : [])}
+                          onSelectAll={(checked) => setSelectedIds(checked ? filteredTableRecords.map((record) => record.id) : [])}
                           onToggleRow={(id, checked) =>
                             setSelectedIds((current) =>
                               checked ? uniqueNumbers([...current, id]) : current.filter((value) => value !== id),

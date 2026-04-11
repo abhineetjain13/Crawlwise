@@ -7,6 +7,7 @@ from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.acquisition.http_client import requests as curl_requests
 from bs4 import BeautifulSoup
 
 
@@ -50,7 +51,8 @@ class JibeAdapter(BaseAdapter):
         query = self._build_query(url, html, surface)
         request_url = api_url if not query else f"{api_url}?{urlencode(query, doseq=True)}"
         try:
-            payload = await self._request_json(
+            payload = await self._request_json_with_curl(
+                curl_requests.get,
                 request_url,
                 proxy=proxy,
                 timeout_seconds=10,

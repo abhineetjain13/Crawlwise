@@ -86,7 +86,7 @@ def test_llm_runtime_reads_env_overrides(monkeypatch):
     importlib.reload(llm_runtime)
 
 
-def test_check_secret_defaults_warns_in_dev_for_insecure_defaults(monkeypatch, caplog):
+def test_check_secret_defaults_warns_in_dev_for_insecure_defaults(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setattr(settings, "jwt_secret_key", "change-me")
     monkeypatch.setattr(settings, "encryption_key", "change-me-32-bytes-minimum-change-me")
@@ -94,9 +94,13 @@ def test_check_secret_defaults_warns_in_dev_for_insecure_defaults(monkeypatch, c
     monkeypatch.setattr(settings, "default_admin_email", "admin@example.invalid")
     monkeypatch.setattr(settings, "default_admin_password", None)
 
-    _check_secret_defaults()
-
-    assert "SECURITY WARNING" in caplog.text
+    import logging
+    from unittest.mock import patch
+    logger = logging.getLogger("app.core.config")
+    with patch.object(logger, "warning") as mock_warn:
+        _check_secret_defaults()
+        assert mock_warn.called
+        assert "SECURITY WARNING" in mock_warn.call_args[0][0]
 
 
 def test_check_secret_defaults_raises_outside_dev_for_insecure_defaults(monkeypatch):

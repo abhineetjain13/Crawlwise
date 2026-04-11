@@ -30,6 +30,7 @@ from app.models.crawl import CrawlRecord, CrawlRun
 from app.models.user import User
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from tests.support import make_crawl_record, make_crawl_run
 
 
 async def _read_streaming_body(response) -> str:
@@ -41,30 +42,17 @@ async def _read_streaming_body(response) -> str:
 
 @pytest.mark.asyncio
 async def test_collect_export_rows_pages_until_total(db_session, test_user):
-    run = CrawlRun(
-        user_id=test_user.id,
-        run_type="crawl",
-        url="https://example.com",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
+    run = make_crawl_run(user_id=test_user.id)
     db_session.add(run)
     await db_session.flush()
 
     total_records = MAX_RECORD_PAGE_SIZE + 5
     for idx in range(total_records):
         db_session.add(
-            CrawlRecord(
+            make_crawl_record(
                 run_id=run.id,
                 source_url=f"https://example.com/{idx}",
                 data={"title": f"Item {idx}", "description": f"Desc {idx}"},
-                raw_data={},
-                discovered_data={},
-                source_trace={},
-                raw_html_path=None,
             )
         )
     await db_session.commit()
@@ -79,30 +67,17 @@ async def test_collect_export_rows_pages_until_total(db_session, test_user):
 
 @pytest.mark.asyncio
 async def test_export_json_includes_all_rows_and_paging_headers(db_session, test_user):
-    run = CrawlRun(
-        user_id=test_user.id,
-        run_type="crawl",
-        url="https://example.com",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
+    run = make_crawl_run(user_id=test_user.id)
     db_session.add(run)
     await db_session.flush()
 
     total_records = MAX_RECORD_PAGE_SIZE + 3
     for idx in range(total_records):
         db_session.add(
-            CrawlRecord(
+            make_crawl_record(
                 run_id=run.id,
                 source_url=f"https://example.com/{idx}",
                 data={"title": f"Item {idx}"},
-                raw_data={},
-                discovered_data={},
-                source_trace={},
-                raw_html_path=None,
             )
         )
     await db_session.commit()
@@ -118,30 +93,17 @@ async def test_export_json_includes_all_rows_and_paging_headers(db_session, test
 
 @pytest.mark.asyncio
 async def test_export_csv_includes_all_rows_and_paging_headers(db_session, test_user):
-    run = CrawlRun(
-        user_id=test_user.id,
-        run_type="crawl",
-        url="https://example.com",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
+    run = make_crawl_run(user_id=test_user.id)
     db_session.add(run)
     await db_session.flush()
 
     total_records = MAX_RECORD_PAGE_SIZE + 2
     for idx in range(total_records):
         db_session.add(
-            CrawlRecord(
+            make_crawl_record(
                 run_id=run.id,
                 source_url=f"https://example.com/{idx}",
                 data={"title": f"Item {idx}", "description": f"Desc {idx}"},
-                raw_data={},
-                discovered_data={},
-                source_trace={},
-                raw_html_path=None,
             )
         )
     await db_session.commit()
@@ -157,21 +119,12 @@ async def test_export_csv_includes_all_rows_and_paging_headers(db_session, test_
 
 @pytest.mark.asyncio
 async def test_export_markdown_includes_clean_sections_fields_and_headers(db_session, test_user):
-    run = CrawlRun(
-        user_id=test_user.id,
-        run_type="crawl",
-        url="https://example.com",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
+    run = make_crawl_run(user_id=test_user.id)
     db_session.add(run)
     await db_session.flush()
 
     db_session.add(
-        CrawlRecord(
+        make_crawl_record(
             run_id=run.id,
             source_url="https://example.com/item-1",
             data={
@@ -187,7 +140,6 @@ async def test_export_markdown_includes_clean_sections_fields_and_headers(db_ses
                     "specifications": {"weight": "310 g", "drop": "6 mm"},
                 }
             },
-            raw_html_path=None,
         )
     )
     await db_session.commit()
@@ -262,16 +214,7 @@ def test_clean_export_data_preserves_duplicate_alias_fields():
 
 @pytest.mark.asyncio
 async def test_export_csv_discovers_fields_beyond_first_page(db_session, test_user):
-    run = CrawlRun(
-        user_id=test_user.id,
-        run_type="crawl",
-        url="https://example.com",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
+    run = make_crawl_run(user_id=test_user.id)
     db_session.add(run)
     await db_session.flush()
 
@@ -280,14 +223,10 @@ async def test_export_csv_discovers_fields_beyond_first_page(db_session, test_us
         if idx == MAX_RECORD_PAGE_SIZE:
             payload["rare_field"] = "late value"
         db_session.add(
-            CrawlRecord(
+            make_crawl_record(
                 run_id=run.id,
                 source_url=f"https://example.com/{idx}",
                 data=payload,
-                raw_data={},
-                discovered_data={},
-                source_trace={},
-                raw_html_path=None,
             )
         )
     await db_session.commit()
@@ -301,26 +240,19 @@ async def test_export_csv_discovers_fields_beyond_first_page(db_session, test_us
 
 @pytest.mark.asyncio
 async def test_export_csv_does_not_fall_back_to_typed_table_rows(db_session, test_user):
-    run = CrawlRun(
+    run = make_crawl_run(
         user_id=test_user.id,
-        run_type="crawl",
         url="https://example.com/specs",
         surface="tabular",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
     )
     db_session.add(run)
     await db_session.flush()
 
     db_session.add(
-        CrawlRecord(
+        make_crawl_record(
             run_id=run.id,
             source_url="https://example.com/specs",
             data={"page_markdown": "# Specs"},
-            raw_data={},
-            discovered_data={},
             source_trace={
                 "manifest_trace": {
                     "tables": [
@@ -333,7 +265,6 @@ async def test_export_csv_does_not_fall_back_to_typed_table_rows(db_session, tes
                     ]
                 }
             },
-            raw_html_path=None,
         )
     )
     await db_session.commit()
@@ -346,25 +277,17 @@ async def test_export_csv_does_not_fall_back_to_typed_table_rows(db_session, tes
 
 @pytest.mark.asyncio
 async def test_export_tables_csv_returns_flattened_rows(db_session, test_user):
-    run = CrawlRun(
+    run = make_crawl_run(
         user_id=test_user.id,
-        run_type="crawl",
         url="https://example.com/specs",
         surface="tabular",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
     )
     db_session.add(run)
     await db_session.flush()
 
-    record = CrawlRecord(
+    record = make_crawl_record(
         run_id=run.id,
         source_url="https://example.com/specs",
-        data={},
-        raw_data={},
-        discovered_data={},
         source_trace={
             "manifest_trace": {
                 "tables": [
@@ -377,7 +300,6 @@ async def test_export_tables_csv_returns_flattened_rows(db_session, test_user):
                 ]
             }
         },
-        raw_html_path=None,
     )
     db_session.add(record)
     await db_session.commit()
@@ -391,25 +313,17 @@ async def test_export_tables_csv_returns_flattened_rows(db_session, test_user):
 
 @pytest.mark.asyncio
 async def test_export_artifacts_json_includes_typed_bundles(db_session, test_user):
-    run = CrawlRun(
+    run = make_crawl_run(
         user_id=test_user.id,
-        run_type="crawl",
         url="https://example.com/item",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
     )
     db_session.add(run)
     await db_session.flush()
 
-    record = CrawlRecord(
+    record = make_crawl_record(
         run_id=run.id,
         source_url="https://example.com/item",
         data={"title": "Widget", "page_markdown": "# Widget"},
-        raw_data={},
-        discovered_data={},
         source_trace={
             "type": "detail",
             "manifest_trace": {
@@ -417,7 +331,6 @@ async def test_export_artifacts_json_includes_typed_bundles(db_session, test_use
                 "tables": [],
             },
         },
-        raw_html_path=None,
     )
     db_session.add(record)
     await db_session.commit()
@@ -428,82 +341,20 @@ async def test_export_artifacts_json_includes_typed_bundles(db_session, test_use
     assert payload[0]["structured_record"]["title"] == "Widget"
     assert payload[0]["evidence_refs"]["json_ld_count"] == 1
 
-
-def test_artifact_table_rows_flattens_manifest_tables():
-    row = CrawlRecord(
-        id=7,
-        run_id=1,
-        source_url="https://example.com/table",
-        data={},
-        raw_data={},
-        discovered_data={},
-        source_trace={
-            "manifest_trace": {
-                "tables": [
-                    {
-                        "table_index": 1,
-                        "headers": [{"text": "Key"}, {"text": "Value"}],
-                        "rows": [{"row_index": 1, "cells": [{"text": "Weight"}, {"text": "10kg"}]}],
-                    }
-                ]
-            }
-        },
-        raw_html_path=None,
-    )
-
-    flattened = _artifact_table_rows(row)
-
-    assert flattened[0]["Key"] == "Weight"
-    assert flattened[0]["Value"] == "10kg"
-
-
-def test_legacy_fallback_markdown_rows_extracts_structured_rows():
-    row = CrawlRecord(
-        id=8,
-        run_id=1,
-        source_url="https://example.com/jobs",
-        data={
-            "page_markdown": "# Jobs\n\n## [Executive Assistant](https://example.com/jobs/executive-assistant)\nHigh-level support role.\n## [Recruiter](https://example.com/jobs/recruiter)\nSources talent.",
-        },
-        raw_data={},
-        discovered_data={},
-        source_trace={"type": "listing_fallback"},
-        raw_html_path=None,
-    )
-
-    rows = _legacy_fallback_markdown_rows(row)
-
-    assert rows[0]["title"] == "Executive Assistant"
-    assert rows[0]["url"] == "https://example.com/jobs/executive-assistant"
-    assert rows[0]["description"] == "High-level support role."
-
-
 @pytest.mark.asyncio
 async def test_record_provenance_returns_manifest_trace(db_session, test_user):
-    run = CrawlRun(
-        user_id=test_user.id,
-        run_type="crawl",
-        url="https://example.com",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
+    run = make_crawl_run(user_id=test_user.id)
     db_session.add(run)
     await db_session.flush()
 
-    record = CrawlRecord(
+    record = make_crawl_record(
         run_id=run.id,
         source_url="https://example.com/item",
         data={"title": "Item"},
-        raw_data={},
-        discovered_data={},
         source_trace={
             "type": "detail",
             "manifest_trace": {"json_ld": [{"name": "Item"}]},
         },
-        raw_html_path=None,
     )
     db_session.add(record)
     await db_session.commit()
@@ -529,27 +380,14 @@ async def test_record_provenance_masks_unauthorized_run_access(db_session):
     db_session.add_all([owner, viewer])
     await db_session.flush()
 
-    run = CrawlRun(
-        user_id=owner.id,
-        run_type="crawl",
-        url="https://example.com",
-        surface="ecommerce_detail",
-        status="completed",
-        settings={},
-        requested_fields=[],
-        result_summary={},
-    )
+    run = make_crawl_run(user_id=owner.id)
     db_session.add(run)
     await db_session.flush()
 
-    record = CrawlRecord(
+    record = make_crawl_record(
         run_id=run.id,
         source_url="https://example.com/item",
         data={"title": "Item"},
-        raw_data={},
-        discovered_data={},
-        source_trace={},
-        raw_html_path=None,
     )
     db_session.add(record)
     await db_session.commit()

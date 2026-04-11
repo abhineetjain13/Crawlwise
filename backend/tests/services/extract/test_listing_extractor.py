@@ -11,10 +11,8 @@ from app.services.extract.listing_extractor import (
 )
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-
-def _sources(**kwargs) -> dict:
-    return kwargs
+from tests.support import manifest as _sources
+from tests.support import run_extract_listing_records
 
 
 def extract_listing_records(
@@ -25,38 +23,14 @@ def extract_listing_records(
     max_records: int = 100,
     manifest: dict | None = None,
 ) -> list[dict]:
-    sources = dict(manifest or {})
-    page_sources = {
-        "next_data": sources.get("next_data"),
-        "hydrated_states": sources.get("_hydrated_states") or sources.get("hydrated_states") or [],
-        "embedded_json": sources.get("embedded_json") or [],
-        "open_graph": sources.get("open_graph") or {},
-        "json_ld": sources.get("json_ld") or [],
-        "microdata": sources.get("microdata") or [],
-        "tables": sources.get("tables") or [],
-    }
-    if any(page_sources.values()):
-        with patch(
-            "app.services.extract.listing_extractor.parse_page_sources",
-            return_value=page_sources,
-        ):
-            return _extract_listing_records_impl(
-                html,
-                surface,
-                target_fields,
-                page_url=page_url,
-                max_records=max_records,
-                xhr_payloads=sources.get("network_payloads") or [],
-                adapter_records=sources.get("adapter_data") or [],
-            )
-    return _extract_listing_records_impl(
-        html,
-        surface,
-        target_fields,
+    return run_extract_listing_records(
+        _extract_listing_records_impl,
+        html=html,
+        surface=surface,
+        target_fields=target_fields,
         page_url=page_url,
         max_records=max_records,
-        xhr_payloads=sources.get("network_payloads") or [],
-        adapter_records=sources.get("adapter_data") or [],
+        manifest_data=manifest,
     )
 
 
@@ -412,6 +386,61 @@ def test_extract_listing_records_myntra_artifact_preserves_primary_results():
         assert record["title"]
         assert record["url"].startswith("https://www.myntra.com/")
         assert record["brand"]
+
+
+def test_extract_listing_records_handles_dyson_style_comparison_tables():
+    html = """
+    <html><body>
+      <div class="comparison">
+        <table>
+          <thead>
+            <tr class="product">
+              <th class="cms-first"></th>
+              <th class="price-info">
+                <a href="/airwrap-id-multi-styler-dryer-vinca-blue-topaz">
+                  <img src="/images/airwrap-id.png" alt="" />
+                </a>
+              </th>
+              <th class="price-info">
+                <a href="/dyson-airwrap-hs02-origin-nickel-copper">
+                  <img src="/images/airwrap-origin.png" alt="" />
+                </a>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="compare-row">
+              <td class="cms-first">Attachments</td>
+              <td>6 Attachments</td>
+              <td>3 Attachments</td>
+            </tr>
+            <tr class="compare-row">
+              <td class="cms-first">End styles</td>
+              <td>Straight, wavy, curly</td>
+              <td>Loose curls</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.dyson.in/hair-care/hair-stylers",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["url"] == "https://www.dyson.in/airwrap-id-multi-styler-dryer-vinca-blue-topaz"
+    assert records[0]["image_url"] == "https://www.dyson.in/images/airwrap-id.png"
+    assert records[0]["title"].startswith("Airwrap Id Multi Styler Dryer")
+    assert "Attachments: 6 Attachments" in records[0]["description"]
+    assert "End styles: Straight, wavy, curly" in records[0]["description"]
+    assert records[1]["url"] == "https://www.dyson.in/dyson-airwrap-hs02-origin-nickel-copper"
+    assert "Attachments: 3 Attachments" in records[1]["description"]
 
 def test_extract_listing_records_handles_main_entity_itemlist_manifest():
     manifest = _sources(

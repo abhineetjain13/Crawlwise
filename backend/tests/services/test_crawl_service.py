@@ -1493,6 +1493,172 @@ async def test_process_run_job_like_listing_retries_browser_instead_of_page_fall
 
 
 @pytest.mark.asyncio
+async def test_process_run_listing_skips_duplicate_browser_retry_after_failed_browser_attempt(
+    db_session: AsyncSession, test_user
+):
+    weak_listing_html = """
+    <html><body>
+      <main>
+        <h1>Hair Stylers</h1>
+        <p>Compare the range.</p>
+      </main>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/category",
+        "surface": "ecommerce_listing",
+    })
+
+    acquire_mock = AsyncMock(return_value=_make_acq(
+        weak_listing_html,
+        method="curl_cffi",
+        diagnostics={
+            "browser_attempted": True,
+            "browser_failed": True,
+        },
+    ))
+
+    with (
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
+    assert acquire_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_process_run_listing_promotes_same_host_child_listing_before_browser_retry(
+    db_session: AsyncSession, test_user
+):
+    parent_listing_html = """
+    <html><body>
+      <main>
+        <a href="/countertop-appliances/food-processors/food-processor-and-chopper-products">Food Processors</a>
+        <a href="/countertop-appliances/food-processors/parts">Food Processor Parts</a>
+        <a href="/countertop-appliances/food-processors/accessories">Food Processor Accessories</a>
+        <a href="/countertop-appliances/food-processors/processors">Shop All Food Processors</a>
+      </main>
+    </body></html>
+    """
+    child_listing_html = """
+    <html><body>
+      <div class="product-card">
+        <a href="/countertop-appliances/food-processors/processors/p.one.html"><h3>13-Cup Food Processor</h3></a>
+        <img src="https://images.example.com/one.jpg" />
+        <span class="price">$179.99</span>
+      </div>
+      <div class="product-card">
+        <a href="/countertop-appliances/food-processors/processors/p.two.html"><h3>9-Cup Food Processor Plus</h3></a>
+        <img src="https://images.example.com/two.jpg" />
+        <span class="price">$149.99</span>
+      </div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/countertop-appliances/food-processors/food-processor-and-chopper-products.html",
+        "surface": "ecommerce_listing",
+    })
+
+    acquire_mock = AsyncMock(side_effect=[
+        _make_acq(parent_listing_html, method="curl_cffi"),
+        _make_acq(child_listing_html, method="curl_cffi"),
+    ])
+
+    with (
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+    assert acquire_mock.await_count == 2
+    first_request = acquire_mock.await_args_list[0].kwargs["request"]
+    second_request = acquire_mock.await_args_list[1].kwargs["request"]
+    assert isinstance(first_request, AcquisitionRequest)
+    assert isinstance(second_request, AcquisitionRequest)
+    assert second_request.url == "https://example.com/countertop-appliances/food-processors/processors"
+    assert second_request.traversal_mode is None
+
+    records = (await db_session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
+    )).scalars().all()
+    assert len(records) == 2
+    assert records[0].data["title"] == "13-Cup Food Processor"
+    assert records[0].source_trace["method"] == "curl_cffi"
+
+
+@pytest.mark.asyncio
+async def test_process_run_listing_promotes_child_listing_when_initial_records_are_category_tiles(
+    db_session: AsyncSession, test_user
+):
+    parent_listing_html = """
+    <html><body>
+      <div class="swiper-slide">
+        <a href="/countertop-appliances/food-processors/processors">
+          <img alt="Food Processors Icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" />
+        </a>
+      </div>
+      <div class="swiper-slide">
+        <a href="/countertop-appliances/food-processors/parts">
+          <img alt="Food Processor Parts 2x" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" />
+        </a>
+      </div>
+      <div class="swiper-slide">
+        <a href="/countertop-appliances/food-processors/accessories">
+          <img alt="Food Processor Accessories 1x" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" />
+        </a>
+      </div>
+      <a href="/countertop-appliances/food-processors/processors">Shop All Food Processors</a>
+    </body></html>
+    """
+    child_listing_html = """
+    <html><body>
+      <div class="product-card">
+        <a href="/countertop-appliances/food-processors/processors/p.one.html"><h3>13-Cup Food Processor</h3></a>
+        <img src="https://images.example.com/one.jpg" />
+        <span class="price">$179.99</span>
+      </div>
+      <div class="product-card">
+        <a href="/countertop-appliances/food-processors/processors/p.two.html"><h3>9-Cup Food Processor Plus</h3></a>
+        <img src="https://images.example.com/two.jpg" />
+        <span class="price">$149.99</span>
+      </div>
+    </body></html>
+    """
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/countertop-appliances/food-processors/food-processor-and-chopper-products.html",
+        "surface": "ecommerce_listing",
+    })
+
+    acquire_mock = AsyncMock(side_effect=[
+        _make_acq(parent_listing_html, method="curl_cffi"),
+        _make_acq(child_listing_html, method="curl_cffi"),
+    ])
+
+    with (
+        patch("app.services.pipeline.core.acquire", acquire_mock),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "completed"
+    assert run.result_summary.get("record_count") == 2
+    assert acquire_mock.await_count == 2
+    second_request = acquire_mock.await_args_list[1].kwargs["request"]
+    assert second_request.url == "https://example.com/countertop-appliances/food-processors/processors"
+
+
+@pytest.mark.asyncio
 async def test_process_run_loading_shell_listing_retries_browser_and_skips_inline_junk(
     db_session: AsyncSession, test_user
 ):

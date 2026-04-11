@@ -718,6 +718,58 @@ async def test_goto_with_fallback_only_uses_load_for_optimistic_wait(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_goto_with_fallback_retries_navigation_with_commit_after_dom_timeout():
+    page = FakeGotoPage([
+        {
+            "exception": TimeoutError("Page.goto: Timeout 15000ms exceeded."),
+        },
+        {
+            "page_url": "https://example.com",
+            "html": "<html><body>ok</body></html>",
+        },
+    ])
+
+    await _goto_with_fallback(
+        page,
+        "https://example.com",
+        strategies=[("domcontentloaded", 15000), ("commit", 8000)],
+    )
+
+    assert page.goto_calls == [
+        ("https://example.com", "domcontentloaded", 15000),
+        ("https://example.com", "commit", 8000),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_goto_with_fallback_uses_longer_final_commit_retry_after_short_commit_timeout():
+    page = FakeGotoPage([
+        {
+            "exception": TimeoutError("Page.goto: Timeout 15000ms exceeded."),
+        },
+        {
+            "exception": TimeoutError("Page.goto: Timeout 8000ms exceeded."),
+        },
+        {
+            "page_url": "https://example.com",
+            "html": "<html><body>ok</body></html>",
+        },
+    ])
+
+    await _goto_with_fallback(
+        page,
+        "https://example.com",
+        strategies=[("domcontentloaded", 15000), ("commit", 8000)],
+    )
+
+    assert page.goto_calls == [
+        ("https://example.com", "domcontentloaded", 15000),
+        ("https://example.com", "commit", 8000),
+        ("https://example.com", "commit", 15000),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_pause_after_navigation_polls_checkpoint_during_long_wait(monkeypatch):
     checkpoint = AsyncMock()
     monkeypatch.setattr(
@@ -1106,10 +1158,10 @@ async def test_apply_traversal_mode_auto_combines_scroll_and_paginate_steps(monk
         5,
         max_pages=3,
         request_delay_ms=0,
-        page_content_with_retry=AsyncMock(),
+        page_content_with_retry=AsyncMock(return_value="<section>pre-pagination</section>"),
         wait_for_surface_readiness=AsyncMock(),
         wait_for_listing_readiness=AsyncMock(),
-        peek_next_page_signal=AsyncMock(return_value={"kind": "click", "selector": "button.next"}),
+        peek_next_page_signal=AsyncMock(side_effect=[None, {"kind": "click", "selector": "button.next"}]),
         click_and_observe_next_page=AsyncMock(return_value="https://example.com/products?page=2"),
         has_load_more_control=AsyncMock(return_value=False),
         dismiss_cookie_consent=AsyncMock(),
@@ -1121,8 +1173,10 @@ async def test_apply_traversal_mode_auto_combines_scroll_and_paginate_steps(monk
     )
 
     assert result.summary["mode"] == "paginate"
+    assert result.summary["decision"] == "progress_then_paginate"
     assert result.summary["steps"][0]["mode"] == "scroll"
     assert result.summary["steps"][1]["action"] == "capture_page"
+    assert result.html.startswith("<!-- PAGE BREAK:auto:pre-pagination: -->")
 
 
 @pytest.mark.asyncio
@@ -1150,7 +1204,7 @@ async def test_apply_traversal_mode_auto_stops_without_pagination_when_no_next_p
         page_content_with_retry=AsyncMock(),
         wait_for_surface_readiness=AsyncMock(),
         wait_for_listing_readiness=AsyncMock(),
-        peek_next_page_signal=AsyncMock(return_value=None),
+        peek_next_page_signal=AsyncMock(side_effect=[None, None]),
         click_and_observe_next_page=AsyncMock(return_value=""),
         has_load_more_control=AsyncMock(return_value=True),
         dismiss_cookie_consent=AsyncMock(),
@@ -1162,8 +1216,93 @@ async def test_apply_traversal_mode_auto_stops_without_pagination_when_no_next_p
     )
 
     assert result.summary["mode"] == "auto"
+    assert result.summary["decision"] == "progress_without_pagination"
     assert result.summary["stop_reason"] == "no_pagination_after_scroll_or_load_more"
-    assert len(result.summary["steps"]) == 2
+    assert result.summary["steps"] == [
+        {"mode": "load_more", "stop_reason": "no_progress_after_click"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_traversal_mode_auto_prefers_pagination_before_scroll_or_load_more(monkeypatch):
+    scroll_mock = AsyncMock(return_value={"mode": "scroll", "stop_reason": "max_scrolls_reached"})
+    load_more_mock = AsyncMock(return_value={"mode": "load_more", "stop_reason": "no_load_more_control"})
+    paginate_mock = AsyncMock(
+        return_value=TraversalResult(
+            html="<!-- PAGE BREAK:1:https://example.com/products?page=1 -->",
+            summary={"mode": "paginate", "steps": [{"action": "capture_page"}], "stop_reason": "no_next_page"},
+        )
+    )
+    monkeypatch.setattr("app.services.acquisition.traversal.scroll_to_bottom", scroll_mock)
+    monkeypatch.setattr("app.services.acquisition.traversal.click_load_more", load_more_mock)
+    monkeypatch.setattr("app.services.acquisition.traversal.collect_paginated_html", paginate_mock)
+
+    result = await apply_traversal_mode(
+        FakeAutoTraversalPage(),
+        "ecommerce_listing",
+        "auto",
+        5,
+        max_pages=3,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(),
+        wait_for_surface_readiness=AsyncMock(),
+        wait_for_listing_readiness=AsyncMock(),
+        peek_next_page_signal=AsyncMock(return_value={"kind": "click", "selector": "button.next"}),
+        click_and_observe_next_page=AsyncMock(return_value="https://example.com/products?page=2"),
+        has_load_more_control=AsyncMock(return_value=True),
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+        cooperative_sleep_ms=AsyncMock(),
+        snapshot_listing_page_metrics=AsyncMock(),
+    )
+
+    assert result.summary["mode"] == "paginate"
+    assert result.summary["decision"] == "paginate_first"
+    scroll_mock.assert_not_awaited()
+    load_more_mock.assert_not_awaited()
+    paginate_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_traversal_mode_auto_pagination_first_emits_progress_log(monkeypatch):
+    progress_logger = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.collect_paginated_html",
+        AsyncMock(
+            return_value=TraversalResult(
+                html="<!-- PAGE BREAK:1:https://example.com/products?page=1 -->",
+                summary={"mode": "paginate", "steps": [{"action": "capture_page"}], "stop_reason": "no_next_page"},
+            )
+        ),
+    )
+
+    result = await apply_traversal_mode(
+        FakeAutoTraversalPage(),
+        "ecommerce_listing",
+        "auto",
+        5,
+        max_pages=3,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(),
+        wait_for_surface_readiness=AsyncMock(),
+        wait_for_listing_readiness=AsyncMock(),
+        peek_next_page_signal=AsyncMock(return_value={"kind": "click", "selector": "button.next"}),
+        click_and_observe_next_page=AsyncMock(return_value="https://example.com/products?page=2"),
+        has_load_more_control=AsyncMock(return_value=False),
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+        cooperative_sleep_ms=AsyncMock(),
+        snapshot_listing_page_metrics=AsyncMock(),
+        progress_logger=progress_logger,
+    )
+
+    assert result.summary["decision"] == "paginate_first"
+    messages = [call.args[0] for call in progress_logger.await_args_list]
+    assert "auto:paginate_first next_page_signal_detected" in messages
 
 
 def test_resolve_traversal_mode_prefers_traversal_mode():

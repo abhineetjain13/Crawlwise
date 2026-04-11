@@ -196,11 +196,14 @@ def _extract_datalayer_ecommerce_payload(ecommerce: dict[str, object]) -> dict[s
                         disc_val = float(discount_value)
                     except (TypeError, ValueError):
                         disc_val = None
-                    if (
-                        price_val is not None
-                        and disc_val is not None
-                        and price_val > 0
-                        and disc_val > price_val
+                    if _datalayer_discount_looks_like_percentage(
+                        discount_value,
+                        price_value=price_val,
+                        discount_value_numeric=disc_val,
+                        price_currency=str(
+                            item.get("currency") or ecommerce.get("currencyCode") or ""
+                        )
+                        or None,
                     ):
                         result["discount_percentage"] = discount_value
                     else:
@@ -238,6 +241,34 @@ def _extract_datalayer_ecommerce_payload(ecommerce: dict[str, object]) -> dict[s
 
     return result
 
+
+def _datalayer_discount_looks_like_percentage(
+    raw_discount: object,
+    *,
+    price_value: float | None,
+    discount_value_numeric: float | None,
+    price_currency: str | None = None,
+) -> bool:
+    if discount_value_numeric is None or discount_value_numeric <= 0:
+        return False
+    if discount_value_numeric > 100:
+        return False
+    if price_value is None or price_value <= 0:
+        return False
+    raw_text = str(raw_discount or "").strip()
+    if "%" in raw_text:
+        return True
+    if not re.fullmatch(r"-?\d+(?:\.0+)?", raw_text):
+        return False
+    currency = str(price_currency or "").strip().upper()
+    if currency in {"JPY", "KRW"}:
+        return False
+    # If discount exceeds price, it's almost certainly a percentage.
+    if discount_value_numeric > price_value:
+        return True
+    if discount_value_numeric < price_value * 0.5:
+        return True
+    return False
 
 def _score_datalayer_payload(
     result: dict[str, object], *, push_index: int

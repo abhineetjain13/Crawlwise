@@ -8,6 +8,7 @@ from json import loads as parse_json
 from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.acquisition.http_client import requests as curl_requests
 
 _FETCH_ERRORS = (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError)
 
@@ -71,7 +72,8 @@ class ShopifyAdapter(BaseAdapter):
             else:
                 api_url = f"{parsed.scheme}://{parsed.netloc}/products.json?limit=250"
         try:
-            data = await self._request_json(
+            data = await self._request_json_with_curl(
+                curl_requests.get,
                 api_url,
                 proxy=proxy,
                 timeout_seconds=6,
@@ -97,6 +99,7 @@ class ShopifyAdapter(BaseAdapter):
                     base_url=urljoin(url, f"/products/{p.get('handle', '')}"),
                 ))
             ]
+            normalized_variants = self._dedupe_variants(normalized_variants)
             selected_variant = self._select_shopify_variant(
                 normalized_variants,
                 base_url=url,
@@ -166,6 +169,7 @@ class ShopifyAdapter(BaseAdapter):
                             base_url=url,
                         ))
                     ]
+                    normalized_variants = self._dedupe_variants(normalized_variants)
                     selected_variant = self._select_shopify_variant(
                         normalized_variants,
                         base_url=url,
@@ -293,6 +297,46 @@ class ShopifyAdapter(BaseAdapter):
                 if cleaned not in axes[str(axis_name)]:
                     axes[str(axis_name)].append(cleaned)
         return axes
+
+    def _dedupe_variants(self, variants: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen: dict[str, int] = {}
+        for variant in variants:
+            fingerprint = self._variant_fingerprint(variant)
+            if fingerprint is None:
+                deduped.append(dict(variant))
+                continue
+            existing_index = seen.get(fingerprint)
+            if existing_index is None:
+                seen[fingerprint] = len(deduped)
+                deduped.append(dict(variant))
+                continue
+            current = deduped[existing_index]
+            if len(variant.keys()) > len(current.keys()):
+                merged = dict(variant)
+                for key, value in current.items():
+                    if merged.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                        merged[key] = value
+                deduped[existing_index] = merged
+                continue
+            for key, value in variant.items():
+                if current.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                    current[key] = value
+        return deduped
+
+    def _variant_fingerprint(self, variant: dict) -> str | None:
+        variant_id = str(variant.get("variant_id") or "").strip()
+        if variant_id:
+            return f"id:{variant_id}"
+        sku = str(variant.get("sku") or "").strip()
+        option_values = variant.get("option_values")
+        if sku and isinstance(option_values, dict) and option_values:
+            return json.dumps({"sku": sku, "option_values": option_values}, sort_keys=True)
+        if sku:
+            return f"sku:{sku}"
+        if isinstance(option_values, dict) and option_values:
+            return json.dumps({"option_values": option_values}, sort_keys=True)
+        return None
 
     def _split_selectable_axes(
         self, axes: dict[str, list[str]]

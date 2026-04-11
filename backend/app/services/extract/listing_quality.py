@@ -317,6 +317,8 @@ def _looks_like_listing_hub_url(url: str) -> bool:
     segments = [segment for segment in path.split("/") if segment]
     if len(segments) <= 1:
         return True
+    if any(segment.startswith("all-") for segment in segments):
+        return True
     return len(segments) <= 2 and any(segment in {"jobs", "careers", "products", "shop", "collections"} for segment in segments)
 
 

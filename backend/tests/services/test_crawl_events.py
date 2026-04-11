@@ -75,35 +75,4 @@ def test_append_log_file_line_emits_structured_log(monkeypatch):
     assert payload["message"] == "hello"
 
 
-def test_merge_run_summary_patch_keeps_monotonic_progress_and_counts():
-    current = {
-        "progress": 80,
-        "processed_urls": 8,
-        "completed_urls": 8,
-        "remaining_urls": 2,
-        "verdict_counts": {"success": 8, "error": 0},
-    }
-    patch = {
-        "progress": 60,
-        "processed_urls": 6,
-        "completed_urls": 6,
-        "remaining_urls": 4,
-        "verdict_counts": {"success": 6, "error": 1},
-    }
 
-    merged = crawl_events._merge_run_summary_patch(current, patch)
-
-    assert merged["progress"] == 80
-    assert merged["processed_urls"] == 8
-    assert merged["completed_urls"] == 8
-    assert merged["remaining_urls"] == 2
-    assert merged["verdict_counts"] == {"success": 8, "error": 1}
-
-
-def test_merge_run_summary_patch_merges_url_verdicts_positionally():
-    current = {"url_verdicts": ["success", "", "blocked"]}
-    patch = {"url_verdicts": ["", "error"]}
-
-    merged = crawl_events._merge_run_summary_patch(current, patch)
-
-    assert merged["url_verdicts"] == ["success", "error", "blocked"]

@@ -8,6 +8,7 @@ from html import unescape
 from urllib.parse import urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.acquisition.http_client import requests as curl_requests
 from bs4 import BeautifulSoup
 
 
@@ -73,7 +74,8 @@ class OracleHCMAdapter(BaseAdapter):
                 offset=offset,
             )
             try:
-                payload = await self._request_json(
+                payload = await self._request_json_with_curl(
+                    curl_requests.get,
                     endpoint,
                     proxy=proxy,
                     timeout_seconds=12,

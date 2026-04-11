@@ -679,51 +679,65 @@ async def _fetch_rendered_html_attempt(
         if shadow_dom_flatten:
             result.diagnostics["shadow_dom_flatten"] = shadow_dom_flatten
 
+        traversal_result = TraversalResult()
+        traversal_fallback_reused_initial_page = False
         traversal_started_at = time.perf_counter()
-        try:
-            traversal_result = await _apply_traversal_mode(
-                page,
-                surface,
-                traversal_mode,
-                max_scrolls,
-                max_pages=max_pages,
-                request_delay_ms=request_delay_ms,
-                run_id=run_id,
-                checkpoint=checkpoint,
-            )
-        except (
-            PlaywrightError,
-            RuntimeError,
-            ValueError,
-            TypeError,
-            OSError,
-        ) as exc:
-            logger.warning(
-                "[traversal] fallback to single-page, reason=exception:%s, url=%s",
-                type(exc).__name__,
-                url,
-            )
-            result.diagnostics["traversal_fallback_used"] = True
-            result.diagnostics["traversal_fallback_reason"] = (
-                f"exception:{type(exc).__name__}"
-            )
-            traversal_result = TraversalResult(
-                html=None,
-                summary={
-                    "mode": traversal_mode,
-                    "attempted": True,
-                    "fallback_used": True,
-                    "stop_reason": f"exception:{type(exc).__name__}",
-                },
-            )
+        if traversal_mode:
+            try:
+                traversal_result = await _apply_traversal_mode(
+                    page,
+                    surface,
+                    traversal_mode,
+                    max_scrolls,
+                    max_pages=max_pages,
+                    request_delay_ms=request_delay_ms,
+                    run_id=run_id,
+                    checkpoint=checkpoint,
+                )
+            except (
+                PlaywrightError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                OSError,
+            ) as exc:
+                logger.warning(
+                    "[traversal] fallback to single-page, reason=exception:%s, url=%s",
+                    type(exc).__name__,
+                    url,
+                )
+                traversal_fallback_reused_initial_page = True
+                result.diagnostics["traversal_exception"] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc or "").strip()[:300],
+                }
+                result.diagnostics["traversal_fallback_used"] = True
+                result.diagnostics["traversal_fallback_reason"] = (
+                    f"exception:{type(exc).__name__}"
+                )
+                traversal_result = TraversalResult(
+                    html=None,
+                    summary={
+                        "mode": traversal_mode,
+                        "attempted": True,
+                        "fallback_used": True,
+                        "stop_reason": f"exception:{type(exc).__name__}",
+                    },
+                )
         timings_ms["browser_traversal_ms"] = _elapsed_ms(traversal_started_at)
         combined_html = traversal_result.html
-        traversal_summary = _normalize_traversal_summary(
-            traversal_result.summary
-            if isinstance(traversal_result.summary, dict)
-            else {},
-            traversal_mode=traversal_mode,
-            combined_html=combined_html,
+        traversal_summary = (
+            _normalize_traversal_summary(
+                traversal_result.summary
+                if isinstance(traversal_result.summary, dict)
+                else {},
+                traversal_mode=traversal_mode,
+                combined_html=combined_html,
+            )
+            if traversal_mode
+            or bool(getattr(traversal_result, "summary", None))
+            or combined_html is not None
+            else {}
         )
         if traversal_summary:
             result.diagnostics["traversal_summary"] = traversal_summary
@@ -784,8 +798,11 @@ async def _fetch_rendered_html_attempt(
                 fallback_reason,
                 url,
             )
+            traversal_fallback_reused_initial_page = True
             result.diagnostics["traversal_fallback_used"] = True
             result.diagnostics["traversal_fallback_reason"] = fallback_reason
+        if traversal_fallback_reused_initial_page:
+            result.diagnostics["traversal_reused_initial_page"] = True
 
         # Always record traversal context when traversal was attempted
         if traversal_mode:
@@ -1230,6 +1247,17 @@ async def _apply_traversal_mode(
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> TraversalResult:
     traversal_config = _traversal_config()
+    progress_logger = None
+    if run_id is not None:
+        async def _progress_logger(message: str) -> None:
+            from app.services.crawl_events import append_log_event
+
+            await append_log_event(
+                run_id=run_id,
+                level="info",
+                message=f"[TRAVERSAL] {message}",
+            )
+        progress_logger = _progress_logger
 
     return await _apply_traversal_mode_shared(
         page,
@@ -1256,6 +1284,13 @@ async def _apply_traversal_mode(
         run_id=run_id,
         traversal_artifact_dir=_traversal_artifact_dir(run_id),
         checkpoint=checkpoint,
+        progress_logger=progress_logger,
+        goto_page=lambda pg, next_url, *, surface=None, checkpoint=None: _goto_with_fallback(
+            pg,
+            next_url,
+            surface=surface,
+            checkpoint=checkpoint,
+        ),
     )
 
 
@@ -1295,6 +1330,12 @@ async def _collect_paginated_html(
         run_id=run_id,
         traversal_artifact_dir=_traversal_artifact_dir(run_id),
         checkpoint=checkpoint,
+        goto_page=lambda pg, next_url, *, surface=None, checkpoint=None: _goto_with_fallback(
+            pg,
+            next_url,
+            surface=surface,
+            checkpoint=checkpoint,
+        ),
     )
     html = traversal_result.html or ""
     return _PaginatedHtmlResult(
@@ -1884,6 +1925,43 @@ def _should_shorten_navigation_after_profile_failure(reason: str | None) -> bool
     return reason in {"timeout", "navigation_error"}
 
 
+def _navigation_attempts(
+    strategies: list[tuple[str, int]] | None = None,
+) -> list[tuple[str, int]]:
+    configured = list(strategies or _navigation_strategies())
+    attempts: list[tuple[str, int]] = [
+        (wait_until, timeout)
+        for wait_until, timeout in configured
+        if wait_until in {"commit", "domcontentloaded"}
+    ]
+    if not attempts:
+        attempts.append(
+            ("domcontentloaded", BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS)
+        )
+    if not any(wait_until == "commit" for wait_until, _timeout in attempts):
+        attempts.append(
+            (
+                "commit",
+                min(
+                    BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
+                    max(8000, BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS),
+                ),
+            )
+        )
+    max_commit_timeout = max(
+        (
+            int(timeout)
+            for wait_until, timeout in attempts
+            if wait_until == "commit"
+        ),
+        default=0,
+    )
+    final_commit_timeout = max(15000, max_commit_timeout)
+    if final_commit_timeout > max_commit_timeout:
+        attempts.append(("commit", final_commit_timeout))
+    return attempts
+
+
 async def _goto_with_fallback(
     page,
     url: str,
@@ -1903,17 +1981,35 @@ async def _goto_with_fallback(
     retrying before giving up.
     """
     strategies = strategies or _navigation_strategies()
+    navigation_attempts = _navigation_attempts(strategies)
     browser_error_retries = max(0, BROWSER_ERROR_RETRY_ATTEMPTS)
 
     for attempt in range(browser_error_retries + 1):
         try:
             if checkpoint is not None:
                 await checkpoint()
-            await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
-            )
+            last_navigation_error: PlaywrightError | None = None
+            for wait_until, timeout in navigation_attempts:
+                try:
+                    await page.goto(
+                        url,
+                        wait_until=wait_until,
+                        timeout=timeout,
+                    )
+                    last_navigation_error = None
+                    break
+                except (PlaywrightTimeoutError, TimeoutError) as exc:
+                    last_navigation_error = exc
+                    logger.debug(
+                        "goto(%s, attempt=%d, wait_until=%s, timeout=%d) timed out",
+                        url,
+                        attempt,
+                        wait_until,
+                        timeout,
+                    )
+                    continue
+            if last_navigation_error is not None:
+                raise last_navigation_error
             browser_error_reason = await _retryable_browser_error_reason(page)
             if browser_error_reason is not None:
                 if attempt >= browser_error_retries:
@@ -1934,7 +2030,7 @@ async def _goto_with_fallback(
 
             # Best-effort hydration window after DOM readiness.
             for wait_until, timeout in strategies:
-                if wait_until == "load":
+                if wait_until == "load" and hasattr(page, "wait_for_load_state"):
                     try:
                         await page.wait_for_load_state(
                             wait_until,

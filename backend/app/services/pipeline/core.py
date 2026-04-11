@@ -53,6 +53,11 @@ from app.services.xpath_service import validate_xpath_candidate
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.shared_acquisition import (
+    acquire,
+    run_adapter,
+    try_blocked_adapter_recovery,
+)
 
 from .field_normalization import (
     _merge_record_fields,

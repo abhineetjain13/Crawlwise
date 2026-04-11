@@ -232,8 +232,14 @@ def _extract_listing_records_single_page(
         surface=surface,
         page_url=page_url,
     )
+    comparison_table_records = _extract_from_comparison_tables(
+        soup,
+        surface=surface,
+        page_url=page_url,
+    )
     raw_record_sets = {
         "structured": structured_records,
+        "comparison_table": comparison_table_records,
         "next_flight": [],
         "inline_array": [],
         "json_ld": json_ld_records,
@@ -467,7 +473,6 @@ def _extract_from_structured_sources(
                 ]
                 if filtered_state_records:
                     structured_groups.append(filtered_state_records)
-                    break
 
     for payload in xhr_payloads:
         payload_url = str(payload.get("url") or "").strip()
@@ -518,6 +523,141 @@ def _extract_from_structured_sources(
     merged = merge_record_sets_on_identity(primary_records, supplemental_sets)
 
     return merged if len(merged) >= MIN_VIABLE_RECORDS else []
+
+
+def _extract_from_comparison_tables(
+    soup: BeautifulSoup,
+    *,
+    surface: str,
+    page_url: str,
+) -> list[dict]:
+    if "job" in str(surface or "").lower():
+        return []
+    records: list[dict] = []
+    for table in soup.select("table"):
+        header_row = table.select_one("thead tr.product") or table.select_one("tr.product")
+        if header_row is None:
+            continue
+        header_cells = header_row.find_all(["th", "td"], recursive=False)
+        if len(header_cells) < 3:
+            continue
+        column_records: list[dict] = []
+        for cell in header_cells[1:]:
+            record = _extract_comparison_table_column_record(cell, page_url=page_url)
+            if record:
+                column_records.append(record)
+        if len(column_records) < MIN_VIABLE_RECORDS:
+            continue
+        body_rows = list(table.select("tbody tr"))
+        for row in body_rows:
+            cells = row.find_all(["th", "td"], recursive=False)
+            if len(cells) < len(column_records) + 1:
+                continue
+            label = _normalize_listing_title_text(cells[0].get_text(" ", strip=True))
+            if not label:
+                continue
+            values = [
+                _extract_comparison_table_value(cell)
+                for cell in cells[1 : len(column_records) + 1]
+            ]
+            if not any(value for value in values):
+                continue
+            _apply_comparison_table_row(column_records, label=label, values=values)
+        for record in column_records:
+            if _is_meaningful_listing_record(record, surface=surface):
+                record["_source"] = "comparison_table"
+                records.append(record)
+        if len(records) >= MIN_VIABLE_RECORDS:
+            break
+    return records
+
+
+def _extract_comparison_table_column_record(cell: Tag, *, page_url: str) -> dict[str, object]:
+    record: dict[str, object] = {}
+    link = cell.select_one("a[href]")
+    href = str(link.get("href") or "").strip() if isinstance(link, Tag) else ""
+    if href:
+        record["url"] = urljoin(page_url, href)
+    image = ""
+    image_el = cell.select_one("img[src]")
+    if isinstance(image_el, Tag):
+        image = str(image_el.get("src") or "").strip()
+    if image:
+        record["image_url"] = urljoin(page_url, image)
+    title = ""
+    if isinstance(link, Tag):
+        title = _normalize_listing_title_text(link.get_text(" ", strip=True))
+        if not title:
+            title = _normalize_listing_title_text(link.get("aria-label"))
+        if not title:
+            title = _normalize_listing_title_text(link.get("title"))
+    if not title and record.get("url"):
+        title = _title_from_product_url(str(record.get("url") or ""))
+    if title:
+        record["title"] = title
+    return record
+
+
+def _extract_comparison_table_value(cell: Tag) -> str:
+    text = _normalize_listing_title_text(cell.get_text(" ", strip=True))
+    if text:
+        return text
+    image = cell.select_one("img[alt]")
+    if image is not None:
+        alt = _normalize_listing_title_text(image.get("alt"))
+        if alt and alt.lower() != "dash":
+            return alt
+    if cell.select_one("img"):
+        return "Yes"
+    return ""
+
+
+def _apply_comparison_table_row(
+    records: list[dict[str, object]],
+    *,
+    label: str,
+    values: list[str],
+) -> None:
+    key = _comparison_table_field_name(label)
+    for record, value in zip(records, values, strict=False):
+        if not value:
+            continue
+        if key == "price" and "price" not in record:
+            record["price"] = value
+            continue
+        if key == "availability":
+            record["availability"] = value
+            continue
+        summary = str(record.get("description") or "").strip()
+        line = f"{label}: {value}"
+        record["description"] = f"{summary} | {line}".strip(" |") if summary else line
+
+
+def _comparison_table_field_name(label: str) -> str:
+    lowered = _normalize_listing_title_text(label).lower()
+    if "price" in lowered:
+        return "price"
+    if lowered in {"availability", "in stock", "stock"}:
+        return "availability"
+    return lowered
+
+
+def _title_from_product_url(url_value: str) -> str:
+    parsed = urlparse(str(url_value or "").strip())
+    path = parsed.path.rstrip("/")
+    if not path:
+        return ""
+    segment = path.split("/")[-1]
+    segment = re.sub(r"\.[A-Za-z0-9]+$", "", segment)
+    segment = re.sub(r"^[pk]\.", "", segment, flags=re.IGNORECASE)
+    segment = re.sub(r"[-_]+", " ", segment)
+    candidate = _normalize_listing_title_text(segment)
+    if not candidate:
+        return ""
+    words = [part for part in candidate.split() if part]
+    if len(words) > 12:
+        words = words[:12]
+    return " ".join(word.capitalize() if word.islower() else word for word in words)
 
 
 def _adapter_candidate_records(records: list[dict]) -> list[dict]:

@@ -586,8 +586,8 @@ async def test_run_prompt_task_exports_prometheus_outcome_metrics(db_session: As
     assert success.error_category == LLMErrorCategory.NONE
     assert failure.error_category == LLMErrorCategory.VALIDATION_FAILURE
 
-    payload, _content_type = await render_prometheus_metrics()
-    rendered = payload.decode("utf-8")
+    from app.core.metrics import _registry, generate_latest
+    rendered = generate_latest(_registry).decode("utf-8") if generate_latest else ""
     assert 'llm_task_outcomes_total{error_category="none",outcome="success",provider="groq",task_type="xpath_discovery"}' in rendered
     assert 'llm_task_outcomes_total{error_category="validation_failure",outcome="error",provider="groq",task_type="schema_inference"}' in rendered
     assert "llm_task_duration_seconds_" in rendered

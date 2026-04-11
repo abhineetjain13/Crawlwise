@@ -253,10 +253,10 @@ def resolve_traversal_mode(settings: object) -> str | None:
     if advanced_enabled:
         _log_for_pytest(
             logging.WARNING,
-            "Unrecognized traversal_mode=%r with advanced_enabled=true; defaulting to auto",
+            "Unrecognized traversal_mode=%r with advanced_enabled=true; ignoring invalid listing traversal request",
             mode,
         )
-        return "auto"
+        return None
     _log_for_pytest(logging.WARNING, "Unrecognized traversal_mode=%r; ignoring", mode)
     return None
 

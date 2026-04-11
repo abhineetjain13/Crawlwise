@@ -9,7 +9,8 @@ from urllib.parse import urlparse
 
 import pytest
 from app.models.crawl import CrawlRecord, CrawlRun
-from app.services.crawl_service import create_crawl_run, process_run
+from app.services.crawl_crud import create_crawl_run
+from app.services.crawl_service import process_run
 from app.services.url_safety import ValidatedTarget
 from sqlalchemy import select
 

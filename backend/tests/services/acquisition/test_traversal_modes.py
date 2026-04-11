@@ -26,14 +26,14 @@ def test_resolve_traversal_mode_contract_matrix(settings: dict, expected: str | 
     assert resolve_traversal_mode(settings) == expected
 
 
-def test_resolve_traversal_mode_unrecognized_mode_falls_back_to_auto_with_warning(
+def test_resolve_traversal_mode_unrecognized_mode_is_ignored_with_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.WARNING):
-        resolved = resolve_traversal_mode(
-            {"advanced_enabled": True, "traversal_mode": "mystery_mode"}
-        )
-    assert resolved == "auto"
+    caplog.set_level(logging.WARNING, logger="app.services.crawl_utils")
+    resolved = resolve_traversal_mode(
+        {"advanced_enabled": True, "traversal_mode": "mystery_mode"}
+    )
+    assert resolved is None
     assert "Unrecognized traversal_mode" in caplog.text
 
 
@@ -114,6 +114,31 @@ class _ButtonOnlyPaginationPage:
 
     async def wait_for_load_state(self, state: str, *, timeout: int) -> None:
         self.wait_for_load_state_calls.append((state, timeout))
+
+
+class _FragmentFriendlyPaginationPage(_ButtonOnlyPaginationPage):
+    async def content(self) -> str:
+        cards = "".join(self.pages[self.page_index])
+        noise = "MARKETING_BLOB " * 5000
+        return (
+            f"<html><body><header>{noise}</header>"
+            f"<section data-page='{self.page_index + 1}'>{cards}</section>"
+            f"<footer>{noise}</footer></body></html>"
+        )
+
+    async def evaluate(self, script: str, arg=None):
+        if "const seen = new Set();" in script:
+            cards = []
+            for card_html in self.pages[self.page_index]:
+                href = card_html.split('href="', 1)[1].split('"', 1)[0]
+                cards.append({"html": card_html, "identity": href})
+            return {
+                "cards": cards,
+                "container_signature": f"page-{self.page_index + 1}",
+            }
+        if "knownSigs" in script:
+            return []
+        return ""
 
 
 class _VirtualizedScrollPage:
@@ -213,6 +238,82 @@ async def test_paginate_mode_collects_three_button_only_pages_without_duplicates
     assert result.html.count("PAGE BREAK:") == 3
     for product_id in range(1, 7):
         assert result.html.count(f'href="/products/{product_id}"') == 1
+
+
+@pytest.mark.asyncio
+async def test_paginate_mode_uses_targeted_fragments_for_listing_pages():
+    page = _FragmentFriendlyPaginationPage()
+
+    async def _page_content_with_retry(current_page, checkpoint=None) -> str:
+        _ = checkpoint
+        return await current_page.content()
+
+    async def _advance_button_only_page(current_page, *, checkpoint=None) -> AdvanceResult:
+        _ = checkpoint
+        button = current_page.locator("button.next").first
+        if not await button.count():
+            return AdvanceResult()
+        await button.click()
+        return AdvanceResult(url=current_page.url, already_navigated=True)
+
+    result = await collect_paginated_html(
+        page,
+        surface="ecommerce_listing",
+        max_pages=2,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+        advance_next_page_fn=_advance_button_only_page,
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+    )
+
+    assert result.html is not None
+    assert "MARKETING_BLOB" not in result.html
+    assert result.summary["pages_collected"] == 2
+    for product_id in range(1, 5):
+        assert result.html.count(f'href="/products/{product_id}"') == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_paginated_html_emits_progress_logs():
+    page = _ButtonOnlyPaginationPage()
+    progress_logger = AsyncMock()
+
+    async def _page_content_with_retry(current_page, checkpoint=None) -> str:
+        _ = checkpoint
+        return await current_page.content()
+
+    async def _advance_button_only_page(current_page, *, checkpoint=None) -> AdvanceResult:
+        _ = checkpoint
+        button = current_page.locator("button.next").first
+        if not await button.count():
+            return AdvanceResult()
+        await button.click()
+        return AdvanceResult(url=current_page.url, already_navigated=True)
+
+    await collect_paginated_html(
+        page,
+        surface="ecommerce_listing",
+        max_pages=2,
+        request_delay_ms=0,
+        page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+        advance_next_page_fn=_advance_button_only_page,
+        dismiss_cookie_consent=AsyncMock(),
+        pause_after_navigation=AsyncMock(),
+        expand_all_interactive_elements=AsyncMock(return_value={}),
+        flatten_shadow_dom=AsyncMock(),
+        progress_logger=progress_logger,
+    )
+
+    messages = [call.args[0] for call in progress_logger.await_args_list]
+    assert any(message.startswith("paginate:capture page=1") for message in messages)
+    assert any(message.startswith("paginate:advance_in_place page=2") for message in messages)
 
 
 @pytest.mark.asyncio

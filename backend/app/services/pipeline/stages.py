@@ -11,14 +11,17 @@ replace the monolithic inline logic that previously lived in
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import TYPE_CHECKING
+from urllib.parse import urljoin, urlparse
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.crawl_metrics import (
     build_url_metrics as _build_url_metrics,
 )
 from app.services.config.crawl_runtime import AUTO_DETECT_SURFACE
+from bs4 import BeautifulSoup
 
 from .types import PipelineContext
 from .utils import _elapsed_ms, parse_html
@@ -28,6 +31,156 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+_LISTING_PROMOTION_TEXT_HINTS = ("shop all", "all ", "see all", "view all")
+_LISTING_PROMOTION_PENALTY_TOKENS = {"accessories", "parts", "support", "help", "service"}
+_LISTING_PROMOTION_TEXT_NOISE = ("skip", "navigation", "menu")
+_LISTING_TILE_ALLOWED_FIELDS = {"title", "url", "image_url", "additional_images"}
+_LISTING_TILE_STRONG_FIELDS = {
+    "availability",
+    "brand",
+    "currency",
+    "original_price",
+    "part_number",
+    "price",
+    "rating",
+    "review_count",
+    "sale_price",
+    "sku",
+}
+_LISTING_PATH_TOKEN_STOPWORDS = {
+    "all",
+    "and",
+    "categories",
+    "category",
+    "collection",
+    "collections",
+    "for",
+    "html",
+    "htm",
+    "page",
+    "product",
+    "products",
+    "shop",
+    "store",
+    "the",
+    "with",
+}
+
+
+def _canonical_listing_path(value: str) -> str:
+    path = urlparse(str(value or "").strip()).path.lower().rstrip("/")
+    return re.sub(r"\.(?:html?|php|aspx?)$", "", path)
+
+
+def _url_path_tokens(value: str) -> set[str]:
+    path = urlparse(str(value or "").strip()).path.lower()
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", path)
+        if len(token) >= 3 and token not in _LISTING_PATH_TOKEN_STOPWORDS
+    }
+
+
+def _looks_like_detail_url(value: str) -> bool:
+    lowered = str(value or "").strip().lower()
+    if any(
+        marker in lowered
+        for marker in ("/p/", "/p.", "/product/", "/products/", "/dp/", "/item/", "/buy")
+    ):
+        return True
+    segments = [segment for segment in urlparse(lowered).path.split("/") if segment]
+    return any(segment.startswith("p.") for segment in segments)
+
+
+def _discover_child_listing_candidate(html: str, *, page_url: str) -> str | None:
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    page = urlparse(page_url)
+    page_host = str(page.netloc or "").strip().lower()
+    if not page_host:
+        return None
+    page_tokens = _url_path_tokens(page_url)
+    page_path = page.path.rstrip("/")
+    page_path_canonical = _canonical_listing_path(page_url)
+    candidates: dict[str, int] = {}
+    for anchor in soup.select("a[href]"):
+        raw_href = str(anchor.get("href") or "").strip()
+        if not raw_href or raw_href.startswith("#"):
+            continue
+        href = urljoin(page_url, raw_href)
+        parsed = urlparse(href)
+        host = str(parsed.netloc or "").strip().lower()
+        if host != page_host:
+            continue
+        normalized_href = parsed._replace(fragment="", query="").geturl().rstrip("/")
+        candidate_path_canonical = _canonical_listing_path(normalized_href)
+        if (
+            not normalized_href
+            or normalized_href == page_url.rstrip("/")
+            or candidate_path_canonical == page_path_canonical
+        ):
+            continue
+        if _looks_like_detail_url(normalized_href):
+            continue
+        candidate_tokens = _url_path_tokens(normalized_href)
+        if not candidate_tokens:
+            continue
+        shared = len(candidate_tokens & page_tokens)
+        if shared <= 0:
+            continue
+        text = " ".join(anchor.get_text(" ", strip=True).split()).lower()
+        if text and any(token in text for token in _LISTING_PROMOTION_TEXT_NOISE):
+            continue
+        score = shared * 5
+        if parsed.path.rstrip("/").startswith(page_path):
+            score += 2
+        if len(candidate_tokens) > len(page_tokens):
+            score += 1
+        if any(hint in text for hint in _LISTING_PROMOTION_TEXT_HINTS):
+            score += 3
+        if any(token in candidate_tokens for token in _LISTING_PROMOTION_PENALTY_TOKENS):
+            score -= 2
+        if score >= 5:
+            candidates[normalized_href] = max(score, candidates.get(normalized_href, 0))
+    if not candidates:
+        return None
+    ranked = sorted(candidates.items(), key=lambda item: (-item[1], item[0]))
+    if len(ranked) > 1 and ranked[0][1] <= ranked[1][1]:
+        return None
+    return ranked[0][0]
+
+
+def _looks_like_category_tile_listing(records: list[dict]) -> bool:
+    if len(records) < 2:
+        return False
+    tile_hints = 0
+    for record in records:
+        public_fields = {
+            key: value
+            for key, value in dict(record or {}).items()
+            if not str(key).startswith("_") and value not in (None, "", [], {})
+        }
+        if not public_fields or not public_fields.get("url"):
+            return False
+        if set(public_fields) & _LISTING_TILE_STRONG_FIELDS:
+            return False
+        if any(field not in _LISTING_TILE_ALLOWED_FIELDS for field in public_fields):
+            return False
+        url_value = str(public_fields.get("url") or "").strip()
+        if not url_value or _looks_like_detail_url(url_value):
+            return False
+        title_value = str(public_fields.get("title") or "").strip().lower()
+        image_value = str(public_fields.get("image_url") or "").strip().lower()
+        if (
+            image_value.startswith("data:image/")
+            or "icon" in title_value
+            or url_value.rstrip("/").endswith("/see-all")
+            or "/all-" in url_value
+        ):
+            tile_hints += 1
+    return tile_hints >= max(1, len(records) // 2)
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +522,8 @@ class ListingBrowserRetryStage:
     """If listing extraction failed on curl, retry with browser rendering."""
 
     async def execute(self, ctx: PipelineContext) -> None:
+        from app.services.acquisition.acquirer import AcquisitionRequest
+
         from .core import _extract_listing, _log, acquire, run_adapter
 
         acq = ctx.acquisition_result
@@ -376,9 +531,98 @@ class ListingBrowserRetryStage:
 
         if not ctx.is_listing:
             return
+        if acq.method != "curl_cffi":
+            return
+        child_listing_url = _discover_child_listing_candidate(
+            acq.html or "",
+            page_url=ctx.url,
+        )
+        promote_child_listing = bool(child_listing_url) and (
+            ctx.verdict == VERDICT_LISTING_FAILED
+            or _looks_like_category_tile_listing(ctx.records)
+        )
+        if promote_child_listing:
+            promotion_reason = (
+                "Listing extraction returned category-tile records; promoting to a deeper same-host child listing"
+                if ctx.records
+                else "Listing shell matched a deeper same-host category candidate"
+            )
+            if ctx.persist_logs:
+                await _log(
+                    ctx.session,
+                    ctx.run.id,
+                    "info",
+                    f"[ANALYZE] {promotion_reason}; retrying on {child_listing_url}",
+                )
+            assert child_listing_url is not None
+            child_request = AcquisitionRequest(
+                run_id=ctx.acquisition_request.run_id,
+                url=child_listing_url,
+                proxy_list=list(ctx.acquisition_request.proxy_list),
+                surface=ctx.acquisition_request.surface,
+                traversal_mode=None,
+                max_pages=ctx.acquisition_request.max_pages,
+                max_scrolls=ctx.acquisition_request.max_scrolls,
+                sleep_ms=ctx.acquisition_request.sleep_ms,
+                requested_fields=list(ctx.acquisition_request.requested_fields),
+                requested_field_selectors=dict(ctx.acquisition_request.requested_field_selectors),
+                acquisition_profile=dict(ctx.acquisition_request.acquisition_profile),
+                checkpoint=ctx.acquisition_request.checkpoint,
+            )
+            promoted_started = time.perf_counter()
+            promoted_acq = await acquire(request=child_request)
+            promoted_retry_ms = _elapsed_ms(promoted_started)
+            promoted_metrics = _build_url_metrics(
+                promoted_acq,
+                requested_fields=ctx.additional_fields,
+            )
+            promoted_metrics["acquisition_ms"] = promoted_retry_ms
+            promoted_metrics["listing_child_promotion"] = True
+            promoted_metrics["listing_child_promotion_url"] = child_listing_url
+            promoted_metrics["listing_child_parent_url"] = ctx.url
+            promoted_adapter_result = await run_adapter(
+                child_listing_url,
+                promoted_acq.html,
+                ctx.surface,
+            )
+            promoted_adapter_records = (
+                promoted_adapter_result.records if promoted_adapter_result else []
+            )
+            promoted_result = await _extract_listing(
+                ctx.session,
+                ctx.run,
+                child_listing_url,
+                promoted_acq.html,
+                promoted_acq,
+                promoted_adapter_result,
+                promoted_adapter_records,
+                ctx.additional_fields,
+                ctx.surface,
+                ctx.config.max_records,
+                promoted_metrics,
+                update_run_state=ctx.update_run_state,
+                persist_logs=ctx.persist_logs,
+            )
+            promoted_result.url_metrics["listing_child_promotion"] = True
+            promoted_result.url_metrics["listing_child_promotion_url"] = child_listing_url
+            promoted_result.url_metrics["listing_child_parent_url"] = ctx.url
+            if promoted_result.records:
+                ctx.records = promoted_result.records
+                ctx.verdict = promoted_result.verdict
+                ctx.url_metrics = promoted_result.url_metrics
+                return
+
         if ctx.verdict != VERDICT_LISTING_FAILED:
             return
-        if acq.method != "curl_cffi":
+        existing_metrics = dict(ctx.url_metrics or {})
+        if bool(existing_metrics.get("browser_attempted")):
+            if ctx.persist_logs:
+                await _log(
+                    ctx.session,
+                    ctx.run.id,
+                    "warning",
+                    "[ANALYZE] Listing extraction failed after curl and a prior browser attempt; skipping duplicate browser retry",
+                )
             return
 
         if ctx.persist_logs:
@@ -395,6 +639,11 @@ class ListingBrowserRetryStage:
         )
         browser_retry_ms = _elapsed_ms(browser_retry_started)
         browser_html = browser_acq.html
+        retry_metrics = _build_url_metrics(
+            browser_acq,
+            requested_fields=ctx.additional_fields,
+        )
+        retry_metrics["acquisition_ms"] = browser_retry_ms
         browser_adapter_result = await run_adapter(ctx.url, browser_html, ctx.surface)
         browser_adapter_records = (
             browser_adapter_result.records if browser_adapter_result else []
@@ -412,7 +661,7 @@ class ListingBrowserRetryStage:
             ctx.additional_fields,
             ctx.surface,
             ctx.config.max_records,
-            ctx.url_metrics,
+            retry_metrics,
             update_run_state=ctx.update_run_state,
             persist_logs=ctx.persist_logs,
         )

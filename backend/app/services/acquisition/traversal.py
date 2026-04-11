@@ -33,6 +33,7 @@ LOAD_MORE_SELECTORS = list(PAGINATION_SELECTORS.get("load_more", []))
 _MAX_TRAVERSAL_FRAGMENTS = 50
 _MAX_TRAVERSAL_FRAGMENT_BYTES = 2_000_000
 _MAX_TRAVERSAL_TOTAL_BYTES = 6_000_000
+_PAGINATION_PAGE_SIZE_ANOMALY_RATIO = 5
 
 
 def _card_selectors_for_surface(surface: str | None) -> list[str]:
@@ -96,6 +97,112 @@ _JS_CONTAINER_DIFF = """
     return news;
 }
 """
+
+# ---------------------------------------------------------------------------
+# JS snippet: detect infinite scroll signals in the live DOM.
+# Returns a dict of boolean signals.
+# ---------------------------------------------------------------------------
+_JS_DETECT_INFINITE_SCROLL = r"""
+() => {
+    // 1. Sentinel / trigger elements used by infinite scroll libraries
+    const sentinelSelectors = [
+        '[data-infinite-scroll]', '[data-lazy-load]',
+        '.infinite-scroll-component', '.infinite-scroll-sentinel',
+        '.infinite-loader', '[data-infinite]',
+        '.lazy-load-trigger', '.scroll-sentinel',
+        '.load-on-scroll', '[data-load-more-auto]',
+    ];
+    let hasSentinel = false;
+    for (const sel of sentinelSelectors) {
+        try { if (document.querySelector(sel)) { hasSentinel = true; break; } } catch {}
+    }
+
+    // 2. Offset-based pagination params in current URL
+    const currentUrl = window.location.href;
+    const hasOffsetParam = /[?&](offset|start|from)=\\d/i.test(currentUrl);
+
+    // 3. rel=next link that only adds an offset param (SEO fallback pattern)
+    const relNext = document.querySelector("link[rel='next'][href]");
+    let relNextIsOffsetOnly = false;
+    if (relNext) {
+        try {
+            const nextUrl = new URL(relNext.href, window.location.origin);
+            const baseUrl = new URL(window.location.href);
+            relNextIsOffsetOnly = nextUrl.pathname === baseUrl.pathname &&
+                /^(offset|page|start|from|p|pg)$/i.test(
+                    [...nextUrl.searchParams.keys()].find(k => {
+                        return nextUrl.searchParams.get(k) !== baseUrl.searchParams.get(k);
+                    }) || ''
+                );
+        } catch {}
+    }
+
+    // 4. Large inner scrollable containers (overflow scroll/auto)
+    let hasScrollableContainer = false;
+    const containers = document.querySelectorAll(
+        'main, [role="main"], [role="feed"], .products, .product-grid, .results'
+    );
+    for (const el of containers) {
+        try {
+            const style = getComputedStyle(el);
+            const ov = style.overflowY || '';
+            if ((ov === 'auto' || ov === 'scroll') &&
+                (el.scrollHeight - el.clientHeight) > 500) {
+                hasScrollableContainer = true;
+                break;
+            }
+        } catch {}
+    }
+
+    // 5. Page height >>> viewport (strong infinite scroll hint)
+    const docH = Math.max(
+        document.body?.scrollHeight || 0,
+        document.documentElement?.scrollHeight || 0
+    );
+    const vpH = window.innerHeight || 0;
+    const tallPage = docH > vpH * 3;
+
+    return {
+        has_sentinel: hasSentinel,
+        has_offset_param: hasOffsetParam,
+        rel_next_is_offset_only: relNextIsOffsetOnly,
+        has_scrollable_container: hasScrollableContainer,
+        tall_page: tallPage,
+        doc_height: docH,
+        viewport_height: vpH,
+    };
+}
+"""
+
+
+async def _detect_infinite_scroll_signals(page) -> dict[str, object]:
+    """Evaluate the live DOM for signals that indicate infinite scroll.
+
+    Returns a dict of individual boolean signals plus a composite
+    ``is_likely_infinite_scroll`` flag.  When True the caller should
+    prefer scroll traversal even if pagination anchor links are present
+    (they are likely SEO fallbacks).
+    """
+    try:
+        raw = await page.evaluate(_JS_DETECT_INFINITE_SCROLL)
+    except (PlaywrightError, Exception):
+        logger.debug("Infinite scroll detection probe failed", exc_info=True)
+        return {"is_likely_infinite_scroll": False, "error": True}
+
+    if not isinstance(raw, dict):
+        return {"is_likely_infinite_scroll": False, "error": True}
+
+    # Composite: two or more positive signals → infinite scroll.
+    positive = sum([
+        bool(raw.get("has_sentinel")),
+        bool(raw.get("rel_next_is_offset_only")),
+        bool(raw.get("has_scrollable_container")),
+        bool(raw.get("tall_page")),
+        bool(raw.get("has_offset_param")),
+    ])
+    raw["positive_signal_count"] = positive
+    raw["is_likely_infinite_scroll"] = positive >= 2
+    return raw
 
 
 def _identity_tokens(metrics: dict[str, object] | None) -> set[str]:
@@ -178,6 +285,8 @@ async def apply_traversal_mode(
     run_id: int | None = None,
     traversal_artifact_dir: Path | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    progress_logger: Callable[[str], Awaitable[None]] | None = None,
+    goto_page: Callable[..., Awaitable[None]] | None = None,
 ) -> TraversalResult:
     config = _resolved_config(config)
     logger.info("[traversal] starting mode=%s surface=%s", traversal_mode, surface)
@@ -364,44 +473,20 @@ async def apply_traversal_mode(
             run_id=run_id,
             traversal_artifact_dir=traversal_artifact_dir,
             checkpoint=checkpoint,
+            progress_logger=progress_logger,
+            goto_page=goto_page,
         ))
     if traversal_mode == "auto":
-        auto_steps: list[dict[str, object]] = []
-        await _capture_initial_fragment(page, "auto-initial")
+        async def _maybe_log_progress(message: str) -> None:
+            if progress_logger is not None:
+                await progress_logger(message)
 
-        scroll_summary = await scroll_to_bottom(
-            page,
-            max_scrolls,
-            config=config,
-            request_delay_ms=request_delay_ms,
-            cooperative_sleep_ms=cooperative_sleep_ms,
-            snapshot_listing_page_metrics=snapshot_listing_page_metrics,
-            capture_dom_fragment=lambda current_page, index: _capture_fragment(
-                current_page, f"auto-scroll-{index}"
-            ),
-            checkpoint=checkpoint,
-        )
-        auto_steps.append(scroll_summary)
-        if await has_load_more_control(page, config):
-            load_more_summary = await click_load_more(
-                page,
-                max_scrolls,
-                config=config,
-                request_delay_ms=request_delay_ms,
-                cooperative_sleep_ms=cooperative_sleep_ms,
-                snapshot_listing_page_metrics=snapshot_listing_page_metrics,
-                capture_dom_fragment=lambda current_page, index: _capture_fragment(
-                    current_page, f"auto-load-more-{index}"
-                ),
-                checkpoint=checkpoint,
-            )
-            auto_steps.append(load_more_summary)
-        
-        await _capture_fragment(page, "auto-pre-pagination")
-        pre_pagination_html = "\n".join(collected_fragments) if collected_fragments else await page_content_with_retry(page, checkpoint=checkpoint)
-        
-        next_page_signal = await peek_next_page_signal(page)
-        if next_page_signal:
+        async def _paginate_with_decision(
+            *,
+            decision: str,
+            steps: list[dict[str, object]],
+            pre_pagination_html: str | None = None,
+        ) -> TraversalResult:
             paginated = await collect_paginated_html(
                 page,
                 config=config,
@@ -421,30 +506,122 @@ async def apply_traversal_mode(
                 run_id=run_id,
                 traversal_artifact_dir=traversal_artifact_dir,
                 checkpoint=checkpoint,
+                progress_logger=progress_logger,
+                goto_page=goto_page,
             )
             if pre_pagination_html:
-                paginated.html = f"<!-- PAGE BREAK: auto pre-pagination -->\n{pre_pagination_html}\n" + (paginated.html or "")
-            
-            paginated.summary.setdefault("steps", [])
+                paginated.html = (
+                    "<!-- PAGE BREAK:auto:pre-pagination: -->\n"
+                    f"{pre_pagination_html}\n"
+                    f"{paginated.html or ''}"
+                )
+                paginated.summary["pages_collected"] = int(
+                    paginated.summary.get("pages_collected", 0) or 0
+                ) + len(collected_fragments)
+            paginated.summary["decision"] = decision
             paginated.summary["steps"] = [
-                *auto_steps,
+                *steps,
                 *list(paginated.summary.get("steps") or []),
             ]
-            paginated.summary.setdefault("mode", "auto")
-            paginated.summary["pages_collected"] = int(
-                paginated.summary.get("pages_collected", 0) or 0
-            ) + len(collected_fragments)
             paginated.summary["captured_fragment_bytes"] = captured_fragment_bytes
-            return _log_and_return(paginated)
+            return paginated
+
+        next_page_signal = await peek_next_page_signal(page)
+        if next_page_signal:
+            await _maybe_log_progress("auto:paginate_first next_page_signal_detected")
+            await _capture_initial_fragment(page, "auto-initial")
+            initial_auto_html = (
+                "\n".join(collected_fragments)
+                if collected_fragments
+                else await page_content_with_retry(page, checkpoint=checkpoint)
+            )
+            # Hybrid page guard: detect infinite scroll signals before
+            # committing to pagination.  Many infinite-scroll sites include
+            # SEO-only <link rel="next"> or "Next" anchors that trick the
+            # pagination detector.  If infinite scroll signals are strong,
+            # skip pagination and return scroll-collected content.
+            infinite_scroll_signals = await _detect_infinite_scroll_signals(page)
+            if infinite_scroll_signals.get("is_likely_infinite_scroll"):
+                logger.info(
+                    "[TRAVERSAL] auto:hybrid_detected — pagination signal present "
+                    "but infinite scroll signals stronger, skipping pagination. "
+                    "signals=%s",
+                    infinite_scroll_signals,
+                )
+                return _log_and_return(TraversalResult(
+                    html=initial_auto_html,
+                    summary={
+                        "mode": "auto",
+                        "attempted": True,
+                        "steps": [],
+                        "pages_collected": len(collected_fragments),
+                        "captured_fragment_bytes": captured_fragment_bytes,
+                        "decision": "hybrid_scroll_preferred",
+                        "stop_reason": "infinite_scroll_detected_over_seo_pagination",
+                        "infinite_scroll_signals": infinite_scroll_signals,
+                    }
+                ))
+            return _log_and_return(await _paginate_with_decision(
+                decision="paginate_first",
+                steps=[],
+            ))
+
+        await _capture_initial_fragment(page, "auto-initial")
+        scroll_summary = await scroll_to_bottom(
+            page,
+            max_scrolls,
+            config=config,
+            request_delay_ms=request_delay_ms,
+            cooperative_sleep_ms=cooperative_sleep_ms,
+            snapshot_listing_page_metrics=snapshot_listing_page_metrics,
+            capture_dom_fragment=lambda current_page, index: _capture_fragment(
+                current_page, f"auto-scroll-{index}"
+            ),
+            checkpoint=checkpoint,
+        )
+        progress_steps: list[dict[str, object]] = [scroll_summary]
+        if await has_load_more_control(page, config):
+            load_more_summary = await click_load_more(
+                page,
+                max_scrolls,
+                config=config,
+                request_delay_ms=request_delay_ms,
+                cooperative_sleep_ms=cooperative_sleep_ms,
+                snapshot_listing_page_metrics=snapshot_listing_page_metrics,
+                capture_dom_fragment=lambda current_page, index: _capture_fragment(
+                    current_page, f"auto-load-more-{index}"
+                ),
+                checkpoint=checkpoint,
+            )
+            progress_steps = [load_more_summary]
+
+        await _capture_fragment(page, "auto-pre-pagination")
+        pre_pagination_html = (
+            "\n".join(collected_fragments)
+            if collected_fragments
+            else await page_content_with_retry(page, checkpoint=checkpoint)
+        )
+
+        next_page_signal = await peek_next_page_signal(page)
+        if next_page_signal:
+            await _maybe_log_progress(
+                "auto:progress_then_paginate next_page_signal_detected"
+            )
+            return _log_and_return(await _paginate_with_decision(
+                decision="progress_then_paginate",
+                steps=progress_steps,
+                pre_pagination_html=pre_pagination_html,
+            ))
 
         return _log_and_return(TraversalResult(
             html=pre_pagination_html,
             summary={
                 "mode": "auto",
                 "attempted": True,
-                "steps": auto_steps,
+                "steps": progress_steps,
                 "pages_collected": len(collected_fragments),
                 "captured_fragment_bytes": captured_fragment_bytes,
+                "decision": "progress_without_pagination",
                 "stop_reason": "no_pagination_after_scroll_or_load_more",
             }
         ))
@@ -484,6 +661,8 @@ async def collect_paginated_html(
     run_id: int | None = None,
     traversal_artifact_dir: Path | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    progress_logger: Callable[[str], Awaitable[None]] | None = None,
+    goto_page: Callable[..., Awaitable[None]] | None = None,
 ) -> TraversalResult:
     config = _resolved_config(config)
     if advance_next_page_fn is None and click_and_observe_next_page is None:
@@ -495,10 +674,61 @@ async def collect_paginated_html(
     page_files: list[Path] = []
     visited_urls: set[str] = set()
     stop_reason = "max_pages_reached"
+    _first_page_size: int = 0
     steps: list[dict[str, object]] = []
     current_url = str(page.url or "").strip()
     if current_url:
         visited_urls.add(current_url)
+    normalized_surface = str(surface or "").strip().lower()
+    is_listing_surface = normalized_surface.endswith("_listing")
+    seen_card_identities: set[str] = set()
+    card_selectors = _card_selectors_for_surface(surface)
+
+    async def _capture_page_html(
+        current_page,
+        *,
+        page_number: int,
+    ) -> tuple[str, int, str]:
+        full_html = await page_content_with_retry(current_page, checkpoint=checkpoint)
+        capture_html = full_html
+        capture_mode = "full_page"
+        if is_listing_surface:
+            fragment_parts: list[str] = []
+            try:
+                result = await current_page.evaluate(_JS_EXTRACT_CARDS, card_selectors)
+                cards = result.get("cards", []) if isinstance(result, dict) else []
+                for card in cards:
+                    identity = (
+                        str(card.get("identity", "")).strip()
+                        if isinstance(card, dict)
+                        else ""
+                    )
+                    card_html = (
+                        str(card.get("html", ""))
+                        if isinstance(card, dict)
+                        else ""
+                    )
+                    if not card_html:
+                        continue
+                    if identity and identity in seen_card_identities:
+                        continue
+                    if identity:
+                        seen_card_identities.add(identity)
+                    fragment_parts.append(card_html)
+            except (PlaywrightError, Exception):
+                logger.debug(
+                    "Paginated card extraction failed for page %s",
+                    page_number,
+                    exc_info=True,
+                )
+            if fragment_parts:
+                capture_html = "\n".join(fragment_parts)
+                capture_mode = "targeted_fragment"
+        if progress_logger is not None:
+            await progress_logger(
+                f"paginate:capture page={page_number} mode={capture_mode} html_length={len(capture_html or '')}"
+            )
+        return capture_html, len(full_html or ""), capture_mode
 
     # Resolve the advance callback.  Prefer advance_next_page_fn (aware of
     # already_navigated); fall back to the legacy click_and_observe_next_page
@@ -518,7 +748,10 @@ async def collect_paginated_html(
 
     page_limit = max(1, int(max_pages or 1))
     for page_index in range(page_limit):
-        page_html = await page_content_with_retry(page, checkpoint=checkpoint)
+        page_html, full_page_size, capture_mode = await _capture_page_html(
+            page,
+            page_number=page_index + 1,
+        )
         if traversal_artifact_dir is not None:
             await asyncio.to_thread(
                 traversal_artifact_dir.mkdir,
@@ -537,12 +770,33 @@ async def collect_paginated_html(
             fragments.append(
                 f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}"
             )
+        # Page-size anomaly guard: if a subsequent page is >=5x the first
+        # page, the "pages" are likely full-DOM captures of an infinite-scroll
+        # site served via offset URLs (e.g. 189KB -> 2MB).
+        current_page_size = full_page_size
+        if page_index == 0:
+            _first_page_size = current_page_size
+        elif (
+            _first_page_size > 0
+            and current_page_size >= _first_page_size * _PAGINATION_PAGE_SIZE_ANOMALY_RATIO
+        ):
+            logger.warning(
+                "[TRAVERSAL] paginate:page_size_anomaly page=%s "
+                "first_page=%s current_page=%s ratio=%.1f — aborting",
+                page_index + 1,
+                _first_page_size,
+                current_page_size,
+                current_page_size / _first_page_size,
+            )
+            stop_reason = "page_size_anomaly"
+            break
         steps.append(
             {
                 "action": "capture_page",
                 "page_index": page_index + 1,
                 "url": str(page.url or "").strip() or None,
                 "html_length": len(page_html or ""),
+                "capture_mode": capture_mode,
                 "html_path": str(page_files[-1]) if page_files else None,
             }
         )
@@ -575,11 +829,19 @@ async def collect_paginated_html(
         # (e.g. it returned an <a href> URL but did not click).
         needs_goto = not advance_result.already_navigated and not page_advanced_in_place
         if needs_goto:
-            await page.goto(
-                next_page_url,
-                wait_until="domcontentloaded",
-                timeout=PAGINATION_NAVIGATION_TIMEOUT_MS,
-            )
+            if goto_page is not None:
+                await goto_page(
+                    page,
+                    next_page_url,
+                    surface=surface,
+                    checkpoint=checkpoint,
+                )
+            else:
+                await page.goto(
+                    next_page_url,
+                    wait_until="domcontentloaded",
+                    timeout=PAGINATION_NAVIGATION_TIMEOUT_MS,
+                )
             if hasattr(page, "wait_for_load_state"):
                 try:
                     await page.wait_for_load_state(
@@ -601,6 +863,10 @@ async def collect_paginated_html(
                     "in_place": False,
                 }
             )
+            if progress_logger is not None:
+                await progress_logger(
+                    f"paginate:advance_goto page={page_index + 2} url={next_page_url}"
+                )
         else:
             steps.append(
                 {
@@ -610,6 +876,10 @@ async def collect_paginated_html(
                     "in_place": page_advanced_in_place or advance_result.already_navigated,
                 }
             )
+            if progress_logger is not None:
+                await progress_logger(
+                    f"paginate:advance_in_place page={page_index + 2} url={next_page_url}"
+                )
         await dismiss_cookie_consent(page, checkpoint=checkpoint)
         await pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
         await expand_all_interactive_elements(page, checkpoint=checkpoint)

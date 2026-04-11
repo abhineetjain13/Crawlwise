@@ -124,6 +124,8 @@ _CATEGORY_NOISE_VALUES = {
 }
 _CATEGORY_INVALID_TERMINALS = {"detail-page", "product", "category", "page", "object"}
 _NON_SIZE_VALUES = {
+    "base",
+    "default",
     "top",
     "tops",
     "bottom",
@@ -699,6 +701,46 @@ def _normalize_selected_variant(
     return normalized or None
 
 
+def _is_meaningful_variant_row(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if value.get("variant_id") not in (None, "", [], {}):
+        return True
+    if value.get("sku") not in (None, "", [], {}):
+        return True
+    option_values = value.get("option_values")
+    if isinstance(option_values, dict) and option_values:
+        return True
+    for key in ("color", "size", "price", "original_price", "image_url", "availability"):
+        if value.get(key) not in (None, "", [], {}):
+            return True
+    return False
+
+
+def _variant_row_identity_fingerprint(value: dict[str, object]) -> str:
+    variant_id = str(value.get("variant_id") or "").strip()
+    if variant_id:
+        return f"id:{variant_id}"
+    sku = str(value.get("sku") or "").strip()
+    option_values = value.get("option_values")
+    if sku and isinstance(option_values, dict) and option_values:
+        return "sku_opts:" + json.dumps(
+            {"sku": sku, "option_values": option_values},
+            sort_keys=True,
+            default=str,
+        )
+    if sku:
+        return f"sku:{sku}"
+    if isinstance(option_values, dict) and option_values:
+        return "opts:" + json.dumps(option_values, sort_keys=True, default=str)
+    fallback = {
+        key: value.get(key)
+        for key in ("color", "size", "price", "original_price", "availability", "image_url")
+        if value.get(key) not in (None, "", [], {})
+    }
+    return json.dumps(fallback, sort_keys=True, default=str) if fallback else ""
+
+
 def _normalize_variants(value: object, *, base_url: str = "") -> list[dict[str, object]] | None:
     if not isinstance(value, list):
         return None
@@ -708,7 +750,11 @@ def _normalize_variants(value: object, *, base_url: str = "") -> list[dict[str, 
         normalized = _normalize_selected_variant(item, base_url=base_url)
         if not normalized:
             continue
-        fingerprint = json.dumps(normalized, sort_keys=True, default=str)
+        if not _is_meaningful_variant_row(normalized):
+            continue
+        fingerprint = _variant_row_identity_fingerprint(normalized) or json.dumps(
+            normalized, sort_keys=True, default=str
+        )
         if fingerprint in seen:
             continue
         seen.add(fingerprint)

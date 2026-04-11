@@ -23,10 +23,8 @@ from app.services.extract.service import (
 from app.services.extract.service import (
     extract_candidates as _extract_candidates_impl,
 )
-
-
-def _manifest(**kwargs) -> dict:
-    return kwargs
+from tests.support import manifest as _manifest
+from tests.support import run_extract_candidates
 
 
 def extract_candidates(
@@ -38,38 +36,15 @@ def extract_candidates(
     extraction_contract: list[dict] | None = None,
     resolved_fields: list[str] | None = None,
 ):
-    sources = dict(manifest or {})
-    page_sources = {
-        "next_data": sources.get("next_data"),
-        "hydrated_states": sources.get("_hydrated_states") or sources.get("hydrated_states") or [],
-        "embedded_json": sources.get("embedded_json") or [],
-        "open_graph": sources.get("open_graph") or {},
-        "json_ld": sources.get("json_ld") or [],
-        "microdata": sources.get("microdata") or [],
-        "tables": sources.get("tables") or [],
-        "datalayer": sources.get("datalayer") or {},
-    }
-    if any(page_sources.values()):
-        with patch("app.services.extract.service.parse_page_sources", return_value=page_sources):
-            return _extract_candidates_impl(
-                url,
-                surface,
-                html,
-                sources.get("network_payloads") or [],
-                additional_fields,
-                extraction_contract,
-                resolved_fields,
-                sources.get("adapter_data") or [],
-            )
-    return _extract_candidates_impl(
-        url,
-        surface,
-        html,
-        sources.get("network_payloads") or [],
-        additional_fields,
-        extraction_contract,
-        resolved_fields,
-        sources.get("adapter_data") or [],
+    return run_extract_candidates(
+        _extract_candidates_impl,
+        url=url,
+        surface=surface,
+        html=html,
+        manifest_data=manifest,
+        additional_fields=additional_fields,
+        extraction_contract=extraction_contract,
+        resolved_fields=resolved_fields,
     )
 
 
@@ -1798,6 +1773,293 @@ def test_extract_selected_variant_overwrites_root_scalars_and_cleans_product_att
         "fit": "Slim",
         "style": "KN4991300",
     }
+
+
+def test_extract_myntra_style_dom_size_variants_preserve_axes_without_fabricating_variants():
+    html = """
+    <html>
+      <body>
+        <h1>Myntra Test Kurti</h1>
+        <div class="size-buttons-container">
+          <div class="size-buttons-size-header">Select Size</div>
+          <button class="size-buttons-size-button size-buttons-size-button-default">S</button>
+          <button class="size-buttons-size-button size-buttons-size-button-selected">M</button>
+          <button class="size-buttons-size-button size-buttons-size-button-default">L</button>
+        </div>
+      </body>
+    </html>
+    """
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.myntra.com/kurtis/example/test-kurti/123/buy",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["variant_axes"][0]["source"] == "dom_variant"
+    assert candidates["variant_axes"][0]["value"] == {"size": ["S", "M", "L"]}
+    assert candidates["selected_variant"][0]["value"]["size"] == "M"
+    assert candidates["size"][0]["value"] == "M"
+    assert "variants" not in candidates
+
+
+def test_extract_structured_specifications_normalize_html_content():
+    html = "<html><body><h1>Myntra Test Kurti</h1></body></html>"
+    manifest = _manifest(
+        embedded_json=[
+            {
+                "product": {
+                    "specificationGroups": [
+                        {
+                            "label": "Product Details",
+                            "specifications": [
+                                {
+                                    "title": "material",
+                                    "content": "<p>Viscose rayon</p><ul><li>Soft finish</li></ul>",
+                                },
+                                {
+                                    "title": "wash_care",
+                                    "content": "<div>Machine wash<br/>Warm iron</div>",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            }
+        ]
+    )
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.myntra.com/kurtis/example/test-kurti/123/buy",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    spec_text = candidates["specifications"][0]["value"]
+    assert "<" not in spec_text
+    assert "material: Viscose rayon" in spec_text
+    assert "Soft finish" in spec_text
+    assert "wash_care: Machine wash" in spec_text
+    assert "Warm iron" in spec_text
+
+
+def test_extract_structured_template_placeholders_do_not_surface_as_discount_percentage():
+    html = "<html><body><h1>Structured Discount Template Product</h1></body></html>"
+    manifest = _manifest(
+        hydrated_states=[
+            {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "specificationGroups": [
+                                {
+                                    "label": "Pricing",
+                                    "specifications": [
+                                        {
+                                            "title": "discount_percentage",
+                                            "content": "-{amount}%",
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        ]
+    )
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/widget",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert "discount_percentage" not in candidates
+
+
+def test_extract_reconciles_variant_bundle_and_drops_duplicate_or_empty_rows():
+    html = "<html><body><h1>Variant Reconcile Product</h1></body></html>"
+    manifest = _manifest(
+        adapter_data=[
+            {
+                "_source": "adapter",
+                "title": "Variant Reconcile Product",
+                "variants": [
+                    {"url": "https://example.com/products/widget"},
+                    {
+                        "variant_id": "sku-red-s",
+                        "sku": "sku-red-s",
+                        "price": "12.00",
+                        "availability": "in_stock",
+                        "color": "Red",
+                        "size": "S",
+                        "option_values": {"color": "Red", "size": "S", "style": "KN4991300"},
+                    },
+                    {
+                        "variant_id": "sku-red-s",
+                        "sku": "sku-red-s",
+                        "price": "12.00",
+                        "availability": "in_stock",
+                        "color": "Red",
+                        "size": "S",
+                        "option_values": {"color": "Red", "size": "S", "style": "KN4991300"},
+                    },
+                    {
+                        "variant_id": "sku-blue-s",
+                        "sku": "sku-blue-s",
+                        "price": "13.00",
+                        "availability": "out_of_stock",
+                        "color": "Blue",
+                        "size": "S",
+                        "option_values": {"color": "Blue", "size": "S", "style": "KN4991300"},
+                    },
+                ],
+                "variant_axes": {
+                    "color": ["Red", "Blue", "Blue"],
+                    "size": ["S"],
+                    "style": ["KN4991300"],
+                    "phantom": ["Should disappear"],
+                },
+                "selected_variant": {
+                    "variant_id": "sku-red-s",
+                    "sku": "sku-red-s",
+                    "price": "12.00",
+                    "availability": "in_stock",
+                    "color": "Red",
+                    "size": "S",
+                    "option_values": {"color": "Red", "size": "S", "style": "KN4991300"},
+                },
+            }
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/widget",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    variants = candidates["variants"][0]["value"]
+    assert len(variants) == 2
+    assert [row["variant_id"] for row in variants] == ["sku-red-s", "sku-blue-s"]
+    assert candidates["variant_axes"][0]["value"] == {"color": ["Red", "Blue"], "size": ["S"]}
+    assert candidates["product_attributes"][0]["value"] == {"style": "KN4991300"}
+    assert candidates["selected_variant"][0]["value"]["variant_id"] == "sku-red-s"
+
+
+def test_extract_dom_variant_rows_do_not_create_multi_axis_cartesian_variants():
+    html = """
+    <html>
+      <body>
+        <h1>Cartesian Guard Product</h1>
+        <div class="color-swatches">
+          <button class="color-swatch selected">Red</button>
+          <button class="color-swatch">Blue</button>
+        </div>
+        <div class="size-buttons-container">
+          <button class="size-buttons-size-button size-buttons-size-button-selected">S</button>
+          <button class="size-buttons-size-button">M</button>
+        </div>
+      </body>
+    </html>
+    """
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/widget",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["variant_axes"][0]["value"] == {"color": ["Red", "Blue"], "size": ["S", "M"]}
+    assert "variants" not in candidates
+    assert candidates["selected_variant"][0]["value"]["color"] == "Red"
+    assert candidates["selected_variant"][0]["value"]["size"] == "S"
+
+
+def test_extract_structured_state_variants_are_discovered_without_site_hardcode():
+    html = "<html><body><h1>Structured Variant Product</h1></body></html>"
+    manifest = _manifest(
+        hydrated_states=[
+            {
+                "props": {
+                    "urqlState": {
+                        "2259305856": {
+                            "data": json.dumps(
+                                {
+                                    "product": {
+                                        "id": "529704",
+                                        "name": "Performance Woven Men's Side Pocket Gym Shorts",
+                                        "colors": [
+                                            {"name": "PUMA Black", "value": "01"},
+                                            {"name": "PUMA Navy", "value": "06"},
+                                        ],
+                                        "variations": [
+                                            {
+                                                "id": "529704_01",
+                                                "variantId": "4070032421827",
+                                                "price": 1799,
+                                                "colorValue": "01",
+                                                "colorName": "PUMA Black",
+                                                "orderable": True,
+                                                "preview": "https://images.puma.com/529704/01.png",
+                                            },
+                                            {
+                                                "id": "529704_06",
+                                                "variantId": "4070032421828",
+                                                "price": 1799,
+                                                "colorValue": "06",
+                                                "colorName": "PUMA Navy",
+                                                "orderable": True,
+                                                "preview": "https://images.puma.com/529704/06.png",
+                                            },
+                                        ],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                },
+                "query": {"swatch": "06"},
+            }
+        ]
+    )
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://in.puma.com/in/en/pd/performance-woven-mens-side-pocket-gym-shorts/529704?swatch=06",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert candidates["variants"][0]["source"] == "structured_variant"
+    assert [row["variant_id"] for row in candidates["variants"][0]["value"]] == [
+        "4070032421827",
+        "4070032421828",
+    ]
+    assert candidates["variant_axes"][0]["value"] == {
+        "color": ["PUMA Black", "PUMA Navy"]
+    }
+    assert candidates["selected_variant"][0]["value"]["variant_id"] == "4070032421828"
+    assert candidates["selected_variant"][0]["value"]["color"] == "PUMA Navy"
+    assert candidates["color"][0]["value"] == "PUMA Navy"
+    assert "size" not in candidates
 
 
 def test_extract_shopify_footer_sections_do_not_pollute_product_attributes():

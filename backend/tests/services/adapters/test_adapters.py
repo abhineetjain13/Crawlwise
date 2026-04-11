@@ -181,6 +181,52 @@ async def test_shopify_detail_prefers_url_variant_over_first_available():
     assert result.records[0]["color"] == "Red"
 
 
+def test_shopify_detail_dedupes_duplicate_variant_rows_by_identity():
+    adapter = ShopifyAdapter()
+    deduped = adapter._dedupe_variants(
+        [
+            {
+                "variant_id": "111",
+                "sku": "SKU-BLUE",
+                "price": "29.99",
+                "availability": "in_stock",
+                "image_url": "https://cdn.example.com/blue.jpg",
+                "option_values": {"color": "Blue"},
+            },
+            {
+                "variant_id": "111",
+                "sku": "SKU-BLUE",
+                "price": "29.99",
+                "availability": "in_stock",
+                "option_values": {"color": "Blue"},
+            },
+            {
+                "variant_id": "222",
+                "sku": "SKU-RED",
+                "price": "34.99",
+                "availability": "out_of_stock",
+                "option_values": {"color": "Red"},
+            },
+        ]
+    )
+    assert len(deduped) == 2
+    assert deduped[0]["image_url"] == "https://cdn.example.com/blue.jpg"
+
+
+def test_shopify_detail_keeps_variants_without_fingerprint_as_unique_entries():
+    adapter = ShopifyAdapter()
+    deduped = adapter._dedupe_variants(
+        [
+            {"price": "29.99", "availability": "in_stock"},
+            {"price": "24.99", "availability": "out_of_stock"},
+        ]
+    )
+
+    assert len(deduped) == 2
+    assert deduped[0]["price"] == "29.99"
+    assert deduped[1]["price"] == "24.99"
+
+
 @pytest.mark.asyncio
 async def test_shopify_listing_uses_collection_specific_endpoint():
     adapter = ShopifyAdapter()

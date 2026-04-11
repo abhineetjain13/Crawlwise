@@ -324,3 +324,84 @@ def test_datalayer_does_not_compute_sale_price_when_price_parse_fails() -> None:
     assert result["price"] == "not-a-number"
     assert result["discount_amount"] == "5"
     assert "sale_price" not in result
+
+
+def test_datalayer_treats_large_price_numeric_discount_as_percentage() -> None:
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": "1799",
+                    "discount": "40",
+                    "currency": "INR"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    result = parse_datalayer(html)
+
+    assert result["price"] == "1799"
+    assert result["discount_percentage"] == "40"
+    assert "discount_amount" not in result
+    assert "sale_price" not in result
+
+
+def test_datalayer_treats_plain_numeric_discount_as_amount_without_currency_context_when_large_relative_to_price() -> None:
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": "80",
+                    "discount": "40"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    result = parse_datalayer(html)
+
+    assert result["price"] == "80"
+    assert result["discount_amount"] == "40"
+    assert result["sale_price"] == 40
+    assert "discount_percentage" not in result
+
+
+def test_datalayer_does_not_assume_plain_numeric_discount_is_percentage_for_jpy() -> None:
+    html = """
+    <html><body>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": "12000",
+                    "discount": "40",
+                    "currency": "JPY"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    result = parse_datalayer(html)
+
+    assert result["price"] == "12000"
+    assert result["price_currency"] == "JPY"
+    assert result["discount_amount"] == "40"
+    assert result["sale_price"] == 11960
+    assert "discount_percentage" not in result

@@ -115,6 +115,10 @@ class TestResolveTraversalMode:
     def test_invalid_mode(self):
         settings = {"traversal_mode": "invalid"}
         assert resolve_traversal_mode(settings) is None
+
+    def test_invalid_mode_with_advanced_enabled_is_ignored(self):
+        settings = {"traversal_mode": "invalid", "advanced_enabled": True}
+        assert resolve_traversal_mode(settings) is None
     
     def test_empty_mode(self):
         settings = {"traversal_mode": ""}

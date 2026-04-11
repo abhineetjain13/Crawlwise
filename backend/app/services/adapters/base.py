@@ -1,6 +1,7 @@
 # Base adapter interface for platform-specific extraction.
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -119,3 +120,39 @@ class BaseAdapter(ABC):
         if response.status_code != 200:
             return ""
         return str(response.text or "")
+
+    async def _request_json_with_curl(
+        self,
+        request_callable,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json_body: Any | None = None,
+        data: Any | None = None,
+        proxy: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict | list | None:
+        hostname = str(urlparse(str(url or "")).hostname or "").strip().lower()
+        if hostname:
+            await wait_for_host_slot(hostname, ACQUIRE_HOST_MIN_INTERVAL_MS)
+        kwargs: dict[str, Any] = {}
+        if headers:
+            kwargs["headers"] = headers
+        if json_body is not None:
+            kwargs["json"] = json_body
+        if data is not None:
+            kwargs["data"] = data
+        if proxy:
+            kwargs["proxy"] = proxy
+        if timeout_seconds is not None:
+            kwargs["timeout"] = timeout_seconds
+        response = await asyncio.to_thread(request_callable, url, **kwargs)
+        if int(getattr(response, "status_code", 0) or 0) != 200:
+            return None
+        parser = getattr(response, "json", None)
+        if not callable(parser):
+            return None
+        try:
+            return parser()
+        except Exception:
+            return None

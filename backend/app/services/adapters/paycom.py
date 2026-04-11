@@ -6,6 +6,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.acquisition.http_client import requests as curl_requests
 
 
 _CONFIG_RE = re.compile(r"var configsFromHost = (\{.*?\});\s*var Mountable", re.DOTALL)
@@ -115,9 +116,9 @@ class PaycomAdapter(BaseAdapter):
                 },
             }
             try:
-                body = await self._request_json(
+                body = await self._request_json_with_curl(
+                    curl_requests.post,
                     endpoint,
-                    method="POST",
                     headers=request_headers,
                     json_body=payload,
                     proxy=proxy,
@@ -162,7 +163,8 @@ class PaycomAdapter(BaseAdapter):
     ) -> dict | None:
         endpoint = f"{service_base}/api/ats/job-postings/{job_id}"
         try:
-            body = await self._request_json(
+            body = await self._request_json_with_curl(
+                curl_requests.get,
                 endpoint,
                 headers=request_headers,
                 proxy=proxy,

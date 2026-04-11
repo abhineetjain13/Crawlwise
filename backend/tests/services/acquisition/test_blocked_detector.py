@@ -105,6 +105,36 @@ def test_detect_blocked_page_blocks_akamai():
     assert verdict.provider == "akamai"
 
 
+def test_detect_blocked_page_allows_rich_akamai_tagged_pages_with_real_content():
+    html = """
+    <html>
+      <head>
+        <title>Dyson Air Treatment</title>
+        <script src="https://www.dyson.in/akam/sw.js"></script>
+      </head>
+      <body>
+        <main>
+          <nav>
+            <a href="/air-treatment">Air Treatment</a>
+            <a href="/purifiers">Purifiers</a>
+            <a href="/fans">Fans</a>
+            <a href="/filters">Filters</a>
+            <a href="/support">Support</a>
+          </nav>
+          <section>
+            <h1>Dyson Purifier Cool</h1>
+            <p>{content}</p>
+          </section>
+        </main>
+      </body>
+    </html>
+    """.format(content="HEPA H13 filtration and coverage details " * 180)
+
+    verdict = detect_blocked_page(html)
+
+    assert not verdict.is_blocked
+
+
 def test_detect_blocked_page_blocks_active_marker_on_low_content_page():
     html = """
     <html>

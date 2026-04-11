@@ -24,9 +24,7 @@ async def test_icims_extracts_listing_from_ajax_endpoint() -> None:
       <script>var listingUrl = "/ajax/joblisting/?num_items=100&offset=0";</script>
     </body></html>
     """
-    response = Mock()
-    response.status_code = 200
-    response.text = """
+    response_text = """
     <div class="iCIMS_Job">
       <a href="/jobs/1234/software-engineer/job">Software Engineer</a>
       <div class="iCIMS_JobLocation">Atlanta, GA</div>
@@ -34,7 +32,7 @@ async def test_icims_extracts_listing_from_ajax_endpoint() -> None:
       <div class="iCIMS_JobDate">Apr 6, 2026</div>
     </div>
     """
-    with patch("app.services.adapters.icims.curl_requests.get", return_value=response):
+    with patch("app.services.adapters.base.BaseAdapter._request_text", return_value=response_text):
         result = await adapter.extract(
             "https://ehccareers-emory.icims.com/jobs/search?pr=0&searchRelation=keyword_all",
             html,
@@ -57,9 +55,7 @@ async def test_icims_follows_embedded_iframe_board() -> None:
       <iframe src="https://example.icims.com/jobs/search?pr=0&searchRelation=keyword_all&in_iframe=1"></iframe>
     </body></html>
     """
-    response = Mock()
-    response.status_code = 200
-    response.text = """
+    response_text = """
     <html><body>
       <div class="iCIMS_JobsTable">
         <div class="row">
@@ -98,7 +94,7 @@ async def test_icims_follows_embedded_iframe_board() -> None:
       </div>
     </body></html>
     """
-    with patch("app.services.adapters.icims.curl_requests.get", return_value=response):
+    with patch("app.services.adapters.base.BaseAdapter._request_text", return_value=response_text):
         result = await adapter.extract("https://example.icims.com/jobs/search", html, "job_listing")
 
     assert len(result.records) == 1
@@ -144,9 +140,7 @@ async def test_icims_extracts_detail_record_from_embedded_iframe() -> None:
       <h1>Careers at Example Health</h1>
     </body></html>
     """
-    response = Mock()
-    response.status_code = 200
-    response.text = """
+    response_text = """
     <html><body>
       <h1>Senior Data Engineer</h1>
       <div class="iCIMS_JobLocation">Remote</div>
@@ -158,7 +152,7 @@ async def test_icims_extracts_detail_record_from_embedded_iframe() -> None:
     </body></html>
     """
 
-    with patch("app.services.adapters.icims.curl_requests.get", return_value=response):
+    with patch("app.services.adapters.base.BaseAdapter._request_text", return_value=response_text):
         result = await adapter.extract(
             "https://example.icims.com/jobs/123/senior-data-engineer/job",
             shell_html,

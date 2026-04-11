@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services._batch_runtime import _merge_run_summary_patch
+from app.services.run_summary import merge_run_summary_patch as _merge_run_summary_patch
 
 
 def test_merge_run_summary_patch_preserves_monotonic_progress_counters() -> None:

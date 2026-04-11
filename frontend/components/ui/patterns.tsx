@@ -1,12 +1,37 @@
 "use client";
 
 import { LucideIcon } from "lucide-react";
+import { Children, isValidElement, useLayoutEffect } from "react";
 import type { ReactNode } from "react";
-import { useLayoutEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { useTopBarStore } from "../layout/top-bar-context";
 import { cn } from "../../lib/utils";
 import { Card, Skeleton } from "./primitives";
+
+function stableNodeSignature(value: ReactNode): string {
+  if (value == null || typeof value === "boolean") {
+    return "";
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableNodeSignature(entry)).join("|")}]`;
+  }
+  if (isValidElement(value)) {
+    const typeName =
+      typeof value.type === "string"
+        ? value.type
+        : (value.type.displayName ?? value.type.name ?? "component");
+    const propEntries = Object.entries(value.props ?? {})
+      .filter(([key, propValue]) => key !== "children" && typeof propValue !== "function")
+      .map(([key, propValue]) => `${key}:${stableNodeSignature(propValue as ReactNode)}`)
+      .sort();
+    return `<${typeName}${propEntries.length ? ` ${propEntries.join(",")}` : ""}>${stableNodeSignature(value.props.children)}</${typeName}>`;
+  }
+  return Children.toArray(value).map((entry) => stableNodeSignature(entry)).join("|");
+}
 
 /* ─── PageHeader ─────────────────────────────────────────────────────────── */
 export function PageHeader({
@@ -14,17 +39,18 @@ export function PageHeader({
   description,
   actions,
 }: Readonly<{
-  title: string;
+  title: ReactNode;
   description?: string;
   actions?: ReactNode;
 }>) {
   const { setHeader } = useTopBarStore();
+  const latestHeaderRef = useRef({ title, description, actions });
+  const signature = `${stableNodeSignature(title)}::${description ?? ""}::${stableNodeSignature(actions)}`;
 
-  // useLayoutEffect fires before paint — no flash of fallback title
   useLayoutEffect(() => {
     setHeader({ title, description, actions });
-    return () => setHeader(null);
-  }, [actions, description, setHeader, title]);
+  }, [setHeader, signature]);
+  useLayoutEffect(() => () => setHeader(null), [setHeader]);
 
   return null;
 }
@@ -37,13 +63,13 @@ export function SectionHeader({
   action,
 }: Readonly<{
   title: string;
-  description?: string;
+  description?: ReactNode;
   icon?: LucideIcon;
   action?: ReactNode;
 }>) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0 space-y-0.5">
+      <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="size-3.5 shrink-0 text-[var(--accent)]" />}
           <h2 className="text-body font-semibold tracking-[-0.015em] text-[var(--text-primary)]">
@@ -51,7 +77,7 @@ export function SectionHeader({
           </h2>
         </div>
         {description ? (
-          <p className="text-caption text-[var(--text-muted)]">{description}</p>
+          <div className="text-caption text-[var(--text-muted)] w-full">{description}</div>
         ) : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
@@ -129,10 +155,9 @@ export function TabBar({
     >
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[#3b82f6] shadow-[0_1px_2px_rgba(0,0,0,0.1)] transition-[left,width] duration-200 ease-out"
+        className="pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[var(--accent)] shadow-[0_1px_2px_rgba(0,0,0,0.1)] transition-[left,width] duration-200 ease-out"
         style={pillStyle}
-      />
-      {options.map((option, index) => (
+      />      {options.map((option, index) => (
         <button
           key={option.value}
           type="button"
