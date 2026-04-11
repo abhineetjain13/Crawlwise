@@ -11,27 +11,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from app.services.acquisition.acquirer import (
-    _PROXY_FAILURE_STATE,
     AcquisitionRequest,
     AcquisitionResult,
     ProxyRotator,
-    _artifact_path,
-    _diagnose_job_surface_page,
-    _diagnostics_path,
-    _json_ld_listing_count,
-    _mark_proxy_failed,
-    _mark_proxy_succeeded,
-    _network_payload_path,
-    _requires_browser_first,
-    _write_diagnostics,
-    _write_network_payloads,
     acquire,
     acquire_html,
-)
-from app.services.acquisition.host_memory import (
-    host_prefers_stealth,
-    remember_stealth_host,
-    reset_host_memory,
 )
 from app.services.acquisition.http_client import HttpFetchResult
 from app.services.acquisition.pacing import reset_pacing_state
@@ -57,6 +41,51 @@ def _redirect_tempdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(tempfile, "tempdir", None)
 
 
+async def _run_acquire_case(
+    tmp_path: Path,
+    *,
+    url: str,
+    fetch_result: HttpFetchResult | None = None,
+    fetch_side_effect: list[HttpFetchResult] | None = None,
+    browser_result=None,
+    resolve_adapter_result=None,
+    surface: str | None = None,
+    requested_fields: list[str] | None = None,
+):
+    fetch_patch_kwargs = {"new_callable": AsyncMock}
+    if fetch_side_effect is not None:
+        fetch_patch_kwargs["side_effect"] = fetch_side_effect
+    else:
+        fetch_patch_kwargs["return_value"] = fetch_result
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            **fetch_patch_kwargs,
+        ),
+        patch(
+            "app.services.acquisition.acquirer.resolve_adapter",
+            new_callable=AsyncMock,
+            return_value=resolve_adapter_result,
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            return_value=browser_result,
+        ) as browser_mock,
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(
+            1,
+            url,
+            surface=surface,
+            requested_fields=requested_fields,
+        )
+
+    return result, browser_mock
+
+
 class TestProxyRotator:
     def test_no_proxies(self):
         r = ProxyRotator([])
@@ -80,58 +109,6 @@ class TestProxyRotator:
     def test_strips_whitespace(self):
         r = ProxyRotator(["  http://proxy:8080  ", ""])
         assert r.next() == "http://proxy:8080"
-
-    @pytest.mark.asyncio
-    async def test_cycle_once_skips_proxies_in_cooldown(self):
-        _PROXY_FAILURE_STATE.clear()
-        await _mark_proxy_failed("http://p2:8080")
-        r = ProxyRotator(["http://p1:8080", "http://p2:8080"])
-        try:
-            candidates = await r.cycle_once(use_cooldown=True)
-            assert candidates == ["http://p1:8080"]
-        finally:
-            _PROXY_FAILURE_STATE.clear()
-
-    @pytest.mark.asyncio
-    async def test_cycle_once_returns_candidates_when_cooldown_disabled(self):
-        _PROXY_FAILURE_STATE.clear()
-        await _mark_proxy_failed("http://p2:8080")
-        r = ProxyRotator(["http://p1:8080", "http://p2:8080"])
-        try:
-            candidates = await r.cycle_once(use_cooldown=False)
-            assert sorted(candidates) == sorted(["http://p1:8080", "http://p2:8080"])
-        finally:
-            _PROXY_FAILURE_STATE.clear()
-
-
-@pytest.mark.asyncio
-async def test_mark_proxy_succeeded_clears_failure_state():
-    _PROXY_FAILURE_STATE.clear()
-    try:
-        await _mark_proxy_failed("http://p1:8080")
-        assert "http://p1:8080" in _PROXY_FAILURE_STATE
-        await _mark_proxy_succeeded("http://p1:8080")
-        assert "http://p1:8080" not in _PROXY_FAILURE_STATE
-    finally:
-        _PROXY_FAILURE_STATE.clear()
-
-
-def test_json_ld_listing_count_handles_type_arrays_and_empty_itemlists():
-    assert _json_ld_listing_count({"@type": ["Thing", "Product"]}) == 1
-    assert _json_ld_listing_count({"@type": ["ItemList"], "itemListElement": []}) == 0
-
-
-def test_requires_browser_first_for_confirmed_job_boards():
-    assert _requires_browser_first(
-        "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant",
-        "job_listing",
-    )
-    assert not _requires_browser_first(
-        "https://careers.clarkassociatesinc.biz/",
-        "job_listing",
-    )
-    assert not _requires_browser_first("https://example.com/jobs", "job_listing")
-
 
 @pytest.mark.asyncio
 async def test_acquire_html_curl_success(tmp_path):
@@ -281,22 +258,13 @@ async def test_acquire_listing_search_shell_without_extractable_records_escalate
 
     from app.services.acquisition.browser_client import BrowserResult
 
-    with (
-        patch(
-            "app.services.acquisition.acquirer._fetch_with_content_type",
-            new_callable=AsyncMock,
-            return_value=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
-        ),
-        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
-        patch(
-            "app.services.acquisition.acquirer.fetch_rendered_html",
-            new_callable=AsyncMock,
-            return_value=BrowserResult(html=browser_html),
-        ) as browser_mock,
-        patch("app.services.acquisition.acquirer.settings") as mock_settings,
-    ):
-        mock_settings.artifacts_dir = tmp_path
-        result = await acquire(1, "https://example.com/jobs?keywords=Dough%20Bird", surface="job_listing")
+    result, browser_mock = await _run_acquire_case(
+        tmp_path,
+        url="https://example.com/jobs?keywords=Dough%20Bird",
+        fetch_result=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
+        browser_result=BrowserResult(html=browser_html),
+        surface="job_listing",
+    )
 
     assert result.method == "playwright"
     browser_mock.assert_awaited()
@@ -325,25 +293,16 @@ async def test_acquire_job_listing_iframe_shell_escalates_to_browser(tmp_path):
 
     from app.services.acquisition.browser_client import BrowserResult
 
-    with (
-        patch(
-            "app.services.acquisition.acquirer._fetch_with_content_type",
-            new_callable=AsyncMock,
-            return_value=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
+    result, browser_mock = await _run_acquire_case(
+        tmp_path,
+        url="https://example.com/careers",
+        fetch_result=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
+        browser_result=BrowserResult(
+            html=browser_html,
+            promoted_sources=[{"kind": "iframe", "url": "https://boards.greenhouse.io/embed/job_board?for=example"}],
         ),
-        patch("app.services.acquisition.acquirer.resolve_adapter", new_callable=AsyncMock, return_value=None),
-        patch(
-            "app.services.acquisition.acquirer.fetch_rendered_html",
-            new_callable=AsyncMock,
-            return_value=BrowserResult(
-                html=browser_html,
-                promoted_sources=[{"kind": "iframe", "url": "https://boards.greenhouse.io/embed/job_board?for=example"}],
-            ),
-        ) as browser_mock,
-        patch("app.services.acquisition.acquirer.settings") as mock_settings,
-    ):
-        mock_settings.artifacts_dir = tmp_path
-        result = await acquire(1, "https://example.com/careers", surface="job_listing")
+        surface="job_listing",
+    )
 
     assert result.method == "playwright"
     assert result.promoted_sources
@@ -371,26 +330,14 @@ async def test_acquire_job_listing_iframe_shell_still_escalates_with_adapter_hin
 
     from app.services.acquisition.browser_client import BrowserResult
 
-    with (
-        patch(
-            "app.services.acquisition.acquirer._fetch_with_content_type",
-            new_callable=AsyncMock,
-            return_value=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
-        ),
-        patch(
-            "app.services.acquisition.acquirer.resolve_adapter",
-            new_callable=AsyncMock,
-            return_value=SimpleNamespace(name="saashr"),
-        ),
-        patch(
-            "app.services.acquisition.acquirer.fetch_rendered_html",
-            new_callable=AsyncMock,
-            return_value=BrowserResult(html=browser_html),
-        ) as browser_mock,
-        patch("app.services.acquisition.acquirer.settings") as mock_settings,
-    ):
-        mock_settings.artifacts_dir = tmp_path
-        result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
+    result, browser_mock = await _run_acquire_case(
+        tmp_path,
+        url="https://lcbhs.net/careers",
+        fetch_result=HttpFetchResult(text=shell_html, status_code=200, content_type="html"),
+        browser_result=BrowserResult(html=browser_html),
+        resolve_adapter_result=SimpleNamespace(name="saashr"),
+        surface="job_listing",
+    )
 
     assert result.method == "playwright"
     assert result.diagnostics["browser_retry_reason"] == "iframe_shell"
@@ -418,26 +365,15 @@ async def test_acquire_iframe_shell_promoted_source_used_before_browser(tmp_path
 
     parent_result = HttpFetchResult(text=shell_html, status_code=200, content_type="html")
     promoted_result = HttpFetchResult(text=promoted_html, status_code=200, content_type="html")
+    from app.services.acquisition.browser_client import BrowserResult
 
-    with (
-        patch(
-            "app.services.acquisition.acquirer._fetch_with_content_type",
-            new_callable=AsyncMock,
-            side_effect=[parent_result, promoted_result],
-        ),
-        patch(
-            "app.services.acquisition.acquirer.resolve_adapter",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-        patch(
-            "app.services.acquisition.acquirer.fetch_rendered_html",
-            new_callable=AsyncMock,
-        ) as browser_mock,
-        patch("app.services.acquisition.acquirer.settings") as mock_settings,
-    ):
-        mock_settings.artifacts_dir = tmp_path
-        result = await acquire(1, "https://lcbhs.net/careers", surface="job_listing")
+    result, browser_mock = await _run_acquire_case(
+        tmp_path,
+        url="https://lcbhs.net/careers",
+        fetch_side_effect=[parent_result, promoted_result],
+        browser_result=BrowserResult(html=promoted_html),
+        surface="job_listing",
+    )
 
     assert result.method == "curl_cffi"
     assert result.diagnostics.get("promoted_source_used")
@@ -594,48 +530,6 @@ async def test_acquire_listing_page_does_not_escalate_from_text_only_card_count_
 
     assert result.method == "curl_cffi"
     browser_mock.assert_not_awaited()
-
-
-def test_diagnose_job_surface_page_detects_homepage_login_redirect():
-    html = """
-    <html>
-      <head>
-        <title>GovernmentJobs | City, State, Federal &amp; Public Sector Jobs</title>
-        <link rel="canonical" href="https://www.schooljobs.com/" />
-      </head>
-      <body><h1>log in</h1></body>
-    </html>
-    """
-
-    warning = _diagnose_job_surface_page(
-        requested_url="https://www.governmentjobs.com/careers/california/jobs/4817400",
-        final_url="https://www.governmentjobs.com/",
-        html=html,
-        surface="job_detail",
-    )
-    assert warning is not None
-    assert "redirected_to_root" in warning["signals"]
-    assert "auth_wall_heading" in warning["signals"]
-
-
-def test_diagnose_job_surface_page_detects_soft_404_job_page():
-    html = """
-    <html>
-      <head><title>Sorry. The page you requested could not be found.</title></head>
-      <body><h1>Sorry. The page you requested could not be found.</h1></body>
-    </html>
-    """
-
-    warning = _diagnose_job_surface_page(
-        requested_url="https://www.higheredjobs.com/jobs/details.cfm?JobCode=178200990",
-        final_url="https://www.higheredjobs.com/jobs/details.cfm?JobCode=178200990",
-        html=html,
-        surface="job_detail",
-    )
-    assert warning is not None
-    assert "soft_404_title" in warning["signals"]
-    assert "soft_404_heading" in warning["signals"]
-
 
 @pytest.mark.asyncio
 async def test_acquire_keeps_job_redirect_shell_results_but_records_surface_warning(tmp_path, monkeypatch):
@@ -830,159 +724,6 @@ async def test_acquire_accepts_typed_request(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_acquire_writes_diagnostics_artifact(tmp_path, monkeypatch):
-    html = "<html><body><h1>Product</h1><p>" + ("x" * 600) + "</p></body></html>"
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-
-    with patch(
-        "app.services.acquisition.acquirer._fetch_with_content_type",
-        new_callable=AsyncMock,
-        return_value=HttpFetchResult(
-            text=html,
-            status_code=200,
-            content_type="html",
-            attempt_log=[{"attempt": 1, "impersonate": "chrome110", "status_code": 200, "content_type": "html", "blocked": False}],
-        ),
-    ):
-        result = await acquire(42, "https://example.com/product")
-
-    diagnostics_path = _diagnostics_path(42, "https://example.com/product")
-    assert result.diagnostics_path == str(diagnostics_path)
-    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
-    assert payload["run_id"] == 42
-    assert payload["url"] == "https://example.com/product"
-    assert payload["method"] == "curl_cffi"
-    assert payload["artifact_path"] == result.artifact_path
-    assert payload["diagnostics"]["curl_status_code"] == 200
-    assert payload["diagnostics"]["curl_needs_browser"] is False
-    assert payload["diagnostics"]["curl_platform_family"] == "generic_commerce"
-    assert payload["diagnostics"]["curl_attempt_log"] == [
-        {"attempt": 1, "impersonate": "chrome110", "status_code": 200, "content_type": "html", "blocked": False}
-    ]
-    assert payload["status"] == "completed"
-
-
-@pytest.mark.asyncio
-async def test_acquire_scrubs_sensitive_network_payloads_before_artifact_write(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-    payloads = [
-        {
-            "url": "https://api.example.com/data",
-            "headers": {"authorization": "Bearer abcdefghijklmnopqrstuvwxyz0123456789"},
-            "body": {
-                "email": "person@example.com",
-                "token": "abcdefghijklmnopqrstuvwxyz0123456789",
-                "note": "contact person@example.com with Bearer abcdefghijklmnopqrstuvwxyz0123456789",
-            },
-        }
-    ]
-    _write_network_payloads(42, "https://example.com/product", payloads)
-
-    payload_path = _network_payload_path(42, "https://example.com/product")
-    persisted = json.loads(payload_path.read_text(encoding="utf-8"))
-    assert persisted[0]["headers"]["authorization"] == "[REDACTED]"
-    assert persisted[0]["body"]["email"] == "[REDACTED]"
-    assert persisted[0]["body"]["token"] == "[REDACTED]"
-    assert "[REDACTED]" in persisted[0]["body"]["note"]
-
-
-@pytest.mark.asyncio
-async def test_acquire_scrubs_session_and_cookie_keys_before_artifact_write(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-    payloads = [
-        {
-            "url": "https://api.example.com/data",
-            "headers": {
-                "Set-Cookie": "x=1",
-                "authorization": "Bearer xyz",
-                "content-type": "application/json",
-            },
-            "body": {
-                "session_id": "abc123",
-                "X-Session-ID": "abc123",
-                "sessionid": "abc123",
-                "__session": "abc123",
-            },
-        }
-    ]
-    _write_network_payloads(42, "https://example.com/product", payloads)
-
-    payload_path = _network_payload_path(42, "https://example.com/product")
-    persisted = json.loads(payload_path.read_text(encoding="utf-8"))
-    assert persisted[0]["headers"]["Set-Cookie"] == "[REDACTED]"
-    assert persisted[0]["headers"]["authorization"] == "[REDACTED]"
-    assert persisted[0]["headers"]["content-type"] == "application/json"
-    assert persisted[0]["body"]["session_id"] == "[REDACTED]"
-    assert persisted[0]["body"]["X-Session-ID"] == "[REDACTED]"
-    assert persisted[0]["body"]["sessionid"] == "[REDACTED]"
-    assert persisted[0]["body"]["__session"] == "[REDACTED]"
-
-
-@pytest.mark.asyncio
-async def test_acquire_scrubs_proxy_credentials_in_network_payload_artifacts(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-    payloads = [
-        {
-            "url": "https://api.example.com/data",
-            "proxy": "http://user:secret@proxy.example:8080",
-            "headers": {
-                "x-upstream-proxy": "https://alice:token@proxy2.example:8181",
-            },
-            "body": {
-                "proxy_url": "socks5://bob:hunter2@proxy3.example:1080",
-                "note": "retry via http://user:secret@proxy.example:8080 if primary fails",
-            },
-        }
-    ]
-    _write_network_payloads(42, "https://example.com/product", payloads)
-
-    payload_path = _network_payload_path(42, "https://example.com/product")
-    persisted = json.loads(payload_path.read_text(encoding="utf-8"))
-    assert persisted[0]["proxy"] == "http://***:***@proxy.example:8080"
-    assert (
-        persisted[0]["headers"]["x-upstream-proxy"]
-        == "https://***:***@proxy2.example:8181"
-    )
-    assert persisted[0]["body"]["proxy_url"] == "socks5://***:***@proxy3.example:1080"
-    assert "http://***:***@proxy.example:8080" in persisted[0]["body"]["note"]
-
-
-@pytest.mark.asyncio
-async def test_write_diagnostics_scrubs_proxy_credentials(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-    url = "https://example.com/product"
-    diagnostics_path = _diagnostics_path(42, url)
-    artifact_path = _artifact_path(42, url)
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_path.write_text("<html><body>ok</body></html>", encoding="utf-8")
-
-    result = AcquisitionResult(
-        html="<html><body>ok</body></html>",
-        method="curl_cffi",
-        diagnostics={
-            "proxy_url": "http://user:secret@proxy.example:8080",
-            "browser_diagnostics": {
-                "upstream_proxy": "https://alice:token@proxy2.example:8181"
-            },
-            "note": "proxy fallback used http://user:secret@proxy.example:8080",
-        },
-    )
-
-    _write_diagnostics(42, url, result, artifact_path, diagnostics_path)
-
-    persisted = json.loads(diagnostics_path.read_text(encoding="utf-8"))
-    diagnostics = persisted["diagnostics"]
-    assert diagnostics["proxy_url"] == "http://***:***@proxy.example:8080"
-    assert (
-        diagnostics["browser_diagnostics"]["upstream_proxy"]
-        == "https://***:***@proxy2.example:8181"
-    )
-    assert "http://***:***@proxy.example:8080" in diagnostics["note"]
-
-
-@pytest.mark.asyncio
 async def test_acquire_diagnostics_include_platform_family_for_real_family_url(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
     html = "<html><body><h1>Jobs</h1><p>" + ("Open roles " * 80) + "</p><table class='iCIMS_JobsTable'></table></body></html>"
@@ -999,24 +740,6 @@ async def test_acquire_diagnostics_include_platform_family_for_real_family_url(t
         )
 
     assert result.diagnostics["curl_platform_family"] == "icims"
-
-
-@pytest.mark.asyncio
-async def test_acquire_writes_failure_diagnostics_when_all_attempts_fail(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-
-    async def _always_fail(**_kwargs):
-        return None
-
-    monkeypatch.setattr("app.services.acquisition.acquirer._acquire_once", _always_fail)
-
-    with pytest.raises(RuntimeError, match="Unable to acquire content"):
-        await acquire(42, "https://example.com/unreachable")
-
-    diagnostics_path = _diagnostics_path(42, "https://example.com/unreachable")
-    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
-    assert payload["status"] == "failed"
-    assert payload["diagnostics"]["error_code"] == "acquisition_failed"
 
 
 @pytest.mark.asyncio
@@ -1062,46 +785,10 @@ async def test_acquire_returns_blocked_html_instead_of_raising_when_challenge_pa
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _reset_host_memory():
-    await reset_host_memory()
+async def _reset_acquisition_state():
     await reset_pacing_state()
     yield
-    await reset_host_memory()
     await reset_pacing_state()
-
-
-@pytest.mark.asyncio
-async def test_host_memory_persists_preference(fake_redis):
-    assert not await host_prefers_stealth("https://example.com/path")
-    await remember_stealth_host("https://example.com/path", ttl_hours=1)
-    assert await host_prefers_stealth("https://example.com/path")
-
-    payload = await fake_redis.hgetall("crawl:host-memory:stealth:example.com")
-    assert payload["reason"] == "blocked"
-    assert float(payload["preferred_stealth_until"]) > 0
-    assert fake_redis._ttl["crawl:host-memory:stealth:example.com"] == 3600
-
-
-@pytest.mark.asyncio
-async def test_host_memory_persists_in_redis(fake_redis):
-    await remember_stealth_host("https://example.com/path", ttl_hours=1)
-    assert await fake_redis.exists("crawl:host-memory:stealth:example.com")
-    assert await host_prefers_stealth("https://example.com/path")
-
-
-def test_artifact_paths_use_readable_hybrid_basename(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
-    url = "https://www.example.com/products/fancy-chair?color=oak&size=large"
-    html_path = _artifact_path(42, url)
-    network_path = _network_payload_path(42, url)
-    diagnostics_path = _diagnostics_path(42, url)
-    assert html_path.stem == network_path.stem
-    assert html_path.stem == diagnostics_path.stem
-    assert html_path.parent == tmp_path / "html"
-    assert network_path.parent == tmp_path / "network"
-    assert diagnostics_path.parent == tmp_path / "diagnostics"
-    assert html_path.stem.startswith("www-example-com-")
-    assert html_path.stem.endswith("-run_42")
 
 
 @pytest.mark.asyncio

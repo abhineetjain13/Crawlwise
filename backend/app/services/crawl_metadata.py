@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from app.models.crawl import CrawlRecord, CrawlRun
+from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.domain_utils import normalize_domain
-from app.services.knowledge_base.store import get_canonical_fields
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.schema_service import load_resolved_schema
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def get_canonical_fields(surface: str) -> list[str]:
+    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip(), []))
 
 
 def _clean_candidate_text(value: object) -> str:

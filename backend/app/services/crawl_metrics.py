@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.models.crawl_settings import CrawlRunSettings
-from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.acquisition import AcquisitionResult
 
 
 def build_acquisition_profile(run_settings: dict | CrawlRunSettings | None) -> dict[str, object]:

@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.models.crawl import CrawlRun
-    from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
+    from app.services.acquisition import AcquisitionRequest, AcquisitionResult
 
 
 # ---------------------------------------------------------------------------

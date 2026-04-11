@@ -121,6 +121,8 @@ async function retrySequentially<T>(
 
 type ResponseParser<T> = (response: Response) => Promise<T>;
 type RequestMethod = "POST" | "PUT" | "PATCH" | "DELETE";
+type ResponseKind = "json" | "text" | "blob";
+type BodyRequestMethod = Exclude<RequestMethod, "DELETE">;
 
 function buildRequestHeaders(init: RequestInit | undefined) {
   const headers = init?.headers;
@@ -215,36 +217,6 @@ async function requestWithParser<T>(
   throw lastError ?? new ApiError("Request failed", 500, "");
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  return requestWithParser(path, async (response) => {
-    if (response.status === 204) {
-      return undefined as T;
-    }
-    const contentLength = response.headers.get("content-length");
-    if (contentLength === "0") {
-      return undefined as T;
-    }
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) {
-      const text = await response.text();
-      if (!text.trim()) {
-        return undefined as T;
-      }
-      throw new ApiError("Expected JSON response from API.", response.status, text);
-    }
-    return response.json() as Promise<T>;
-  }, {
-    ...init,
-    headers:
-      init?.body instanceof FormData
-        ? init?.headers
-        : {
-            "Content-Type": "application/json",
-            ...(init?.headers ?? {}),
-          },
-  });
-}
-
 function withJsonHeaders(init?: RequestInit): RequestInit {
   return {
     ...init,
@@ -258,12 +230,55 @@ function withJsonHeaders(init?: RequestInit): RequestInit {
   };
 }
 
+async function parseResponseBody<T>(
+  response: Response,
+  responseKind: ResponseKind,
+): Promise<T> {
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const contentLength = response.headers.get("content-length");
+  if (contentLength === "0") {
+    return undefined as T;
+  }
+
+  if (responseKind === "text") {
+    return response.text() as Promise<T>;
+  }
+  if (responseKind === "blob") {
+    return response.blob() as Promise<T>;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    if (!text.trim()) {
+      return undefined as T;
+    }
+    throw new ApiError("Expected JSON response from API.", response.status, text);
+  }
+  return response.json() as Promise<T>;
+}
+
+function requestWithResponseType<T>(
+  path: string,
+  responseKind: ResponseKind,
+  init?: RequestInit,
+): Promise<T> {
+  return requestWithParser(
+    path,
+    (response) => parseResponseBody<T>(response, responseKind),
+    responseKind === "json" ? withJsonHeaders(init) : init,
+  );
+}
+
 function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  return request<T>(path, withJsonHeaders(init));
+  return requestWithResponseType<T>(path, "json", init);
 }
 
 function requestWithBody<T>(
-  method: Exclude<RequestMethod, "DELETE">,
+  method: BodyRequestMethod,
   path: string,
   body: unknown,
 ): Promise<T> {
@@ -273,23 +288,27 @@ function requestWithBody<T>(
   });
 }
 
-async function requestText(path: string, init?: RequestInit): Promise<string> {
-  return requestWithParser(path, (response) => response.text(), init);
+function createBodyRequest(method: BodyRequestMethod) {
+  return <T,>(path: string, body: unknown) => requestWithBody<T>(method, path, body);
 }
 
-async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
-  return requestWithParser(path, (response) => response.blob(), init);
+function createReadRequest<T>(responseKind: ResponseKind) {
+  return (path: string) => requestWithResponseType<T>(path, responseKind);
+}
+
+function createDeleteRequest<T>() {
+  return (path: string) => requestJson<T>(path, { method: "DELETE" });
 }
 
 export const apiClient = {
-  get: <T,>(path: string) => requestJson<T>(path),
-  getText: (path: string) => requestText(path),
-  getBlob: (path: string) => requestBlob(path),
-  post: <T,>(path: string, body: unknown) => requestWithBody<T>("POST", path, body),
-  postForm: <T,>(path: string, body: FormData) => requestWithBody<T>("POST", path, body),
-  put: <T,>(path: string, body: unknown) => requestWithBody<T>("PUT", path, body),
-  patch: <T,>(path: string, body: unknown) => requestWithBody<T>("PATCH", path, body),
-  delete: <T,>(path: string) => requestJson<T>(path, { method: "DELETE" }),
+  get: createReadRequest("json"),
+  getText: createReadRequest<string>("text"),
+  getBlob: createReadRequest<Blob>("blob"),
+  post: createBodyRequest("POST"),
+  postForm: createBodyRequest("POST"),
+  put: createBodyRequest("PUT"),
+  patch: createBodyRequest("PATCH"),
+  delete: createDeleteRequest(),
 };
 
 async function readErrorBody(response: Response) {

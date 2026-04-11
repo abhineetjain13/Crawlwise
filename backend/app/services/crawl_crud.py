@@ -17,6 +17,7 @@ from app.services.crawl_utils import (
     normalize_target_url,
     validate_extraction_contract,
 )
+from app.services.db_utils import escape_like_pattern
 from app.services.normalizers import normalize_value
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.url_safety import ensure_public_crawl_targets
@@ -26,13 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 STAGE_FETCH = "FETCH"
 
 
-def _escape_like_pattern(value: str) -> str:
-    text = str(value or "")
-    return (
-        text.replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
 async def create_crawl_run(
     session: AsyncSession, user_id: int, payload: dict
 ) -> CrawlRun:
@@ -113,7 +107,7 @@ async def list_runs(
         query = query.where(CrawlRun.run_type == run_type)
         count_query = count_query.where(CrawlRun.run_type == run_type)
     if url_search:
-        escaped = _escape_like_pattern(url_search.lower())
+        escaped = escape_like_pattern(url_search.lower())
         pattern = f"%{escaped}%"
         query = query.where(func.lower(CrawlRun.url).like(pattern, escape="\\"))
         count_query = count_query.where(

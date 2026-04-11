@@ -1,7 +1,7 @@
 ---
 title: "refactor: Decompose God Files — extract/service.py, listing_extractor.py, browser_client.py"
 type: refactor
-status: active
+status: phase-a-in-progress
 date: 2026-04-11
 ---
 
@@ -15,7 +15,7 @@ Three files account for **11,274 lines** — 29% of the entire backend — in ju
 
 | File | Lines | Target |
 |------|-------|--------|
-| `app/services/extract/service.py` | 5,167 | ~200 (public API shell) |
+| `app/services/extract/service.py` | 5,167 | ~450 (public API + orchestrators) |
 | `app/services/extract/listing_extractor.py` | 3,524 | ~400 (entry point + dispatch) |
 | `app/services/acquisition/browser_client.py` | 2,583 | ~500 (core fetch + pool) |
 

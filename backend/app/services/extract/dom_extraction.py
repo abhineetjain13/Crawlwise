@@ -16,7 +16,7 @@ from app.services.config.extraction_rules import (
     NESTED_NON_PRODUCT_KEYS,
 )
 from app.services.config.field_mappings import REQUESTED_FIELD_ALIASES, get_surface_field_aliases
-from app.services.config.listing_heuristics import LISTING_DESCRIPTION_CANDIDATE_FIELDS
+from app.services.config.extraction_rules import LISTING_DESCRIPTION_CANDIDATE_FIELDS
 from app.services.extract.candidate_processing import (
     _embedded_blob_payload,
     _looks_like_ga_data_layer,

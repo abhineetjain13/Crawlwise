@@ -1,211 +1,31 @@
-"""
-Pipeline package for crawl processing.
+from __future__ import annotations
 
-This package splits the monolithic pipeline.py into focused modules.
-"""
-
-# Import from submodules
-# Import core pipeline functions
-from .core import (
-    STAGE_ANALYZE,
-    STAGE_FETCH,
-    STAGE_SAVE,
-    _collect_detail_llm_suggestions,
-    _extract_detail,
-    _extract_listing,
-    _load_domain_requested_fields,
-    _log,
-    _mark_run_failed,
-    _normalize_detail_candidate_values,
-    _persist_failure_state,
-    _process_json_response,
-    _process_single_url,
-    _reconcile_detail_candidate_values,
-    _refresh_record_commit_metadata,
-    _resolve_listing_surface,
-    _set_stage,
-    _split_detail_output_fields,
-    _supports_parallel_batch_sessions,
-)
-from .field_normalization import (
-    _merge_record_fields,
-    _normalize_record_fields,
-    _normalize_review_value,
-    _passes_detail_quality_gate,
-    _public_record_fields,
-    _raw_record_payload,
-    _requested_field_coverage,
-    _review_values_equal,
-    _should_prefer_secondary_field,
-)
-from .listing_helpers import (
-    _listing_acquisition_blocked,
-    _looks_like_loading_listing_shell,
-    _sanitize_listing_record_fields,
-    _summarize_job_listing_description,
-)
-from .llm_integration import (
-    _apply_llm_suggestions_to_candidate_values,
-    _build_llm_candidate_evidence,
-    _build_llm_discovered_sources,
-    _normalize_llm_cleanup_review,
-    _normalize_llm_review_bucket_item,
-    _select_llm_review_candidates,
-    _snapshot_for_llm,
-    _split_llm_cleanup_payload,
-)
-from .rendering import (
-    _find_fallback_card_group,
-    _normalize_target_url,
-    _render_fallback_card_group,
-    _render_fallback_node_markdown,
-    _render_manifest_tables_markdown,
-    _should_skip_fallback_node,
-)
-from .review_helpers import (
-    _merge_review_bucket_entries,
-    _should_surface_discovered_field,
-)
-from .types import (
-    AcquisitionMetrics,
-    ExtractionResult,
+from app.services.pipeline.pipeline_config import PipelineConfig
+from app.services.pipeline.types import (
     PipelineContext,
-    PipelineStage,
     URLProcessingConfig,
     URLProcessingResult,
 )
-from .runner import PipelineRunner, build_default_stages
-from .stages import (
-    AcquireStage,
-    AdapterStage,
-    BlockedDetectionStage,
-    ExtractStage,
-    ListingBrowserRetryStage,
-    ParseStage,
-    SurfaceValidationStage,
-)
-from .trace_builders import (
-    _build_acquisition_trace,
-    _build_field_discovery_summary,
-    _build_legible_listing_fallback_record,
-    _build_manifest_trace,
-    _build_review_bucket,
-    _review_bucket_source_for_field,
-)
-from .utils import (
-    _clean_candidate_text,
-    _clean_page_text,
-    _compact_dict,
-    _elapsed_ms,
-    _first_non_empty_text,
-    _normalize_committed_field_name,
-    _parse_html_sync,
-    _review_bucket_fingerprint,
-    parse_html,
-)
-from .verdict import (
-    VERDICT_BLOCKED,
-    VERDICT_EMPTY,
+from app.services.pipeline.verdict import (
+    VERDICT_ERROR,
     VERDICT_LISTING_FAILED,
     VERDICT_PARTIAL,
-    VERDICT_SCHEMA_MISS,
     VERDICT_SUCCESS,
-    _aggregate_verdict,
     _compute_verdict,
-    _passes_core_verdict,
 )
 
+VERDICT_FAILED = VERDICT_ERROR
+VERDICT_LISTING_DETECTION_FAILED = VERDICT_LISTING_FAILED
+compute_verdict = _compute_verdict
+
 __all__ = [
-    # Utils
-    "_elapsed_ms",
-    "_compact_dict",
-    "_clean_page_text",
-    "_first_non_empty_text",
-    "_normalize_committed_field_name",
-    "_parse_html_sync",
-    "_review_bucket_fingerprint",
-    "_clean_candidate_text",
-    "parse_html",
-    # Field normalization
-    "_normalize_review_value",
-    "_review_values_equal",
-    "_normalize_record_fields",
-    "_passes_detail_quality_gate",
-    "_raw_record_payload",
-    "_public_record_fields",
-    "_merge_record_fields",
-    "_should_prefer_secondary_field",
-    "_requested_field_coverage",
-    # Verdict
-    "VERDICT_SUCCESS",
-    "VERDICT_PARTIAL",
-    "VERDICT_BLOCKED",
-    "VERDICT_SCHEMA_MISS",
-    "VERDICT_LISTING_FAILED",
-    "VERDICT_EMPTY",
-    "_compute_verdict",
-    "_passes_core_verdict",
-    "_aggregate_verdict",
-    # Core functions (from legacy)
-    "_process_single_url",
-    "_resolve_listing_surface",
-    "_extract_listing",
-    "_extract_detail",
-    "_process_json_response",
-    "_log",
-    "_set_stage",
-    "_mark_run_failed",
-    "_supports_parallel_batch_sessions",
-    "_persist_failure_state",
-    "_apply_llm_suggestions_to_candidate_values",
-    "_build_acquisition_trace",
-    "_build_field_discovery_summary",
-    "_build_legible_listing_fallback_record",
-    "_build_llm_candidate_evidence",
-    "_build_llm_discovered_sources",
-    "_build_manifest_trace",
-    "_build_review_bucket",
-    "_collect_detail_llm_suggestions",
-    "_find_fallback_card_group",
-    "_listing_acquisition_blocked",
-    "_load_domain_requested_fields",
-    "_looks_like_loading_listing_shell",
-    "_merge_review_bucket_entries",
-    "_normalize_detail_candidate_values",
-    "_normalize_llm_cleanup_review",
-    "_normalize_llm_review_bucket_item",
-    "_normalize_target_url",
-    "_reconcile_detail_candidate_values",
-    "_refresh_record_commit_metadata",
-    "_render_fallback_card_group",
-    "_render_fallback_node_markdown",
-    "_render_manifest_tables_markdown",
-    "_review_bucket_source_for_field",
-    "_sanitize_listing_record_fields",
-    "_select_llm_review_candidates",
-    "_should_skip_fallback_node",
-    "_should_surface_discovered_field",
-    "_snapshot_for_llm",
-    "_split_detail_output_fields",
-    "_split_llm_cleanup_payload",
-    "_summarize_job_listing_description",
-    "STAGE_FETCH",
-    "STAGE_ANALYZE",
-    "STAGE_SAVE",
-    # Typed pipeline boundary objects
+    "PipelineConfig",
+    "PipelineContext",
     "URLProcessingConfig",
     "URLProcessingResult",
-    "AcquisitionMetrics",
-    "ExtractionResult",
-    "PipelineContext",
-    "PipelineRunner",
-    "PipelineStage",
-    "AcquireStage",
-    "AdapterStage",
-    "BlockedDetectionStage",
-    "ExtractStage",
-    "ListingBrowserRetryStage",
-    "ParseStage",
-    "SurfaceValidationStage",
-    "build_default_stages",
+    "VERDICT_SUCCESS",
+    "VERDICT_PARTIAL",
+    "VERDICT_FAILED",
+    "VERDICT_LISTING_DETECTION_FAILED",
+    "compute_verdict",
 ]

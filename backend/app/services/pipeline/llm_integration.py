@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from app.services.extract.candidate_processing import coerce_field_candidate_value
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.extract import coerce_field_candidate_value, parse_page_sources
 
 from .field_normalization import (
     _normalize_review_value,

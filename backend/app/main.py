@@ -31,8 +31,10 @@ from app.core.telemetry import (
     reset_correlation_id,
     set_correlation_id,
 )
-from app.services.acquisition.browser_client import shutdown_browser_pool
-from app.services.acquisition.cookie_store import validate_cookie_policy_config
+from app.services.acquisition import (
+    shutdown_browser_pool,
+    validate_cookie_policy_config,
+)
 from app.services.auth_service import bootstrap_admin_user
 from app.services.crawl_service import recover_stale_local_runs
 
@@ -70,10 +72,21 @@ app.add_middleware(
 )
 
 
+def _sanitize_header_value(value: str) -> str:
+    return value.replace("\r", "").replace("\n", "")
+
+
 @app.middleware("http")
 async def correlation_middleware(request: Request, call_next) -> Response:
     request_id_header = settings.request_id_header
-    correlation_id = request.headers.get(request_id_header) or generate_correlation_id()
+    raw_correlation_id = request.headers.get(request_id_header)
+    correlation_id = (
+        _sanitize_header_value(raw_correlation_id)
+        if raw_correlation_id is not None
+        else generate_correlation_id()
+    )
+    if not correlation_id:
+        correlation_id = generate_correlation_id()
     token = set_correlation_id(correlation_id)
     try:
         response = await call_next(request)

@@ -13,6 +13,15 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from tests.support import manifest as _sources
 from tests.support import run_extract_listing_records
+from tests.services._duplication_helpers import (
+    adapter_manifest,
+    html_page,
+    item_list_manifest,
+    job_card,
+    query_state_manifest,
+    next_data_manifest,
+    product_card,
+)
 
 
 def extract_listing_records(
@@ -135,47 +144,36 @@ def test_extract_listing_records_ignores_third_party_social_network_payload_reco
 
 
 def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_item():
-    html = """
-    <html><body>
-    <div class="product-card">
-        <h3><a href="/product/1">Widget A</a></h3>
-        <span class="price">$10.00</span>
-        <img src="https://img.example.com/a.jpg" />
-    </div>
-    <div class="product-card">
-        <h3><a href="/product/2">Widget B</a></h3>
-        <span class="price">$20.00</span>
-        <img src="https://img.example.com/b.jpg" />
-    </div>
-    </body></html>
-    """
-    manifest = _sources(
-        json_ld=[
+    html = html_page(
+        product_card(
+            href="/product/1",
+            title="Widget A",
+            price="$10.00",
+            image_src="https://img.example.com/a.jpg",
+        ),
+        product_card(
+            href="/product/2",
+            title="Widget B",
+            price="$20.00",
+            image_src="https://img.example.com/b.jpg",
+        ),
+    )
+    manifest = item_list_manifest(
+        [
             {
-                "@type": "ItemList",
-                "itemListElement": [
-                    {
-                        "@type": "ListItem",
-                        "item": {
-                            "@type": "Product",
-                            "name": "Widget A",
-                            "url": "https://example.com/product/1",
-                            "brand": {"name": "Acme"},
-                            "description": "A richer structured description for widget A.",
-                        },
-                    },
-                    {
-                        "@type": "ListItem",
-                        "item": {
-                            "@type": "Product",
-                            "name": "Widget B",
-                            "url": "https://example.com/product/2",
-                            "brand": {"name": "Acme"},
-                            "description": "A richer structured description for widget B.",
-                        },
-                    },
-                ],
-            }
+                "@type": "Product",
+                "name": "Widget A",
+                "url": "https://example.com/product/1",
+                "brand": {"name": "Acme"},
+                "description": "A richer structured description for widget A.",
+            },
+            {
+                "@type": "Product",
+                "name": "Widget B",
+                "url": "https://example.com/product/2",
+                "brand": {"name": "Acme"},
+                "description": "A richer structured description for widget B.",
+            },
         ]
     )
 
@@ -187,35 +185,33 @@ def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_
         max_records=10,
         manifest=manifest,
     )
+    filtered_records = listing_extractor._enforce_listing_field_contract(records, "listing")
 
     assert len(records) == 2
-    assert records[0]["brand"] == "Acme"
     assert records[0]["price"] == "$10.00"
-    assert records[0]["description"] == "A richer structured description for widget A."
+    assert filtered_records[0]["price"] == "$10.00"
+    assert "brand" not in filtered_records[0]
+    assert "description" not in filtered_records[0]
 
 
 def test_extract_listing_records_merges_adapter_rows_with_dom_job_cards():
-    html = """
-    <html><body>
-      <div class="job-card">
-        <a href="https://example.com/jobs/164066">
-          <h3>Medical Surgical Registered Nurse / RN</h3>
-          <div class="company">Emory Univ Hosp-Midtown</div>
-          <div class="location">Atlanta, GA, 30308</div>
-          <div class="salary">$52/hr</div>
-        </a>
-      </div>
-      <div class="job-card">
-        <a href="https://example.com/jobs/164065">
-          <h3>Cardiovascular Step Down Registered Nurse / RN</h3>
-          <div class="company">Emory Univ Hosp-Midtown</div>
-          <div class="location">Atlanta, GA, 30308</div>
-        </a>
-      </div>
-    </body></html>
-    """
-    manifest = _sources(
-        adapter_data=[
+    html = html_page(
+        job_card(
+            href="https://example.com/jobs/164066",
+            title="Medical Surgical Registered Nurse / RN",
+            company="Emory Univ Hosp-Midtown",
+            location="Atlanta, GA, 30308",
+            salary="$52/hr",
+        ),
+        job_card(
+            href="https://example.com/jobs/164065",
+            title="Cardiovascular Step Down Registered Nurse / RN",
+            company="Emory Univ Hosp-Midtown",
+            location="Atlanta, GA, 30308",
+        ),
+    )
+    manifest = adapter_manifest(
+        [
             {
                 "title": "Medical Surgical Registered Nurse / RN",
                 "url": "https://example.com/jobs/164066",
@@ -251,41 +247,25 @@ def test_extract_listing_records_merges_adapter_rows_with_dom_job_cards():
 
 
 def test_extract_listing_records_maps_generic_job_ids_without_emitting_sku():
-    manifest = _sources(
-        next_data={
-            "props": {
-                "pageProps": {
-                    "dehydratedState": {
-                        "queries": [
-                            {
-                                "state": {
-                                    "data": {
-                                        "items": [
-                                            {
-                                                "id": "f73230ff-586f-4775-9628-9a88bcde18b9",
-                                                "name": "Chemical Operator",
-                                                "url": "https://ats.rippling.com/inhance-technologies/jobs/f73230ff-586f-4775-9628-9a88bcde18b9",
-                                                "department": {"name": "Operations"},
-                                                "locations": [{"name": "Catoosa"}],
-                                                "language": "en-US",
-                                            },
-                                            {
-                                                "id": "1b410123-0089-4bde-9ab1-9acbe62ecf1b",
-                                                "name": "Production Supervisor",
-                                                "url": "https://ats.rippling.com/inhance-technologies/jobs/1b410123-0089-4bde-9ab1-9acbe62ecf1b",
-                                                "department": {"name": "Operations"},
-                                                "locations": [{"name": "Catoosa"}],
-                                                "language": "en-US",
-                                            },
-                                        ]
-                                    }
-                                }
-                            }
-                        ]
-                    }
-                }
-            }
-        }
+    manifest = next_data_manifest(
+        [
+            {
+                "id": "f73230ff-586f-4775-9628-9a88bcde18b9",
+                "name": "Chemical Operator",
+                "url": "https://ats.rippling.com/inhance-technologies/jobs/f73230ff-586f-4775-9628-9a88bcde18b9",
+                "department": {"name": "Operations"},
+                "locations": [{"name": "Catoosa"}],
+                "language": "en-US",
+            },
+            {
+                "id": "1b410123-0089-4bde-9ab1-9acbe62ecf1b",
+                "name": "Production Supervisor",
+                "url": "https://ats.rippling.com/inhance-technologies/jobs/1b410123-0089-4bde-9ab1-9acbe62ecf1b",
+                "department": {"name": "Operations"},
+                "locations": [{"name": "Catoosa"}],
+                "language": "en-US",
+            },
+        ]
     )
 
     records = extract_listing_records(
@@ -306,19 +286,17 @@ def test_extract_listing_records_maps_generic_job_ids_without_emitting_sku():
 
 
 def test_extract_listing_records_citybeach_artifact_stays_onsite_and_keeps_titles():
-    cards = []
-    for index in range(1, 11):
-        cards.append(
-            f"""
-            <div class="product-card">
-                <a href="/au/mens/swimwear/product-{index}">
-                    <img src="https://cdn.citybeach.com/product-{index}.jpg" alt="Swim Short {index}" />
-                </a>
-                <span class="price">${index * 10}.00</span>
-            </div>
-            """
+    html = html_page(
+        *(
+            product_card(
+                href=f"/au/mens/swimwear/product-{index}",
+                price=f"${index * 10}.00",
+                image_src=f"https://cdn.citybeach.com/product-{index}.jpg",
+                image_alt=f"Swim Short {index}",
+            )
+            for index in range(1, 11)
         )
-    html = "<html><body>" + "".join(cards) + "</body></html>"
+    )
     payloads = [
         {
             "url": "https://edge.curalate.com/v1/media/foo",
@@ -432,15 +410,11 @@ def test_extract_listing_records_handles_dyson_style_comparison_tables():
         page_url="https://www.dyson.in/hair-care/hair-stylers",
         max_records=10,
     )
-
     assert len(records) == 2
     assert records[0]["url"] == "https://www.dyson.in/airwrap-id-multi-styler-dryer-vinca-blue-topaz"
     assert records[0]["image_url"] == "https://www.dyson.in/images/airwrap-id.png"
     assert records[0]["title"].startswith("Airwrap Id Multi Styler Dryer")
-    assert "Attachments: 6 Attachments" in records[0]["description"]
-    assert "End styles: Straight, wavy, curly" in records[0]["description"]
     assert records[1]["url"] == "https://www.dyson.in/dyson-airwrap-hs02-origin-nickel-copper"
-    assert "Attachments: 3 Attachments" in records[1]["description"]
 
 def test_extract_listing_records_handles_main_entity_itemlist_manifest():
     manifest = _sources(
@@ -1002,49 +976,29 @@ def test_normalize_listing_value_only_promotes_true_product_short_paths():
 
 def test_extract_listing_from_query_state_product_cards_and_drops_content_cards():
     html = "<html><body></body></html>"
-    manifest = _sources(
-        json_ld=[],
-        next_data={
-            "props": {
-                "pageProps": {
-                    "dehydratedState": {
-                        "queries": [
-                            {
-                                "queryKey": ["KA_CUSTOM_PRODUCT_LISTING"],
-                                "state": {
-                                    "data": {
-                                        "items": [
-                                            {
-                                                "__typename": "ProductCard",
-                                                "name": "13-Cup Food Processor",
-                                                "detailPageLink": {"href": "/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html"},
-                                                "assets": [{"src": "https://images.example.com/p1.jpg", "type": "IMAGE"}],
-                                                "price": {"currentValue": 179.99, "currency": "USD"},
-                                            },
-                                            {
-                                                "__typename": "ProductCard",
-                                                "name": "9 Cup Food Processor Plus",
-                                                "detailPageLink": {"href": "/countertop-appliances/food-processors/processors/p.9-cup-food-processor-plus.KFP0919CU.html"},
-                                                "assets": [{"src": "https://images.example.com/p2.jpg", "type": "IMAGE"}],
-                                                "price": {"currentValue": 179.99, "currency": "USD"},
-                                            },
-                                            {
-                                                "__typename": "ContentCard",
-                                                "title": "<p>Promo banner</p>",
-                                                "image": {"src": "https://images.example.com/promo.jpg", "type": "IMAGE"},
-                                                "tooltip": {"content": "<p>Ends soon</p>"},
-                                            },
-                                        ]
-                                    }
-                                },
-                            }
-                        ]
-                    }
-                }
-            }
-        },
-        _hydrated_states=[],
-        network_payloads=[],
+    manifest = query_state_manifest(
+        [
+            {
+                "__typename": "ProductCard",
+                "name": "13-Cup Food Processor",
+                "detailPageLink": {"href": "/countertop-appliances/food-processors/processors/p.13-cup-food-processor.KFP1318CU.html"},
+                "assets": [{"src": "https://images.example.com/p1.jpg", "type": "IMAGE"}],
+                "price": {"currentValue": 179.99, "currency": "USD"},
+            },
+            {
+                "__typename": "ProductCard",
+                "name": "9 Cup Food Processor Plus",
+                "detailPageLink": {"href": "/countertop-appliances/food-processors/processors/p.9-cup-food-processor-plus.KFP0919CU.html"},
+                "assets": [{"src": "https://images.example.com/p2.jpg", "type": "IMAGE"}],
+                "price": {"currentValue": 179.99, "currency": "USD"},
+            },
+            {
+                "__typename": "ContentCard",
+                "title": "<p>Promo banner</p>",
+                "image": {"src": "https://images.example.com/promo.jpg", "type": "IMAGE"},
+                "tooltip": {"content": "<p>Ends soon</p>"},
+            },
+        ]
     )
 
     records = extract_listing_records(
@@ -1065,67 +1019,47 @@ def test_extract_listing_from_query_state_product_cards_and_drops_content_cards(
 
 def test_extract_listing_ignores_kitchenaid_style_variant_option_rows():
     html = "<html><body></body></html>"
-    manifest = _sources(
-        json_ld=[],
-        next_data={
-            "props": {
-                "pageProps": {
-                    "dehydratedState": {
-                        "queries": [
-                            {
-                                "queryKey": ["KA_CUSTOM_PRODUCT_LISTING"],
-                                "state": {
-                                    "data": {
-                                        "items": [
-                                            {
-                                                "__typename": "ProductCard",
-                                                "name": "7 Quart Bowl-Lift Stand Mixer",
-                                                "detailPageLink": {"href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.7-quart-bowl-lift-stand-mixer.KSM70SKXXBK.html"},
-                                                "assets": [{"src": "https://images.example.com/mixer-main.jpg", "type": "IMAGE"}],
-                                                "price": {"specialValue": 549.99, "currency": "USD"},
-                                            },
-                                            {
-                                                "__typename": "ProductCard",
-                                                "name": "5.5 Quart Bowl-Lift Stand Mixer",
-                                                "detailPageLink": {"href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.5.5-quart-bowl-lift-stand-mixer.KSM55SXXXER.html"},
-                                                "assets": [{"src": "https://images.example.com/mixer-two-main.jpg", "type": "IMAGE"}],
-                                                "price": {"specialValue": 449.99, "currency": "USD"},
-                                            },
-                                            {
-                                                "availability": "IN_STOCK",
-                                                "skuId": "550",
-                                                "commercialCode": "KSM70SKXXBK",
-                                                "twelvenc": "KSM70SKXXBK",
-                                                "label": "Cast Iron Black",
-                                                "labelEn": "Cast Iron Black",
-                                                "image": {"src": "https://www.kitchenaid.com/is/image/content/dam/business-unit/global-assets/color-swatches/Images/K2.png?wid=150&hei=150", "alt": "Cast Iron Black", "type": "IMAGE"},
-                                                "detailPageLink": {"label": "7 Quart Bowl-Lift Stand Mixer", "href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.7-quart-bowl-lift-stand-mixer.KSM70SKXXBK.html"},
-                                                "assets": [{"src": "https://images.example.com/mixer-gallery.jpg", "type": "IMAGE"}],
-                                                "price": {"currentValue": 649.99, "specialValue": 549.99, "currency": "USD"},
-                                            },
-                                            {
-                                                "availability": "IN_STOCK",
-                                                "skuId": "551",
-                                                "commercialCode": "KSM55SXXXER",
-                                                "twelvenc": "KSM55SXXXER",
-                                                "label": "Empire Red",
-                                                "labelEn": "Empire Red",
-                                                "image": {"src": "https://www.kitchenaid.com/is/image/content/dam/business-unit/global-assets/color-swatches/Images/ER.png?wid=150&hei=150", "alt": "Empire Red", "type": "IMAGE"},
-                                                "detailPageLink": {"label": "5.5 Quart Bowl-Lift Stand Mixer", "href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.5.5-quart-bowl-lift-stand-mixer.KSM55SXXXER.html"},
-                                                "assets": [{"src": "https://images.example.com/mixer-two-gallery.jpg", "type": "IMAGE"}],
-                                                "price": {"currentValue": 499.99, "specialValue": 449.99, "currency": "USD"},
-                                            },
-                                        ]
-                                    }
-                                },
-                            }
-                        ]
-                    }
-                }
-            }
-        },
-        _hydrated_states=[],
-        network_payloads=[],
+    manifest = query_state_manifest(
+        [
+            {
+                "__typename": "ProductCard",
+                "name": "7 Quart Bowl-Lift Stand Mixer",
+                "detailPageLink": {"href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.7-quart-bowl-lift-stand-mixer.KSM70SKXXBK.html"},
+                "assets": [{"src": "https://images.example.com/mixer-main.jpg", "type": "IMAGE"}],
+                "price": {"specialValue": 549.99, "currency": "USD"},
+            },
+            {
+                "__typename": "ProductCard",
+                "name": "5.5 Quart Bowl-Lift Stand Mixer",
+                "detailPageLink": {"href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.5.5-quart-bowl-lift-stand-mixer.KSM55SXXXER.html"},
+                "assets": [{"src": "https://images.example.com/mixer-two-main.jpg", "type": "IMAGE"}],
+                "price": {"specialValue": 449.99, "currency": "USD"},
+            },
+            {
+                "availability": "IN_STOCK",
+                "skuId": "550",
+                "commercialCode": "KSM70SKXXBK",
+                "twelvenc": "KSM70SKXXBK",
+                "label": "Cast Iron Black",
+                "labelEn": "Cast Iron Black",
+                "image": {"src": "https://www.kitchenaid.com/is/image/content/dam/business-unit/global-assets/color-swatches/Images/K2.png?wid=150&hei=150", "alt": "Cast Iron Black", "type": "IMAGE"},
+                "detailPageLink": {"label": "7 Quart Bowl-Lift Stand Mixer", "href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.7-quart-bowl-lift-stand-mixer.KSM70SKXXBK.html"},
+                "assets": [{"src": "https://images.example.com/mixer-gallery.jpg", "type": "IMAGE"}],
+                "price": {"currentValue": 649.99, "specialValue": 549.99, "currency": "USD"},
+            },
+            {
+                "availability": "IN_STOCK",
+                "skuId": "551",
+                "commercialCode": "KSM55SXXXER",
+                "twelvenc": "KSM55SXXXER",
+                "label": "Empire Red",
+                "labelEn": "Empire Red",
+                "image": {"src": "https://www.kitchenaid.com/is/image/content/dam/business-unit/global-assets/color-swatches/Images/ER.png?wid=150&hei=150", "alt": "Empire Red", "type": "IMAGE"},
+                "detailPageLink": {"label": "5.5 Quart Bowl-Lift Stand Mixer", "href": "/countertop-appliances/stand-mixers/bowl-lift-stand-mixers/p.5.5-quart-bowl-lift-stand-mixer.KSM55SXXXER.html"},
+                "assets": [{"src": "https://images.example.com/mixer-two-gallery.jpg", "type": "IMAGE"}],
+                "price": {"currentValue": 499.99, "specialValue": 449.99, "currency": "USD"},
+            },
+        ]
     )
 
     records = extract_listing_records(

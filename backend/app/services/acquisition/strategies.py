@@ -167,7 +167,7 @@ class AdapterRecoveryStrategy:
         *,
         proxy: str | None = None,
     ) -> "AcquisitionResult | None":
-        from app.services.shared_acquisition import try_blocked_adapter_recovery
+        from app.services.adapters.registry import try_blocked_adapter_recovery
 
         try:
             result = await try_blocked_adapter_recovery(

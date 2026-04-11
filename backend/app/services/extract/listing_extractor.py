@@ -21,10 +21,16 @@ from app.services.extract.listing_quality import (
 from app.services.extract.listing_quality import (
     is_meaningful_structured_listing_record as _assess_meaningful_structured_listing_record,
 )
+from app.services.extract.noise_policy import (
+    is_listing_noise_group,
+    is_noise_title,
+    is_social_url,
+    strip_noise_containers,
+)
 from app.services.extract.source_parsers import parse_page_sources
 from app.services.config.crawl_runtime import MAX_JSON_RECURSION_DEPTH
 from app.services.config.field_mappings import COLLECTION_KEYS
-from app.services.config.listing_heuristics import (
+from app.services.config.extraction_rules import (
     LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_CARD_TITLE_SELECTORS,
     LISTING_CATEGORY_PATH_MARKERS,
@@ -68,16 +74,6 @@ _WEAK_LISTING_TITLES = LISTING_WEAK_TITLES
 
 # Detail-only fields that should not be extracted on listing pages
 DETAIL_ONLY_FIELDS = {"brand", "gtin", "variants", "specifications", "description"}
-_LISTING_SOCIAL_HOST_SUFFIXES = (
-    "facebook.com",
-    "instagram.com",
-    "tiktok.com",
-    "pinterest.com",
-    "x.com",
-    "twitter.com",
-    "youtube.com",
-    "youtu.be",
-)
 _LISTING_HOST_TOKEN_STOPWORDS = {
     "www",
     "m",
@@ -1762,35 +1758,6 @@ def _product_search_dimensions(attributes: list[object]) -> str:
     return " | ".join(dimension_rows)
 
 
-def _is_noise_title(title: str) -> bool:
-    """Check if a title is likely navigation, editorial, or UI noise."""
-    t = str(title).strip().lower()
-    if not t:
-        return True
-
-    # 1. Navigation hints (Home, Login, etc.)
-    if t in LISTING_NAVIGATION_TITLE_HINTS:
-        return True
-
-    # 2. Merchandising prefixes (Shop All, Discover, etc.)
-    if t.startswith(LISTING_MERCHANDISING_TITLE_PREFIXES):
-        return True
-
-    # 3. Editorial/Ad patterns
-    if any(p.search(t) for p in LISTING_EDITORIAL_TITLE_PATTERNS):
-        return True
-
-    # 4. Alt text patterns (Front View, Close-up, etc.)
-    if LISTING_ALT_TEXT_TITLE_PATTERN and LISTING_ALT_TEXT_TITLE_PATTERN.search(t):
-        return True
-
-    # 5. Weak standalone titles
-    if t in _WEAK_LISTING_TITLES:
-        return True
-
-    return False
-
-
 def _is_merchandising_record(record: dict) -> bool:
     """Reject fragments that are clearly merchandising or navigation fragments."""
     title = str(record.get("title") or "").strip()
@@ -1801,7 +1768,14 @@ def _is_merchandising_record(record: dict) -> bool:
         has_company = record.get("company") not in (None, "", [], {})
         return not (has_detail_url and (has_visual or has_pricing or has_company))
 
-    if _is_noise_title(title):
+    if is_noise_title(
+        title,
+        navigation_hints=LISTING_NAVIGATION_TITLE_HINTS,
+        merchandising_prefixes=LISTING_MERCHANDISING_TITLE_PREFIXES,
+        editorial_patterns=LISTING_EDITORIAL_TITLE_PATTERNS,
+        alt_text_pattern=LISTING_ALT_TEXT_TITLE_PATTERN,
+        weak_titles=_WEAK_LISTING_TITLES,
+    ):
         return True
 
     return False
@@ -1941,7 +1915,7 @@ def _filter_relevant_network_record_set(
 ) -> list[dict]:
     if not records or "job" in str(surface or "").lower():
         return records
-    if _is_social_listing_url(payload_url):
+    if is_social_url(payload_url):
         return []
     if _hosts_look_related(payload_url, page_url):
         return records
@@ -1960,7 +1934,7 @@ def _record_url_matches_listing_page(record: dict, *, page_url: str) -> bool:
     record_url = str(record.get("url") or record.get("apply_url") or "").strip()
     if not record_url:
         return False
-    if _is_social_listing_url(record_url):
+    if is_social_url(record_url):
         return False
     if not _hosts_look_related(record_url, page_url):
         return False
@@ -1969,16 +1943,6 @@ def _record_url_matches_listing_page(record: dict, *, page_url: str) -> bool:
         for field_name in ("title", "price", "brand")
     )
     return _looks_like_detail_record_url(record_url) or has_primary_listing_data
-
-
-def _is_social_listing_url(value: str) -> bool:
-    host = urlparse(str(value or "").strip()).netloc.lower()
-    if not host:
-        return False
-    return any(
-        host == suffix or host.endswith(f".{suffix}")
-        for suffix in _LISTING_SOCIAL_HOST_SUFFIXES
-    )
 
 
 def _hosts_look_related(left: str, right: str) -> bool:
@@ -2132,12 +2096,7 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
         return repeated_link_cards, repeated_selector
 
     soup_copy = deepcopy(soup)
-    for noise_el in soup_copy.select(
-        "aside, nav, [class*='filter' i], [class*='facet' i], "
-        "[class*='sidebar' i], [class*='breadcrumb' i], "
-        "[class*='navigation' i], [class*='menu' i], footer, header"
-    ):
-        noise_el.decompose()
+    strip_noise_containers(soup_copy)
 
     best_cards: list[Tag] = []
     best_selector = ""
@@ -2197,7 +2156,7 @@ def _card_group_score(group: list[Tag], surface: str = "") -> tuple[float, int]:
     with count as a tiebreaker.
     """
     # Reject groups that live entirely inside footer/privacy/legal containers.
-    if _is_footer_or_legal_group(group):
+    if is_listing_noise_group(group):
         return (0.0, 0)
     signals = 0.0
     normalized_surface = str(surface or "").lower()
@@ -2236,32 +2195,6 @@ def _card_group_score(group: list[Tag], surface: str = "") -> tuple[float, int]:
     sample_size = min(len(group), 30)
     ratio = signals / sample_size if sample_size > 0 else 0.0
     return (ratio, len(group))
-
-
-def _is_footer_or_legal_group(group: list[Tag]) -> bool:
-    """Return True if the group lives inside a noise container (footer, legal,
-    navigation, menu) that should never produce listing records."""
-    if not group:
-        return False
-    el = group[0]
-    # Check the element itself and its first ancestor class for noise signals.
-    for target in [el, *list(el.parents)[:6]]:
-        if not isinstance(target, Tag):
-            continue
-        tag_name = str(target.name or "").lower()
-        if tag_name in ("footer", "nav"):
-            return True
-        classes = " ".join(str(c) for c in target.get("class", [])).lower()
-        if any(
-            token in classes
-            for token in (
-                "footer", "legal", "privacy", "cookie", "consent", "iubenda",
-                "menu", "navigation", "nav-", "navbar",
-            )
-        ):
-            return True
-    return False
-
 
 _MIN_CARD_SIGNAL_RATIO = 0.45
 _PRICE_LIKE_RE = re.compile(r"^[\s$£€¥₹]?\d[\d,.\s]*$")

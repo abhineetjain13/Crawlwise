@@ -78,6 +78,14 @@ PUBLISH: persist to Postgres
 - `record.source_trace.field_discovery` — per-field provenance (value, source, missing).
 - `record.source_trace.acquisition` — method, browser flags, challenge state, timing.
 
+## Extraction Output Objectives
+
+- Acquisition must preserve enough artifacts and diagnostics to verify whether fetch/render succeeded before extraction is blamed.
+- Listing extraction must emit canonical listing records first: at minimum canonical item URL plus any naturally exposed canonical fields such as title, description, price, company, image, or location.
+- Detail extraction must emit canonical detail fields plus variants when the page exposes them. Residual rich content belongs in markdown-capable detail fields such as `description`, `features`, and `specifications`, not ad hoc schema keys.
+- Noise must not leak into persisted commerce or job records. Footer/legal/contact/share/app-store/UI chrome and raw container/schema metadata are extraction noise, not user data.
+- Commerce and jobs must remain explicitly user-controlled surfaces. If the UI adds stronger surface controls, the backend still treats that explicit user choice as authoritative and does not silently reclassify it.
+
 ## Key Invariants (Top 7)
 
 > Full list: `docs/INVARIANTS.md`

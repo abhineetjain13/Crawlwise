@@ -14,6 +14,57 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 
+def _make_inventory(
+    *,
+    json_ld=None,
+    datalayer=None,
+    next_data=None,
+    hydrated_states=None,
+    card_count: int = 0,
+    has_price: bool = False,
+    has_description: bool = False,
+    has_specs: bool = False,
+    is_listing_url: bool = False,
+    is_detail_url: bool = False,
+    link_count: int = 10,
+    text_ratio: float = 0.5,
+    domain: str = "example.com",
+    surface: str = "",
+) -> SignalInventory:
+    return SignalInventory(
+        structured_data={
+            "json_ld": [] if json_ld is None else json_ld,
+            "datalayer": {} if datalayer is None else datalayer,
+            "next_data": next_data,
+            "hydrated_states": [] if hydrated_states is None else hydrated_states,
+        },
+        dom_patterns={
+            "card_count": card_count,
+            "detail_markers": {
+                "has_price": has_price,
+                "has_description": has_description,
+                "has_specs": has_specs,
+            },
+            "url_patterns": {
+                "is_listing_url": is_listing_url,
+                "is_detail_url": is_detail_url,
+            },
+        },
+        metadata={
+            "link_count": link_count,
+            "text_ratio": text_ratio,
+            "domain": domain,
+            "surface": surface,
+        },
+    )
+
+
+def _assert_inventory_is_populated(inventory: SignalInventory) -> None:
+    assert inventory.structured_data is not None
+    assert inventory.dom_patterns is not None
+    assert inventory.metadata is not None
+
+
 # Property 1: Signal Inventory Completeness
 @given(
     html=st.text(min_size=0, max_size=10000),
@@ -44,15 +95,10 @@ def test_signal_inventory_completeness(html: str, url: str, surface: str):
     assert isinstance(inventory, SignalInventory)
 
     # Verify structured_data is non-null and is a dict
-    assert inventory.structured_data is not None
+    _assert_inventory_is_populated(inventory)
     assert isinstance(inventory.structured_data, dict)
-
-    # Verify dom_patterns is non-null and is a dict
     assert inventory.dom_patterns is not None
     assert isinstance(inventory.dom_patterns, dict)
-
-    # Verify metadata is non-null and is a dict
-    assert inventory.metadata is not None
     assert isinstance(inventory.metadata, dict)
 
 
@@ -124,9 +170,7 @@ def test_signal_inventory_with_empty_html():
     """Test signal inventory with empty HTML."""
     inventory = build_signal_inventory("", "https://example.com", "")
 
-    assert inventory.structured_data is not None
-    assert inventory.dom_patterns is not None
-    assert inventory.metadata is not None
+    _assert_inventory_is_populated(inventory)
 
 
 def test_signal_inventory_with_valid_html():
@@ -154,20 +198,7 @@ def test_signal_inventory_with_valid_html():
 
 def test_classify_listing_page_with_json_ld():
     """Test classification of listing page based on JSON-LD."""
-    inventory = SignalInventory(
-        structured_data={
-            "json_ld": [{"@type": "ItemList"}],
-            "datalayer": {},
-            "next_data": None,
-            "hydrated_states": [],
-        },
-        dom_patterns={
-            "card_count": 0,
-            "detail_markers": {"has_price": False, "has_description": False, "has_specs": False},
-            "url_patterns": {"is_listing_url": False, "is_detail_url": False},
-        },
-        metadata={"link_count": 10, "text_ratio": 0.5, "domain": "example.com", "surface": ""},
-    )
+    inventory = _make_inventory(json_ld=[{"@type": "ItemList"}])
 
     page_type = classify_page_type(inventory)
     assert page_type == "listing"
@@ -175,20 +206,7 @@ def test_classify_listing_page_with_json_ld():
 
 def test_classify_detail_page_with_json_ld():
     """Test classification of detail page based on JSON-LD."""
-    inventory = SignalInventory(
-        structured_data={
-            "json_ld": [{"@type": "Product"}],
-            "datalayer": {},
-            "next_data": None,
-            "hydrated_states": [],
-        },
-        dom_patterns={
-            "card_count": 0,
-            "detail_markers": {"has_price": False, "has_description": False, "has_specs": False},
-            "url_patterns": {"is_listing_url": False, "is_detail_url": False},
-        },
-        metadata={"link_count": 10, "text_ratio": 0.5, "domain": "example.com", "surface": ""},
-    )
+    inventory = _make_inventory(json_ld=[{"@type": "Product"}])
 
     page_type = classify_page_type(inventory)
     assert page_type == "detail"
@@ -196,20 +214,7 @@ def test_classify_detail_page_with_json_ld():
 
 def test_classify_listing_page_with_card_count():
     """Test classification of listing page based on card count."""
-    inventory = SignalInventory(
-        structured_data={
-            "json_ld": [],
-            "datalayer": {},
-            "next_data": None,
-            "hydrated_states": [],
-        },
-        dom_patterns={
-            "card_count": 10,
-            "detail_markers": {"has_price": False, "has_description": False, "has_specs": False},
-            "url_patterns": {"is_listing_url": False, "is_detail_url": False},
-        },
-        metadata={"link_count": 10, "text_ratio": 0.5, "domain": "example.com", "surface": ""},
-    )
+    inventory = _make_inventory(card_count=10)
 
     page_type = classify_page_type(inventory)
     assert page_type == "listing"
@@ -217,20 +222,7 @@ def test_classify_listing_page_with_card_count():
 
 def test_classify_detail_page_with_markers():
     """Test classification of detail page based on DOM markers."""
-    inventory = SignalInventory(
-        structured_data={
-            "json_ld": [],
-            "datalayer": {},
-            "next_data": None,
-            "hydrated_states": [],
-        },
-        dom_patterns={
-            "card_count": 0,
-            "detail_markers": {"has_price": True, "has_description": True, "has_specs": False},
-            "url_patterns": {"is_listing_url": False, "is_detail_url": False},
-        },
-        metadata={"link_count": 10, "text_ratio": 0.5, "domain": "example.com", "surface": ""},
-    )
+    inventory = _make_inventory(has_price=True, has_description=True)
 
     page_type = classify_page_type(inventory)
     assert page_type == "detail"
@@ -238,20 +230,7 @@ def test_classify_detail_page_with_markers():
 
 def test_classify_unknown_page():
     """Test classification of unknown page with no clear signals."""
-    inventory = SignalInventory(
-        structured_data={
-            "json_ld": [],
-            "datalayer": {},
-            "next_data": None,
-            "hydrated_states": [],
-        },
-        dom_patterns={
-            "card_count": 0,
-            "detail_markers": {"has_price": False, "has_description": False, "has_specs": False},
-            "url_patterns": {"is_listing_url": False, "is_detail_url": False},
-        },
-        metadata={"link_count": 10, "text_ratio": 0.5, "domain": "example.com", "surface": ""},
-    )
+    inventory = _make_inventory()
 
     page_type = classify_page_type(inventory)
     assert page_type == "unknown"
@@ -259,18 +238,5 @@ def test_classify_unknown_page():
 
 def test_classify_does_not_infer_from_surface_metadata():
     """Surface metadata should not drive page classification."""
-    inventory = SignalInventory(
-        structured_data={
-            "json_ld": [],
-            "datalayer": {},
-            "next_data": None,
-            "hydrated_states": [],
-        },
-        dom_patterns={
-            "card_count": 0,
-            "detail_markers": {"has_price": False, "has_description": False, "has_specs": False},
-            "url_patterns": {"is_listing_url": False, "is_detail_url": False},
-        },
-        metadata={"link_count": 1, "text_ratio": 0.1, "domain": "example.com", "surface": "ecommerce_detail"},
-    )
+    inventory = _make_inventory(link_count=1, text_ratio=0.1, surface="ecommerce_detail")
     assert classify_page_type(inventory) == "unknown"

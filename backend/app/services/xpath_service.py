@@ -101,17 +101,6 @@ def validate_xpath_syntax(xpath: str) -> tuple[bool, str | None]:
     return True, None
 
 
-def validate_regex_syntax(pattern: str) -> tuple[bool, str | None]:
-    candidate = str(pattern or "").strip()
-    if not candidate:
-        return False, "Regex is empty"
-    try:
-        regex_lib.compile(candidate)
-    except regex_lib.error as exc:
-        return False, f"Invalid regex syntax: {exc}"
-    return True, None
-
-
 def validate_xpath_candidate(
     html_text: str,
     xpath: str,
@@ -164,41 +153,6 @@ def build_absolute_xpath(node: Tag | NavigableString) -> str | None:
     if not segments:
         return None
     return f"//{'/'.join(reversed(segments))}"
-
-
-def bs4_tag_to_xpath(node: Tag) -> str:
-    """Build an absolute XPath for a BeautifulSoup tag without lxml."""
-    components: list[str] = []
-    current = node
-
-    while hasattr(current, "name") and current.name and current.name != "[document]":
-        parent = getattr(current, "parent", None)
-        if not hasattr(parent, "name") or not parent.name or parent.name == "[document]":
-            components.append(current.name)
-            break
-
-        siblings = [
-            sibling
-            for sibling in parent.children
-            if hasattr(sibling, "name") and sibling.name == current.name
-        ]
-        if len(siblings) == 1:
-            components.append(current.name)
-        else:
-            index = siblings.index(current) + 1
-            components.append(f"{current.name}[{index}]")
-        current = parent
-
-    components.reverse()
-    return "/" + "/".join(components) if components else ""
-
-
-def simplify_xpath(xpath: str) -> str:
-    """Trim a long absolute XPath to a relative path using the last segments."""
-    segments = [segment for segment in str(xpath or "").split("/") if segment]
-    if len(segments) <= 4:
-        return str(xpath or "")
-    return "//" + "/".join(segments[-4:])
 
 
 def _build_xpath_tree(document_html: str):

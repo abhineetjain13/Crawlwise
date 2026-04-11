@@ -1,21 +1,21 @@
 from __future__ import annotations
-
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.config.field_mappings import (
     ECOMMERCE_ONLY_FIELDS,
     INTERNAL_ONLY_FIELDS,
     JOB_ONLY_FIELDS,
 )
 from app.services.domain_utils import normalize_domain
-from app.services.knowledge_base.store import get_canonical_fields
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
-_NUMERIC_ONLY_RE = re.compile(r"^\d+$")
 _MAX_SCHEMA_AGE = timedelta(days=7)
+
+
+def get_canonical_fields(surface: str) -> list[str]:
+    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip(), []))
 
 
 @dataclass
@@ -29,28 +29,6 @@ class ResolvedSchema:
     source: str
     saved_at: str | None
     stale: bool
-
-
-def is_valid_schema_field_name(name: str) -> bool:
-    normalized = str(name or "").strip().lower()
-    return bool(
-        normalized
-        and _FIELD_NAME_RE.match(normalized)
-        and not _NUMERIC_ONLY_RE.match(normalized)
-        and "__" not in normalized
-        and not normalized.startswith("_")
-    )
-
-
-def _normalize_field_name(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
-    normalized = re.sub(r"\s+", "_", text.lower())
-    normalized = re.sub(r"[^a-z0-9_]+", "_", normalized)
-    normalized = re.sub(r"_+", "_", normalized)
-    return normalized.strip("_")
 
 
 def _dedupe_fields(values: list[str] | None) -> list[str]:
@@ -157,17 +135,6 @@ def _snapshot_to_resolved(
         saved_at=saved_at,
         stale=stale,
     )
-
-
-def _schema_payload(schema: ResolvedSchema) -> dict:
-    return {
-        "baseline_fields": list(schema.baseline_fields),
-        "fields": list(schema.fields),
-        "new_fields": list(schema.new_fields),
-        "deprecated_fields": list(schema.deprecated_fields),
-        "source": schema.source,
-        "saved_at": schema.saved_at,
-    }
 
 
 async def load_resolved_schema(

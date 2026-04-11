@@ -15,7 +15,6 @@ from app.services.config.crawl_runtime import (
     STALLED_RUN_THRESHOLD_SECONDS,
 )
 from app.services.domain_utils import normalize_domain
-from app.services.knowledge_base.store import reset_learned_state
 from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,8 +97,6 @@ async def reset_application_data(session: AsyncSession) -> dict:
         _reset_directory(path, create_if_missing=False)
         for path in _legacy_artifact_paths()
     )
-    await reset_learned_state()
-
     return {
         "crawl_runs_deleted": crawl_runs_deleted.rowcount or 0,
         "crawl_records_deleted": crawl_records_deleted.rowcount or 0,
@@ -109,7 +106,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
         "artifacts_removed": artifacts_removed,
         "legacy_artifacts_removed": legacy_artifacts_removed,
         "cookies_removed": cookies_removed,
-        "knowledge_base_reset": True,
+        "knowledge_base_reset": False,
     }
 
 

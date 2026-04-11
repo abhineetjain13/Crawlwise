@@ -19,6 +19,60 @@ from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 
+
+def _mock_json_response(payload: object, status_code: int = 200) -> Mock:
+    response = Mock()
+    response.status_code = status_code
+    response.json.return_value = payload
+    return response
+
+
+def _assert_single_record(result):
+    assert len(result.records) == 1
+    return result.records[0]
+
+
+def _jibe_search_html() -> str:
+    return """
+    <html data-jibe-search-version="4.11.178">
+      <script>window._jibe = {"cid":"thecheesecakefactory"};</script>
+      <script>window.searchConfig = {"query":{"keywords":"Dough Bird","limit":"100"}};</script>
+    </html>
+    """
+
+
+def _oracle_hcm_html(include_site_name: bool = False) -> str:
+    site_name_meta = '<meta property="og:site_name" content="Brookdale Senior Living Inc." />\n' if include_site_name else ""
+    return f"""
+    <html><body>
+      {site_name_meta}<script>
+        var CX_CONFIG = {{
+          app: {{
+            apiBaseUrl: 'https://ibmwjb.fa.ocs.oraclecloud.com:443',
+            siteName: 'Brookdale Senior Living Inc.',
+            siteNumber: 'CX_1',
+            siteLang: 'en'
+          }}
+        }};
+      </script>
+    </body></html>
+    """
+
+
+def _paycom_html() -> str:
+    return """
+    <html><body>
+      <script>
+        var configsFromHost = {
+          "sessionJWT": "token-123",
+          "libConfig": "{\\"locale\\":\\"en-US\\",\\"atsPortalMantleServiceUrl\\":\\"https://portal-applicant-tracking.us-cent.paycomonline.net\\"}"
+        };
+        var Mountable = {};
+      </script>
+    </body></html>
+    """
+
+
 # --- Shopify ---
 
 @pytest.mark.asyncio
@@ -401,12 +455,7 @@ async def test_icims_can_handle():
 @pytest.mark.asyncio
 async def test_jibe_can_handle():
     adapter = JibeAdapter()
-    html = """
-    <html data-jibe-search-version="4.11.178">
-      <script>window._jibe = {"cid":"thecheesecakefactory"};</script>
-      <script>window.searchConfig = {"query":{"keywords":"Dough Bird","limit":"100"}};</script>
-    </html>
-    """
+    html = _jibe_search_html()
     assert await adapter.can_handle("https://www.foxrccareers.com/jobs?keywords=Dough%20Bird", html)
     assert not await adapter.can_handle("https://example.com/jobs", "<html>plain</html>")
 
@@ -428,9 +477,7 @@ async def test_jibe_extract_listing_uses_public_jobs_endpoint():
       </script>
     </html>
     """
-    response = Mock()
-    response.status_code = 200
-    response.json.return_value = {
+    response = _mock_json_response({
         "jobs": [
             {
                 "data": {
@@ -449,17 +496,17 @@ async def test_jibe_extract_listing_uses_public_jobs_endpoint():
                 }
             }
         ]
-    }
+    })
     with patch("app.services.adapters.jibe.curl_requests.get", return_value=response) as mock_get:
         result = await adapter.extract(
             "https://www.foxrccareers.com/foxrc-careers-home/jobs?keywords=Dough%20Bird",
             html,
             "job_listing",
         )
-    assert len(result.records) == 1
-    assert result.records[0]["title"] == "Dishwasher"
-    assert result.records[0]["company"] == "Doughbird"
-    assert result.records[0]["job_id"] == "5920"
+    record = _assert_single_record(result)
+    assert record["title"] == "Dishwasher"
+    assert record["company"] == "Doughbird"
+    assert record["job_id"] == "5920"
     called_url = mock_get.call_args.args[0]
     assert called_url.startswith("https://www.foxrccareers.com/api/jobs?")
     assert "keywords=Dough+Bird" in called_url
@@ -471,20 +518,7 @@ async def test_jibe_extract_listing_uses_public_jobs_endpoint():
 @pytest.mark.asyncio
 async def test_oracle_hcm_can_handle():
     adapter = OracleHCMAdapter()
-    html = """
-    <html><body>
-      <script>
-        var CX_CONFIG = {
-          app: {
-            apiBaseUrl: 'https://ibmwjb.fa.ocs.oraclecloud.com:443',
-            siteName: 'Brookdale Senior Living Inc.',
-            siteNumber: 'CX_1',
-            siteLang: 'en'
-          }
-        };
-      </script>
-    </body></html>
-    """
+    html = _oracle_hcm_html()
     assert await adapter.can_handle(
         "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location",
         html,
@@ -513,24 +547,8 @@ async def test_oracle_hcm_does_not_match_commerce_page_with_footer_careers_link(
 @pytest.mark.asyncio
 async def test_oracle_hcm_extract_listing_uses_public_requisitions_endpoint():
     adapter = OracleHCMAdapter()
-    html = """
-    <html><body>
-      <meta property="og:site_name" content="Brookdale Senior Living Inc." />
-      <script>
-        var CX_CONFIG = {
-          app: {
-            apiBaseUrl: 'https://ibmwjb.fa.ocs.oraclecloud.com:443',
-            siteName: 'Brookdale Senior Living Inc.',
-            siteNumber: 'CX_1',
-            siteLang: 'en'
-          }
-        };
-      </script>
-    </body></html>
-    """
-    response = Mock()
-    response.status_code = 200
-    response.json.return_value = {
+    html = _oracle_hcm_html(include_site_name=True)
+    response = _mock_json_response({
         "items": [
             {
                 "requisitionList": [
@@ -554,22 +572,22 @@ async def test_oracle_hcm_extract_listing_uses_public_requisitions_endpoint():
                 ]
             }
         ]
-    }
+    })
     with patch("app.services.adapters.oracle_hcm.curl_requests.get", return_value=response) as mock_get:
         result = await adapter.extract(
             "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location",
             html,
             "job_listing",
         )
-    assert len(result.records) == 1
-    assert result.records[0]["title"] == "Server"
-    assert result.records[0]["job_id"] == "25019248"
-    assert result.records[0]["company"] == "Brookdale Senior Living Inc."
-    assert result.records[0]["category"] == "Dining"
-    assert result.records[0]["department"] == "Restaurant"
-    assert result.records[0]["job_type"] == "Full Time"
-    assert result.records[0]["description"] == "Serve residents and guests."
-    assert result.records[0]["url"] == "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/25019248/"
+    record = _assert_single_record(result)
+    assert record["title"] == "Server"
+    assert record["job_id"] == "25019248"
+    assert record["company"] == "Brookdale Senior Living Inc."
+    assert record["category"] == "Dining"
+    assert record["department"] == "Restaurant"
+    assert record["job_type"] == "Full Time"
+    assert record["description"] == "Serve residents and guests."
+    assert record["url"] == "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/25019248/"
     called_url = mock_get.call_args.args[0]
     assert "recruitingCEJobRequisitions" in called_url
     assert "siteNumber=CX_1" in called_url
@@ -593,36 +611,19 @@ def test_oracle_hcm_extract_cx_config_accepts_single_quoted_json_fallback():
 @pytest.mark.asyncio
 async def test_oracle_hcm_listing_paginates_based_on_raw_response_count_not_filtered_records():
     adapter = OracleHCMAdapter()
-    html = """
-    <html><body>
-      <script>
-        var CX_CONFIG = {
-          app: {
-            apiBaseUrl: 'https://ibmwjb.fa.ocs.oraclecloud.com:443',
-            siteName: 'Brookdale Senior Living Inc.',
-            siteNumber: 'CX_1',
-            siteLang: 'en'
-          }
-        };
-      </script>
-    </body></html>
-    """
-    first_response = Mock()
-    first_response.status_code = 200
-    first_response.json.return_value = {
+    html = _oracle_hcm_html()
+    first_response = _mock_json_response({
         "items": (
             [{"requisitionList": [{"Id": "1", "Title": "Role 1"}]}]
             + [{"requisitionList": [{"Id": "2", "Title": "Role 2"}]}]
             + [{"requisitionList": [{"Id": "2", "Title": "Role 2 duplicate"}]} for _ in range(98)]
         )
-    }
-    second_response = Mock()
-    second_response.status_code = 200
-    second_response.json.return_value = {
+    })
+    second_response = _mock_json_response({
         "items": [
             {"requisitionList": [{"Id": "3", "Title": "Role 3"}]},
         ]
-    }
+    })
 
     with patch("app.services.adapters.oracle_hcm.curl_requests.get", side_effect=[first_response, second_response]) as mock_get:
         records = await adapter.try_public_endpoint(
@@ -640,17 +641,7 @@ async def test_oracle_hcm_listing_paginates_based_on_raw_response_count_not_filt
 @pytest.mark.asyncio
 async def test_paycom_can_handle():
     adapter = PaycomAdapter()
-    html = """
-    <html><body>
-      <script>
-        var configsFromHost = {
-          "sessionJWT": "token-123",
-          "libConfig": "{\\"locale\\":\\"en-US\\",\\"atsPortalMantleServiceUrl\\":\\"https://portal-applicant-tracking.us-cent.paycomonline.net\\"}"
-        };
-        var Mountable = {};
-      </script>
-    </body></html>
-    """
+    html = _paycom_html()
     assert await adapter.can_handle(
         "https://www.paycomonline.net/v4/ats/web.php/portal/client/career-page",
         html,
@@ -661,20 +652,8 @@ async def test_paycom_can_handle():
 @pytest.mark.asyncio
 async def test_paycom_extract_listing_uses_public_preview_endpoint():
     adapter = PaycomAdapter()
-    html = """
-    <html><body>
-      <script>
-        var configsFromHost = {
-          "sessionJWT": "token-123",
-          "libConfig": "{\\"locale\\":\\"en-US\\",\\"atsPortalMantleServiceUrl\\":\\"https://portal-applicant-tracking.us-cent.paycomonline.net\\"}"
-        };
-        var Mountable = {};
-      </script>
-    </body></html>
-    """
-    response = Mock()
-    response.status_code = 200
-    response.json.return_value = {
+    html = _paycom_html()
+    response = _mock_json_response({
         "jobPostingPreviews": [
             {
                 "jobId": 62197,
@@ -686,19 +665,19 @@ async def test_paycom_extract_listing_uses_public_preview_endpoint():
             }
         ],
         "jobPostingPreviewsCount": 1,
-    }
+    })
     with patch("app.services.adapters.paycom.curl_requests.post", return_value=response) as mock_post:
         result = await adapter.extract(
             "https://www.paycomonline.net/v4/ats/web.php/portal/8EC14E985B45C7F52C531F487F62A2B8/career-page",
             html,
             "job_listing",
         )
-    assert len(result.records) == 1
-    assert result.records[0]["title"] == "Controller"
-    assert result.records[0]["job_id"] == "62197"
-    assert result.records[0]["location"] == "Columbus, OH 43215"
-    assert result.records[0]["job_type"] == "Full Time"
-    assert result.records[0]["url"] == "https://www.paycomonline.net/v4/ats/web.php/portal/8EC14E985B45C7F52C531F487F62A2B8/jobs/62197"
+    record = _assert_single_record(result)
+    assert record["title"] == "Controller"
+    assert record["job_id"] == "62197"
+    assert record["location"] == "Columbus, OH 43215"
+    assert record["job_type"] == "Full Time"
+    assert record["url"] == "https://www.paycomonline.net/v4/ats/web.php/portal/8EC14E985B45C7F52C531F487F62A2B8/jobs/62197"
     called_url = mock_post.call_args.args[0]
     assert called_url == "https://portal-applicant-tracking.us-cent.paycomonline.net/api/ats/job-posting-previews/search"
     headers = mock_post.call_args.kwargs["headers"]

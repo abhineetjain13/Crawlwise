@@ -2,20 +2,31 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
-from app.services.config.listing_heuristics import (
+from app.services.config.extraction_rules import (
+    LISTING_ALT_TEXT_TITLE_PATTERN,
+    LISTING_CATEGORY_PATH_MARKERS,
+    LISTING_DETAIL_PATH_MARKERS,
+    LISTING_EDITORIAL_TITLE_PATTERNS,
+    LISTING_FACET_PATH_FRAGMENTS,
+    LISTING_FACET_QUERY_KEYS,
+    LISTING_HUB_PATH_SEGMENTS,
     LISTING_JOB_SIGNAL_FIELDS,
     LISTING_MINIMAL_VISUAL_FIELDS,
+    LISTING_MERCHANDISING_TITLE_PREFIXES,
     LISTING_NON_LISTING_PATH_TOKENS,
+    LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_PRODUCT_SIGNAL_FIELDS,
     LISTING_WEAK_METADATA_FIELDS,
     LISTING_WEAK_TITLES,
 )
+from app.services.extract.noise_policy import is_noise_title, is_social_url
 
 _EMPTY_VALUES = (None, "", [], {})
 _NUMERIC_ONLY_RE = re.compile(r"^\s*\(?\s*[\d,]+\s*\)?\s*$")
 _FILTER_COUNT_RE = re.compile(r"^\s*\(\s*\d[\d,]*\s*\)\s*$")
+_MIN_VIABLE_RECORDS = 2
 _JOB_REQUIRED_CONTEXT_FIELDS = frozenset({
     "url",
     "job_id",
@@ -38,6 +49,27 @@ _JOB_STRONG_SIGNALS = frozenset({
     "job_type",
     "posted_date",
 })
+_LISTING_HOST_TOKEN_STOPWORDS = {
+    "www",
+    "m",
+    "amp",
+    "api",
+    "cdn",
+    "img",
+    "images",
+    "static",
+    "backend",
+    "edge",
+    "shop",
+    "store",
+    "merchant",
+    "com",
+    "net",
+    "org",
+    "co",
+    "io",
+    "app",
+}
 
 
 @dataclass(frozen=True)
@@ -83,7 +115,7 @@ def assess_listing_record_quality(record: dict, *, surface: str = "") -> Listing
         & meaningful_keys
     )
 
-    if _is_merchandising_record(public_fields):
+    if is_merchandising_listing_record(public_fields):
         return _invalid_assessment(normalized_surface, public_fields, product_signal_keys, job_signal_keys, "merchandising_noise")
 
     if title_value:
@@ -250,6 +282,91 @@ def listing_set_quality(records: list[dict], *, surface: str = "") -> str:
     return "invalid"
 
 
+def is_merchandising_listing_record(record: dict[str, object]) -> bool:
+    title = str(record.get("title") or "").strip()
+    if not title:
+        has_detail_url = bool(str(record.get("url") or "").strip())
+        has_visual = record.get("image_url") not in _EMPTY_VALUES
+        has_pricing = record.get("price") not in _EMPTY_VALUES
+        has_company = record.get("company") not in _EMPTY_VALUES
+        return not (has_detail_url and (has_visual or has_pricing or has_company))
+
+    return is_noise_title(
+        title,
+        navigation_hints=LISTING_NAVIGATION_TITLE_HINTS,
+        merchandising_prefixes=LISTING_MERCHANDISING_TITLE_PREFIXES,
+        editorial_patterns=LISTING_EDITORIAL_TITLE_PATTERNS,
+        alt_text_pattern=LISTING_ALT_TEXT_TITLE_PATTERN,
+        weak_titles=LISTING_WEAK_TITLES,
+    )
+
+
+def has_strong_ecommerce_listing_signal(record: dict[str, object]) -> bool:
+    public_fields = {
+        key: value
+        for key, value in record.items()
+        if not str(key).startswith("_") and value not in _EMPTY_VALUES
+    }
+    if not public_fields:
+        return False
+
+    url_value = str(public_fields.get("url") or "").strip()
+    if url_value and _looks_like_detail_record_url_for_listing(url_value):
+        return True
+
+    strong_fields = {
+        "price",
+        "sale_price",
+        "original_price",
+        "image_url",
+        "additional_images",
+        "brand",
+        "availability",
+        "rating",
+        "review_count",
+        "color",
+        "size",
+        "dimensions",
+        "materials",
+        "part_number",
+    }
+    if set(public_fields) & strong_fields:
+        return True
+
+    if {"sku", "part_number"} & set(public_fields) and {
+        "brand",
+        "image_url",
+        "price",
+    } & set(public_fields):
+        return True
+
+    return False
+
+
+def filter_relevant_network_record_set(
+    records: list[dict],
+    *,
+    payload_url: str,
+    page_url: str,
+    surface: str,
+) -> list[dict]:
+    if not records or "job" in str(surface or "").lower():
+        return records
+    if is_social_url(payload_url):
+        return []
+    if _hosts_look_related(payload_url, page_url):
+        return records
+
+    relevant_records = [
+        record
+        for record in records
+        if _record_url_matches_listing_page(record, page_url=page_url)
+    ]
+    if len(relevant_records) >= _MIN_VIABLE_RECORDS:
+        return relevant_records
+    return []
+
+
 def _invalid_assessment(
     surface: str,
     public_fields: dict[str, object],
@@ -282,19 +399,6 @@ def _is_meaningful_for_surface(
     if "commerce" in surface or "ecommerce" in surface:
         return bool(title and (url or product_signal_keys))
     return bool(title and (url or product_signal_keys or job_signal_keys))
-
-
-def _is_merchandising_record(record: dict[str, object]) -> bool:
-    title = str(record.get("title") or "").strip().lower()
-    url = str(record.get("url") or "").strip().lower()
-    if not title and not url:
-        return False
-    if any(token in title for token in ("sort by", "filter by", "shop all", "view all", "load more")):
-        return True
-    if url and any(token in url for token in ("/search", "/category", "/categories", "/collections", "/filters")):
-        if not (set(record) & (_JOB_STRONG_SIGNALS | set(LISTING_PRODUCT_SIGNAL_FIELDS))):
-            return True
-    return False
 
 
 def _looks_like_category_url(url: str) -> bool:
@@ -343,3 +447,115 @@ def _looks_like_detail_record_url(url: str) -> bool:
     if re.search(r"(job|jobs|product|products|position|opening|role)[-/]", path, re.I):
         return True
     return bool(re.search(r"/[a-z0-9][a-z0-9-]{2,}$", path, re.I))
+
+
+def _looks_like_facet_or_filter_url_for_listing(url_value: str) -> bool:
+    parsed = urlparse(url_value)
+    query_keys = {
+        key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    }
+    if query_keys & LISTING_FACET_QUERY_KEYS:
+        return True
+
+    path = parsed.path.lower()
+    return any(fragment in path for fragment in LISTING_FACET_PATH_FRAGMENTS) and bool(
+        parsed.query
+    )
+
+
+def _looks_like_category_url_for_listing(url_value: str) -> bool:
+    parsed = urlparse(str(url_value or "").strip())
+    path = parsed.path.lower().rstrip("/")
+    if not path:
+        return False
+    for prefix in LISTING_DETAIL_PATH_MARKERS:
+        if prefix in path:
+            return False
+    segments = [s for s in path.split("/") if s]
+    if len(segments) < 2:
+        return False
+    last = segments[-1]
+    for i, seg in enumerate(segments[:-1]):
+        if seg in LISTING_CATEGORY_PATH_MARKERS and i + 1 < len(segments):
+            if re.fullmatch(r"[a-z][a-z0-9\-]+", last) and len(last) < 60:
+                return True
+    return False
+
+
+def _looks_like_listing_hub_url_for_listing(url_value: str) -> bool:
+    parsed = urlparse(str(url_value or "").strip())
+    path = parsed.path.lower().rstrip("/")
+    if not path:
+        return bool(parsed.query)
+    if _looks_like_facet_or_filter_url_for_listing(
+        url_value
+    ) or _looks_like_category_url_for_listing(url_value):
+        return True
+    if _looks_like_detail_record_url_for_listing(url_value):
+        return False
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        return True
+    normalized_segments = [segment.lower().replace("-", "") for segment in segments]
+    if any(segment in LISTING_HUB_PATH_SEGMENTS for segment in normalized_segments):
+        return True
+    if len(segments) <= 2 and parsed.query:
+        return True
+    return False
+
+
+def _looks_like_detail_record_url_for_listing(url_value: str) -> bool:
+    lowered = str(url_value or "").lower()
+    if not lowered.startswith("http"):
+        return False
+    if _looks_like_facet_or_filter_url_for_listing(lowered):
+        return False
+    if _looks_like_category_url_for_listing(lowered):
+        return False
+    return any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS)
+
+
+def _record_url_matches_listing_page(record: dict, *, page_url: str) -> bool:
+    record_url = str(record.get("url") or record.get("apply_url") or "").strip()
+    if not record_url:
+        return False
+    if is_social_url(record_url):
+        return False
+    if not _hosts_look_related(record_url, page_url):
+        return False
+    has_primary_listing_data = any(
+        record.get(field_name) not in _EMPTY_VALUES
+        for field_name in ("title", "price", "brand")
+    )
+    return _looks_like_detail_record_url_for_listing(record_url) or has_primary_listing_data
+
+
+def _hosts_look_related(left: str, right: str) -> bool:
+    def _host_like_value(value: str) -> str:
+        raw = str(value or "").strip().lower()
+        parsed_host = urlparse(raw).netloc.lower()
+        if parsed_host:
+            return parsed_host
+        if re.fullmatch(r"[a-z0-9.-]+", raw) and "." in raw and ".." not in raw:
+            return raw
+        return ""
+
+    left_host = _host_like_value(left)
+    right_host = _host_like_value(right)
+    if not left_host or not right_host:
+        return False
+    if left_host == right_host:
+        return True
+    if left_host.endswith(f".{right_host}") or right_host.endswith(f".{left_host}"):
+        return True
+    left_tokens = _listing_host_tokens(left_host)
+    right_tokens = _listing_host_tokens(right_host)
+    return len(left_tokens & right_tokens) >= 2
+
+
+def _listing_host_tokens(host: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", str(host or "").lower())
+        if len(token) >= 2 and token not in _LISTING_HOST_TOKEN_STOPWORDS
+    }

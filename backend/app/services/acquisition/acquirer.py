@@ -698,6 +698,18 @@ async def _acquire_once(
         payload["timings_ms"] = timings
         return payload
 
+    def _result_diagnostics(result: AcquisitionResult) -> dict[str, object]:
+        return dict(result.diagnostics or {})
+
+    def _update_result_diagnostics(
+        result: AcquisitionResult,
+        **updates: object,
+    ) -> AcquisitionResult:
+        diagnostics = _result_diagnostics(result)
+        diagnostics.update(updates)
+        result.diagnostics = _finalize_diagnostics_payload(diagnostics)
+        return result
+
     host_wait = await wait_for_host_slot(
         urlparse(url).netloc.lower(),
         ACQUIRE_HOST_MIN_INTERVAL_MS,
@@ -871,15 +883,10 @@ async def _acquire_once(
             {"acquisition_total_ms": _elapsed_ms(started)},
         )
         if curl_result is not None:
-            if curl_result.diagnostics is None:
-                curl_result.diagnostics = {}
-            else:
-                curl_result.diagnostics = dict(curl_result.diagnostics)
-            curl_result.diagnostics["timings_ms"] = curl_diagnostics.get("timings_ms")
-            curl_result.diagnostics = _finalize_diagnostics_payload(
-                curl_result.diagnostics
+            return _update_result_diagnostics(
+                curl_result,
+                timings_ms=curl_diagnostics.get("timings_ms"),
             )
-            return curl_result
         return AcquisitionResult(
             html=http_result.text,
             json_data=http_result.json_data,
@@ -939,14 +946,7 @@ async def _acquire_once(
                 else {}
             )
         if curl_result is not None:
-            if curl_result.diagnostics is None:
-                curl_result.diagnostics = {}
-            else:
-                curl_result.diagnostics = dict(curl_result.diagnostics)
-            curl_result.diagnostics = _finalize_diagnostics_payload(
-                curl_result.diagnostics
-            )
-            return curl_result
+            return _update_result_diagnostics(curl_result)
         return AcquisitionResult(
             html=http_result.text,
             json_data=http_result.json_data,
@@ -1032,26 +1032,24 @@ async def _acquire_once(
             diagnostics=_finalize_diagnostics_payload(merged),
         )
     if curl_result is not None:
-        curl_result.diagnostics.update(
-            {
-                "browser_attempted": True,
-                "browser_challenge_state": browser_result.challenge_state,
-                "browser_origin_warmed": browser_result.origin_warmed,
-                "browser_network_payloads": len(browser_payloads),
-                "browser_diagnostics": browser_diag,
-                "browser_blocked": browser_data.get("blocked") or None,
-                "browser_redirect_shell": browser_redirect_shell or None,
-                "browser_non_public_target": (not browser_public_target) or None,
-                "surface_selection_warnings": browser_surface_warnings or None,
-                "timings_ms": _merge_timing_maps(
-                    curl_result.diagnostics.get("timings_ms"),
-                    {"browser_total_ms": browser_data.get("browser_total_ms")},
-                    browser_diag.get("timings_ms"),
-                    {"acquisition_total_ms": _elapsed_ms(started)},
-                ),
-            }
+        curl_result = _update_result_diagnostics(
+            curl_result,
+            browser_attempted=True,
+            browser_challenge_state=browser_result.challenge_state,
+            browser_origin_warmed=browser_result.origin_warmed,
+            browser_network_payloads=len(browser_payloads),
+            browser_diagnostics=browser_diag,
+            browser_blocked=browser_data.get("blocked") or None,
+            browser_redirect_shell=browser_redirect_shell or None,
+            browser_non_public_target=(not browser_public_target) or None,
+            surface_selection_warnings=browser_surface_warnings or None,
+            timings_ms=_merge_timing_maps(
+                _result_diagnostics(curl_result).get("timings_ms"),
+                {"browser_total_ms": browser_data.get("browser_total_ms")},
+                browser_diag.get("timings_ms"),
+                {"acquisition_total_ms": _elapsed_ms(started)},
+            ),
         )
-        curl_result.diagnostics = _finalize_diagnostics_payload(curl_result.diagnostics)
         logger.info(
             "Playwright returned blocked/empty for %s — using curl_cffi fallback", url
         )
@@ -1113,13 +1111,7 @@ async def _acquire_once(
         )
     # FINAL FALLBACK: If we have a curl result and browser failed or was rejected, return curl.
     if curl_result is not None:
-        if curl_result.diagnostics is None:
-            curl_result.diagnostics = {}
-        else:
-            curl_result.diagnostics = dict(curl_result.diagnostics)
-        curl_result.diagnostics["browser_failed"] = True
-        curl_result.diagnostics = _finalize_diagnostics_payload(curl_result.diagnostics)
-        return curl_result
+        return _update_result_diagnostics(curl_result, browser_failed=True)
 
     return None
 

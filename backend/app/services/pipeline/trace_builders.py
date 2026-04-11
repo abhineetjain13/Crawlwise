@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from app.services.acquisition.acquirer import (
+from app.services.acquisition import (
     AcquisitionResult,
     scrub_network_payloads_for_storage,
 )
-from app.services.extract.source_parsers import parse_page_sources
-from app.services.knowledge_base.store import get_canonical_fields
+from app.services.config.field_mappings import CANONICAL_SCHEMAS
+from app.services.extract import parse_page_sources
 from bs4 import BeautifulSoup
 
 from .field_normalization import _normalize_review_value
@@ -33,6 +33,10 @@ _MANIFEST_TEXT_LIMIT = 400
 _MANIFEST_TABLE_LIMIT = 3
 _MANIFEST_TABLE_ROW_LIMIT = 12
 _MANIFEST_TABLE_CELL_LIMIT = 4
+
+
+def get_canonical_fields(surface: str) -> list[str]:
+    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip(), []))
 
 
 def _snapshot_manifest_value(

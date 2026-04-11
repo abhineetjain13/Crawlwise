@@ -15,275 +15,36 @@ From an architectural perspective, this duplication rate is unacceptable. It ind
 
 The following catalog provides the technical specifics for every "Major" severity duplicate block identified. These must be prioritized for consolidation.
 
-Duplicate Group 1
-
-Metric	Value
-Total Lines Involved	67 lines
-Files Affected	1 distinct path (3 instances)
-
-* frontend/lib/api/client.ts [281:302]
-* frontend/lib/api/client.ts [216:237]
-* frontend/lib/api/client.ts [151:173]
-
-Duplicate Group 2
-
-Metric	Value
-Total Lines Involved	45 lines
-Files Affected	1 distinct path (3 instances)
-
-* frontend/lib/api/client.ts [262:276]
-* frontend/lib/api/client.ts [116:130]
-* frontend/lib/api/client.ts [197:211]
-
-Duplicate Group 3
-
-Metric	Value
-Total Lines Involved	42 lines
-Files Affected	1 distinct path (3 instances)
-
-* frontend/lib/api/client.ts [249:262]
-* frontend/lib/api/client.ts [184:197]
-* frontend/lib/api/client.ts [102:115]
-
-Duplicate Group 4
-
-Metric	Value
-Total Lines Involved	62 lines
-Files Affected	1 distinct path (2 instances)
-
-* frontend/lib/api/client.ts [181:211]
-* frontend/lib/api/client.ts [246:276]
-
-Duplicate Group 7
-
-Metric	Value
-Total Lines Involved	106 lines
-Files Affected	2 distinct paths
-
-* backend/app/services/acquisition/acquirer.py [2036:2088]
-* backend/app/services/llm_integration/page_classifier.py [56:108]
-
-Duplicate Group 8
-
-Metric	Value
-Total Lines Involved	155 lines
-Files Affected	3 distinct paths
-
-* backend/app/services/crawl_events.py [285:336]
-* backend/app/models/crawl.py [111:161]
-* backend/app/services/_batch_progress.py [162:213]
-
-Duplicate Group 11
-
-Metric	Value
-Total Lines Involved	55 lines
-Files Affected	2 distinct paths
-
-* backend/app/services/pipeline/core.py [1760:1787]
-* backend/app/services/crawl_metadata.py [72:98]
-
-Duplicate Group 13
-
-Metric	Value
-Total Lines Involved	260 lines
-Files Affected	2 distinct paths
-
-* backend/tests/services/test_crawl_service.py [767:862]
-* backend/tests/services/extract/test_listing_extractor.py [175:338]
-
-Duplicate Group 21
-
-Metric	Value
-Total Lines Involved	91 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/test_crawl_service.py [1375:1421]
-* backend/tests/services/test_crawl_service.py [1326:1369]
-
-Duplicate Group 38
-
-Metric	Value
-Total Lines Involved	65 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/test_crawl_service.py [1687:1729]
-* backend/tests/services/test_crawl_service.py [537:558]
-
-Duplicate Group 39
-
-Metric	Value
-Total Lines Involved	56 lines
-Files Affected	1 distinct path (4 instances)
-
-* backend/tests/services/acquisition/test_fragment_capture.py [313:326]
-* backend/tests/services/acquisition/test_fragment_capture.py [138:151]
-* backend/tests/services/acquisition/test_fragment_capture.py [261:274]
-* backend/tests/services/acquisition/test_fragment_capture.py [200:213]
-
-Duplicate Group 44
-
-Metric	Value
-Total Lines Involved	114 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/adapters/test_adapters.py [472:536]
-* backend/tests/services/adapters/test_adapters.py [551:599]
-
-Duplicate Group 45
-
-Metric	Value
-Total Lines Involved	75 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/adapters/test_adapters.py [550:598]
-* backend/tests/services/adapters/test_adapters.py [428:453]
-
-Duplicate Group 54
-
-Metric	Value
-Total Lines Involved	42 lines
-Files Affected	1 distinct path (3 instances)
-
-* backend/tests/services/extract/test_signal_inventory.py [180:193]
-* backend/tests/services/extract/test_signal_inventory.py [159:172]
-* backend/tests/services/extract/test_signal_inventory.py [243:256]
-
-Duplicate Group 60
-
-Metric	Value
-Total Lines Involved	159 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/adapters/test_adapters.py [560:619]
-* backend/tests/services/adapters/test_adapters.py [604:702]
-
-Duplicate Group 61
-
-Metric	Value
-Total Lines Involved	89 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/adapters/test_adapters.py [429:453]
-* backend/tests/services/adapters/test_adapters.py [472:535]
-
-Duplicate Group 66
-
-Metric	Value
-Total Lines Involved	285 lines
-Files Affected	2 distinct paths
-
-* backend/tests/services/test_crawl_service.py [1610:1623]
-* backend/tests/services/extract/test_listing_extractor.py [849:1119]
-
-Duplicate Group 69
-
-Metric	Value
-Total Lines Involved	94 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/acquisition/test_acquirer.py [319:365]
-* backend/tests/services/acquisition/test_acquirer.py [365:411]
-
-Duplicate Group 70
-
-Metric	Value
-Total Lines Involved	94 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/acquisition/test_acquirer.py [322:368]
-* backend/tests/services/acquisition/test_acquirer.py [278:319]
-
-Duplicate Group 73
-
-Metric	Value
-Total Lines Involved	36 lines
-Files Affected	1 distinct path (3 instances)
-
-* backend/app/api/crawls.py [261:272]
-* backend/app/api/crawls.py [359:370]
-* backend/app/api/crawls.py [329:340]
-
-Duplicate Group 75
-
-Metric	Value
-Total Lines Involved	37 lines
-Files Affected	1 distinct path (3 instances)
-
-* backend/app/services/acquisition/acquirer.py [869:880]
-* backend/app/services/acquisition/acquirer.py [1017:1029]
-* backend/app/services/acquisition/acquirer.py [804:815]
-
-Duplicate Group 79
-
-Metric	Value
-Total Lines Involved	48 lines
-Files Affected	1 distinct path (4 instances)
-
-* backend/tests/api/test_records_exports.py [353:364]
-* backend/tests/api/test_records_exports.py [536:547]
-* backend/tests/api/test_records_exports.py [487:498]
-* backend/tests/api/test_records_exports.py [398:409]
-
-Duplicate Group 80
-
-Metric	Value
-Total Lines Involved	72 lines
-Files Affected	1 distinct path (6 instances)
-
-* backend/tests/api/test_records_exports.py [266:277]
-* backend/tests/api/test_records_exports.py [533:544]
-* backend/tests/api/test_records_exports.py [122:133]
-* backend/tests/api/test_records_exports.py [45:56]
-* backend/tests/api/test_records_exports.py [83:94]
-* backend/tests/api/test_records_exports.py [161:172]
-
-Duplicate Group 81
-
-Metric	Value
-Total Lines Involved	107 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/test_crawl_service.py [875:942]
-* backend/tests/services/test_crawl_service.py [1685:1723]
-
-Duplicate Group 82
-
-Metric	Value
-Total Lines Involved	236 lines
-Files Affected	2 distinct paths
-
-* backend/tests/services/test_crawl_service.py [802:862]
-* backend/tests/services/test_crawl_service.py [868:934]
-* backend/tests/services/extract/test_listing_extractor.py [231:338]
-
-Duplicate Group 85
-
-Metric	Value
-Total Lines Involved	48 lines
-Files Affected	1 distinct path (3 instances)
-
-* backend/tests/services/acquisition/test_fragment_capture.py [259:274]
-* backend/tests/services/acquisition/test_fragment_capture.py [198:213]
-* backend/tests/services/acquisition/test_fragment_capture.py [311:326]
-
-Duplicate Group 86
-
-Metric	Value
-Total Lines Involved	53 lines
-Files Affected	1 distinct path (2 instances)
-
-* backend/tests/services/acquisition/test_fragment_capture.py [259:277]
-* backend/tests/services/acquisition/test_fragment_capture.py [198:217]
-
-Duplicate Group 99
-
-Metric	Value
-Total Lines Involved	42 lines
-Files Affected	1 distinct path (3 instances)
-
-* backend/tests/services/test_llm_runtime.py [102:115]
-* backend/tests/services/test_llm_runtime.py [62:75]
-* backend/tests/services/test_llm_runtime.py [403:416]
+Completed on 2026-04-11
+
+* Group 1: `frontend/lib/api/client.ts` request-response helper duplication consolidated into a shared response-type parser. The open major-group list below starts at the next unresolved item.
+* Group 2: `frontend/lib/api/client.ts` repeated response dispatch wrappers collapsed behind `requestWithResponseType()`.
+* Group 3: `frontend/lib/api/client.ts` repeated read-method plumbing collapsed behind `createReadRequest()`.
+* Group 4: `frontend/lib/api/client.ts` repeated body/delete method plumbing collapsed behind request factories.
+* Group 7: audit line ranges no longer match the current `acquirer.py` / `page_classifier.py` code after later refactors; the previously reported duplicate block is stale and no longer present as written.
+* Group 8: audit line ranges no longer match the current `crawl_events.py` / `crawl.py` / `_batch_progress.py` code after the typed summary/progress refactors; the previously reported duplicate block is stale and no longer present as written.
+* Group 13: shared HTML/build-result helpers were extracted for `test_crawl_service.py` and `test_listing_extractor.py`, removing repeated crawl/listing fixture scaffolding.
+* Group 21: repeated process-run setup in `test_crawl_service.py` was consolidated behind local helper flows.
+* Group 38: repeated crawl-service acquisition/query assertions were consolidated behind shared helpers.
+* Group 39: repeated traversal/capture setup in `test_fragment_capture.py` was consolidated behind `_run_fragment_capture_case()`.
+* Group 44: repeated adapter-test response setup was consolidated behind shared test helpers.
+* Group 45: repeated adapter-test fixture/assertion plumbing was consolidated behind shared test helpers.
+* Group 54: repeated `SignalInventory` setup/assertion patterns were consolidated in `test_signal_inventory.py`.
+* Group 60: repeated adapter-test HTML/record scaffolding was consolidated behind shared test helpers.
+* Group 61: repeated adapter-test single-record assertions were consolidated behind shared test helpers.
+* Group 69: repeated acquirer test fetch/browser patch scaffolding was consolidated behind `_run_acquire_case()`.
+* Group 70: repeated acquirer test fetch/browser patch scaffolding was consolidated behind `_run_acquire_case()`.
+* Group 79: repeated export-test run/record setup and paging-header assertions in `test_records_exports.py` were consolidated behind local helpers.
+* Group 80: repeated export-test run/record setup and provenance/assertion scaffolding in `test_records_exports.py` were consolidated behind local helpers.
+* Group 81: repeated crawl-service browser/listing process-run setup was consolidated behind shared helpers.
+* Group 82: repeated crawl/listing extractor fixture builders were consolidated into shared test-only helpers.
+* Group 85: repeated traversal/capture setup in `test_fragment_capture.py` was consolidated behind `_run_fragment_capture_case()`.
+* Group 86: repeated traversal/capture setup in `test_fragment_capture.py` was consolidated behind `_run_fragment_capture_case()`.
+* Group 11: duplicate metadata wrapper logic was removed from `pipeline/core.py`; the pipeline now imports `crawl_metadata.py` directly.
+* Group 66: shared KitchenAid/food-processor fixture scaffolding in `test_crawl_service.py` and `test_listing_extractor.py` was consolidated into shared helpers.
+* Group 73: the original duplicate line ranges in `api/crawls.py` no longer map to a real repeated block in the current router after later controller refactors, so this audit entry is stale.
+* Group 75: repeated curl/browser diagnostics finalization in `acquirer.py` was consolidated behind shared result-diagnostics helpers.
+* Group 99: repeated `xpath_discovery` config seeding and single-cost-log assertions in `test_llm_runtime.py` were consolidated behind local helpers.
 
 3. Primary Redundancy Hotspots
 
@@ -298,7 +59,6 @@ Secondary Targets
 
 * backend/tests/services/extract/test_listing_extractor.py: Critical participant in heavy-weight Groups 13, 66, and 82.
 * backend/tests/services/adapters/test_adapters.py: Plagued by repetitive setup in Groups 44, 45, 60, and 61.
-* backend/tests/api/test_records_exports.py: Redundant logic found in Groups 79 and 80.
 * backend/tests/services/acquisition/test_fragment_capture.py: Redundancy observed in Groups 39, 85, and 86.
 
 4. Strategic Recommendations for Logic Consolidation

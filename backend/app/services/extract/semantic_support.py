@@ -16,6 +16,11 @@ from app.services.config.extraction_rules import (
     SPEC_LABEL_BLOCK_PATTERNS,
 )
 from app.services.config.field_mappings import FIELD_ALIASES, REQUESTED_FIELD_ALIASES
+from app.services.extract.noise_policy import (
+    SECTION_BODY_SKIP_PHRASES as _SECTION_BODY_SKIP_PHRASES,
+    SECTION_KEY_SKIP_PREFIXES as _SECTION_KEY_SKIP_PREFIXES,
+    SECTION_LABEL_SKIP_TOKENS as _SECTION_LABEL_SKIP_TOKENS,
+)
 from app.services.requested_field_policy import normalize_requested_field
 from bs4 import BeautifulSoup, Tag
 
@@ -34,30 +39,6 @@ _FEATURE_SKIP_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _NON_CONTENT_TAGS = ("script", "style", "svg", "noscript", "iframe", "object", "embed", "meta", "link", "template")
-_SECTION_LABEL_SKIP_TOKENS = (
-    "contact",
-    "share",
-    "top searches",
-    "you may also like",
-    "similar",
-    "related",
-)
-_SECTION_KEY_SKIP_PREFIXES = (
-    "contact_",
-    "share",
-    "top_searches",
-    "you_may_also_like",
-    "related",
-    "similar",
-    "ad_id_",
-    "images",
-)
-_SECTION_BODY_SKIP_PHRASES = (
-    "click to reveal phone number",
-    "dealer network partner",
-    "buy report now",
-    "share this ad",
-)
 _IMAGE_COUNTER_RE = re.compile(r"^\d+\s+of\s+\d+$", re.IGNORECASE)
 _PRICE_ONLY_TEXT_RE = re.compile(r"[$€£]\s?\d[\d,.\s]*", re.IGNORECASE)
 _HEADING_TAG_RE = re.compile(r"h[1-6]", re.IGNORECASE)
@@ -75,11 +56,6 @@ def extract_semantic_detail_data(
     page_url: str = "",
     adapter_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Extract page-local semantic content from detail pages.
-
-    The result is intentionally compact and is designed to feed the field
-    candidate extractor rather than replace it.
-    """
     if not html and soup is None:
         return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}, "aggregates": {}, "table_groups": []}
 
@@ -479,11 +455,7 @@ def _extract_table_groups(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
 def _extract_inline_spec_pair(node: Tag) -> tuple[str, str] | None:
     text = _clean_text(node.get_text(" ", strip=True))
-    if not text or len(text) < 4:
-        return None
-    if len(text) > 240:
-        return None
-    if ":" not in text:
+    if not text or len(text) < 4 or len(text) > 240 or ":" not in text:
         return None
     label, value = [_clean_text(part) for part in text.split(":", 1)]
     if not label or not value:
@@ -520,18 +492,9 @@ def _should_keep_specification(key: str, value: str, *, preserve_visible: bool =
         return False
     if lowered_key in SPEC_DROP_LABELS:
         return False
-    if _PACK_KEY_RE.fullmatch(lowered_key):
+    if _PACK_KEY_RE.fullmatch(lowered_key) or _NUMERIC_KEY_RE.fullmatch(lowered_key) or _DAY_TIME_KEY_RE.fullmatch(lowered_key):
         return False
-    if _NUMERIC_KEY_RE.fullmatch(lowered_key):
-        return False
-    if _DAY_TIME_KEY_RE.fullmatch(lowered_key):
-        return False
-    # Drop single-character keys and overly long sentence-like labels
-    if len(lowered_key) <= 1 or len(lowered_key) > 60:
-        return False
-    # Drop keys that look like sentences (4+ words with spaces) — these are
-    # section headings or review titles, not specification labels
-    if lowered_key.count("_") >= 5:
+    if len(lowered_key) <= 1 or len(lowered_key) > 60 or lowered_key.count("_") >= 5:
         return False
     if any(token in lowered_key for token in SPEC_LABEL_BLOCK_PATTERNS):
         return False
@@ -705,15 +668,11 @@ def _section_text(node: Tag, *, label: str) -> str:
 def _is_prominent_section_label_node(node: Tag) -> bool:
     text = _clean_text(node.get_text(" ", strip=True))
     lowered = text.lower()
-    if not text or len(text) > 80:
-        return False
-    if not _HAS_ALPHA_RE.search(lowered):
+    if not text or len(text) > 80 or not _HAS_ALPHA_RE.search(lowered):
         return False
     if any(token in lowered for token in SECTION_SKIP_PATTERNS):
         return False
-    if node.find("a", href=True):
-        return False
-    if len(text.split()) > 8:
+    if node.find("a", href=True) or len(text.split()) > 8:
         return False
     has_emphasis = node.find(["b", "strong", "u", "em"]) is not None
     return text.endswith(":") or has_emphasis
@@ -771,9 +730,7 @@ def _label_text(node: Tag) -> str:
 
 def _is_section_label(text: str) -> bool:
     lowered = text.lower()
-    if not text or len(text) > 80:
-        return False
-    if not _HAS_ALPHA_RE.search(lowered):
+    if not text or len(text) > 80 or not _HAS_ALPHA_RE.search(lowered):
         return False
     if any(token in lowered for token in SECTION_SKIP_PATTERNS):
         return False

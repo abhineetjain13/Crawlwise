@@ -13,12 +13,7 @@ from app.core.telemetry import (
 )
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
-from app.services.acquisition.acquirer import AcquisitionResult, ProxyPoolExhausted
-from app.services.crawl_metrics import (
-    build_acquisition_profile,
-    build_url_metrics,
-    finalize_url_metrics,
-)
+from app.services.acquisition import ProxyPoolExhausted
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
     CONTROL_REQUEST_PAUSE,
@@ -32,12 +27,17 @@ from app.services.exceptions import RunControlError
 from app.services.crawl_utils import (
     normalize_target_url,
     parse_csv_urls,
-    resolve_traversal_mode,
 )
 from app.services.domain_utils import normalize_domain
-from app.services.pipeline import (
+from app.services.pipeline.core import (
     STAGE_FETCH,
     STAGE_SAVE,
+    _log,
+    _mark_run_failed,
+    _process_single_url,
+    _set_stage,
+)
+from app.services.pipeline.verdict import (
     VERDICT_BLOCKED,
     VERDICT_EMPTY,
     VERDICT_LISTING_FAILED,
@@ -45,13 +45,9 @@ from app.services.pipeline import (
     VERDICT_SCHEMA_MISS,
     VERDICT_SUCCESS,
     _aggregate_verdict,
-    _log,
-    _mark_run_failed,
-    _process_single_url,
-    _set_stage,
 )
 from app.services.llm_runtime import snapshot_active_configs
-from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
+from app.services.pipeline.types import URLProcessingResult
 from app.services.config.crawl_runtime import (
     MAX_URL_PROCESS_TIMEOUT_SECONDS,
     URL_PROCESS_TIMEOUT_SECONDS,
@@ -225,11 +221,6 @@ async def _retry_run_update(
     await mutate(session, run)
     # Single commit: records (already flushed by pipeline) + progress patch.
     await session.commit()
-
-
-async def _noop_checkpoint() -> None:
-    return None
-
 
 class RunControlSignal(RunControlError):
     def __init__(self, request: str) -> None:
@@ -578,76 +569,6 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
     finally:
         if correlation_token is not None:
             reset_correlation_id(correlation_token)
-
-
-# Default per-run concurrency for parallel batch URL processing.
-# Cross-run concurrency is governed by the global memory-adaptive semaphore.
-_DEFAULT_INTRA_RUN_CONCURRENCY = 4
-
-
-async def _process_url_with_own_session(
-    *,
-    run_id: int,
-    run: CrawlRun,
-    url: str,
-    idx: int,
-    total_urls: int,
-    url_config: URLProcessingConfig,
-    url_timeout_seconds: float,
-    progress_state: BatchRunProgressState,
-) -> URLProcessingResult:
-    """Process a single URL in its own DB session for transaction isolation.
-
-    Each URL's records and progress update are committed atomically —
-    if the worker dies mid-URL, both are rolled back together.
-    """
-    from app.core.database import SessionLocal
-
-    async with SessionLocal() as url_session:
-        try:
-            attached_run = await url_session.get(CrawlRun, run_id)
-            if attached_run is None:
-                raise RuntimeError(
-                    f"Run {run_id} is not visible in the isolated session; "
-                    "commit the run before parallel URL processing"
-                )
-            async with _get_global_url_semaphore():
-                url_result = _ensure_url_processing_result(
-                    await asyncio.wait_for(
-                        _process_single_url(
-                            session=url_session,
-                            run=attached_run,
-                            url=url,
-                            config=url_config,
-                            checkpoint=lambda: _run_control_checkpoint(
-                                url_session, attached_run
-                            ),
-                        ),
-                        timeout=url_timeout_seconds,
-                    )
-                )
-            # Atomic: commit records + progress together
-            await progress_state.persist_url_result(
-                session=url_session,
-                run_id=run_id,
-                retry_run_update=_retry_run_update,
-                idx=idx,
-                url=url,
-                records_count=len(url_result.records),
-                verdict=url_result.verdict,
-                url_metrics=url_result.url_metrics,
-            )
-            return url_result
-        except RunControlSignal:
-            raise
-        except ProxyPoolExhausted:
-            raise
-        except Exception as exc:
-            await url_session.rollback()
-            logger.warning("URL %s failed: %s", url, exc, exc_info=True)
-            raise
-
-
 async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
     remaining_ms = max(0, int(sleep_ms or 0))
     while remaining_ms > 0:
@@ -678,43 +599,6 @@ async def _handle_run_control_signal(
     set_control_request(run, None)
     await _log(session, run.id, "warning", "Run killed at checkpoint")
     await session.commit()
-
-
-def _collect_target_urls(payload: dict, settings: dict) -> list[str]:
-    """Collect and deduplicate all target URLs from payload and settings."""
-    from app.services.crawl_utils import collect_target_urls
-
-    return collect_target_urls(payload, settings)
-
-
-def _build_acquisition_profile(run_settings: dict | None) -> dict[str, object]:
-    return build_acquisition_profile(run_settings)
-
-
-def _resolve_traversal_mode(settings: dict | None) -> str | None:
-    """Resolve and validate the traversal mode from settings."""
-    return resolve_traversal_mode(settings)
-
-
-def _build_url_metrics(
-    acq: AcquisitionResult,
-    *,
-    requested_fields: list[str],
-) -> dict[str, object]:
-    return build_url_metrics(acq, requested_fields=requested_fields)
-
-
-def _finalize_url_metrics(
-    url_metrics: dict[str, object],
-    *,
-    records: list[dict],
-    requested_fields: list[str],
-) -> dict[str, object]:
-    return finalize_url_metrics(
-        url_metrics,
-        records=records,
-        requested_fields=requested_fields,
-    )
 
 
 _domain = normalize_domain

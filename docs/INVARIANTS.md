@@ -21,33 +21,37 @@
 8. **Listing fallback guard.** Listing pages with 0 item records MUST get `listing_detection_failed` verdict. Never fall back to detail-style single-record extraction for listings.
 9. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to config, not hardcoded.
 10. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
+11. **Listing outputs stay canonical.** Listing extraction must emit canonical item URLs plus whatever canonical fields are naturally exposed on the listing surface. Listing outputs must not be back-filled with detail-only fields, variant payloads, or synthetic schema spillover.
+12. **Detail outputs separate canonical fields from residual rich content.** Detail extraction must populate canonical detail fields and variant structures when exposed. Residual content belongs in markdown-capable detail fields such as `description`, `features`, and `specifications`, not in ad hoc schema-pollution keys.
+13. **Commerce/job schema pollution is forbidden.** Footer/legal/contact/share/app-store/UI-chrome text, raw structured-data container keys, and cross-surface field pollution must be filtered before persistence. Users should see logical data only.
 
 ## Record & API Contract
 
-11. **Clean record API responses.** `CrawlRecordResponse.data` strips empty/null values and `_`-prefixed internal keys. `discovered_data` strips raw manifest containers. Users see only populated logical fields.
-12. **Review shows only actionable fields.** `discovered_fields` in review payloads excludes container keys and empty-valued fields.
+14. **Clean record API responses.** `CrawlRecordResponse.data` strips empty/null values and `_`-prefixed internal keys. `discovered_data` strips raw manifest containers. Users see only populated logical fields.
+15. **Review shows only actionable fields.** `discovered_fields` in review payloads excludes container keys and empty-valued fields.
 
 ## User Control Ownership
 
-13. **User-owned crawl controls are never rewritten by the backend.** Do not normalize or reclassify `surface`, auto-enable LLM, auto-enable traversal, or auto-switch hidden proxy policy. If the user chose poorly, fail visibly instead of mutating the request.
-14. **JS-shell detection may trigger Playwright rendering, not traversal.** Browser escalation is allowed for rendering blocked/empty/JS-shell pages, but pagination, infinite scroll, and load-more remain explicit `advanced_mode` actions only.
-15. **Playwright expansion is generic, not field-routed.** No code path may use requested field names to decide what to click before capture; the browser path runs the same interactive expansion pass on every session.
+16. **User-owned crawl controls are never rewritten by the backend.** Do not normalize or reclassify page type, auto-enable LLM, auto-enable traversal, or auto-switch hidden proxy policy. If the user chose poorly, fail visibly instead of mutating the request.
+17. **Surface selection remains explicit and user-owned.** Commerce vs. jobs identification may be strengthened with explicit UI controls or diagnostics, but the backend must honor the submitted surface/page-type choice rather than silently overriding it.
+18. **JS-shell detection may trigger Playwright rendering, not traversal.** Browser escalation is allowed for rendering blocked/empty/JS-shell pages, but pagination, infinite scroll, and load-more remain explicit `advanced_mode` actions only.
+19. **Playwright expansion is generic, not field-routed.** No code path may use requested field names to decide what to click before capture; the browser path runs the same interactive expansion pass on every session.
 
 ## Acquisition Safety
 
-16. **Preserve usable content over brittle anti-bot heuristics.** Anti-bot signatures should only block when the page actually behaves like a challenge page, not merely because vendor markup exists in otherwise rich HTML.
-17. **HTTP pinning must not break TLS identity.** Preserve the original hostname URL whenever using DNS pinning or SSRF hardening.
-18. **Acquisition regressions must be diagnosable from artifacts.** Successful phase-1 runs should emit HTML/JSON artifacts plus per-URL diagnostics and smoke-run summaries so failures can be compared across batches without relying on transient logs.
-19. **Cookie reuse must be policy-driven.** Do not commit site cookies. Persist only policy-approved cookies via `cookie_policy.json`, and treat challenge/session cookies as ephemeral unless explicitly allowed.
-20. **Diagnostics must be observational.** Acquisition diagnostics should report only what actually happened during the fetch/render path; do not fabricate blocker causes, fallback reasons, or retry metadata.
+20. **Preserve usable content over brittle anti-bot heuristics.** Anti-bot signatures should only block when the page actually behaves like a challenge page, not merely because vendor markup exists in otherwise rich HTML.
+21. **HTTP pinning must not break TLS identity.** Preserve the original hostname URL whenever using DNS pinning or SSRF hardening.
+22. **Acquisition regressions must be diagnosable from artifacts.** Successful phase-1 runs should emit HTML/JSON artifacts plus per-URL diagnostics and smoke-run summaries so failures can be compared across batches without relying on transient logs.
+23. **Cookie reuse must be policy-driven.** Do not commit site cookies. Persist only policy-approved cookies via `cookie_policy.json`, and treat challenge/session cookies as ephemeral unless explicitly allowed.
+24. **Diagnostics must be observational.** Acquisition diagnostics should report only what actually happened during the fetch/render path; do not fabricate blocker causes, fallback reasons, or retry metadata.
 
 ## Runtime & Infrastructure
 
-21. **Database pool must be pre-ping enabled for Postgres.** `pool_pre_ping=True` catches stale connections before use. Engine must be disposed on application shutdown via `dispose_engine()`.
-22. **LLM config must be snapshot-stable within a run.** Once a run starts, `llm_config_snapshot` is stamped into `run.settings`. Mid-run config changes must not affect in-flight extraction.
-23. **LLM calls must fail fast on rate limits.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. The per-provider circuit breaker handles repeated non-rate-limit failures separately.
+25. **Database pool must be pre-ping enabled for Postgres.** `pool_pre_ping=True` catches stale connections before use. Engine must be disposed on application shutdown via `dispose_engine()`.
+26. **LLM config must be snapshot-stable within a run.** Once a run starts, `llm_config_snapshot` is stamped into `run.settings`. Mid-run config changes must not affect in-flight extraction.
+27. **LLM calls must fail fast on rate limits.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. The per-provider circuit breaker handles repeated non-rate-limit failures separately.
 
 ## Deletion Policy
 
-24. **Deleted subsystems stay deleted.** Do not reintroduce site memory, selector CRUD, discovery manifests, evidence buckets, or runtime-editable per-domain extraction logic under new names.
-25. **Generic crawler paths stay generic.** No tenant/site hardcodes; platform behavior is family-based and minimized to the required families.
+28. **Deleted subsystems stay deleted.** Do not reintroduce site memory, selector CRUD, discovery manifests, evidence buckets, or runtime-editable per-domain extraction logic under new names.
+29. **Generic crawler paths stay generic.** No tenant/site hardcodes; platform behavior is family-based and minimized to the required families.

@@ -16,13 +16,14 @@ import time
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
-from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.acquisition import detect_blocked_page
 from app.services.crawl_metrics import (
     build_url_metrics as _build_url_metrics,
 )
 from app.services.config.crawl_runtime import AUTO_DETECT_SURFACE
 from bs4 import BeautifulSoup
 
+from .pipeline_config import PIPELINE_CONFIG
 from .types import PipelineContext
 from .utils import _elapsed_ms, parse_html
 from .verdict import VERDICT_BLOCKED, VERDICT_LISTING_FAILED
@@ -31,41 +32,6 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-_LISTING_PROMOTION_TEXT_HINTS = ("shop all", "all ", "see all", "view all")
-_LISTING_PROMOTION_PENALTY_TOKENS = {"accessories", "parts", "support", "help", "service"}
-_LISTING_PROMOTION_TEXT_NOISE = ("skip", "navigation", "menu")
-_LISTING_TILE_ALLOWED_FIELDS = {"title", "url", "image_url", "additional_images"}
-_LISTING_TILE_STRONG_FIELDS = {
-    "availability",
-    "brand",
-    "currency",
-    "original_price",
-    "part_number",
-    "price",
-    "rating",
-    "review_count",
-    "sale_price",
-    "sku",
-}
-_LISTING_PATH_TOKEN_STOPWORDS = {
-    "all",
-    "and",
-    "categories",
-    "category",
-    "collection",
-    "collections",
-    "for",
-    "html",
-    "htm",
-    "page",
-    "product",
-    "products",
-    "shop",
-    "store",
-    "the",
-    "with",
-}
 
 
 def _canonical_listing_path(value: str) -> str:
@@ -78,7 +44,7 @@ def _url_path_tokens(value: str) -> set[str]:
     return {
         token
         for token in re.split(r"[^a-z0-9]+", path)
-        if len(token) >= 3 and token not in _LISTING_PATH_TOKEN_STOPWORDS
+        if len(token) >= 3 and token not in PIPELINE_CONFIG.listing_path_token_stopwords
     }
 
 
@@ -131,16 +97,19 @@ def _discover_child_listing_candidate(html: str, *, page_url: str) -> str | None
         if shared <= 0:
             continue
         text = " ".join(anchor.get_text(" ", strip=True).split()).lower()
-        if text and any(token in text for token in _LISTING_PROMOTION_TEXT_NOISE):
+        if text and any(token in text for token in PIPELINE_CONFIG.listing_promotion_text_noise):
             continue
         score = shared * 5
         if parsed.path.rstrip("/").startswith(page_path):
             score += 2
         if len(candidate_tokens) > len(page_tokens):
             score += 1
-        if any(hint in text for hint in _LISTING_PROMOTION_TEXT_HINTS):
+        if any(hint in text for hint in PIPELINE_CONFIG.listing_promotion_text_hints):
             score += 3
-        if any(token in candidate_tokens for token in _LISTING_PROMOTION_PENALTY_TOKENS):
+        if any(
+            token in candidate_tokens
+            for token in PIPELINE_CONFIG.listing_promotion_penalty_tokens
+        ):
             score -= 2
         if score >= 5:
             candidates[normalized_href] = max(score, candidates.get(normalized_href, 0))
@@ -164,9 +133,9 @@ def _looks_like_category_tile_listing(records: list[dict]) -> bool:
         }
         if not public_fields or not public_fields.get("url"):
             return False
-        if set(public_fields) & _LISTING_TILE_STRONG_FIELDS:
+        if set(public_fields) & PIPELINE_CONFIG.listing_tile_strong_fields:
             return False
-        if any(field not in _LISTING_TILE_ALLOWED_FIELDS for field in public_fields):
+        if any(field not in PIPELINE_CONFIG.listing_tile_allowed_fields for field in public_fields):
             return False
         url_value = str(public_fields.get("url") or "").strip()
         if not url_value or _looks_like_detail_url(url_value):
@@ -522,7 +491,7 @@ class ListingBrowserRetryStage:
     """If listing extraction failed on curl, retry with browser rendering."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from app.services.acquisition.acquirer import AcquisitionRequest
+        from app.services.acquisition import AcquisitionRequest
 
         from .core import _extract_listing, _log, acquire, run_adapter
 
@@ -639,11 +608,17 @@ class ListingBrowserRetryStage:
         )
         browser_retry_ms = _elapsed_ms(browser_retry_started)
         browser_html = browser_acq.html
+        original_metrics = dict(existing_metrics)
+        ctx.acquisition_ms += browser_retry_ms
         retry_metrics = _build_url_metrics(
             browser_acq,
             requested_fields=ctx.additional_fields,
         )
         retry_metrics["acquisition_ms"] = browser_retry_ms
+        merged_retry_metrics = dict(original_metrics)
+        merged_retry_metrics["acquisition_ms"] = ctx.acquisition_ms
+        merged_retry_metrics["original_url_metrics"] = original_metrics
+        merged_retry_metrics["retry_url_metrics"] = retry_metrics
         browser_adapter_result = await run_adapter(ctx.url, browser_html, ctx.surface)
         browser_adapter_records = (
             browser_adapter_result.records if browser_adapter_result else []
@@ -661,13 +636,16 @@ class ListingBrowserRetryStage:
             ctx.additional_fields,
             ctx.surface,
             ctx.config.max_records,
-            retry_metrics,
+            merged_retry_metrics,
             update_run_state=ctx.update_run_state,
             persist_logs=ctx.persist_logs,
         )
         result.url_metrics["listing_browser_retry"] = True
         result.url_metrics["listing_browser_retry_method"] = browser_acq.method
         result.url_metrics["listing_browser_retry_acquisition_ms"] = browser_retry_ms
+        result.url_metrics["original_url_metrics"] = original_metrics
+        result.url_metrics["retry_url_metrics"] = retry_metrics
+        result.url_metrics["acquisition_ms"] = ctx.acquisition_ms
         result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started)
         ctx.records = result.records
         ctx.verdict = result.verdict

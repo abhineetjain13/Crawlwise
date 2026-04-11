@@ -55,29 +55,19 @@ describe("apiClient", () => {
     expect(getApiBaseUrl()).toBe("https://api.example.com");
   });
 
-  it("tries fallback base URL candidates after 404", async () => {
+  it("keeps a single-origin policy after 404 responses", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response("Not Found", { status: 404 }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      .mockResolvedValueOnce(new Response("Not Found", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const { apiClient } = await import("./client");
-    const payload = await apiClient.get<{ ok: boolean }>("/api/ping");
+    await expect(apiClient.get<{ ok: boolean }>("/api/ping")).rejects.toThrow("Not Found");
 
-    expect(payload).toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     const firstUrl = String(fetchMock.mock.calls[0]?.[0] ?? "");
-    const secondUrl = String(fetchMock.mock.calls[1]?.[0] ?? "");
     expect(firstUrl).not.toEqual("");
-    expect(secondUrl).not.toEqual("");
-    expect(firstUrl).not.toEqual(secondUrl);
   });
 
   it("httpErrorStatus reads status from ApiError and duck-typed errors", async () => {

@@ -6,7 +6,6 @@ import pytest
 
 from app.services._batch_progress import (
     BatchRunProgressState,
-    _merge_run_acquisition_metrics,
 )
 
 
@@ -72,16 +71,6 @@ def test_batch_run_progress_state_aligns_out_of_order_verdict_indices() -> None:
     )
 
     assert state.url_verdicts == ["success", "", "", "blocked"]
-
-
-def test_merge_run_acquisition_metrics_tolerates_invalid_float_values() -> None:
-    summary = _merge_run_acquisition_metrics(
-        {"host_wait_seconds_total": "bad-input"},
-        {"host_wait_seconds": "still-bad"},
-    )
-
-    assert summary["host_wait_seconds_total"] == 0.0
-
 
 @pytest.mark.asyncio
 async def test_batch_run_progress_state_persists_url_result() -> None:

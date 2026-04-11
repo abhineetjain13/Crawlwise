@@ -102,7 +102,7 @@ def _merge_record_fields(primary: dict, secondary: dict) -> dict:
 
     Uses FieldDecisionEngine for sanitisation-aware merge preference.
     """
-    from app.services.extract.field_decision import FieldDecisionEngine
+    from app.services.extract import FieldDecisionEngine
 
     engine = FieldDecisionEngine()
     merged = dict(primary)

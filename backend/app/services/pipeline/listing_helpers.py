@@ -4,8 +4,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin
 
-from app.services.acquisition.acquirer import AcquisitionResult
-from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.acquisition import AcquisitionResult
+from app.services.acquisition import detect_blocked_page
 
 from .utils import _clean_candidate_text
 

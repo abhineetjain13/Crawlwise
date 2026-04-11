@@ -1,9 +1,8 @@
 "use client";
 
 import { LucideIcon } from "lucide-react";
-import { Children, isValidElement, useLayoutEffect } from "react";
+import { Children, isValidElement, useEffectEvent, useLayoutEffect } from "react";
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
 
 import { useTopBarStore } from "../layout/top-bar-context";
 import { cn } from "../../lib/utils";
@@ -44,12 +43,14 @@ export function PageHeader({
   actions?: ReactNode;
 }>) {
   const { setHeader } = useTopBarStore();
-  const latestHeaderRef = useRef({ title, description, actions });
   const signature = `${stableNodeSignature(title)}::${description ?? ""}::${stableNodeSignature(actions)}`;
+  const syncHeader = useEffectEvent(() => {
+    setHeader({ title, description, actions });
+  });
 
   useLayoutEffect(() => {
-    setHeader({ title, description, actions });
-  }, [setHeader, signature]);
+    syncHeader();
+  }, [signature]);
   useLayoutEffect(() => () => setHeader(null), [setHeader]);
 
   return null;

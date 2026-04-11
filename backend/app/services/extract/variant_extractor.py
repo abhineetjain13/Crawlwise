@@ -176,7 +176,7 @@ def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> Non
         if normalized_key in canonical_keys:
             sanitized.pop(key, None)
             continue
-        if _is_noisy_product_attribute_entry(
+        if is_noisy_product_attribute_entry(
             normalized_key or str(key), sanitized.get(key)
         ):
             sanitized.pop(key, None)
@@ -446,8 +446,8 @@ def _merge_variant_records(
             merged[key] = value
     if isinstance(primary.get("option_values"), dict) and isinstance(secondary.get("option_values"), dict):
         merged["option_values"] = {
-            **primary["option_values"],
             **secondary["option_values"],
+            **primary["option_values"],
         }
     return merged
 
@@ -480,7 +480,3 @@ def _collect_variant_axis_values(
             if cleaned_value not in bucket:
                 bucket.append(cleaned_value)
     return axis_values
-
-
-def _is_noisy_product_attribute_entry(key: object, value: object) -> bool:
-    return is_noisy_product_attribute_entry(key, value)

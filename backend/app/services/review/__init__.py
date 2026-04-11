@@ -7,15 +7,30 @@ from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
 from app.services.crawl_metadata import refresh_record_commit_metadata
 from app.services.crawl_utils import normalize_committed_field_name
 from app.services.domain_utils import normalize_domain
-from app.services.knowledge_base.store import (
-    get_domain_mapping,
-    save_domain_mapping,
-)
 from app.services.normalizers import normalize_value
 from app.services.config.selectors import REVIEW_CONTAINER_KEYS
 from app.services.schema_service import load_resolved_schema, persist_resolved_schema
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def _load_domain_mapping(
+    session: AsyncSession,
+    *,
+    domain: str,
+    surface: str,
+) -> dict[str, str]:
+    result = await session.execute(
+        select(ReviewPromotion.field_mapping)
+        .where(
+            ReviewPromotion.domain == domain,
+            ReviewPromotion.surface == surface,
+        )
+        .order_by(ReviewPromotion.created_at.desc(), ReviewPromotion.id.desc())
+        .limit(1)
+    )
+    mapping = result.scalar_one_or_none()
+    return dict(mapping) if isinstance(mapping, dict) else {}
 
 
 async def build_review_payload(session: AsyncSession, run_id: int) -> dict | None:
@@ -26,7 +41,11 @@ async def build_review_payload(session: AsyncSession, run_id: int) -> dict | Non
     records = list(records_result.scalars().all())
     domain = _domain(run.url)
     canonical_fields = (await load_resolved_schema(session, run.surface, domain)).fields
-    domain_mapping = get_domain_mapping(domain, run.surface)
+    domain_mapping = await _load_domain_mapping(
+        session,
+        domain=domain,
+        surface=run.surface,
+    )
     normalized_fields = sorted({
         key for record in records
         for key, val in _safe_dict(record.data).items()
@@ -79,7 +98,6 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
         for row in selected_rows
     }
     domain = _domain(run.url)
-    await save_domain_mapping(domain, run.surface, mapping)
     resolved_schema = await load_resolved_schema(session, run.surface, domain)
     next_fields = [
         *resolved_schema.fields,

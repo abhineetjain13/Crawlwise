@@ -4,7 +4,7 @@ import asyncio
 
 from app.core.celery_app import celery_app, worker_process_init, worker_process_shutdown
 from app.core.database import SessionLocal
-from app.services.acquisition.browser_client import (
+from app.services.acquisition import (
     prepare_browser_pool_for_worker_process,
     shutdown_browser_pool_sync,
 )

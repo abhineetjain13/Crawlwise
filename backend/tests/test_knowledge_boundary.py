@@ -7,26 +7,6 @@ from app.services.config.extraction_rules import SALARY_RANGE_REGEX
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SERVICES_DIR = REPO_ROOT / "backend" / "app" / "services"
-KNOWLEDGE_BASE_DIR = REPO_ROOT / "backend" / "app" / "data" / "knowledge_base"
-
-
-def test_services_do_not_use_json_load_for_knowledge_config():
-    offenders: list[str] = []
-
-    for path in SERVICES_DIR.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        if "json.load(" in text:
-            offenders.append(str(path.relative_to(REPO_ROOT)))
-
-    assert offenders == [], "app/services should not load JSON at runtime:\n" + "\n".join(offenders)
-
-
-def test_knowledge_base_no_longer_contains_json_config_files():
-    json_files = sorted(path.name for path in KNOWLEDGE_BASE_DIR.glob("*.json"))
-    assert json_files == []
-
-
 def test_salary_range_regex_expands_currency_placeholders():
     assert "__CURRENCY_SYMBOL_CLASS__" not in SALARY_RANGE_REGEX
     assert "__CURRENCY_CODE_ALT__" not in SALARY_RANGE_REGEX

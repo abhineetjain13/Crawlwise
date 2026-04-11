@@ -20,7 +20,7 @@ from app.services.crawl_state import (
     set_control_request,
     update_run_status,
 )
-from app.services.pipeline import (
+from app.services.pipeline.core import (
     _log,
     _mark_run_failed,
 )

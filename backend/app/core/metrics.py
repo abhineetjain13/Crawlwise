@@ -14,7 +14,7 @@ from sqlalchemy import func, select, text
 from app.core.database import SessionLocal, engine
 from app.core.redis import get_redis, redis_failure_total, redis_is_enabled
 from app.models.crawl import CrawlRun
-from app.services.acquisition.browser_client import browser_pool_snapshot
+from app.services.acquisition import browser_pool_snapshot
 
 class _NoopMetric:
     def labels(self, **_: object) -> "_NoopMetric":

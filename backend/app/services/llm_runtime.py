@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from json import loads as parse_json
+from pathlib import Path
 from string import Template
 from typing import Any
 
@@ -18,7 +19,7 @@ from app.core.redis import redis_fail_open, redis_is_enabled
 from app.core.security import decrypt_secret
 from app.models.crawl import CrawlRun
 from app.models.llm import LLMConfig, LLMCostLog
-from app.services.knowledge_base.store import get_prompt_task, load_prompt_file
+from app.services.config.field_mappings import PROMPT_REGISTRY
 from app.services.config.llm_runtime import (
     LLM_ANTHROPIC_MAX_TOKENS,
     LLM_ANTHROPIC_TEMPERATURE,
@@ -40,6 +41,19 @@ SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 logger = logging.getLogger(__name__)
 _PAGE_CLASSIFICATION_TYPES = {"listing", "detail", "challenge", "error", "unknown"}
 _LLM_CACHE_KEY_PREFIX = "crawl:llm:result"
+_PROMPTS_DIR = Path(__file__).resolve().parents[1] / "data" / "knowledge_base" / "prompts"
+
+
+def get_prompt_task(task_type: str) -> dict | None:
+    task = PROMPT_REGISTRY.get(str(task_type or "").strip())
+    return dict(task) if isinstance(task, dict) else None
+
+
+def load_prompt_file(relative_path: str) -> str:
+    candidate = _PROMPTS_DIR / str(relative_path or "").strip()
+    if not str(relative_path or "").strip() or not candidate.is_file():
+        return ""
+    return candidate.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

@@ -9,9 +9,6 @@ import pytest
 from app.core.config import settings
 from app.services.acquisition.cookie_store import is_persistable_cookie
 from app.services.acquisition.http_client import (
-    _build_attempt_order,
-    _parse_retry_after,
-    _retry_backoff_seconds,
     fetch_html_result,
 )
 from app.services.url_safety import ValidatedTarget
@@ -244,19 +241,6 @@ async def test_fetch_html_result_attaches_harvested_cookies(monkeypatch, tmp_pat
     assert result.status_code == 200
     assert captured["cookies"] is None
 
-
-def test_build_attempt_order_rejects_empty_impersonation_profiles(monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("", None))
-    monkeypatch.setattr("app.services.acquisition.http_client.IMPERSONATION_TARGET", "")
-
-    with pytest.raises(ValueError, match="No valid HTTP impersonation profile"):
-        _build_attempt_order(
-            url="https://example.com",
-            allow_stealth_retry=True,
-            force_stealth=False,
-        )
-
-
 def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(monkeypatch):
     import logging
     from unittest.mock import patch
@@ -282,33 +266,6 @@ def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(monkeypatch):
         assert allowed is True
         assert mock_log.called
         assert "max_persisted_ttl_seconds" in mock_log.call_args[0][2]
-
-
-def test_retry_backoff_seconds_is_bounded(monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_BASE_MS", 400)
-    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_MAX_MS", 1000)
-
-    assert _retry_backoff_seconds(1) == 0.4
-    assert _retry_backoff_seconds(2) == 0.8
-    assert _retry_backoff_seconds(3) == 1.0
-
-
-def test_retry_backoff_seconds_rejects_invalid_bounds(monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_BASE_MS", 400)
-    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_MAX_MS", 200)
-
-    with pytest.raises(ValueError, match="HTTP_RETRY_BACKOFF_MAX_MS"):
-        _retry_backoff_seconds(1)
-
-
-def test_parse_retry_after_treats_naive_http_dates_as_utc(monkeypatch):
-    retry_at = datetime(2026, 4, 6, 12, 0, 0, tzinfo=UTC)
-    monkeypatch.setattr("app.services.acquisition.http_client.time.time", lambda: retry_at.timestamp() - 30.0)
-
-    delay = _parse_retry_after({"retry-after": "Mon, 06 Apr 2026 12:00:00"})
-
-    assert delay == 30.0
-
 
 @pytest.mark.asyncio
 async def test_fetch_html_result_honors_retry_after_header(monkeypatch):

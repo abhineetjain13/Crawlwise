@@ -16,7 +16,6 @@ from app.core.database import Base
 from app.core.security import hash_password
 from app.models.user import User
 from app.services.acquisition.browser_client import reset_browser_pool_state
-from app.services.acquisition.host_memory import reset_host_memory
 from app.services.acquisition.pacing import reset_pacing_state
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -174,10 +173,9 @@ async def _reset_async_acquisition_state():
     yield
     await reset_browser_pool_state()
     await reset_pacing_state()
-    await reset_host_memory()
 
 
-@pytest_asyncio.fixture(scope="session", autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def _dispose_global_app_engine():
     yield
     await reset_browser_pool_state()

@@ -7,11 +7,7 @@ import re
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun
-from app.services.acquisition.acquirer import (
-    AcquisitionRequest,
-    AcquisitionResult,
-    acquire,
-)
+from app.services.acquisition import AcquisitionRequest, AcquisitionResult, acquire
 from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.crawl_events import (
     append_log_event,
@@ -34,15 +30,16 @@ from app.services.crawl_state import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.exceptions import PipelineWriteError
-from app.services.extract.json_extractor import (
+from app.services.extract import (
+    FieldDecisionEngine,
+    coerce_field_candidate_value,
+    extract_candidates,
     extract_json_detail,
     extract_json_listing,
+    extract_listing_records,
+    listing_set_quality,
+    strong_identity_key,
 )
-from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.listing_identity import strong_identity_key
-from app.services.extract.listing_quality import listing_set_quality
-from app.services.extract.candidate_processing import coerce_field_candidate_value
-from app.services.extract.service import extract_candidates
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.runtime_metrics import incr
@@ -1248,8 +1245,6 @@ def _reconcile_detail_candidate_values(
     allowed_fields: set[str],
     url: str,
 ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
-    from app.services.extract.field_decision import FieldDecisionEngine
-
     engine = FieldDecisionEngine(base_url=url)
     reconciled: dict[str, object] = {}
     reconciliation: dict[str, dict[str, object]] = {}
