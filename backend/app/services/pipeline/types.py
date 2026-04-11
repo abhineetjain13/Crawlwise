@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
     from app.models.crawl import CrawlRun
     from app.services.acquisition import AcquisitionRequest, AcquisitionResult
+    from .record_persistence import ExtractionRecordWriter
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +101,7 @@ class URLProcessingConfig:
     update_run_state: bool = True
     persist_logs: bool = True
     prefetch_only: bool = False
+    record_writer: "ExtractionRecordWriter | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +132,7 @@ class PipelineContext:
     update_run_state: bool = True
     persist_logs: bool = True
     checkpoint: Callable[[], Awaitable[None]] | None = None
+    record_writer: "ExtractionRecordWriter | None" = None
 
     # -- Mutable state populated by stages --
     acquisition_result: "AcquisitionResult | None" = None

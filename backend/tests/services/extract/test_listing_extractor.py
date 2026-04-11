@@ -4,8 +4,10 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
+import app.services.extract.listing_card_extractor as listing_card_extractor
 import app.services.extract.listing_extractor as listing_extractor
 import app.services.extract.listing_normalize as listing_normalize
+from bs4 import BeautifulSoup
 from app.services.extract.listing_extractor import (
     extract_listing_records as _extract_listing_records_impl,
 )
@@ -92,6 +94,37 @@ def test_extract_product_cards_falls_back_to_image_alt_for_title():
     assert len(records) == 2
     assert records[0]["title"] == "Widget Alt Title"
     assert records[0]["url"] == "https://example.com/product/1"
+
+
+def test_extract_listing_records_reuses_provided_soup(monkeypatch):
+    html = """
+    <html><body>
+    <div class="product-card">
+        <h3><a href="/product/1">Widget A</a></h3>
+        <span class="price">$10.00</span>
+    </div>
+    <div class="product-card">
+        <h3><a href="/product/2">Widget B</a></h3>
+        <span class="price">$20.00</span>
+    </div>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    def _unexpected_reparse(*args, **kwargs):
+        raise AssertionError("BeautifulSoup should not be called when soup is provided")
+
+    monkeypatch.setattr(listing_extractor, "BeautifulSoup", _unexpected_reparse)
+
+    records = _extract_listing_records_impl(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        soup=soup,
+    )
+
+    assert len(records) == 2
 
 
 def test_extract_listing_records_ignores_third_party_social_network_payload_records():
@@ -841,6 +874,28 @@ def test_extract_listing_prefers_next_flight_records_over_breadcrumb_json_ld():
     assert records_by_url["https://example.com/pdp/arnott"]["review_count"] == "648"
 
 
+def test_extract_listing_next_flight_uses_generic_brand_fallback():
+    html = """
+    <html><body>
+      <script>
+      self.__next_f.push([1,"1:{\\"displayName\\":\\"Trail Shoe\\",\\"listingUrl\\":\\"/p/trail-shoe\\",\\"brand\\":{\\"name\\":\\"Acme\\"},\\"priceVariation\\":\\"SALE\\",\\"amount\\":\\"79.99\\"}"]);
+      self.__next_f.push([1,"2:{\\"displayName\\":\\"Road Shoe\\",\\"listingUrl\\":\\"/p/road-shoe\\",\\"brand\\":{\\"name\\":\\"Acme\\"},\\"priceVariation\\":\\"SALE\\",\\"amount\\":\\"89.99\\"}"]);
+      </script>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com",
+        max_records=10,
+    )
+
+    assert len(records) == 2
+    assert records[0]["brand"] == "Acme"
+
+
 def test_extract_listing_rejects_weak_collection_json_ld_without_item_fields():
     html = """
     <html><body>
@@ -1498,6 +1553,50 @@ def test_extract_listing_records_uses_usajobs_network_payload_aliases():
     assert records[0]["url"] == "https://www.usajobs.gov/job/863502700"
 
 
+def test_extract_listing_records_synthesizes_saashr_urls_from_network_payloads():
+    html = "<html><body></body></html>"
+    manifest = _sources(
+        network_payloads=[
+            {
+                "url": "https://secure7.saashr.com/ta/rest/ui/recruitment/companies/%7C6208610/job-requisitions?offset=1&size=20&sort=desc&ein_id=118959061&lang=en-US&career_portal_id=6062087",
+                "body": {
+                    "job_requisitions": [
+                        {
+                            "id": "587696937",
+                            "job_title": "Behavioral Health Tech - Nights",
+                            "location": {"city": "Yankton", "state": "SD"},
+                            "job_description": "Support crisis stabilization services.",
+                        },
+                        {
+                            "id": "587687244",
+                            "job_title": "Crisis and Addiction Care EMT or Paramedic – Full Time",
+                            "location": {"city": "Yankton", "state": "SD"},
+                            "job_description": "Nursing care role.",
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+
+    records = extract_listing_records(
+        html,
+        "job_listing",
+        set(),
+        page_url="https://lcbhs.net/careers/",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert len(records) == 2
+    assert records[0]["job_id"] == "587696937"
+    assert (
+        records[0]["url"]
+        == "https://secure7.saashr.com/ta/6208610.careers?offset=1&size=20&sort=desc&ein_id=118959061&lang=en-US&career_portal_id=6062087&ShowJob=587696937"
+    )
+    assert records[0]["apply_url"] == records[0]["url"]
+
+
 def test_extract_from_card_infers_dice_job_fields():
     html = """
     <div data-testid="job-card">
@@ -1831,6 +1930,71 @@ def test_auto_detect_cards_ignores_sidebar_filter_groups_for_commerce():
         "Widget A $10",
         "Widget B $20",
         "Widget C $30",
+    ]
+
+
+def test_card_group_score_prefers_job_signals_on_job_cards():
+    html = """
+    <html><body>
+      <section class="job-results">
+        <div class="job-card">
+          <h3><a href="/jobs/1">Senior Data Engineer</a></h3>
+          <div class="meta"><span>Remote</span><span>Full Time</span></div>
+        </div>
+        <div class="job-card">
+          <h3><a href="/jobs/2">Staff Platform Engineer</a></h3>
+          <div class="meta"><span>Austin, TX</span><span>Hybrid</span></div>
+        </div>
+      </section>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    group = soup.select(".job-card")
+
+    job_score = listing_card_extractor._card_group_score(
+        group, surface="job_listing"
+    )
+    commerce_score = listing_card_extractor._card_group_score(
+        group, surface="ecommerce_listing"
+    )
+
+    assert job_score > commerce_score
+
+
+def test_auto_detect_cards_prefers_job_groups_for_job_surface():
+    html = """
+    <html><body>
+      <aside class="filters">
+        <ul>
+          <li class="choice"><a href="/jobs?location=remote">Remote</a></li>
+          <li class="choice"><a href="/jobs?location=austin">Austin</a></li>
+          <li class="choice"><a href="/jobs?location=hybrid">Hybrid</a></li>
+        </ul>
+      </aside>
+      <section class="job-results">
+        <div class="job-card">
+          <h3><a href="/jobs/1">Senior Data Engineer</a></h3>
+          <div class="meta"><span>Remote</span><span>Full Time</span></div>
+        </div>
+        <div class="job-card">
+          <h3><a href="/jobs/2">Staff Platform Engineer</a></h3>
+          <div class="meta"><span>Austin, TX</span><span>Hybrid</span></div>
+        </div>
+        <div class="job-card">
+          <h3><a href="/jobs/3">Analytics Engineer</a></h3>
+          <div class="meta"><span>New York, NY</span><span>Contract</span></div>
+        </div>
+      </section>
+    </body></html>
+    """
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+
+    cards, _selector = listing_extractor._auto_detect_cards(soup, surface="job_listing")
+
+    assert [card.get_text(" ", strip=True) for card in cards] == [
+        "Senior Data Engineer Remote Full Time",
+        "Staff Platform Engineer Austin, TX Hybrid",
+        "Analytics Engineer New York, NY Contract",
     ]
 
 

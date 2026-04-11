@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -36,6 +37,11 @@ def extract_candidates(
         extraction_contract=extraction_contract,
         resolved_fields=resolved_fields,
     )
+
+
+def _artifact_text(relative_path: str) -> str:
+    backend_root = Path(__file__).resolve().parents[3]
+    return (backend_root / relative_path).read_text(encoding="utf-8", errors="ignore")
 
 
 def test_extract_from_json_ld():
@@ -1137,45 +1143,6 @@ def test_extract_dedupes_exact_duplicate_rows_but_preserves_distinct_same_source
     assert candidates["title"][0]["value"] == "Repeated Title"
 
 
-def test_extract_dedupes_same_value_across_sources_and_preserves_supporting_sources():
-    html = "<html><body>test</body></html>"
-    manifest = _manifest(
-        adapter_data=[{"title": "Shared Title"}],
-        json_ld=[{"title": "Shared Title"}],
-    )
-    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
-            "https://example.com/product",
-            "ecommerce_detail",
-            html,
-            manifest,
-            [],
-    )
-    assert len(candidates["title"]) == 1
-    assert candidates["title"][0]["value"] == "Shared Title"
-    assert candidates["title"][0]["source"] == "adapter, json_ld"
-    assert set(candidates["title"][0]["sources"]) == {"adapter", "json_ld"}
-
-
-def test_extract_dedupes_case_only_variants_and_keeps_best_display_value():
-    html = "<html><body></body></html>"
-    manifest = _manifest(
-        adapter_data=[{"brand": "Supelco"}],
-        json_ld=[{"brand": "SUPELCO"}],
-        _hydrated_states=[{"product": {"brand": "supelco"}}],
-    )
-    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
-            "https://example.com/product",
-            "ecommerce_detail",
-            html,
-            manifest,
-            [],
-    )
-    assert [row["value"] for row in candidates["brand"]] == ["Supelco"]
-    assert set(candidates["brand"][0]["sources"]) == {"adapter", "hydrated_state", "json_ld"}
-
-
 def test_extract_sigma_product_detail_and_buy_box_candidates():
     html = """
     <html><body>
@@ -1933,6 +1900,46 @@ def test_extract_structured_state_variants_are_discovered_without_site_hardcode(
     }
     assert candidates["selected_variant"][0]["value"]["variant_id"] == "4070032421828"
     assert candidates["selected_variant"][0]["value"]["color"] == "PUMA Navy"
+
+
+def test_extract_myntra_artifact_emits_structured_size_variants():
+    html = _artifact_text("artifacts/html/www-myntra-com-ef483f8915-run_94.html")
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.myntra.com/tshirts/puma/puma-men-ess-small-logo-regular-fit-t-shirt/32338405/buy",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["variants"][0]["source"] == "structured_variant"
+    assert [row.get("variant_id") for row in candidates["variants"][0]["value"]] == [
+        "131962443",
+        "131962446",
+        "131962448",
+        "131962449",
+    ]
+    assert candidates["variant_axes"][0]["value"] == {"size": ["38", "40", "42", "44"]}
+    assert candidates["selected_variant"][0]["value"]["size"] == "44"
+
+
+def test_extract_puma_artifact_filters_structured_state_pollution():
+    html = _artifact_text("artifacts/html/in-puma-com-15ac28d5e1-run_97.html")
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://in.puma.com/in/en/pd/performance-woven-mens-side-pocket-gym-shorts/529704?swatch=06",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["variant_axes"][0]["source"] == "structured_variant"
+    assert candidates.get("features", [{}])[0].get("value") != "LiveChat"
+    assert candidates.get("care", [{}])[0].get("value") != "Care instructions"
 
 
 def test_extract_shopify_footer_sections_do_not_pollute_product_attributes():

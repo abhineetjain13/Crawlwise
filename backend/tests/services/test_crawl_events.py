@@ -75,4 +75,44 @@ def test_append_log_file_line_emits_structured_log(monkeypatch):
     assert payload["message"] == "hello"
 
 
+@pytest.mark.asyncio
+async def test_prepare_log_event_keeps_info_db_persistence_when_redis_is_unavailable(
+    monkeypatch,
+):
+    monkeypatch.setattr(crawl_events.settings, "crawl_log_db_min_level", "info")
+
+    async def _redis_unavailable(operation, *, default, operation_name):
+        return default
+
+    monkeypatch.setattr(crawl_events, "redis_fail_open", _redis_unavailable)
+
+    level, message, should_persist = await crawl_events.prepare_log_event(
+        505, "info", "Pipeline heartbeat"
+    )
+
+    assert level == "info"
+    assert message == "Pipeline heartbeat"
+    assert should_persist is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_log_event_keeps_error_db_persistence_when_redis_is_unavailable(
+    monkeypatch,
+):
+    monkeypatch.setattr(crawl_events.settings, "crawl_log_db_min_level", "info")
+
+    async def _redis_unavailable(operation, *, default, operation_name):
+        return default
+
+    monkeypatch.setattr(crawl_events, "redis_fail_open", _redis_unavailable)
+
+    level, message, should_persist = await crawl_events.prepare_log_event(
+        606, "error", "Detail extraction failed"
+    )
+
+    assert level == "error"
+    assert message == "Detail extraction failed"
+    assert should_persist is True
+
+
 

@@ -8,7 +8,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from bs4 import BeautifulSoup, Tag
 
 from app.services.config.extraction_rules import (
+    DIMENSION_KEYWORDS,
     LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT,
+    SEMANTIC_AGGREGATE_SEPARATOR,
 )
 from app.services.normalizers import normalize_and_validate_value
 from app.services.requested_field_policy import (
@@ -21,13 +23,12 @@ from app.services.extract.candidate_processing import (
     _parse_json_like_value,
     resolve_candidate_url as _resolve_candidate_url,
 )
-from app.services.extract.field_type_classifier import (
-    _looks_like_variant_selector_text,
-)
 from app.services.extract.dom_extraction import (
     _scoped_url_key,
 )
+from app.services.extract.noise_policy import sanitize_product_attribute_map
 from app.services.extract.variant_extractor import (
+    _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS,
     _canonical_structured_key,
     _split_variant_axes,
 )
@@ -47,6 +48,7 @@ _NETWORK_PAYLOAD_NOISE_URL_PATTERNS = re.compile(
     r"cdn-cgi/|captcha",
     re.IGNORECASE,
 )
+_VARIANT_PRODUCT_ATTRIBUTE_BLOCKLIST = frozenset(_STRUCTURED_CANONICAL_ATTRIBUTE_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +175,7 @@ def _structured_source_candidates(
     network_payloads: list[dict],
     base_url: str = "",
 ) -> list[dict]:
-    from app.services.extract.detail_extractor import _extract_structured_field_value
+    from app.services.extract.detail_extractor import _extract_structured_spec_map
     from app.services.extract.candidate_processing import _contains_unresolved_template_value
 
     rows: list[dict] = []
@@ -186,7 +188,22 @@ def _structured_source_candidates(
         base_url=base_url,
     )
     for source, payload, metadata in sources:
-        value = _extract_structured_field_value(payload, field_name)
+        spec_map = _extract_structured_spec_map(payload)
+        if not spec_map:
+            continue
+        normalized_field = normalize_requested_field(field_name)
+        if field_name == "specifications":
+            value = SEMANTIC_AGGREGATE_SEPARATOR.join(
+                f"{label}: {spec_value}" for label, spec_value in spec_map.items()
+            )
+        elif field_name == "dimensions":
+            value = SEMANTIC_AGGREGATE_SEPARATOR.join(
+                f"{label}: {spec_value}"
+                for label, spec_value in spec_map.items()
+                if any(token in label.lower() for token in DIMENSION_KEYWORDS)
+            )
+        else:
+            value = spec_map.get(normalized_field) or spec_map.get(field_name)
         normalized = _normalized_candidate_text(value)
         if not normalized or _contains_unresolved_template_value(normalized):
             continue
@@ -211,6 +228,34 @@ def _merge_dynamic_row_map(
 ) -> None:
     for field_name, field_rows in source.items():
         target.setdefault(field_name, []).extend(field_rows)
+
+
+def _selected_variant_rows(
+    selected_variant: object,
+    *,
+    source: str,
+) -> dict[str, list[dict]]:
+    if not isinstance(selected_variant, dict) or not selected_variant:
+        return {}
+    return {
+        "selected_variant": [{"value": selected_variant, "source": source}]
+    }
+
+
+def _product_attribute_rows(
+    product_attributes: object,
+    *,
+    source: str,
+) -> dict[str, list[dict]]:
+    sanitized = sanitize_product_attribute_map(
+        product_attributes,
+        blocked_keys=_VARIANT_PRODUCT_ATTRIBUTE_BLOCKLIST,
+    )
+    if not sanitized:
+        return {}
+    return {
+        "product_attributes": [{"value": sanitized, "source": source}],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -240,26 +285,8 @@ def _build_adapter_variant_rows(
     axes = record.get("variant_axes")
     if isinstance(axes, dict) and axes:
         rows["variant_axes"] = [{"value": axes, "source": source}]
-    selected_variant = record.get("selected_variant")
-    if selected_variant:
-        rows["selected_variant"] = [{"value": selected_variant, "source": source}]
-        for field_name in (
-            "color",
-            "size",
-            "sku",
-            "price",
-            "original_price",
-            "availability",
-            "image_url",
-        ):
-            value = selected_variant.get(field_name)
-            if value not in (None, "", [], {}):
-                rows.setdefault(field_name, []).append(
-                    {"value": value, "source": source}
-                )
-    product_attributes = record.get("product_attributes")
-    if isinstance(product_attributes, dict) and product_attributes:
-        rows["product_attributes"] = [{"value": product_attributes, "source": source}]
+    rows.update(_selected_variant_rows(record.get("selected_variant"), source=source))
+    rows.update(_product_attribute_rows(record.get("product_attributes"), source=source))
     return rows
 
 
@@ -285,26 +312,10 @@ def _build_demandware_variant_rows(
     selectable_axes = parsed_variants.get("variant_axes")
     if isinstance(selectable_axes, dict) and selectable_axes:
         rows["variant_axes"] = [{"value": selectable_axes, "source": source}]
-    product_attributes = parsed_variants.get("product_attributes")
-    if isinstance(product_attributes, dict) and product_attributes:
-        rows["product_attributes"] = [{"value": product_attributes, "source": source}]
-    selected_variant = parsed_variants.get("selected_variant")
-    if isinstance(selected_variant, dict) and selected_variant:
-        rows["selected_variant"] = [{"value": selected_variant, "source": source}]
-        for field_name in (
-            "color",
-            "size",
-            "sku",
-            "price",
-            "original_price",
-            "availability",
-            "image_url",
-        ):
-            value = selected_variant.get(field_name)
-            if value not in (None, "", [], {}):
-                rows.setdefault(field_name, []).append(
-                    {"value": value, "source": source}
-                )
+    rows.update(
+        _product_attribute_rows(parsed_variants.get("product_attributes"), source=source)
+    )
+    rows.update(_selected_variant_rows(parsed_variants.get("selected_variant"), source=source))
     return rows
 
 
@@ -811,16 +822,15 @@ def _build_dom_variant_rows(
     rows: dict[str, list[dict]] = {}
     if selectable_axes:
         rows["variant_axes"] = [{"value": selectable_axes, "source": "dom_variant"}]
-    if product_attributes:
-        rows["product_attributes"] = [
-            {"value": product_attributes, "source": "dom_variant"}
-        ]
-
-    selected_variant = _selected_dom_variant(base_url, selected_values=selected_values)
-    if selected_variant:
-        rows["selected_variant"] = [
-            {"value": selected_variant, "source": "dom_variant"}
-        ]
+    rows.update(
+        _product_attribute_rows(product_attributes, source="dom_variant")
+    )
+    rows.update(
+        _selected_variant_rows(
+            _selected_dom_variant(base_url, selected_values=selected_values),
+            source="dom_variant",
+        )
+    )
 
     return rows
 
@@ -849,26 +859,10 @@ def _build_structured_variant_rows(
     selectable_axes = parsed_variants.get("variant_axes")
     if isinstance(selectable_axes, dict) and selectable_axes:
         rows["variant_axes"] = [{"value": selectable_axes, "source": source}]
-    product_attributes = parsed_variants.get("product_attributes")
-    if isinstance(product_attributes, dict) and product_attributes:
-        rows["product_attributes"] = [{"value": product_attributes, "source": source}]
-    selected_variant = parsed_variants.get("selected_variant")
-    if isinstance(selected_variant, dict) and selected_variant:
-        rows["selected_variant"] = [{"value": selected_variant, "source": source}]
-        for field_name in (
-            "color",
-            "size",
-            "sku",
-            "price",
-            "original_price",
-            "availability",
-            "image_url",
-        ):
-            value = selected_variant.get(field_name)
-            if value not in (None, "", [], {}):
-                rows.setdefault(field_name, []).append(
-                    {"value": value, "source": source}
-                )
+    rows.update(
+        _product_attribute_rows(parsed_variants.get("product_attributes"), source=source)
+    )
+    rows.update(_selected_variant_rows(parsed_variants.get("selected_variant"), source=source))
     return rows
 
 
@@ -971,6 +965,14 @@ def _iter_structured_variant_containers(
 
 
 def _looks_like_structured_variant_container(payload: dict[str, object]) -> bool:
+    sizes = payload.get("sizes")
+    if isinstance(sizes, list) and sizes:
+        dict_sizes = [item for item in sizes[:30] if isinstance(item, dict)]
+        if dict_sizes and any(
+            any(token in size for token in ("skuId", "label", "available", "sizeSellerData"))
+            for size in dict_sizes
+        ):
+            return True
     variations = payload.get("variations")
     if not isinstance(variations, list) or not variations:
         return False
@@ -1004,6 +1006,16 @@ def _parse_structured_variant_container(
     base_url: str,
     selection_hints: dict[str, str],
 ) -> dict[str, object] | None:
+    sizes = payload.get("sizes")
+    if isinstance(sizes, list) and sizes:
+        parsed_sizes = _parse_structured_size_variant_container(
+            sizes,
+            base_url=base_url,
+            selection_hints=selection_hints,
+        )
+        if parsed_sizes:
+            return parsed_sizes
+
     variations = payload.get("variations")
     if not isinstance(variations, list) or not variations:
         return None
@@ -1021,6 +1033,58 @@ def _parse_structured_variant_container(
         if not isinstance(item, dict):
             continue
         variant = _build_structured_variant_row(
+            item,
+            base_url=base_url,
+            selection_hints=selection_hints,
+        )
+        if not variant:
+            continue
+        parsed_variants.append(variant)
+        option_values = variant.get("option_values")
+        if isinstance(option_values, dict):
+            for axis_name, value in option_values.items():
+                cleaned_axis = _canonical_structured_key(axis_name)
+                cleaned_value = _normalized_candidate_text(value)
+                if not cleaned_axis or not cleaned_value:
+                    continue
+                target = axis_values.setdefault(cleaned_axis, [])
+                if cleaned_value not in target:
+                    target.append(cleaned_value)
+        score = _score_structured_selected_variant(
+            variant,
+            raw_variant=item,
+            base_url=base_url,
+            selection_hints=selection_hints,
+        )
+        if score >= selected_score:
+            selected_variant = variant
+            selected_score = score
+
+    if not parsed_variants:
+        return None
+    return {
+        "variants": parsed_variants,
+        "axis_values": axis_values,
+        "selected_variant": selected_variant,
+        "selection_score": selected_score,
+    }
+
+
+def _parse_structured_size_variant_container(
+    sizes: list[object],
+    *,
+    base_url: str,
+    selection_hints: dict[str, str],
+) -> dict[str, object] | None:
+    axis_values: dict[str, list[str]] = {}
+    parsed_variants: list[dict[str, object]] = []
+    selected_variant: dict[str, object] | None = None
+    selected_score = -1
+
+    for item in sizes:
+        if not isinstance(item, dict):
+            continue
+        variant = _build_structured_size_variant_row(
             item,
             base_url=base_url,
             selection_hints=selection_hints,
@@ -1145,6 +1209,53 @@ def _build_structured_variant_row(
     return row or None
 
 
+def _build_structured_size_variant_row(
+    payload: dict[str, object],
+    *,
+    base_url: str,
+    selection_hints: dict[str, str],
+) -> dict[str, object] | None:
+    row: dict[str, object] = {}
+    variant_id = _normalized_candidate_text(
+        payload.get("skuId") or payload.get("sku") or payload.get("id")
+    )
+    if variant_id:
+        row["variant_id"] = variant_id
+        row["sku"] = variant_id
+
+    size_label = _normalized_candidate_text(
+        payload.get("label") or payload.get("size") or payload.get("displaySize")
+    )
+    if size_label:
+        row["option_values"] = {"size": size_label}
+        row["size"] = size_label
+
+    url = _structured_variant_url(payload, base_url=base_url, selection_hints=selection_hints)
+    if url:
+        row["url"] = url
+
+    seller_rows = payload.get("sizeSellerData")
+    primary_seller = seller_rows[0] if isinstance(seller_rows, list) and seller_rows else {}
+    if not isinstance(primary_seller, dict):
+        primary_seller = {}
+    price = normalize_and_validate_value(
+        "price",
+        primary_seller.get("discountedPrice") or payload.get("discountedPrice") or payload.get("price"),
+    )
+    if price:
+        row["price"] = price
+    original_price = normalize_and_validate_value(
+        "price",
+        primary_seller.get("mrp") or payload.get("mrp") or payload.get("originalPrice"),
+    )
+    if original_price:
+        row["original_price"] = original_price
+    availability = _structured_variant_availability(payload)
+    if availability:
+        row["availability"] = availability
+    return row or None
+
+
 def _structured_variant_option_values(payload: dict[str, object]) -> dict[str, str]:
     option_values: dict[str, str] = {}
     raw_option_values = payload.get("option_values") or payload.get("optionValues")
@@ -1164,6 +1275,19 @@ def _structured_variant_option_values(payload: dict[str, object]) -> dict[str, s
         cleaned_value = _normalized_candidate_text(raw_value)
         if cleaned_value:
             option_values[axis_name] = cleaned_value
+    all_sizes = payload.get("allSizesList")
+    if isinstance(all_sizes, list):
+        for entry in all_sizes:
+            if not isinstance(entry, dict):
+                continue
+            axis_name = _canonical_structured_key(entry.get("name"))
+            cleaned_value = _normalized_candidate_text(entry.get("label") or entry.get("value"))
+            if axis_name and cleaned_value:
+                option_values.setdefault(axis_name, cleaned_value)
+    if "size" not in option_values:
+        cleaned_label = _normalized_candidate_text(payload.get("label"))
+        if cleaned_label:
+            option_values["size"] = cleaned_label
     return option_values
 
 
@@ -1198,6 +1322,10 @@ def _structured_variant_availability(payload: dict[str, object]) -> str | None:
         normalized = normalize_and_validate_value("availability", payload.get(field_name))
         if normalized:
             return str(normalized)
+    if payload.get("availableToSell") is True:
+        return "in_stock"
+    if payload.get("availableToSell") is False:
+        return "out_of_stock"
     if any(payload.get(key) is True for key in ("orderable", "available", "inStock")):
         return "in_stock"
     if any(payload.get(key) is False for key in ("orderable", "available", "inStock")):

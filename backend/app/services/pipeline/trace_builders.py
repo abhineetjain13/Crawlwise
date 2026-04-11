@@ -154,7 +154,6 @@ def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
     return _compact_dict(
         {
             "method": acq.method,
-            "browser_attempted": bool(diagnostics.get("browser_attempted")),
             "acquisition": _compact_dict(
                 {
                     "final_url": diagnostics.get("curl_final_url")

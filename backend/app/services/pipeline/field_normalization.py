@@ -1,10 +1,36 @@
 """Field normalization and validation functions."""
 from __future__ import annotations
 
+import re
+
 from app.services.config.extraction_rules import EMPTY_SENTINEL_VALUES
 from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
 
 from .utils import _clean_page_text, _compact_dict, _normalize_committed_field_name
+
+_PERSISTENCE_DISALLOWED_DISCOVERED_KEYS = frozenset(
+    {
+        "_raw_item",
+        "raw_item",
+        "container",
+        "schema",
+        "schema_data",
+        "__typename",
+        "@context",
+        "@type",
+    }
+)
+_DISCOVERED_EMAIL_RE = re.compile(
+    r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b"
+)
+_DISCOVERED_PHONE_CANDIDATE_RE = re.compile(
+    r"(?ix)"
+    r"(?<!\w)"
+    r"(?:\+?\(?\d[\d().\-\s]{7,}\d)"
+    r"(?:\s*(?:ext\.?|x)\s*\d{1,5})?"
+    r"(?!\w)"
+)
+_REDACTED = "[REDACTED]"
 
 
 def _normalize_review_value(value: object) -> object | None:
@@ -97,72 +123,110 @@ def _public_record_fields(record: dict) -> dict:
     }
 
 
-def _merge_record_fields(primary: dict, secondary: dict) -> dict:
-    """Merge two records, preferring primary but taking better secondary values.
+def _scrub_persisted_text(text: str) -> str:
+    scrubbed = _DISCOVERED_EMAIL_RE.sub(_REDACTED, str(text or ""))
 
-    Uses FieldDecisionEngine for sanitisation-aware merge preference.
-    """
+    def _replace_phone(match: re.Match[str]) -> str:
+        candidate = match.group(0)
+        digits_only = re.sub(r"\D", "", candidate)
+        if 10 <= len(digits_only) <= 15:
+            return _REDACTED
+        return candidate
+
+    return _DISCOVERED_PHONE_CANDIDATE_RE.sub(_replace_phone, scrubbed)
+
+
+def _sanitize_review_bucket(value: object) -> object:
+    if not isinstance(value, list):
+        return _sanitize_discovered_data_value(value)
+    sanitized_rows: list[object] = []
+    for row in value:
+        if not isinstance(row, dict):
+            sanitized_rows.append(_sanitize_discovered_data_value(row))
+            continue
+        sanitized_row = {
+            key: _sanitize_discovered_data_value(item)
+            for key, item in row.items()
+        }
+        if "value" in sanitized_row:
+            sanitized_row["value"] = _sanitize_discovered_data_value(row.get("value"))
+        sanitized_rows.append(sanitized_row)
+    return sanitized_rows
+
+
+def _sanitize_discovered_fields(value: object) -> object:
+    if not isinstance(value, dict):
+        return _sanitize_discovered_data_value(value)
+    return {
+        key: _sanitize_discovered_data_value(item)
+        for key, item in value.items()
+    }
+
+
+def _sanitize_discovered_data_value(value: object) -> object:
+    if isinstance(value, str):
+        return _scrub_persisted_text(value)
+    if isinstance(value, dict):
+        sanitized: dict[object, object] = {}
+        for key, inner_value in value.items():
+            key_text = str(key)
+            if key_text == "review_bucket":
+                sanitized[key] = _sanitize_review_bucket(inner_value)
+                continue
+            if key_text == "discovered_fields":
+                sanitized[key] = _sanitize_discovered_fields(inner_value)
+                continue
+            sanitized[key] = _sanitize_discovered_data_value(inner_value)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_discovered_data_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_discovered_data_value(item) for item in value)
+    return value
+
+
+def _sanitize_persisted_record_payload(
+    record: dict[str, object] | None,
+    *,
+    discovered_data: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    sanitized_record = dict(record or {})
+    sanitized_record.pop("_raw_item", None)
+    sanitized_record = {
+        key: value
+        for key, value in sanitized_record.items()
+        if not str(key).startswith("_")
+    }
+    sanitized_discovered = {
+        key: value
+        for key, value in dict(discovered_data or {}).items()
+        if key not in _PERSISTENCE_DISALLOWED_DISCOVERED_KEYS
+    }
+    sanitized_discovered = _sanitize_discovered_data_value(sanitized_discovered)
+    return sanitized_record, sanitized_discovered
+
+
+def _merge_record_fields(
+    primary: dict,
+    secondary: dict,
+    *,
+    return_reconciliation: bool = False,
+) -> dict | tuple[dict, dict[str, dict[str, object]]]:
+    """Merge two records through the field arbitration engine."""
     from app.services.extract import FieldDecisionEngine
 
     engine = FieldDecisionEngine()
-    merged = dict(primary)
-    for key, value in secondary.items():
-        if key.startswith("_"):
-            continue
-        merged[key] = engine.decide_merge_preference(key, merged.get(key), value)
-    return merged
-
-
-def _should_prefer_secondary_field(
-    field_name: str, existing: object, candidate: object
-) -> bool:
-    """Determine if secondary field value should be preferred."""
-    from .utils import _clean_candidate_text
-    
-    if candidate in (None, "", [], {}):
-        return False
-    if existing in (None, "", [], {}):
-        return True
-        
-    existing_text = _clean_candidate_text(existing, limit=None).casefold()
-    candidate_text = _clean_candidate_text(candidate, limit=None).casefold()
-    
-    if not candidate_text:
-        return False
-
-    # 1. Long-form text fields: longer is generally better
-    if field_name in {"description", "specifications", "responsibilities", "requirements"}:
-        return len(candidate_text) > len(existing_text)
-
-    # 2. Short-form categorical fields: prevent long noise from overwriting short facts
-    if field_name in {"brand", "category", "color", "size", "availability"}:
-        # FIX: If the candidate is suspiciously long (e.g., a sentence), reject it
-        if len(candidate_text) > 40 or len(candidate_text.split()) > 5:
-            return False
-            
-        low_quality_tokens = {
-            "cookie", "privacy", "sign in", "log in", 
-            "account", "home", "menu", "agree", "policy"
+    merged = engine.merge_record_fields(
+        primary,
+        secondary,
+        return_reconciliation=return_reconciliation,
+    )
+    if return_reconciliation:
+        merged_record, reconciliation = merged
+        return merged_record, {
+            key: _compact_dict(value) for key, value in reconciliation.items()
         }
-        existing_is_noisy = any(token in existing_text for token in low_quality_tokens)
-        candidate_is_noisy = any(token in candidate_text for token in low_quality_tokens)
-        
-        if existing_is_noisy and not candidate_is_noisy:
-            return True
-        if not existing_is_noisy and candidate_is_noisy:
-            return False
-            
-        # If both are clean, prefer the slightly longer/richer label,
-        # but only up to our 40-character safety cap.
-        return len(candidate_text) > len(existing_text)
-
-    # 3. List-based fields (images)
-    if field_name == "additional_images":
-        existing_count = len([p.strip() for p in (existing if isinstance(existing, (list, tuple)) else str(existing or "").split(",")) if p.strip()])
-        candidate_count = len([p.strip() for p in (candidate if isinstance(candidate, (list, tuple)) else str(candidate or "").split(",")) if p.strip()])
-        return candidate_count > existing_count
-        
-    return False
+    return merged
 
 
 def _requested_field_coverage(record: dict, requested_fields: list[str]) -> dict:

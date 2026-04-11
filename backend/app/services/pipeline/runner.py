@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 
 from .types import PipelineContext, PipelineStage
 from .utils import _elapsed_ms
+from .verdict import VERDICT_ERROR
 
 logger = logging.getLogger(__name__)
 
@@ -46,34 +47,87 @@ class PipelineRunner:
         self._on_before_stage = on_before_stage
         self._on_after_stage = on_after_stage
 
+    async def _handle_pipeline_error(
+        self,
+        ctx: PipelineContext,
+        *,
+        stage_name: str,
+        exc: Exception,
+    ) -> None:
+        logger.exception(
+            "Pipeline stage %s failed for run_id=%s url=%s",
+            stage_name,
+            getattr(ctx.run, "id", None),
+            ctx.url,
+        )
+        ctx.records = []
+        ctx.verdict = VERDICT_ERROR
+        ctx.url_metrics["pipeline_error"] = {
+            "stage": stage_name,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        if ctx.persist_logs:
+            try:
+                from .runtime_helpers import log_event
+
+                await log_event(
+                    ctx.session,
+                    ctx.run.id,
+                    "error",
+                    f"[PIPELINE] {stage_name} failed: {type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to persist pipeline error log for run_id=%s",
+                    getattr(ctx.run, "id", None),
+                    exc_info=True,
+                )
+
     async def execute(self, ctx: PipelineContext) -> None:
         """Run all stages in order.  Stops early if *ctx.verdict* is set."""
-        for stage in self._stages:
-            stage_name = type(stage).__name__
+        current_stage_name = "PipelineRunner"
+        try:
+            for stage in self._stages:
+                current_stage_name = type(stage).__name__
 
-            if self._on_before_stage is not None:
-                await self._on_before_stage(stage_name, ctx)
+                if self._on_before_stage is not None:
+                    await self._on_before_stage(current_stage_name, ctx)
 
-            started = time.perf_counter()
-            await stage.execute(ctx)
-            elapsed = _elapsed_ms(started)
+                started = time.perf_counter()
+                try:
+                    await stage.execute(ctx)
+                except Exception as exc:
+                    await self._handle_pipeline_error(
+                        ctx,
+                        stage_name=current_stage_name,
+                        exc=exc,
+                    )
+                    break
+                elapsed = _elapsed_ms(started)
 
-            # Record per-stage timing in metrics
-            ctx.url_metrics.setdefault("stage_timings_ms", {})[stage_name] = elapsed
+                # Record per-stage timing in metrics
+                ctx.url_metrics.setdefault("stage_timings_ms", {})[current_stage_name] = elapsed
 
-            if self._on_after_stage is not None:
-                await self._on_after_stage(stage_name, ctx)
+                if self._on_after_stage is not None:
+                    await self._on_after_stage(current_stage_name, ctx)
 
-            # Early pipeline stages may set terminal verdicts such as
-            # "blocked". ExtractStage also sets provisional verdicts that the
-            # final browser-retry stage may refine, so don't stop on those.
-            if ctx.verdict and stage_name != "ExtractStage":
-                logger.debug(
-                    "Pipeline short-circuited at %s with verdict=%s",
-                    stage_name,
-                    ctx.verdict,
-                )
-                break
+                # Early pipeline stages may set terminal verdicts such as
+                # "blocked". ExtractStage also sets provisional verdicts that the
+                # final browser-retry stage may refine, so don't stop on those.
+                if ctx.verdict and current_stage_name != "ExtractStage":
+                    logger.debug(
+                        "Pipeline short-circuited at %s with verdict=%s",
+                        current_stage_name,
+                        ctx.verdict,
+                    )
+                    break
+        except Exception as exc:
+            await self._handle_pipeline_error(
+                ctx,
+                stage_name=current_stage_name,
+                exc=exc,
+            )
 
 
 def build_default_stages(*, prefetch_only: bool = False) -> list[PipelineStage]:

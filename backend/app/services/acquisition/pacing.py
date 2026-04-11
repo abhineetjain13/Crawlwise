@@ -121,7 +121,7 @@ async def wait_for_host_slot(
 
     return await redis_fail_open(
         _wait,
-        default=0.0,
+        default=interval_seconds,
         operation_name=f"wait_for_host_slot:{normalized_host}",
     )
 

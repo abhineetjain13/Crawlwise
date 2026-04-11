@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.extract.noise_policy import is_noisy_product_attribute_entry
+from app.services.extract.noise_policy import sanitize_product_attribute_map
 from app.services.normalizers import normalize_and_validate_value
 from app.services.requested_field_policy import normalize_requested_field
 
@@ -104,35 +104,6 @@ def _sync_selected_variant_root_fields(final_candidates: dict[str, list[dict]]) 
         final_candidates[field_name] = [{"value": value, "source": source}]
 
 
-def _sanitize_structured_variant_output(
-    final_candidates: dict[str, list[dict]],
-) -> None:
-    variant_axes_rows = final_candidates.get("variant_axes")
-    if not isinstance(variant_axes_rows, list) or not variant_axes_rows:
-        return
-    axis_payload = (
-        variant_axes_rows[0].get("value")
-        if isinstance(variant_axes_rows[0], dict)
-        else None
-    )
-    if not isinstance(axis_payload, dict):
-        return
-    cleaned_axes, moved_attributes = _split_variant_axes(axis_payload)
-    if cleaned_axes:
-        final_candidates["variant_axes"] = [
-            {**variant_axes_rows[0], "value": cleaned_axes}
-        ]
-    else:
-        final_candidates.pop("variant_axes", None)
-    if moved_attributes:
-        _merge_product_attributes_into_candidates(
-            final_candidates,
-            moved_attributes,
-            source=str(variant_axes_rows[0].get("source") or "variant_axes").strip()
-            or "variant_axes",
-        )
-
-
 def _merge_product_attributes_into_candidates(
     final_candidates: dict[str, list[dict]],
     attributes: dict[str, object],
@@ -152,38 +123,33 @@ def _merge_product_attributes_into_candidates(
         if isinstance(current, dict):
             merged.update(current)
     merged.update(attributes)
-    final_candidates["product_attributes"] = [{"value": merged, "source": source}]
+    sanitized = sanitize_product_attribute_map(
+        merged,
+        blocked_keys=_STRUCTURED_CANONICAL_ATTRIBUTE_KEYS,
+    )
+    if sanitized:
+        final_candidates["product_attributes"] = [{"value": sanitized, "source": source}]
+    else:
+        final_candidates.pop("product_attributes", None)
 
 
 def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> None:
     product_rows = final_candidates.get("product_attributes")
     if not isinstance(product_rows, list) or not product_rows:
         return
-    payload = (
-        product_rows[0].get("value") if isinstance(product_rows[0], dict) else None
-    )
+    product_row = product_rows[0]
+    payload = product_row.get("value") if isinstance(product_row, dict) else None
     if not isinstance(payload, dict):
         final_candidates.pop("product_attributes", None)
         return
-    sanitized = dict(payload)
-    canonical_keys = {
+    blocked_keys = {
         key
         for key in final_candidates.keys()
         if key in _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS and key != "product_attributes"
     } | _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS
-    for key in list(sanitized.keys()):
-        normalized_key = _canonical_structured_key(key)
-        if normalized_key in canonical_keys:
-            sanitized.pop(key, None)
-            continue
-        if is_noisy_product_attribute_entry(
-            normalized_key or str(key), sanitized.get(key)
-        ):
-            sanitized.pop(key, None)
+    sanitized = sanitize_product_attribute_map(payload, blocked_keys=blocked_keys)
     if sanitized:
-        final_candidates["product_attributes"] = [
-            {**product_rows[0], "value": sanitized}
-        ]
+        final_candidates["product_attributes"] = [{**product_row, "value": sanitized}]
     else:
         final_candidates.pop("product_attributes", None)
 
@@ -217,7 +183,10 @@ def _reconcile_variant_bundle(
             else -1
         )
         if selected_variant and matched_index >= 0:
-            merged_selected = _merge_variant_records(variants[matched_index], selected_variant)
+            merged_selected = _merge_variant_records(
+                variants[matched_index],
+                selected_variant,
+            )
             variants[matched_index] = merged_selected
             selected_variant = merged_selected
         elif selected_variant and _is_meaningful_variant_record(selected_variant):
@@ -234,7 +203,9 @@ def _reconcile_variant_bundle(
             variant_axes, variant_attributes = _split_variant_axes(merged_axis_values)
             if variant_axes:
                 source = _row_source_label(variants_row, fallback="variants")
-                final_candidates["variant_axes"] = [{"value": variant_axes, "source": source}]
+                final_candidates["variant_axes"] = [
+                    {"value": variant_axes, "source": source}
+                ]
             else:
                 final_candidates.pop("variant_axes", None)
             if variant_attributes:
@@ -252,26 +223,20 @@ def _reconcile_variant_bundle(
                 "source": _row_source_label(variants_row, fallback="variants"),
             }
         ]
+        selected_source = _row_source_label(
+            selected_row or variants_row,
+            fallback="selected_variant",
+        )
         if selected_variant:
             final_candidates["selected_variant"] = [
                 {
                     "value": selected_variant,
-                    "source": _row_source_label(selected_row or variants_row, fallback="selected_variant"),
+                    "source": selected_source,
                 }
             ]
         else:
             final_candidates.pop("selected_variant", None)
         return
-
-    if selected_variant:
-        final_candidates["selected_variant"] = [
-            {
-                "value": selected_variant,
-                "source": _row_source_label(selected_row, fallback="selected_variant"),
-            }
-        ]
-    else:
-        final_candidates.pop("selected_variant", None)
 
     if variant_axes:
         cleaned_axes, moved_attributes = _split_variant_axes(variant_axes)
@@ -292,6 +257,16 @@ def _reconcile_variant_bundle(
             )
     else:
         final_candidates.pop("variant_axes", None)
+
+    if selected_variant:
+        final_candidates["selected_variant"] = [
+            {
+                "value": selected_variant,
+                "source": _row_source_label(selected_row, fallback="selected_variant"),
+            }
+        ]
+    else:
+        final_candidates.pop("selected_variant", None)
 
 
 def _merge_variant_axis_values(

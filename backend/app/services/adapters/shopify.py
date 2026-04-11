@@ -8,7 +8,7 @@ from json import loads as parse_json
 from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.acquisition.http_client import requests as curl_requests
+from app.services.acquisition import requests as curl_requests
 
 _FETCH_ERRORS = (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError)
 

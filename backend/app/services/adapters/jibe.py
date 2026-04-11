@@ -7,7 +7,7 @@ from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.acquisition.http_client import requests as curl_requests
+from app.services.acquisition import requests as curl_requests
 from bs4 import BeautifulSoup
 
 

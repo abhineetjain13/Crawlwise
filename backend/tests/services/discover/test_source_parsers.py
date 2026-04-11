@@ -1,6 +1,9 @@
 # Tests for HTML source parsing helpers.
 from __future__ import annotations
 
+import pytest
+
+from app.services.extract import source_parsers
 from app.services.extract.source_parsers import parse_page_sources
 
 
@@ -264,3 +267,61 @@ def test_parse_page_sources_react_create_element_props_handles_nested_template_e
     """
     page_sources = parse_page_sources(html)
     assert page_sources["hydrated_states"][0]["title"] == "Widget"
+
+
+def test_parse_page_sources_uses_pure_sync_json_parsing(monkeypatch: pytest.MonkeyPatch):
+    html = """
+    <html><body>
+    <script id="__NEXT_DATA__">{"props":{"pageProps":{"product":{"name":"NextWidget"}}}}</script>
+    <script>
+    dataLayer.push({
+        "ecommerce": {
+            "items": [
+                {
+                    "price": 19.99,
+                    "currency": "USD"
+                }
+            ]
+        }
+    });
+    </script>
+    </body></html>
+    """
+
+    def _unexpected_async_usage(*_args, **_kwargs):
+        raise AssertionError("sync parser should not spin up asyncio helpers")
+
+    monkeypatch.setattr(source_parsers.asyncio, "run", _unexpected_async_usage)
+    monkeypatch.setattr(source_parsers.asyncio, "to_thread", _unexpected_async_usage)
+
+    page_sources = parse_page_sources(html)
+
+    assert page_sources["next_data"]["props"]["pageProps"]["product"]["name"] == "NextWidget"
+    assert page_sources["datalayer"]["price"] == 19.99
+
+
+@pytest.mark.asyncio
+async def test_parse_page_sources_async_offloads_sync_parser(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    html = """
+    <html><body>
+    <script type="application/ld+json">
+    {"@type": "Product", "name": "Async Widget", "price": "19.99"}
+    </script>
+    </body></html>
+    """
+    captured: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+    real_parse_page_sources = source_parsers.parse_page_sources
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        captured.append((func, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(source_parsers.asyncio, "to_thread", _fake_to_thread)
+
+    page_sources = await source_parsers.parse_page_sources_async(html)
+
+    assert captured
+    assert captured[0][0] is real_parse_page_sources
+    assert page_sources["json_ld"][0]["name"] == "Async Widget"

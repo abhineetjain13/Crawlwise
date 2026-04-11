@@ -511,115 +511,38 @@ COLLECTION_KEYS = [
     "response",
 ]
 
-REQUESTED_FIELD_ALIASES = {
-    "responsibilities": [
-        "responsibilities",
-        "job responsibilities",
-        "key responsibilities",
-        "duties",
-        "job duties",
-        "what you'll do",
-        "what you’ll do",
-        "what_you_ll_do",
-        "what_you_will_do",
-        "role responsibilities",
-    ],
-    "qualifications": [
-        "qualifications",
-        "job qualifications",
-        "job_qualification",
-        "prerequisites",
-        "minimum requirements",
-        "minimum_requirements",
-        "preferred qualifications",
-        "preferred_qualifications",
-        "who you are",
-        "what we're looking for",
-        "what we're looking for",
-    ],
-    "benefits": [
-        "benefits",
-        "job benefits",
-        "job_benefits",
-        "perks",
-        "why you'll love this job",
-        "why you'll love this job",
-        "life at stripe",
-        "what we offer",
-    ],
-    "skills": [
-        "skills",
-        "job skills",
-        "job_skills",
-        "competencies",
-        "abilities",
-        "experience",
-        "what you'll bring",
-        "what you'll bring",
-    ],
-    "summary": [
-        "summary",
-        "overview",
-        "about",
-        "description",
-        "our opportunity",
-        "about the role",
-        "about the team",
-    ],
-    "specifications": [
-        "specifications",
-        "specs",
-        "spec",
-        "details",
-        "technical details",
-        "tech specs",
-        "product details",
-        "the details",
-    ],
-    "features": [
-        "features",
-        "highlights",
-        "key features",
-    ],
-    "materials": [
-        "materials",
-        "material",
-        "fabrics",
-        "fabric",
-        "composition",
-        "fabric content",
-        "material composition",
-    ],
-    "material": [
-        "materials",
-        "material",
-        "fabrics",
-        "fabric",
-        "composition",
-        "fabric content",
-        "material composition",
-    ],
-    "care": [
-        "care",
-        "care instructions",
-        "product care",
-        "washing instructions",
-    ],
-    "dimensions": [
-        "dimensions",
-        "sizing",
-        "measurements",
-    ],
-    "remote": [
-        "remote",
-        "work from home",
-        "wfh",
-    ],
-    "requirements": [
-        "requirements",
-        "job_requirements",
-        "prerequisites",
-    ],
+def _dedupe_aliases(*groups: object) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        if isinstance(group, str):
+            candidates = (group,)
+        elif isinstance(group, (list, tuple, set)):
+            candidates = group
+        else:
+            continue
+        for alias in candidates:
+            cleaned = str(alias).strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                deduped.append(cleaned)
+    return deduped
+
+
+_REQUESTED_FIELD_ALIAS_BASES = {
+    "responsibilities": FIELD_ALIASES["responsibilities"],
+    "qualifications": FIELD_ALIASES["qualifications"],
+    "benefits": FIELD_ALIASES["benefits"],
+    "skills": FIELD_ALIASES["skills"],
+    "summary": FIELD_ALIASES["summary"],
+    "specifications": FIELD_ALIASES["specifications"],
+    "features": FIELD_ALIASES["features"],
+    "materials": FIELD_ALIASES["materials"],
+    "material": FIELD_ALIASES["materials"],
+    "care": FIELD_ALIASES["care"],
+    "dimensions": FIELD_ALIASES["dimensions"],
+    "remote": FIELD_ALIASES["remote"],
+    "requirements": FIELD_ALIASES["requirements"],
     "country_of_origin": [
         "country of origin",
         "country_of_origin",
@@ -630,15 +553,44 @@ REQUESTED_FIELD_ALIASES = {
         "importer_info",
         "importer name and address",
     ],
-    "color_variants": [
-        "color variants",
-        "color_variants",
-        "available colors",
-        "colors",
-        "swatch",
-        "color_swatch",
-        "color_options",
-    ],
+    "color_variants": FIELD_ALIASES["color_variants"],
+}
+_REQUESTED_FIELD_ALIAS_EXTRAS = {
+    "responsibilities": (
+        "job responsibilities",
+        "key responsibilities",
+        "job duties",
+        "what you'll do",
+        "what_you_ll_do",
+        "what_you_will_do",
+        "role responsibilities",
+    ),
+    "qualifications": (
+        "job qualifications",
+        "job_qualification",
+        "minimum requirements",
+        "minimum_requirements",
+        "preferred qualifications",
+        "preferred_qualifications",
+        "who you are",
+        "what we're looking for",
+    ),
+    "benefits": ("job benefits", "perks", "why you'll love this job", "life at stripe"),
+    "skills": ("job skills", "job_skills", "experience", "what you'll bring"),
+    "summary": ("description", "our opportunity", "about the role", "about the team"),
+    "specifications": ("specs", "spec", "technical details", "tech specs", "the details"),
+    "features": ("key features",),
+    "materials": ("fabrics", "material composition"),
+    "material": ("fabrics", "material composition"),
+    "care": ("care instructions", "washing instructions"),
+}
+
+REQUESTED_FIELD_ALIASES = {
+    canonical: _dedupe_aliases(
+        _REQUESTED_FIELD_ALIAS_BASES[canonical],
+        _REQUESTED_FIELD_ALIAS_EXTRAS.get(canonical, ()),
+    )
+    for canonical in _REQUESTED_FIELD_ALIAS_BASES
 }
 
 PROMPT_REGISTRY = {

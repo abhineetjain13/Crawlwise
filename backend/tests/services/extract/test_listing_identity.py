@@ -43,3 +43,12 @@ def test_merge_does_not_override_existing_url_on_backfill_path() -> None:
     merged = merge_record_sets_on_identity(primary, supplemental)
 
     assert merged[0]["url"] == "https://example.com/original"
+
+
+def test_merge_rejects_noisy_brand_candidates_via_field_decision_engine() -> None:
+    primary = [{"title": "A", "sku": "SKU-1", "brand": ""}]
+    supplemental = [[{"title": "A", "sku": "SKU-1", "brand": "Home privacy policy sign in"}]]
+
+    merged = merge_record_sets_on_identity(primary, supplemental)
+
+    assert merged[0]["brand"] == ""

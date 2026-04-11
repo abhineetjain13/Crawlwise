@@ -7,12 +7,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin
+from typing import Protocol
 
 from app.services.config.crawl_runtime import (
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
     LISTING_MIN_ITEMS,
     LOAD_MORE_WAIT_MIN_MS,
     PAGINATION_NAVIGATION_TIMEOUT_MS,
+    PAGINATION_PAGE_SIZE_ANOMALY_RATIO,
     SCROLL_WAIT_MIN_MS,
 )
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
@@ -33,7 +35,6 @@ LOAD_MORE_SELECTORS = list(PAGINATION_SELECTORS.get("load_more", []))
 _MAX_TRAVERSAL_FRAGMENTS = 50
 _MAX_TRAVERSAL_FRAGMENT_BYTES = 2_000_000
 _MAX_TRAVERSAL_TOTAL_BYTES = 6_000_000
-_PAGINATION_PAGE_SIZE_ANOMALY_RATIO = 5
 
 
 def _card_selectors_for_surface(surface: str | None) -> list[str]:
@@ -259,69 +260,159 @@ def _resolved_config(config: TraversalConfig | None) -> TraversalConfig:
     return config if config is not None else TraversalConfig()
 
 
-async def apply_traversal_mode(
-    page,
-    surface: str | None,
+def _log_traversal_result(
     traversal_mode: str | None,
-    max_scrolls: int,
-    *,
-    config: TraversalConfig | None = None,
-    max_pages: int,
-    request_delay_ms: int,
-    page_content_with_retry: Callable[..., Awaitable[str]],
-    wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]],
-    wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]],
-    peek_next_page_signal: Callable[..., Awaitable[dict[str, object] | None]],
-    click_and_observe_next_page: Callable[..., Awaitable[str | AdvanceResult]] | None = None,
-    advance_next_page_fn: Callable[..., Awaitable[AdvanceResult]] | None = None,
-    has_load_more_control: Callable[..., Awaitable[bool]],
-    dismiss_cookie_consent: Callable[..., Awaitable[None]],
-    pause_after_navigation: Callable[..., Awaitable[None]],
-    expand_all_interactive_elements: Callable[..., Awaitable[dict[str, object]]],
-    flatten_shadow_dom: Callable[..., Awaitable[None]],
-    cooperative_sleep_ms: Callable[..., Awaitable[None]],
-    snapshot_listing_page_metrics: Callable[..., Awaitable[dict[str, object]]],
-    ensure_memory_available: Callable[[], None] | None = None,
-    run_id: int | None = None,
-    traversal_artifact_dir: Path | None = None,
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-    progress_logger: Callable[[str], Awaitable[None]] | None = None,
-    goto_page: Callable[..., Awaitable[None]] | None = None,
+    result: TraversalResult,
 ) -> TraversalResult:
-    config = _resolved_config(config)
-    logger.info("[traversal] starting mode=%s surface=%s", traversal_mode, surface)
+    logger.info(
+        "[traversal] done mode=%s html_len=%s stop_reason=%s",
+        result.summary.get("mode", traversal_mode),
+        len(result.html or "") if result.html else 0,
+        result.summary.get("stop_reason"),
+    )
+    return result
 
-    def _log_and_return(result: TraversalResult) -> TraversalResult:
-        logger.info(
-            "[traversal] done mode=%s html_len=%s stop_reason=%s",
-            result.summary.get("mode", traversal_mode),
-            len(result.html or "") if result.html else 0,
-            result.summary.get("stop_reason"),
-        )
-        return result
 
-    normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface.endswith("_detail"):
-        return _log_and_return(TraversalResult(
-            summary={
-                "mode": traversal_mode,
-                "attempted": False,
-                "stop_reason": "detail_surface",
-            }
-        ))
-    collected_fragments: list[str] = []
-    seen_fragment_hashes: set[str] = set()
-    captured_fragment_bytes = 0
-    # Card-level dedup: identity string → True.  Prevents virtualized grids
-    # from producing duplicate cards across scroll steps.
-    seen_card_identities: set[str] = set()
-    # Container child signatures seen so far, used for DOM-diff fallback
-    # when CARD_SELECTORS match 0 elements.
-    known_container_sigs: list[str] = []
+@dataclass(slots=True)
+class TraversalRuntime:
+    page_content_with_retry: Callable[..., Awaitable[str]]
+    wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]]
+    wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]]
+    peek_next_page_signal: Callable[..., Awaitable[dict[str, object] | None]]
+    has_load_more_control: Callable[..., Awaitable[bool]]
+    dismiss_cookie_consent: Callable[..., Awaitable[None]]
+    pause_after_navigation: Callable[..., Awaitable[None]]
+    expand_all_interactive_elements: Callable[..., Awaitable[dict[str, object]]]
+    flatten_shadow_dom: Callable[..., Awaitable[None]]
+    cooperative_sleep_ms: Callable[..., Awaitable[None]]
+    snapshot_listing_page_metrics: Callable[..., Awaitable[dict[str, object]]]
+    click_and_observe_next_page: Callable[..., Awaitable[str | AdvanceResult]] | None = None
+    advance_next_page_fn: Callable[..., Awaitable[AdvanceResult]] | None = None
+    ensure_memory_available: Callable[[], None] | None = None
+    run_id: int | None = None
+    traversal_artifact_dir: Path | None = None
+    checkpoint: Callable[[], Awaitable[None]] | None = None
+    progress_logger: Callable[[str], Awaitable[None]] | None = None
+    goto_page: Callable[..., Awaitable[None]] | None = None
 
-    card_selectors = _card_selectors_for_surface(surface)
 
-    async def _capture_fragment(page, marker: str) -> None:
+@dataclass
+class _TraversalContext:
+    page: object
+    surface: str | None
+    traversal_mode: str | None
+    config: TraversalConfig
+    max_scrolls: int
+    max_pages: int
+    request_delay_ms: int
+    runtime: TraversalRuntime
+
+    @property
+    def page_content_with_retry(self) -> Callable[..., Awaitable[str]]:
+        return self.runtime.page_content_with_retry
+
+    @property
+    def wait_for_surface_readiness(
+        self,
+    ) -> Callable[..., Awaitable[dict[str, object] | None]]:
+        return self.runtime.wait_for_surface_readiness
+
+    @property
+    def wait_for_listing_readiness(
+        self,
+    ) -> Callable[..., Awaitable[dict[str, object] | None]]:
+        return self.runtime.wait_for_listing_readiness
+
+    @property
+    def peek_next_page_signal(
+        self,
+    ) -> Callable[..., Awaitable[dict[str, object] | None]]:
+        return self.runtime.peek_next_page_signal
+
+    @property
+    def click_and_observe_next_page(
+        self,
+    ) -> Callable[..., Awaitable[str | AdvanceResult]] | None:
+        return self.runtime.click_and_observe_next_page
+
+    @property
+    def advance_next_page_fn(self) -> Callable[..., Awaitable[AdvanceResult]] | None:
+        return self.runtime.advance_next_page_fn
+
+    @property
+    def has_load_more_control(self) -> Callable[..., Awaitable[bool]]:
+        return self.runtime.has_load_more_control
+
+    @property
+    def dismiss_cookie_consent(self) -> Callable[..., Awaitable[None]]:
+        return self.runtime.dismiss_cookie_consent
+
+    @property
+    def pause_after_navigation(self) -> Callable[..., Awaitable[None]]:
+        return self.runtime.pause_after_navigation
+
+    @property
+    def expand_all_interactive_elements(
+        self,
+    ) -> Callable[..., Awaitable[dict[str, object]]]:
+        return self.runtime.expand_all_interactive_elements
+
+    @property
+    def flatten_shadow_dom(self) -> Callable[..., Awaitable[None]]:
+        return self.runtime.flatten_shadow_dom
+
+    @property
+    def cooperative_sleep_ms(self) -> Callable[..., Awaitable[None]]:
+        return self.runtime.cooperative_sleep_ms
+
+    @property
+    def snapshot_listing_page_metrics(
+        self,
+    ) -> Callable[..., Awaitable[dict[str, object]]]:
+        return self.runtime.snapshot_listing_page_metrics
+
+    @property
+    def ensure_memory_available(self) -> Callable[[], None] | None:
+        return self.runtime.ensure_memory_available
+
+    @property
+    def run_id(self) -> int | None:
+        return self.runtime.run_id
+
+    @property
+    def traversal_artifact_dir(self) -> Path | None:
+        return self.runtime.traversal_artifact_dir
+
+    @property
+    def checkpoint(self) -> Callable[[], Awaitable[None]] | None:
+        return self.runtime.checkpoint
+
+    @property
+    def progress_logger(self) -> Callable[[str], Awaitable[None]] | None:
+        return self.runtime.progress_logger
+
+    @property
+    def goto_page(self) -> Callable[..., Awaitable[None]] | None:
+        return self.runtime.goto_page
+
+
+class TraversalStrategy(Protocol):
+    async def traverse(self) -> TraversalResult:
+        ...
+
+
+@dataclass
+class _FragmentCaptureState:
+    page_content_with_retry: Callable[..., Awaitable[str]]
+    checkpoint: Callable[[], Awaitable[None]] | None
+    card_selectors: list[str]
+    collected_fragments: list[str] = field(default_factory=list)
+    seen_fragment_hashes: set[str] = field(default_factory=set)
+    captured_fragment_bytes: int = 0
+    seen_card_identities: set[str] = field(default_factory=set)
+    known_container_sigs: list[str] = field(default_factory=list)
+
+    async def capture_fragment(self, page, marker: str) -> None:
         """Capture only card-level HTML instead of full page content.
 
         Strategy:
@@ -332,33 +423,30 @@ async def apply_traversal_mode(
         3. Only if both produce nothing, fall back to full page.content() —
            but this path should be rare.
         """
-        nonlocal captured_fragment_bytes
-        if len(collected_fragments) >= _MAX_TRAVERSAL_FRAGMENTS:
+        if len(self.collected_fragments) >= _MAX_TRAVERSAL_FRAGMENTS:
             return
 
         fragment_parts: list[str] = []
         try:
-            result = await page.evaluate(_JS_EXTRACT_CARDS, card_selectors)
+            result = await page.evaluate(_JS_EXTRACT_CARDS, self.card_selectors)
             cards = result.get("cards", []) if isinstance(result, dict) else []
             for card in cards:
                 identity = card.get("identity", "")
                 card_html = card.get("html", "")
                 if not card_html:
                     continue
-                if identity and identity in seen_card_identities:
+                if identity and identity in self.seen_card_identities:
                     continue
                 if identity:
-                    seen_card_identities.add(identity)
+                    self.seen_card_identities.add(identity)
                 fragment_parts.append(card_html)
         except (PlaywrightError, Exception):
             logger.debug("Card-selector extraction failed at %s", marker, exc_info=True)
-            cards = []
 
-        # Fallback: DOM diff of listing container when selectors matched nothing.
         if not fragment_parts:
             try:
                 diff_items = await page.evaluate(
-                    _JS_CONTAINER_DIFF, known_container_sigs
+                    _JS_CONTAINER_DIFF, self.known_container_sigs
                 )
                 if isinstance(diff_items, list):
                     for item in diff_items:
@@ -368,118 +456,171 @@ async def apply_traversal_mode(
                             continue
                         fragment_parts.append(item_html)
                         if item_sig:
-                            known_container_sigs.append(item_sig)
+                            self.known_container_sigs.append(item_sig)
             except (PlaywrightError, Exception):
                 logger.debug("Container-diff fallback failed at %s", marker, exc_info=True)
 
-        # Last resort: full page content (original behavior).
         if not fragment_parts:
-            html = await page_content_with_retry(page, checkpoint=checkpoint)
+            html = await self.page_content_with_retry(page, checkpoint=self.checkpoint)
             if not isinstance(html, str) or not html:
                 return
             encoded_size = len(html.encode("utf-8", errors="ignore"))
             if encoded_size > _MAX_TRAVERSAL_FRAGMENT_BYTES:
                 return
-            if captured_fragment_bytes + encoded_size > _MAX_TRAVERSAL_TOTAL_BYTES:
+            if self.captured_fragment_bytes + encoded_size > _MAX_TRAVERSAL_TOTAL_BYTES:
                 return
             fingerprint = hashlib.sha1(
                 html.encode("utf-8", errors="ignore")
             ).hexdigest()
-            if fingerprint in seen_fragment_hashes:
+            if fingerprint in self.seen_fragment_hashes:
                 return
-            seen_fragment_hashes.add(fingerprint)
-            captured_fragment_bytes += encoded_size
-            collected_fragments.append(
+            self.seen_fragment_hashes.add(fingerprint)
+            self.captured_fragment_bytes += encoded_size
+            self.collected_fragments.append(
                 f"<!-- PAGE BREAK:traversal:{marker}:{getattr(page, 'url', '')} -->\n{html}"
             )
             return
 
-        # Assemble targeted fragment from card parts.
         html = "\n".join(fragment_parts)
         encoded_size = len(html.encode("utf-8", errors="ignore"))
-        if captured_fragment_bytes + encoded_size > _MAX_TRAVERSAL_TOTAL_BYTES:
+        if self.captured_fragment_bytes + encoded_size > _MAX_TRAVERSAL_TOTAL_BYTES:
             return
-        captured_fragment_bytes += encoded_size
-        collected_fragments.append(
+        self.captured_fragment_bytes += encoded_size
+        self.collected_fragments.append(
             f"<!-- PAGE BREAK:traversal:{marker}:{getattr(page, 'url', '')} -->\n{html}"
         )
 
-    async def _capture_initial_fragment(page, marker: str) -> None:
-        if collected_fragments:
+    async def capture_initial_fragment(self, page, marker: str) -> None:
+        if self.collected_fragments:
             return
-        await _capture_fragment(page, marker)
+        await self.capture_fragment(page, marker)
 
-    if traversal_mode == "scroll":
-        await _capture_initial_fragment(page, "scroll-initial")
+    async def render_html(self, page) -> str:
+        if self.collected_fragments:
+            return "\n".join(self.collected_fragments)
+        return await self.page_content_with_retry(page, checkpoint=self.checkpoint)
+
+
+class _TraversalStrategyBase:
+    def __init__(self, context: _TraversalContext) -> None:
+        self.context = context
+
+    def _log_and_return(self, result: TraversalResult) -> TraversalResult:
+        return _log_traversal_result(self.context.traversal_mode, result)
+
+
+class ScrollStrategy(_TraversalStrategyBase):
+    def __init__(self, context: _TraversalContext) -> None:
+        super().__init__(context)
+        self._fragments = _FragmentCaptureState(
+            page_content_with_retry=context.page_content_with_retry,
+            checkpoint=context.checkpoint,
+            card_selectors=_card_selectors_for_surface(context.surface),
+        )
+
+    async def traverse(self) -> TraversalResult:
+        page = self.context.page
+        await self._fragments.capture_initial_fragment(page, "scroll-initial")
         summary = await scroll_to_bottom(
             page,
-            max_scrolls,
-            config=config,
-            request_delay_ms=request_delay_ms,
-            cooperative_sleep_ms=cooperative_sleep_ms,
-            snapshot_listing_page_metrics=snapshot_listing_page_metrics,
-            capture_dom_fragment=lambda current_page, index: _capture_fragment(
+            self.context.max_scrolls,
+            config=self.context.config,
+            request_delay_ms=self.context.request_delay_ms,
+            cooperative_sleep_ms=self.context.cooperative_sleep_ms,
+            snapshot_listing_page_metrics=self.context.snapshot_listing_page_metrics,
+            capture_dom_fragment=lambda current_page, index: self._fragments.capture_fragment(
                 current_page, f"scroll-{index}"
             ),
-            checkpoint=checkpoint,
+            checkpoint=self.context.checkpoint,
         )
-        await _capture_fragment(page, "scroll-final")
-        summary["pages_collected"] = len(collected_fragments)
-        summary["captured_fragment_bytes"] = captured_fragment_bytes
-        return _log_and_return(TraversalResult(
-            html="\n".join(collected_fragments) if collected_fragments else await page_content_with_retry(page, checkpoint=checkpoint),
-            summary=summary,
-        ))
+        await self._fragments.capture_fragment(page, "scroll-final")
+        summary["pages_collected"] = len(self._fragments.collected_fragments)
+        summary["captured_fragment_bytes"] = self._fragments.captured_fragment_bytes
+        return self._log_and_return(
+            TraversalResult(
+                html=await self._fragments.render_html(page),
+                summary=summary,
+            )
+        )
 
-    if traversal_mode == "load_more":
-        await _capture_initial_fragment(page, "load-more-initial")
+
+class LoadMoreStrategy(_TraversalStrategyBase):
+    def __init__(self, context: _TraversalContext) -> None:
+        super().__init__(context)
+        self._fragments = _FragmentCaptureState(
+            page_content_with_retry=context.page_content_with_retry,
+            checkpoint=context.checkpoint,
+            card_selectors=_card_selectors_for_surface(context.surface),
+        )
+
+    async def traverse(self) -> TraversalResult:
+        page = self.context.page
+        await self._fragments.capture_initial_fragment(page, "load-more-initial")
         summary = await click_load_more(
             page,
-            max_scrolls,
-            config=config,
-            request_delay_ms=request_delay_ms,
-            cooperative_sleep_ms=cooperative_sleep_ms,
-            snapshot_listing_page_metrics=snapshot_listing_page_metrics,
-            capture_dom_fragment=lambda current_page, index: _capture_fragment(
+            self.context.max_scrolls,
+            config=self.context.config,
+            request_delay_ms=self.context.request_delay_ms,
+            cooperative_sleep_ms=self.context.cooperative_sleep_ms,
+            snapshot_listing_page_metrics=self.context.snapshot_listing_page_metrics,
+            capture_dom_fragment=lambda current_page, index: self._fragments.capture_fragment(
                 current_page, f"load-more-{index}"
             ),
-            checkpoint=checkpoint,
+            checkpoint=self.context.checkpoint,
         )
-        await _capture_fragment(page, "load-more-final")
-        summary["pages_collected"] = len(collected_fragments)
-        summary["captured_fragment_bytes"] = captured_fragment_bytes
-        return _log_and_return(TraversalResult(
-            html="\n".join(collected_fragments) if collected_fragments else await page_content_with_retry(page, checkpoint=checkpoint),
-            summary=summary,
-        ))
+        await self._fragments.capture_fragment(page, "load-more-final")
+        summary["pages_collected"] = len(self._fragments.collected_fragments)
+        summary["captured_fragment_bytes"] = self._fragments.captured_fragment_bytes
+        return self._log_and_return(
+            TraversalResult(
+                html=await self._fragments.render_html(page),
+                summary=summary,
+            )
+        )
 
-    if traversal_mode == "paginate":
-        return _log_and_return(await collect_paginated_html(
-            page,
-            config=config,
-            surface=surface,
-            max_pages=max_pages,
-            request_delay_ms=request_delay_ms,
-            page_content_with_retry=page_content_with_retry,
-            wait_for_surface_readiness=wait_for_surface_readiness,
-            wait_for_listing_readiness=wait_for_listing_readiness,
-            click_and_observe_next_page=click_and_observe_next_page,
-            advance_next_page_fn=advance_next_page_fn,
-            dismiss_cookie_consent=dismiss_cookie_consent,
-            pause_after_navigation=pause_after_navigation,
-            expand_all_interactive_elements=expand_all_interactive_elements,
-            flatten_shadow_dom=flatten_shadow_dom,
-            ensure_memory_available=ensure_memory_available,
-            run_id=run_id,
-            traversal_artifact_dir=traversal_artifact_dir,
-            checkpoint=checkpoint,
-            progress_logger=progress_logger,
-            goto_page=goto_page,
-        ))
-    if traversal_mode == "auto":
+
+class PaginationStrategy(_TraversalStrategyBase):
+    async def traverse(self) -> TraversalResult:
+        result = await collect_paginated_html(
+            self.context.page,
+            config=self.context.config,
+            surface=self.context.surface,
+            max_pages=self.context.max_pages,
+            request_delay_ms=self.context.request_delay_ms,
+            page_content_with_retry=self.context.page_content_with_retry,
+            wait_for_surface_readiness=self.context.wait_for_surface_readiness,
+            wait_for_listing_readiness=self.context.wait_for_listing_readiness,
+            click_and_observe_next_page=self.context.click_and_observe_next_page,
+            advance_next_page_fn=self.context.advance_next_page_fn,
+            dismiss_cookie_consent=self.context.dismiss_cookie_consent,
+            pause_after_navigation=self.context.pause_after_navigation,
+            expand_all_interactive_elements=self.context.expand_all_interactive_elements,
+            flatten_shadow_dom=self.context.flatten_shadow_dom,
+            ensure_memory_available=self.context.ensure_memory_available,
+            run_id=self.context.run_id,
+            traversal_artifact_dir=self.context.traversal_artifact_dir,
+            checkpoint=self.context.checkpoint,
+            progress_logger=self.context.progress_logger,
+            goto_page=self.context.goto_page,
+        )
+        return self._log_and_return(result)
+
+
+class AutoTraversalStrategy(_TraversalStrategyBase):
+    def __init__(self, context: _TraversalContext) -> None:
+        super().__init__(context)
+        self._fragments = _FragmentCaptureState(
+            page_content_with_retry=context.page_content_with_retry,
+            checkpoint=context.checkpoint,
+            card_selectors=_card_selectors_for_surface(context.surface),
+        )
+
+    async def traverse(self) -> TraversalResult:
+        page = self.context.page
+
         async def _maybe_log_progress(message: str) -> None:
-            if progress_logger is not None:
-                await progress_logger(message)
+            if self.context.progress_logger is not None:
+                await self.context.progress_logger(message)
 
         async def _paginate_with_decision(
             *,
@@ -489,25 +630,25 @@ async def apply_traversal_mode(
         ) -> TraversalResult:
             paginated = await collect_paginated_html(
                 page,
-                config=config,
-                surface=surface,
-                max_pages=max_pages,
-                request_delay_ms=request_delay_ms,
-                page_content_with_retry=page_content_with_retry,
-                wait_for_surface_readiness=wait_for_surface_readiness,
-                wait_for_listing_readiness=wait_for_listing_readiness,
-                click_and_observe_next_page=click_and_observe_next_page,
-                advance_next_page_fn=advance_next_page_fn,
-                dismiss_cookie_consent=dismiss_cookie_consent,
-                pause_after_navigation=pause_after_navigation,
-                expand_all_interactive_elements=expand_all_interactive_elements,
-                flatten_shadow_dom=flatten_shadow_dom,
-                ensure_memory_available=ensure_memory_available,
-                run_id=run_id,
-                traversal_artifact_dir=traversal_artifact_dir,
-                checkpoint=checkpoint,
-                progress_logger=progress_logger,
-                goto_page=goto_page,
+                config=self.context.config,
+                surface=self.context.surface,
+                max_pages=self.context.max_pages,
+                request_delay_ms=self.context.request_delay_ms,
+                page_content_with_retry=self.context.page_content_with_retry,
+                wait_for_surface_readiness=self.context.wait_for_surface_readiness,
+                wait_for_listing_readiness=self.context.wait_for_listing_readiness,
+                click_and_observe_next_page=self.context.click_and_observe_next_page,
+                advance_next_page_fn=self.context.advance_next_page_fn,
+                dismiss_cookie_consent=self.context.dismiss_cookie_consent,
+                pause_after_navigation=self.context.pause_after_navigation,
+                expand_all_interactive_elements=self.context.expand_all_interactive_elements,
+                flatten_shadow_dom=self.context.flatten_shadow_dom,
+                ensure_memory_available=self.context.ensure_memory_available,
+                run_id=self.context.run_id,
+                traversal_artifact_dir=self.context.traversal_artifact_dir,
+                checkpoint=self.context.checkpoint,
+                progress_logger=self.context.progress_logger,
+                goto_page=self.context.goto_page,
             )
             if pre_pagination_html:
                 paginated.html = (
@@ -517,29 +658,22 @@ async def apply_traversal_mode(
                 )
                 paginated.summary["pages_collected"] = int(
                     paginated.summary.get("pages_collected", 0) or 0
-                ) + len(collected_fragments)
+                ) + len(self._fragments.collected_fragments)
             paginated.summary["decision"] = decision
             paginated.summary["steps"] = [
                 *steps,
                 *list(paginated.summary.get("steps") or []),
             ]
-            paginated.summary["captured_fragment_bytes"] = captured_fragment_bytes
+            paginated.summary["captured_fragment_bytes"] = (
+                self._fragments.captured_fragment_bytes
+            )
             return paginated
 
-        next_page_signal = await peek_next_page_signal(page)
+        next_page_signal = await self.context.peek_next_page_signal(page)
         if next_page_signal:
             await _maybe_log_progress("auto:paginate_first next_page_signal_detected")
-            await _capture_initial_fragment(page, "auto-initial")
-            initial_auto_html = (
-                "\n".join(collected_fragments)
-                if collected_fragments
-                else await page_content_with_retry(page, checkpoint=checkpoint)
-            )
-            # Hybrid page guard: detect infinite scroll signals before
-            # committing to pagination.  Many infinite-scroll sites include
-            # SEO-only <link rel="next"> or "Next" anchors that trick the
-            # pagination detector.  If infinite scroll signals are strong,
-            # skip pagination and return scroll-collected content.
+            await self._fragments.capture_initial_fragment(page, "auto-initial")
+            initial_auto_html = await self._fragments.render_html(page)
             infinite_scroll_signals = await _detect_infinite_scroll_signals(page)
             if infinite_scroll_signals.get("is_likely_infinite_scroll"):
                 logger.info(
@@ -548,91 +682,152 @@ async def apply_traversal_mode(
                     "signals=%s",
                     infinite_scroll_signals,
                 )
-                return _log_and_return(TraversalResult(
-                    html=initial_auto_html,
-                    summary={
-                        "mode": "auto",
-                        "attempted": True,
-                        "steps": [],
-                        "pages_collected": len(collected_fragments),
-                        "captured_fragment_bytes": captured_fragment_bytes,
-                        "decision": "hybrid_scroll_preferred",
-                        "stop_reason": "infinite_scroll_detected_over_seo_pagination",
-                        "infinite_scroll_signals": infinite_scroll_signals,
-                    }
-                ))
-            return _log_and_return(await _paginate_with_decision(
-                decision="paginate_first",
-                steps=[],
-            ))
+                return self._log_and_return(
+                    TraversalResult(
+                        html=initial_auto_html,
+                        summary={
+                            "mode": "auto",
+                            "attempted": True,
+                            "steps": [],
+                            "pages_collected": len(self._fragments.collected_fragments),
+                            "captured_fragment_bytes": self._fragments.captured_fragment_bytes,
+                            "decision": "hybrid_scroll_preferred",
+                            "stop_reason": "infinite_scroll_detected_over_seo_pagination",
+                            "infinite_scroll_signals": infinite_scroll_signals,
+                        },
+                    )
+                )
+            return self._log_and_return(
+                await _paginate_with_decision(
+                    decision="paginate_first",
+                    steps=[],
+                )
+            )
 
-        await _capture_initial_fragment(page, "auto-initial")
+        await self._fragments.capture_initial_fragment(page, "auto-initial")
         scroll_summary = await scroll_to_bottom(
             page,
-            max_scrolls,
-            config=config,
-            request_delay_ms=request_delay_ms,
-            cooperative_sleep_ms=cooperative_sleep_ms,
-            snapshot_listing_page_metrics=snapshot_listing_page_metrics,
-            capture_dom_fragment=lambda current_page, index: _capture_fragment(
+            self.context.max_scrolls,
+            config=self.context.config,
+            request_delay_ms=self.context.request_delay_ms,
+            cooperative_sleep_ms=self.context.cooperative_sleep_ms,
+            snapshot_listing_page_metrics=self.context.snapshot_listing_page_metrics,
+            capture_dom_fragment=lambda current_page, index: self._fragments.capture_fragment(
                 current_page, f"auto-scroll-{index}"
             ),
-            checkpoint=checkpoint,
+            checkpoint=self.context.checkpoint,
         )
         progress_steps: list[dict[str, object]] = [scroll_summary]
-        if await has_load_more_control(page, config):
+        if await self.context.has_load_more_control(page, self.context.config):
             load_more_summary = await click_load_more(
                 page,
-                max_scrolls,
-                config=config,
-                request_delay_ms=request_delay_ms,
-                cooperative_sleep_ms=cooperative_sleep_ms,
-                snapshot_listing_page_metrics=snapshot_listing_page_metrics,
-                capture_dom_fragment=lambda current_page, index: _capture_fragment(
+                self.context.max_scrolls,
+                config=self.context.config,
+                request_delay_ms=self.context.request_delay_ms,
+                cooperative_sleep_ms=self.context.cooperative_sleep_ms,
+                snapshot_listing_page_metrics=self.context.snapshot_listing_page_metrics,
+                capture_dom_fragment=lambda current_page, index: self._fragments.capture_fragment(
                     current_page, f"auto-load-more-{index}"
                 ),
-                checkpoint=checkpoint,
+                checkpoint=self.context.checkpoint,
             )
             progress_steps = [load_more_summary]
 
-        await _capture_fragment(page, "auto-pre-pagination")
-        pre_pagination_html = (
-            "\n".join(collected_fragments)
-            if collected_fragments
-            else await page_content_with_retry(page, checkpoint=checkpoint)
-        )
+        await self._fragments.capture_fragment(page, "auto-pre-pagination")
+        pre_pagination_html = await self._fragments.render_html(page)
 
-        next_page_signal = await peek_next_page_signal(page)
+        next_page_signal = await self.context.peek_next_page_signal(page)
         if next_page_signal:
             await _maybe_log_progress(
                 "auto:progress_then_paginate next_page_signal_detected"
             )
-            return _log_and_return(await _paginate_with_decision(
-                decision="progress_then_paginate",
-                steps=progress_steps,
-                pre_pagination_html=pre_pagination_html,
-            ))
+            return self._log_and_return(
+                await _paginate_with_decision(
+                    decision="progress_then_paginate",
+                    steps=progress_steps,
+                    pre_pagination_html=pre_pagination_html,
+                )
+            )
 
-        return _log_and_return(TraversalResult(
-            html=pre_pagination_html,
-            summary={
-                "mode": "auto",
-                "attempted": True,
-                "steps": progress_steps,
-                "pages_collected": len(collected_fragments),
-                "captured_fragment_bytes": captured_fragment_bytes,
-                "decision": "progress_without_pagination",
-                "stop_reason": "no_pagination_after_scroll_or_load_more",
-            }
-        ))
-    return _log_and_return(TraversalResult(
-        summary={
-            "mode": traversal_mode,
-            "attempted": False,
-            "stop_reason": "mode_not_enabled",
-        }
-    ))
+        return self._log_and_return(
+            TraversalResult(
+                html=pre_pagination_html,
+                summary={
+                    "mode": "auto",
+                    "attempted": True,
+                    "steps": progress_steps,
+                    "pages_collected": len(self._fragments.collected_fragments),
+                    "captured_fragment_bytes": self._fragments.captured_fragment_bytes,
+                    "decision": "progress_without_pagination",
+                    "stop_reason": "no_pagination_after_scroll_or_load_more",
+                },
+            )
+        )
 
+
+class _NoOpTraversalStrategy(_TraversalStrategyBase):
+    async def traverse(self) -> TraversalResult:
+        return self._log_and_return(
+            TraversalResult(
+                summary={
+                    "mode": self.context.traversal_mode,
+                    "attempted": False,
+                    "stop_reason": "mode_not_enabled",
+                }
+            )
+        )
+
+
+def _traversal_strategy_for_mode(context: _TraversalContext) -> TraversalStrategy:
+    normalized_mode = str(context.traversal_mode or "").strip().lower()
+    strategy_map: dict[str, type[_TraversalStrategyBase]] = {
+        "scroll": ScrollStrategy,
+        "load_more": LoadMoreStrategy,
+        "paginate": PaginationStrategy,
+        "auto": AutoTraversalStrategy,
+    }
+    strategy_factory = strategy_map.get(normalized_mode, _NoOpTraversalStrategy)
+    return strategy_factory(context)
+
+
+async def apply_traversal_mode(
+    page,
+    surface: str | None,
+    traversal_mode: str | None,
+    max_scrolls: int,
+    *,
+    runtime: TraversalRuntime,
+    config: TraversalConfig | None = None,
+    max_pages: int,
+    request_delay_ms: int,
+) -> TraversalResult:
+    config = _resolved_config(config)
+    logger.info("[traversal] starting mode=%s surface=%s", traversal_mode, surface)
+
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface.endswith("_detail"):
+        return _log_traversal_result(
+            traversal_mode,
+            TraversalResult(
+                summary={
+                    "mode": traversal_mode,
+                    "attempted": False,
+                    "stop_reason": "detail_surface",
+                }
+            ),
+        )
+
+    context = _TraversalContext(
+        page=page,
+        surface=surface,
+        traversal_mode=traversal_mode,
+        config=config,
+        max_scrolls=max_scrolls,
+        max_pages=max_pages,
+        request_delay_ms=request_delay_ms,
+        runtime=runtime,
+    )
+    return await _traversal_strategy_for_mode(context).traverse()
 
 def _log_for_pytest(level: int, message: str, *args: object) -> None:
     logger.log(level, message, *args)
@@ -752,6 +947,24 @@ async def collect_paginated_html(
             page,
             page_number=page_index + 1,
         )
+        current_page_size = full_page_size
+        if page_index == 0:
+            _first_page_size = current_page_size
+        elif (
+            _first_page_size > 0
+            and current_page_size
+            >= _first_page_size * PAGINATION_PAGE_SIZE_ANOMALY_RATIO
+        ):
+            logger.warning(
+                "[TRAVERSAL] paginate:page_size_anomaly page=%s "
+                "first_page=%s current_page=%s ratio=%.1f — aborting",
+                page_index + 1,
+                _first_page_size,
+                current_page_size,
+                current_page_size / _first_page_size,
+            )
+            stop_reason = "page_size_anomaly"
+            break
         if traversal_artifact_dir is not None:
             await asyncio.to_thread(
                 traversal_artifact_dir.mkdir,
@@ -770,26 +983,6 @@ async def collect_paginated_html(
             fragments.append(
                 f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}"
             )
-        # Page-size anomaly guard: if a subsequent page is >=5x the first
-        # page, the "pages" are likely full-DOM captures of an infinite-scroll
-        # site served via offset URLs (e.g. 189KB -> 2MB).
-        current_page_size = full_page_size
-        if page_index == 0:
-            _first_page_size = current_page_size
-        elif (
-            _first_page_size > 0
-            and current_page_size >= _first_page_size * _PAGINATION_PAGE_SIZE_ANOMALY_RATIO
-        ):
-            logger.warning(
-                "[TRAVERSAL] paginate:page_size_anomaly page=%s "
-                "first_page=%s current_page=%s ratio=%.1f — aborting",
-                page_index + 1,
-                _first_page_size,
-                current_page_size,
-                current_page_size / _first_page_size,
-            )
-            stop_reason = "page_size_anomaly"
-            break
         steps.append(
             {
                 "action": "capture_page",

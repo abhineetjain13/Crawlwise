@@ -26,12 +26,21 @@ Completed in the current Slice 1 pass:
 
 - expanded `extract/noise_policy.py` to own shared social-host suppression, listing noise-group detection, reusable noise-container stripping, site-chrome detection, and noisy product-attribute rejection
 - removed local generic-noise wrappers from `listing_extractor.py`, `variant_extractor.py`, `detail_extractor.py`, and `variant_builder.py`
+- moved generic UI-noise stripping into `extract/noise_policy.py` and removed the remaining local implementation from `field_type_classifier.py`
 - aligned `CLAUDE.md` and `docs/INVARIANTS.md` with explicit canonical-output and no-schema-pollution requirements for listing/detail extraction
+- added direct shared-noise regression coverage in `backend/tests/services/extract/test_noise_policy.py`
+- removed the dead `backend/app/services/knowledge_base/` directory after confirming it only contained stale bytecode
+- cleared the structural import-hygiene gate by removing dead imports and making the pipeline verdict facade use a public `compute_verdict()` symbol
 
 Open baseline blockers discovered during verification:
 
-- `ruff check backend/app/services/ --select F401,F811 -q` currently fails on pre-existing unused imports in config and pipeline modules
-- `pytest backend/tests -q --tb=short --ignore=backend/tests/e2e` does not complete cleanly in the current baseline; the run timed out after reaching failures in `backend/tests/services/acquisition/test_http_client.py`
+- `ruff check backend/app/services/ --select F401,F811 -q` now passes after config/extract/pipeline cleanup
+- targeted regression gates now pass:
+  - `pytest backend/tests/services/extract/test_noise_policy.py -q --tb=short`
+  - `pytest backend/tests/services/extract/test_detail_extractor.py -q --tb=short`
+  - `pytest backend/tests/services/test_schema_service.py -q --tb=short`
+  - `pytest backend/tests/services/test_llm_runtime.py -q --tb=short`
+- `pytest backend/tests -q --tb=short --ignore=backend/tests/e2e` still needs a fresh full-suite verification pass; the last known baseline timeout was in `backend/tests/services/acquisition/test_http_client.py`
 
 These blockers are baseline cleanup items for Track A, not regressions introduced by the package-surface changes above.
 
@@ -102,7 +111,7 @@ Update `desired-backend-architecture.md` so it explicitly states:
 ## Slices 1-7: Consolidation Program
 
 ### Slice 1: Shared noise-policy extraction
-Status: in progress
+Status: completed
 
 Goal:
 Create one reusable owner for generic noise reduction so the system stops re-implementing “noise filtering” in multiple layers.
@@ -323,7 +332,7 @@ Reason for this order:
 
 | Slice | Title | Goal | Target LOC Reduction | Status |
 |---|---|---:|---:|---|
-| 1 | Shared noise-policy extraction | one owner for generic noise filtering | 800-1200 | Pending |
+| 1 | Shared noise-policy extraction | one owner for generic noise filtering | 800-1200 | Completed |
 | 2 | Single-owner field arbitration | one authority for winner selection | 700-1000 | Pending |
 | 3 | Shrink `extract/service.py` | orchestrator only | 1200-1800 | In Progress |
 | 4 | Collapse semantic/detail overlap | one owner for sections/specs/attrs | 700-1000 | Pending |

@@ -61,6 +61,7 @@ from app.services.acquisition.traversal import (
     AdvanceResult,
     TraversalConfig,
     TraversalResult,
+    TraversalRuntime,
     advance_next_page as _advance_next_page_shared,
     apply_traversal_mode,
     click_and_observe_next_page as _click_and_observe_next_page_shared,
@@ -84,6 +85,7 @@ from app.services.config.crawl_runtime import (
     LOAD_MORE_WAIT_MIN_MS,
     SCROLL_WAIT_MIN_MS,
     SHADOW_DOM_FLATTEN_MAX_HOSTS,
+    MAX_URL_PROCESS_TIMEOUT_SECONDS,
 )
 from app.services.config.selectors import (
     CARD_SELECTORS,
@@ -230,56 +232,57 @@ async def _fetch_rendered_html_with_fallback(
     first_profile_failure_reason: str | None = None
     options = runtime_options or BrowserRuntimeOptions()
     profiles = _browser_launch_profiles(options, target=target)
-    for index, profile in enumerate(profiles):
-        navigation_strategies = (
-            _shortened_navigation_strategies()
-            if _should_shorten_navigation_after_profile_failure(
-                first_profile_failure_reason
+    async with asyncio.timeout(MAX_URL_PROCESS_TIMEOUT_SECONDS):
+        for index, profile in enumerate(profiles):
+            navigation_strategies = (
+                _shortened_navigation_strategies()
+                if _should_shorten_navigation_after_profile_failure(
+                    first_profile_failure_reason
+                )
+                else _navigation_strategies(
+                    browser_channel=str(profile.get("channel") or "").strip() or None
+                )
             )
-            else _navigation_strategies(
-                browser_channel=str(profile.get("channel") or "").strip() or None
-            )
-        )
-        try:
-            result = await _fetch_rendered_html_attempt(
-                pw,
-                target=target,
-                url=url,
-                proxy=proxy,
-                surface=surface,
-                traversal_mode=traversal_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                prefer_stealth=prefer_stealth,
-                request_delay_ms=request_delay_ms,
-                runtime_options=options,
-                requested_fields=requested_fields,
-                requested_field_selectors=requested_field_selectors,
-                launch_profile=profile,
-                navigation_strategies=navigation_strategies,
-                checkpoint=checkpoint,
-                run_id=run_id,
-                session_context=session_context,
-            )
-            result.diagnostics["browser_launch_profile"] = profile["label"]
-            if index < len(profiles) - 1 and _should_retry_launch_profile(
-                result, surface=surface
-            ):
-                first_profile_failure_reason = "low_value_result"
-                logger.info(
-                    "Playwright %s produced a low-value result for %s; trying next launch profile",
-                    profile["label"],
-                    url,
+            try:
+                result = await _fetch_rendered_html_attempt(
+                    pw,
+                    target=target,
+                    url=url,
+                    proxy=proxy,
+                    surface=surface,
+                    traversal_mode=traversal_mode,
+                    max_pages=max_pages,
+                    max_scrolls=max_scrolls,
+                    prefer_stealth=prefer_stealth,
+                    request_delay_ms=request_delay_ms,
+                    runtime_options=options,
+                    requested_fields=requested_fields,
+                    requested_field_selectors=requested_field_selectors,
+                    launch_profile=profile,
+                    navigation_strategies=navigation_strategies,
+                    checkpoint=checkpoint,
+                    run_id=run_id,
+                    session_context=session_context,
+                )
+                result.diagnostics["browser_launch_profile"] = profile["label"]
+                if index < len(profiles) - 1 and _should_retry_launch_profile(
+                    result, surface=surface
+                ):
+                    first_profile_failure_reason = "low_value_result"
+                    logger.info(
+                        "Playwright %s produced a low-value result for %s; trying next launch profile",
+                        profile["label"],
+                        url,
+                    )
+                    continue
+                return result
+            except (PlaywrightError, RuntimeError, OSError) as exc:
+                last_error = exc
+                first_profile_failure_reason = _classify_profile_failure_reason(exc)
+                logger.warning(
+                    "Playwright %s failed for %s: %s", profile["label"], url, exc
                 )
                 continue
-            return result
-        except (PlaywrightError, RuntimeError, OSError) as exc:
-            last_error = exc
-            first_profile_failure_reason = _classify_profile_failure_reason(exc)
-            logger.warning(
-                "Playwright %s failed for %s: %s", profile["label"], url, exc
-            )
-            continue
     if last_error is not None:
         raise last_error
     raise BrowserError(f"Unable to render {url}")
@@ -579,14 +582,7 @@ async def _fetch_rendered_html_attempt(
                         )
 
                     progress_logger = _progress_logger
-                traversal_result = await apply_traversal_mode(
-                    page,
-                    surface,
-                    traversal_mode,
-                    max_scrolls,
-                    config=_traversal_config(),
-                    max_pages=max_pages,
-                    request_delay_ms=request_delay_ms,
+                traversal_runtime = TraversalRuntime(
                     page_content_with_retry=_page_content_with_retry,
                     wait_for_surface_readiness=_wait_for_surface_readiness,
                     wait_for_listing_readiness=_wait_for_listing_readiness,
@@ -611,6 +607,16 @@ async def _fetch_rendered_html_attempt(
                         surface=surface,
                         checkpoint=checkpoint,
                     ),
+                )
+                traversal_result = await apply_traversal_mode(
+                    page,
+                    surface,
+                    traversal_mode,
+                    max_scrolls,
+                    runtime=traversal_runtime,
+                    config=_traversal_config(),
+                    max_pages=max_pages,
+                    request_delay_ms=request_delay_ms,
                 )
             except (
                 PlaywrightError,
@@ -1377,8 +1383,6 @@ async def _save_cookies(
 
 
 def _check_memory_available() -> None:
-    if psutil is None:
-        return
     mem = psutil.virtual_memory()
     if int(mem.available) < _MIN_TRAVERSAL_MEMORY_BYTES:
         raise MemoryError("Insufficient memory for traversal")

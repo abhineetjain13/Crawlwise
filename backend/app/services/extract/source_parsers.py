@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from json import loads as parse_json
@@ -114,6 +115,15 @@ def parse_page_sources(
     }
 
 
+async def parse_page_sources_async(
+    html: str,
+    *,
+    soup: BeautifulSoup | None = None,
+) -> dict[str, object]:
+    """Async wrapper for CPU-bound page source parsing."""
+    return await asyncio.to_thread(parse_page_sources, html, soup=soup)
+
+
 def extract_json_ld(soup: BeautifulSoup) -> list[dict]:
     results = []
     for node in soup.select("script[type='application/ld+json']"):
@@ -140,11 +150,7 @@ def parse_datalayer(html: str) -> dict[str, object]:
     
     Returns empty dict if dataLayer absent or malformed.
     """
-    best_result: dict[str, object] = {}
-    best_score: tuple[int, int, int] | None = None
-
-    # Parse all valid ecommerce payloads from dataLayer.push(...) calls and prefer
-    # the richest product/detail payload rather than the first valid push.
+    # Preserve first-match semantics across dataLayer pushes.
     for push_index, match in enumerate(_DATALAYER_PUSH_RE.finditer(html)):
         start_pos = match.end()
         # Extract balanced JSON fragment starting from the opening brace
@@ -163,12 +169,14 @@ def parse_datalayer(html: str) -> dict[str, object]:
         result = _extract_datalayer_ecommerce_payload(ecommerce)
         if not result:
             continue
-        score = _score_datalayer_payload(result, push_index=push_index)
-        if best_score is None or score > best_score:
-            best_result = result
-            best_score = score
+        return {**result, "_selected_push_index": push_index}
 
-    return best_result
+    return {}
+
+
+async def parse_datalayer_async(html: str) -> dict[str, object]:
+    """Async wrapper for CPU-bound dataLayer parsing."""
+    return await asyncio.to_thread(parse_datalayer, html)
 
 
 def _extract_datalayer_ecommerce_payload(ecommerce: dict[str, object]) -> dict[str, object]:
@@ -309,10 +317,7 @@ def extract_apollo_state_from_meta(soup: BeautifulSoup) -> dict | None:
 def extract_next_data(soup: BeautifulSoup) -> dict | None:
     node = soup.select_one("script#__NEXT_DATA__")
     if node and node.string:
-        try:
-            parsed = parse_json(node.string)
-        except json.JSONDecodeError:
-            return None
+        parsed = _parse_json_blob(node.string)
         return parsed if isinstance(parsed, dict) else None
     return None
 
@@ -672,13 +677,20 @@ def _has_embedded_product_signals(
     }
 
 
-def _parse_json_blob(text: str) -> dict | list | None:
+def _normalized_json_candidate(text: str) -> str | None:
     candidate = str(text or "").strip()
     if not candidate:
         return None
     if candidate.endswith(";"):
         candidate = candidate[:-1].rstrip()
     if candidate[:1] not in "{[":
+        return None
+    return candidate
+
+
+def _parse_json_blob(text: str) -> dict | list | None:
+    candidate = _normalized_json_candidate(text)
+    if candidate is None:
         return None
     try:
         parsed = parse_json(candidate)

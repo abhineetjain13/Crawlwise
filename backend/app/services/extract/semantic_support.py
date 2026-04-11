@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from app.services.config.extraction_rules import (
     DIMENSION_KEYWORDS,
     FEATURE_SECTION_ALIASES,
+    JSONLD_TYPE_NOISE,
     SECTION_ANCESTOR_STOP_TAGS,
     SECTION_ANCESTOR_STOP_TOKENS,
     SECTION_SKIP_PATTERNS,
@@ -16,11 +17,17 @@ from app.services.config.extraction_rules import (
     SPEC_LABEL_BLOCK_PATTERNS,
 )
 from app.services.config.field_mappings import FIELD_ALIASES, REQUESTED_FIELD_ALIASES
+from app.services.extract.candidate_processing import (
+    _DYNAMIC_NUMERIC_FIELD_RE,
+    _coerce_scalar_for_dynamic_row,
+)
 from app.services.extract.noise_policy import (
     SECTION_BODY_SKIP_PHRASES as _SECTION_BODY_SKIP_PHRASES,
     SECTION_KEY_SKIP_PREFIXES as _SECTION_KEY_SKIP_PREFIXES,
     SECTION_LABEL_SKIP_TOKENS as _SECTION_LABEL_SKIP_TOKENS,
+    is_noisy_product_attribute_entry,
 )
+from app.services.extract.field_classifier import _dynamic_field_name_is_valid
 from app.services.requested_field_policy import normalize_requested_field
 from bs4 import BeautifulSoup, Tag
 
@@ -57,7 +64,15 @@ def extract_semantic_detail_data(
     adapter_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not html and soup is None:
-        return {"sections": {}, "specifications": {}, "promoted_fields": {}, "coverage": {}, "aggregates": {}, "table_groups": []}
+        return {
+            "sections": {},
+            "specifications": {},
+            "promoted_fields": {},
+            "coverage": {},
+            "aggregates": {},
+            "table_groups": [],
+            "semantic_rows": {},
+        }
 
     working_soup = deepcopy(soup) if soup is not None else BeautifulSoup(html, "html.parser")
     _strip_non_content_nodes(working_soup)
@@ -70,6 +85,7 @@ def extract_semantic_detail_data(
     promoted = _promote_semantic_fields(sections, specifications, requested_fields or [])
     coverage = _build_coverage(requested_fields or [], sections, specifications, promoted)
     aggregates = _build_semantic_aggregates(sections, specifications)
+    semantic_rows = _build_semantic_rows(sections, specifications, table_groups, aggregates)
     return {
         "sections": sections,
         "specifications": specifications,
@@ -77,6 +93,7 @@ def extract_semantic_detail_data(
         "coverage": coverage,
         "aggregates": aggregates,
         "table_groups": table_groups,
+        "semantic_rows": semantic_rows,
         "scope": _semantic_scope(page_url, adapter_records or []),
     }
 
@@ -148,6 +165,10 @@ def resolve_requested_field_values(
         if normalized in promoted_data and promoted_data[normalized] not in (None, "", [], {}):
             resolved[normalized] = promoted_data[normalized]
             continue
+        matched = _lookup_semantic_value(normalized, promoted_data)
+        if matched not in (None, "", [], {}):
+            resolved[normalized] = matched
+            continue
         matched = _lookup_semantic_value(normalized, section_data)
         if matched not in (None, "", [], {}):
             resolved[normalized] = matched
@@ -155,10 +176,6 @@ def resolve_requested_field_values(
         matched = _lookup_semantic_value(normalized, spec_data)
         if matched not in (None, "", [], {}):
             resolved[normalized] = matched
-            continue
-        match = _lookup_semantic_value(normalized, promoted_data)
-        if match not in (None, "", [], {}):
-            resolved[normalized] = match
     return resolved
 
 
@@ -224,6 +241,128 @@ def _build_semantic_aggregates(
     if feature_values:
         aggregates["features"] = SEMANTIC_AGGREGATE_SEPARATOR.join(feature_values)
     return aggregates
+
+
+def _build_semantic_rows(
+    sections: dict[str, str],
+    specifications: dict[str, str],
+    table_groups: list[dict[str, Any]],
+    aggregates: dict[str, str],
+) -> dict[str, list[dict[str, Any]]]:
+    rows: dict[str, list[dict[str, Any]]] = {}
+    product_attributes: dict[str, object] = {}
+
+    def append_row(
+        field_name: str,
+        value: object,
+        *,
+        source: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        coerced = _coerce_scalar_for_dynamic_row(value)
+        if coerced is None:
+            return
+        row = {"value": coerced, "source": source}
+        if metadata:
+            row.update(metadata)
+        rows.setdefault(field_name, []).append(row)
+
+    for field_name, value in sections.items():
+        normalized = normalize_requested_field(field_name)
+        if not normalized or value in (None, "", [], {}):
+            continue
+        coerced = _coerce_scalar_for_dynamic_row(value)
+        if coerced is None:
+            continue
+        if normalized in {"description", "summary", "overview"}:
+            append_row("description", coerced, source="semantic_section")
+            continue
+        if normalized in FEATURE_SECTION_ALIASES:
+            append_row("features", coerced, source="semantic_section")
+            continue
+        if normalized in {"materials", "material_composition", "fabric", "composition"}:
+            append_row("materials", coerced, source="semantic_section")
+        if not is_noisy_product_attribute_entry(normalized, coerced):
+            product_attributes.setdefault(normalized, coerced)
+
+    for field_name, value in specifications.items():
+        normalized = normalize_requested_field(field_name)
+        if (
+            not normalized
+            or value in (None, "", [], {})
+            or _DYNAMIC_NUMERIC_FIELD_RE.fullmatch(normalized)
+            or normalized in JSONLD_TYPE_NOISE
+            or not _dynamic_field_name_is_valid(normalized)
+        ):
+            continue
+        coerced = _coerce_scalar_for_dynamic_row(value)
+        if coerced is None:
+            continue
+        append_row(normalized, coerced, source="semantic_spec")
+        if not is_noisy_product_attribute_entry(normalized, coerced):
+            product_attributes.setdefault(normalized, coerced)
+
+    for group in table_groups:
+        if not isinstance(group, dict):
+            continue
+        group_label = _clean_text(group.get("title")) or _clean_text(group.get("caption"))
+        for row in group.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            normalized = normalize_requested_field(
+                row.get("normalized_key") or row.get("label")
+            )
+            display_label = _clean_text(row.get("label")) or normalized
+            value = row.get("value")
+            if (
+                not normalized
+                or value in (None, "", [], {})
+                or _DYNAMIC_NUMERIC_FIELD_RE.fullmatch(normalized)
+                or not _dynamic_field_name_is_valid(normalized)
+            ):
+                continue
+            coerced = _coerce_scalar_for_dynamic_row(value)
+            if coerced is None:
+                continue
+            target_fields = [normalized]
+            if normalized == "dimensions" and display_label.casefold() == "size":
+                target_fields.append("size")
+            metadata = {
+                "display_label": display_label,
+                "group_label": group_label or None,
+                "href": _clean_text(row.get("href")) or None,
+                "preserve_visible": bool(row.get("preserve_visible")),
+                "row_index": row.get("row_index"),
+                "table_index": group.get("table_index"),
+            }
+            for target_field in target_fields:
+                append_row(
+                    target_field,
+                    coerced,
+                    source="semantic_spec",
+                    metadata=metadata,
+                )
+
+    spec_entry_count = len(specifications)
+    for aggregate_field in ("specifications", "dimensions"):
+        value = aggregates.get(aggregate_field)
+        if value in (None, "", [], {}) or spec_entry_count < 2:
+            continue
+        coerced_agg = _coerce_scalar_for_dynamic_row(value)
+        if coerced_agg is not None:
+            append_row(aggregate_field, coerced_agg, source="semantic_spec")
+
+    feature_value = aggregates.get("features")
+    if feature_value not in (None, "", [], {}):
+        coerced_features = _coerce_scalar_for_dynamic_row(feature_value)
+        if coerced_features is not None:
+            append_row("features", coerced_features, source="semantic_section")
+
+    if product_attributes:
+        rows.setdefault("product_attributes", []).append(
+            {"value": product_attributes, "source": "semantic_spec"}
+        )
+    return rows
 
 
 def _collect_feature_values(sections: dict[str, str]) -> list[str]:

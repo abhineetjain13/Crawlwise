@@ -6,7 +6,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.acquisition.http_client import requests as curl_requests
+from app.services.acquisition import requests as curl_requests
 
 
 _CONFIG_RE = re.compile(r"var configsFromHost = (\{.*?\});\s*var Mountable", re.DOTALL)

@@ -367,6 +367,103 @@ def filter_relevant_network_record_set(
     return []
 
 
+def looks_like_facet_or_filter_url_for_listing(url_value: str) -> bool:
+    return _looks_like_facet_or_filter_url_for_listing(url_value)
+
+
+def looks_like_category_url_for_listing(url_value: str) -> bool:
+    return _looks_like_category_url_for_listing(url_value)
+
+
+def looks_like_listing_hub_url_for_listing(url_value: str) -> bool:
+    return _looks_like_listing_hub_url_for_listing(url_value)
+
+
+def looks_like_detail_record_url_for_listing(url_value: str) -> bool:
+    return _looks_like_detail_record_url_for_listing(url_value)
+
+
+def looks_like_navigation_or_action_title(title: str, url: str = "") -> bool:
+    lowered = (title or "").strip().lower()
+    if not lowered:
+        return True
+    if lowered in LISTING_NAVIGATION_TITLE_HINTS:
+        return True
+    if re.fullmatch(r"(?:next|previous|prev|back)(?:\s+\W+)?", lowered):
+        return True
+    if re.fullmatch(r"[a-z0-9.-]+\.(?:com|net|org|io|co|ai|in|uk)", lowered):
+        return True
+    lowered_url = url.lower().strip()
+    if lowered in {"login", "log in", "sign in"} and "/login" in lowered_url:
+        return True
+    return False
+
+
+def looks_like_alt_text_title(title: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not normalized:
+        return False
+    word_count = len(re.findall(r"[A-Za-z]{2,}", normalized))
+    if (
+        word_count >= 12
+        and LISTING_ALT_TEXT_TITLE_PATTERN
+        and LISTING_ALT_TEXT_TITLE_PATTERN.search(normalized)
+    ):
+        return True
+    if len(normalized) >= 95 and ("," in normalized or ";" in normalized):
+        return True
+    return False
+
+
+def looks_like_editorial_or_taxonomy_title(
+    title: str,
+    url: str = "",
+    price: str = "",
+) -> bool:
+    lowered = title.lower().strip()
+    if not lowered:
+        return False
+    if any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS):
+        return True
+    if lowered.startswith(LISTING_MERCHANDISING_TITLE_PREFIXES) and not price:
+        return True
+    if re.search(r"\(\d+\)\s*$", title):
+        return True
+    return False
+
+
+def is_listing_like_record(record: dict) -> bool:
+    title = str(record.get("title") or "").strip()
+    url = str(record.get("url") or "").strip()
+    price = str(record.get("price") or "").strip()
+    image = str(record.get("image_url") or record.get("image") or "").strip()
+    salary = str(record.get("salary") or "").strip()
+    company = str(record.get("company") or "").strip()
+
+    if title and looks_like_navigation_or_action_title(title, url):
+        return False
+    if title and looks_like_alt_text_title(title):
+        return False
+    if title and looks_like_editorial_or_taxonomy_title(title, url, price):
+        return False
+
+    evidence = 0
+    if title:
+        evidence += 1
+    if price or salary:
+        evidence += 2
+    if image:
+        evidence += 1
+    if company:
+        evidence += 1
+    if _looks_like_detail_record_url_for_listing(url):
+        evidence += 2
+    elif url and not _looks_like_listing_hub_url_for_listing(url):
+        evidence += 1
+
+    return evidence >= 2
+
+
 def _invalid_assessment(
     surface: str,
     public_fields: dict[str, object],

@@ -90,7 +90,8 @@ def _index_extraction_contract(extraction_contract: list[dict]) -> dict[str, dic
 
 
 def _extract_xpath_value(tree, xpath: str) -> str | None:
-    if tree is None or not xpath.strip():
+    xpath = str(xpath or "").strip()
+    if tree is None or not xpath:
         return None
     try:
         results = tree.xpath(xpath)
@@ -109,7 +110,8 @@ def _extract_xpath_value(tree, xpath: str) -> str | None:
 
 
 def _extract_regex_value(document_html: str, pattern: str) -> str | None:
-    if not pattern.strip():
+    pattern = str(pattern or "").strip()
+    if not pattern:
         return None
     try:
         match = re.search(pattern, document_html, re.DOTALL)

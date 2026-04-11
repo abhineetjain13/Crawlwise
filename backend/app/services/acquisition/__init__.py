@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.acquisition.http_client import HttpFetchResult, request_result, requests
+from app.services.acquisition.pacing import wait_for_host_slot
 from app.services.acquisition.browser_pool import (
     BrowserPool,
     browser_pool_snapshot,
@@ -34,10 +36,14 @@ __all__ = [
     "detect_blocked_page",
     "fetch_rendered_html",
     "expand_all_interactive_elements",
+    "HttpFetchResult",
     "reset_browser_pool_state",
     "prepare_browser_pool_for_worker_process",
+    "request_result",
+    "requests",
     "shutdown_browser_pool",
     "shutdown_browser_pool_sync",
     "scrub_network_payloads_for_storage",
     "validate_cookie_policy_config",
+    "wait_for_host_slot",
 ]

@@ -7,8 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
-from app.services.acquisition.http_client import HttpFetchResult, request_result
-from app.services.acquisition.pacing import wait_for_host_slot
+from app.services.acquisition import HttpFetchResult, request_result, wait_for_host_slot
 from app.services.config.crawl_runtime import ACQUIRE_HOST_MIN_INTERVAL_MS
 
 

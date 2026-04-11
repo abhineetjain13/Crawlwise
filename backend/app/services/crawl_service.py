@@ -21,9 +21,9 @@ from app.services.crawl_state import (
     update_run_status,
 )
 from app.services.pipeline.core import (
-    _log,
     _mark_run_failed,
 )
+from app.services.pipeline.runtime_helpers import log_event
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = "schema_miss", "lis
 CELERY_TASK_ID_KEY = "celery_task_id"
 logger = logging.getLogger(__name__)
 _local_run_tasks: dict[int, asyncio.Task[None]] = {}
+_log = log_event
 
 
 def _new_task_id(run_id: int) -> str:
@@ -161,7 +162,7 @@ async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
         local_task = _local_run_tasks.get(run_id)
         if local_task is not None:
             set_control_request(retry_run, CONTROL_REQUEST_PAUSE)
-            await _log(
+            await log_event(
                 retry_session,
                 retry_run.id,
                 "warning",
@@ -174,7 +175,7 @@ async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
             process_run_task.app.control.revoke(task_id, terminate=True)
         update_run_status(retry_run, CrawlStatus.PAUSED)
         _set_task_id(retry_run, None)
-        await _log(
+        await log_event(
             retry_session,
             retry_run.id,
             "warning",
@@ -193,7 +194,7 @@ async def resume_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
         update_run_status(retry_run, CrawlStatus.RUNNING)
         set_control_request(retry_run, None)
         _set_task_id(retry_run, None)
-        await _log(retry_session, retry_run.id, "info", "Resume requested")
+        await log_event(retry_session, retry_run.id, "info", "Resume requested")
 
     updated = await _run_control_update(session, run, _operation)
     return await dispatch_run(session, updated)
@@ -214,7 +215,7 @@ async def kill_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
             local_task.cancel()
             update_run_status(retry_run, CrawlStatus.KILLED)
             _set_task_id(retry_run, None)
-            await _log(
+            await log_event(
                 retry_session,
                 retry_run.id,
                 "warning",
@@ -225,7 +226,7 @@ async def kill_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
             process_run_task.app.control.revoke(task_id, terminate=True)
         update_run_status(retry_run, CrawlStatus.KILLED)
         _set_task_id(retry_run, None)
-        await _log(
+        await log_event(
             retry_session,
             retry_run.id,
             "warning",
