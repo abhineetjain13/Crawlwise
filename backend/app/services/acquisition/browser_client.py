@@ -531,7 +531,10 @@ async def _fetch_rendered_html_attempt(
             if (
                 listing_readiness
                 and not bool(listing_readiness.get("ready"))
-                and await _page_looks_low_value(page)
+                and await _page_looks_low_value(
+                    page,
+                    _page_content_with_retry,
+                )
             ):
                 await _populate_result(result, page, intercepted, checkpoint=checkpoint)
                 timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
