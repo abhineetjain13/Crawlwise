@@ -59,15 +59,17 @@ from app.services.config.extraction_rules import (
     CANDIDATE_IMAGE_TOKENS,
     CANDIDATE_IMAGE_URL_HINT_TOKENS,
     CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT,
+    CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS,
+    CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS,
     CANDIDATE_PLACEHOLDER_VALUES,
     CANDIDATE_PRICE_TOKENS,
+    CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN,
+    CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN,
     CANDIDATE_PROMO_ONLY_TITLE_PATTERN,
     CANDIDATE_RATING_TOKENS,
     CANDIDATE_REVIEW_COUNT_TOKENS,
     CANDIDATE_SALARY_TOKENS,
     CANDIDATE_SCRIPT_NOISE_PATTERN,
-    CANDIDATE_SIZE_CSS_NOISE_TOKENS,
-    CANDIDATE_SIZE_PACKAGE_TOKENS,
     CANDIDATE_TITLE_NOISE_PHRASES,
     CANDIDATE_TRACKING_PARAM_EXACT_KEYS,
     CANDIDATE_TRACKING_PARAM_PREFIXES,
@@ -97,7 +99,6 @@ from app.services.config.extraction_rules import (
     SOURCE_RANKING,
 )
 from app.services.config.listing_heuristics import (
-    LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_BUY_BOX_AVAILABILITY_PATTERN,
     LISTING_BUY_BOX_CURRENCY_SYMBOL_MAP,
     LISTING_BUY_BOX_HEADING_SCAN_TAGS,
@@ -513,12 +514,23 @@ _NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES = (
     "account login",
     "store locations",
     "accessibility statement",
+    "subscribe to our newsletter",
+    "sign up for",
+    "follow us on",
+    "download our app",
+    "manage preferences",
+    "cookie settings",
+    "do not sell my personal",
 )
 _NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS = (
     "gift cards",
     "press inquiries",
     "the gazette",
     "your privacy choices",
+)
+_CSS_NOISE_VALUE_RE = re.compile(CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN)
+_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_RE = re.compile(
+    CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN
 )
 
 
@@ -1249,13 +1261,30 @@ def _is_noisy_product_attribute_entry(key: object, value: object) -> bool:
     text_value = _normalized_candidate_text(value).lower()
     if not normalized_key or not text_value:
         return True
+    if _PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_RE.fullmatch(normalized_key):
+        return True
+    if not re.search(r"[a-z]", normalized_key):
+        return True
     if normalized_key in _NOISY_PRODUCT_ATTRIBUTE_KEYS:
         return True
     if normalized_key.startswith(("contact_", "customer_", "privacy_", "terms_")):
         return True
+    if any(
+        token in normalized_key.split("_")
+        for token in CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS
+    ):
+        return True
     if any(phrase in text_value for phrase in _NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES):
         return True
     if any(token in text_value for token in _NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS):
+        return True
+    if _CSS_NOISE_VALUE_RE.search(text_value):
+        return True
+    if (
+        text_value.count("{") >= 1
+        and text_value.count("}") >= 1
+        and text_value.count(":") >= 3
+    ):
         return True
     if text_value.count(" - ") >= 2:
         return True
@@ -2246,43 +2275,82 @@ _FIELD_TYPE_TOKENS: dict[str, tuple[str, ...]] = {
 def _field_is_type(field_name: str, type_key: str) -> bool:
     normalized = _field_token(field_name)
 
-    if type_key == "color":
-        return normalized in _field_alias_tokens("color")
-    if type_key == "size":
-        return normalized in _field_alias_tokens("size")
+    if type_key in {"color", "size"}:
+        return _field_matches_exact_alias(normalized, type_key)
     if type_key in ("title", "job_text", "entity_name"):
         return _field_in_group(field_name, type_key)
 
-    is_img_coll = _field_in_group(field_name, "image_collection") or any(
-        token in normalized for token in _FIELD_TYPE_TOKENS["image_collection"]
-    )
+    is_img_coll = _field_is_image_collection(field_name, normalized=normalized)
     if type_key == "image_collection":
         return is_img_coll
 
-    is_img_prim = _field_in_group(field_name, "image_primary") or (
-        _field_has_any_token(field_name, _FIELD_TYPE_TOKENS["image_primary"])
-        and not is_img_coll
+    is_img_prim = _field_is_primary_image(
+        field_name,
+        normalized=normalized,
+        is_image_collection=is_img_coll,
     )
     if type_key == "image_primary":
         return is_img_prim
 
     if type_key == "url":
-        if is_img_prim or is_img_coll:
-            return False
-        return _field_in_group(field_name, "url") or any(
-            normalized.endswith(_normalized_field_token(suffix))
-            for suffix in _FIELD_TYPE_TOKENS["url"]
+        return _field_is_url_type(
+            field_name,
+            normalized=normalized,
+            is_primary_image=is_img_prim,
+            is_image_collection=is_img_coll,
         )
 
     if type_key == "numeric":
-        return (
-            _field_in_group(field_name, "numeric")
-            or _field_has_any_token(field_name, _FIELD_TYPE_TOKENS["numeric"])
-            or _field_has_any_token(field_name, CANDIDATE_REVIEW_COUNT_TOKENS)
-        )
+        return _field_is_numeric_type(field_name)
 
     return _field_in_group(field_name, type_key) or _field_has_any_token(
         field_name, _FIELD_TYPE_TOKENS.get(type_key, ())
+    )
+
+
+def _field_matches_exact_alias(normalized: str, field_name: str) -> bool:
+    return normalized in _field_alias_tokens(field_name)
+
+
+def _field_is_image_collection(field_name: str, *, normalized: str) -> bool:
+    return _field_in_group(field_name, "image_collection") or any(
+        token in normalized for token in _FIELD_TYPE_TOKENS["image_collection"]
+    )
+
+
+def _field_is_primary_image(
+    field_name: str,
+    *,
+    normalized: str,
+    is_image_collection: bool,
+) -> bool:
+    return _field_in_group(field_name, "image_primary") or (
+        not is_image_collection
+        and _field_has_any_token(field_name, _FIELD_TYPE_TOKENS["image_primary"])
+        and bool(normalized)
+    )
+
+
+def _field_is_url_type(
+    field_name: str,
+    *,
+    normalized: str,
+    is_primary_image: bool,
+    is_image_collection: bool,
+) -> bool:
+    if is_primary_image or is_image_collection:
+        return False
+    return _field_in_group(field_name, "url") or any(
+        normalized.endswith(_normalized_field_token(suffix))
+        for suffix in _FIELD_TYPE_TOKENS["url"]
+    )
+
+
+def _field_is_numeric_type(field_name: str) -> bool:
+    return (
+        _field_in_group(field_name, "numeric")
+        or _field_has_any_token(field_name, _FIELD_TYPE_TOKENS["numeric"])
+        or _field_has_any_token(field_name, CANDIDATE_REVIEW_COUNT_TOKENS)
     )
 
 
@@ -2658,46 +2726,77 @@ def _build_demandware_selected_variant(
     selected_values: dict[str, str],
 ) -> dict[str, object] | None:
     row: dict[str, object] = {}
-    variant_id = (
-        root.get("id") or root.get("productId") or root.get("pid") or root.get("sku")
-    )
-    if variant_id not in (None, "", [], {}):
-        row["variant_id"] = str(variant_id)
-        row["sku"] = str(variant_id)
-    resolved_url = _resolve_candidate_url(
-        root.get("selectedProductUrl") or root.get("selected_product_url") or base_url,
-        base_url,
-    )
+    _append_demandware_variant_identity(row, root)
+    resolved_url = _resolve_candidate_url(_demandware_variant_url(root, base_url), base_url)
     if resolved_url:
         row["url"] = resolved_url
-    option_values = {
-        axis_name: value
-        for axis_name, value in selected_values.items()
-        if value not in (None, "", [], {})
-    }
+    option_values = _selected_demandware_option_values(selected_values)
     if option_values:
         row["option_values"] = option_values
-        for axis_name in ("color", "size"):
-            if option_values.get(axis_name):
-                row[axis_name] = option_values[axis_name]
-    price = _extract_demandware_price(
-        root.get("price"), preferred_keys=("sales", "sale", "current")
-    )
-    if price:
-        row["price"] = price
-    original_price = _extract_demandware_price(
-        root.get("price"),
-        preferred_keys=("list", "regular", "base", "strikeThrough"),
-    )
-    if original_price:
-        row["original_price"] = original_price
-    availability = _extract_demandware_availability(root)
-    if availability:
-        row["availability"] = availability
+        _append_demandware_variant_option_fields(row, option_values)
+    _append_demandware_variant_commerce_fields(row, root)
     image_url = _extract_demandware_image_url(root, base_url=payload_url or base_url)
     if image_url:
         row["image_url"] = image_url
     return row or None
+
+
+def _append_demandware_variant_identity(
+    row: dict[str, object], root: dict[str, object]
+) -> None:
+    variant_id = root.get("id") or root.get("productId") or root.get("pid") or root.get("sku")
+    if variant_id in (None, "", [], {}):
+        return
+    row["variant_id"] = str(variant_id)
+    row["sku"] = str(variant_id)
+
+
+def _demandware_variant_url(root: dict[str, object], base_url: str) -> object:
+    return root.get("selectedProductUrl") or root.get("selected_product_url") or base_url
+
+
+def _selected_demandware_option_values(
+    selected_values: dict[str, str]
+) -> dict[str, str]:
+    return {
+        axis_name: value
+        for axis_name, value in selected_values.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _append_demandware_variant_option_fields(
+    row: dict[str, object],
+    option_values: dict[str, str],
+) -> None:
+    for axis_name in ("color", "size"):
+        if option_values.get(axis_name):
+            row[axis_name] = option_values[axis_name]
+
+
+def _append_demandware_variant_commerce_fields(
+    row: dict[str, object],
+    root: dict[str, object],
+) -> None:
+    for field_name, value in (
+        (
+            "price",
+            _extract_demandware_price(
+                root.get("price"),
+                preferred_keys=("sales", "sale", "current"),
+            ),
+        ),
+        (
+            "original_price",
+            _extract_demandware_price(
+                root.get("price"),
+                preferred_keys=("list", "regular", "base", "strikeThrough"),
+            ),
+        ),
+        ("availability", _extract_demandware_availability(root)),
+    ):
+        if value:
+            row[field_name] = value
 
 
 def _extract_demandware_price(
@@ -2803,16 +2902,13 @@ def _score_demandware_selected_variant(
     variant: dict[str, object], *, base_url: str, payload_url: str
 ) -> int:
     score = 0
-    parsed_base = urlsplit(str(base_url or "").strip())
-    base_query = dict(parse_qsl(parsed_base.query, keep_blank_values=False))
     option_values = variant.get("option_values")
     if isinstance(option_values, dict):
         score += len(option_values)
-        base_pid = base_query.get("pid")
-        for axis_name, value in option_values.items():
-            key = f"dwvar_{base_pid}_{axis_name}" if base_pid else ""
-            if key and str(base_query.get(key) or "").strip() == str(value).strip():
-                score += 10
+        score += _demandware_selected_option_query_score(
+            option_values,
+            base_url=base_url,
+        )
     if variant.get("url") and _scoped_url_key(
         str(variant.get("url"))
     ) == _scoped_url_key(base_url):
@@ -2821,6 +2917,24 @@ def _score_demandware_selected_variant(
         score += 1
     if _is_demandware_variation_payload_url(payload_url):
         score += 1
+    return score
+
+
+def _demandware_selected_option_query_score(
+    option_values: dict[str, object],
+    *,
+    base_url: str,
+) -> int:
+    parsed_base = urlsplit(str(base_url or "").strip())
+    base_query = dict(parse_qsl(parsed_base.query, keep_blank_values=False))
+    base_pid = base_query.get("pid")
+    if not base_pid:
+        return 0
+    score = 0
+    for axis_name, value in option_values.items():
+        key = f"dwvar_{base_pid}_{axis_name}"
+        if str(base_query.get(key) or "").strip() == str(value).strip():
+            score += 10
     return score
 
 
@@ -3164,6 +3278,8 @@ def _rich_text_from_node(node) -> str:
         return ""
     if not isinstance(node, Tag):
         return _normalized_candidate_text(node)
+    if node.name in CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS:
+        return ""
 
     if node.name in {"table", "tbody", "thead"}:
         rows: list[str] = []
@@ -3261,6 +3377,18 @@ def _build_dom_section_rows(soup: BeautifulSoup) -> dict[str, list[dict]]:
     return rows
 
 
+_SITE_CHROME_ANCESTORS = frozenset({"footer", "nav", "header", "aside"})
+
+
+def _is_inside_site_chrome(node: Tag) -> bool:
+    for ancestor in node.parents:
+        if not isinstance(ancestor, Tag):
+            continue
+        if ancestor.name in _SITE_CHROME_ANCESTORS:
+            return True
+    return False
+
+
 def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
     sections: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -3277,6 +3405,8 @@ def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
         sections.append((normalized_header, content.strip()))
 
     for details in soup.find_all("details"):
+        if not isinstance(details, Tag) or _is_inside_site_chrome(details):
+            continue
         summary = details.find("summary")
         if not isinstance(summary, Tag):
             continue
@@ -3295,6 +3425,8 @@ def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
     ):
         if not isinstance(node, Tag):
             continue
+        if _is_inside_site_chrome(node):
+            continue
         label = _normalized_candidate_text(
             node.get("data-tab")
             or node.get("data-title")
@@ -3312,6 +3444,8 @@ def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
     for heading in soup.find_all(["h2", "h3", "h4", "h5"]):
         if not isinstance(heading, Tag):
             continue
+        if _is_inside_site_chrome(heading):
+            continue
         header = _normalized_candidate_text(heading.get_text(" ", strip=True))
         if not header:
             continue
@@ -3323,7 +3457,7 @@ def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
 
 def _collect_heading_section_content(heading: Tag) -> str:
     parts: list[str] = []
-    for sibling in heading.next_siblings:
+    for sibling in tuple(getattr(heading, "next_siblings", ())):
         if not isinstance(sibling, Tag):
             continue
         if sibling.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
@@ -3332,6 +3466,17 @@ def _collect_heading_section_content(heading: Tag) -> str:
         if text:
             parts.append(text)
     return "\n\n".join(parts).strip()
+
+
+def _collect_non_empty_section_text(nodes: object) -> list[str]:
+    parts: list[str] = []
+    for node in list(nodes or []):
+        if not isinstance(node, Tag):
+            continue
+        text = _section_content_text(node)
+        if text:
+            parts.append(text)
+    return parts
 
 
 def _build_dom_gallery_rows(
@@ -3372,16 +3517,8 @@ def _build_shopify_content_rows(
         return {}
 
     soup = BeautifulSoup(content, "html.parser")
-    paragraphs = [
-        _section_content_text(node)
-        for node in soup.find_all("p")
-        if _section_content_text(node)
-    ]
-    bullets = [
-        _section_content_text(node)
-        for node in soup.find_all("li")
-        if _section_content_text(node)
-    ]
+    paragraphs = _collect_non_empty_section_text(list(soup.find_all("p")))
+    bullets = _collect_non_empty_section_text(list(soup.find_all("li")))
 
     rows: dict[str, list[dict]] = {}
     if paragraphs:

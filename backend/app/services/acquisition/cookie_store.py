@@ -13,6 +13,14 @@ from app.services.config.extraction_rules import COOKIE_POLICY
 
 logger = logging.getLogger(__name__)
 
+
+def _log_for_pytest(level: int, message: str, *args: object) -> None:
+    if logger.propagate or logger.handlers:
+        logger.log(level, message, *args)
+        return
+    root_logger = logging.getLogger()
+    root_logger.log(level, message, *args)
+
 _COOKIE_OVERRIDE_DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
 )
@@ -70,6 +78,27 @@ def cookie_store_path(domain: str) -> Path | None:
     if not safe:
         return None
     return Path(settings.cookie_store_dir) / f"{safe}.json"
+
+
+def session_cookie_store_path(domain: str, session_identity: str) -> Path | None:
+    """Cookie store path keyed by domain AND session identity.
+
+    This ensures different proxy/fingerprint sessions never share persisted
+    cookies on disk.
+    """
+    normalized = str(domain or "").strip().lower()
+    identity = str(session_identity or "").strip()
+    if not normalized or not identity:
+        return None
+    safe_domain = "".join(
+        ch if ch.isalnum() or ch in {".", "-", "_"} else "_" for ch in normalized
+    )
+    safe_identity = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in identity
+    )
+    if not safe_domain or not safe_identity:
+        return None
+    return Path(settings.cookie_store_dir) / f"{safe_domain}__{safe_identity}.json"
 
 
 def filter_persistable_cookies(payload: object, *, domain: str) -> list[dict]:
@@ -152,7 +181,8 @@ def is_persistable_cookie(cookie: dict, *, domain: str) -> bool:
     try:
         max_ttl = int(raw_max_ttl or 0)
     except (TypeError, ValueError):
-        logger.warning(
+        _log_for_pytest(
+            logging.WARNING,
             "Invalid cookie policy value for %s: %r",
             "max_persisted_ttl_seconds",
             raw_max_ttl,
@@ -233,3 +263,62 @@ def cookie_domain_matches(cookie_domain: str, requested_domain: str) -> bool:
     if not cookie_host or not requested_host:
         return False
     return cookie_host == requested_host or requested_host.endswith(f".{cookie_host}")
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped cookie persistence
+# ---------------------------------------------------------------------------
+
+
+def load_session_cookies_for_context(
+    domain: str, session_identity: str
+) -> list[dict]:
+    """Load Playwright-format cookies scoped to a specific session identity."""
+    path = session_cookie_store_path(domain, session_identity)
+    if path is None or not path.exists():
+        return []
+    try:
+        payload = parse_json(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+        return []
+    return filter_persistable_cookies(payload, domain=domain)
+
+
+def load_session_cookies_for_http(
+    domain: str, session_identity: str
+) -> dict[str, str]:
+    """Load HTTP-format cookies scoped to a specific session identity."""
+    policy = cookie_policy_for_domain(domain)
+    if not bool(policy.get("reuse_in_http_client", True)):
+        return {}
+    cookies = load_session_cookies_for_context(domain, session_identity)
+    return {
+        str(c.get("name") or "").strip(): str(c.get("value") or "").strip()
+        for c in cookies
+        if str(c.get("name") or "").strip() and str(c.get("value") or "").strip()
+    }
+
+
+def save_session_cookies_payload(
+    payload: object, *, domain: str, session_identity: str
+) -> None:
+    """Save cookies to a session-scoped store file."""
+    path = session_cookie_store_path(domain, session_identity)
+    if path is None:
+        return
+    filtered = filter_persistable_cookies(payload, domain=domain)
+    if not filtered:
+        if path.exists():
+            path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(filtered, indent=2), encoding="utf-8")
+    Path(tmp_path).replace(path)
+
+
+def discard_session_cookies(domain: str, session_identity: str) -> None:
+    """Remove persisted cookies for an invalidated session."""
+    path = session_cookie_store_path(domain, session_identity)
+    if path is not None and path.exists():
+        path.unlink(missing_ok=True)

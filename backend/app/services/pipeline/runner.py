@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from .types import PipelineContext, PipelineStage
 from .utils import _elapsed_ms
@@ -65,9 +64,10 @@ class PipelineRunner:
             if self._on_after_stage is not None:
                 await self._on_after_stage(stage_name, ctx)
 
-            # If a stage set a terminal verdict, stop the pipeline.
-            # 'BLOCKED' is terminal — no further extraction needed.
-            if ctx.verdict:
+            # Early pipeline stages may set terminal verdicts such as
+            # "blocked". ExtractStage also sets provisional verdicts that the
+            # final browser-retry stage may refine, so don't stop on those.
+            if ctx.verdict and stage_name != "ExtractStage":
                 logger.debug(
                     "Pipeline short-circuited at %s with verdict=%s",
                     stage_name,
@@ -76,7 +76,7 @@ class PipelineRunner:
                 break
 
 
-def build_default_stages() -> list[PipelineStage]:
+def build_default_stages(*, prefetch_only: bool = False) -> list[PipelineStage]:
     """Build the default stage chain matching the legacy ``_process_single_url`` behaviour.
 
     Order: Acquire → SurfaceValidation → BlockedDetection → Adapter → Parse → Extract → ListingBrowserRetry
@@ -91,12 +91,19 @@ def build_default_stages() -> list[PipelineStage]:
         SurfaceValidationStage,
     )
 
-    return [
+    stages: list[PipelineStage] = [
         AcquireStage(),
         SurfaceValidationStage(),
         BlockedDetectionStage(),
-        AdapterStage(),
         ParseStage(),
-        ExtractStage(),
-        ListingBrowserRetryStage(),
     ]
+    if prefetch_only:
+        return stages
+    stages.extend(
+        [
+            AdapterStage(),
+            ExtractStage(),
+            ListingBrowserRetryStage(),
+        ]
+    )
+    return stages

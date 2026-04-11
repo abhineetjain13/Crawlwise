@@ -19,8 +19,16 @@ from app.core.metrics import observe_acquisition_duration
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import BrowserResult, fetch_rendered_html
 from app.services.acquisition.browser_runtime import resolve_browser_runtime_options
+from app.services.acquisition.cookie_store import (
+    discard_session_cookies,
+    load_cookies_for_http,
+)
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
 from app.services.acquisition.pacing import wait_for_host_slot
+from app.services.acquisition.session_context import (
+    SessionContext,
+    create_session_context,
+)
 from app.services.adapters.registry import resolve_adapter
 from app.services.config.acquisition_guards import (
     JOB_ERROR_PAGE_HEADINGS,
@@ -49,6 +57,11 @@ from app.services.config.platform_registry import (
 from app.services.config.platform_registry import (
     detect_platform_family as detect_platform_family_from_registry,
 )
+from app.services.extractability import (
+    NEXT_DATA_PRODUCT_SIGNALS,
+    html_has_extractable_listings_from_soup,
+    json_ld_listing_count,
+)
 from app.services.exceptions import (
     AcquisitionFailureError,
     AcquisitionTimeoutError,
@@ -75,6 +88,7 @@ _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset(
 _JS_SHELL_MIN_CONTENT_LEN = 100_000
 _JS_SHELL_VISIBLE_RATIO_MAX = 0.15
 _MIN_DETAIL_FIELD_SIGNAL_COUNT = 2
+HTML_PARSER = "html.parser"
 logger = logging.getLogger(__name__)
 _REDACTED = "[REDACTED]"
 _MAX_PROXY_BACKOFF_EXPONENT = 8
@@ -232,6 +246,7 @@ class AcquisitionResult:
     frame_sources: list[dict] = field(default_factory=list)
     promoted_sources: list[dict] = field(default_factory=list)
     diagnostics: dict[str, object] = field(default_factory=dict)
+    outcome: str = ""  # AcquisitionOutcome value; empty means unclassified
 
 
 @dataclass(slots=True)
@@ -471,7 +486,13 @@ async def acquire(
 
     result: AcquisitionResult | None = None
     last_timeout_error: asyncio.TimeoutError | None = None
+    target_domain = urlparse(url).netloc.lower()
     for proxy in proxy_candidates:
+        # Create a fresh SessionContext per proxy attempt.  When a proxy
+        # dies, the entire context (cookies + fingerprint) is discarded.
+        domain_cookies = load_cookies_for_http(target_domain)
+        session_ctx = create_session_context(proxy=proxy, domain_cookies=domain_cookies)
+        session_ctx.remember_domain(target_domain)
         try:
             result = await asyncio.wait_for(
                 _acquire_once(
@@ -492,6 +513,7 @@ async def acquire(
                     acquisition_profile=profile,
                     runtime_options=runtime_options,
                     checkpoint=checkpoint,
+                    session_context=session_ctx,
                 ),
                 timeout=float(ACQUISITION_ATTEMPT_TIMEOUT_SECONDS),
             )
@@ -503,16 +525,26 @@ async def acquire(
                 "yes" if proxy else "no",
             )
             last_timeout_error = exc
+            session_ctx.invalidate()
+            for domain in set(session_ctx.persisted_domains) or {target_domain}:
+                discard_session_cookies(domain, session_ctx.identity_key)
             if proxy:
                 await _mark_proxy_failed(proxy)
             result = None
         else:
+            if result is None:
+                session_ctx.invalidate()
+                for domain in set(session_ctx.persisted_domains) or {target_domain}:
+                    discard_session_cookies(domain, session_ctx.identity_key)
             if proxy:
                 if result is None:
                     await _mark_proxy_failed(proxy)
                 else:
                     await _mark_proxy_succeeded(proxy)
         if result is not None:
+            # Stamp session diagnostics into the acquisition result.
+            if isinstance(result.diagnostics, dict):
+                result.diagnostics["session_context"] = session_ctx.to_diagnostics()
             break
 
     if result is None:
@@ -543,6 +575,9 @@ async def acquire(
             json.dumps(result.json_data, indent=2, default=str),
             encoding="utf-8",
         )
+    elif result.content_type == "json":
+        path = path.with_suffix(".json")
+        await asyncio.to_thread(path.write_text, result.html or "", encoding="utf-8")
     else:
         await asyncio.to_thread(path.write_text, result.html, encoding="utf-8")
 
@@ -557,15 +592,48 @@ async def acquire(
     result.artifact_path = str(path)
     result.diagnostics_path = str(diagnostics_path)
     diagnostics = result.diagnostics if isinstance(result.diagnostics, dict) else {}
-    if bool(diagnostics.get("browser_blocked")) or bool(diagnostics.get("curl_blocked")):
+    if bool(diagnostics.get("browser_blocked")) or bool(
+        diagnostics.get("curl_blocked")
+    ):
         incr("blocked_page_result_total")
-    timings_ms = diagnostics.get("timings_ms") if isinstance(diagnostics, dict) else None
+    timings_ms = (
+        diagnostics.get("timings_ms") if isinstance(diagnostics, dict) else None
+    )
     acquisition_total_ms = 0
     if isinstance(timings_ms, dict):
         acquisition_total_ms = int(timings_ms.get("acquisition_total_ms", 0) or 0)
     if acquisition_total_ms > 0:
         observe_acquisition_duration(acquisition_total_ms / 1000)
+    # Classify the acquisition outcome from diagnostics.
+    result.outcome = _classify_outcome(result)
+    if isinstance(result.diagnostics, dict):
+        result.diagnostics["acquisition_outcome"] = result.outcome
     return result
+
+
+def _classify_outcome(result: AcquisitionResult) -> str:
+    """Derive a typed :class:`AcquisitionOutcome` value from the result."""
+    from app.services.pipeline.types import AcquisitionOutcome
+
+    diag = result.diagnostics if isinstance(result.diagnostics, dict) else {}
+    if result.content_type == "json":
+        return AcquisitionOutcome.json_response
+    if not result.html and result.json_data is None:
+        return AcquisitionOutcome.empty
+    blocked = diag.get("blocked")
+    if isinstance(blocked, dict) and blocked.get("is_blocked"):
+        return AcquisitionOutcome.blocked
+    if getattr(blocked, "is_blocked", False):
+        return AcquisitionOutcome.blocked
+    if diag.get("promoted_browser_used"):
+        return AcquisitionOutcome.promoted_source_browser
+    if diag.get("promoted_source_used"):
+        return AcquisitionOutcome.promoted_source
+    if result.method == "playwright":
+        return AcquisitionOutcome.browser_rendered
+    if result.method == "curl_cffi":
+        return AcquisitionOutcome.direct_html
+    return AcquisitionOutcome.direct_html
 
 
 async def _acquire_once(
@@ -587,6 +655,7 @@ async def _acquire_once(
     acquisition_profile: dict[str, object] | None,
     runtime_options,
     checkpoint: Callable[[], Awaitable[None]] | None,
+    session_context: SessionContext | None = None,
 ) -> AcquisitionResult | None:
     started = time.perf_counter()
     requested_surface = str(requested_surface or "").strip().lower() or None
@@ -600,7 +669,9 @@ async def _acquire_once(
         payload["surface_effective"] = surface or requested_surface
         payload["suggested_surface"] = (
             suggested_surface
-            if requested_surface and suggested_surface and requested_surface != suggested_surface
+            if requested_surface
+            and suggested_surface
+            and requested_surface != suggested_surface
             else None
         )
         payload["surface_mismatch_detected"] = bool(
@@ -649,6 +720,7 @@ async def _acquire_once(
             checkpoint=checkpoint,
             run_id=run_id,
             failure_log_message="Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi",
+            session_context=session_context,
         )
         if browser_first
         else None
@@ -725,7 +797,8 @@ async def _acquire_once(
                         "prefer_stealth": prefer_stealth,
                         "anti_bot_enabled": runtime_options.anti_bot_enabled,
                         "proxy_used": bool(proxy),
-                        "surface_selection_warnings": browser_first_surface_warnings or None,
+                        "surface_selection_warnings": browser_first_surface_warnings
+                        or None,
                     }.items()
                     if v is not None
                 }
@@ -748,6 +821,7 @@ async def _acquire_once(
             runtime_options=runtime_options,
             host_wait_seconds=host_wait,
             checkpoint=checkpoint,
+            session_context=session_context,
         )
     analysis = (
         getattr(http_result, "_acquirer_analysis", {})
@@ -766,8 +840,12 @@ async def _acquire_once(
         runtime_options=runtime_options,
         host_wait_seconds=host_wait,
         checkpoint=checkpoint,
+        session_context=session_context,
     )
     if promoted_source_result is not None:
+        promoted_source_result.diagnostics = _finalize_diagnostics_payload(
+            promoted_source_result.diagnostics
+        )
         return promoted_source_result
 
     should_escalate, _ = _needs_browser(
@@ -828,6 +906,7 @@ async def _acquire_once(
         checkpoint=checkpoint,
         run_id=run_id,
         diagnostics_sink=curl_result.diagnostics if curl_result is not None else None,
+        session_context=session_context,
     )
     if browser_result is None:
         if http_result is None:
@@ -844,6 +923,7 @@ async def _acquire_once(
                 runtime_options=runtime_options,
                 host_wait_seconds=host_wait,
                 checkpoint=checkpoint,
+                session_context=session_context,
             )
             if http_result is None:
                 return None
@@ -933,7 +1013,12 @@ async def _acquire_once(
             }
         )
         # Surface traversal diagnostics at top level for pipeline/frontend consumers
-        for _tkey in ("traversal_mode", "traversal_summary", "traversal_fallback_used", "traversal_fallback_reason"):
+        for _tkey in (
+            "traversal_mode",
+            "traversal_summary",
+            "traversal_fallback_used",
+            "traversal_fallback_reason",
+        ):
             if _tkey in browser_diag:
                 merged[_tkey] = browser_diag[_tkey]
         return AcquisitionResult(
@@ -1051,6 +1136,7 @@ async def _try_promoted_source_acquire(
     runtime_options,
     host_wait_seconds: float,
     checkpoint: Callable[[], Awaitable[None]] | None,
+    session_context: SessionContext | None,
 ) -> AcquisitionResult | None:
     extractability = (
         analysis.get("extractability")
@@ -1080,7 +1166,11 @@ async def _try_promoted_source_acquire(
         try:
             fetch_started = time.perf_counter()
             promoted_fetch = _normalize_fetch_result(
-                await _fetch_with_content_type(promoted_url, proxy)
+                await _fetch_with_content_type(
+                    promoted_url,
+                    proxy,
+                    session_context=session_context,
+                )
             )
             promoted_timings = {"promoted_source_fetch_ms": _elapsed_ms(fetch_started)}
         except (OSError, RuntimeError, ValueError, TypeError):
@@ -1113,6 +1203,57 @@ async def _try_promoted_source_acquire(
         if blocked.is_blocked:
             continue
 
+        # ── Promoted source shell detection ──
+        # If the promoted HTML is a JS shell (very low visible text despite
+        # an adapter hint claiming extractability), the curl fetch returned a
+        # wrapper that needs browser rendering.  Escalate to Playwright for
+        # the promoted URL so the real content gets hydrated.
+        promoted_visible_text = " ".join(
+            BeautifulSoup(promoted_html, HTML_PARSER)
+            .get_text(" ", strip=True)
+            .split()
+        )
+        promoted_is_shell = (
+            len(promoted_visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
+            and str(promoted_extractability.get("reason") or "") == "adapter_hint"
+        )
+        browser_data: dict = {}
+        if promoted_is_shell:
+            logger.info(
+                "[promoted] curl returned shell for %s (visible=%d), "
+                "escalating to browser",
+                promoted_url,
+                len(promoted_visible_text),
+            )
+            browser_result = await _try_browser(
+                promoted_url,
+                proxy,
+                surface,
+                traversal_mode=None,
+                max_pages=1,
+                max_scrolls=0,
+                prefer_stealth=prefer_stealth,
+                sleep_ms=0,
+                runtime_options=runtime_options,
+                requested_fields=None,
+                requested_field_selectors=None,
+                checkpoint=checkpoint,
+                run_id=run_id,
+                session_context=session_context,
+            )
+            browser_data = (
+                getattr(browser_result, "_acquirer_browser", {})
+                if browser_result is not None
+                else {}
+            )
+            browser_html = str(browser_data.get("html") or "")
+            if browser_html and not browser_data.get("blocked"):
+                promoted_html = browser_html
+                promoted_extractability = {
+                    **promoted_extractability,
+                    "promoted_browser_rendered": True,
+                }
+
         diagnostics = _build_curl_diagnostics(
             normalized=promoted_fetch,
             blocked=blocked,
@@ -1130,6 +1271,15 @@ async def _try_promoted_source_acquire(
             anti_bot_enabled=runtime_options.anti_bot_enabled,
             memory_browser_first=False,
         )
+        promoted_browser_used = bool(
+            promoted_extractability.get("promoted_browser_rendered")
+        )
+        browser_timing_map = (
+            browser_data.get("diagnostics", {}).get("timings_ms")
+            if promoted_browser_used
+            and isinstance(browser_data.get("diagnostics"), dict)
+            else None
+        )
         diagnostics.update(
             {
                 "curl_final_url": promoted_fetch.final_url or promoted_url,
@@ -1139,13 +1289,18 @@ async def _try_promoted_source_acquire(
                     "url": promoted_url,
                 },
                 "promoted_source_candidates": promoted_sources,
+                "promoted_browser_used": promoted_browser_used,
                 "timings_ms": _merge_timing_maps(
                     diagnostics.get("timings_ms"),
                     promoted_timings,
+                    browser_timing_map,
                     {"acquisition_total_ms": _elapsed_ms(started)},
                 ),
             }
         )
+        if promoted_browser_used:
+            diagnostics["browser_attempted"] = True
+            diagnostics["browser_diagnostics"] = browser_data.get("diagnostics")
         timings = _merge_timing_maps(diagnostics.get("timings_ms"))
         phase_sum_ms = sum(
             int(value)
@@ -1157,12 +1312,19 @@ async def _try_promoted_source_acquire(
             0, int(timings.get("acquisition_total_ms", 0)) - phase_sum_ms
         )
         diagnostics["timings_ms"] = timings
+        acquisition_method = "playwright" if promoted_browser_used else "curl_cffi"
+        network_payloads = (
+            list(browser_data.get("network_payloads") or [])
+            if promoted_browser_used
+            else []
+        )
         return AcquisitionResult(
             html=promoted_html,
             content_type="html",
-            method="curl_cffi",
+            method=acquisition_method,
             artifact_path=str(_artifact_path(run_id, url)),
             promoted_sources=promoted_sources,
+            network_payloads=network_payloads,
             diagnostics=diagnostics,
         )
     return None
@@ -1172,7 +1334,7 @@ def _html_has_min_listing_link_signals(html: str, *, surface: str | None) -> boo
     normalized_surface = str(surface or "").strip().lower()
     if not normalized_surface.endswith("listing"):
         return False
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, HTML_PARSER)
     count = 0
     for anchor in soup.select("a[href]"):
         href = str(anchor.get("href") or "").strip()
@@ -1189,7 +1351,7 @@ def _html_has_min_listing_link_signals(html: str, *, surface: str | None) -> boo
 
 def _analyze_html_sync(html: str) -> tuple[str, bool]:
     """Runs heavy CPU-bound HTML analysis synchronously."""
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, HTML_PARSER)
     visible_text = " ".join(soup.get_text(" ", strip=True).lower().split())
     gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
     return visible_text, gate_phrases
@@ -1209,11 +1371,14 @@ async def _try_http(
     runtime_options,
     host_wait_seconds: float,
     checkpoint: Callable[[], Awaitable[None]] | None,
+    session_context: SessionContext | None = None,
 ) -> HttpFetchResult | None:
     try:
         await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
         curl_started_at = time.perf_counter()
-        normalized = _normalize_fetch_result(await _fetch_with_content_type(url, proxy))
+        normalized = _normalize_fetch_result(
+            await _fetch_with_content_type(url, proxy, session_context=session_context)
+        )
     except (OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.warning("curl_cffi acquisition failed for %s: %s", url, exc)
         return None
@@ -1272,11 +1437,22 @@ async def _try_http(
     content_len = _content_html_length(html)
 
     visible_len = len(visible_text)
+    # Large page with low visible-text ratio (classic SPA shell).
     js_shell_detected = (
         content_len >= _JS_SHELL_MIN_CONTENT_LEN
         and visible_len > 0
         and (visible_len / content_len) < _JS_SHELL_VISIBLE_RATIO_MAX
     )
+    # Small page with near-zero visible text and deferred script bundles
+    # (server-rendered wrapper shells like SaaSHR, ATS embed pages).
+    if (
+        not js_shell_detected
+        and visible_len < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
+        and content_len < _JS_SHELL_MIN_CONTENT_LEN
+        and html.count("<script") >= 2
+        and ("defer" in html or "async" in html)
+    ):
+        js_shell_detected = True
     adapter_hint = await _resolve_adapter_hint(url, html)
     platform_family = _detect_platform_family(url, html)
     effective_surface = _resolve_effective_surface(
@@ -1520,11 +1696,12 @@ async def _try_browser(
     run_id: int | None = None,
     diagnostics_sink: dict[str, object] | None = None,
     failure_log_message: str = "Playwright failed for %s: %s — falling back to curl_cffi result",
+    session_context: SessionContext | None = None,
 ) -> BrowserResult | None:
     logger.info("[browser] attempting url=%s traversal_mode=%s", url, traversal_mode)
+    browser_started_at = time.perf_counter()
     try:
         await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
-        browser_started_at = time.perf_counter()
         result = await fetch_rendered_html(
             url,
             proxy=proxy,
@@ -1539,37 +1716,85 @@ async def _try_browser(
             requested_field_selectors=requested_field_selectors,
             checkpoint=checkpoint,
             run_id=run_id,
+            session_context=session_context,
         )
     except (PlaywrightError, OSError, RuntimeError, ValueError, TypeError) as exc:
-        logger.warning("[browser] FAILED type=%s msg=%s", type(exc).__name__, exc)
-        incr("browser_launch_failures_total")
-        # Surface to crawl log so users can see traversal was abandoned
-        if run_id is not None:
-            from app.services.crawl_events import append_log_event
-
-            try:
-                traversal_failure = _should_force_browser_for_traversal(traversal_mode)
-                log_message = (
-                    f"[traversal] Browser acquisition failed, falling back to curl: {type(exc).__name__}: {exc}"
-                    if traversal_failure
-                    else f"Browser acquisition failed: {type(exc).__name__}: {exc}"
-                )
-                await append_log_event(
-                    run_id=run_id,
-                    level="warning",
-                    message=log_message,
-                )
-            except Exception:
-                incr("acquisition_log_event_failures_total")
-                logger.debug(
-                    "Failed to append browser acquisition fallback event for %s",
-                    url,
-                    exc_info=True,
-                )
-        if diagnostics_sink is not None:
-            diagnostics_sink["browser_exception"] = f"{type(exc).__name__}: {exc}"
-            diagnostics_sink["browser_attempted"] = True
+        await _record_browser_failure(
+            exc,
+            url=url,
+            traversal_mode=traversal_mode,
+            run_id=run_id,
+            diagnostics_sink=diagnostics_sink,
+        )
         return None
+    result._acquirer_browser = _build_browser_attempt_metadata(
+        result,
+        url=url,
+        browser_started_at=browser_started_at,
+    )
+    return result
+
+
+async def _record_browser_failure(
+    exc: Exception,
+    *,
+    url: str,
+    traversal_mode: str | None,
+    run_id: int | None,
+    diagnostics_sink: dict[str, object] | None,
+) -> None:
+    logger.warning("[browser] FAILED type=%s msg=%s", type(exc).__name__, exc)
+    incr("browser_launch_failures_total")
+    await _append_browser_failure_log(run_id, traversal_mode=traversal_mode, exc=exc, url=url)
+    if diagnostics_sink is not None:
+        diagnostics_sink["browser_exception"] = f"{type(exc).__name__}: {exc}"
+        diagnostics_sink["browser_attempted"] = True
+
+
+async def _append_browser_failure_log(
+    run_id: int | None,
+    *,
+    traversal_mode: str | None,
+    exc: Exception,
+    url: str,
+) -> None:
+    if run_id is None:
+        return
+    from app.services.crawl_events import append_log_event
+
+    try:
+        await append_log_event(
+            run_id=run_id,
+            level="warning",
+            message=_browser_failure_log_message(traversal_mode, exc),
+        )
+    except Exception:
+        incr("acquisition_log_event_failures_total")
+        logger.debug(
+            "Failed to append browser acquisition fallback event for %s",
+            url,
+            exc_info=True,
+        )
+
+
+def _browser_failure_log_message(
+    traversal_mode: str | None,
+    exc: Exception,
+) -> str:
+    prefix = (
+        "[traversal] Browser acquisition failed, falling back to curl"
+        if _should_force_browser_for_traversal(traversal_mode)
+        else "Browser acquisition failed"
+    )
+    return f"{prefix}: {type(exc).__name__}: {exc}"
+
+
+def _build_browser_attempt_metadata(
+    result: BrowserResult,
+    *,
+    url: str,
+    browser_started_at: float,
+) -> dict[str, object]:
     browser_html = result.html if isinstance(result.html, str) else ""
     browser_diagnostics = (
         result.diagnostics if isinstance(result.diagnostics, dict) else {}
@@ -1577,8 +1802,14 @@ async def _try_browser(
     browser_network_payloads = (
         result.network_payloads if isinstance(result.network_payloads, list) else []
     )
-    result._acquirer_browser = {"html": browser_html, "diagnostics": browser_diagnostics, "network_payloads": browser_network_payloads, "final_url": str(browser_diagnostics.get("final_url") or url).strip() or url, "blocked": bool(browser_html and detect_blocked_page(browser_html).is_blocked), "browser_total_ms": _elapsed_ms(browser_started_at)}
-    return result
+    return {
+        "html": browser_html,
+        "diagnostics": browser_diagnostics,
+        "network_payloads": browser_network_payloads,
+        "final_url": str(browser_diagnostics.get("final_url") or url).strip() or url,
+        "blocked": bool(browser_html and detect_blocked_page(browser_html).is_blocked),
+        "browser_total_ms": _elapsed_ms(browser_started_at),
+    }
 
 
 def _should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
@@ -1622,10 +1853,13 @@ def _suggest_surface_from_hints(
 
     normalized_platform = str(platform_family or "").strip().lower()
     normalized_hint = str(adapter_hint or "").strip().lower()
-    is_job_like = is_job_platform_signal(
-        platform_family=normalized_platform,
-        adapter_hint=normalized_hint,
-    ) or normalized_platform in JOB_PLATFORM_FAMILIES
+    is_job_like = (
+        is_job_platform_signal(
+            platform_family=normalized_platform,
+            adapter_hint=normalized_hint,
+        )
+        or normalized_platform in JOB_PLATFORM_FAMILIES
+    )
     if not is_job_like:
         return requested_surface
     if requested_surface.endswith("listing"):
@@ -1721,7 +1955,7 @@ def _diagnose_job_surface_page(
             "requested_url": requested_url,
             "final_url": final_url or requested_url,
         }
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, HTML_PARSER)
     title_text = " ".join(
         (soup.title.get_text(" ", strip=True) if soup.title else "").split()
     )
@@ -1784,7 +2018,7 @@ def _is_invalid_commerce_surface_page(
     if redirected_to_root:
         return True
     if html:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, HTML_PARSER)
         title_text = " ".join(
             (soup.title.get_text(" ", strip=True) if soup.title else "").lower().split()
         )
@@ -1795,9 +2029,14 @@ def _is_invalid_commerce_surface_page(
     return False
 
 
-async def _fetch_with_content_type(url: str, proxy: str | None) -> HttpFetchResult:
+async def _fetch_with_content_type(
+    url: str,
+    proxy: str | None,
+    *,
+    session_context: SessionContext | None = None,
+) -> HttpFetchResult:
     """Fetch URL and detect content type from response headers."""
-    return await fetch_html_result(url, proxy=proxy)
+    return await fetch_html_result(url, proxy=proxy, session_context=session_context)
 
 
 async def _resolve_adapter_hint(url: str, html: str) -> str | None:
@@ -1807,59 +2046,15 @@ async def _resolve_adapter_hint(url: str, html: str) -> str | None:
     return adapter.name if adapter is not None else None
 
 
-_NEXT_DATA_PRODUCT_SIGNALS = (
-    '"productId"',
-    '"partNumber"',
-    '"displayName"',
-    '"sku"',
-    '"skuId"',
-    '"price"',
-    '"salePrice"',
-    '"listPrice"',
-    '"imageUrl"',
-    '"imageURL"',
-    '"image_url"',
-    '"availability"',
-    '"inStock"',
-    '"slug"',
-    '"handle"',
-    '"jobId"',
-    '"jobTitle"',
-    '"companyName"',
-)
-
-
 def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
-    product_count = 0
-    for node in soup.select("script[type='application/ld+json']"):
-        raw = node.string or node.get_text(" ", strip=True) or ""
-        try:
-            payload = parse_json(raw)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        product_count += _json_ld_listing_count(payload)
-        if product_count >= 2:
-            return True
-
-    next_data_node = soup.select_one("script#__NEXT_DATA__")
-    if next_data_node is not None:
-        raw_next_data = (
-            next_data_node.string or next_data_node.get_text(" ", strip=True) or ""
-        )
-        signal_hits = sum(
-            raw_next_data.count(key) for key in _NEXT_DATA_PRODUCT_SIGNALS
-        )
-        if signal_hits >= 4:
-            return True
-
-    return False
+    return html_has_extractable_listings_from_soup(soup, json_loader=parse_json)
 
 
 def _find_promotable_iframe_sources(html: str, *, surface: str | None) -> list[dict]:
     normalized_surface = str(surface or "").strip().lower()
     if "job" not in normalized_surface:
         return []
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, HTML_PARSER)
     promoted: list[dict] = []
     promotable_tokens = _promotable_job_iframe_tokens()
     for tag in soup.select("iframe[src], frame[src]"):
@@ -1876,7 +2071,9 @@ def _find_promotable_iframe_sources(html: str, *, surface: str | None) -> list[d
 def _promotable_job_iframe_tokens() -> tuple[str, ...]:
     base_tokens = {"job", "jobs", "career", "careers"}
     merged = {
-        token for token in (base_tokens | set(acquisition_hint_tokens())) if len(token) >= 3
+        token
+        for token in (base_tokens | set(acquisition_hint_tokens()))
+        if len(token) >= 3
     }
     return tuple(sorted(merged))
 
@@ -1925,7 +2122,7 @@ def _assess_extractable_html(
     if not html:
         return {"has_extractable_data": False, "reason": "empty_html"}
 
-    soup_probe = BeautifulSoup(html, "html.parser")
+    soup_probe = BeautifulSoup(html, HTML_PARSER)
     if soup_probe.find("frameset") is not None or "<frameset" in html.lower():
         promoted_iframes = _find_promotable_iframe_sources(html, surface=surface)
         return {
@@ -1953,7 +2150,7 @@ def _assess_extractable_html(
             }
 
         # (b) __NEXT_DATA__ signal density OR general product signals in HTML
-        signal_hits = sum(html.count(sig) for sig in _NEXT_DATA_PRODUCT_SIGNALS)
+        signal_hits = sum(html.count(sig) for sig in NEXT_DATA_PRODUCT_SIGNALS)
         has_next_data = "__NEXT_DATA__" in html
         if (has_next_data or signal_hits >= 15) and signal_hits >= 4:
             return {
@@ -2011,7 +2208,7 @@ def _assess_extractable_html(
             return {"has_extractable_data": True, "reason": "detail_json_ld"}
 
         # (b) Count canonical field tokens in visible text
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, HTML_PARSER)
         visible_text = soup.get_text(" ", strip=True).lower()
         detail_tokens = ("title", "price", "brand", "description", "sku")
         field_hits = sum(1 for tok in detail_tokens if tok in visible_text)
@@ -2034,56 +2231,7 @@ def _assess_extractable_html(
 def _json_ld_listing_count(
     payload: object, *, _depth: int = 0, _max_depth: int = 3
 ) -> int:
-    if _depth > _max_depth:
-        return 0
-    if isinstance(payload, list):
-        return sum(
-            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
-            for item in payload
-        )
-    if not isinstance(payload, dict):
-        return 0
-
-    count = 0
-    raw_ld_type = payload.get("@type", "")
-    if isinstance(raw_ld_type, str):
-        ld_types = {raw_ld_type.lower()}
-    elif isinstance(raw_ld_type, (list, tuple, set)):
-        ld_types = {
-            str(item).lower()
-            for item in raw_ld_type
-            if isinstance(item, str) and item.strip()
-        }
-    else:
-        ld_types = set()
-
-    if ld_types & {"product", "jobposting"}:
-        count += 1
-    if "itemlist" in ld_types or "itemListElement" in payload:
-        count += len(payload.get("itemListElement", []))
-
-    graph = payload.get("@graph")
-    if isinstance(graph, list):
-        count += sum(
-            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
-            for item in graph
-        )
-
-    main_entity = payload.get("mainEntity")
-    if isinstance(main_entity, dict):
-        count += _json_ld_listing_count(
-            main_entity,
-            _depth=_depth + 1,
-            _max_depth=_max_depth,
-        )
-
-    offers = payload.get("offers")
-    if isinstance(offers, dict):
-        item_offered = offers.get("itemOffered")
-        if isinstance(item_offered, list):
-            count += sum(1 for item in item_offered if isinstance(item, dict))
-
-    return count
+    return json_ld_listing_count(payload, _depth=_depth, max_depth=_max_depth)
 
 
 def _normalize_fetch_result(

@@ -85,7 +85,7 @@ _CIRCUIT_COOLDOWN_SECONDS = 120
 @dataclass
 class _CircuitState:
     consecutive_failures: int = 0
-    opened_at: float = 0.0
+    opened_at: float | None = None
     total_failures: int = 0
     total_successes: int = 0
     last_error_category: LLMErrorCategory = LLMErrorCategory.NONE
@@ -104,6 +104,8 @@ def _circuit_is_open(provider: str) -> bool:
     circuit = _get_circuit(provider)
     if circuit.consecutive_failures < _CIRCUIT_FAILURE_THRESHOLD:
         return False
+    if circuit.opened_at is None:
+        return False
     elapsed = time.monotonic() - circuit.opened_at
     if elapsed >= _CIRCUIT_COOLDOWN_SECONDS:
         logger.info("Circuit half-open for provider=%s — allowing probe request", provider)
@@ -114,7 +116,7 @@ def _circuit_is_open(provider: str) -> bool:
 def _record_success(provider: str) -> None:
     circuit = _get_circuit(provider)
     circuit.consecutive_failures = 0
-    circuit.opened_at = 0.0
+    circuit.opened_at = None
     circuit.total_successes += 1
 
 
@@ -123,7 +125,10 @@ def _record_failure(provider: str, category: LLMErrorCategory) -> None:
     circuit.consecutive_failures += 1
     circuit.total_failures += 1
     circuit.last_error_category = category
-    if circuit.consecutive_failures >= _CIRCUIT_FAILURE_THRESHOLD and circuit.opened_at == 0.0:
+    if (
+        circuit.consecutive_failures >= _CIRCUIT_FAILURE_THRESHOLD
+        and circuit.opened_at is None
+    ):
         circuit.opened_at = time.monotonic()
         logger.warning(
             "Circuit OPEN for provider=%s after %d consecutive failures (last=%s)",
@@ -388,7 +393,11 @@ def _normalize_cache_value(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_normalize_cache_value(item) for item in value]
     if isinstance(value, set):
-        return sorted(_normalize_cache_value(item) for item in value)
+        normalized_items = [_normalize_cache_value(item) for item in value]
+        try:
+            return sorted(normalized_items)
+        except TypeError:
+            return sorted(normalized_items, key=str)
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -404,28 +413,51 @@ async def _load_cached_llm_result(cache_key: str) -> LLMTaskResult | None:
         raw = await redis.get(cache_key)
         if not raw:
             return None
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        error_category = payload.get("error_category")
-        return LLMTaskResult(
-            payload=payload.get("payload") if isinstance(payload.get("payload"), (dict, list)) or payload.get("payload") is None else None,
-            input_tokens=int(payload.get("input_tokens") or 0),
-            output_tokens=int(payload.get("output_tokens") or 0),
-            provider=str(payload.get("provider") or ""),
-            model=str(payload.get("model") or ""),
-            error_message=str(payload.get("error_message") or ""),
-            error_category=LLMErrorCategory(str(error_category or LLMErrorCategory.NONE)),
-        )
+        return _deserialize_cached_llm_result(raw)
 
     return await redis_fail_open(
         _load,
         default=None,
         operation_name="llm_result_cache_get",
     )
+
+
+def _deserialize_cached_llm_result(raw: str) -> LLMTaskResult | None:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return LLMTaskResult(
+        payload=_coerce_cached_llm_payload(payload.get("payload")),
+        input_tokens=_coerce_cached_llm_int(payload.get("input_tokens")),
+        output_tokens=_coerce_cached_llm_int(payload.get("output_tokens")),
+        provider=str(payload.get("provider") or ""),
+        model=str(payload.get("model") or ""),
+        error_message=str(payload.get("error_message") or ""),
+        error_category=_coerce_cached_llm_error_category(payload.get("error_category")),
+    )
+
+
+def _coerce_cached_llm_payload(value: Any) -> dict | list | None:
+    if isinstance(value, (dict, list)) or value is None:
+        return value
+    return None
+
+
+def _coerce_cached_llm_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_cached_llm_error_category(value: Any) -> LLMErrorCategory:
+    try:
+        return LLMErrorCategory(str(value or LLMErrorCategory.NONE))
+    except ValueError:
+        return LLMErrorCategory.NONE
 
 
 async def _store_cached_llm_result(cache_key: str, result: LLMTaskResult) -> None:

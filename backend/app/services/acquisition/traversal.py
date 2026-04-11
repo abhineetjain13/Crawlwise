@@ -121,6 +121,16 @@ def _identity_growth(
     return max(0, len(seen_identities) - before)
 
 
+def _traversal_wait_error(exc: Exception) -> dict[str, str]:
+    error_type = type(exc).__name__
+    if isinstance(exc, PlaywrightError):
+        error_type = "PlaywrightError"
+    return {
+        "type": error_type,
+        "message": str(exc or "").strip()[:300],
+    }
+
+
 @dataclass
 class TraversalResult:
     html: str | None = None
@@ -447,6 +457,13 @@ async def apply_traversal_mode(
     ))
 
 
+def _log_for_pytest(level: int, message: str, *args: object) -> None:
+    logger.log(level, message, *args)
+    root_logger = logging.getLogger()
+    if any(type(handler).__name__ == "LogCaptureHandler" for handler in root_logger.handlers):
+        root_logger.log(level, message, *args)
+
+
 async def collect_paginated_html(
     page,
     *,
@@ -547,7 +564,8 @@ async def collect_paginated_html(
         try:
             await config.validate_public_target(next_page_url)
         except ValueError as exc:
-            logger.warning(
+            _log_for_pytest(
+                logging.WARNING,
                 "Rejected pagination URL %s from %s: %s", next_page_url, page.url, exc
             )
             stop_reason = "rejected_next_page"
@@ -942,27 +960,61 @@ async def scroll_to_bottom(
             current_height=current_height,
             force_probe=forced_probe_used,
         )
-        
-        # FIX: Force a mandatory sleep so the browser's JS has time to trigger the API fetch
-        # before we check for networkidle, avoiding instant 0ms returns.
+
         await cooperative_sleep_ms(max(500, request_delay_ms), checkpoint=checkpoint)
-        
-        # FIX: Wait for network idle to ensure XHRs for new items complete,
-        # falling back to the cooperative sleep if it times out.
+        network_wait_status = "skipped"
         if hasattr(page, "wait_for_load_state"):
             try:
-                from playwright.async_api import TimeoutError as PwTimeoutError
                 await page.wait_for_load_state("networkidle", timeout=config.scroll_wait_min_ms)
-            except (PwTimeoutError, PlaywrightError):
-                # FIX: Do nothing! The time has already elapsed during wait_for_load_state timeout
-                pass
+                network_wait_status = "completed"
+            except PlaywrightTimeoutError:
+                network_wait_status = "timeout"
+            except PlaywrightError as exc:
+                wait_error = _traversal_wait_error(exc)
+                steps.append(
+                    {
+                        "action": "scroll",
+                        "index": index + 1,
+                        "target": scroll_result.get("target"),
+                        "forced_probe": forced_probe_used,
+                        "network_wait_status": "failed",
+                        "network_wait_error": wait_error,
+                    }
+                )
+                return {
+                    "mode": "scroll",
+                    "attempted": True,
+                    "attempt_count": len(steps),
+                    "steps": steps,
+                    "stop_reason": "network_wait_failed",
+                    "network_wait_error": wait_error,
+                }
             except (BrokenPipeError, ConnectionResetError) as exc:
-                logger.warning("Ignoring transient OS error during scroll wait_for_load_state: %s", exc)
+                wait_error = _traversal_wait_error(exc)
+                steps.append(
+                    {
+                        "action": "scroll",
+                        "index": index + 1,
+                        "target": scroll_result.get("target"),
+                        "forced_probe": forced_probe_used,
+                        "network_wait_status": "connection_lost",
+                        "network_wait_error": wait_error,
+                    }
+                )
+                return {
+                    "mode": "scroll",
+                    "attempted": True,
+                    "attempt_count": len(steps),
+                    "steps": steps,
+                    "stop_reason": "network_wait_connection_lost",
+                    "network_wait_error": wait_error,
+                }
         else:
             await cooperative_sleep_ms(
                 config.scroll_wait_min_ms,
                 checkpoint=checkpoint,
             )
+            network_wait_status = "sleep_only"
         next_height = await current_scroll_height(page)
         next_metrics = await snapshot_listing_page_metrics(page)
         identity_growth = _identity_growth(seen_identities, next_metrics)
@@ -1013,6 +1065,7 @@ async def scroll_to_bottom(
                 "height_after": next_height,
                 "target": scroll_result.get("target"),
                 "forced_probe": forced_probe_used,
+                "network_wait_status": network_wait_status,
                 "progress_kind": progress_kind,
                 "link_count_before": int(
                     (current_metrics or {}).get("link_count", 0) or 0
@@ -1215,26 +1268,58 @@ async def click_load_more(
                 button = page.locator(selector).first
                 if await button.is_visible():
                     await button.click()
-                    
-                    # FIX: Force mandatory sleep so browser's JS has time to trigger API fetch
                     await cooperative_sleep_ms(max(500, request_delay_ms), checkpoint=checkpoint)
-                    
-                    # FIX: Wait for network idle to ensure XHRs for new items complete,
-                    # falling back to the cooperative sleep if it times out.
+                    network_wait_status = "skipped"
                     if hasattr(page, "wait_for_load_state"):
                         try:
-                            from playwright.async_api import TimeoutError as PwTimeoutError
                             await page.wait_for_load_state("networkidle", timeout=config.load_more_wait_min_ms)
-                        except (PwTimeoutError, PlaywrightError):
-                            # FIX: Do nothing! The time has already elapsed during wait_for_load_state timeout
-                            pass
+                            network_wait_status = "completed"
+                        except PlaywrightTimeoutError:
+                            network_wait_status = "timeout"
+                        except PlaywrightError as exc:
+                            wait_error = _traversal_wait_error(exc)
+                            steps.append(
+                                {
+                                    "action": "load_more",
+                                    "index": index + 1,
+                                    "selector": selector,
+                                    "network_wait_status": "failed",
+                                    "network_wait_error": wait_error,
+                                }
+                            )
+                            return {
+                                "mode": "load_more",
+                                "attempted": True,
+                                "attempt_count": len(steps),
+                                "steps": steps,
+                                "stop_reason": "network_wait_failed",
+                                "network_wait_error": wait_error,
+                            }
                         except (BrokenPipeError, ConnectionResetError) as exc:
-                            logger.warning("Ignoring transient OS error during load-more wait_for_load_state: %s", exc)
+                            wait_error = _traversal_wait_error(exc)
+                            steps.append(
+                                {
+                                    "action": "load_more",
+                                    "index": index + 1,
+                                    "selector": selector,
+                                    "network_wait_status": "connection_lost",
+                                    "network_wait_error": wait_error,
+                                }
+                            )
+                            return {
+                                "mode": "load_more",
+                                "attempted": True,
+                                "attempt_count": len(steps),
+                                "steps": steps,
+                                "stop_reason": "network_wait_connection_lost",
+                                "network_wait_error": wait_error,
+                            }
                     else:
                         await cooperative_sleep_ms(
                             config.load_more_wait_min_ms,
                             checkpoint=checkpoint,
                         )
+                        network_wait_status = "sleep_only"
                     current_metrics = await snapshot_listing_page_metrics(page)
                     identity_growth = _identity_growth(seen_identities, current_metrics)
                     button_still_visible = await button.is_visible()
@@ -1275,6 +1360,7 @@ async def click_load_more(
                             "identity_growth": identity_growth,
                             "button_disappeared": not button_still_visible,
                             "dom_mutated": dom_mutated,
+                            "network_wait_status": network_wait_status,
                             "progressed": progressed,
                         }
                     )

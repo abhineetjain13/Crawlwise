@@ -82,10 +82,12 @@ async def run_adapter(url: str, html: str, surface: str) -> AdapterResult | None
 async def try_blocked_adapter_recovery(
     url: str,
     surface: str,
+    *,
+    proxy_list: list[str] | None = None,
 ) -> AdapterResult | None:
     """
     Attempt to recover data from a blocked page using platform adapters.
     
     This is a thin wrapper around the adapter registry to provide a stable import point.
     """
-    return await _try_blocked_adapter_recovery(url, surface)
+    return await _try_blocked_adapter_recovery(url, surface, proxy_list=proxy_list)

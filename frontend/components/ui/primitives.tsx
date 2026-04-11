@@ -88,7 +88,7 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
     <input
       {...normalizedProps}
       className={cn(
-        "focus-ring h-8 w-full rounded-[var(--radius-md)] border-2 border-[var(--border-strong)]",
+        "focus-ring h-[var(--control-height)] w-full rounded-[var(--radius-md)] border-2 border-[var(--border-strong)]",
         "bg-[var(--control-input-bg)] px-3 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
@@ -148,10 +148,10 @@ export function Button({
     danger: "border-2 border-[var(--danger)] bg-[var(--danger)] !text-[var(--button-filled-fg)] hover:opacity-90",
   };
   const sizes: Record<string, string> = {
-    sm:   "h-7 px-2.5 text-caption",
-    md:   "h-8 px-3.5 text-body-sm",
-    lg:   "h-9 px-4 text-body",
-    icon: "h-8 w-8 p-0",
+    sm:   "h-8 px-2.5 text-caption",
+    md:   "h-[var(--control-height)] px-3.5 text-body-sm",
+    lg:   "h-10 px-4 text-body",
+    icon: "h-[var(--control-height)] w-[var(--control-height)] p-0",
   };
   const onAccent = variant === "primary" || variant === "danger" || variant === "accent";
   return (

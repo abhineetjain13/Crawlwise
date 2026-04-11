@@ -37,6 +37,7 @@ from app.services.crawl_utils import (
 from app.services.domain_utils import normalize_domain
 from app.services.pipeline import (
     STAGE_FETCH,
+    STAGE_SAVE,
     VERDICT_BLOCKED,
     VERDICT_EMPTY,
     VERDICT_LISTING_FAILED,
@@ -57,7 +58,6 @@ from app.services.config.crawl_runtime import (
 )
 from app.services._batch_progress import (
     BatchRunProgressState,
-    _merge_run_acquisition_metrics,
 )
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -149,6 +149,19 @@ def _ensure_url_processing_result(
     raise TypeError(f"Unexpected URL result type: {type(url_result)!r}")
 
 
+async def _count_run_records(session: AsyncSession, run_id: int) -> int:
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(CrawlRecord)
+                .where(CrawlRecord.run_id == run_id)
+            )
+        ).scalar()
+        or 0
+    )
+
+
 def _resolve_run_urls(run: CrawlRun, settings_view: CrawlRunSettings) -> list[str]:
     urls = settings_view.urls()
     if run.run_type == "batch" and urls:
@@ -190,7 +203,19 @@ async def _retry_run_update(
     run_id: int,
     mutate,
 ) -> None:
-    """Safely update a run using DB-level row locks (FOR UPDATE)."""
+    """Atomically update a run using DB-level row locks (FOR UPDATE).
+
+    This is the **single commit point** for each URL iteration in the batch
+    loop.  ``_process_single_url`` adds ``CrawlRecord`` objects and flushes
+    them (in-transaction, uncommitted).  This function then locks the
+    ``CrawlRun`` row, applies the progress mutation, and issues a single
+    ``session.commit()`` that persists *both* the new records and the
+    updated run summary atomically.
+
+    If the commit fails the entire transaction — records included — is
+    rolled back, so a crash between record insertion and progress update
+    can never produce phantom progress or orphaned records.
+    """
     result = await session.execute(
         select(CrawlRun).where(CrawlRun.id == run_id).with_for_update()
     )
@@ -198,7 +223,7 @@ async def _retry_run_update(
     if run is None:
         return
     await mutate(session, run)
-    await session.flush()
+    # Single commit: records (already flushed by pipeline) + progress patch.
     await session.commit()
 
 
@@ -213,9 +238,15 @@ class RunControlSignal(RunControlError):
 
 
 async def _run_control_checkpoint(session: AsyncSession, run: CrawlRun) -> None:
-    await session.refresh(run)
-    current_status = run.status_value
-    control_request = get_control_request(run)
+    refreshed_run = run
+    try:
+        await session.refresh(run)
+    except Exception:
+        fetched = await session.get(CrawlRun, int(getattr(run, "id", 0) or 0))
+        if fetched is not None:
+            refreshed_run = fetched
+    current_status = refreshed_run.status_value
+    control_request = get_control_request(refreshed_run)
     if current_status == CrawlStatus.PAUSED or control_request == CONTROL_REQUEST_PAUSE:
         raise RunControlSignal(CONTROL_REQUEST_PAUSE)
     if current_status == CrawlStatus.KILLED or control_request == CONTROL_REQUEST_KILL:
@@ -328,7 +359,12 @@ async def _finalize_batch_run(
                 VERDICT_LISTING_FAILED,
             }:
                 update_run_status(retry_run, CrawlStatus.FAILED)
-        retry_run.merge_summary_patch(summary_patch)
+        retry_run.merge_summary_patch(
+            {
+                **summary_patch,
+                "current_stage": STAGE_SAVE,
+            }
+        )
 
     await _retry_run_update(session, run_id, _finalize_mutation)
     traversal_attempted = int(
@@ -350,6 +386,12 @@ async def _finalize_batch_run(
         "[traversal-summary] attempted="
         f"{traversal_attempted}, succeeded={traversal_succeeded}, "
         f"fell_back={traversal_fell_back}, modes={traversal_modes_used}",
+    )
+    await _log_with_retry(
+        session,
+        run_id,
+        "info",
+        f"[SAVE] Finalized run summary (record_count={int(summary_patch.get('record_count', 0) or 0)}, verdict={aggregate_verdict})",
     )
     await _log_with_retry(
         session,
@@ -538,6 +580,74 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             reset_correlation_id(correlation_token)
 
 
+# Default per-run concurrency for parallel batch URL processing.
+# Cross-run concurrency is governed by the global memory-adaptive semaphore.
+_DEFAULT_INTRA_RUN_CONCURRENCY = 4
+
+
+async def _process_url_with_own_session(
+    *,
+    run_id: int,
+    run: CrawlRun,
+    url: str,
+    idx: int,
+    total_urls: int,
+    url_config: URLProcessingConfig,
+    url_timeout_seconds: float,
+    progress_state: BatchRunProgressState,
+) -> URLProcessingResult:
+    """Process a single URL in its own DB session for transaction isolation.
+
+    Each URL's records and progress update are committed atomically —
+    if the worker dies mid-URL, both are rolled back together.
+    """
+    from app.core.database import SessionLocal
+
+    async with SessionLocal() as url_session:
+        try:
+            attached_run = await url_session.get(CrawlRun, run_id)
+            if attached_run is None:
+                raise RuntimeError(
+                    f"Run {run_id} is not visible in the isolated session; "
+                    "commit the run before parallel URL processing"
+                )
+            async with _get_global_url_semaphore():
+                url_result = _ensure_url_processing_result(
+                    await asyncio.wait_for(
+                        _process_single_url(
+                            session=url_session,
+                            run=attached_run,
+                            url=url,
+                            config=url_config,
+                            checkpoint=lambda: _run_control_checkpoint(
+                                url_session, attached_run
+                            ),
+                        ),
+                        timeout=url_timeout_seconds,
+                    )
+                )
+            # Atomic: commit records + progress together
+            await progress_state.persist_url_result(
+                session=url_session,
+                run_id=run_id,
+                retry_run_update=_retry_run_update,
+                idx=idx,
+                url=url,
+                records_count=len(url_result.records),
+                verdict=url_result.verdict,
+                url_metrics=url_result.url_metrics,
+            )
+            return url_result
+        except RunControlSignal:
+            raise
+        except ProxyPoolExhausted:
+            raise
+        except Exception as exc:
+            await url_session.rollback()
+            logger.warning("URL %s failed: %s", url, exc, exc_info=True)
+            raise
+
+
 async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
     remaining_ms = max(0, int(sleep_ms or 0))
     while remaining_ms > 0:
@@ -568,19 +678,6 @@ async def _handle_run_control_signal(
     set_control_request(run, None)
     await _log(session, run.id, "warning", "Run killed at checkpoint")
     await session.commit()
-
-
-async def _count_run_records(session: AsyncSession, run_id: int) -> int:
-    return int(
-        (
-            await session.execute(
-                select(func.count())
-                .select_from(CrawlRecord)
-                .where(CrawlRecord.run_id == run_id)
-            )
-        ).scalar()
-        or 0
-    )
 
 
 def _collect_target_urls(payload: dict, settings: dict) -> list[str]:

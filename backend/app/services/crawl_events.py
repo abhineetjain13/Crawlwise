@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.core.redis import get_redis, redis_fail_open, schedule_fail_open
+from app.core.redis import redis_fail_open, schedule_fail_open
 from app.models.crawl import CrawlLog, CrawlRun
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -260,10 +260,8 @@ async def persist_run_summary_patch(
         if run is None:
             return None
         result_summary = run.summary_dict()
-        merged_summary = _merge_run_summary_patch(result_summary, summary_patch)
-        if merged_summary == result_summary:
+        if run.merge_summary_patch(summary_patch) == result_summary:
             return run
-        run.merge_summary_patch(summary_patch)
         await s.flush()
         return run
 
@@ -280,70 +278,6 @@ async def persist_run_summary_patch(
         await new_session.commit()
         await new_session.refresh(run)
         return serialize_run_snapshot(run)
-
-
-def _merge_run_summary_patch(current: object, patch: dict[str, Any]) -> dict[str, Any]:
-    summary = dict(current) if isinstance(current, dict) else {}
-    merged = {**summary, **patch}
-
-    # Preserve monotonic counters/progress when late/stale writes race in.
-    for key in ("url_count", "record_count", "progress", "processed_urls", "completed_urls"):
-        if key in summary or key in patch:
-            merged[key] = max(_as_int(summary.get(key)), _as_int(patch.get(key)))
-
-    if "remaining_urls" in patch:
-        prev_remaining = summary.get("remaining_urls")
-        if prev_remaining is None:
-            merged["remaining_urls"] = _as_int(patch.get("remaining_urls"))
-        else:
-            merged["remaining_urls"] = min(
-                _as_int(prev_remaining),
-                _as_int(patch.get("remaining_urls")),
-            )
-
-    if "url_verdicts" in patch or "url_verdicts" in summary:
-        merged["url_verdicts"] = _merge_url_verdicts(
-            summary.get("url_verdicts"),
-            patch.get("url_verdicts"),
-        )
-
-    if "verdict_counts" in patch or "verdict_counts" in summary:
-        merged["verdict_counts"] = _merge_verdict_counts(
-            summary.get("verdict_counts"),
-            patch.get("verdict_counts"),
-        )
-
-    return merged
-
-
-def _merge_url_verdicts(current: object, patch: object) -> list[str]:
-    current_list = list(current) if isinstance(current, list) else []
-    patch_list = list(patch) if isinstance(patch, list) else []
-    max_len = max(len(current_list), len(patch_list))
-    merged: list[str] = []
-    for idx in range(max_len):
-        patch_value = str(patch_list[idx] or "").strip() if idx < len(patch_list) else ""
-        current_value = str(current_list[idx] or "").strip() if idx < len(current_list) else ""
-        merged.append(patch_value or current_value)
-    return merged
-
-
-def _merge_verdict_counts(current: object, patch: object) -> dict[str, int]:
-    current_map = dict(current) if isinstance(current, dict) else {}
-    patch_map = dict(patch) if isinstance(patch, dict) else {}
-    keys = set(current_map) | set(patch_map)
-    merged: dict[str, int] = {}
-    for key in keys:
-        merged[str(key)] = max(_as_int(current_map.get(key)), _as_int(patch_map.get(key)))
-    return merged
-
-
-def _as_int(value: object) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
 
 async def load_run_for_events(
     session: AsyncSession,

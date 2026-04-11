@@ -1,4 +1,5 @@
 """Trace and manifest builder functions for crawl diagnostics."""
+
 from __future__ import annotations
 
 from app.services.acquisition.acquirer import (
@@ -23,7 +24,114 @@ from .utils import (
     _compact_dict,
     _first_non_empty_text,
 )
+
 from .verdict import _review_bucket_fingerprint
+
+_MANIFEST_MAX_ITEMS = 8
+_MANIFEST_MAX_DEPTH = 4
+_MANIFEST_TEXT_LIMIT = 400
+_MANIFEST_TABLE_LIMIT = 3
+_MANIFEST_TABLE_ROW_LIMIT = 12
+_MANIFEST_TABLE_CELL_LIMIT = 4
+
+
+def _snapshot_manifest_value(
+    value: object,
+    *,
+    depth: int = 0,
+    max_depth: int = _MANIFEST_MAX_DEPTH,
+    max_items: int = _MANIFEST_MAX_ITEMS,
+    text_limit: int = _MANIFEST_TEXT_LIMIT,
+) -> object:
+    if value in (None, "", [], {}):
+        return None
+    if depth >= max_depth:
+        return _clean_candidate_text(value, limit=text_limit)
+    if isinstance(value, dict):
+        snapshot: dict[str, object] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                break
+            normalized_key = str(key or "").strip()
+            if not normalized_key:
+                continue
+            nested = _snapshot_manifest_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+                text_limit=text_limit,
+            )
+            if nested not in (None, "", [], {}):
+                snapshot[normalized_key] = nested
+        return snapshot or None
+    if isinstance(value, list):
+        rows: list[object] = []
+        for item in value[:max_items]:
+            nested = _snapshot_manifest_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+                text_limit=text_limit,
+            )
+            if nested not in (None, "", [], {}):
+                rows.append(nested)
+        return rows or None
+    return _clean_candidate_text(value, limit=text_limit)
+
+
+def _snapshot_manifest_tables(tables: object) -> list[dict[str, object]] | None:
+    if not isinstance(tables, list):
+        return None
+    summarized_tables: list[dict[str, object]] = []
+    for table in tables[:_MANIFEST_TABLE_LIMIT]:
+        if not isinstance(table, dict):
+            continue
+        summarized_rows: list[dict[str, object]] = []
+        for row in list(table.get("rows") or [])[:_MANIFEST_TABLE_ROW_LIMIT]:
+            if not isinstance(row, dict):
+                continue
+            summarized_cells: list[dict[str, object]] = []
+            for cell in list(row.get("cells") or [])[:_MANIFEST_TABLE_CELL_LIMIT]:
+                if not isinstance(cell, dict):
+                    continue
+                summarized_cell = _compact_dict(
+                    {
+                        "text": _clean_candidate_text(cell.get("text"), limit=160),
+                        "href": _clean_candidate_text(cell.get("href"), limit=160),
+                        "tag": _clean_candidate_text(cell.get("tag"), limit=32),
+                    }
+                )
+                if summarized_cell:
+                    summarized_cells.append(summarized_cell)
+            if summarized_cells:
+                summarized_rows.append(
+                    _compact_dict(
+                        {
+                            "row_index": row.get("row_index"),
+                            "cells": summarized_cells,
+                        }
+                    )
+                )
+        summarized_table = _compact_dict(
+            {
+                "table_index": table.get("table_index"),
+                "caption": _clean_candidate_text(table.get("caption"), limit=120),
+                "section_title": _clean_candidate_text(
+                    table.get("section_title"), limit=120
+                ),
+                "headers": _snapshot_manifest_value(
+                    table.get("headers"),
+                    max_items=_MANIFEST_TABLE_CELL_LIMIT,
+                    text_limit=120,
+                ),
+                "rows": summarized_rows or None,
+            }
+        )
+        if summarized_table:
+            summarized_tables.append(summarized_table)
+    return summarized_tables or None
 
 
 def _build_acquisition_trace(acq: AcquisitionResult) -> dict[str, object]:
@@ -89,28 +197,37 @@ def _build_manifest_trace(
     page_sources = parse_page_sources(html)
     payload = _compact_dict(
         {
-            "adapter_data": adapter_records or None,
+            "adapter_data": _snapshot_manifest_value(adapter_records),
             "network_payloads": [
                 _compact_dict(
                     {
-                        "url": row.get("url"),
+                        "url": _clean_candidate_text(row.get("url"), limit=240),
                         "status": row.get("status"),
-                        "headers": row.get("headers"),
-                        "body": row.get("body"),
+                        "headers": _snapshot_manifest_value(
+                            row.get("headers"), max_items=20, text_limit=160
+                        ),
+                        "body": _snapshot_manifest_value(row.get("body")),
                     }
                 )
                 for row in scrubbed_payloads
             ]
             or None,
-            "next_data": page_sources.get("next_data") or None,
-            "_hydrated_states": page_sources.get("hydrated_states") or None,
-            "embedded_json": page_sources.get("embedded_json") or None,
-            "open_graph": page_sources.get("open_graph") or None,
-            "json_ld": page_sources.get("json_ld") or None,
-            "microdata": page_sources.get("microdata") or None,
-            "tables": page_sources.get("tables") or None,
-            "semantic": semantic or None,
-            **extra_payload,
+            "next_data": _snapshot_manifest_value(page_sources.get("next_data")),
+            "_hydrated_states": _snapshot_manifest_value(
+                page_sources.get("hydrated_states")
+            ),
+            "embedded_json": _snapshot_manifest_value(page_sources.get("embedded_json")),
+            "open_graph": _snapshot_manifest_value(
+                page_sources.get("open_graph"), max_items=20, text_limit=200
+            ),
+            "json_ld": _snapshot_manifest_value(page_sources.get("json_ld")),
+            "microdata": _snapshot_manifest_value(page_sources.get("microdata")),
+            "tables": _snapshot_manifest_tables(page_sources.get("tables")),
+            "semantic": _snapshot_manifest_value(semantic),
+            **{
+                key: _snapshot_manifest_value(value)
+                for key, value in extra_payload.items()
+            },
         }
     )
     return payload
@@ -328,7 +445,7 @@ def _build_legible_listing_fallback_record(
             ["", *markdown_lines] if page_markdown_lines else markdown_lines
         )
     page_markdown = "\n".join(page_markdown_lines).strip()
-    
+
     return _compact_dict(
         {
             "fallback_listing": _compact_dict(

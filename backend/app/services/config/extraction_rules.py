@@ -10,6 +10,9 @@ from app.services.config.platform_registry import known_ats_domains
 from app.services.config.selectors import DOM_PATTERNS as _DOM_PATTERNS
 
 SITE_POLICY_REGISTRY = {}
+ACTION_ADD_TO_CART = "add to cart"
+ACTION_BUY_NOW = "buy now"
+ACTION_SIGN_IN = "sign in"
 
 EXTRACTION_RULES = {
     "field_aliases": {
@@ -487,7 +490,7 @@ EXTRACTION_RULES = {
             "manage cookies",
             "consent preferences",
             "accept cookies",
-            "sign in",
+            ACTION_SIGN_IN,
             "log in",
             "my account",
             "newsletter",
@@ -500,7 +503,7 @@ EXTRACTION_RULES = {
             "privacy",
             "consent",
             "preferences",
-            "sign in",
+            ACTION_SIGN_IN,
             "log in",
             "login",
             "register",
@@ -516,10 +519,10 @@ EXTRACTION_RULES = {
             "cookie preferences",
             "privacy policy",
             "terms of service",
-            "sign in",
+            ACTION_SIGN_IN,
             "log in",
             "my account",
-            "add to cart",
+            ACTION_ADD_TO_CART,
             "shopping cart",
             "department navigation",
             "cookie manager banner",
@@ -531,12 +534,12 @@ EXTRACTION_RULES = {
             "sort by",
             "shop all",
             "purchased",
-            "add to cart",
+            ACTION_ADD_TO_CART,
             "add to bag",
             "quick view",
             "quick shop",
             "shop now",
-            "buy now",
+            ACTION_BUY_NOW,
             "learn more",
             "see details",
             "view details",
@@ -554,7 +557,7 @@ EXTRACTION_RULES = {
         "availability_noise_phrases": [
             "select options",
             "choose options",
-            "add to cart",
+            ACTION_ADD_TO_CART,
             "quantity",
             "wishlist",
         ],
@@ -618,8 +621,8 @@ EXTRACTION_RULES = {
         "ui_noise_phrases": [
             "add to wishlist",
             "add to bag",
-            "add to cart",
-            "buy now",
+            ACTION_ADD_TO_CART,
+            ACTION_BUY_NOW,
             "selling fast",
             "best seller",
             "top seller",
@@ -788,11 +791,11 @@ EXTRACTION_RULES = {
     },
     "semantic_detail": {
         "section_skip_patterns": [
-            "add to cart",
-            "buy now",
+            ACTION_ADD_TO_CART,
+            ACTION_BUY_NOW,
             "checkout",
             "login",
-            "sign in",
+            ACTION_SIGN_IN,
             "subscribe",
             "review this product",
             "filter reviews",
@@ -827,8 +830,8 @@ EXTRACTION_RULES = {
             "watch video",
             "video",
             "learn more",
-            "add to cart",
-            "buy now",
+            ACTION_ADD_TO_CART,
+            ACTION_BUY_NOW,
             "primary guide",
             "guide",
             "discount",
@@ -1039,16 +1042,16 @@ EXTRACTION_RULES = {
             "reject_phrases": [
                 "cookie preferences",
                 "privacy policy",
-                "sign in",
+                ACTION_SIGN_IN,
                 "log in",
-                "add to cart",
+                ACTION_ADD_TO_CART,
             ],
         },
         "brand": {
             "reject_phrases": [
                 "cookie",
                 "privacy",
-                "sign in",
+                ACTION_SIGN_IN,
                 "log in",
                 ">",
                 "/",
@@ -1058,7 +1061,7 @@ EXTRACTION_RULES = {
             "reject_phrases": [
                 "cookie",
                 "privacy",
-                "sign in",
+                ACTION_SIGN_IN,
                 "log in",
             ],
         },
@@ -1148,7 +1151,7 @@ EXTRACTION_RULES = {
             "fitment-warning",
         ],
         "color_action_values": [
-            "add to cart",
+            ACTION_ADD_TO_CART,
             "add to bag",
             "quick view",
             "quick shop",
@@ -1158,7 +1161,7 @@ EXTRACTION_RULES = {
             "more options",
             "select",
             "choose",
-            "buy now",
+            ACTION_BUY_NOW,
             "checkout",
             "shop now",
         ],
@@ -1323,7 +1326,7 @@ EXTRACTION_RULES = {
             "home",
             "login",
             "log in",
-            "sign in",
+            ACTION_SIGN_IN,
             "sign up",
             "register",
             "account",
@@ -1598,6 +1601,41 @@ NORMALIZATION_RULES = {
         "border:",
         "auto",
     ],
+    "non_content_rich_text_tags": [
+        "script",
+        "style",
+        "svg",
+        "noscript",
+        "iframe",
+        "template",
+        "meta",
+        "link",
+    ],
+    "noisy_product_attribute_key_tokens": [
+        "about",
+        "acerca",
+        "account",
+        "ayuda",
+        "contact",
+        "cookie",
+        "customer",
+        "faq",
+        "footer",
+        "help",
+        "newsletter",
+        "policy",
+        "privacy",
+        "return",
+        "service",
+        "servicios",
+        "shipping",
+        "social",
+        "store",
+        "suscrib",
+        "terms",
+    ],
+    "product_attribute_css_noise_pattern": r"(?i)(?:^|\s)(?:@media|@supports|\.?[a-z0-9_-]+\s*\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\s*:)",
+    "product_attribute_digit_only_key_pattern": r"^\d+(?:[_-]\d+)*$",
     "page_url_currency_hints": {
         "/us/": "USD",
         "/en-us/": "USD",
@@ -1716,7 +1754,9 @@ CANDIDATE_CATEGORY_TOKENS = tuple(
     )
 )
 CANDIDATE_IDENTIFIER_TOKENS = tuple(
-    _CANDIDATE_FIELD_NAME_PATTERNS.get("identifier_tokens", ["sku", "id", "code", "vin", "mpn"])
+    _CANDIDATE_FIELD_NAME_PATTERNS.get(
+        "identifier_tokens", ["sku", "id", "code", "vin", "mpn"]
+    )
 )
 GA_DATA_LAYER_KEYS = frozenset(_CANDIDATE_CLEANUP.get("ga_data_layer_keys", []))
 CANDIDATE_DESCRIPTION_TOKENS = tuple(
@@ -1737,6 +1777,52 @@ CANDIDATE_COLOR_CSS_NOISE_TOKENS = tuple(
 )
 CANDIDATE_SIZE_CSS_NOISE_TOKENS = tuple(
     _CANDIDATE_CLEANUP.get("size_css_noise_tokens", [])
+)
+CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS = frozenset(
+    _CANDIDATE_CLEANUP.get(
+        "non_content_rich_text_tags",
+        ["script", "style", "svg", "noscript", "iframe", "template", "meta", "link"],
+    )
+)
+CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS = frozenset(
+    _CANDIDATE_CLEANUP.get(
+        "noisy_product_attribute_key_tokens",
+        [
+            "about",
+            "acerca",
+            "account",
+            "ayuda",
+            "contact",
+            "cookie",
+            "customer",
+            "faq",
+            "footer",
+            "help",
+            "newsletter",
+            "policy",
+            "privacy",
+            "return",
+            "service",
+            "servicios",
+            "shipping",
+            "social",
+            "store",
+            "suscrib",
+            "terms",
+        ],
+    )
+)
+CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN = str(
+    _CANDIDATE_CLEANUP.get(
+        "product_attribute_css_noise_pattern",
+        r"(?i)(?:^|\s)(?:@media|@supports|\.?[a-z0-9_-]+\s*\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\s*:)",
+    )
+)
+CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN = str(
+    _CANDIDATE_CLEANUP.get(
+        "product_attribute_digit_only_key_pattern",
+        r"^\d+(?:[_-]\d+)*$",
+    )
 )
 CANDIDATE_SIZE_PACKAGE_TOKENS = tuple(_CANDIDATE_CLEANUP.get("size_package_tokens", []))
 CANDIDATE_AVAILABILITY_NOISE_PHRASES = tuple(
@@ -1777,7 +1863,9 @@ CANDIDATE_PLACEHOLDER_VALUES = tuple(_CANDIDATE_CLEANUP.get("placeholder_values"
 CANDIDATE_GENERIC_CATEGORY_VALUES = tuple(
     _CANDIDATE_CLEANUP.get("generic_category_values", [])
 )
-CANDIDATE_GENERIC_TITLE_VALUES = tuple(_CANDIDATE_CLEANUP.get("generic_title_values", []))
+CANDIDATE_GENERIC_TITLE_VALUES = tuple(
+    _CANDIDATE_CLEANUP.get("generic_title_values", [])
+)
 CANDIDATE_TITLE_NOISE_PHRASES = tuple(_CANDIDATE_CLEANUP.get("title_noise_phrases", []))
 CANDIDATE_PROMO_ONLY_TITLE_PATTERN = str(
     _CANDIDATE_CLEANUP.get(
@@ -1786,14 +1874,18 @@ CANDIDATE_PROMO_ONLY_TITLE_PATTERN = str(
     )
 )
 CANDIDATE_RATING_WORD_TOKENS = tuple(
-    _CANDIDATE_CLEANUP.get("rating_word_tokens", ["one", "two", "three", "four", "five"])
+    _CANDIDATE_CLEANUP.get(
+        "rating_word_tokens", ["one", "two", "three", "four", "five"]
+    )
 )
 CANDIDATE_ANALYTICS_DIMENSION_TOKEN_PATTERN = str(
     _CANDIDATE_CLEANUP.get(
         "analytics_dimension_token_pattern", r"dimension\d+|metric\d+|cd\d+|ev\d+"
     )
 )
-CANDIDATE_ALPHA_CHAR_PATTERN = str(_CANDIDATE_CLEANUP.get("alpha_char_pattern", r"[A-Za-z]"))
+CANDIDATE_ALPHA_CHAR_PATTERN = str(
+    _CANDIDATE_CLEANUP.get("alpha_char_pattern", r"[A-Za-z]")
+)
 CANDIDATE_UI_NOISE_TOKEN_PATTERN = str(
     _CANDIDATE_CLEANUP.get("ui_noise_token_pattern", r"\b[a-z]+_[a-z0-9_]+\b")
 )
@@ -1857,6 +1949,7 @@ DISCOVERED_VALUE_NOISE_PHRASES = tuple(
     _DISCOVERED_FIELD_CLEANUP.get("value_noise_phrases", [])
 )
 
+
 def _currency_symbol_class(symbol_map: dict[object, object]) -> str:
     symbols = sorted(
         {str(symbol).strip() for symbol in symbol_map.keys() if str(symbol).strip()}
@@ -1899,16 +1992,29 @@ def _coerce_symbol_map(value: object) -> dict[object, object]:
 
 
 def _expand_salary_range_regex(rules: dict[str, object]) -> str:
+    """Build the salary range regex with ReDoS-safe patterns.
+
+    The regex avoids nested quantifiers by using bounded repetition
+    (``{0,20}`` instead of ``*``) and non-overlapping character classes
+    to prevent catastrophic backtracking on adversarial input.
+    """
     raw_pattern = str(rules.get("salary_range_regex") or "").strip()
     if not raw_pattern:
+        # ReDoS-hardened pattern:
+        # - ``\d[\d,.]{0,20}`` bounds digit sequences to prevent unbounded backtracking
+        # - ``\s{0,5}`` bounds whitespace instead of ``\s*``
+        # - Each branch is non-overlapping by requiring a distinct leading token
+        _NUM = r"\d[\d,.]{0,20}[kKmMbB]?"
+        _WS = r"\s{0,5}"
+        _SEP = r"(?:[-–—]|to|until)"
+        _UNIT = rf"(?:{_WS}/{_WS}[a-zA-Z]{{1,20}})?"
         raw_pattern = (
-            r"(?:(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\s*\d[\d,.]*[kKmMbB]?\s*"
-            r"(?:[-–—]|to|until)\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?\s*"
-            r"\d[\d,.]*[kKmMbB]?\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?"
-            r"(?:\s*/\s*[a-zA-Z]+)?|(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)\s*"
-            r"\d[\d,.]*[kKmMbB]?(?:\s*(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?"
-            r"(?:\s*/\s*[a-zA-Z]+)?|\d[\d,.]*[kKmMbB]?(?:\s*(?:__CURRENCY_SYMBOL_CLASS__|"
-            r"__CURRENCY_CODE_ALT__))?(?:\s*/\s*[a-zA-Z]+)?)"
+            rf"(?:(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?{_WS}{_NUM}{_WS}"
+            rf"{_SEP}{_WS}(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?{_WS}"
+            rf"{_NUM}{_WS}(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__)?{_UNIT}"
+            rf"|(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__){_WS}"
+            rf"{_NUM}(?:{_WS}(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?{_UNIT}"
+            rf"|{_NUM}(?:{_WS}(?:__CURRENCY_SYMBOL_CLASS__|__CURRENCY_CODE_ALT__))?{_UNIT})"
         )
     currency_symbol_map = _coerce_symbol_map(rules.get("currency_symbol_map"))
     expanded = raw_pattern.replace(
@@ -2135,7 +2241,7 @@ _SEMANTIC_DETAIL_RULES = EXTRACTION_RULES.get("semantic_detail", {})
 SECTION_SKIP_PATTERNS = tuple(
     _SEMANTIC_DETAIL_RULES.get(
         "section_skip_patterns",
-        ["add to cart", "buy now", "checkout", "login", "sign in", "subscribe"],
+        [ACTION_ADD_TO_CART, ACTION_BUY_NOW, "checkout", "login", ACTION_SIGN_IN, "subscribe"],
     )
 )
 SECTION_ANCESTOR_STOP_TAGS = set(
@@ -2167,8 +2273,8 @@ SPEC_LABEL_BLOCK_PATTERNS = tuple(
             "watch video",
             "video",
             "learn more",
-            "add to cart",
-            "buy now",
+            ACTION_ADD_TO_CART,
+            ACTION_BUY_NOW,
             "primary guide",
             "guide",
             "discount",
@@ -2239,7 +2345,9 @@ LISTING_JOB_SIGNAL_FIELDS = frozenset(
 LISTING_NON_LISTING_PATH_TOKENS = frozenset(
     _LISTING_EXTRACTION_RULES.get("non_listing_path_tokens", [])
 )
-LISTING_HUB_PATH_SEGMENTS = frozenset(_LISTING_EXTRACTION_RULES.get("hub_path_segments", []))
+LISTING_HUB_PATH_SEGMENTS = frozenset(
+    _LISTING_EXTRACTION_RULES.get("hub_path_segments", [])
+)
 LISTING_WEAK_METADATA_FIELDS = frozenset(
     _LISTING_EXTRACTION_RULES.get("weak_metadata_fields", [])
 )
@@ -2331,7 +2439,9 @@ LISTING_BUY_BOX_HEADING_SCAN_TAGS = tuple(
     )
 )
 LISTING_DESCRIPTION_CANDIDATE_FIELDS = tuple(
-    _LISTING_EXTRACTION_RULES.get("description_candidate_fields", ["description", "summary"])
+    _LISTING_EXTRACTION_RULES.get(
+        "description_candidate_fields", ["description", "summary"]
+    )
 )
 _LISTING_MATERIALS_AND_CARE_SECTION_LABELS = _LISTING_EXTRACTION_RULES.get(
     "materials_and_care_section_labels", {}

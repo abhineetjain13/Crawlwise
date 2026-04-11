@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 
 import psutil  # Hard dependency — zombie browser cleanup requires psutil
@@ -22,7 +23,9 @@ from app.services.acquisition.cookie_store import (
     cookie_store_path,
     filter_persistable_cookies,
     load_cookies_for_context,
+    load_session_cookies_for_context,
     save_cookies_payload,
+    save_session_cookies_payload,
 )
 from app.services.acquisition.traversal import (
     AdvanceResult,
@@ -63,10 +66,13 @@ from app.services.acquisition.traversal import (
     snapshot_pagination_state as _snapshot_pagination_state_shared,
 )
 from app.services.exceptions import BrowserError, BrowserNavigationError
+from app.services.resource_monitor import MemoryPressureLevel, get_memory_pressure_level
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.crawl_runtime import (
     ACCORDION_EXPAND_WAIT_MS,
     BLOCK_MIN_HTML_LENGTH,
+    BROWSER_CONTEXT_TIMEOUT_MS,
+    BROWSER_NEW_PAGE_TIMEOUT_MS,
     BROWSER_ERROR_RETRY_ATTEMPTS,
     BROWSER_ERROR_RETRY_DELAY_MS,
     BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
@@ -74,6 +80,8 @@ from app.services.config.crawl_runtime import (
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
     CHALLENGE_POLL_INTERVAL_MS,
     CHALLENGE_WAIT_MAX_SECONDS,
+    COOKIE_CONSENT_POSTCLICK_WAIT_MS,
+    COOKIE_CONSENT_PREWAIT_MS,
     DEFAULT_MAX_SCROLLS,
     INTERRUPTIBLE_WAIT_POLL_MS,
     LISTING_MIN_ITEMS,
@@ -104,6 +112,9 @@ from playwright.async_api import (
     async_playwright,
 )
 
+if TYPE_CHECKING:
+    from app.services.acquisition.session_context import SessionContext
+
 logger = logging.getLogger(__name__)
 
 BLOCK_BROWSER_CHALLENGE_STRONG_MARKERS = dict(
@@ -125,6 +136,12 @@ _BROWSER_POOL_MAX_SIZE = 6
 _BROWSER_POOL_IDLE_TTL_SECONDS = 300
 _BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS = 60
 _MIN_TRAVERSAL_MEMORY_BYTES = 500 * 1024 * 1024
+
+# Resource types blocked in degraded (memory-pressure) mode to reduce
+# per-page memory footprint.  Fonts/images/media are the heaviest
+# resources and rarely affect extraction quality.
+_DEGRADED_BLOCKED_RESOURCE_TYPES = frozenset({"image", "media", "font"})
+_DEGRADED_VIEWPORT = {"width": 1024, "height": 768}
 
 
 def _traversal_config() -> TraversalConfig:
@@ -274,6 +291,7 @@ async def fetch_rendered_html(
     requested_field_selectors: dict[str, list[dict]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
     run_id: int | None = None,
+    session_context: SessionContext | None = None,
 ) -> BrowserResult:
     """Render a page with Playwright and intercept XHR/fetch responses.
 
@@ -302,6 +320,7 @@ async def fetch_rendered_html(
             requested_field_selectors=requested_field_selectors or {},
             checkpoint=checkpoint,
             run_id=run_id,
+            session_context=session_context,
         )
 
 
@@ -322,6 +341,7 @@ async def _fetch_rendered_html_with_fallback(
     requested_field_selectors: dict[str, list[dict]],
     checkpoint: Callable[[], Awaitable[None]] | None = None,
     run_id: int | None = None,
+    session_context: SessionContext | None = None,
 ) -> BrowserResult:
     last_error: Exception | None = None
     first_profile_failure_reason: str | None = None
@@ -356,6 +376,7 @@ async def _fetch_rendered_html_with_fallback(
                 navigation_strategies=navigation_strategies,
                 checkpoint=checkpoint,
                 run_id=run_id,
+                session_context=session_context,
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
             if index < len(profiles) - 1 and _should_retry_launch_profile(
@@ -369,7 +390,7 @@ async def _fetch_rendered_html_with_fallback(
                 )
                 continue
             return result
-        except (PlaywrightError, RuntimeError, ValueError, TypeError, OSError) as exc:
+        except (PlaywrightError, RuntimeError, OSError) as exc:
             last_error = exc
             first_profile_failure_reason = _classify_profile_failure_reason(exc)
             logger.warning(
@@ -400,11 +421,23 @@ async def _fetch_rendered_html_attempt(
     navigation_strategies: list[tuple[str, int]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
     run_id: int | None = None,
+    session_context: SessionContext | None = None,
 ) -> BrowserResult:
     result = BrowserResult()
     intercepted: list[dict] = []
     blocked_non_public_requests: list[dict[str, str]] = []
     timings_ms: dict[str, int] = {}
+
+    # Check memory pressure once per attempt — cheap psutil call.
+    pressure = get_memory_pressure_level()
+    degraded = pressure is not MemoryPressureLevel.NORMAL
+    if degraded:
+        logger.info(
+            "Browser acquisition running in degraded mode (pressure=%s) for %s",
+            pressure.value,
+            url,
+        )
+
     browser_started_at = time.perf_counter()
     browser_type = getattr(pw, str(launch_profile.get("browser_type") or "chromium"))
     launch_kwargs = _build_launch_kwargs(
@@ -421,17 +454,19 @@ async def _fetch_rendered_html_attempt(
     timings_ms["browser_launch_ms"] = _elapsed_ms(launch_started_at)
     timings_ms["browser_reused"] = int(browser_reused)
     browser_channel = str(launch_profile.get("channel") or "").strip() or None
+    ctx_kwargs = _context_kwargs(
+        prefer_stealth,
+        browser_channel=browser_channel,
+        runtime_options=runtime_options,
+        session_context=session_context,
+    )
+    if degraded:
+        ctx_kwargs["viewport"] = _DEGRADED_VIEWPORT
     try:
         # FIX: Wrap context creation in a strict timeout to prevent zombie browsers
         context = await asyncio.wait_for(
-            browser.new_context(
-                **_context_kwargs(
-                    prefer_stealth,
-                    browser_channel=browser_channel,
-                    runtime_options=runtime_options,
-                )
-            ),
-            timeout=15.0,
+            browser.new_context(**ctx_kwargs),
+            timeout=BROWSER_CONTEXT_TIMEOUT_MS / 1000,
         )
     except (TimeoutError, PlaywrightError):
         # Browser in pool may have died or hung; evict and retry once.
@@ -443,21 +478,21 @@ async def _fetch_rendered_html_attempt(
             force_new=True,
         )
         context = await asyncio.wait_for(
-            browser.new_context(
-                **_context_kwargs(
-                    prefer_stealth,
-                    browser_channel=browser_channel,
-                    runtime_options=runtime_options,
-                )
-            ),
-            timeout=15.0,
+            browser.new_context(**ctx_kwargs),
+            timeout=BROWSER_CONTEXT_TIMEOUT_MS / 1000,
         )
 
     original_domain = _domain(url)
     try:
-        await _load_cookies(context, original_domain)
+        await _load_cookies(
+            context,
+            original_domain,
+            session_context=session_context,
+        )
         # FIX: Wrap page creation in timeout
-        page = await asyncio.wait_for(context.new_page(), timeout=10.0)
+        page = await asyncio.wait_for(
+            context.new_page(), timeout=BROWSER_NEW_PAGE_TIMEOUT_MS / 1000
+        )
 
         async def _guard_non_public_request(route, request) -> None:
             request_url = str(getattr(request, "url", "") or "").strip()
@@ -477,9 +512,39 @@ async def _fetch_rendered_html_attempt(
             except PlaywrightError:
                 await route.abort()
 
+        async def _route_request(route, request) -> None:
+            request_url = str(getattr(request, "url", "") or "").strip()
+            allowed, reason = await _is_public_browser_request_target(request_url)
+            if not allowed:
+                blocked_non_public_requests.append(
+                    {
+                        "url": request_url,
+                        "resource_type": str(
+                            getattr(request, "resource_type", "") or ""
+                        ),
+                        "reason": reason,
+                    }
+                )
+                try:
+                    await route.abort("blockedbyclient")
+                except PlaywrightError:
+                    await route.abort()
+                return
+
+            if degraded:
+                resource_type = str(getattr(request, "resource_type", "") or "")
+                if resource_type in _DEGRADED_BLOCKED_RESOURCE_TYPES:
+                    try:
+                        await route.abort("blockedbyclient")
+                    except PlaywrightError:
+                        await route.abort()
+                    return
+
+            await route.continue_()
+
         route_fn = getattr(page, "route", None)
         if callable(route_fn):
-            await route_fn("**/*", _guard_non_public_request)
+            await route_fn("**/*", _route_request)
 
         async def _on_response(response):
             content_type = response.headers.get("content-type", "")
@@ -502,7 +567,10 @@ async def _fetch_rendered_html_attempt(
 
         page.on("response", _on_response)
 
-        if browser_channel:
+        if degraded:
+            result.origin_warmed = False
+            timings_ms["browser_origin_warm_ms"] = 0
+        elif browser_channel:
             result.origin_warmed = False
             timings_ms["browser_origin_warm_ms"] = 0
         elif not runtime_options.warm_origin:
@@ -527,7 +595,10 @@ async def _fetch_rendered_html_attempt(
         )
         timings_ms["browser_navigation_ms"] = _elapsed_ms(navigation_started_at)
         await _dismiss_cookie_consent(page, checkpoint=checkpoint)
-        if runtime_options.wait_for_challenge:
+        if degraded:
+            challenge_ok, challenge_state, reasons = True, "degraded_skipped", []
+            timings_ms["browser_challenge_wait_ms"] = 0
+        elif runtime_options.wait_for_challenge:
             challenge_started_at = time.perf_counter()
             (
                 challenge_ok,
@@ -553,7 +624,12 @@ async def _fetch_rendered_html_attempt(
             result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
             timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
             result.diagnostics["timings_ms"] = timings_ms
-            await _persist_context_cookies(context, page.url or url, original_domain)
+            await _persist_context_cookies(
+                context,
+                page.url or url,
+                original_domain,
+                session_context=session_context,
+            )
             return result
         if runtime_options.wait_for_readiness and _is_listing_surface(surface):
             readiness_started_at = time.perf_counter()
@@ -575,7 +651,10 @@ async def _fetch_rendered_html_attempt(
                 timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
                 result.diagnostics["timings_ms"] = timings_ms
                 await _persist_context_cookies(
-                    context, page.url or url, original_domain
+                    context,
+                    page.url or url,
+                    original_domain,
+                    session_context=session_context,
                 )
                 return result
         elif runtime_options.wait_for_readiness:
@@ -596,7 +675,9 @@ async def _fetch_rendered_html_attempt(
         )
         if interactive_expansion:
             result.diagnostics["interactive_expansion"] = interactive_expansion
-        await _flatten_shadow_dom(page)
+        shadow_dom_flatten = await _flatten_shadow_dom(page)
+        if shadow_dom_flatten:
+            result.diagnostics["shadow_dom_flatten"] = shadow_dom_flatten
 
         traversal_started_at = time.perf_counter()
         try:
@@ -742,7 +823,12 @@ async def _fetch_rendered_html_attempt(
             result.diagnostics["blocked_non_public_request_count"] = len(
                 blocked_non_public_requests
             )
-        await _persist_context_cookies(context, page.url or url, original_domain)
+        await _persist_context_cookies(
+            context,
+            page.url or url,
+            original_domain,
+            session_context=session_context,
+        )
         return result
     finally:
         await context.close()
@@ -1611,9 +1697,9 @@ async def expand_all_interactive_elements(
     return {}
 
 
-async def _flatten_shadow_dom(page) -> None:
+async def _flatten_shadow_dom(page) -> dict[str, object]:
     try:
-        flattened_count = await page.evaluate(
+        host_count = await page.evaluate(
             """
             (maxHosts) => {
                 const hosts = [];
@@ -1634,60 +1720,27 @@ async def _flatten_shadow_dom(page) -> None:
                         current = walker.nextNode();
                     }
                 };
-                const escapeHtml = (text) =>
-                    String(text || "")
-                        .replace(/&/g, "&amp;")
-                        .replace(/</g, "&lt;")
-                        .replace(/>/g, "&gt;");
-                const escapeAttr = (text) => escapeHtml(text).replace(/"/g, "&quot;");
-                const serializeNode = (node) => {
-                    if (node.nodeType === Node.TEXT_NODE) {
-                        return escapeHtml(node.textContent || "");
-                    }
-                    if (node.nodeType !== Node.ELEMENT_NODE) {
-                        return "";
-                    }
-                    const element = node;
-                    const tagName = (element.tagName || "div").toLowerCase();
-                    const attrs = Array.from(element.attributes || [])
-                        .map((attr) => ` ${attr.name}="${escapeAttr(attr.value)}"`)
-                        .join("");
-                    const children = Array.from(element.childNodes || []).map(serializeNode);
-                    if (element.shadowRoot) {
-                        children.push(
-                            `<div data-shadow-dom-inline-root="${tagName}">` +
-                                Array.from(element.shadowRoot.childNodes || []).map(serializeNode).join("") +
-                            `</div>`
-                        );
-                    }
-                    return `<${tagName}${attrs}>${children.join("")}</${tagName}>`;
-                };
-
                 collectHosts(document);
-                let flattened = 0;
-                for (const host of hosts.slice(0, maxHosts)) {
-                    if (!host.shadowRoot) {
-                        continue;
-                    }
-                    if (host.querySelector(":scope > [data-shadow-dom-clone='true']")) {
-                        continue;
-                    }
-                    const container = document.createElement("div");
-                    container.setAttribute("data-shadow-dom-clone", "true");
-                    container.hidden = true;
-                    container.innerHTML = Array.from(host.shadowRoot.childNodes || []).map(serializeNode).join("");
-                    host.appendChild(container);
-                    flattened += 1;
-                }
-                return flattened;
+                return hosts.slice(0, maxHosts).filter((host) => Boolean(host.shadowRoot)).length;
             }
             """,
             SHADOW_DOM_FLATTEN_MAX_HOSTS,
         )
-        if flattened_count:
-            logger.debug("Flattened %d shadow root hosts", flattened_count)
-    except PlaywrightError:
+        flattened = int(host_count or 0)
+        if flattened:
+            logger.debug("Detected %d shadow root hosts", flattened)
+        return {"attempted": True, "flattened_count": flattened, "mutated": False}
+    except PlaywrightError as exc:
         logger.debug("Shadow DOM flattening failed (non-critical)", exc_info=True)
+        return {
+            "attempted": True,
+            "flattened_count": 0,
+            "mutated": False,
+            "error": {
+                "type": "PlaywrightError",
+                "message": str(exc or "").strip()[:300] or "shadow_dom_flatten_failed",
+            },
+        }
 
 
 async def _populate_result(
@@ -1781,12 +1834,20 @@ def _normalize_traversal_summary(
 
 
 async def _persist_context_cookies(
-    context, final_url: str, original_domain: str
+    context,
+    final_url: str,
+    original_domain: str,
+    *,
+    session_context: SessionContext | None = None,
 ) -> None:
     final_domain = _domain(final_url)
-    await _save_cookies(context, final_domain)
+    await _save_cookies(context, final_domain, session_context=session_context)
     if final_domain != original_domain:
-        await _save_cookies(context, original_domain)
+        await _save_cookies(
+            context,
+            original_domain,
+            session_context=session_context,
+        )
 
 
 def _navigation_strategies(
@@ -2151,8 +2212,22 @@ def _context_kwargs(
     *,
     browser_channel: str | None = None,
     runtime_options: BrowserRuntimeOptions | None = None,
+    session_context: SessionContext | None = None,
 ) -> dict:
     options = runtime_options or BrowserRuntimeOptions()
+
+    # When a SessionContext is provided, delegate to its fingerprint-based
+    # kwargs generator for full proxy-fingerprint-cookie affinity.
+    if session_context is not None:
+        kwargs = session_context.playwright_context_kwargs(
+            browser_channel=browser_channel,
+            ignore_https_errors=bool(options.ignore_https_errors),
+            bypass_csp=bool(options.bypass_csp),
+        )
+        kwargs["service_workers"] = "block"
+        return kwargs
+
+    # Legacy path: static fingerprint.
     if browser_channel:
         kwargs = {
             "java_script_enabled": True,
@@ -2192,8 +2267,28 @@ def _origin_url(url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
 
 
-async def _load_cookies(context, domain: str) -> bool:
-    cookies = load_cookies_for_context(domain)
+async def _load_cookies(
+    context,
+    domain: str,
+    *,
+    session_context: SessionContext | None = None,
+) -> bool:
+    cookies: list[dict]
+    if session_context is not None:
+        session_context.remember_domain(domain)
+        cookies = []
+        if session_context.playwright_cookies:
+            cookies = list(session_context.playwright_cookies)
+        if not cookies:
+            cookies = load_session_cookies_for_context(domain, session_context.identity_key)
+            if cookies:
+                session_context.merge_playwright_cookies(cookies)
+        if not cookies:
+            cookies = load_cookies_for_context(domain)
+            if cookies:
+                session_context.merge_playwright_cookies(cookies)
+    else:
+        cookies = load_cookies_for_context(domain)
     if not cookies:
         return False
     try:
@@ -2206,12 +2301,27 @@ async def _load_cookies(context, domain: str) -> bool:
     return True
 
 
-async def _save_cookies(context, domain: str) -> None:
+async def _save_cookies(
+    context,
+    domain: str,
+    *,
+    session_context: SessionContext | None = None,
+) -> None:
     try:
         cookies = await context.cookies()
     except PlaywrightError:
         logger.debug(
             "Failed to read cookies from context for domain %s", domain, exc_info=True
+        )
+        return
+    if session_context is not None:
+        session_context.remember_domain(domain)
+        session_context.merge_playwright_cookies(cookies)
+        await asyncio.to_thread(
+            save_session_cookies_payload,
+            cookies,
+            domain=domain,
+            session_identity=session_context.identity_key,
         )
         return
     await asyncio.to_thread(save_cookies_payload, cookies, domain=domain)
@@ -2375,15 +2485,3 @@ def shutdown_browser_pool_sync() -> None:
         _kill_orphaned_browser_processes()
         global _BROWSER_POOL_STATE
         _BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
-
-
-def shutdown_browser_pool_sync() -> None:
-    try:
-        asyncio.run(_shutdown_browser_pool())
-    except RuntimeError:
-        logger.warning(
-            "Async shutdown unavailable; force-killing browser child processes"
-        )
-        _kill_orphaned_browser_processes()
-        global _BROWSER_POOL_STATE
-        _BROWSER_POOL_STATE = _BrowserPoolState(pid=os.getpid())

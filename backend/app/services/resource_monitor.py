@@ -4,11 +4,16 @@ Replaces the fixed ``asyncio.Semaphore`` used in ``_batch_runtime.py``
 with a pressure-aware token bucket.  When system memory pressure exceeds
 configurable thresholds the semaphore blocks new URL acquisitions until
 pressure drops.
+
+Exposes ``MemoryPressureLevel`` so downstream components (e.g. browser
+acquisition) can cheaply query current pressure and degrade gracefully
+before the semaphore hard-blocks new work.
 """
 
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
 import time
 
@@ -17,9 +22,42 @@ import psutil
 logger = logging.getLogger(__name__)
 
 # Defaults — should eventually move to pipeline_tuning.json / crawl_runtime.py
-_DEFAULT_MEMORY_PRESSURE_THRESHOLD_PCT = 85
+_DEFAULT_MEMORY_PRESSURE_THRESHOLD_PCT = 90
 _DEFAULT_MEMORY_CRITICAL_THRESHOLD_PCT = 95
 _PRESSURE_POLL_INTERVAL_SECONDS = 1.0
+
+
+class MemoryPressureLevel(enum.Enum):
+    """Discrete pressure bands for downstream consumers.
+
+    * ``NORMAL``   — below pressure threshold; full-fidelity operations.
+    * ``ELEVATED`` — between pressure and critical thresholds; expensive
+      operations (browser rendering) should degrade to lighter settings.
+    * ``CRITICAL`` — above critical threshold; the semaphore will hard-block
+      new work; anything already in-flight should shed load aggressively.
+    """
+
+    NORMAL = "normal"
+    ELEVATED = "elevated"
+    CRITICAL = "critical"
+
+
+def get_memory_pressure_level(
+    *,
+    pressure_threshold_pct: float = _DEFAULT_MEMORY_PRESSURE_THRESHOLD_PCT,
+    critical_threshold_pct: float = _DEFAULT_MEMORY_CRITICAL_THRESHOLD_PCT,
+) -> MemoryPressureLevel:
+    """Return the current memory pressure level.
+
+    This is a cheap, non-blocking call suitable for hot-path decisions
+    like choosing browser fidelity settings.
+    """
+    pct = psutil.virtual_memory().percent
+    if pct >= critical_threshold_pct:
+        return MemoryPressureLevel.CRITICAL
+    if pct >= pressure_threshold_pct:
+        return MemoryPressureLevel.ELEVATED
+    return MemoryPressureLevel.NORMAL
 
 
 class MemoryAdaptiveSemaphore:
@@ -107,10 +145,24 @@ class MemoryAdaptiveSemaphore:
                 self._throttled_since = None
                 return
 
+    # -- Pressure query --
+
+    @property
+    def pressure_level(self) -> MemoryPressureLevel:
+        """Current pressure level using this semaphore's thresholds."""
+        return get_memory_pressure_level(
+            pressure_threshold_pct=self._pressure_threshold,
+            critical_threshold_pct=self._critical_threshold,
+        )
+
     # -- Observability --
 
     def snapshot(self) -> dict[str, object]:
         mem = psutil.virtual_memory()
+        level = get_memory_pressure_level(
+            pressure_threshold_pct=self._pressure_threshold,
+            critical_threshold_pct=self._critical_threshold,
+        )
         return {
             "limit": self._limit,
             "active_tokens": self._active_tokens,
@@ -118,6 +170,7 @@ class MemoryAdaptiveSemaphore:
             "memory_available_mb": round(mem.available / (1024 * 1024)),
             "pressure_threshold_pct": self._pressure_threshold,
             "critical_threshold_pct": self._critical_threshold,
+            "pressure_level": level.value,
             "throttled": self._throttled_since is not None,
             "throttled_duration_s": (
                 round(time.monotonic() - self._throttled_since, 1)

@@ -22,6 +22,65 @@ def _compact_dict(payload: dict) -> dict:
     }
 
 
+def _clean_committed_value(value: object) -> str | None:
+    return _clean_candidate_text(value) if value not in (None, "", [], {}) else None
+
+
+def _merged_field_discovery_entry(
+    existing_entry: dict,
+    *,
+    field_name: str,
+    cleaned_value: str | None,
+    source_label: str,
+    canonical_fields: set[str],
+) -> dict:
+    existing_sources = existing_entry.get("sources") or []
+    sources = {
+        str(source).strip() for source in existing_sources if str(source).strip()
+    }
+    sources.add(source_label)
+    return _compact_dict(
+        {
+            **existing_entry,
+            "status": "found",
+            "value": cleaned_value,
+            "sources": sorted(sources),
+            "is_canonical": existing_entry["is_canonical"]
+            if "is_canonical" in existing_entry
+            else field_name in canonical_fields,
+        }
+    )
+
+
+def _field_discovery_missing_without(
+    missing_fields: list[object],
+    *,
+    field_name: str,
+) -> list[str]:
+    return [
+        str(item).strip()
+        for item in missing_fields
+        if str(item).strip() and str(item).strip() != field_name
+    ]
+
+
+def _prune_review_bucket_entries(
+    review_bucket: object,
+    *,
+    field_name: str,
+) -> list[object]:
+    if not isinstance(review_bucket, list):
+        return []
+    return [
+        row
+        for row in review_bucket
+        if not (
+            isinstance(row, dict)
+            and str(row.get("key") or "").strip() == field_name
+        )
+    ]
+
+
 async def load_domain_requested_fields(
     session: AsyncSession, *, url: str, surface: str
 ) -> list[str]:
@@ -40,31 +99,19 @@ def refresh_record_commit_metadata(
     source_trace = dict(record.source_trace or {})
     field_discovery = dict(source_trace.get("field_discovery") or {})
     existing_entry = dict(field_discovery.get(field_name) or {})
-    existing_sources = existing_entry.get("sources") or []
-    sources = {
-        str(source).strip() for source in existing_sources if str(source).strip()
-    }
-    sources.add(source_label)
     canonical_fields = set(get_canonical_fields(run.surface))
-    cleaned_value = (
-        _clean_candidate_text(value) if value not in (None, "", [], {}) else None
+    cleaned_value = _clean_committed_value(value)
+    field_discovery[field_name] = _merged_field_discovery_entry(
+        existing_entry,
+        field_name=field_name,
+        cleaned_value=cleaned_value,
+        source_label=source_label,
+        canonical_fields=canonical_fields,
     )
-    field_discovery[field_name] = _compact_dict(
-        {
-            **existing_entry,
-            "status": "found",
-            "value": cleaned_value,
-            "sources": sorted(sources),
-            "is_canonical": existing_entry["is_canonical"]
-            if "is_canonical" in existing_entry
-            else field_name in canonical_fields,
-        }
+    missing_fields = _field_discovery_missing_without(
+        list(source_trace.get("field_discovery_missing") or []),
+        field_name=field_name,
     )
-    missing_fields = [
-        str(item).strip()
-        for item in (source_trace.get("field_discovery_missing") or [])
-        if str(item).strip() and str(item).strip() != field_name
-    ]
     source_trace["field_discovery"] = field_discovery
     source_trace["field_discovery_missing"] = missing_fields
 
@@ -74,20 +121,11 @@ def refresh_record_commit_metadata(
     record.source_trace = source_trace
 
     discovered_data = dict(record.discovered_data or {})
-    review_bucket = (
-        discovered_data.get("review_bucket")
-        if isinstance(discovered_data.get("review_bucket"), list)
-        else []
+    review_bucket = _prune_review_bucket_entries(
+        discovered_data.get("review_bucket"),
+        field_name=field_name,
     )
-    if review_bucket:
-        discovered_data["review_bucket"] = [
-            row
-            for row in review_bucket
-            if not (
-                isinstance(row, dict)
-                and str(row.get("key") or "").strip() == field_name
-            )
-        ]
+    discovered_data["review_bucket"] = review_bucket
     requested_fields = list(run.requested_fields or [])
     if requested_fields:
         from app.services.pipeline.field_normalization import _requested_field_coverage

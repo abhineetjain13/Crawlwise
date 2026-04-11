@@ -14,8 +14,9 @@ dependencies = [
   "cachetools>=5.5.2",
   "celery[redis]>=5.4.0",
   "curl-cffi>=0.14.0",
-  "cryptography>=46.0.5",
+  "cryptography>=46.0.7",
   "fastapi>=0.116.0",
+  "email-validator>=2.3.0",
   "httpx>=0.28.1",
   "lxml>=6.0.0",
   "passlib[bcrypt]>=1.7.4",
@@ -31,15 +32,18 @@ dependencies = [
   "sqlalchemy>=2.0.43",
   "structlog>=25.4.0",
   "uvicorn[standard]>=0.35.0",
+  "browserforge>=1.2.0",
 ]
 
 [project.optional-dependencies]
 # Local/dev environments can use psycopg2-binary to avoid libpq toolchain setup.
 # Production should install psycopg2 explicitly (not listed in core dependencies to avoid conflicts).
 dev = [
+  "hypothesis>=6.0.0",
   "pytest>=8.4.2",
   "pytest-asyncio>=1.1.0",
   "psycopg2-binary>=2.9.10",
+  "ruff>=0.1.0",
 ]
 prod = [
   "psycopg2>=2.9.10",

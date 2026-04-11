@@ -4,7 +4,49 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+
+# ---------------------------------------------------------------------------
+# Acquisition outcome classification
+# ---------------------------------------------------------------------------
+
+
+class AcquisitionOutcome(StrEnum):
+    """Typed classification of how acquisition resolved a URL.
+
+    Replaces inferring the outcome from scattered diagnostic booleans
+    (``method``, ``curl_needs_browser``, ``browser_attempted``,
+    ``promoted_source_used``, etc.).
+    """
+
+    direct_html = "direct_html"
+    """curl_cffi returned usable HTML directly."""
+
+    browser_rendered = "browser_rendered"
+    """Playwright rendered the page (escalated from curl or browser-first)."""
+
+    promoted_source = "promoted_source"
+    """Promoted iframe/embed source fetched via curl."""
+
+    promoted_source_browser = "promoted_source_browser"
+    """Promoted source fetched via curl returned a shell; browser rendered it."""
+
+    json_response = "json_response"
+    """Target returned a JSON API response (no HTML extraction needed)."""
+
+    blocked = "blocked"
+    """Anti-bot / challenge page detected."""
+
+    js_shell = "js_shell"
+    """JS shell detected but browser escalation not attempted or failed."""
+
+    empty = "empty"
+    """No content returned from any acquisition method."""
+
+    error = "error"
+    """Acquisition raised an unrecoverable exception."""
 
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup
@@ -57,6 +99,7 @@ class URLProcessingConfig:
     sleep_ms: int = 0
     update_run_state: bool = True
     persist_logs: bool = True
+    prefetch_only: bool = False
 
 
 # ---------------------------------------------------------------------------

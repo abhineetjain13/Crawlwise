@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 import json
 import re
 from html import unescape
@@ -11,17 +10,13 @@ from urllib.parse import urlparse
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from bs4 import BeautifulSoup
 
-try:
-    from curl_cffi import requests as curl_requests
-except ImportError:
-    curl_requests = None
-
 
 _CX_CONFIG_RE = re.compile(r"var\s+CX_CONFIG\s*=\s*(\{.*?\})\s*;", re.DOTALL)
 _SITE_PATH_RE = re.compile(r"/sites/([^/?#]+)", re.IGNORECASE)
 _LANG_PATH_RE = re.compile(r"/CandidateExperience/([^/?#]+)/sites/", re.IGNORECASE)
 _JOB_PATH_RE = re.compile(r"/job/([^/?#]+)/?", re.IGNORECASE)
 _DEFAULT_FACETS = "LOCATIONS;WORK_LOCATIONS;WORKPLACE_TYPES;TITLES;CATEGORIES;ORGANIZATIONS;POSTING_DATES;FLEX_FIELDS"
+_LOCATION_LIST_KEYS = ("workLocation", "otherWorkLocations", "secondaryLocations")
 
 
 class OracleHCMAdapter(BaseAdapter):
@@ -54,7 +49,7 @@ class OracleHCMAdapter(BaseAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
-        if curl_requests is None or "job" not in str(surface or "").lower():
+        if "job" not in str(surface or "").lower():
             return []
 
         parsed = urlparse(url)
@@ -64,10 +59,6 @@ class OracleHCMAdapter(BaseAdapter):
         site_lang = self._extract_site_lang(url, html) or "en"
         company = self._extract_site_name(html)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        request_kwargs = {"impersonate": "chrome124", "timeout": 12}
-        if proxy:
-            request_kwargs["proxies"] = {"http": proxy, "https": proxy}
-
         target_job_id = self._extract_job_id_from_url(url) if "detail" in str(surface or "").lower() else ""
         page_size = 100 if "listing" in str(surface or "").lower() else 25
         offset = 0
@@ -82,10 +73,13 @@ class OracleHCMAdapter(BaseAdapter):
                 offset=offset,
             )
             try:
-                response = await asyncio.to_thread(curl_requests.get, endpoint, **request_kwargs)
-                if response.status_code != 200:
+                payload = await self._request_json(
+                    endpoint,
+                    proxy=proxy,
+                    timeout_seconds=12,
+                )
+                if not isinstance(payload, dict):
                     break
-                payload = response.json()
             except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
                 break
 
@@ -242,29 +236,32 @@ class OracleHCMAdapter(BaseAdapter):
         match = _JOB_PATH_RE.search(path)
         return self._clean_text(match.group(1)) if match else ""
 
-    def _join_locations(self, requisition: dict) -> str:
-        values: list[str] = []
+    def _format_location_item(self, item: dict) -> str:
+        parts = [
+            self._clean_text(item.get("TownOrCity")),
+            self._clean_text(item.get("Region2")),
+            self._clean_text(item.get("Country")),
+        ]
+        location = ", ".join(part for part in parts if part)
+        return location or self._clean_text(item.get("LocationName"))
+
+    def _iter_location_values(self, requisition: dict):
         primary = self._clean_text(requisition.get("PrimaryLocation"))
         if primary:
-            values.append(primary)
-        for key in ("workLocation", "otherWorkLocations", "secondaryLocations"):
+            yield primary
+        for key in _LOCATION_LIST_KEYS:
             payload = requisition.get(key)
             if not isinstance(payload, list):
                 continue
             for item in payload:
-                if not isinstance(item, dict):
-                    continue
-                parts = [
-                    self._clean_text(item.get("TownOrCity")),
-                    self._clean_text(item.get("Region2")),
-                    self._clean_text(item.get("Country")),
-                ]
-                location = ", ".join(part for part in parts if part)
-                if not location:
-                    location = self._clean_text(item.get("LocationName"))
-                if location and location not in values:
-                    values.append(location)
-        return " | ".join(values)
+                if isinstance(item, dict):
+                    location = self._format_location_item(item)
+                    if location:
+                        yield location
+
+    def _join_locations(self, requisition: dict) -> str:
+        unique_locations = dict.fromkeys(self._iter_location_values(requisition))
+        return " | ".join(unique_locations)
 
     def _html_to_text(self, value: object) -> str:
         html = str(value or "").strip()

@@ -18,22 +18,14 @@ from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.crawl_metrics import (
     build_url_metrics as _build_url_metrics,
 )
-from app.services.crawl_metrics import (
-    finalize_url_metrics as _finalize_url_metrics,
-)
 from app.services.config.crawl_runtime import AUTO_DETECT_SURFACE
-from app.services.shared_acquisition import (
-    acquire,
-    run_adapter,
-    try_blocked_adapter_recovery,
-)
 
 from .types import PipelineContext
 from .utils import _elapsed_ms, parse_html
 from .verdict import VERDICT_BLOCKED, VERDICT_LISTING_FAILED
 
 if TYPE_CHECKING:
-    from app.services.acquisition.acquirer import AcquisitionResult
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +39,7 @@ class AcquireStage:
     """Fetch the target URL via the acquisition waterfall (curl → Playwright)."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .core import STAGE_FETCH, _log, _set_stage
+        from .core import STAGE_FETCH, _log, _set_stage, acquire
 
         if ctx.update_run_state:
             await _set_stage(ctx.session, ctx.run, STAGE_FETCH)
@@ -116,9 +108,8 @@ class BlockedDetectionStage:
     async def execute(self, ctx: PipelineContext) -> None:
         from app.models.crawl import CrawlRecord
 
-        from .core import _log
+        from .core import _log, acquire, try_blocked_adapter_recovery
         from .trace_builders import _build_acquisition_trace
-        from .utils import _compact_dict
 
         acq = ctx.acquisition_result
         assert acq is not None
@@ -176,7 +167,7 @@ class BlockedDetectionStage:
         # Adapter recovery attempt
         recovered = (
             None
-            if ctx.config.proxy_list
+            if ctx.config.proxy_list or not ctx.is_listing
             else await try_blocked_adapter_recovery(ctx.url, ctx.surface)
         )
         if recovered and recovered.records:
@@ -245,11 +236,13 @@ class AdapterStage:
     """Run domain-matched platform adapters against the acquired HTML."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .core import STAGE_ANALYZE, _log, _set_stage
+        from .core import STAGE_ANALYZE, _log, _set_stage, run_adapter
 
         acq = ctx.acquisition_result
         assert acq is not None
         if acq.content_type == "json":
+            return
+        if ctx.adapter_result is not None or ctx.adapter_records:
             return
         html = acq.html
         ctx.adapter_result = await run_adapter(ctx.url, html, ctx.surface)
@@ -376,7 +369,7 @@ class ListingBrowserRetryStage:
     """If listing extraction failed on curl, retry with browser rendering."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .core import _extract_listing, _log
+        from .core import _extract_listing, _log, acquire, run_adapter
 
         acq = ctx.acquisition_result
         assert acq is not None

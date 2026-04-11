@@ -6,18 +6,12 @@
 #   - JSON API at boards-api.greenhouse.io/v1/boards/<company>/jobs
 from __future__ import annotations
 
-import asyncio
 import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.config.platform_registry import detect_platform_family
 from bs4 import BeautifulSoup
-
-try:
-    from curl_cffi import requests as curl_requests
-except ImportError:
-    curl_requests = None
 
 
 class GreenhouseAdapter(BaseAdapter):
@@ -83,19 +77,14 @@ class GreenhouseAdapter(BaseAdapter):
 
     async def _try_api(self, company_slug: str) -> list[dict]:
         """Fetch jobs from Greenhouse JSON API."""
-        if curl_requests is None:
-            return []
         api_url = f"https://boards-api.greenhouse.io/v1/boards/{company_slug}/jobs"
         try:
-            resp = await asyncio.to_thread(
-                curl_requests.get,
+            data = await self._request_json(
                 api_url,
-                impersonate="chrome110",
-                timeout=10,
+                timeout_seconds=10,
             )
-            if resp.status_code != 200:
+            if not isinstance(data, dict):
                 return []
-            data = resp.json()
         except Exception:
             return []
 

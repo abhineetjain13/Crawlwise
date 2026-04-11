@@ -57,8 +57,16 @@ def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
     root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.addHandler(handler)
+    if not any(
+        isinstance(existing, logging.StreamHandler)
+        and getattr(existing, "stream", None) is sys.stdout
+        and isinstance(
+            getattr(existing, "formatter", None),
+            structlog.stdlib.ProcessorFormatter,
+        )
+        for existing in root_logger.handlers
+    ):
+        root_logger.addHandler(handler)
     root_logger.setLevel(logging.INFO)
 
     structlog.configure(

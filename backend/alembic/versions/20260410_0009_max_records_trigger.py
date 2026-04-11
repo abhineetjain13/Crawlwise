@@ -1,7 +1,8 @@
-"""enforce max_records at the database level via triggers"""
+"""enforce crawl run max_records at the database layer"""
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "20260410_0009"
@@ -11,91 +12,71 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
     op.execute(
-        """
-        CREATE OR REPLACE FUNCTION enforce_crawl_run_max_records()
-        RETURNS trigger AS $$
-        DECLARE
-            configured_max integer;
-            current_count integer;
-        BEGIN
-            EXECUTE format(
-                'SELECT NULLIF(settings->>''max_records'', '''')::integer FROM %I.crawl_runs WHERE id = $1',
-                TG_TABLE_SCHEMA
-            )
-            INTO configured_max
-            USING NEW.run_id;
+        sa.text(
+            """
+            CREATE OR REPLACE FUNCTION enforce_crawl_run_max_records()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            DECLARE
+                configured_limit integer;
+            BEGIN
+                SELECT GREATEST(
+                    COALESCE(
+                        CASE
+                            WHEN COALESCE(crawl_runs.settings->>'max_records', '') ~ '^[0-9]+$'
+                                THEN (crawl_runs.settings->>'max_records')::integer
+                        END,
+                        100
+                    ),
+                    1
+                )
+                INTO configured_limit
+                FROM crawl_runs
+                WHERE crawl_runs.id = NEW.run_id
+                FOR UPDATE;
 
-            IF configured_max IS NULL THEN
+                IF configured_limit IS NULL THEN
+                    configured_limit := 100;
+                END IF;
+
+                IF (
+                    SELECT COUNT(*)
+                    FROM crawl_records
+                    WHERE crawl_records.run_id = NEW.run_id
+                ) >= configured_limit THEN
+                    RAISE EXCEPTION
+                        'crawl_records max_records exceeded for run %',
+                        NEW.run_id
+                        USING ERRCODE = '23514';
+                END IF;
+
                 RETURN NEW;
-            END IF;
-
-            EXECUTE format(
-                'SELECT COUNT(*) FROM %I.crawl_records WHERE run_id = $1',
-                TG_TABLE_SCHEMA
-            )
-            INTO current_count
-            USING NEW.run_id;
-
-            IF current_count > configured_max THEN
-                RAISE EXCEPTION 'max_records exceeded for run %', NEW.run_id;
-            END IF;
-
-            RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-        """
+            END;
+            $$;
+            """
+        )
     )
     op.execute(
-        """
-        CREATE CONSTRAINT TRIGGER trigger_enforce_crawl_run_max_records
-        AFTER INSERT OR UPDATE OF run_id ON crawl_records
-        DEFERRABLE INITIALLY IMMEDIATE
-        FOR EACH ROW
-        EXECUTE FUNCTION enforce_crawl_run_max_records();
-        """
-    )
-    op.execute(
-        """
-        CREATE OR REPLACE FUNCTION enforce_crawl_run_max_records_on_settings()
-        RETURNS trigger AS $$
-        DECLARE
-            configured_max integer;
-            current_count integer;
-        BEGIN
-            configured_max := NULLIF(NEW.settings->>'max_records', '')::integer;
-            IF configured_max IS NULL THEN
-                RETURN NEW;
-            END IF;
-
-            EXECUTE format(
-                'SELECT COUNT(*) FROM %I.crawl_records WHERE run_id = $1',
-                TG_TABLE_SCHEMA
-            )
-            INTO current_count
-            USING NEW.id;
-
-            IF current_count > configured_max THEN
-                RAISE EXCEPTION 'max_records below existing record count for run %', NEW.id;
-            END IF;
-
-            RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-        """
-    )
-    op.execute(
-        """
-        CREATE TRIGGER trigger_enforce_crawl_run_max_records_on_settings
-        BEFORE INSERT OR UPDATE OF settings ON crawl_runs
-        FOR EACH ROW
-        EXECUTE FUNCTION enforce_crawl_run_max_records_on_settings();
-        """
+        sa.text(
+            """
+            DROP TRIGGER IF EXISTS tr_crawl_records_max_records ON crawl_records;
+            CREATE TRIGGER tr_crawl_records_max_records
+            BEFORE INSERT ON crawl_records
+            FOR EACH ROW
+            EXECUTE FUNCTION enforce_crawl_run_max_records();
+            """
+        )
     )
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS trigger_enforce_crawl_run_max_records_on_settings ON crawl_runs")
-    op.execute("DROP FUNCTION IF EXISTS enforce_crawl_run_max_records_on_settings()")
-    op.execute("DROP TRIGGER IF EXISTS trigger_enforce_crawl_run_max_records ON crawl_records")
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+    op.execute("DROP TRIGGER IF EXISTS tr_crawl_records_max_records ON crawl_records")
     op.execute("DROP FUNCTION IF EXISTS enforce_crawl_run_max_records()")

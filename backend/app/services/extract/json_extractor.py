@@ -3,8 +3,12 @@
 # Handles API responses that return structured JSON directly.
 # Searches for arrays of objects that look like product or job records
 # and normalizes them into the standard record shape.
+#
+# Fields are routed through FieldDecisionEngine for unified arbitration
+# with the same sanitization/ranking logic used by HTML extraction.
 from __future__ import annotations
 
+import logging
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -15,6 +19,8 @@ from app.services.config.field_mappings import (
 )
 from app.services.config.crawl_runtime import JSON_MAX_SEARCH_DEPTH
 from app.services.normalizers import validate_value
+
+logger = logging.getLogger(__name__)
 
 
 def extract_json_listing(
@@ -28,7 +34,9 @@ def extract_json_listing(
     """Extract records from a JSON API response.
 
     Finds the main data array, then normalizes each object into the
-    canonical field set for the given surface.
+    canonical field set for the given surface.  Each record's fields are
+    routed through ``FieldDecisionEngine`` for unified sanitization and
+    ranking consistent with the HTML extraction path.
     """
     items = _find_items_array(json_data)
     if not items:
@@ -40,6 +48,7 @@ def extract_json_listing(
         if not isinstance(item, dict):
             continue
         record = _normalize_item(item, page_url, surface=surface)
+        record = _arbitrate_record_fields(record, page_url=page_url)
         record = _filter_requested_fields(record, normalized_requested_fields)
         if record and any(v for k, v in record.items() if not k.startswith("_")):
             record["_source"] = "json_api"
@@ -55,7 +64,11 @@ def extract_json_detail(
     surface: str = "",
     requested_fields: list[str] | None = None,
 ) -> list[dict]:
-    """Extract a single record from a JSON API response (detail page)."""
+    """Extract a single record from a JSON API response (detail page).
+
+    Fields are routed through ``FieldDecisionEngine`` for unified
+    sanitization and ranking consistent with the HTML extraction path.
+    """
     normalized_requested_fields = _normalize_requested_fields(requested_fields)
     if isinstance(json_data, list):
         if not json_data:
@@ -66,11 +79,55 @@ def extract_json_detail(
         return []
 
     record = _normalize_item(json_data, page_url, surface=surface)
+    record = _arbitrate_record_fields(record, page_url=page_url)
     record = _filter_requested_fields(record, normalized_requested_fields)
     if record and any(v for k, v in record.items() if not k.startswith("_")):
         record["_source"] = "json_api"
         return [record]
     return []
+
+
+def _arbitrate_record_fields(record: dict, *, page_url: str) -> dict:
+    """Route each field in *record* through FieldDecisionEngine.
+
+    This ensures JSON-extracted fields go through the same sanitization,
+    noise filtering, and validation that HTML-extracted candidates receive.
+    JSON candidates are injected with source ``"json_api"`` so they rank
+    at the top of the source hierarchy (preserving JSON-first priority).
+
+    Internal fields (``_``-prefixed) are passed through unchanged.
+    """
+    from app.services.extract.field_decision import FieldDecisionEngine
+
+    if not record:
+        return record
+
+    engine = FieldDecisionEngine(base_url=page_url)
+    arbitrated: dict = {}
+
+    for key, value in record.items():
+        # Pass through internal metadata fields untouched
+        if key.startswith("_"):
+            arbitrated[key] = value
+            continue
+
+        if value in (None, "", [], {}):
+            continue
+
+        # Build a single-candidate row list for the engine
+        row = {"value": value, "source": "json_api"}
+        decision = engine.decide_from_rows(key, [row])
+
+        if decision.accepted and decision.value not in (None, "", [], {}):
+            arbitrated[key] = decision.value
+        else:
+            logger.debug(
+                "FieldDecisionEngine rejected JSON field %s: %s",
+                key,
+                decision.rejection_reason or "rejected",
+            )
+
+    return arbitrated
 
 
 def _normalize_requested_fields(
@@ -99,7 +156,9 @@ def _filter_requested_fields(
     }
 
 
-def _find_items_array(data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH) -> list[dict]:
+def _find_items_array(
+    data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH
+) -> list[dict]:
     """Find the most likely data array in a JSON response."""
     # If top-level is already a list of objects, use it directly.
     if isinstance(data, list):
@@ -182,13 +241,13 @@ def _normalize_item(item: dict, page_url: str, *, surface: str = "") -> dict:
             )
             if normalized in (None, "", [], {}):
                 continue
-                
+
             # FIX: Enforce strict schema validation on JSON API responses
             # to prevent payload pollution
             validated = validate_value(canonical, normalized)
             if validated in (None, "", [], {}):
                 continue
-                
+
             record[canonical] = validated
             consumed_keys.update(key for key in candidate_keys if key in item)
             break
@@ -210,7 +269,11 @@ def _normalize_item(item: dict, page_url: str, *, surface: str = "") -> dict:
         if slug_url:
             record["url"] = slug_url
 
-    if record.get("company") and "brand" in record and record["company"] == record["brand"]:
+    if (
+        record.get("company")
+        and "brand" in record
+        and record["company"] == record["brand"]
+    ):
         record.pop("brand", None)
 
     # Preserve unmapped scalar fields before applying any surface contract so the
@@ -218,10 +281,14 @@ def _normalize_item(item: dict, page_url: str, *, surface: str = "") -> dict:
     for key, value in item.items():
         if key in consumed_keys or key.startswith("_") or key in INTERNAL_ONLY_FIELDS:
             continue
-        if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value.strip()):
+        if isinstance(value, (int, float, bool)) or (
+            isinstance(value, str) and value.strip()
+        ):
             record[key] = value
 
-    inferred_surface = _infer_surface_from_item(item, page_url=page_url, normalized=record)
+    inferred_surface = _infer_surface_from_item(
+        item, page_url=page_url, normalized=record
+    )
     if inferred_surface == "job_listing":
         record = _apply_job_surface_contract(record, item=item, page_url=page_url)
 
@@ -243,7 +310,16 @@ def _score_candidate_array(items: list[dict]) -> int:
             score += 3
         if keys & {"url", "href", "link", "positionuri", "apply_url"}:
             score += 3
-        if keys & {"company", "company_name", "companyname", "salary", "salarydisplay", "jobid", "job_id", "location"}:
+        if keys & {
+            "company",
+            "company_name",
+            "companyname",
+            "salary",
+            "salarydisplay",
+            "jobid",
+            "job_id",
+            "location",
+        }:
             score += 4
         if keys & {"price", "sale_price", "brand", "sku"}:
             score += 2
@@ -265,12 +341,23 @@ def _infer_surface_from_item(item: dict, *, page_url: str, normalized: dict) -> 
 
 def _apply_job_surface_contract(record: dict, *, item: dict, page_url: str) -> dict:
     normalized = dict(record)
-    if normalized.get("price") not in (None, "", [], {}) and normalized.get("salary") in (None, "", [], {}):
+    if normalized.get("price") not in (None, "", [], {}) and normalized.get(
+        "salary"
+    ) in (None, "", [], {}):
         normalized["salary"] = normalized.pop("price")
-    if normalized.get("apply_url") in (None, "", [], {}) and normalized.get("url") not in (None, "", [], {}):
+    if normalized.get("apply_url") in (None, "", [], {}) and normalized.get(
+        "url"
+    ) not in (None, "", [], {}):
         normalized["apply_url"] = normalized["url"]
     if normalized.get("job_id") in (None, "", [], {}):
-        for key in ("jobId", "job_id", "id", "requisitionNumber", "requisition_number", "reqId"):
+        for key in (
+            "jobId",
+            "job_id",
+            "id",
+            "requisitionNumber",
+            "requisition_number",
+            "reqId",
+        ):
             value = item.get(key)
             if value not in (None, "", [], {}):
                 normalized["job_id"] = str(value).strip()
@@ -316,9 +403,7 @@ def _normalize_json_value(
     if isinstance(value, list):
         if canonical in list_join_fields:
             scalar_values = [
-                text
-                for item in value
-                if (text := _coerce_scalar_text(item))
+                text for item in value if (text := _coerce_scalar_text(item))
             ]
             return " | ".join(dict.fromkeys(scalar_values)) if scalar_values else None
         for item in value:
@@ -334,7 +419,15 @@ def _normalize_json_value(
 
     if isinstance(value, dict):
         if canonical in {"price", "sale_price", "original_price"}:
-            for key in ("price", "amount", "value", "lowPrice", "minPrice", "maxPrice", "compareAtPrice"):
+            for key in (
+                "price",
+                "amount",
+                "value",
+                "lowPrice",
+                "minPrice",
+                "maxPrice",
+                "compareAtPrice",
+            ):
                 nested = value.get(key)
                 if nested not in (None, "", [], {}):
                     return _normalize_json_value(
@@ -343,7 +436,18 @@ def _normalize_json_value(
                         page_url=page_url,
                         list_join_fields=list_join_fields,
                     )
-        for key in ("url", "href", "src", "contentUrl", "name", "title", "value", "content", "text", "description"):
+        for key in (
+            "url",
+            "href",
+            "src",
+            "contentUrl",
+            "name",
+            "title",
+            "value",
+            "content",
+            "text",
+            "description",
+        ):
             nested = value.get(key)
             if nested in (None, "", [], {}):
                 continue
@@ -360,8 +464,14 @@ def _normalize_json_value(
     return str(value).strip() if not isinstance(value, (int, float, bool)) else value
 
 
-def _find_alias_values(data: object, aliases: list[str], max_depth: int) -> list[object]:
-    alias_tokens = {_normalized_field_token(alias) for alias in aliases if _normalized_field_token(alias)}
+def _find_alias_values(
+    data: object, aliases: list[str], max_depth: int
+) -> list[object]:
+    alias_tokens = {
+        _normalized_field_token(alias)
+        for alias in aliases
+        if _normalized_field_token(alias)
+    }
     values: list[object] = []
 
     def _visit(node: object, depth: int) -> None:
@@ -369,7 +479,12 @@ def _find_alias_values(data: object, aliases: list[str], max_depth: int) -> list
             return
         if isinstance(node, dict):
             for key, value in node.items():
-                if _normalized_field_token(key) in alias_tokens and value not in (None, "", [], {}):
+                if _normalized_field_token(key) in alias_tokens and value not in (
+                    None,
+                    "",
+                    [],
+                    {},
+                ):
                     values.append(value)
                 _visit(value, depth - 1)
             return
@@ -387,7 +502,18 @@ def _normalized_field_token(value: object) -> str:
 
 def _coerce_scalar_text(value: object) -> str:
     if isinstance(value, dict):
-        for key in ("url", "href", "src", "contentUrl", "name", "title", "value", "content", "text", "description"):
+        for key in (
+            "url",
+            "href",
+            "src",
+            "contentUrl",
+            "name",
+            "title",
+            "value",
+            "content",
+            "text",
+            "description",
+        ):
             nested = value.get(key)
             if nested not in (None, "", [], {}):
                 return _coerce_scalar_text(nested)

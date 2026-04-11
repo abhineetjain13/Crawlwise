@@ -1,32 +1,28 @@
 # SaaSHR / UKG Ready careers adapter.
 from __future__ import annotations
 
-import asyncio
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from bs4 import BeautifulSoup
 
-try:
-    from curl_cffi import requests as curl_requests
-except ImportError:
-    curl_requests = None
-
 
 _COMPANY_RE = re.compile(r"/ta/([^/?#]+)\.careers", re.IGNORECASE)
+SAASHR_DOMAIN = "saashr.com"
+SECURE7_SAASHR_DOMAIN = f"secure7.{SAASHR_DOMAIN}"
 
 
 class SaaSHRAdapter(BaseAdapter):
     name = "saashr"
-    domains = ["saashr.com"]
+    domains = [SAASHR_DOMAIN]
 
     async def can_handle(self, url: str, html: str) -> bool:
         lowered_url = str(url or "").lower()
         lowered_html = str(html or "").lower()
         return (
-            "saashr.com" in lowered_url
-            or "secure7.saashr.com" in lowered_html
+            SAASHR_DOMAIN in lowered_url
+            or SECURE7_SAASHR_DOMAIN in lowered_html
             or "inframeset=1" in lowered_html and ".careers" in lowered_html
         )
 
@@ -46,7 +42,7 @@ class SaaSHRAdapter(BaseAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
-        if curl_requests is None or "job" not in str(surface or "").lower():
+        if "job" not in str(surface or "").lower():
             return []
         board_url = self._discover_board_url(url, html)
         if not board_url:
@@ -62,10 +58,6 @@ class SaaSHRAdapter(BaseAdapter):
         if not ein_id or not career_portal_id:
             return []
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        request_kwargs = {"impersonate": "chrome124", "timeout": 12}
-        if proxy:
-            request_kwargs["proxies"] = {"http": proxy, "https": proxy}
-
         records: list[dict] = []
         seen_ids: set[str] = set()
         size = 50
@@ -77,10 +69,13 @@ class SaaSHRAdapter(BaseAdapter):
                 f"?offset={offset}&size={size}&sort=desc&ein_id={ein_id}&lang={lang}&career_portal_id={career_portal_id}"
             )
             try:
-                response = await asyncio.to_thread(curl_requests.get, endpoint, **request_kwargs)
-                if response.status_code != 200:
+                payload = await self._request_json(
+                    endpoint,
+                    proxy=proxy,
+                    timeout_seconds=12,
+                )
+                if not isinstance(payload, dict):
                     break
-                payload = response.json()
             except (OSError, RuntimeError, ValueError, TypeError):
                 break
             if not company_name:
@@ -90,7 +85,7 @@ class SaaSHRAdapter(BaseAdapter):
                     ein_id=ein_id,
                     career_portal_id=career_portal_id,
                     lang=lang,
-                    request_kwargs=request_kwargs,
+                    proxy=proxy,
                 )
             rows = payload.get("job_requisitions") if isinstance(payload, dict) else []
             if not isinstance(rows, list) or not rows:
@@ -121,26 +116,31 @@ class SaaSHRAdapter(BaseAdapter):
         ein_id: str,
         career_portal_id: str,
         lang: str,
-        request_kwargs: dict,
+        proxy: str | None = None,
     ) -> str:
         endpoint = (
             f"{base_url}/ta/rest/ui/recruitment/companies/%7C{company_code}/job-search/config"
             f"?ein_id={ein_id}&career_portal_id={career_portal_id}&lang={lang}"
         )
         try:
-            response = await asyncio.to_thread(curl_requests.get, endpoint, **request_kwargs)
-            if response.status_code != 200:
+            payload = await self._request_json(
+                endpoint,
+                proxy=proxy,
+                timeout_seconds=12,
+            )
+            if not isinstance(payload, dict):
                 return ""
-            payload = response.json()
         except (OSError, RuntimeError, ValueError, TypeError):
             return ""
         return self._clean_text(payload.get("comp_name")) if isinstance(payload, dict) else ""
 
     def _discover_board_url(self, url: str, html: str) -> str:
-        if "saashr.com" in str(url or "").lower():
+        if SAASHR_DOMAIN in str(url or "").lower():
             return url
         soup = BeautifulSoup(str(html or ""), "html.parser")
-        iframe = soup.select_one("iframe[src*='saashr.com/ta/'][src*='.careers']")
+        iframe = soup.select_one(
+            f"iframe[src*='{SAASHR_DOMAIN}/ta/'][src*='.careers']"
+        )
         if iframe is None:
             return ""
         src = str(iframe.get("src") or "").strip()

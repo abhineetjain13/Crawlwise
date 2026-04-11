@@ -4,12 +4,17 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from app.models.crawl import CrawlRun
+from app.services.run_summary import as_int, merge_run_summary_patch
 from sqlalchemy.ext.asyncio import AsyncSession
 
 RetryRunUpdate = Callable[
     [AsyncSession, int, Callable[[AsyncSession, CrawlRun], Awaitable[None]]],
     Awaitable[None],
 ]
+
+# Backwards-compatible re-export for callers and tests that still import the
+# helper from the batch progress/runtime modules.
+_merge_run_summary_patch = merge_run_summary_patch
 
 
 @dataclass(slots=True)
@@ -32,14 +37,14 @@ class BatchRunProgressState:
         persisted_record_count: int,
     ) -> "BatchRunProgressState":
         summary = dict(current_summary) if isinstance(current_summary, dict) else {}
-        completed_count = min(_as_int(summary.get("completed_urls", 0)), total_urls)
+        completed_count = min(as_int(summary.get("completed_urls", 0)), total_urls)
         return cls(
             total_urls=total_urls,
             url_domain=str(url_domain or ""),
             url_verdicts=list(summary.get("url_verdicts") or [])[:completed_count],
             verdict_counts=dict(summary.get("verdict_counts") or {}),
             acquisition_summary=dict(summary.get("acquisition_summary") or {}),
-            persisted_record_count=max(0, _as_int(persisted_record_count)),
+            persisted_record_count=max(0, as_int(persisted_record_count)),
             completed_count=completed_count,
         )
 
@@ -51,7 +56,7 @@ class BatchRunProgressState:
         verdict: str,
         url_metrics: dict[str, object],
     ) -> None:
-        self.persisted_record_count += max(0, _as_int(records_count))
+        self.persisted_record_count += max(0, as_int(records_count))
         self.completed_count += 1
         if idx >= len(self.url_verdicts):
             self.url_verdicts.extend([""] * (idx + 1 - len(self.url_verdicts)))
@@ -158,71 +163,6 @@ class BatchRunProgressState:
             return 100 if final else 0
         return int((self.completed_count / self.total_urls) * 100)
 
-
-def _merge_run_summary_patch(current: object, patch: dict[str, object]) -> dict[str, object]:
-    summary = dict(current) if isinstance(current, dict) else {}
-    merged = {**summary, **patch}
-
-    # Preserve monotonic counters/progress when late/stale writes race in.
-    for key in ("url_count", "record_count", "progress", "processed_urls", "completed_urls"):
-        if key in summary or key in patch:
-            merged[key] = max(_as_int(summary.get(key)), _as_int(patch.get(key)))
-
-    if "remaining_urls" in patch:
-        prev_remaining = summary.get("remaining_urls")
-        if prev_remaining is None:
-            merged["remaining_urls"] = _as_int(patch.get("remaining_urls"))
-        else:
-            merged["remaining_urls"] = min(
-                _as_int(prev_remaining),
-                _as_int(patch.get("remaining_urls")),
-            )
-
-    if "url_verdicts" in patch or "url_verdicts" in summary:
-        merged["url_verdicts"] = _merge_url_verdicts(
-            summary.get("url_verdicts"),
-            patch.get("url_verdicts"),
-        )
-
-    if "verdict_counts" in patch or "verdict_counts" in summary:
-        merged["verdict_counts"] = _merge_verdict_counts(
-            summary.get("verdict_counts"),
-            patch.get("verdict_counts"),
-        )
-
-    return merged
-
-
-def _merge_url_verdicts(current: object, patch: object) -> list[str]:
-    current_list = list(current) if isinstance(current, list) else []
-    patch_list = list(patch) if isinstance(patch, list) else []
-    max_len = max(len(current_list), len(patch_list))
-    merged: list[str] = []
-    for idx in range(max_len):
-        patch_value = str(patch_list[idx] or "").strip() if idx < len(patch_list) else ""
-        current_value = str(current_list[idx] or "").strip() if idx < len(current_list) else ""
-        merged.append(patch_value or current_value)
-    return merged
-
-
-def _merge_verdict_counts(current: object, patch: object) -> dict[str, int]:
-    current_map = dict(current) if isinstance(current, dict) else {}
-    patch_map = dict(patch) if isinstance(patch, dict) else {}
-    keys = set(current_map) | set(patch_map)
-    merged: dict[str, int] = {}
-    for key in keys:
-        merged[str(key)] = max(
-            _as_int(current_map.get(key)),
-            _as_int(patch_map.get(key)),
-        )
-    return merged
-
-
-def _as_int(value: object) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _as_float(value: object) -> float:

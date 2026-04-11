@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -10,6 +9,9 @@ from urllib.parse import parse_qsl, urlparse
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.config.extraction_rules import KNOWN_ATS_PLATFORMS
 from app.services.config.selectors import CARD_SELECTORS_COMMERCE, CARD_SELECTORS_JOBS
+from app.services.extractability import (
+    html_has_extractable_listings_from_soup,
+)
 from app.services.extract.source_parsers import extract_json_ld
 from bs4 import BeautifulSoup, Tag
 from cachetools import TTLCache
@@ -46,86 +48,8 @@ _LISTING_CARD_CLASS_RE = re.compile(r"(?:product|job|result|listing|item)[-_ ]?(
 _ADD_TO_CART_RE = re.compile(r"\b(?:add to cart|buy now|add to bag)\b", re.IGNORECASE)
 _APPLY_NOW_RE = re.compile(r"\b(?:apply now|submit application)\b", re.IGNORECASE)
 
-_NEXT_DATA_PRODUCT_SIGNALS = (
-    '"productId"', '"partNumber"', '"displayName"', '"sku"', '"skuId"', '"price"', '"salePrice"',
-    '"listPrice"', '"imageUrl"', '"imageURL"', '"image_url"', '"availability"', '"inStock"',
-    '"slug"', '"handle"', '"jobId"', '"jobTitle"', '"companyName"',
-)
-
-
-def _json_ld_listing_count(payload: object, *, _depth: int = 0, _max_depth: int = 3) -> int:
-    if _depth > _max_depth:
-        return 0
-    if isinstance(payload, list):
-        return sum(
-            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
-            for item in payload
-        )
-    if not isinstance(payload, dict):
-        return 0
-
-    count = 0
-    raw_ld_type = payload.get("@type", "")
-    if isinstance(raw_ld_type, str):
-        ld_types = {raw_ld_type.lower()}
-    elif isinstance(raw_ld_type, (list, tuple, set)):
-        ld_types = {
-            str(item).lower()
-            for item in raw_ld_type
-            if isinstance(item, str) and item.strip()
-        }
-    else:
-        ld_types = set()
-
-    if ld_types & {"product", "jobposting"}:
-        count += 1
-    if "itemlist" in ld_types or "itemListElement" in payload:
-        count += len(payload.get("itemListElement", []))
-
-    graph = payload.get("@graph")
-    if isinstance(graph, list):
-        count += sum(
-            _json_ld_listing_count(item, _depth=_depth + 1, _max_depth=_max_depth)
-            for item in graph
-        )
-
-    main_entity = payload.get("mainEntity")
-    if isinstance(main_entity, dict):
-        count += _json_ld_listing_count(
-            main_entity,
-            _depth=_depth + 1,
-            _max_depth=_max_depth,
-        )
-
-    offers = payload.get("offers")
-    if isinstance(offers, dict):
-        item_offered = offers.get("itemOffered")
-        if isinstance(item_offered, list):
-            count += sum(1 for item in item_offered if isinstance(item, dict))
-
-    return count
-
-
 def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
-    product_count = 0
-    for node in soup.select("script[type='application/ld+json']"):
-        raw = node.string or node.get_text(" ", strip=True) or ""
-        try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        product_count += _json_ld_listing_count(payload)
-        if product_count >= 2:
-            return True
-
-    next_data_node = soup.select_one("script#__NEXT_DATA__")
-    if next_data_node is not None:
-        raw_next_data = next_data_node.string or next_data_node.get_text(" ", strip=True) or ""
-        signal_hits = sum(raw_next_data.count(key) for key in _NEXT_DATA_PRODUCT_SIGNALS)
-        if signal_hits >= 4:
-            return True
-
-    return False
+    return html_has_extractable_listings_from_soup(soup)
 
 
 def _cache_key(url: str, html: str) -> str:
@@ -158,27 +82,44 @@ def _sanitize_html_snippet_for_prompt(html_text: str) -> str:
     return cleaned
 
 
+def _tag_children(container: Tag) -> list[Tag]:
+    return [child for child in container.children if isinstance(child, Tag)]
+
+
+def _group_children_by_signature(children: list[Tag]) -> dict[tuple[str, tuple[str, ...]], list[Tag]]:
+    grouped: dict[tuple[str, tuple[str, ...]], list[Tag]] = {}
+    for child in children:
+        key = (child.name, tuple(sorted(child.get("class", []))))
+        grouped.setdefault(key, []).append(child)
+    return grouped
+
+
+def _has_repeating_card_links(group: list[Tag]) -> bool:
+    return sum(1 for item in group[:10] if item.select_one("a[href]")) >= 3
+
+
+def _build_card_selector(name: str, classes: tuple[str, ...]) -> str:
+    escaped_name = css_escape(name)
+    escaped_classes = ".".join(
+        css_escape(class_name) for class_name in classes if class_name
+    )
+    return f"{escaped_name}.{escaped_classes}" if escaped_classes else escaped_name
+
+
 def _find_repeating_cards(soup: BeautifulSoup) -> tuple[list[Tag], str]:
     best_cards: list[Tag] = []
     best_selector = ""
     for container in soup.select("main, section, ul, ol, div"):
-        children = [child for child in container.children if isinstance(child, Tag)]
+        children = _tag_children(container)
         if len(children) < 3:
             continue
-        grouped: dict[tuple[str, tuple[str, ...]], list[Tag]] = {}
-        for child in children:
-            key = (child.name, tuple(sorted(child.get("class", []))))
-            grouped.setdefault(key, []).append(child)
+        grouped = _group_children_by_signature(children)
         for (name, classes), group in grouped.items():
-            if len(group) < 3:
-                continue
-            if sum(1 for item in group[:10] if item.select_one("a[href]")) < 3:
+            if len(group) < 3 or not _has_repeating_card_links(group):
                 continue
             if len(group) > len(best_cards):
                 best_cards = group
-                escaped_name = css_escape(name)
-                escaped_classes = ".".join(css_escape(class_name) for class_name in classes if class_name)
-                best_selector = f"{escaped_name}.{escaped_classes}" if escaped_classes else escaped_name
+                best_selector = _build_card_selector(name, classes)
     return best_cards, best_selector
 
 

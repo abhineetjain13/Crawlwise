@@ -7,6 +7,9 @@ on:
       - ".github/workflows/frontend-playwright-smoke.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   playwright-smoke:
     runs-on: ubuntu-latest

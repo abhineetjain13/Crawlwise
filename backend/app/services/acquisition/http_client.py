@@ -8,11 +8,14 @@ from dataclasses import dataclass, field
 from datetime import UTC
 from email.utils import parsedate_to_datetime
 from json import loads as parse_json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlparse
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
-from app.services.acquisition.cookie_store import load_cookies_for_http
+from app.services.acquisition.cookie_store import (
+    load_cookies_for_http,
+    load_session_cookies_for_http,
+)
 from app.services.config.crawl_runtime import (
     HTTP_IMPERSONATION_PROFILES,
     HTTP_MAX_RETRIES,
@@ -27,6 +30,9 @@ from app.services.url_safety import ValidatedTarget, validate_public_target
 from curl_cffi import requests
 from curl_cffi.const import CurlOpt
 from curl_cffi.requests.errors import RequestsError as CurlRequestsError
+
+if TYPE_CHECKING:
+    from app.services.acquisition.session_context import SessionContext
 
 _MAX_REDIRECTS = 5
 _ALLOWED_REDIRECT_SCHEMES = {"http", "https"}
@@ -69,6 +75,30 @@ async def fetch_html_result(
     *,
     allow_stealth_retry: bool = True,
     force_stealth: bool = False,
+    session_context: SessionContext | None = None,
+) -> HttpFetchResult:
+    return await request_result(
+        url,
+        proxy=proxy,
+        method="GET",
+        allow_stealth_retry=allow_stealth_retry,
+        force_stealth=force_stealth,
+        session_context=session_context,
+    )
+
+
+async def request_result(
+    url: str,
+    proxy: str | None = None,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    json_body: Any | None = None,
+    data: Any | None = None,
+    timeout_seconds: float | None = None,
+    allow_stealth_retry: bool = True,
+    force_stealth: bool = False,
+    session_context: SessionContext | None = None,
 ) -> HttpFetchResult:
     """Fetch a URL and retry with stealth impersonation when needed.
 
@@ -76,7 +106,31 @@ async def fetch_html_result(
         url: Target URL.
         proxy: Optional proxy URL with embedded credentials if required
             (e.g. "http://<user>:<password>@host:port").
+        method: HTTP method to use.
+        headers: Optional request headers.
+        json_body: Optional JSON payload.
+        data: Optional non-JSON payload.
+        timeout_seconds: Optional request timeout override.
+        session_context: Optional SessionContext for proxy-fingerprint affinity.
+            When provided, the bound impersonation profile and isolated cookies
+            are used instead of the global defaults.
     """
+    normalized_method = str(method or "GET").strip().upper() or "GET"
+    if session_context is not None:
+        # Session-affinity path: use the bound profile exclusively.
+        result = await _fetch_with_retry(
+            url,
+            session_context.proxy,
+            impersonate=session_context.impersonate_profile,
+            method=normalized_method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            timeout_seconds=timeout_seconds,
+            session_context=session_context,
+        )
+        return result
+
     attempt_order = _build_attempt_order(
         url=url,
         allow_stealth_retry=allow_stealth_retry,
@@ -85,7 +139,16 @@ async def fetch_html_result(
     last_result = HttpFetchResult(error="request_not_attempted")
 
     for impersonate in attempt_order:
-        result = await _fetch_with_retry(url, proxy, impersonate=impersonate)
+        result = await _fetch_with_retry(
+            url,
+            proxy,
+            impersonate=impersonate,
+            method=normalized_method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            timeout_seconds=timeout_seconds,
+        )
         last_result = result
         if _is_successful(result):
             return result
@@ -118,7 +181,16 @@ def _build_attempt_order(
 
 
 async def _fetch_with_retry(
-    url: str, proxy: str | None, *, impersonate: str
+    url: str,
+    proxy: str | None,
+    *,
+    impersonate: str,
+    method: str,
+    headers: dict[str, str] | None = None,
+    json_body: Any | None = None,
+    data: Any | None = None,
+    timeout_seconds: float | None = None,
+    session_context: SessionContext | None = None,
 ) -> HttpFetchResult:
     attempts = max(1, HTTP_MAX_RETRIES + 1)
     last_result = HttpFetchResult(
@@ -128,7 +200,17 @@ async def _fetch_with_retry(
     attempt_log: list[dict[str, object]] = []
 
     for attempt in range(1, attempts + 1):
-        result = await _fetch_once(url, proxy, impersonate=impersonate)
+        result = await _fetch_once(
+            url,
+            proxy,
+            impersonate=impersonate,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            timeout_seconds=timeout_seconds,
+            session_context=session_context,
+        )
         result.attempts = attempt
         attempt_log.append(
             _build_attempt_entry(result, attempt=attempt, impersonate=impersonate)
@@ -186,29 +268,81 @@ def _build_attempt_entry(
 
 
 async def _fetch_once(
-    url: str, proxy: str | None, *, impersonate: str
+    url: str,
+    proxy: str | None,
+    *,
+    impersonate: str,
+    method: str,
+    headers: dict[str, str] | None = None,
+    json_body: Any | None = None,
+    data: Any | None = None,
+    timeout_seconds: float | None = None,
+    session_context: SessionContext | None = None,
 ) -> HttpFetchResult:
     request_url = str(url or "").strip()
+    request_method = str(method or "GET").strip().upper() or "GET"
     redirect_count = 0
+
+    # Seed session cookies once before the redirect loop.  Re-merging on
+    # every iteration would pollute the session jar with domain-global
+    # cookies from redirect targets.
+    _cookies_seeded = False
+
     while True:
         target = await validate_public_target(request_url)
         session_kwargs: dict[str, Any] = {}
         session_kwargs["trust_env"] = False
         kwargs: dict[str, Any] = {
             "impersonate": impersonate,
-            "timeout": HTTP_TIMEOUT_SECONDS,
+            "timeout": float(timeout_seconds or HTTP_TIMEOUT_SECONDS),
             "allow_redirects": False,
         }
+        if headers:
+            kwargs["headers"] = dict(headers)
+        if json_body is not None:
+            kwargs["json"] = json_body
+        if data is not None:
+            kwargs["data"] = data
         if target.resolved_ips:
             session_kwargs["curl_options"] = _resolve_options(target)
-        if proxy:
-            kwargs["proxies"] = {"http": proxy, "https": proxy}
-        cookies = load_cookies_for_http(target.hostname)
-        if cookies:
-            kwargs["cookies"] = cookies
+        # Session-affinity: use SessionContext's proxy and isolated cookies
+        # when available, falling back to legacy domain-scoped cookie store.
+        effective_proxy = (
+            session_context.proxy if session_context is not None else proxy
+        )
+        if effective_proxy:
+            kwargs["proxies"] = {"http": effective_proxy, "https": effective_proxy}
+        if session_context is not None:
+            if not _cookies_seeded:
+                # Seed once: load session-scoped cookies first, then fall
+                # back to domain-scoped store for the initial request only.
+                session_cookies = load_session_cookies_for_http(
+                    target.hostname, session_context.identity_key
+                )
+                if session_cookies:
+                    session_context.merge_http_cookies(session_cookies)
+                else:
+                    domain_cookies = load_cookies_for_http(target.hostname)
+                    if domain_cookies:
+                        session_context.merge_http_cookies(domain_cookies)
+                _cookies_seeded = True
+            if session_context.cookies:
+                kwargs["cookies"] = dict(session_context.cookies)
+        else:
+            cookies = load_cookies_for_http(target.hostname)
+            if cookies:
+                kwargs["cookies"] = cookies
         try:
             async with requests.AsyncSession(**session_kwargs) as session:
-                response = await session.get(request_url, **kwargs)
+                request_fn = getattr(session, request_method.lower(), None)
+                if request_fn is None:
+                    response = await session.request(
+                        request_method,
+                        request_url,
+                        **kwargs,
+                    )
+                else:
+                    response = await request_fn(request_url, **kwargs)
         except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError) as exc:
             return HttpFetchResult(
                 error=str(exc),

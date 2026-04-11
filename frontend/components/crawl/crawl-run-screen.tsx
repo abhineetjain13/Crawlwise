@@ -218,12 +218,15 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     const nextTotal = tableRecordsQuery.data.meta?.total ?? nextItems.length;
     setTableTotal(nextTotal);
     setTableRecords((current) => {
+      if (tablePage === 1) {
+        return nextItems;
+      }
       const byId = new Map<number, CrawlRecord>();
       for (const row of current) byId.set(row.id, row);
       for (const row of nextItems) byId.set(row.id, row);
       return Array.from(byId.values()).sort((a, b) => a.id - b.id);
     });
-  }, [tableRecordsQuery.data]);
+  }, [tableRecordsQuery.data, tablePage]);
 
   useEffect(() => {
     if (!logsQuery.data || !logsQuery.data.length) {

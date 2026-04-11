@@ -1,18 +1,11 @@
 # Paycom ATS adapter.
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from curl_cffi.requests.errors import RequestsError
-
-try:
-    from curl_cffi import requests as curl_requests
-except ImportError:
-    curl_requests = None
 
 
 _CONFIG_RE = re.compile(r"var configsFromHost = (\{.*?\});\s*var Mountable", re.DOTALL)
@@ -49,7 +42,7 @@ class PaycomAdapter(BaseAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
-        if curl_requests is None or "job" not in str(surface or "").lower():
+        if "job" not in str(surface or "").lower():
             return []
         host_config = self._extract_host_config(html)
         if not host_config:
@@ -60,20 +53,14 @@ class PaycomAdapter(BaseAdapter):
         if not service_base or not auth_token:
             return []
 
-        request_kwargs = {
-            "impersonate": "chrome124",
-            "timeout": 12,
-            "headers": {
-                "accept": "application/json, text/plain, */*",
-                "authorization": auth_token,
-                "locale": locale,
-                "origin": f"{urlparse(url).scheme}://{urlparse(url).netloc}",
-                "portal-host-referrer": url,
-                "referer": f"{urlparse(url).scheme}://{urlparse(url).netloc}/",
-            },
+        request_headers = {
+            "accept": "application/json, text/plain, */*",
+            "authorization": auth_token,
+            "locale": locale,
+            "origin": f"{urlparse(url).scheme}://{urlparse(url).netloc}",
+            "portal-host-referrer": url,
+            "referer": f"{urlparse(url).scheme}://{urlparse(url).netloc}/",
         }
-        if proxy:
-            request_kwargs["proxies"] = {"http": proxy, "https": proxy}
 
         if "detail" in str(surface or "").lower():
             job_id = self._extract_job_id(url)
@@ -81,18 +68,18 @@ class PaycomAdapter(BaseAdapter):
                 return []
             record = await self._fetch_detail(
                 service_base=service_base,
-                request_kwargs=request_kwargs,
+                request_headers=request_headers,
                 page_url=url,
-                locale=locale,
                 job_id=job_id,
+                proxy=proxy,
             )
             return [record] if record else []
 
         records = await self._fetch_listing(
             service_base=service_base,
-            request_kwargs=request_kwargs,
+            request_headers=request_headers,
             page_url=url,
-            locale=locale,
+            proxy=proxy,
         )
         return records
 
@@ -100,9 +87,9 @@ class PaycomAdapter(BaseAdapter):
         self,
         *,
         service_base: str,
-        request_kwargs: dict,
+        request_headers: dict[str, str],
         page_url: str,
-        locale: str,
+        proxy: str | None,
     ) -> list[dict]:
         endpoint = f"{service_base}/api/ats/job-posting-previews/search"
         records: list[dict] = []
@@ -128,22 +115,22 @@ class PaycomAdapter(BaseAdapter):
                 },
             }
             try:
-                response = await asyncio.to_thread(
-                    curl_requests.post,
+                body = await self._request_json(
                     endpoint,
-                    json=payload,
-                    **request_kwargs,
+                    method="POST",
+                    headers=request_headers,
+                    json_body=payload,
+                    proxy=proxy,
+                    timeout_seconds=12,
                 )
-                if response.status_code != 200:
+                if not isinstance(body, dict):
                     break
-                body = response.json()
             except (
                 OSError,
                 RuntimeError,
                 ValueError,
                 TypeError,
                 json.JSONDecodeError,
-                RequestsError,
             ):
                 break
             previews = body.get("jobPostingPreviews") if isinstance(body, dict) else []
@@ -168,24 +155,27 @@ class PaycomAdapter(BaseAdapter):
         self,
         *,
         service_base: str,
-        request_kwargs: dict,
+        request_headers: dict[str, str],
         page_url: str,
-        locale: str,
         job_id: str,
+        proxy: str | None,
     ) -> dict | None:
         endpoint = f"{service_base}/api/ats/job-postings/{job_id}"
         try:
-            response = await asyncio.to_thread(curl_requests.get, endpoint, **request_kwargs)
-            if response.status_code != 200:
+            body = await self._request_json(
+                endpoint,
+                headers=request_headers,
+                proxy=proxy,
+                timeout_seconds=12,
+            )
+            if not isinstance(body, dict):
                 return None
-            body = response.json()
         except (
             OSError,
             RuntimeError,
             ValueError,
             TypeError,
             json.JSONDecodeError,
-            RequestsError,
         ):
             return None
         posting = body.get("jobPosting") if isinstance(body, dict) else None

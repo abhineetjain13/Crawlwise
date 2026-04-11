@@ -75,6 +75,7 @@ _CURRENCY_TOKEN_RE = re.compile(r"\b[A-Z]{3}\b")
 _CURRENCY_AFTER_AMOUNT_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s*([A-Z]{3})\b")
 _CURRENCY_BEFORE_AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*\d[\d,]*(?:\.\d+)?\b")
 _HEX_COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b")
+_CHOOSE_AN_OPTION_PREFIX_RE = re.compile(r"(?i)^choose an option\b")
 _BREADCRUMB_SEPARATOR_RE = re.compile(r"\s>\s|(?:[^/]+/){2,}[^/]+|[^/]+/[^/]+/[^/]*")
 _NUMERIC_ONLY_RE = re.compile(r"^\d+$")
 _VARIANT_SELECTOR_PROMPT_RE = re.compile(
@@ -107,6 +108,21 @@ _CATEGORY_PLACEHOLDER_VALUES = {
     "other",
     "uncategorized",
 }
+_GENERIC_CATEGORY_VALUES_LOWER = {
+    item.lower() for item in CANDIDATE_GENERIC_CATEGORY_VALUES
+}
+_CATEGORY_NOISE_VALUES = {
+    "regular",
+    "petite",
+    "plus",
+    "tall",
+    "maternity",
+    "slim",
+    "fitted",
+    "oversized",
+    "husky",
+}
+_CATEGORY_INVALID_TERMINALS = {"detail-page", "product", "category", "page", "object"}
 _NON_SIZE_VALUES = {
     "top",
     "tops",
@@ -143,6 +159,10 @@ _COLOR_NOISE_RE = _compile_noise_token_pattern(COLOR_NOISE_TOKENS)
 _SIZE_NOISE_RE = _compile_noise_token_pattern(SIZE_NOISE_TOKENS)
 
 
+def _strip_choose_an_option_prefix(value: str) -> str:
+    return _CHOOSE_AN_OPTION_PREFIX_RE.sub("", value).strip(" ,")
+
+
 def normalize_value(field_name: str, value: object, *, base_url: str = "") -> object:
     if not isinstance(value, str):
         return value
@@ -159,7 +179,7 @@ def normalize_value(field_name: str, value: object, *, base_url: str = "") -> ob
         cleaned = _strip_ui_noise(_strip_html(text))
         if _SIZE_NOISE_RE.search(cleaned.lower()):
             return ""
-        cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
+        cleaned = _strip_choose_an_option_prefix(cleaned)
         tokens = [token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()]
         if tokens and all(re.fullmatch(r"[A-Za-z0-9.+-]{1,5}", token) for token in tokens):
             return ", ".join(tokens)
@@ -286,7 +306,7 @@ def _coerce_color_field(value: str) -> str | None:
         return hex_match.group(0)
     if _COLOR_NOISE_RE.search(lowered):
         return None
-    cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
+    cleaned = _strip_choose_an_option_prefix(cleaned)
     cleaned = re.sub(r"(?i)\bclear\b$", "", cleaned).strip(" ,")
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     if len(cleaned) > 40 or len(cleaned.split()) > 6:
@@ -313,7 +333,7 @@ def _coerce_size_field(value: str) -> str | None:
         return cleaned
     if any(token in lowered for token in CANDIDATE_SIZE_PACKAGE_TOKENS):
         return cleaned
-    cleaned = re.sub(r"(?i)^choose an option\b", "", cleaned).strip(" ,")
+    cleaned = _strip_choose_an_option_prefix(cleaned)
     if re.fullmatch(r"[A-Za-z0-9.+-]+(?:\s+[A-Za-z0-9.+-]+){0,3}", cleaned):
         return cleaned
     tokens = [token.strip() for token in re.split(r"[\s,/|]+", cleaned) if token.strip()]
@@ -324,30 +344,56 @@ def _coerce_size_field(value: str) -> str | None:
 
 def _coerce_category_field(value: str) -> str | None:
     cleaned = _normalized_candidate_text(value)
-    lowered = cleaned.lower()
-    if lowered in _GENERIC_SENTINEL_VALUES:
+    if not cleaned:
         return None
-    if lowered in {item.lower() for item in CANDIDATE_GENERIC_CATEGORY_VALUES}:
+    if _is_rejected_category_candidate(cleaned):
         return None
-    if lowered in _CATEGORY_PLACEHOLDER_VALUES:
+    cleaned = _normalize_category_path(cleaned)
+    if not cleaned:
         return None
-    if "schema.org" in lowered or "cookie" in lowered or "sign in" in lowered:
-        return None
-    if lowered in {"regular", "petite", "plus", "tall", "maternity", "slim", "fitted", "oversized", "husky"}:
-        return None
-    if ">" in cleaned or "/" in cleaned:
-        parts = [part.strip() for part in re.split(r"\s*(?:>|/)\s*", cleaned) if part.strip()]
-        if parts and parts[0].lower() == "home":
-            parts = parts[1:]
-        cleaned = " > ".join(parts)
-        lowered = cleaned.lower()
-    if not cleaned or lowered in _GENERIC_SENTINEL_VALUES:
-        return None
-    if lowered in {"detail-page", "product", "category", "page", "object"} or re.fullmatch(r"e\d+", lowered):
-        return None
-    if re.fullmatch(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+", cleaned):
+    if _is_invalid_normalized_category(cleaned):
         return None
     return cleaned
+
+
+def _is_rejected_category_candidate(value: str) -> bool:
+    lowered = value.lower()
+    return any(
+        (
+            lowered in _GENERIC_SENTINEL_VALUES,
+            lowered in _GENERIC_CATEGORY_VALUES_LOWER,
+            lowered in _CATEGORY_PLACEHOLDER_VALUES,
+            lowered in _CATEGORY_NOISE_VALUES,
+            "schema.org" in lowered,
+            "cookie" in lowered,
+            "sign in" in lowered,
+        )
+    )
+
+
+def _is_invalid_normalized_category(value: str) -> bool:
+    lowered = value.lower()
+    return any(
+        (
+            lowered in _GENERIC_SENTINEL_VALUES,
+            lowered in _CATEGORY_INVALID_TERMINALS,
+            bool(re.fullmatch(r"e\d+", lowered)),
+            _looks_like_compound_camel_case(value),
+        )
+    )
+
+
+def _looks_like_compound_camel_case(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z][a-z]+(?:[A-Z][a-z]+)+", value))
+
+
+def _normalize_category_path(value: str) -> str:
+    if ">" not in value and "/" not in value:
+        return value
+    parts = [part.strip() for part in re.split(r"\s*(?:>|/)\s*", value) if part.strip()]
+    if parts and parts[0].lower() == "home":
+        parts = parts[1:]
+    return " > ".join(parts)
 
 
 def _coerce_rating_field(value: str) -> str | None:
@@ -983,7 +1029,7 @@ def _strip_html(value: str, *, preserve_paragraphs: bool = False) -> str:
         return unescape(value).strip()
     soup = BeautifulSoup(value, "html.parser")
     if preserve_paragraphs:
-        for tag in soup.find_all(["p", "li", "br", "div"]):
+        for tag in list(soup.find_all(["p", "li", "br", "div"])):
             tag.insert_before("\n")
         text = soup.get_text(" ", strip=False)
         text = re.sub(r"[ \t]+", " ", text)

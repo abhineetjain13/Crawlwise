@@ -195,4 +195,17 @@ __all__ = [
     # Typed pipeline boundary objects
     "URLProcessingConfig",
     "URLProcessingResult",
+    "AcquisitionMetrics",
+    "ExtractionResult",
+    "PipelineContext",
+    "PipelineRunner",
+    "PipelineStage",
+    "AcquireStage",
+    "AdapterStage",
+    "BlockedDetectionStage",
+    "ExtractStage",
+    "ListingBrowserRetryStage",
+    "ParseStage",
+    "SurfaceValidationStage",
+    "build_default_stages",
 ]

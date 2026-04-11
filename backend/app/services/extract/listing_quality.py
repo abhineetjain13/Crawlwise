@@ -153,6 +153,20 @@ def assess_listing_record_quality(record: dict, *, surface: str = "") -> Listing
     if is_job_surface and title_value and not (set(public_fields) & _JOB_REQUIRED_CONTEXT_FIELDS):
         return _invalid_assessment(normalized_surface, public_fields, product_signal_keys, job_signal_keys, "job_title_without_context")
 
+    if (
+        ("commerce" in normalized_surface or "ecommerce" in normalized_surface)
+        and url_value
+        and not product_signal_keys
+        and _looks_like_job_url(url_value)
+    ):
+        return _invalid_assessment(
+            normalized_surface,
+            public_fields,
+            product_signal_keys,
+            job_signal_keys,
+            "job_like_url_on_ecommerce_surface",
+        )
+
     if not title_value and not url_value and not job_signal_keys and not product_signal_keys:
         return _invalid_assessment(normalized_surface, public_fields, product_signal_keys, job_signal_keys, "missing_anchor_fields")
 
@@ -304,6 +318,14 @@ def _looks_like_listing_hub_url(url: str) -> bool:
     if len(segments) <= 1:
         return True
     return len(segments) <= 2 and any(segment in {"jobs", "careers", "products", "shop", "collections"} for segment in segments)
+
+
+def _looks_like_job_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    lowered = parsed.path.lower()
+    return any(
+        token in lowered for token in ("/jobs", "/job/", "/careers", "/career/")
+    )
 
 
 def _looks_like_detail_record_url(url: str) -> bool:

@@ -87,9 +87,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     card_autodetect_min_siblings: int = 3
     json_max_search_depth: int = 5
     max_json_recursion_depth: int = 8
-    http_retry_status_codes: list[int] = Field(
-        default_factory=lambda: [403, 429, 503]
-    )
+    http_retry_status_codes: list[int] = Field(default_factory=lambda: [403, 429, 503])
     http_max_retries: int = 2
     http_retry_backoff_base_ms: int = 400
     http_retry_backoff_max_ms: int = 3000
@@ -121,6 +119,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     cookie_consent_prewait_ms: int = 400
     cookie_consent_postclick_wait_ms: int = 600
     shadow_dom_flatten_max_hosts: int = 100
+    browser_context_timeout_ms: int = 15000
+    browser_new_page_timeout_ms: int = 10000
+    browser_close_timeout_ms: int = 5000
 
     @model_validator(mode="after")
     def _apply_profile_defaults(self) -> CrawlerRuntimeSettings:

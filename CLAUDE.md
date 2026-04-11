@@ -221,11 +221,53 @@ Code should continue to import from `pipeline_config.py`, not duplicate config v
 
 - `URLProcessingResult` (dataclass in `services/pipeline/types.py`): typed replacement for the raw `(list[dict], str, dict)` tuple returned by `_process_single_url` and its sub-functions. Fields: `records`, `verdict`, `url_metrics`. Supports tuple destructuring for backward compatibility.
 - `URLProcessingConfig` (dataclass in `services/pipeline/types.py`): groups the 8 positional settings parameters into a typed config object. `_process_single_url` accepts either `config: URLProcessingConfig` or legacy kwargs.
+- `PipelineContext` (dataclass in `services/pipeline/types.py`): mutable state carried through the pipeline stage chain. Holds session, run, URL, config, acquisition result, soup, adapter records, url_metrics, records, and verdict. Each stage reads from and writes to this context.
+- `PipelineStage` (Protocol in `services/pipeline/types.py`): protocol for a single pipeline processing stage. Each stage has `async execute(ctx: PipelineContext) -> None`.
+- `ExtractionResult` (dataclass in `services/pipeline/types.py`): typed output from extraction passes (listing or detail). Replaces raw `list[dict]` returns.
+- `AcquisitionMetrics` (dataclass in `services/pipeline/types.py`): typed acquisition-phase metrics replacing raw `url_metrics` dict for the acquisition portion of pipeline telemetry.
+
+### Pipeline stage architecture
+
+The pipeline now supports a composable stage chain architecture alongside the legacy monolithic `_process_single_url`. New code should prefer the stage-based approach.
+
+- `services/pipeline/stages.py`: Concrete stage implementations — `AcquireStage`, `SurfaceValidationStage`, `BlockedDetectionStage`, `AdapterStage`, `ParseStage`, `ExtractStage`, `ListingBrowserRetryStage`.
+- `services/pipeline/runner.py`: `PipelineRunner` composes stages with pre/post hooks (`on_before_stage`, `on_after_stage`). `build_default_stages()` factory produces the default chain matching legacy `_process_single_url` behaviour in execution order: Acquire → SurfaceValidation → BlockedDetection → Adapter → Parse → Extract → ListingBrowserRetry.
+- Stage execution order: Acquire → SurfaceValidation → BlockedDetection → Adapter → Parse → Extract → ListingBrowserRetry.
+- The runner stops early if any stage sets `ctx.verdict` (e.g. BLOCKED).
+- Per-stage timing is recorded in `ctx.url_metrics["stage_timings_ms"]`.
+- The legacy `_process_single_url` function is preserved for backward compatibility; existing call sites in `_batch_runtime.py` continue to use it. Migration to the stage runner is incremental.
 
 ### CPU offloading
 
 - The pipeline hot path now treats HTML parsing as CPU-bound work and routes shared BeautifulSoup parsing through off-thread helpers in `services/pipeline/utils.py` and stage helpers instead of constructing DOMs inline on the event loop.
+- `parse_html(html)` in `pipeline/utils.py` is the canonical async HTML parser. It offloads `BeautifulSoup(html, "html.parser")` to `asyncio.to_thread`. All pipeline code should call this rather than constructing BeautifulSoup directly in async functions.
+- `extract_candidates()` in `extract/service.py` now accepts an optional pre-parsed `soup` parameter to avoid redundant DOM parsing when the caller already has one.
 - This closes the external todo item "Phase 1: CPU Offloading" for the active pipeline flow.
+
+### Memory-adaptive concurrency
+
+- `services/resource_monitor.py`: `MemoryAdaptiveSemaphore` wraps `asyncio.Semaphore` with memory pressure awareness. Before granting a concurrency token, it checks `psutil.virtual_memory().percent` against configurable thresholds (default 90% pressure, 95% critical). When pressure exceeds the threshold, new URL acquisitions are blocked until memory drops.
+- The global URL semaphore in `_batch_runtime.py` now uses `MemoryAdaptiveSemaphore` instead of a fixed `asyncio.Semaphore`.
+- `MemoryAdaptiveSemaphore.snapshot()` exposes current memory state, active tokens, and throttle duration for observability.
+
+### Acquisition strategy chain
+
+- `services/acquisition/strategies.py`: Defines `AcquisitionStrategy` protocol and `AcquisitionChain` executor.
+- Default strategies: `HttpStrategy` (curl_cffi), `BrowserStrategy` (Playwright), `AdapterRecoveryStrategy` (platform fallback).
+- `build_default_chain(browser_first=False)` factory produces the standard waterfall. New acquisition backends (e.g. BrightData, Zyte) can be added by implementing `AcquisitionStrategy` and inserting into the chain.
+- The existing `acquire()` function in `acquirer.py` is unchanged; the strategy chain is a parallel composable interface for future migration.
+
+### Browser pool architecture
+
+- `psutil` is now a hard dependency (not optional). Missing psutil causes an import error at startup rather than silent zombie browser accumulation.
+- `BrowserPool` class in `browser_client.py` replaces the flat `_BrowserPoolState` dataclass. Provides structured LRU eviction, health probing, per-browser context limits (`_BROWSER_POOL_MAX_CONTEXTS_PER_BROWSER = 4`), and observability via `snapshot()`.
+- `_PooledBrowser` tracks `active_contexts` count per browser instance.
+- `browser_pool_snapshot()` now returns detailed per-entry context counts, connection status, and idle time.
+
+### Per-URL session isolation
+
+- `_process_url_with_own_session()` in `_batch_runtime.py` processes a single URL in its own DB session for transaction isolation. Each URL's records and progress update are committed atomically — if the worker dies mid-URL, both are rolled back together.
+- This is the foundation for parallel batch URL processing and closes the transaction tearing risk between record insertion and batch progress updates.
 
 ## Tests
 
@@ -263,6 +305,71 @@ python run_extraction_smoke.py
 ```
 
 This exercises the complete acquisition and extraction pipeline without the database and writes a timestamped report under `artifacts/extraction_smoke/`.
+
+## Session-Proxy-Fingerprint Affinity
+
+`services/acquisition/session_context.py` — `SessionContext` dataclass binds proxy IP, `BrowserFingerprint` (generated via `browserforge`), isolated cookie jars, and a curl_cffi `impersonate_profile` into a single affinity group per acquisition attempt.
+
+- `acquire()` creates a fresh `SessionContext` per proxy in the rotation loop; invalidates it (cookies cleared) on timeout/failure.
+- `http_client._fetch_once()` accepts optional `SessionContext`: uses session-bound impersonation profile, proxy, and isolated cookies instead of global defaults.
+- `browser_client._context_kwargs()` accepts optional `SessionContext`: delegates to `session_context.playwright_context_kwargs()` for fingerprint-consistent Playwright contexts (viewport, UA, locale, device scale factor all from the same generated fingerprint).
+- Legacy static `_STEALTH_USER_AGENT` path preserved when no `SessionContext` is provided (backward compatibility for direct callers).
+
+## Database-Level Listing Deduplication
+
+`CrawlRecord.url_identity_key` — `String(64)`, nullable column holding SHA-256 hash of `source_url|identity_key`.
+
+- Migration `20260411_0011`: adds column + unique partial index `uq_crawl_records_run_identity ON (run_id, url_identity_key) WHERE url_identity_key IS NOT NULL`.
+- `_save_listing_records` computes the hash from the strong identity key (or fallback key) and sets it on each `CrawlRecord` before insert.
+- Prevents duplicate records when a batch run resumes across overlap or pagination boundaries.
+
+## JSON Extractor FieldDecisionEngine Unification
+
+`extract/json_extractor.py` — `_arbitrate_record_fields()` routes each field from a JSON-extracted record through `FieldDecisionEngine.decide_from_rows()` with source `"json_api"`.
+
+- Applied after `_normalize_item()` in both `extract_json_listing()` and `extract_json_detail()`.
+- Ensures JSON and HTML extraction share the same sanitization, noise filtering, and validation path.
+- JSON-first priority preserved: candidates injected as `source="json_api"` rank at the top of the source hierarchy.
+
+## Browser Timeout Configuration
+
+`runtime_settings.py` — `browser_context_timeout_ms` (default 15000), `browser_new_page_timeout_ms` (default 10000), `browser_close_timeout_ms` (default 5000).
+
+- Exported via `crawl_runtime.py` as `BROWSER_CONTEXT_TIMEOUT_MS`, `BROWSER_NEW_PAGE_TIMEOUT_MS`, `BROWSER_CLOSE_TIMEOUT_MS`.
+- `browser_client.py` uses these instead of hardcoded `timeout=15.0` / `timeout=10.0` floats.
+- All configurable via `CRAWLER_RUNTIME_BROWSER_CONTEXT_TIMEOUT_MS` etc. env vars.
+
+## Review Bucket PII Scrubbing
+
+`pipeline/trace_builders.py` — `_scrub_pii()` runs pattern-based detection before writing to `discovered_data.review_bucket`.
+
+- Detects and replaces: emails, JWTs (`eyJ...` patterns), long opaque tokens (40+ chars), standalone phone numbers.
+- Values replaced with `"[redacted]"` marker; field keys preserved for review visibility.
+- Fully redacted values (value == `"[redacted]"`) are dropped from the bucket entirely.
+
+## Exception Narrowing in Browser Client
+
+`browser_client.py` launch retry loop (line 377) narrowed from `(PlaywrightError, RuntimeError, ValueError, TypeError, OSError)` to `(PlaywrightError, RuntimeError, OSError)`.
+
+- `TypeError` and `ValueError` now propagate — they indicate code bugs, not browser failures.
+- JSON parse `ValueError` in the XHR interceptor (`_on_response`) is kept since `json.loads` raises `ValueError` for malformed payloads (legitimate).
+
+## ReDoS-Hardened Salary Regex
+
+`config/extraction_rules.py` — `_expand_salary_range_regex()` rewritten with bounded repetition.
+
+- `\d[\d,.]{0,20}` instead of `\d[\d,.]*` prevents unbounded digit backtracking.
+- `\s{0,5}` instead of `\s*` prevents whitespace-driven catastrophic backtracking.
+- `[a-zA-Z]{1,20}` instead of `[a-zA-Z]+` bounds unit suffix matching.
+- Three non-overlapping alternation branches with distinct leading tokens.
+
+## Current Implementation Notes
+
+- **Adapter HTTP path:** audited adapters (`jibe.py`, `oracle_hcm.py`, `saashr.py`, `icims.py`, `greenhouse.py`, `shopify.py`, `paycom.py`) now use `BaseAdapter._request_json()` / `_request_text()`, which flow through `http_client.request_result()` plus host pacing instead of bypassing shared acquisition controls.
+- **Traversal failure reporting:** `scroll_to_bottom` and `load_more` now record `network_wait_status`, structured `network_wait_error`, and explicit stop reasons when `wait_for_load_state("networkidle")` times out or the browser connection drops.
+- **Portable `max_records` enforcement:** migration `20260410_0009` is intentionally a no-op; record-budget enforcement now lives in pipeline code by comparing requested budget, run settings, and persisted `CrawlRecord` count before JSON extraction, detail extraction, and listing saves.
+- **Stage-runner-backed URL processing:** `_process_single_url()` now resolves a typed `URLProcessingConfig`, builds `PipelineContext`, and executes `PipelineRunner(build_default_stages())`. Existing callers can keep using `_process_single_url()` as the compatibility wrapper.
+- **Listing-contract and shadow-DOM diagnostics:** `_enforce_listing_field_contract` remains part of the production listing path, and `_flatten_shadow_dom()` now emits diagnostics into browser acquisition results instead of failing silently under CSP or Playwright errors.
 
 ## Architecture Invariants
 

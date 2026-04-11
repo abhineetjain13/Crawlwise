@@ -31,7 +31,9 @@ DEFAULT_MAX_SCROLLS = crawler_runtime_settings.default_max_scrolls
 AUTO_DETECT_SURFACE = bool(crawler_runtime_settings.auto_detect_surface)
 BATCH_URL_CONCURRENCY = crawler_runtime_settings.batch_url_concurrency
 URL_BATCH_CONCURRENCY = int(crawler_runtime_settings.url_batch_concurrency)
-URL_PROCESS_TIMEOUT_SECONDS = float(crawler_runtime_settings.url_process_timeout_seconds)
+URL_PROCESS_TIMEOUT_SECONDS = float(
+    crawler_runtime_settings.url_process_timeout_seconds
+)
 MAX_URL_PROCESS_TIMEOUT_SECONDS = float(
     crawler_runtime_settings.max_url_process_timeout_seconds
 )
@@ -74,7 +76,9 @@ BROWSER_ERROR_RETRY_DELAY_MS = crawler_runtime_settings.browser_error_retry_dela
 BROWSER_NAVIGATION_NETWORKIDLE_TIMEOUT_MS = (
     crawler_runtime_settings.browser_navigation_networkidle_timeout_ms
 )
-BROWSER_NAVIGATION_LOAD_TIMEOUT_MS = crawler_runtime_settings.browser_navigation_load_timeout_ms
+BROWSER_NAVIGATION_LOAD_TIMEOUT_MS = (
+    crawler_runtime_settings.browser_navigation_load_timeout_ms
+)
 BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS = (
     crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms
 )
@@ -94,6 +98,9 @@ COOKIE_CONSENT_POSTCLICK_WAIT_MS = (
     crawler_runtime_settings.cookie_consent_postclick_wait_ms
 )
 SHADOW_DOM_FLATTEN_MAX_HOSTS = crawler_runtime_settings.shadow_dom_flatten_max_hosts
+BROWSER_CONTEXT_TIMEOUT_MS = crawler_runtime_settings.browser_context_timeout_ms
+BROWSER_NEW_PAGE_TIMEOUT_MS = crawler_runtime_settings.browser_new_page_timeout_ms
+BROWSER_CLOSE_TIMEOUT_MS = crawler_runtime_settings.browser_close_timeout_ms
 LONG_RUN_THRESHOLD_SECONDS: int = 30 * 60
 STALLED_RUN_THRESHOLD_SECONDS: int = 2 * 60
 MAX_DURATION_SAMPLE_SIZE: int = 1000

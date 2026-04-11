@@ -253,7 +253,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
                     href={item.href}
                     title={collapsed ? item.label : undefined}
                     className={cn(
-                      "no-underline group relative flex h-9 items-center rounded-[12px] px-2.5 text-[13px] font-medium transition-all",
+                      "no-underline group relative flex h-[var(--control-height)] items-center rounded-[12px] px-2.5 text-[13px] font-medium transition-all",
                       collapsed ? "justify-center" : "gap-2.5",
                       active
                         ? "nav-item-active text-[var(--accent)]"
@@ -422,7 +422,7 @@ function MobileNav({
                       href={item.href}
                       onClick={onClose}
                       className={cn(
-                        "no-underline flex h-8 items-center gap-2.5 rounded-[var(--radius-md)] px-2 text-[13px] font-medium transition-all",
+                        "no-underline flex h-[var(--control-height)] items-center gap-2.5 rounded-[var(--radius-md)] px-2 text-[13px] font-medium transition-all",
                         active
                           ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
                           : "text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)]",

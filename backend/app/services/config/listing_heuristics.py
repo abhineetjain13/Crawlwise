@@ -45,4 +45,3 @@ from app.services.config.extraction_rules import (
     LISTING_WEAK_METADATA_FIELDS,
     LISTING_WEAK_TITLES,
 )
-

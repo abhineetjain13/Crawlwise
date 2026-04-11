@@ -2,7 +2,7 @@
 
 import { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect } from "react";
 
 import { useTopBarStore } from "../layout/top-bar-context";
 import { cn } from "../../lib/utils";
@@ -75,54 +75,26 @@ export function TabBar({
   className?: string;
   variant?: "pill" | "underline";
 }>) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [pill, setPill] = useState({ left: 0, width: 0 });
-
   const activeIndex = options.findIndex((o) => o.value === value);
   const padX = compact ? "px-2.5" : "px-3.5";
-
-  const syncPill = useCallback(() => {
-    const container = containerRef.current;
-    if (activeIndex < 0 || !container || variant !== "pill") {
-      setPill({ left: 0, width: 0 });
-      return;
-    }
-    const btn = buttonRefs.current[activeIndex];
-    if (!btn) {
-      return;
-    }
-    const cRect = container.getBoundingClientRect();
-    const bRect = btn.getBoundingClientRect();
-    setPill({
-      left: bRect.left - cRect.left,
-      width: bRect.width,
-    });
-  }, [activeIndex, variant]);
-
-  useEffect(() => {
-    syncPill();
-  }, [syncPill, value, options]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || typeof ResizeObserver === "undefined" || variant !== "pill") {
-      return;
-    }
-    const ro = new ResizeObserver(() => syncPill());
-    ro.observe(container);
-    window.addEventListener("resize", syncPill);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", syncPill);
-    };
-  }, [syncPill, variant]);
+  const pillStyle =
+    variant === "pill" && options.length > 0 && activeIndex >= 0
+      ? {
+          width: `calc((100% - 4px) / ${options.length})`,
+          left: `calc(2px + ((100% - 4px) / ${options.length}) * ${activeIndex})`,
+          opacity: 1,
+        }
+      : {
+          width: 0,
+          left: 0,
+          opacity: 0,
+        };
 
   if (variant === "underline") {
     return (
       <div
         className={cn(
-          "flex h-9 items-stretch border-b-2 border-[var(--border-strong)] bg-transparent p-0",
+          "flex h-[var(--control-height)] items-stretch border-b-2 border-[var(--border-strong)] bg-transparent p-0",
           className,
         )}
       >
@@ -149,32 +121,25 @@ export function TabBar({
 
   return (
     <div
-      ref={containerRef}
       className={cn(
-        "relative inline-flex h-8 items-stretch rounded-[var(--radius-md)] border-2 border-[var(--border-strong)] bg-[var(--bg-elevated)] p-0.5 shadow-[var(--shadow-xs)]",
+        "relative grid h-[var(--control-height)] items-stretch rounded-[var(--radius-md)] border-2 border-[var(--border-strong)] bg-[var(--bg-elevated)] p-0.5 shadow-[var(--shadow-xs)]",
         className,
       )}
+      style={{ gridTemplateColumns: `repeat(${Math.max(options.length, 1)}, minmax(0, 1fr))` }}
     >
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[#3b82f6] shadow-[0_1px_2px_rgba(0,0,0,0.1)] transition-[left,width] duration-200 ease-out"
-        style={{
-          width: pill.width > 0 ? pill.width : 0,
-          left: pill.left,
-          opacity: activeIndex >= 0 && pill.width > 0 ? 1 : 0,
-        }}
+        style={pillStyle}
       />
       {options.map((option, index) => (
         <button
           key={option.value}
-          ref={(el) => {
-            buttonRefs.current[index] = el;
-          }}
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "relative z-10 inline-flex shrink-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-[11px] font-bold transition-all duration-200",
+            "relative z-10 inline-flex min-w-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-[11px] font-bold transition-all duration-200",
             padX,
             value === option.value
               ? "text-white"

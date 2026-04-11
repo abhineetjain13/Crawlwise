@@ -92,8 +92,67 @@ function getApiBaseUrlCandidates() {
   return [getApiBaseUrl()];
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const isFormData = init?.body instanceof FormData;
+async function retrySequentially<T>(
+  operation: (attempt: number) => Promise<T>,
+  {
+    maxAttempts,
+    backoffMs = 200,
+    shouldRetry,
+  }: {
+    maxAttempts: number;
+    backoffMs?: number;
+    shouldRetry: (error: unknown) => boolean;
+  },
+): Promise<T> {
+  async function run(attempt: number): Promise<T> {
+    try {
+      return await operation(attempt);
+    } catch (error) {
+      if (attempt >= maxAttempts || !shouldRetry(error)) {
+        throw error;
+      }
+      await delay(backoffMs * 2 ** (attempt - 1));
+      return run(attempt + 1);
+    }
+  }
+
+  return run(1);
+}
+
+type ResponseParser<T> = (response: Response) => Promise<T>;
+type RequestMethod = "POST" | "PUT" | "PATCH" | "DELETE";
+
+function buildRequestHeaders(init: RequestInit | undefined) {
+  const headers = init?.headers;
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+  return {
+    ...(headers ?? {}),
+  };
+}
+
+async function fetchApiResponse(baseUrl: string, path: string, init?: RequestInit) {
+  try {
+    return await fetch(`${baseUrl}${path}`, {
+      ...init,
+      cache: "no-store",
+      credentials: "include",
+      headers: buildRequestHeaders(init),
+    });
+  } catch (error) {
+    throw error instanceof Error ? error : new Error("Failed to reach API.");
+  }
+}
+
+async function requestWithParser<T>(
+  path: string,
+  parser: ResponseParser<T>,
+  init?: RequestInit,
+): Promise<T> {
   const maxAttempts = 3;
   let lastError: ApiError | null = null;
   let lastFetchError: Error | null = null;
@@ -101,67 +160,49 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const hasConfiguredBaseUrl = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || candidateBaseUrls.length === 1;
 
   for (const baseUrl of candidateBaseUrls) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      let response: Response;
-      try {
-        response = await fetch(`${baseUrl}${path}`, {
-          ...init,
-          cache: "no-store",
-          credentials: "include",
-          headers: isFormData
-            ? {
-                ...(init?.headers ?? {}),
-              }
-            : {
-                "Content-Type": "application/json",
-                ...(init?.headers ?? {}),
-              },
-        });
-      } catch (error) {
-        lastFetchError = error instanceof Error ? error : new Error("Failed to reach API.");
-        if (attempt === maxAttempts) {
-          break;
-        }
-        await delay(200 * 2 ** (attempt - 1));
-        continue;
-      }
-
-      if (response.ok) {
-        resolvedBaseUrl = baseUrl;
-        if (response.status === 204) {
-          return undefined as T;
-        }
-        const contentLength = response.headers.get("content-length");
-        if (contentLength === "0") {
-          return undefined as T;
-        }
-        const contentType = response.headers.get("content-type") ?? "";
-        if (!contentType.includes("application/json")) {
-          const text = await response.text();
-          if (!text.trim()) {
-            return undefined as T;
+    try {
+      return await retrySequentially(
+        async () => {
+          let response: Response;
+          try {
+            response = await fetchApiResponse(baseUrl, path, init);
+          } catch (error) {
+            lastFetchError = error instanceof Error ? error : new Error("Failed to reach API.");
+            throw lastFetchError;
           }
-          throw new ApiError("Expected JSON response from API.", response.status, text);
-        }
-        return response.json() as Promise<T>;
-      }
 
-      const body = await readErrorBody(response);
-      const message = body || response.statusText || "Request failed";
-      const error = new ApiError(message, response.status, body);
-      lastError = error;
+          if (response.ok) {
+            resolvedBaseUrl = baseUrl;
+            return parser(response);
+          }
 
-      if (response.status === 404 && hasConfiguredBaseUrl) {
-        throw error;
-      }
-      if (!error.isRetryable || attempt === maxAttempts) {
-        if (response.status !== 404) {
+          const body = await readErrorBody(response);
+          const message = body || response.statusText || "Request failed";
+          const error = new ApiError(message, response.status, body);
+          lastError = error;
+
+          if (response.status === 404 && hasConfiguredBaseUrl) {
+            throw error;
+          }
+          if (!error.isRetryable) {
+            throw error;
+          }
+          throw error;
+        },
+        {
+          maxAttempts,
+          shouldRetry: (error) =>
+            !(error instanceof ApiError) || error.isRetryable,
+        },
+      );
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.status !== 404) {
           throw error;
         }
+        lastError = error;
         break;
       }
-
-      await delay(200 * 2 ** (attempt - 1));
     }
   }
 
@@ -174,148 +215,81 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   throw lastError ?? new ApiError("Request failed", 500, "");
 }
 
-async function requestText(path: string, init?: RequestInit): Promise<string> {
-  const isFormData = init?.body instanceof FormData;
-  const maxAttempts = 3;
-  const candidateBaseUrls = getApiBaseUrlCandidates();
-  const hasConfiguredBaseUrl = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || candidateBaseUrls.length === 1;
-  let lastError: ApiError | null = null;
-  let lastFetchError: Error | null = null;
-
-  for (const baseUrl of candidateBaseUrls) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      let response: Response;
-      try {
-        response = await fetch(`${baseUrl}${path}`, {
-          ...init,
-          cache: "no-store",
-          credentials: "include",
-          headers: isFormData
-            ? {
-                ...(init?.headers ?? {}),
-              }
-            : {
-                ...(init?.headers ?? {}),
-              },
-        });
-      } catch (error) {
-        lastFetchError = error instanceof Error ? error : new Error("Failed to reach API.");
-        if (attempt === maxAttempts) {
-          break;
-        }
-        await delay(200 * 2 ** (attempt - 1));
-        continue;
-      }
-
-      if (response.ok) {
-        resolvedBaseUrl = baseUrl;
-        return await response.text();
-      }
-
-      const body = await readErrorBody(response);
-      const error = new ApiError(body || response.statusText || "Request failed", response.status, body);
-      lastError = error;
-      if (response.status === 404 && hasConfiguredBaseUrl) {
-        throw error;
-      }
-      if (!error.isRetryable || attempt === maxAttempts) {
-        if (response.status !== 404) {
-          throw error;
-        }
-        break;
-      }
-
-      await delay(200 * 2 ** (attempt - 1));
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestWithParser(path, async (response) => {
+    if (response.status === 204) {
+      return undefined as T;
     }
-  }
+    const contentLength = response.headers.get("content-length");
+    if (contentLength === "0") {
+      return undefined as T;
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      const text = await response.text();
+      if (!text.trim()) {
+        return undefined as T;
+      }
+      throw new ApiError("Expected JSON response from API.", response.status, text);
+    }
+    return response.json() as Promise<T>;
+  }, {
+    ...init,
+    headers:
+      init?.body instanceof FormData
+        ? init?.headers
+        : {
+            "Content-Type": "application/json",
+            ...(init?.headers ?? {}),
+          },
+  });
+}
 
-  if (lastError) {
-    throw lastError;
-  }
-  if (lastFetchError) {
-    throw new Error(`Failed to reach backend API. Tried: ${candidateBaseUrls.join(", ")}`);
-  }
-  throw new ApiError("Request failed", 500, "");
+function withJsonHeaders(init?: RequestInit): RequestInit {
+  return {
+    ...init,
+    headers:
+      init?.body instanceof FormData
+        ? init?.headers
+        : {
+            "Content-Type": "application/json",
+            ...(init?.headers ?? {}),
+          },
+  };
+}
+
+function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>(path, withJsonHeaders(init));
+}
+
+function requestWithBody<T>(
+  method: Exclude<RequestMethod, "DELETE">,
+  path: string,
+  body: unknown,
+): Promise<T> {
+  return requestJson<T>(path, {
+    method,
+    body: body instanceof FormData ? body : JSON.stringify(body),
+  });
+}
+
+async function requestText(path: string, init?: RequestInit): Promise<string> {
+  return requestWithParser(path, (response) => response.text(), init);
 }
 
 async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
-  const isFormData = init?.body instanceof FormData;
-  const maxAttempts = 3;
-  const candidateBaseUrls = getApiBaseUrlCandidates();
-  const hasConfiguredBaseUrl =
-    Boolean(process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || candidateBaseUrls.length === 1;
-  let lastError: ApiError | null = null;
-  let lastFetchError: Error | null = null;
-
-  for (const baseUrl of candidateBaseUrls) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      let response: Response;
-      try {
-        response = await fetch(`${baseUrl}${path}`, {
-          ...init,
-          cache: "no-store",
-          credentials: "include",
-          headers: isFormData
-            ? {
-                ...(init?.headers ?? {}),
-              }
-            : {
-                ...(init?.headers ?? {}),
-              },
-        });
-      } catch (error) {
-        lastFetchError = error instanceof Error ? error : new Error("Failed to reach API.");
-        if (attempt === maxAttempts) {
-          break;
-        }
-        await delay(200 * 2 ** (attempt - 1));
-        continue;
-      }
-
-      if (response.ok) {
-        resolvedBaseUrl = baseUrl;
-        return response.blob();
-      }
-
-      const body = await readErrorBody(response);
-      const error = new ApiError(body || response.statusText || "Request failed", response.status, body);
-      lastError = error;
-      if (response.status === 404 && hasConfiguredBaseUrl) {
-        throw error;
-      }
-      if (!error.isRetryable || attempt === maxAttempts) {
-        if (response.status !== 404) {
-          throw error;
-        }
-        break;
-      }
-
-      await delay(200 * 2 ** (attempt - 1));
-    }
-  }
-
-  if (lastError) {
-    throw lastError;
-  }
-  if (lastFetchError) {
-    throw new Error(`Failed to reach backend API. Tried: ${candidateBaseUrls.join(", ")}`);
-  }
-  throw new ApiError("Request failed", 500, "");
+  return requestWithParser(path, (response) => response.blob(), init);
 }
 
 export const apiClient = {
-  get: <T,>(path: string) => request<T>(path),
+  get: <T,>(path: string) => requestJson<T>(path),
   getText: (path: string) => requestText(path),
   getBlob: (path: string) => requestBlob(path),
-  post: <T,>(path: string, body: unknown) =>
-    request<T>(path, { method: "POST", body: JSON.stringify(body) }),
-  postForm: <T,>(path: string, body: FormData) =>
-    request<T>(path, { method: "POST", body }),
-  put: <T,>(path: string, body: unknown) =>
-    request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
-  patch: <T,>(path: string, body: unknown) =>
-    request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
-  delete: <T,>(path: string) => request<T>(path, { method: "DELETE" }),
+  post: <T,>(path: string, body: unknown) => requestWithBody<T>("POST", path, body),
+  postForm: <T,>(path: string, body: FormData) => requestWithBody<T>("POST", path, body),
+  put: <T,>(path: string, body: unknown) => requestWithBody<T>("PUT", path, body),
+  patch: <T,>(path: string, body: unknown) => requestWithBody<T>("PATCH", path, body),
+  delete: <T,>(path: string) => requestJson<T>(path, { method: "DELETE" }),
 };
 
 async function readErrorBody(response: Response) {

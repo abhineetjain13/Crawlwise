@@ -6,14 +6,25 @@ import logging
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+import httpx
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from bs4 import BeautifulSoup, Tag
-from curl_cffi.requests.errors import RequestsError as CurlRequestsError
 
-try:
-    from curl_cffi import requests as curl_requests
-except ImportError:
-    curl_requests = None
+try:  # pragma: no cover - optional dependency
+    from aiohttp import ClientError as AioHttpClientError
+except ImportError:  # pragma: no cover - aiohttp is optional
+    _AIOHTTP_CLIENT_ERRORS: tuple[type[BaseException], ...] = ()
+else:  # pragma: no cover - exercised only when aiohttp is installed
+    _AIOHTTP_CLIENT_ERRORS = (AioHttpClientError,)
+
+_ICIMS_PAGINATION_ERRORS: tuple[type[BaseException], ...] = (
+    asyncio.TimeoutError,
+    httpx.RequestError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+) + _AIOHTTP_CLIENT_ERRORS
 
 
 _ROW_RE = re.compile(
@@ -22,6 +33,7 @@ _ROW_RE = re.compile(
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 logger = logging.getLogger(__name__)
+HTML_PARSER = "html.parser"
 
 
 class ICIMSAdapter(BaseAdapter):
@@ -69,7 +81,7 @@ class ICIMSAdapter(BaseAdapter):
             return inline_records
 
         endpoint = self._discover_ajax_endpoint(url, html)
-        if not endpoint or curl_requests is None:
+        if not endpoint:
             return []
 
         records: list[dict] = []
@@ -77,17 +89,31 @@ class ICIMSAdapter(BaseAdapter):
         for offset in range(0, 1000, 100):
             page_url = self._paginate_endpoint(endpoint, offset)
             try:
-                response = await asyncio.to_thread(
-                    curl_requests.get,
+                response_text = await self._request_text(
                     page_url,
-                    impersonate="chrome110",
-                    timeout=15,
+                    timeout_seconds=15,
                 )
-            except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError):
+            except _ICIMS_PAGINATION_ERRORS as exc:
+                logger.warning(
+                    "Failed to fetch iCIMS pagination URL %s (offset=%s, endpoint=%s): %s",
+                    page_url,
+                    offset,
+                    endpoint,
+                    exc,
+                )
                 break
-            if response.status_code != 200 or not response.text:
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected error fetching iCIMS pagination URL %s (offset=%s, endpoint=%s): %s",
+                    page_url,
+                    offset,
+                    endpoint,
+                    exc,
+                )
                 break
-            batch = self._parse_ajax_rows(response.text, base_url)
+            if not response_text:
+                break
+            batch = self._parse_ajax_rows(response_text, base_url)
             if not batch:
                 break
             for record in batch:
@@ -112,7 +138,7 @@ class ICIMSAdapter(BaseAdapter):
         return None
 
     def _discover_embedded_board_url(self, url: str, html: str) -> str | None:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, HTML_PARSER)
         iframe = soup.select_one("iframe[src*='icims.com/jobs/search'], iframe[src*='in_iframe=1']")
         if iframe is None:
             return None
@@ -122,7 +148,7 @@ class ICIMSAdapter(BaseAdapter):
         return urljoin(url, src)
 
     async def _follow_embedded_content_url(self, url: str, html: str) -> str:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, HTML_PARSER)
         iframe = soup.select_one("iframe[src*='in_iframe=1'], iframe[src*='icims.com/jobs/']")
         if iframe is None:
             return html
@@ -133,21 +159,15 @@ class ICIMSAdapter(BaseAdapter):
         return await self._fetch_embedded_content(url=embedded_url, fallback_html=html)
 
     async def _fetch_embedded_content(self, *, url: str, fallback_html: str) -> str:
-        if curl_requests is None:
-            return fallback_html
         try:
-            response = await asyncio.to_thread(
-                curl_requests.get,
+            response_text = await self._request_text(
                 url,
-                impersonate="chrome110",
-                timeout=15,
+                timeout_seconds=15,
             )
-        except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError):
+        except Exception:
             logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
             return fallback_html
-        if response.status_code == 200 and response.text:
-            return response.text
-        return fallback_html
+        return response_text or fallback_html
 
     def _paginate_endpoint(self, endpoint: str, offset: int) -> str:
         page_url = re.sub(r"offset=\d+", f"offset={offset}", endpoint) if "offset=" in endpoint else f"{endpoint}{'&' if '?' in endpoint else '?'}offset={offset}"
@@ -156,7 +176,7 @@ class ICIMSAdapter(BaseAdapter):
         return page_url
 
     def _extract_from_listing_html(self, html: str, base_url: str) -> list[dict]:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, HTML_PARSER)
         rows = soup.select(
             ".iCIMS_JobsTable > .row, .iCIMS_JobsTable tr, .iCIMS_Job, [class*='job-card'], [class*='job-listing'], [class*='search-result'], .listitem"
         )
@@ -174,7 +194,7 @@ class ICIMSAdapter(BaseAdapter):
         return records
 
     def _parse_ajax_rows(self, html_fragment: str, base_url: str) -> list[dict]:
-        soup = BeautifulSoup(html_fragment, "html.parser")
+        soup = BeautifulSoup(html_fragment, HTML_PARSER)
         jobs = self._extract_from_listing_html(str(soup), base_url)
         if jobs:
             return jobs
@@ -260,7 +280,7 @@ class ICIMSAdapter(BaseAdapter):
         return record
 
     def _extract_detail(self, url: str, html: str) -> dict | None:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, HTML_PARSER)
         title = soup.select_one("h1, .iCIMS_JobHeader h1, [class*='jobtitle'], [class*='JobTitle']")
         if title is None:
             return None

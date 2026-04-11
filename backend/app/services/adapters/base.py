@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
+from urllib.parse import urlparse
+
+from app.services.acquisition.http_client import HttpFetchResult, request_result
+from app.services.acquisition.pacing import wait_for_host_slot
+from app.services.config.crawl_runtime import ACQUIRE_HOST_MIN_INTERVAL_MS
 
 
 @dataclass
@@ -41,3 +47,75 @@ class BaseAdapter(ABC):
         tailor its output (e.g. listing vs detail fields).
         """
         ...
+
+    async def _request_result(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        json_body: Any | None = None,
+        data: Any | None = None,
+        proxy: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> HttpFetchResult:
+        hostname = str(urlparse(str(url or "")).hostname or "").strip().lower()
+        if hostname:
+            await wait_for_host_slot(hostname, ACQUIRE_HOST_MIN_INTERVAL_MS)
+        return await request_result(
+            url,
+            proxy=proxy,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def _request_json(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        json_body: Any | None = None,
+        data: Any | None = None,
+        proxy: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict | list | None:
+        response = await self._request_result(
+            url,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            proxy=proxy,
+            timeout_seconds=timeout_seconds,
+        )
+        if response.status_code != 200:
+            return None
+        return response.json_data
+
+    async def _request_text(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        json_body: Any | None = None,
+        data: Any | None = None,
+        proxy: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> str:
+        response = await self._request_result(
+            url,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            proxy=proxy,
+            timeout_seconds=timeout_seconds,
+        )
+        if response.status_code != 200:
+            return ""
+        return str(response.text or "")

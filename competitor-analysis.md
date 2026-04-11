@@ -1,80 +1,297 @@
-This audit ignores hype and focuses strictly on architectural mechanics. We evaluate whether a competitor's pattern solves a real, measurable flaw in CrawlerAI (such as event-loop starvation, transaction tearing, zombie browsers, or IP-session mismatch) without violating CrawlerAI's invariant first-match-wins extraction hierarchy.
-Section 1: Per-Competitor Findings
-1. unclecode/crawl4ai
-Pattern	CrawlerAI Equivalent	Gap / Failure Mode Prevented	Adoptable?	Complexity
-3-tier browser pool & janitor	Basic dict pool (_BROWSER_POOL_STATE) with optional psutil kill	Prevents zombie browser OOMs and cold-start latency spikes.	Yes	Medium
-8 Pipeline Hooks	_process_single_url (monolithic 140-line procedural function)	Prevents God-functions; allows clean injection of pre/post logic.	Yes	High
-Prefetch mode	None (Always runs full extraction pipeline)	Wastes CPU/DOM parsing on pure discovery/link-harvesting passes.	Yes	Low
-State/Checkpoint hooks	Separate DB commits for records and run summary	Prevents transaction tearing and phantom progress on worker crash.	Yes	Medium
-Memory-adaptive crawling	Hardcoded MemoryError if < 500MB available	Prevents hard OOM crashes by backing off concurrency dynamically.	Yes	Low
-Key Takeaway: crawl4ai treats crawling as a distributed systems problem, whereas CrawlerAI treats it as a procedural script. Crawl4ai’s memory-adaptive concurrency and transactional checkpointing directly solve CrawlerAI's most critical vulnerabilities (OOM crashes and transaction tearing during batch resumes).
-2. D4Vinci/Scrapling
-Pattern	CrawlerAI Equivalent	Gap / Failure Mode Prevented	Adoptable?	Complexity
-3 Fetcher Tiers (inc. Camoufox)	2 Tiers (curl_cffi → Playwright)	Prevents advanced TLS/JS fingerprint blocking (Playwright is easily fingerprinted).	Yes	Medium
-Tab pool limits per browser	Global semaphore, but no strict per-browser context limits	Prevents single Playwright instances from ballooning in RAM.	Yes	Low
-Strict Session Classes	Procedural passing of proxy and cookie dicts	Prevents IP-to-Session mismatch (using cookie A with proxy B gets you blocked).	Yes	Medium
-msgspec validation	Pydantic at the edges, loose dicts internally	Prevents malformed kwargs crashing the fetcher deep in the async stack.	Yes	Low
-Key Takeaway: Scrapling tightly couples Session state (Cookies + Headers) to a specific Proxy IP via isolated Session classes. CrawlerAI passes proxies and cookies as loose procedural arguments, practically guaranteeing that a retry will route a logged-in cookie session through a different proxy IP, instantly triggering fraud-detection blocks on modern storefronts.
-3. apify/crawlee-python
-Pattern	CrawlerAI Equivalent	Gap / Failure Mode Prevented	Adoptable?	Complexity
-RenderingTypePredictor	host_memory.py TTL cache	Prevents latency; learns over time if a CSS selector requires JS rendering.	Yes	High
-SessionPool (Proxy-Affinity)	ProxyRotator (Round-robin with backoff)	Prevents burning good proxies by tying a healthy proxy to a healthy cookie jar.	Yes	Medium
-Browserforge Fingerprints	Hardcoded _STEALTH_USER_AGENT	Prevents static UA/Viewport fingerprint clustering by anti-bot systems.	Yes	Low
-OpenTelemetry Tracing	Custom JSON source_trace column	Prevents APM vendor lock-in; allows tracing bottleneck latencies visually.	Yes	Medium
-Autoscaling Concurrency	Fixed URL_BATCH_CONCURRENCY	Prevents CPU/Event-loop starvation during heavy DOM parsing.	Yes	Medium
-Key Takeaway: Crawlee’s SessionPool combined with dynamic fingerprint generation exposes CrawlerAI's anti-bot strategy as incredibly naive. CrawlerAI relies on a single hardcoded Chrome User-Agent string across thousands of requests, which Akamai/Datadome will cluster and shadow-ban immediately.
-4. joaobenedetmachado/scrapit
-Pattern	CrawlerAI Equivalent	Gap / Failure Mode Prevented	Adoptable?	Complexity
-YAML-driven config	DB/JSON CrawlRun.settings	N/A - YAML is not superior for a SaaS backend.	No	N/A
-Middleware chain	Monolithic acquirer.py waterfall	Allows plugging in new bypass networks (e.g., BrightData) without rewriting core.	Yes	Medium
-Key Takeaway: Scrapit’s middleware chain highlights how tightly coupled CrawlerAI’s acquirer.py is to curl/Playwright. If CrawlerAI needs to route a request to a third-party scraping API (like Zyte or BrightData), the current monolithic waterfall requires a massive refactor.
-5. boxed-dev/trace-trace-scraper
-Pattern	CrawlerAI Equivalent	Gap / Failure Mode Prevented	Adoptable?	Complexity
-HTTP -> Browser escalation	_needs_browser logic	N/A - CrawlerAI's escalation logic is already superior and more granular.	No	N/A
-Key Takeaway: CrawlerAI actually beats this competitor. CrawlerAI's extraction of __NEXT_DATA__ and JSON-LD to bypass HTML rendering is highly optimized compared to generic scrapers.
-Section 2: Cross-Competitor Gap Analysis
-Gap 1: Disconnected Session, Proxy, and Fingerprint State
-The Gap: CrawlerAI treats proxies, cookies, and User-Agents as independent variables. If a request fails, it grabs the next proxy from the pool, but uses the same cookies and the same static _STEALTH_USER_AGENT. Anti-bot systems flag this immediately (Session hijacking/IP hopping).
-Who solved it: Scrapling (Session classes) and Crawlee (SessionPool & Browserforge).
-Best Approach for CrawlerAI: Adopt a SessionContext object that rigidly binds a specific Proxy IP, a dynamically generated Fingerprint, and a Cookie Jar. If the proxy dies, the session dies.
-Gap 2: Brittle, OOM-Prone Resource Management
-The Gap: CrawlerAI uses fixed concurrency (URL_BATCH_CONCURRENCY). If a batch hits 8 massive React sites simultaneously, BeautifulSoup blocks the main thread, Playwright instances bloat, and the worker OOMs or the event-loop starves.
-Who solved it: Crawl4ai (Memory-adaptive crawling) and Crawlee (Autoscaling concurrency).
-Best Approach for CrawlerAI: Replace fixed semaphores with a memory-adaptive token bucket. If psutil.virtual_memory().available drops below a threshold, pause taking new URLs off the Celery queue.
-Gap 3: Monolithic Orchestration Code
-The Gap: pipeline/core.py::_process_single_url is a 150+ line God-function intertwining I/O, CPU work, and DB transactions. This causes transaction tearing on worker crashes.
-Who solved it: Crawl4ai (Event Hooks) and Scrapit (Middleware).
-Best Approach for CrawlerAI: Refactor the pipeline into an explicit State Machine / Hook architecture, allowing DB commits to wrap tightly around state transitions rather than sprawling across the function.
-Section 3: Prioritized Integration Roadmap
-1. Proxy-Session-Fingerprint Affinity (Source: Crawlee / Scrapling)
-Problem: CrawlerAI's static UA and decoupled proxy/cookie logic triggers Akamai/Datadome blocks.
-Affected Files: acquirer.py, http_client.py, browser_client.py, cookie_store.py.
-Adoption Approach: Introduce a SessionPool. When a domain is crawled, lease a SessionContext containing a bound Proxy, a generated fingerprint (via browserforge), and isolated cookies. Pass this context into curl_cffi and Playwright instead of passing raw kwargs.
-Acceptance Criteria: A single HTTP session maintains the exact same IP, UA, and TLS fingerprint across its lifespan.
-Risk: Medium. Requires modifying the AcquisitionRequest interface.
-2. Memory-Adaptive Concurrency Backoff (Source: Crawl4ai)
-Problem: Fixed concurrency leads to event-loop starvation and OOM kills on heavy DOMs.
-Affected Files: _batch_runtime.py, tasks.py.
-Adoption Approach: Implement a dynamic semaphore. Before pulling the next URL from the batch list, check system memory. If pressure is high, await asyncio.sleep until memory frees up (i.e., previous DOMs are garbage collected).
-Acceptance Criteria: A batch of 500 massive SPA websites completes slower, but without crashing the Celery worker.
-Risk: Low. Strictly an additive control mechanism.
-3. Transactional Checkpointing (Source: Crawl4ai)
-Problem: persist_patch (batch progress) and Session.commit() (record write) are separate, risking phantom progress if the worker dies mid-execution.
-Affected Files: _batch_runtime.py, _batch_progress.py.
-Adoption Approach: Combine record insertion and the batch progress update into a single SQLAlchemy unit-of-work transaction per URL.
-Acceptance Criteria: Hard-killing a Celery worker mid-batch and resuming results in exactly 0 duplicate records and perfectly synced URL counts.
-Risk: High. Requires careful refactoring of the DB session lifecycle.
-4. Hook-based Pipeline Refactor (Source: Crawl4ai)
-Problem: _process_single_url is unmaintainable and impossible to unit test effectively.
-Affected Files: pipeline/core.py.
-Adoption Approach: Convert the pipeline to a runner that emits events (pre_acquire, post_acquire, pre_extract, post_extract).
-Acceptance Criteria: _process_single_url is reduced to a declarative runner under 40 lines; all logic lives in isolated hook handlers.
-Risk: High. Touches the core data flow.
-Section 4: Explicit Reject List
-Adaptive Element Relocation / Selector CRUD (Scrapling): Rejected. Violates CrawlerAI's invariant against storing and mutating CSS selectors at runtime.
-YAML-driven Configurations (Scrapit): Rejected. CrawlerAI is designed as an API-first SaaS; YAML files are a regression for dynamic multi-tenant orchestration.
-Streaming Parsers (async for item in spider.stream()): Rejected. CrawlerAI's arbitration engine requires all candidate sources to be loaded in memory to rank them via FieldDecisionEngine. Streaming breaks first-match-wins arbitration.
-LLM-First Extraction: Rejected. Violates the core deterministic constraint of the system.
-Section 5: Final Verdict
-CrawlerAI's extraction arbitration architecture (FieldDecisionEngine, JSON-LD parsing, __NEXT_DATA__ interception) is fundamentally superior to almost all competitors audited here. By prioritizing structured payload interception over raw DOM parsing, it avoids the fragility that plagues standard scrapers.
-However, its orchestration and resource management layer is archaic and fragile. It treats a highly concurrent distributed systems problem like a linear Python script. Competitors like crawl4ai and crawlee have correctly recognized that modern crawling requires dynamic memory backoff, strict Session-Proxy-Fingerprint affinity, and transactional state management. If CrawlerAI adopts these specific operational patterns, it will transform from a highly accurate but unstable script into an enterprise-grade extraction engine.
+# Competitor Analysis: Operational Patterns Worth Stealing
+
+Last re-validated: 2026-04-11
+
+This audit focuses on operational mechanics, not marketing. The question is not whether another crawler is "better"; it is whether a pattern from that project closes a concrete failure mode in Crawlwise without breaking Crawlwise's deterministic extraction model and first-match-wins arbitration.
+
+## Method
+
+- Prefer repository docs or project docs over secondary summaries.
+- Downgrade claims when the repo exposes a feature in docs but not as a clearly reusable architecture primitive.
+- Separate `missing`, `partially implemented`, and `already landed` in Crawlwise. The earlier draft overstated several gaps that are already partially addressed in this repo.
+
+## Current-State Correction For Crawlwise
+
+The largest correction is that Crawlwise is no longer missing all of the operational patterns called out in the original draft.
+
+- Session affinity is partially implemented. `SessionContext` already binds proxy, fingerprint, cookies, and curl impersonation into one object in [backend/app/services/acquisition/session_context.py](backend/app/services/acquisition/session_context.py), and `acquirer.py` creates a fresh context per proxy attempt.
+- Memory-adaptive concurrency is partially implemented. `_batch_runtime.py` now uses `MemoryAdaptiveSemaphore` from [backend/app/services/resource_monitor.py](backend/app/services/resource_monitor.py) instead of a fixed plain semaphore.
+- Hooked pipeline orchestration is already landed. `_process_single_url` is now backed by `PipelineRunner` plus explicit stages in [backend/app/services/pipeline/runner.py](backend/app/services/pipeline/runner.py) and [backend/app/services/pipeline/core.py](backend/app/services/pipeline/core.py).
+- Transactional checkpointing is still incomplete. Record writes and batch-summary updates still persist through separate commit paths in [backend/app/services/_batch_progress.py](backend/app/services/_batch_progress.py) and [backend/app/services/_batch_runtime.py](backend/app/services/_batch_runtime.py).
+- Cookie persistence is still domain-scoped rather than session-scoped. `load_cookies_for_http()` and `save_cookies_payload()` in [backend/app/services/acquisition/cookie_store.py](backend/app/services/acquisition/cookie_store.py) mean a new proxy attempt can still inherit cookies from a previous proxy for the same domain.
+
+Bottom line: the real gap is no longer "build these primitives from scratch." It is "finish the lifecycle boundaries so the existing primitives are enforced consistently."
+
+## Per-Project Findings
+
+### 1. `unclecode/crawl4ai`
+
+Evidence:
+
+- Browser config docs expose isolated contexts, persistent contexts, random user-agent mode, text/light modes, and other runtime knobs: <https://docs.crawl4ai.com/core/browser-crawler-config/>
+- Hook docs expose lifecycle hooks such as `on_page_context_created`: <https://docs.crawl4ai.com/advanced/hooks-auth/>
+- Multi-URL docs emphasize dispatcher-based orchestration rather than one giant per-URL function: <https://docs.crawl4ai.com/advanced/multi-url-crawling/>
+
+What is real:
+
+| Pattern | Confidence | Why it matters to Crawlwise | Adoptable? |
+| --- | --- | --- | --- |
+| Hooked crawler lifecycle | High | Confirms the value of explicit stage boundaries for auth, instrumentation, and custom recovery. | Already partially landed |
+| Browser/runtime tuning knobs | High | Supports cheaper non-rendering and light-rendering paths for discovery workloads. | Yes |
+| Dispatcher-based multi-URL orchestration | Medium | Reinforces keeping queueing/backpressure outside a monolithic URL processor. | Yes |
+| Crash-safe state/checkpoint lifecycle | Medium | Docs suggest resumable orchestration, but the repo docs are clearer on hooks than on exact transactional guarantees. | Yes, but do not overspecify |
+
+Correction versus the earlier draft:
+
+- "3-tier browser pool and janitor" was directionally plausible but not well-supported by the public docs I checked.
+- "Memory-adaptive crawling" should be softened to "resource-aware orchestration and runtime controls" unless verified from code/docs more deeply.
+
+Key takeaway:
+
+Crawl4AI is still the best evidence for keeping orchestration explicit and configurable, but it is weaker evidence than the original draft implied for very specific claims like janitor tiers or exact checkpoint semantics.
+
+### 2. `D4Vinci/Scrapling`
+
+Evidence:
+
+- Stealth fetcher docs explicitly call out Camoufox, anti-bot bypass, resource controls, and session management: <https://scrapling.readthedocs.io/en/v0.3.2/fetching/stealthy/>
+- Repo docs also emphasize fetchers, proxy rotation, stealth randomization, hooks, and plugins: <https://github.com/D4Vinci/Scrapling>
+
+What is real:
+
+| Pattern | Confidence | Why it matters to Crawlwise | Adoptable? |
+| --- | --- | --- | --- |
+| Stealth fetcher tier using Camoufox | High | Gives a third escalation tier beyond curl impersonation and vanilla Playwright. | Yes |
+| Session-management primitives | Medium | Stronger lifecycle handling for repeated fetches and browser automation. | Yes |
+| Resource-control knobs at fetch time | High | Lets browser paths disable expensive assets and reduce RAM burn. | Yes |
+| Hook/plugin orientation | Medium | Makes anti-bot integrations less invasive than editing a monolithic waterfall. | Yes |
+
+Correction versus the earlier draft:
+
+- "Strict Session Classes that rigidly bind cookies to a proxy IP" is too strong from the docs alone.
+- The robust claim is that Scrapling has explicit session-management and stealth-fetcher primitives, not that it guarantees proxy-cookie affinity by default.
+
+Key takeaway:
+
+Scrapling is best used as evidence for a stronger anti-bot escalation tier and for fetch-time resource controls, not as definitive proof of perfect proxy-session affinity.
+
+### 3. `apify/crawlee-python`
+
+Evidence:
+
+- Product docs explicitly advertise automatic parallel crawling based on available system resources and integrated proxy rotation plus session management: <https://crawlee.dev/python/docs/0.6/introduction/>
+- Proxy docs explicitly state that using the same `session_id` guarantees the same proxy URL: <https://crawlee.dev/python/api/0.6/class/ProxyInfo>
+- Repo: <https://github.com/apify/crawlee-python>
+
+What is real:
+
+| Pattern | Confidence | Why it matters to Crawlwise | Adoptable? |
+| --- | --- | --- | --- |
+| Session-aware proxy affinity | High | Strong direct evidence for binding retry/session identity to a stable proxy route. | Yes |
+| Autoscaled concurrency | High | Best external validation for replacing fixed throughput assumptions with pressure-aware scheduling. | Already partially landed |
+| Unified HTTP/browser crawler model | High | Matches Crawlwise's need to escalate selectively instead of treating every page as browser-first. | Already conceptually aligned |
+| Built-in tracing/observability orientation | Medium | Supports making stage latency and bottlenecks first-class, not buried in JSON blobs. | Yes |
+
+Correction versus the earlier draft:
+
+- BrowserForge is not a core `crawlee-python` primitive in the same way the original draft implied. The accurate claim is that the Apify ecosystem strongly values session identity and fingerprint realism, and Crawlwise already uses `browserforge` directly.
+- "RenderingTypePredictor" may exist in Crawlee concepts, but I would not anchor roadmap decisions to it without a tighter source than the pages reviewed here.
+
+Key takeaway:
+
+Crawlee remains the strongest source for two high-confidence ideas: session-linked proxy affinity and autoscaled concurrency. Those are still the most relevant external patterns for Crawlwise.
+
+### 4. `joaobenedetmachado/scrapit`
+
+Evidence:
+
+- Repo README describes it as a modular, YAML-driven scraper framework with five backends, hook system, plugin system, proxy rotation, stealth mode, and async queue support: <https://github.com/joaobenedetmachado/scrapit>
+
+What is real:
+
+| Pattern | Confidence | Why it matters to Crawlwise | Adoptable? |
+| --- | --- | --- | --- |
+| Hook system | High | Cleaner extension point for new bypass providers and storage side-effects. | Partially aligned with current runner hooks |
+| Plugin system | Medium | Better long-term seam for Bright Data/Zyte style integrations. | Yes |
+| Async queue / daemon orientation | Medium | Supports clearer separation between orchestration and scraping logic. | Yes |
+| YAML directives | High | Useful for CLI/local scraping, but not a clear improvement for a multi-tenant API backend. | No |
+
+Correction versus the earlier draft:
+
+- "Middleware chain" was too specific. The public evidence is stronger for hooks/plugins than for an explicit middleware pipeline.
+
+Key takeaway:
+
+Scrapit is useful as evidence for extension seams, not as evidence for a better core extraction model.
+
+### 5. `boxed-dev/trace-trace-scraper`
+
+Evidence quality:
+
+- Low. I was not able to validate enough public documentation to keep this project as a strong comparator.
+
+Decision:
+
+- Remove it from the decision-critical argument.
+- If it is kept at all, keep it in a low-confidence appendix rather than in the main roadmap.
+
+## Additional Repos Worth Mining
+
+These are not full-framework replacements, but they expose reusable components or design directions that map well to Crawlwise's current architecture.
+
+| Repo / Project | Why it is relevant |
+| --- | --- |
+| `daijro/browserforge` | Crawlwise already imports `browserforge`; this should be treated as a first-class subsystem, not a side utility. It strengthens the case for persistent per-session fingerprint identity rather than per-request randomization. |
+| `apify/browser-pool` | JavaScript project, but conceptually strong for browser lifecycle hygiene, warm browser reuse, and context isolation. Useful as architecture inspiration even if not directly adoptable. |
+| `scrapy-zyte-api` | Useful reference for vendor-routed escalation and anti-bot outsourcing, but likely a bad default dependency because it introduces vendor lock-in. |
+| `scrapy-playwright` | Useful for studying browser-context lifecycle patterns and request-to-context mapping, especially if Crawlwise later needs richer browser pool semantics. |
+
+## Cross-Project Gap Analysis
+
+### Gap 1: Session Context Exists, But Persistence Boundaries Are Still Leaky
+
+Current state:
+
+- Crawlwise now creates a fresh `SessionContext` per proxy attempt.
+- The remaining leak is that cookies are still persisted and reloaded at domain scope, so a later proxy attempt can inherit cookies created under a different proxy identity.
+
+Who validates this concern:
+
+- Crawlee validates stable proxy/session identity.
+- Scrapling validates the value of explicit session-management primitives.
+- BrowserForge validates treating fingerprint identity as a durable session property.
+
+Best next step:
+
+- Move cookie persistence from `domain -> cookie jar` to `session key -> cookie jar`, where the session key includes proxy identity plus fingerprint identity.
+- If a proxy fails, invalidate the persistent session bucket as well, not just the in-memory `SessionContext`.
+
+### Gap 2: Memory Backoff Exists, But It Is Still Too Narrow
+
+Current state:
+
+- Crawlwise already has a pressure-aware semaphore.
+- The remaining problem is that memory pressure is treated mostly as an acquisition throttle, not as a full scheduler signal that can affect browser reuse, DOM-heavy parsing admission, and long-lived traversal work.
+
+Who validates this concern:
+
+- Crawlee docs explicitly support resource-based parallelism.
+- Crawl4AI validates keeping crawler runtime knobs explicit and configurable.
+- Scrapling validates fetch-time resource controls like disabling expensive assets.
+
+Best next step:
+
+- Expand the controller from `memory-only admission` to `memory + active browser count + queue latency + parser backlog`.
+- Add a degraded mode that forces lighter acquisition settings before total throttling.
+
+### Gap 3: Pipeline Refactor Landed, But Checkpointing Is Still Not Atomic
+
+Current state:
+
+- The old "God function" critique is outdated. The runner/stage model exists now.
+- The real remaining issue is transaction scope. Record persistence and run-summary progress updates still commit through separate paths.
+
+Who validates this concern:
+
+- Crawl4AI validates lifecycle hooks and resumable orchestration.
+- Scrapit validates explicit hook seams for lifecycle side-effects.
+
+Best next step:
+
+- Co-locate `record insert/update`, `url verdict`, and `batch progress patch` in one SQLAlchemy unit-of-work per processed URL.
+- Treat observability writes and user-facing logs as best-effort side channels, not part of the correctness transaction.
+
+## Revised Priority Roadmap
+
+### 1. Finish Session-Proxy-Fingerprint Affinity
+
+Why this stays first:
+
+- It is the highest-value fix for anti-bot stability.
+- The repo already has the right primitive; the missing work is making persistence obey it.
+
+Affected areas:
+
+- [backend/app/services/acquisition/session_context.py](backend/app/services/acquisition/session_context.py)
+- [backend/app/services/acquisition/cookie_store.py](backend/app/services/acquisition/cookie_store.py)
+- [backend/app/services/acquisition/http_client.py](backend/app/services/acquisition/http_client.py)
+- [backend/app/services/acquisition/browser_client.py](backend/app/services/acquisition/browser_client.py)
+
+Acceptance criterion:
+
+- A retried session reuses the same proxy, UA, impersonation profile, and cookie jar until the session is explicitly invalidated.
+
+### 2. Make URL-Level Persistence Atomic
+
+Why this moved above further pipeline refactoring:
+
+- The stage refactor already exists.
+- Data correctness is now the bigger risk than code shape.
+
+Affected areas:
+
+- [backend/app/services/_batch_runtime.py](backend/app/services/_batch_runtime.py)
+- [backend/app/services/_batch_progress.py](backend/app/services/_batch_progress.py)
+- Any record-write path inside [backend/app/services/pipeline/core.py](backend/app/services/pipeline/core.py)
+
+Acceptance criterion:
+
+- Killing a worker mid-batch cannot produce phantom progress or duplicate records on resume.
+
+### 3. Upgrade The Resource Controller From Guardrail To Scheduler
+
+Why this is third:
+
+- The primitive exists, but it is still a narrow throttle.
+
+Affected areas:
+
+- [backend/app/services/resource_monitor.py](backend/app/services/resource_monitor.py)
+- [backend/app/services/_batch_runtime.py](backend/app/services/_batch_runtime.py)
+- [backend/app/services/acquisition/browser_client.py](backend/app/services/acquisition/browser_client.py)
+
+Acceptance criterion:
+
+- Large SPA-heavy batches slow down predictably under pressure instead of crashing, timing out chaotically, or over-spawning browsers.
+
+### 4. Exploit Existing Runner Hooks More Aggressively
+
+Why this is no longer a rewrite item:
+
+- The runner already exists.
+- The remaining work is to use hooks for checkpointing, tracing, retries, and stage-level policy, not to re-architect again.
+
+Affected areas:
+
+- [backend/app/services/pipeline/runner.py](backend/app/services/pipeline/runner.py)
+- [backend/app/services/pipeline/stages.py](backend/app/services/pipeline/stages.py)
+- [backend/app/services/pipeline/core.py](backend/app/services/pipeline/core.py)
+
+Acceptance criterion:
+
+- Cross-cutting behaviors such as tracing, per-stage timing, and checkpoint callbacks are injected through hooks rather than reintroduced into stage bodies.
+
+## Explicit Reject List
+
+- YAML-first runtime configuration: rejected for the production backend. Good for local directives, not for multi-tenant orchestration.
+- Selector mutation / adaptive selector CRUD: rejected. Conflicts with deterministic extraction and governance of extraction rules.
+- LLM-first extraction: rejected. Violates the system's deterministic baseline.
+- Vendor-first scraping APIs as the default path: rejected. Keep them as optional escalation providers only.
+
+## Final Verdict
+
+Crawlwise's extraction strategy is still differentiated. Structured payload interception, arbitration, and field-quality logic remain stronger than what most general-purpose crawler frameworks optimize for.
+
+The original draft was directionally right about the operational weak spots, but it was outdated in one important way: this repo has already started solving them. The highest-leverage work now is not a broad architectural rewrite. It is closing the enforcement gaps around session-scoped persistence, atomic per-URL commits, and resource-aware scheduling.
+
+## Sources
+
+- Crawl4AI browser config: <https://docs.crawl4ai.com/core/browser-crawler-config/>
+- Crawl4AI hooks/auth: <https://docs.crawl4ai.com/advanced/hooks-auth/>
+- Crawl4AI multi-URL crawling: <https://docs.crawl4ai.com/advanced/multi-url-crawling/>
+- Scrapling docs: <https://scrapling.readthedocs.io/en/v0.3.2/fetching/stealthy/>
+- Scrapling repo: <https://github.com/D4Vinci/Scrapling>
+- Crawlee intro: <https://crawlee.dev/python/docs/0.6/introduction/>
+- Crawlee proxy/session docs: <https://crawlee.dev/python/api/0.6/class/ProxyInfo>
+- Crawlee repo: <https://github.com/apify/crawlee-python>
+- Scrapit repo: <https://github.com/joaobenedetmachado/scrapit>

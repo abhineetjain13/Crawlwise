@@ -38,8 +38,8 @@ async def records_list(
 ) -> PaginatedResponse[CrawlRecordResponse]:
     try:
         await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
 
     rows, total = await get_run_records(session, run_id, page, limit)
     return PaginatedResponse(
@@ -80,8 +80,8 @@ async def export_json(
 ) -> StreamingResponse:
     try:
         await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
     return await build_json_export_response(session, run_id=run_id)
 
 
@@ -93,8 +93,8 @@ async def export_csv(
 ) -> StreamingResponse:
     try:
         await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
     return await build_csv_export_response(session, run_id=run_id)
 
 
@@ -106,8 +106,8 @@ async def export_tables_csv(
 ) -> StreamingResponse:
     try:
         await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
     return await build_tables_csv_export_response(session, run_id=run_id)
 
 
@@ -119,8 +119,8 @@ async def export_markdown(
 ) -> StreamingResponse:
     try:
         await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
     return await build_markdown_export_response(session, run_id=run_id)
 
 
@@ -134,8 +134,8 @@ async def export_artifacts_json(
 ) -> StreamingResponse:
     try:
         await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
     return await build_artifacts_json_export_response(session, run_id=run_id)
 
 
@@ -147,6 +147,6 @@ async def export_discoverist(
 ) -> StreamingResponse:
     try:
         await require_accessible_run(session, run_id=run_id, user=current_user)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
     return await build_discoverist_export_response(session, run_id=run_id)

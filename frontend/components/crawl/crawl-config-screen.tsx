@@ -20,6 +20,7 @@ import {
   type CrawlTab,
   type FieldRow,
   ManualFieldEditor,
+  inferSurfaceFromUrl,
   type PendingDispatch,
   parseRequestedCategoryMode,
   parseRequestedCrawlTab,
@@ -73,7 +74,7 @@ export function CrawlConfigScreen({
   const bulkPrefillRouteSyncGuardRef = useRef(false);
 
   const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
-  const surface: CrawlSurface = crawlTab === "category" ? "ecommerce_listing" : "ecommerce_detail";
+  const surface: CrawlSurface = inferSurfaceFromUrl(targetUrl, crawlTab);
 
   useEffect(() => {
     if (bulkPrefillRouteSyncGuardRef.current) {
@@ -562,7 +563,14 @@ function isSurfaceMismatch(module: CrawlConfig["module"], surface: CrawlSurface)
 }
 
 function resolveDispatchSurface(config: CrawlConfig) {
-  return config.surface;
+  const primaryUrl = config.module === "category"
+    ? (config.mode === "bulk" ? parseLines(config.bulk_urls)[0] ?? "" : config.target_url)
+    : (
+        config.mode === "batch"
+          ? parseLines(config.bulk_urls)[0] ?? ""
+          : config.target_url
+      );
+  return inferSurfaceFromUrl(primaryUrl, config.module);
 }
 
 function inferRunTypeHint(config: CrawlConfig) {

@@ -183,34 +183,51 @@ export default function SelectorsPage() {
     setLoadError("");
     const failedFields: string[] = [];
     try {
-      for (const row of acceptedRows) {
-        const payload: SelectorCreatePayload = {
-          domain,
-          field_name: normalizeField(row.fieldName),
-          xpath: row.kind === "xpath" ? row.selectorValue.trim() : undefined,
-          css_selector: row.kind === "css_selector" ? row.selectorValue.trim() : undefined,
-          regex: row.kind === "regex" ? row.selectorValue.trim() : undefined,
-          sample_value: row.extractedValue.trim() || undefined,
-          source: row.source || selectorSource(row.kind),
-          status: "validated",
-          is_active: true,
-        };
-        try {
+      const settled = await Promise.allSettled(
+        acceptedRows.map(async (row) => {
+          const payload: SelectorCreatePayload = {
+            domain,
+            field_name: normalizeField(row.fieldName),
+            xpath: row.kind === "xpath" ? row.selectorValue.trim() : undefined,
+            css_selector: row.kind === "css_selector" ? row.selectorValue.trim() : undefined,
+            regex: row.kind === "regex" ? row.selectorValue.trim() : undefined,
+            sample_value: row.extractedValue.trim() || undefined,
+            source: row.source || selectorSource(row.kind),
+            status: "validated",
+            is_active: true,
+          };
           await api.createSelector(payload);
-          setRows((current) =>
-            current.map((entry) => (entry.key === row.key ? { ...entry, state: "saved" } : entry)),
-          );
-        } catch (error) {
-          failedFields.push(row.fieldName.trim() || row.key);
-          setRowMessages((current) => ({
-            ...current,
-            [row.key]: {
-              tone: "danger",
-              message: error instanceof Error ? error.message : "Unable to save selector.",
-            },
-          }));
+          return row;
+        }),
+      );
+      const savedKeys = new Set<string>();
+      const nextMessages: Record<string, RowMessage> = {};
+      settled.forEach((result, index) => {
+        const row = acceptedRows[index];
+        if (result.status === "fulfilled") {
+          savedKeys.add(row.key);
+          return;
         }
+        failedFields.push(row.fieldName.trim() || row.key);
+        nextMessages[row.key] = {
+          tone: "danger",
+          message: result.reason instanceof Error ? result.reason.message : "Unable to save selector.",
+        };
+      });
+      if (savedKeys.size) {
+        setRows((current) =>
+          current.map((entry) => (savedKeys.has(entry.key) ? { ...entry, state: "saved" } : entry)),
+        );
       }
+      setRowMessages((current) => {
+        const remainingMessages = Object.fromEntries(
+          Object.entries(current).filter(([key]) => !savedKeys.has(key)),
+        ) as Record<string, RowMessage>;
+        return {
+          ...remainingMessages,
+          ...nextMessages,
+        };
+      });
     } finally {
       setSavingAccepted(false);
     }
@@ -530,4 +547,3 @@ function createRowKey() {
 function normalizeField(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "_");
 }
-

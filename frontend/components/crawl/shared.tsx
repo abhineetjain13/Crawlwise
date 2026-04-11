@@ -71,6 +71,130 @@ export function normalizeField(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "_");
 }
 
+const JOB_HOST_HINTS = [
+  "workforcenow.adp.com",
+  "myjobs.adp.com",
+  "recruiting.adp.com",
+  "icims.com",
+  "ultipro.com",
+  "ukg.com",
+  "oraclecloud.com",
+  "myworkdayjobs.com",
+  "greenhouse.io",
+  "lever.co",
+  "paycomonline.net",
+  "saashr.com",
+  "jobvite.com",
+];
+
+const JOB_LISTING_PATH_HINTS = [
+  "/careers",
+  "/jobs",
+  "/search-jobs",
+  "/jobboard",
+  "/requisitions",
+];
+
+const JOB_DETAIL_PATH_HINTS = [
+  "/job/",
+  /\/jobs\/\d+(?:\/|$|\?)/,
+  /\/jobs\/[0-9a-f-]{8,}(?:\/|$|\?)/,
+  /\/jobs\/[^/?#]+\/job(?:\/|$|\?)/,
+  "/job-detail",
+  "/job-details",
+  "/jobdetail",
+  "/jobboard/jobdetails",
+  "/opportunitydetail",
+  "/requisition/",
+];
+
+const COMMERCE_LISTING_PATH_HINTS = [
+  "/category/",
+  "/categories/",
+  "/collections/",
+  "/shop/",
+  "/search",
+  "/c/",
+];
+
+const COMMERCE_DETAIL_PATH_HINTS = [
+  "/product/",
+  "/products/",
+  "/p/",
+  "/dp/",
+  "/item/",
+];
+
+function pathOrQueryMatches(value: string, hints: Array<string | RegExp>) {
+  return hints.some((hint) => (typeof hint === "string" ? value.includes(hint) : hint.test(value)));
+}
+
+function hostnameMatches(hostname: string, hints: string[]) {
+  return hints.some((hint) => hostname === hint || hostname.endsWith(`.${hint}`));
+}
+
+export function inferSurfaceFromUrl(
+  url: string,
+  module: CrawlTab,
+): CrawlSurface {
+  const fallback = module === "category" ? "ecommerce_listing" : "ecommerce_detail";
+  const raw = url.trim();
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(raw);
+    const path = parsed.pathname.toLowerCase();
+    const query = parsed.search.toLowerCase();
+    const combined = `${path}${query}`;
+    const hostname = parsed.hostname.toLowerCase();
+    const queryKeys = new Set(
+      Array.from(parsed.searchParams.keys()).map((key) => key.trim().toLowerCase()).filter(Boolean),
+    );
+
+    const jobHost = hostnameMatches(hostname, JOB_HOST_HINTS);
+    const jobDetail =
+      pathOrQueryMatches(combined, JOB_DETAIL_PATH_HINTS) ||
+      queryKeys.has("jobid") ||
+      queryKeys.has("job_id") ||
+      queryKeys.has("opportunityid") ||
+      queryKeys.has("showjob");
+    if (jobDetail) {
+      return "job_detail";
+    }
+
+    const jobListing =
+      pathOrQueryMatches(combined, JOB_LISTING_PATH_HINTS) ||
+      jobHost ||
+      queryKeys.has("keywords") ||
+      queryKeys.has("careersearch");
+    if (jobListing) {
+      return "job_listing";
+    }
+
+    const commerceDetail =
+      pathOrQueryMatches(combined, COMMERCE_DETAIL_PATH_HINTS) ||
+      queryKeys.has("sku") ||
+      queryKeys.has("variant");
+    if (commerceDetail) {
+      return "ecommerce_detail";
+    }
+
+    const commerceListing =
+      pathOrQueryMatches(combined, COMMERCE_LISTING_PATH_HINTS) ||
+      queryKeys.has("category") ||
+      queryKeys.has("q") ||
+      queryKeys.has("query");
+    if (commerceListing) {
+      return "ecommerce_listing";
+    }
+  } catch {
+    return fallback;
+  }
+
+  return fallback;
+}
+
 const SCHEMA_TYPE_FIELD_NAMES = new Set([
   "aggregaterating",
   "breadcrumblist",

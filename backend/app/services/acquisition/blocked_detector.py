@@ -65,7 +65,7 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html, "html.parser")
-            for tag in soup(["script", "style", "noscript", "svg"]):
+            for tag in list(soup.find_all(["script", "style", "noscript", "svg"])):
                 tag.decompose()
             visible = " ".join(soup.get_text(" ", strip=True).lower().split())
         except Exception:

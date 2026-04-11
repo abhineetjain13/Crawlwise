@@ -105,9 +105,24 @@ _LISTING_VARIANT_PROMPT_RE = re.compile(
     r"style|styles|fit|fits|waist|length|width)\b",
     re.IGNORECASE,
 )
+_JOB_SURFACE_COMMERCE_FIELDS = (
+    "price",
+    "sale_price",
+    "original_price",
+    "currency",
+    "image_url",
+    "additional_images",
+    "sku",
+    "part_number",
+    "brand",
+    "availability",
+    "rating",
+    "review_count",
+)
 
 
-# LISTING_PAGE_ALLOWED_FIELDS was removed because runtime enforcement only drops DETAIL_ONLY_FIELDS.
+# Listing extraction still enforces the field contract for DOM card records by
+# stripping detail-only fields before persistence.
 def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
     """Filter listing page records to remove detail-only fields from DOM records.
 
@@ -118,8 +133,7 @@ def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list
 
     Returns filtered records.
 
-    Note: This function is kept for testing purposes. The actual contract enforcement
-    happens inline during DOM extraction in _extract_listing_records_single_page.
+    This helper remains part of the production listing extraction path.
     """
     if page_type != "listing":
         return records
@@ -218,51 +232,35 @@ def _extract_listing_records_single_page(
         surface=surface,
         page_url=page_url,
     )
-    should_run_expensive_fallbacks = (
-        len(json_ld_records) < MIN_VIABLE_RECORDS
-        and len(structured_records) < MIN_VIABLE_RECORDS
-    )
-    next_flight_records = (
-        _extract_from_next_flight_scripts(html, page_url)
-        if should_run_expensive_fallbacks
-        else []
-    )
-    inline_array_records = (
-        _extract_from_inline_object_arrays(html, surface, page_url)
-        if should_run_expensive_fallbacks
-        else []
-    )
     raw_record_sets = {
         "structured": structured_records,
-        "next_flight": next_flight_records,
-        "inline_array": inline_array_records,
+        "next_flight": [],
+        "inline_array": [],
         "json_ld": json_ld_records,
         "adapter": _adapter_candidate_records(adapter_records),
     }
-
-    cards, used_selector = _auto_detect_cards(soup, surface=surface)
-    dom_records: list[dict] = []
-    for card in cards[:max_records]:
-        record = _extract_from_card(card, target_fields, surface, page_url)
-        if record and _is_meaningful_listing_record(record, surface=surface):
-            record["_source"] = "listing_card"
-            if used_selector:
-                record["_selector"] = used_selector
-            dom_records.append(record)
-    dom_records = _enforce_listing_field_contract(
-        dom_records, "listing" if "listing" in str(surface or "").lower() else surface
-    )
-    raw_record_sets["dom"] = dom_records
-
-    normalized_record_sets = {
-        label: _normalize_record_set(
-            records,
-            surface=surface,
-            page_url=page_url,
-            target_fields=target_fields,
+    if _should_run_expensive_listing_fallbacks(
+        json_ld_records=json_ld_records,
+        structured_records=structured_records,
+    ):
+        raw_record_sets["next_flight"] = _extract_from_next_flight_scripts(html, page_url)
+        raw_record_sets["inline_array"] = _extract_from_inline_object_arrays(
+            html, surface, page_url
         )
-        for label, records in raw_record_sets.items()
-    }
+    raw_record_sets["dom"] = _extract_dom_listing_records(
+        soup,
+        surface=surface,
+        target_fields=target_fields,
+        page_url=page_url,
+        max_records=max_records,
+    )
+
+    normalized_record_sets = _normalize_listing_record_sets(
+        raw_record_sets,
+        surface=surface,
+        page_url=page_url,
+        target_fields=target_fields,
+    )
     primary_label, primary_records = choose_primary_record_set(
         normalized_record_sets,
         surface=surface,
@@ -277,6 +275,57 @@ def _extract_listing_records_single_page(
     ]
     merged_records = merge_record_sets_on_identity(primary_records, supplemental_sets)
     return _dedupe_listing_records(merged_records)[:max_records]
+
+
+def _should_run_expensive_listing_fallbacks(
+    *,
+    json_ld_records: list[dict],
+    structured_records: list[dict],
+) -> bool:
+    return (
+        len(json_ld_records) < MIN_VIABLE_RECORDS
+        and len(structured_records) < MIN_VIABLE_RECORDS
+    )
+
+
+def _extract_dom_listing_records(
+    soup: BeautifulSoup,
+    *,
+    surface: str,
+    target_fields: set[str],
+    page_url: str,
+    max_records: int,
+) -> list[dict]:
+    cards, used_selector = _auto_detect_cards(soup, surface=surface)
+    dom_records: list[dict] = []
+    for card in cards[:max_records]:
+        record = _extract_from_card(card, target_fields, surface, page_url)
+        if not record or not _is_meaningful_listing_record(record, surface=surface):
+            continue
+        record["_source"] = "listing_card"
+        if used_selector:
+            record["_selector"] = used_selector
+        dom_records.append(record)
+    page_type = "listing" if "listing" in str(surface or "").lower() else surface
+    return _enforce_listing_field_contract(dom_records, page_type)
+
+
+def _normalize_listing_record_sets(
+    raw_record_sets: dict[str, list[dict]],
+    *,
+    surface: str,
+    page_url: str,
+    target_fields: set[str],
+) -> dict[str, list[dict]]:
+    return {
+        label: _normalize_record_set(
+            records,
+            surface=surface,
+            page_url=page_url,
+            target_fields=target_fields,
+        )
+        for label, records in raw_record_sets.items()
+    }
 
 
 def _normalize_record_set(
@@ -1159,45 +1208,50 @@ def _apply_surface_record_contract(
     if not record:
         return record
 
-    is_job_surface = "job" in str(surface or "").lower()
-    if not is_job_surface:
+    if "job" not in str(surface or "").lower():
         return record
 
-    if (
-        record.get("price") not in _EMPTY_VALUES
-        and record.get("salary") in _EMPTY_VALUES
-    ):
-        record["salary"] = record.pop("price")
-    if record.get("title"):
-        normalized_title = _normalize_listing_title_text(record.get("title"))
-        if normalized_title:
-            record["title"] = normalized_title
-    if record.get("job_id") in _EMPTY_VALUES:
-        inferred_job_id = _extract_generic_job_identifier(raw_item or {})
-        if inferred_job_id:
-            record["job_id"] = inferred_job_id
-    if record.get("url") in _EMPTY_VALUES:
-        synthesized_url = _synthesize_job_detail_url(raw_item or {}, page_url=page_url)
-        if synthesized_url:
-            record["url"] = synthesized_url
-            record.setdefault("apply_url", synthesized_url)
-
-    for commerce_field in (
-        "price",
-        "sale_price",
-        "original_price",
-        "currency",
-        "image_url",
-        "additional_images",
-        "sku",
-        "part_number",
-        "brand",
-        "availability",
-        "rating",
-        "review_count",
-    ):
-        record.pop(commerce_field, None)
+    _promote_job_salary(record)
+    _normalize_job_title(record)
+    _fill_missing_job_identifier(record, raw_item or {})
+    _fill_missing_job_urls(record, raw_item or {}, page_url=page_url)
+    _strip_job_commerce_fields(record)
     return record
+
+
+def _promote_job_salary(record: dict) -> None:
+    if record.get("price") not in _EMPTY_VALUES and record.get("salary") in _EMPTY_VALUES:
+        record["salary"] = record.pop("price")
+
+
+def _normalize_job_title(record: dict) -> None:
+    if not record.get("title"):
+        return
+    normalized_title = _normalize_listing_title_text(record.get("title"))
+    if normalized_title:
+        record["title"] = normalized_title
+
+
+def _fill_missing_job_identifier(record: dict, raw_item: dict) -> None:
+    if record.get("job_id") not in _EMPTY_VALUES:
+        return
+    inferred_job_id = _extract_generic_job_identifier(raw_item)
+    if inferred_job_id:
+        record["job_id"] = inferred_job_id
+
+
+def _fill_missing_job_urls(record: dict, raw_item: dict, *, page_url: str) -> None:
+    if record.get("url") not in _EMPTY_VALUES:
+        return
+    synthesized_url = _synthesize_job_detail_url(raw_item, page_url=page_url)
+    if synthesized_url:
+        record["url"] = synthesized_url
+        record.setdefault("apply_url", synthesized_url)
+
+
+def _strip_job_commerce_fields(record: dict) -> None:
+    for commerce_field in _JOB_SURFACE_COMMERCE_FIELDS:
+        record.pop(commerce_field, None)
 
 
 def _preferred_generic_item_values(
@@ -1394,50 +1448,74 @@ def _looks_like_listing_variant_option(item: dict, *, surface: str) -> bool:
 
 
 def _normalize_product_search_item(item: dict, *, page_url: str) -> dict | None:
-    typename = str(item.get("__typename") or "").strip()
-    product_number = str(
-        item.get("productNumber") or item.get("productKey") or ""
-    ).strip()
-    name = str(item.get("name") or "").strip()
     attributes = item.get("attributes")
-    if (
-        typename != "Product"
-        or not product_number
-        or not name
-        or not isinstance(attributes, list)
-    ):
+    if not _is_product_search_item(item, attributes):
         return None
 
-    record: dict[str, object] = {
-        "title": name,
-        "sku": product_number,
+    record = _product_search_base_record(item, page_url=page_url)
+    _append_product_search_images(record, item, page_url=page_url)
+    _append_product_search_attributes(record, attributes)
+    return _compact_product_search_record(record)
+
+
+def _is_product_search_item(item: dict, attributes: object) -> bool:
+    typename = str(item.get("__typename") or "").strip()
+    product_number = str(item.get("productNumber") or item.get("productKey") or "").strip()
+    name = str(item.get("name") or "").strip()
+    return (
+        typename == "Product"
+        and bool(product_number)
+        and bool(name)
+        and isinstance(attributes, list)
+    )
+
+
+def _product_search_base_record(item: dict, *, page_url: str) -> dict[str, object]:
+    return {
+        "title": str(item.get("name") or "").strip(),
+        "sku": str(item.get("productNumber") or item.get("productKey") or "").strip(),
         "description": str(item.get("description") or "").strip() or None,
         "brand": _nested_name(item.get("brand")) or None,
         "url": _product_search_detail_url(item, page_url=page_url) or None,
     }
 
+
+def _append_product_search_images(
+    record: dict[str, object],
+    item: dict,
+    *,
+    page_url: str,
+) -> None:
     image_candidates = _extract_image_candidates(
         _product_search_images(item), page_url=page_url
     )
-    if image_candidates:
-        record["image_url"] = image_candidates[0]
-        if len(image_candidates) > 1:
-            record["additional_images"] = ", ".join(image_candidates[1:])
+    if not image_candidates:
+        return
+    record["image_url"] = image_candidates[0]
+    if len(image_candidates) > 1:
+        record["additional_images"] = ", ".join(image_candidates[1:])
 
+
+def _append_product_search_attributes(
+    record: dict[str, object],
+    attributes: list[object],
+) -> None:
     attribute_values = _product_search_attribute_map(attributes)
-    materials = attribute_values.get("material")
-    if materials:
-        record["materials"] = materials
     dimensions = _product_search_dimensions(attributes)
-    if dimensions:
-        record["dimensions"] = dimensions
-    packaging = attribute_values.get("packaging")
-    if packaging:
-        record["size"] = packaging
+    for field_name, value in (
+        ("materials", attribute_values.get("material")),
+        ("dimensions", dimensions),
+        ("size", attribute_values.get("packaging")),
+    ):
+        if value:
+            record[field_name] = value
 
-    return {
+
+def _compact_product_search_record(record: dict[str, object]) -> dict | None:
+    compacted = {
         key: value for key, value in record.items() if value not in (None, "", [], {})
-    } or None
+    }
+    return compacted or None
 
 
 def _product_search_detail_url(item: dict, *, page_url: str) -> str:
@@ -1978,6 +2056,9 @@ def _card_group_score(group: list[Tag], surface: str = "") -> tuple[float, int]:
     Returns (signal_ratio, count) so groups with higher signal density win,
     with count as a tiebreaker.
     """
+    # Reject groups that live entirely inside footer/privacy/legal containers.
+    if _is_footer_or_legal_group(group):
+        return (0.0, 0)
     signals = 0.0
     normalized_surface = str(surface or "").lower()
     is_commerce = "commerce" in normalized_surface
@@ -2008,11 +2089,38 @@ def _card_group_score(group: list[Tag], surface: str = "") -> tuple[float, int]:
                 signals += 0.6
         elif has_image or has_price:
             signals += 1.0
+        elif has_heading and has_substantial_text:
+            signals += 0.5
         elif has_substantial_text and has_multi_elements:
             signals += 0.4
     sample_size = min(len(group), 30)
     ratio = signals / sample_size if sample_size > 0 else 0.0
     return (ratio, len(group))
+
+
+def _is_footer_or_legal_group(group: list[Tag]) -> bool:
+    """Return True if the group lives inside a noise container (footer, legal,
+    navigation, menu) that should never produce listing records."""
+    if not group:
+        return False
+    el = group[0]
+    # Check the element itself and its first ancestor class for noise signals.
+    for target in [el, *list(el.parents)[:6]]:
+        if not isinstance(target, Tag):
+            continue
+        tag_name = str(target.name or "").lower()
+        if tag_name in ("footer", "nav"):
+            return True
+        classes = " ".join(str(c) for c in target.get("class", [])).lower()
+        if any(
+            token in classes
+            for token in (
+                "footer", "legal", "privacy", "cookie", "consent", "iubenda",
+                "menu", "navigation", "nav-", "navbar",
+            )
+        ):
+            return True
+    return False
 
 
 _MIN_CARD_SIGNAL_RATIO = 0.45

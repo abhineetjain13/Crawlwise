@@ -1,7 +1,6 @@
 # Shopify platform adapter.
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -10,18 +9,7 @@ from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 
-try:
-    from curl_cffi import requests as curl_requests
-except ImportError:
-    curl_requests = None
-
 _FETCH_ERRORS = (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError)
-try:
-    from curl_cffi.requests.errors import RequestsError
-except ImportError:
-    RequestsError = None  # type: ignore[assignment]
-else:
-    _FETCH_ERRORS = _FETCH_ERRORS + (RequestsError,)
 
 
 class ShopifyAdapter(BaseAdapter):
@@ -67,8 +55,6 @@ class ShopifyAdapter(BaseAdapter):
         records stay scoped to the requested collection instead of the entire catalog.
         Detail pages use `/products/<handle>.js` to avoid returning unrelated products.
         """
-        if curl_requests is None:
-            return []
         parsed = urlparse(url)
         if surface == "ecommerce_detail":
             handle = self._extract_product_handle(parsed.path)
@@ -85,17 +71,13 @@ class ShopifyAdapter(BaseAdapter):
             else:
                 api_url = f"{parsed.scheme}://{parsed.netloc}/products.json?limit=250"
         try:
-            request_kwargs = {"impersonate": "chrome110", "timeout": 6}
-            if proxy:
-                request_kwargs["proxies"] = {"http": proxy, "https": proxy}
-            resp = await asyncio.to_thread(
-                curl_requests.get,
+            data = await self._request_json(
                 api_url,
-                **request_kwargs,
+                proxy=proxy,
+                timeout_seconds=6,
             )
-            if resp.status_code != 200:
+            if data is None:
                 return []
-            data = resp.json()
         except _FETCH_ERRORS:
             return []
 

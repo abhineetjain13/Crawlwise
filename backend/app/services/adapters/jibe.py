@@ -1,7 +1,6 @@
 # Jibe careers adapter.
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from html import unescape
@@ -9,12 +8,6 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from bs4 import BeautifulSoup
-from curl_cffi.requests.errors import RequestsError
-
-try:
-    from curl_cffi import requests as curl_requests
-except ImportError:
-    curl_requests = None
 
 
 _SEARCH_CONFIG_RE = re.compile(r"window\.searchConfig\s*=\s*(\{.*?\});", re.DOTALL)
@@ -52,27 +45,23 @@ class JibeAdapter(BaseAdapter):
         *,
         proxy: str | None = None,
     ) -> list[dict]:
-        if curl_requests is None:
-            return []
         parsed = urlparse(url)
         api_url = f"{parsed.scheme}://{parsed.netloc}/api/jobs"
         query = self._build_query(url, html, surface)
         request_url = api_url if not query else f"{api_url}?{urlencode(query, doseq=True)}"
         try:
-            request_kwargs = {"impersonate": "chrome124", "timeout": 10}
-            if proxy:
-                request_kwargs["proxies"] = {"http": proxy, "https": proxy}
-            response = await asyncio.to_thread(curl_requests.get, request_url, **request_kwargs)
-            if response.status_code != 200:
+            payload = await self._request_json(
+                request_url,
+                proxy=proxy,
+                timeout_seconds=10,
+            )
+            if not isinstance(payload, dict):
                 return []
-            payload = response.json()
         except (
             OSError,
             RuntimeError,
             ValueError,
             TypeError,
-            json.JSONDecodeError,
-            RequestsError,
         ):
             return []
         jobs = payload.get("jobs") if isinstance(payload, dict) else []

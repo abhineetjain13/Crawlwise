@@ -360,7 +360,7 @@ FIELD_ALIASES = {
     "summary": ["summary", "overview", "about"],
     "requirements": ["requirements", "job_requirements", "prerequisites"],
     "job_type": ["job_type"],
-    "make": ["make", "manufacturer"],
+    "make": ["make"],
     "model": ["model"],
     "year": ["year"],
     "trim": ["trim"],
@@ -450,11 +450,26 @@ def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
     elif is_ecommerce:
         excluded = excluded | JOB_ONLY_FIELDS
 
-    return {
+    aliases = {
         canonical: aliases
         for canonical, aliases in FIELD_ALIASES.items()
         if canonical not in excluded
     }
+    if normalized in {"automobile_listing", "automobile_detail"}:
+        automobile_aliases = {
+            canonical: list(values) for canonical, values in aliases.items()
+        }
+        make_aliases = automobile_aliases.setdefault("make", [])
+        if "manufacturer" not in make_aliases:
+            make_aliases.append("manufacturer")
+        brand_aliases = automobile_aliases.get("brand")
+        if brand_aliases is not None:
+            automobile_aliases["brand"] = [
+                alias for alias in brand_aliases if alias != "manufacturer"
+            ]
+        return automobile_aliases
+    return aliases
+
 
 COLLECTION_KEYS = [
     "products",

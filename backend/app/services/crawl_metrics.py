@@ -45,6 +45,8 @@ def build_url_metrics(
             or None,
             "browser_attempted": bool(diagnostics.get("browser_attempted")),
             "browser_used": acq.method == "playwright",
+            "acquisition_outcome": str(diagnostics.get("acquisition_outcome") or "").strip()
+            or None,
             "memory_browser_first": bool(diagnostics.get("memory_browser_first")),
             "proxy_used": bool(diagnostics.get("proxy_used")),
             "network_payloads": len(acq.network_payloads or []),
@@ -99,4 +101,19 @@ def finalize_url_metrics(
     if requested_total > 0:
         url_metrics["requested_fields_total"] = requested_total
         url_metrics["requested_fields_found_best"] = max(found_counts or [0])
+    quality_summary = {
+        key: value
+        for key, value in {
+            "record_count": len(records),
+            "requested_fields_total": requested_total or None,
+            "requested_fields_found_best": url_metrics.get("requested_fields_found_best"),
+            "acquisition_outcome": url_metrics.get("acquisition_outcome"),
+            "listing_quality": url_metrics.get("listing_quality"),
+            "listing_quality_flags": url_metrics.get("listing_quality_flags"),
+            "winning_sources": url_metrics.get("winning_sources"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    if quality_summary:
+        url_metrics["quality_summary"] = quality_summary
     return url_metrics

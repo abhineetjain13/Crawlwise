@@ -12,16 +12,6 @@ from app.tasks import process_run_task
 from app.services._batch_runtime import (
     process_run as _batch_process_run,
 )
-from app.services.crawl_crud import (
-    active_jobs,
-    commit_llm_suggestions,
-    create_crawl_run,
-    delete_run,
-    get_run,
-    get_run_logs,
-    get_run_records,
-    list_runs,
-)
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
     CONTROL_REQUEST_PAUSE,
@@ -30,11 +20,9 @@ from app.services.crawl_state import (
     set_control_request,
     update_run_status,
 )
-from app.services.llm_integration.page_classifier import classify_page
 from app.services.pipeline import (
     _log,
     _mark_run_failed,
-    _resolve_listing_surface,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -269,10 +257,18 @@ async def recover_stale_local_runs(session: AsyncSession) -> int:
     for run in result.scalars().all():
         _local_run_tasks.pop(int(run.id), None)
         _set_task_id(run, None)
-        await _mark_run_failed(
-            session,
-            int(run.id),
-            "Local dev runner was interrupted by backend restart or process termination",
-        )
+        if run.status_value == CrawlStatus.PENDING:
+            update_run_status(run, CrawlStatus.KILLED)
+            run.update_summary(
+                error="Local dev runner was interrupted before processing began",
+                extraction_verdict=VERDICT_BLOCKED,
+            )
+            await session.commit()
+        else:
+            await _mark_run_failed(
+                session,
+                int(run.id),
+                "Local dev runner was interrupted by backend restart or process termination",
+            )
         recovered += 1
     return recovered

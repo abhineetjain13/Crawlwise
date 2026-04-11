@@ -168,7 +168,7 @@
   --tracking-normal:  -0.01em;
   --tracking-wide:     0.05em;
 
-  /* ── Spacing ── */
+  /* ── Spacing & Layout ── */
   --space-1:  4px;
   --space-2:  8px;
   --space-3:  12px;
@@ -178,6 +178,8 @@
   --space-8:  32px;
   --space-10: 40px;
   --space-12: 48px;
+
+  --control-height: 36px;
 
   /* ── Radii — Neo-Brutalist (flatter, sharper) ── */
   --radius-sm:  2px;
@@ -723,8 +725,8 @@ select:focus-visible {
    ════════════════════════════════════════════════════════════════════════════ */
 .control-select {
   appearance: none;
-  height: 32px;
-  border: 1px solid var(--border);
+  height: var(--control-height);
+  border: 2px solid var(--border-strong);
   border-radius: var(--radius-md);
   background-color: var(--control-input-bg);
   background-image:

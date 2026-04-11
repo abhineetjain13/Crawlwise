@@ -36,7 +36,7 @@ from app.services.crawl_ingestion_service import (
     create_crawl_run_from_payload,
 )
 from app.services.crawl_service import kill_run, pause_run, resume_run
-from app.services.crawl_state import TERMINAL_STATUSES, normalize_status
+from app.services.crawl_state import TERMINAL_STATUSES
 from fastapi import (
     APIRouter,
     Depends,
@@ -96,6 +96,39 @@ async def _resolve_websocket_user(websocket: WebSocket) -> User | None:
 def _raise_http_from_value_error(*, status_code: int, exc: ValueError) -> NoReturn:
     """Translate validation/business ValueError into HTTPException preserving cause."""
     raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+async def _get_accessible_run_or_404(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    user: User,
+):
+    try:
+        return await _require_accessible_run(session, run_id=run_id, user=user)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+
+async def _mutate_run_status(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    user: User,
+    action,
+) -> dict[str, object]:
+    run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
+    try:
+        updated = await action(session, run)
+    except ValueError as exc:
+        _raise_http_from_value_error(
+            status_code=status.HTTP_409_CONFLICT,
+            exc=exc,
+        )
+    return {"run_id": updated.id, "status": updated.status}
 
 
 async def _close_websocket_safely(
@@ -263,20 +296,12 @@ async def crawls_pause(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    try:
-        run = await _require_accessible_run(session, run_id=run_id, user=user)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
-    try:
-        updated = await pause_run(session, run)
-    except ValueError as exc:
-        _raise_http_from_value_error(
-            status_code=status.HTTP_409_CONFLICT,
-            exc=exc,
-        )
-    return {"run_id": updated.id, "status": updated.status}
+    return await _mutate_run_status(
+        session,
+        run_id=run_id,
+        user=user,
+        action=pause_run,
+    )
 
 
 @router.post("/{run_id}/llm-commit", responses=RUN_NOT_FOUND_RESPONSE)
@@ -286,12 +311,7 @@ async def crawls_llm_commit(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> LLMCommitResponse:
-    try:
-        run = await _require_accessible_run(session, run_id=run_id, user=user)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+    run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
     updated_records, updated_fields = await commit_llm_suggestions(
         session,
         run=run,
@@ -309,12 +329,7 @@ async def crawls_commit_fields(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> FieldCommitResponse:
-    try:
-        run = await _require_accessible_run(session, run_id=run_id, user=user)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+    run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
     updated_records, updated_fields = await commit_selected_fields(
         session,
         run=run,
@@ -331,20 +346,12 @@ async def crawls_resume(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    try:
-        run = await _require_accessible_run(session, run_id=run_id, user=user)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
-    try:
-        updated = await resume_run(session, run)
-    except ValueError as exc:
-        _raise_http_from_value_error(
-            status_code=status.HTTP_409_CONFLICT,
-            exc=exc,
-        )
-    return {"run_id": updated.id, "status": updated.status}
+    return await _mutate_run_status(
+        session,
+        run_id=run_id,
+        user=user,
+        action=resume_run,
+    )
 
 
 @router.post(
@@ -361,20 +368,12 @@ async def crawls_kill(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
-    try:
-        run = await _require_accessible_run(session, run_id=run_id, user=user)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
-    try:
-        updated = await kill_run(session, run)
-    except ValueError as exc:
-        _raise_http_from_value_error(
-            status_code=status.HTTP_409_CONFLICT,
-            exc=exc,
-        )
-    return {"run_id": updated.id, "status": updated.status}
+    return await _mutate_run_status(
+        session,
+        run_id=run_id,
+        user=user,
+        action=kill_run,
+    )
 
 
 @router.post(
