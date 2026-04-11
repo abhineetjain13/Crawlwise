@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.services.extract.service import (
+from app.services.extract.candidate_processing import (
     candidate_source_rank,
     finalize_candidate_row,
     sanitize_field_value_with_reason,

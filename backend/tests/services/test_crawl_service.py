@@ -27,19 +27,17 @@ from app.services.crawl_crud import (
     list_runs,
 )
 from app.services.crawl_utils import parse_csv_urls
-from app.services.pipeline import (
-    STAGE_SAVE,
-    _build_field_discovery_summary,
-    _build_llm_candidate_evidence,
-    _collect_detail_llm_suggestions,
-    _merge_record_fields,
-    _normalize_detail_candidate_values,
-    _normalize_record_fields,
-    _sanitize_listing_record_fields,
-)
-from app.services.extract.service import sanitize_field_value
+from app.services.pipeline.core import STAGE_SAVE
+from app.services.extract.candidate_processing import sanitize_field_value
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.services._duplication_helpers import (
+    adapter_result,
+    food_processor_listing_html,
+    html_page,
+    job_card,
+    product_card,
+)
 
 
 class _MissingRunRef:
@@ -56,6 +54,48 @@ def _make_acq(html: str = "", **kwargs) -> AcquisitionResult:
         artifact_path=kwargs.get("artifact_path", "/tmp/artifact.html"),
         network_payloads=kwargs.get("network_payloads", []),
         diagnostics=kwargs.get("diagnostics", {}),
+    )
+
+
+async def _process_run_with_acquisition(
+    db_session: AsyncSession,
+    run,
+    acquisition: AcquisitionResult,
+    *,
+    adapter: AdapterResult | None = None,
+) -> None:
+    with (
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=acquisition),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+
+
+async def _get_run_records(db_session: AsyncSession, run_id: int):
+    return (
+        await db_session.execute(
+            select(CrawlRecord).where(CrawlRecord.run_id == run_id).order_by(CrawlRecord.id.asc())
+        )
+    ).scalars().all()
+
+
+def _elementor_job_card(*, href: str, title: str, excerpt: str) -> str:
+    return (
+        '<article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">'
+        '<div class="elementor-post__text">'
+        f'<h3 class="elementor-post__title"><a href="{href}">{title}</a></h3>'
+        f'<div class="elementor-post__excerpt"><p>{excerpt}</p></div>'
+        "</div></article>"
+    )
+
+
+def _elementor_jobs_html(*cards: tuple[str, str, str]) -> str:
+    return html_page(
+        "<main>",
+        *(_elementor_job_card(href=href, title=title, excerpt=excerpt) for href, title, excerpt in cards),
+        "</main>",
     )
 
 
@@ -82,131 +122,6 @@ def test_parse_csv_urls_with_header():
 def test_parse_csv_urls_empty():
     assert parse_csv_urls("") == []
     assert parse_csv_urls("header\nnot-a-url\n") == []
-
-
-def test_build_llm_candidate_evidence_preserves_legible_multi_source_values():
-    evidence = _build_llm_candidate_evidence(
-        {
-            "description": [
-                {"value": "<p>Sequential <strong>analog</strong> polysynth</p>", "source": "dom"},
-                {"value": "Sequential analog polysynth", "source": "json_ld"},
-            ],
-            "polyphony": [
-                {"value": "16 Voice", "source": "semantic_section"},
-            ],
-        },
-        {"title": "Prophet Rev2", "description": "Sequential analog polysynth"},
-    )
-
-    assert evidence["title"][0]["source"] == "current_output"
-    assert evidence["description"][0]["value"] == "Sequential analog polysynth"
-    assert any(row["source"] == "semantic_section" for row in evidence["polyphony"])
-
-
-def test_build_field_discovery_summary_includes_core_and_extra_fields():
-    source_trace = _build_field_discovery_summary(
-        {},
-        {
-            "title": [{"value": "Canonical Title", "source": "adapter"}],
-            "wire_gauge": [{"value": "26 AWG", "source": "semantic_spec"}],
-        },
-        {"title": "Canonical Title"},
-        [],
-        "ecommerce_detail",
-    )
-
-    field_discovery = source_trace["field_discovery"]
-    assert field_discovery["title"]["value"] == "Canonical Title"
-    assert field_discovery["wire_gauge"]["value"] == "26 AWG"
-    assert "title" not in source_trace["field_discovery_missing"]
-    assert "wire_gauge" not in source_trace["field_discovery_missing"]
-    assert "price" in source_trace["field_discovery_missing"]
-
-
-def test_build_field_discovery_summary_tolerates_candidate_rows_without_value_key():
-    source_trace = _build_field_discovery_summary(
-        {},
-        {
-            "title": [{"source": "adapter"}],
-        },
-        {},
-        [],
-        "ecommerce_detail",
-    )
-
-    assert source_trace["field_discovery"]["title"]["status"] == "found"
-    assert source_trace["field_discovery"]["title"].get("value") is None
-
-
-def test_sanitize_listing_record_fields_resolves_relative_urls_against_page_url():
-    sanitized = _sanitize_listing_record_fields(
-        {
-            "title": "  Example role  ",
-            "url": "/jobs/12345",
-            "apply_url": "jobs/12345/apply",
-        },
-        surface="job_listing",
-        page_base_url="https://example.com/careers",
-    )
-
-    assert sanitized["url"] == "https://example.com/jobs/12345"
-    assert sanitized["apply_url"] == "https://example.com/jobs/12345/apply"
-
-
-def test_sanitize_listing_record_fields_strips_ecommerce_only_fields_from_job_records():
-    sanitized = _sanitize_listing_record_fields(
-        {
-            "title": "Senior Engineer | ",
-            "salary": "",
-            "price": "$120,000",
-            "sale_price": "$110,000",
-            "original_price": "$130,000",
-            "currency": "USD",
-            "sku": "ABC-123",
-            "part_number": "PN-42",
-            "color": "Blue",
-            "availability": "InStock",
-            "rating": "4.9",
-            "review_count": "81",
-            "image_url": "https://example.com/job.jpg",
-            "additional_images": "https://example.com/job-2.jpg",
-        },
-        surface="job_listing",
-    )
-
-    assert sanitized["title"] == "Senior Engineer"
-    assert sanitized["salary"] == "$120,000"
-    assert "price" not in sanitized
-    assert "sale_price" not in sanitized
-    assert "original_price" not in sanitized
-    assert "currency" not in sanitized
-    assert "sku" not in sanitized
-    assert "part_number" not in sanitized
-    assert "color" not in sanitized
-    assert "availability" not in sanitized
-    assert "rating" not in sanitized
-    assert "review_count" not in sanitized
-    assert "image_url" not in sanitized
-    assert "additional_images" not in sanitized
-
-
-def test_normalize_detail_candidate_values_dedupes_primary_image_from_additional_images():
-    normalized = _normalize_detail_candidate_values(
-        {
-            "image_url": "https://example.com/images/main.jpg",
-            "additional_images": "https://example.com/images/main.jpg, https://example.com/images/alt.jpg",
-        },
-        url="https://example.com/product",
-    )
-
-    assert normalized["image_url"] == "https://example.com/images/main.jpg"
-    assert normalized["additional_images"] == "https://example.com/images/alt.jpg"
-
-
-def test_normalize_record_fields_does_not_infer_currency_for_job_surfaces():
-    normalized = _normalize_record_fields({"salary": "$20.00/Hr."}, surface="job_listing")
-    assert normalized["salary"] == "$20.00/Hr."
-    assert "currency" not in normalized
 
 
 # --- CRUD ---
@@ -548,23 +463,14 @@ async def test_process_run_single_url(db_session: AsyncSession, test_user):
         "surface": "ecommerce_detail",
     })
 
-    with (
-        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
-              return_value=_make_acq(FIXTURE_HTML)),
-        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
-    ):
-        await process_run(db_session, run.id)
-
-    await db_session.refresh(run)
+    await _process_run_with_acquisition(db_session, run, _make_acq(FIXTURE_HTML))
     assert run.status == "completed"
     assert run.result_summary["record_count"] >= 1
     assert run.result_summary["current_stage"] == STAGE_SAVE
     assert run.result_summary["current_url"] == "https://example.com/product"
 
     # Check records
-    records = (await db_session.execute(
-        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
-    )).scalars().all()
+    records = await _get_run_records(db_session, run.id)
     assert len(records) >= 1
     assert "title" in records[0].data
     logs = (await db_session.execute(
@@ -760,31 +666,20 @@ async def test_process_run_multi_run_concurrency_keeps_status_and_summary_consis
 @pytest.mark.asyncio
 async def test_process_run_listing_page(db_session: AsyncSession, test_user):
     """Listing page should extract multiple records from cards."""
-    listing_html = """
-    <html><body>
-    <div class="product-card"><h3><a href="/p/1">Product A</a></h3><span class="price">$10</span></div>
-    <div class="product-card"><h3><a href="/p/2">Product B</a></h3><span class="price">$20</span></div>
-    <div class="product-card"><h3><a href="/p/3">Product C</a></h3><span class="price">$30</span></div>
-    </body></html>
-    """
+    listing_html = html_page(
+        product_card(href="/p/1", title="Product A", price="$10"),
+        product_card(href="/p/2", title="Product B", price="$20"),
+        product_card(href="/p/3", title="Product C", price="$30"),
+    )
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/category",
         "surface": "ecommerce_listing",
     })
 
-    with (
-        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
-              return_value=_make_acq(listing_html)),
-        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
-    ):
-        await process_run(db_session, run.id)
-
-    await db_session.refresh(run)
+    await _process_run_with_acquisition(db_session, run, _make_acq(listing_html))
     assert run.status == "completed"
-    records = (await db_session.execute(
-        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
-    )).scalars().all()
+    records = await _get_run_records(db_session, run.id)
     assert len(records) == 3
 
 
@@ -792,34 +687,30 @@ async def test_process_run_listing_page(db_session: AsyncSession, test_user):
 async def test_process_run_listing_merges_sparse_adapter_rows_with_richer_dom_records(
     db_session: AsyncSession, test_user
 ):
-    listing_html = """
-    <html><body>
-      <div class="job-card">
-        <a href="https://example.com/jobs/164066">
-          <h3>Medical Surgical Registered Nurse / RN</h3>
-          <div class="company">Emory Univ Hosp-Midtown</div>
-          <div class="location">Atlanta, GA, 30308</div>
-          <div class="salary">$52/hr</div>
-        </a>
-      </div>
-      <div class="job-card">
-        <a href="https://example.com/jobs/164065">
-          <h3>Cardiovascular Step Down Registered Nurse / RN</h3>
-          <div class="company">Emory Univ Hosp-Midtown</div>
-          <div class="location">Atlanta, GA, 30308</div>
-        </a>
-      </div>
-    </body></html>
-    """
+    listing_html = html_page(
+        job_card(
+            href="https://example.com/jobs/164066",
+            title="Medical Surgical Registered Nurse / RN",
+            company="Emory Univ Hosp-Midtown",
+            location="Atlanta, GA, 30308",
+            salary="$52/hr",
+        ),
+        job_card(
+            href="https://example.com/jobs/164065",
+            title="Cardiovascular Step Down Registered Nurse / RN",
+            company="Emory Univ Hosp-Midtown",
+            location="Atlanta, GA, 30308",
+        ),
+    )
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/jobs",
         "surface": "job_listing",
     })
 
-    adapter = AdapterResult(
-        adapter_name="icims",
-        records=[
+    adapter = adapter_result(
+        "icims",
+        [
             {
                 "title": "Medical Surgical Registered Nurse / RN",
                 "url": "https://example.com/jobs/164066",
@@ -835,17 +726,9 @@ async def test_process_run_listing_merges_sparse_adapter_rows_with_richer_dom_re
         ],
     )
 
-    with (
-        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
-        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
-    ):
-        await process_run(db_session, run.id)
+    await _process_run_with_acquisition(db_session, run, _make_acq(listing_html), adapter=adapter)
 
-    records = (
-        await db_session.execute(
-            select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
-        )
-    ).scalars().all()
+    records = await _get_run_records(db_session, run.id)
     assert len(records) == 2
     assert records[0].data["company"] == "Emory Univ Hosp-Midtown"
     assert records[0].data["location"] == "Atlanta, GA, 30308"
@@ -859,24 +742,20 @@ async def test_process_run_listing_merges_sparse_adapter_rows_with_richer_dom_re
 async def test_process_run_job_listing_sanitizes_adapter_media_and_noisy_description(
     db_session: AsyncSession, test_user
 ):
-    listing_html = """
-    <html><body>
-      <div class="job-card">
-        <a href="https://example.com/jobs/164066">
-          <h3>Medical Surgical Registered Nurse / RN</h3>
-          <div class="company">Emory Univ Hosp-Midtown</div>
-          <div class="location">Atlanta, GA, 30308</div>
-        </a>
-      </div>
-      <div class="job-card">
-        <a href="https://example.com/jobs/164065">
-          <h3>Cardiovascular Step Down Registered Nurse / RN</h3>
-          <div class="company">Emory Univ Hosp-Midtown</div>
-          <div class="location">Atlanta, GA, 30308</div>
-        </a>
-      </div>
-    </body></html>
-    """
+    listing_html = html_page(
+        job_card(
+            href="https://example.com/jobs/164066",
+            title="Medical Surgical Registered Nurse / RN",
+            company="Emory Univ Hosp-Midtown",
+            location="Atlanta, GA, 30308",
+        ),
+        job_card(
+            href="https://example.com/jobs/164065",
+            title="Cardiovascular Step Down Registered Nurse / RN",
+            company="Emory Univ Hosp-Midtown",
+            location="Atlanta, GA, 30308",
+        ),
+    )
     noisy_description = (
         "Be inspired. Be rewarded. Belong. At Emory Healthcare. "
         "This role includes clinical care, patient flow, collaboration, compliance, internal marketing copy, "
@@ -888,9 +767,9 @@ async def test_process_run_job_listing_sanitizes_adapter_media_and_noisy_descrip
         "surface": "job_listing",
     })
 
-    adapter = AdapterResult(
-        adapter_name="icims",
-        records=[
+    adapter = adapter_result(
+        "icims",
+        [
             {
                 "title": "Medical Surgical Registered Nurse / RN",
                 "url": "https://example.com/jobs/164066",
@@ -912,17 +791,9 @@ async def test_process_run_job_listing_sanitizes_adapter_media_and_noisy_descrip
         ],
     )
 
-    with (
-        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(listing_html)),
-        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
-    ):
-        await process_run(db_session, run.id)
+    await _process_run_with_acquisition(db_session, run, _make_acq(listing_html), adapter=adapter)
 
-    records = (
-        await db_session.execute(
-            select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
-        )
-    ).scalars().all()
+    records = await _get_run_records(db_session, run.id)
     assert len(records) == 2
     assert "image_url" not in records[0].data
     assert "additional_images" not in records[0].data
@@ -1173,12 +1044,10 @@ async def test_process_run_listing_blocked_curl_recovers_with_browser_first_retr
     <html><head><title>Just a moment...</title></head>
     <body><div class="cf-browser-verification">Checking your browser before accessing the site</div></body></html>
     """
-    browser_listing_html = """
-    <html><body>
-      <div class="product-card"><h3><a href="/p/1">Product A</a></h3><span class="price">$10</span></div>
-      <div class="product-card"><h3><a href="/p/2">Product B</a></h3><span class="price">$20</span></div>
-    </body></html>
-    """
+    browser_listing_html = html_page(
+        product_card(href="/p/1", title="Product A", price="$10"),
+        product_card(href="/p/2", title="Product B", price="$20"),
+    )
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://reverb.com/marketplace?product_type=electric-guitars",
@@ -1352,50 +1221,35 @@ async def test_process_run_listing_legible_page_with_zero_items_fails_without_fa
 
 @pytest.mark.asyncio
 async def test_process_run_job_listing_elementor_cards_capture_multiple_rows(db_session: AsyncSession, test_user):
-    jobs_html = """
-    <html><body>
-      <main>
-        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
-          <div class="elementor-post__text">
-            <h3 class="elementor-post__title"><a href="https://example.com/jobs/executive-assistant">Executive Assistant</a></h3>
-            <div class="elementor-post__excerpt"><p>Purpose: The Executive Assistant provides high-level administrative support.</p></div>
-          </div>
-        </article>
-        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
-          <div class="elementor-post__text">
-            <h3 class="elementor-post__title"><a href="https://example.com/jobs/associate">Associate</a></h3>
-            <div class="elementor-post__excerpt"><p>The Associate supports sourcing, diligence, and portfolio work.</p></div>
-          </div>
-        </article>
-        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
-          <div class="elementor-post__text">
-            <h3 class="elementor-post__title"><a href="https://example.com/jobs/vice-president">Vice President</a></h3>
-            <div class="elementor-post__excerpt"><p>The Vice President leads execution across search and portfolio initiatives.</p></div>
-          </div>
-        </article>
-      </main>
-    </body></html>
-    """
+    jobs_html = _elementor_jobs_html(
+        (
+            "https://example.com/jobs/executive-assistant",
+            "Executive Assistant",
+            "Purpose: The Executive Assistant provides high-level administrative support.",
+        ),
+        (
+            "https://example.com/jobs/associate",
+            "Associate",
+            "The Associate supports sourcing, diligence, and portfolio work.",
+        ),
+        (
+            "https://example.com/jobs/vice-president",
+            "Vice President",
+            "The Vice President leads execution across search and portfolio initiatives.",
+        ),
+    )
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/jobs",
         "surface": "job_listing",
     })
 
-    with (
-        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
-        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
-    ):
-        await process_run(db_session, run.id)
-
-    await db_session.refresh(run)
+    await _process_run_with_acquisition(db_session, run, _make_acq(jobs_html))
     assert run.status == "completed"
     assert run.result_summary.get("record_count") == 3
     assert run.result_summary.get("extraction_verdict") in {"success", "partial"}
 
-    records = (await db_session.execute(
-        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
-    )).scalars().all()
+    records = await _get_run_records(db_session, run.id)
     assert len(records) == 3
     assert records[0].data["title"] == "Executive Assistant"
     assert records[0].data["url"] == "https://example.com/jobs/executive-assistant"
@@ -1404,43 +1258,29 @@ async def test_process_run_job_listing_elementor_cards_capture_multiple_rows(db_
 
 @pytest.mark.asyncio
 async def test_process_run_job_like_ecommerce_listing_uses_job_extractor(db_session: AsyncSession, test_user):
-    jobs_html = """
-    <html><body>
-      <main>
-        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
-          <div class="elementor-post__text">
-            <h3 class="elementor-post__title"><a href="https://example.com/jobs/executive-assistant">Executive Assistant</a></h3>
-            <div class="elementor-post__excerpt"><p>Purpose: The Executive Assistant provides high-level administrative support.</p></div>
-          </div>
-        </article>
-        <article class="elementor-post elementor-grid-item post type-post status-publish category-jobs">
-          <div class="elementor-post__text">
-            <h3 class="elementor-post__title"><a href="https://example.com/jobs/associate">Associate</a></h3>
-            <div class="elementor-post__excerpt"><p>The Associate supports sourcing, diligence, and portfolio work.</p></div>
-          </div>
-        </article>
-      </main>
-    </body></html>
-    """
+    jobs_html = _elementor_jobs_html(
+        (
+            "https://example.com/jobs/executive-assistant",
+            "Executive Assistant",
+            "Purpose: The Executive Assistant provides high-level administrative support.",
+        ),
+        (
+            "https://example.com/jobs/associate",
+            "Associate",
+            "The Associate supports sourcing, diligence, and portfolio work.",
+        ),
+    )
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/jobs",
         "surface": "ecommerce_listing",
     })
 
-    with (
-        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(jobs_html)),
-        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
-    ):
-        await process_run(db_session, run.id)
-
-    await db_session.refresh(run)
+    await _process_run_with_acquisition(db_session, run, _make_acq(jobs_html))
     assert run.status == "failed"
     assert run.result_summary.get("extraction_verdict") == "listing_detection_failed"
 
-    records = (await db_session.execute(
-        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
-    )).scalars().all()
+    records = await _get_run_records(db_session, run.id)
     assert len(records) == 0
 
 
@@ -1545,20 +1385,6 @@ async def test_process_run_listing_promotes_same_host_child_listing_before_brows
       </main>
     </body></html>
     """
-    child_listing_html = """
-    <html><body>
-      <div class="product-card">
-        <a href="/countertop-appliances/food-processors/processors/p.one.html"><h3>13-Cup Food Processor</h3></a>
-        <img src="https://images.example.com/one.jpg" />
-        <span class="price">$179.99</span>
-      </div>
-      <div class="product-card">
-        <a href="/countertop-appliances/food-processors/processors/p.two.html"><h3>9-Cup Food Processor Plus</h3></a>
-        <img src="https://images.example.com/two.jpg" />
-        <span class="price">$149.99</span>
-      </div>
-    </body></html>
-    """
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/countertop-appliances/food-processors/food-processor-and-chopper-products.html",
@@ -1567,7 +1393,7 @@ async def test_process_run_listing_promotes_same_host_child_listing_before_brows
 
     acquire_mock = AsyncMock(side_effect=[
         _make_acq(parent_listing_html, method="curl_cffi"),
-        _make_acq(child_listing_html, method="curl_cffi"),
+        _make_acq(food_processor_listing_html(), method="curl_cffi"),
     ])
 
     with (
@@ -1619,20 +1445,6 @@ async def test_process_run_listing_promotes_child_listing_when_initial_records_a
       <a href="/countertop-appliances/food-processors/processors">Shop All Food Processors</a>
     </body></html>
     """
-    child_listing_html = """
-    <html><body>
-      <div class="product-card">
-        <a href="/countertop-appliances/food-processors/processors/p.one.html"><h3>13-Cup Food Processor</h3></a>
-        <img src="https://images.example.com/one.jpg" />
-        <span class="price">$179.99</span>
-      </div>
-      <div class="product-card">
-        <a href="/countertop-appliances/food-processors/processors/p.two.html"><h3>9-Cup Food Processor Plus</h3></a>
-        <img src="https://images.example.com/two.jpg" />
-        <span class="price">$149.99</span>
-      </div>
-    </body></html>
-    """
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/countertop-appliances/food-processors/food-processor-and-chopper-products.html",
@@ -1641,7 +1453,7 @@ async def test_process_run_listing_promotes_child_listing_when_initial_records_a
 
     acquire_mock = AsyncMock(side_effect=[
         _make_acq(parent_listing_html, method="curl_cffi"),
-        _make_acq(child_listing_html, method="curl_cffi"),
+        _make_acq(food_processor_listing_html(), method="curl_cffi"),
     ])
 
     with (
@@ -1681,20 +1493,20 @@ async def test_process_run_loading_shell_listing_retries_browser_and_skips_inlin
       </div>
     </body></html>
     """
-    browser_listing_html = """
-    <html><body>
-      <div class="product-card">
-        <a href="/products/linen-blazer"><h3>Linen Blazer</h3></a>
-        <img src="https://example.com/img/linen-blazer.jpg" />
-        <span class="price">$219</span>
-      </div>
-      <div class="product-card">
-        <a href="/products/wool-coat"><h3>Wool Coat</h3></a>
-        <img src="https://example.com/img/wool-coat.jpg" />
-        <span class="price">$349</span>
-      </div>
-    </body></html>
-    """
+    browser_listing_html = html_page(
+        product_card(
+            href="/products/linen-blazer",
+            title="Linen Blazer",
+            price="$219",
+            image_src="https://example.com/img/linen-blazer.jpg",
+        ),
+        product_card(
+            href="/products/wool-coat",
+            title="Wool Coat",
+            price="$349",
+            image_src="https://example.com/img/wool-coat.jpg",
+        ),
+    )
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://example.com/categories/womens-coats-jackets",
@@ -1717,9 +1529,7 @@ async def test_process_run_loading_shell_listing_retries_browser_and_skips_inlin
     assert run.result_summary.get("record_count") == 2
     assert acquire_mock.await_count == 2
 
-    records = (await db_session.execute(
-        select(CrawlRecord).where(CrawlRecord.run_id == run.id).order_by(CrawlRecord.id.asc())
-    )).scalars().all()
+    records = await _get_run_records(db_session, run.id)
     assert len(records) == 2
     assert [record.data["title"] for record in records] == ["Linen Blazer", "Wool Coat"]
     assert all(record.source_trace["type"] == "listing" for record in records)
@@ -1953,22 +1763,6 @@ async def test_process_run_marks_failed_when_single_url_processing_times_out(
     mark_failed_mock.assert_awaited_once()
     error_message = mark_failed_mock.await_args.args[2]
     assert "timed out" in error_message.lower()
-
-
-def test_merge_record_fields_prefers_richer_detail_description():
-    merged = _merge_record_fields(
-        {"title": "Widget", "description": "Short desc"},
-        {"description": "A much richer product description with more detail and context."},
-    )
-    assert merged["description"] == "A much richer product description with more detail and context."
-
-
-def test_merge_record_fields_prefers_cleaner_brand_value_for_conflicts():
-    merged = _merge_record_fields(
-        {"brand": "Cookie Preferences"},
-        {"brand": "Arc'teryx"},
-    )
-    assert merged["brand"] == "Arc'teryx"
 
 
 def test_sanitize_field_value_drops_polluted_title_phrase():
@@ -2294,51 +2088,3 @@ async def test_active_jobs(db_session: AsyncSession, test_user):
     assert jobs[0]["status"] == "pending"
 
 
-@pytest.mark.asyncio
-async def test_collect_detail_llm_suggestions_builds_discovered_sources_in_thread(
-    db_session: AsyncSession, test_user
-):
-    run = await create_crawl_run(
-        db_session,
-        test_user.id,
-        {
-            "run_type": "crawl",
-            "url": "https://example.com/product",
-            "surface": "ecommerce_detail",
-            "settings": {"llm_enabled": True},
-        },
-    )
-    thread_calls: list[str] = []
-
-    async def _fake_to_thread(func, *args, **kwargs):
-        thread_calls.append(getattr(func, "__name__", str(func)))
-        return func(*args, **kwargs)
-
-    with (
-        patch(
-            "app.services.pipeline.core.discover_xpath_candidates",
-            new_callable=AsyncMock,
-            return_value=([], None),
-        ),
-        patch(
-            "app.services.pipeline.core.asyncio.to_thread",
-            side_effect=_fake_to_thread,
-        ),
-    ):
-        source_trace, llm_review_bucket = await _collect_detail_llm_suggestions(
-            session=db_session,
-            run=run,
-            url=run.url,
-            surface=run.surface,
-            html="<html><body><h1>Widget</h1></body></html>",
-            xhr_payloads=[],
-            additional_fields=["title"],
-            adapter_records=[],
-            candidate_values={"title": "Widget"},
-            source_trace={"candidates": {"title": [{"value": "Widget", "source": "json_ld"}]}},
-            resolved_schema=SimpleNamespace(fields=["title"]),
-        )
-
-    assert "llm_cleanup_status" in source_trace
-    assert llm_review_bucket == []
-    assert "_build_llm_discovered_sources" in thread_calls

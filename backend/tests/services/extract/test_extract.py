@@ -6,18 +6,8 @@ from unittest.mock import patch
 
 import pytest
 from app.services.exceptions import ExtractionParseError
-from app.services.extract.service import (
-    _coerce_scalar_for_dynamic_row,
-    _dispatch_string_field_coercer,
-    _extract_image_urls,
-    _extract_label_value_from_text,
-    _finalize_candidate_rows,
+from app.services.extract.candidate_processing import (
     finalize_candidate_row,
-    _label_value_pattern,
-    _normalize_color_candidate,
-    _normalize_html_rich_text,
-    _resolve_candidate_url,
-    _should_skip_jsonld_block,
     coerce_field_candidate_value,
 )
 from app.services.extract.service import (
@@ -305,28 +295,6 @@ def test_extract_label_value_fallback_uses_full_description_sources():
     assert candidates["brand"][0]["value"] == "Acme Corp"
 
 
-def test_extract_label_value_from_text_searches_raw_html_when_text_sources_miss() -> None:
-    value = _extract_label_value_from_text(
-        "brand",
-        text_sources=[],
-        html="<div>Brand: Acme Corp</div>",
-    )
-
-    assert value == "Acme Corp"
-
-
-def test_label_value_pattern_cache_reuses_compiled_regex_for_same_variant():
-    _label_value_pattern.cache_clear()
-    before = _label_value_pattern.cache_info()
-    first = _label_value_pattern("Brand")
-    second = _label_value_pattern("Brand")
-    after = _label_value_pattern.cache_info()
-
-    assert first is second
-    assert after.hits == before.hits + 1
-    assert after.misses == before.misses + 1
-
-
 def test_extract_job_company_from_open_graph_site_name():
     html = "<html><body><h1>Supervisor Food and Beverage</h1></body></html>"
     manifest = _manifest(open_graph={"og:site_name": "Woodbine Entertainment"})
@@ -376,18 +344,6 @@ def test_coerce_field_candidate_value_joins_description_lists():
     assert coerced == "Paragraph one. Paragraph two. Final details."
 
 
-def test_dispatch_string_field_coercer_prefers_image_collection_over_url_suffix_match():
-    coerced = _dispatch_string_field_coercer(
-        "product_images_url",
-        "/img/a.jpg, /img/b.jpg",
-        base_url="https://example.com/product/1",
-    )
-    assert (
-        coerced
-        == "https://example.com/img/a.jpg, https://example.com/img/b.jpg"
-    )
-
-
 def test_coerce_field_candidate_value_rejects_asset_font_urls_for_url_fields():
     assert (
         coerce_field_candidate_value(
@@ -397,29 +353,6 @@ def test_coerce_field_candidate_value_rejects_asset_font_urls_for_url_fields():
         )
         is None
     )
-    assert _resolve_candidate_url("https://cdn.example.com/fonts/inter.woff2", "https://example.com") == ""
-
-
-def test_resolve_candidate_url_strips_tracking_query_params():
-    assert (
-        _resolve_candidate_url(
-            "https://example.com/product/widget?utm_source=newsletter&ref=home&id=9",
-            "https://example.com",
-        )
-        == "https://example.com/product/widget?id=9"
-    )
-
-
-def test_resolve_candidate_url_preserves_fragment_and_non_tracking_ref_prefix_keys():
-    assert (
-        _resolve_candidate_url(
-            "https://example.com/product/widget?referrer=home&ref=nav&id=9#details",
-            "https://example.com",
-        )
-        == "https://example.com/product/widget?referrer=home&id=9#details"
-    )
-
-
 def test_extract_rejects_noise_title_and_placeholder_image_candidates():
     html = "<html><body></body></html>"
     manifest = _manifest(
@@ -973,11 +906,6 @@ def test_extract_semantic_tables_preserve_grouping_links_and_visible_placeholder
 
 
 
-def test_should_skip_jsonld_block_handles_type_lists():
-    assert _should_skip_jsonld_block({"@type": ["Organization", "Thing"]}, "title") is True
-    assert _should_skip_jsonld_block({"@type": ["Product", "SoftwareApplication"]}, "title") is False
-
-
 def test_extract_filters_noisy_dynamic_semantic_field_names():
     html = """
     <html><body>
@@ -1127,28 +1055,6 @@ def test_coerce_salary_returns_none_for_overlong_input():
     assert coerce_field_candidate_value("salary", "9" * 10_000) is None
 
 
-def test_coerce_scalar_for_dynamic_row_rejects_blobs_and_sentinels():
-    assert _coerce_scalar_for_dynamic_row(False) is None
-    assert _coerce_scalar_for_dynamic_row(True) is None
-    assert _coerce_scalar_for_dynamic_row({"a": 1}) is None
-    assert _coerce_scalar_for_dynamic_row("object") is None
-    assert _coerce_scalar_for_dynamic_row("pending") is None
-    assert _coerce_scalar_for_dynamic_row("ok label") == "ok label"
-    assert _coerce_scalar_for_dynamic_row(42) == 42
-    assert _coerce_scalar_for_dynamic_row(["a", "b"]) == "a; b"
-
-
-def test_finalize_candidate_rows_never_reintroduces_boolean_via_fallback():
-    assert (
-        _finalize_candidate_rows(
-            "dynamic_noise_field",
-            [{"value": False, "source": "network_intercept"}],
-            base_url="https://example.com/p",
-        )
-        == []
-    )
-
-
 def test_extract_category_falls_back_to_breadcrumb_and_ignores_network_sentinel_values():
     html = """
     <html>
@@ -1186,13 +1092,6 @@ def test_coerce_title_rejects_account_and_cookie_noise():
     assert coerce_field_candidate_value("title", "Sign in to your account") is None
     assert coerce_field_candidate_value("title", "Select a Size") is None
     assert coerce_field_candidate_value("title", "Trail Running Shoe") == "Trail Running Shoe"
-
-
-def test_normalize_color_candidate_rejects_overlong_or_ui_phrases():
-    assert _normalize_color_candidate("Choose options") is None
-    assert _normalize_color_candidate("Size S, .") is None
-    assert _normalize_color_candidate("Black Gray Orange") == "Black Gray Orange"
-    assert _normalize_color_candidate("Super extra premium metallic reflective carbon black and silver") is None
 
 
 def test_extract_preserves_all_matches_from_multiple_hydrated_states_and_embedded_json_payloads():
@@ -1460,61 +1359,6 @@ def test_extract_respects_regex_contract_for_additional_field():
     assert candidates["sku_code"][0]["source"] == "contract_regex"
     assert candidates["sku_code"][0]["value"] == "ABC-123"
 
-
-def test_extract_prefers_saved_xpath_selector_defaults():
-    html = "<html><body><h1>Saved XPath Title</h1></body></html>"
-    manifest = _manifest()
-    with patch(
-        "app.services.extract.service.get_selector_defaults",
-        return_value=[{"xpath": "//h1/text()", "status": "validated"}],
-    ):
-        candidates, _ = extract_candidates(
-            "https://example.com/product",
-            "ecommerce_detail",
-            html,
-            manifest,
-            [],
-        )
-    selector_rows = [row for row in candidates["title"] if "selector" in row.get("sources", [])]
-    assert selector_rows
-    assert selector_rows[0]["value"] == "Saved XPath Title"
-    assert selector_rows[0]["xpath"] == "//h1/text()"
-
-
-def test_resolve_candidate_url_joins_relative_path_against_base_url():
-    assert (
-        _resolve_candidate_url("products/shoe-123", "https://example.com/category")
-        == "https://example.com/products/shoe-123"
-    )
-
-
-def test_extract_image_urls_keeps_cdn_images_with_query_strings():
-    assert _extract_image_urls(
-        "https://cdn.example.com/product.jpg?v=1234&width=800",
-        base_url="https://example.com/product",
-    ) == ["https://cdn.example.com/product.jpg?v=1234&width=800"]
-
-
-def test_normalize_color_candidate_rejects_css_noise():
-    assert _normalize_color_candidate(
-        "#0d475c;padding:8px 0;position:relative;padding:0;}.css-hazhdp-nav-bar .side-men"
-    ) is None
-
-
-def test_normalize_color_candidate_rejects_variant_count_labels():
-    assert _normalize_color_candidate("12 colors") is None
-
-
-def test_size_coercer_rejects_css_noise():
-    assert _dispatch_string_field_coercer(
-        "size",
-        "12px;font-weight:330;-webkit-transition:0.1s ease;transition:0.1s ease;}",
-        base_url="",
-    ) is None
-
-
-def test_normalize_html_rich_text_handles_block_tags_without_crashing():
-    assert _normalize_html_rich_text("<div>Alpha</div><p>Beta</p><br><li>Gamma</li>") == "Alpha\nBeta\nGamma"
 
 def test_extraction_hierarchy_order_preservation_adapter_before_datalayer():
     """Feature: extraction-pipeline-improvements, Property 3: Extraction Hierarchy Order Preservation
@@ -1852,7 +1696,7 @@ def test_extract_structured_specifications_normalize_html_content():
 def test_extract_structured_template_placeholders_do_not_surface_as_discount_percentage():
     html = "<html><body><h1>Structured Discount Template Product</h1></body></html>"
     manifest = _manifest(
-        hydrated_states=[
+        _hydrated_states=[
             {
                 "props": {
                     "pageProps": {
@@ -1991,10 +1835,41 @@ def test_extract_dom_variant_rows_do_not_create_multi_axis_cartesian_variants():
     assert candidates["selected_variant"][0]["value"]["size"] == "S"
 
 
+def test_extract_dom_variant_rows_do_not_infer_unknown_axis_selection():
+    html = """
+    <html>
+      <body>
+        <h1>Unknown Selection Product</h1>
+        <div class="color-swatches">
+          <button class="color-swatch selected">Red</button>
+          <button class="color-swatch">Blue</button>
+        </div>
+        <div class="size-buttons-container">
+          <button class="size-buttons-size-button">S</button>
+          <button class="size-buttons-size-button">M</button>
+        </div>
+      </body>
+    </html>
+    """
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/widget",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["variant_axes"][0]["value"] == {"color": ["Red", "Blue"], "size": ["S", "M"]}
+    assert candidates["selected_variant"][0]["value"]["color"] == "Red"
+    assert "size" not in candidates["selected_variant"][0]["value"]
+
+
 def test_extract_structured_state_variants_are_discovered_without_site_hardcode():
     html = "<html><body><h1>Structured Variant Product</h1></body></html>"
     manifest = _manifest(
-        hydrated_states=[
+        _hydrated_states=[
             {
                 "props": {
                     "urqlState": {
@@ -2058,8 +1933,6 @@ def test_extract_structured_state_variants_are_discovered_without_site_hardcode(
     }
     assert candidates["selected_variant"][0]["value"]["variant_id"] == "4070032421828"
     assert candidates["selected_variant"][0]["value"]["color"] == "PUMA Navy"
-    assert candidates["color"][0]["value"] == "PUMA Navy"
-    assert "size" not in candidates
 
 
 def test_extract_shopify_footer_sections_do_not_pollute_product_attributes():

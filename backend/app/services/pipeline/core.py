@@ -7,12 +7,20 @@ import re
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun
-from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
+from app.services.acquisition.acquirer import (
+    AcquisitionRequest,
+    AcquisitionResult,
+    acquire,
+)
+from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.crawl_events import (
     append_log_event,
     prepare_log_event,
 )
-from app.services.crawl_metadata import refresh_record_commit_metadata
+from app.services.crawl_metadata import (
+    load_domain_requested_fields,
+    refresh_record_commit_metadata,
+)
 from app.services.crawl_metrics import (
     build_acquisition_profile as _build_acquisition_profile,
 )
@@ -33,19 +41,13 @@ from app.services.extract.json_extractor import (
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.listing_identity import strong_identity_key
 from app.services.extract.listing_quality import listing_set_quality
-from app.services.extract.service import (
-    coerce_field_candidate_value,
-    extract_candidates,
-)
-from app.services.knowledge_base.store import (
-    get_selector_defaults,
-)
+from app.services.extract.candidate_processing import coerce_field_candidate_value
+from app.services.extract.service import extract_candidates
 from app.services.llm_runtime import discover_xpath_candidates, review_field_candidates
 from app.services.requested_field_policy import expand_requested_fields
 from app.services.runtime_metrics import incr
 from app.services.schema_service import (
     ResolvedSchema,
-    load_resolved_schema,
     resolve_schema,
     schema_trace_payload,
 )
@@ -53,8 +55,7 @@ from app.services.xpath_service import validate_xpath_candidate
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.services.shared_acquisition import (
-    acquire,
+from app.services.adapters.registry import (
     run_adapter,
     try_blocked_adapter_recovery,
 )
@@ -127,6 +128,14 @@ _ERROR_PAGE_TITLE_TOKENS = frozenset(
     }
 )
 # Batch runtime helpers now live directly in _batch_runtime.
+
+
+def get_selector_defaults(_domain: str, _field_name: str) -> list[dict]:
+    return []
+
+
+def get_canonical_fields(surface: str) -> list[str]:
+    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip(), []))
 
 
 def _log_for_pytest(level: int, message: str, *args: object) -> None:
@@ -1581,30 +1590,6 @@ def _normalize_detail_candidate_values(
             normalized.pop("additional_images", None)
 
     return normalized
-
-
-async def _load_domain_requested_fields(
-    session: AsyncSession, *, url: str, surface: str
-) -> list[str]:
-    resolved = await load_resolved_schema(session, surface, normalize_domain(url))
-    return expand_requested_fields(list(resolved.new_fields))
-
-
-def _refresh_record_commit_metadata(
-    record: CrawlRecord,
-    *,
-    run: CrawlRun,
-    field_name: str,
-    value: object,
-    source_label: str = "user_commit",
-) -> None:
-    refresh_record_commit_metadata(
-        record,
-        run=run,
-        field_name=field_name,
-        value=value,
-        source_label=source_label,
-    )
 
 
 # Domain normalisation delegated to app.services.domain_utils.normalize_domain
