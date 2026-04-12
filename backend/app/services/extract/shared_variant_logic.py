@@ -6,9 +6,22 @@ VARIANT_ALWAYS_SELECTABLE_AXES = frozenset(
     {"color", "size", "waist", "width", "length", "inseam"}
 )
 
+_VARIANT_AXIS_ALIASES = {
+    "สี": "color",
+    "สีสินค้า": "color",
+    "สีของสินค้า": "color",
+    "ขนาด": "size",
+    "ไซซ์": "size",
+    "ไซส์": "size",
+}
+
 
 def normalized_variant_axis_key(value: object) -> str:
     text = " ".join(str(value or "").split()).strip().lower()
+    if not text:
+        return ""
+    if text in _VARIANT_AXIS_ALIASES:
+        return _VARIANT_AXIS_ALIASES[text]
     if text in {"color", "colour", "colors", "colours"}:
         return "color"
     if text in {"size", "sizes", "dimension", "dimensions"}:

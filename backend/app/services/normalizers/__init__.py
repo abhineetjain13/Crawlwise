@@ -127,6 +127,24 @@ _NON_SIZE_VALUES = {
 _STRUCTURED_DETAIL_FIELDS = frozenset(
     {"product_attributes", "variant_axes", "selected_variant", "variants"}
 )
+_VARIANT_AXIS_METADATA_KEYS = frozenset(
+    {"axis", "attribute", "code", "display_name", "id", "key", "label", "name", "title", "type"}
+)
+_VARIANT_AXIS_GENERIC_BUCKET_KEYS = (
+    "all_choices",
+    "all_options",
+    "choices",
+    "options",
+    "values",
+)
+_LOCALIZED_VARIANT_AXIS_ALIASES = {
+    "สี": "color",
+    "สีสินค้า": "color",
+    "สีของสินค้า": "color",
+    "ขนาด": "size",
+    "ไซซ์": "size",
+    "ไซส์": "size",
+}
 
 
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
@@ -590,6 +608,21 @@ def _normalized_mapping_key(value: object) -> str:
     return text.strip("_")
 
 
+def _normalized_variant_axis_name(value: object) -> str:
+    text = _normalized_candidate_text(value)
+    if not text:
+        return ""
+    lowered = text.casefold()
+    if lowered in _LOCALIZED_VARIANT_AXIS_ALIASES:
+        return _LOCALIZED_VARIANT_AXIS_ALIASES[lowered]
+    normalized = _normalized_mapping_key(text)
+    if normalized in {"color", "colour", "colors", "colours"}:
+        return "color"
+    if normalized in {"size", "sizes", "dimension", "dimensions"}:
+        return "size"
+    return normalized
+
+
 def _normalize_structured_scalar(
     value: object,
     *,
@@ -644,7 +677,7 @@ def _normalize_product_attributes(value: object) -> dict[str, object] | None:
     normalized: dict[str, object] = {}
     for key, raw in value.items():
         attr_key = _normalized_mapping_key(key)
-        if not attr_key:
+        if not attr_key or attr_key in _VARIANT_AXIS_METADATA_KEYS:
             continue
         attr_value = _normalize_structured_scalar(raw)
         if attr_value in (None, "", [], {}):
@@ -656,19 +689,78 @@ def _normalize_product_attributes(value: object) -> dict[str, object] | None:
 def _normalize_variant_axes(value: object) -> dict[str, list[str]] | None:
     if not isinstance(value, dict):
         return None
-    normalized: dict[str, list[str]] = {}
-    for key, raw in value.items():
-        axis_name = _normalized_mapping_key(key)
+
+    def _append_axis_values(
+        target: dict[str, list[str]],
+        *,
+        axis_name: str,
+        raw_values: object,
+    ) -> None:
         if not axis_name:
-            continue
-        axis_values: list[str] = []
-        for item in (raw if isinstance(raw, list) else [raw]):
+            return
+        axis_values = target.setdefault(axis_name, [])
+        for item in (raw_values if isinstance(raw_values, list) else [raw_values]):
             cleaned = _normalize_structured_scalar(item, field_name=axis_name)
             if not isinstance(cleaned, str) or not cleaned or cleaned in axis_values:
                 continue
             axis_values.append(cleaned)
-        if axis_values:
-            normalized[axis_name] = axis_values
+        if not axis_values:
+            target.pop(axis_name, None)
+
+    generic_bucket_key = next(
+        (
+            key
+            for key in _VARIANT_AXIS_GENERIC_BUCKET_KEYS
+            if isinstance(value.get(key), list) and value.get(key)
+        ),
+        "",
+    )
+    if generic_bucket_key:
+        inferred_axis_name = next(
+            (
+                candidate
+                for candidate in (
+                    _normalized_variant_axis_name(value.get("name")),
+                    _normalized_variant_axis_name(value.get("label")),
+                    _normalized_variant_axis_name(value.get("title")),
+                    _normalized_variant_axis_name(value.get("axis")),
+                    _normalized_variant_axis_name(value.get("attribute")),
+                )
+                if candidate
+            ),
+            "",
+        )
+        if inferred_axis_name:
+            normalized_descriptor: dict[str, list[str]] = {}
+            _append_axis_values(
+                normalized_descriptor,
+                axis_name=inferred_axis_name,
+                raw_values=value.get(generic_bucket_key),
+            )
+            if normalized_descriptor:
+                return normalized_descriptor
+
+    normalized: dict[str, list[str]] = {}
+    for key, raw in value.items():
+        axis_name = _normalized_variant_axis_name(key)
+        if not axis_name:
+            continue
+
+        if axis_name in _VARIANT_AXIS_METADATA_KEYS or axis_name in _VARIANT_AXIS_GENERIC_BUCKET_KEYS:
+            continue
+
+        if isinstance(raw, dict):
+            nested_descriptor = _normalize_variant_axes(raw)
+            if nested_descriptor:
+                for nested_axis_name, nested_values in nested_descriptor.items():
+                    _append_axis_values(
+                        normalized,
+                        axis_name=nested_axis_name,
+                        raw_values=nested_values,
+                    )
+                continue
+
+        _append_axis_values(normalized, axis_name=axis_name, raw_values=raw)
     return normalized or None
 
 

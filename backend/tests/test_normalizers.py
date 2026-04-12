@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from app.services.normalizers import (
     extract_currency_hint,
+    normalize_and_validate_value,
     normalize_decimal_price,
     normalize_value,
     validate_value,
@@ -113,3 +114,27 @@ def test_validate_color_hex_accepts_only_valid_css_hex_lengths():
     assert validate_value("color", "Size S, .") is None
     assert validate_value("color", "#abcde") is None
     assert validate_value("color", "#abcdefg") is None
+
+
+def test_normalize_variant_axes_promotes_localized_generic_choice_bucket_to_named_axis():
+    assert normalize_and_validate_value(
+        "variant_axes",
+        {
+            "key": "AT5",
+            "name": "สี",
+            "all_choices": ["Sand Beige", "Sirrocco Nude", "Machine Grey"],
+        },
+    ) == {"color": ["Sand Beige", "Sirrocco Nude", "Machine Grey"]}
+
+
+def test_normalize_product_attributes_drops_variant_axis_metadata_payload():
+    assert (
+        normalize_and_validate_value(
+            "product_attributes",
+            {
+                "key": "AT5",
+                "name": "สี",
+            },
+        )
+        is None
+    )

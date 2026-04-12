@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CrawlRecord, CrawlRun } from "../../lib/api/types";
+import { POLLING_INTERVALS } from "../../lib/constants/timing";
 import { TopBarProvider } from "../layout/top-bar-context";
 import { CrawlRunScreen } from "./crawl-run-screen";
 
@@ -83,6 +84,7 @@ function renderRunScreen(runId = 101) {
 
 describe("CrawlRunScreen", () => {
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
   });
 
@@ -157,5 +159,50 @@ describe("CrawlRunScreen", () => {
     expect(await screen.findByText("Some live panels failed to refresh")).toBeInTheDocument();
     expect(await screen.findByText(/Unable to refresh records: records fetch failed/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry failed panels" })).toBeInTheDocument();
+  });
+
+  it("refetches recent completed runs when summary records are present but the first table fetch is empty", async () => {
+    const completedAt = new Date().toISOString();
+    apiMock.getCrawl.mockResolvedValue({
+      ...terminalRun(101),
+      updated_at: completedAt,
+      completed_at: completedAt,
+      result_summary: {
+        extraction_verdict: "success",
+        record_count: 2,
+      },
+    });
+
+    let callCount = 0;
+    apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
+      callCount += 1;
+      const limit = params?.limit ?? 100;
+      if (callCount === 1) {
+        return {
+          items: [],
+          meta: { page: 1, limit, total: 0 },
+        };
+      }
+      return {
+        items: [makeRecord(1), makeRecord(2)],
+        meta: { page: 1, limit, total: 2 },
+      };
+    });
+
+    renderRunScreen();
+
+    await waitFor(() => {
+      expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 1, limit: 100 });
+    });
+
+    await new Promise((resolve) => window.setTimeout(resolve, POLLING_INTERVALS.RECORDS_MS + 100));
+
+    await waitFor(() => {
+      expect(apiMock.getRecords.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 1")).toBeInTheDocument();
+    });
   });
 });

@@ -143,7 +143,8 @@ export function clampNumber(value: string, min: number, max: number, fallback: n
 }
 
 export function extractRecordUrl(record: CrawlRecord) {
-  return stringifyCell(record.data?.url ?? record.raw_data?.url ?? record.source_url).trim();
+  const value = record.data?.url ?? record.raw_data?.url ?? record.source_url;
+  return stringifyCell(value).trim();
 }
 
 export function isListingRun(run?: CrawlRun) {
@@ -154,6 +155,16 @@ export function stringifyCell(value: unknown) {
   if (value == null) return "";
   if (typeof value === "string") return value;
   return JSON.stringify(value);
+}
+
+export function formatCellDisplay(value: unknown) {
+  const text = stringifyCell(value).trim();
+  if (!/^https?:\/\//i.test(text)) return text;
+  try {
+    return decodeURI(text);
+  } catch {
+    return text;
+  }
 }
 
 export function humanizeFieldName(value: string) {
@@ -882,9 +893,9 @@ export const RecordsTable = memo(function RecordsTable({
                 />
               </td>
               {visibleColumns.map((col) => (
-                <td key={col} title={stringifyCell(readRecordValue(record, col))}>
+                <td key={col} title={formatCellDisplay(readRecordValue(record, col))}>
                   <span className="block max-w-[260px] truncate">
-                    {stringifyCell(readRecordValue(record, col)) || <span className="text-muted/50">--</span>}
+                    {formatCellDisplay(readRecordValue(record, col)) || <span className="text-muted/50">--</span>}
                   </span>
                 </td>
               ))}

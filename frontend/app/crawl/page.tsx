@@ -15,7 +15,7 @@ export default function CrawlPage() {
   const runId = Number(searchParams.get("run_id") || searchParams.get("runId") || 0) || null;
 
   if (runId !== null) {
-    return <CrawlRunScreen runId={runId} />;
+    return <CrawlRunScreen key={runId} runId={runId} />;
   }
 
   return (

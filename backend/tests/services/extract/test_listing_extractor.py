@@ -2143,6 +2143,18 @@ def test_card_itemprop_image():
     assert records[0]["image_url"] == "https://example.com/img/product.jpg"
 
 
+def test_coerce_listing_product_url_candidate_preserves_canonical_percent_encoded_url():
+    encoded = "https://www.shop.ving.run/product/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3"
+
+    assert (
+        listing_card_extractor._coerce_listing_product_url_candidate(
+            encoded,
+            "https://www.shop.ving.run/search",
+        )
+        == encoded
+    )
+
+
 def test_extract_listing_records_reads_titles_from_pro_title_text():
     html = """
     <html><body>

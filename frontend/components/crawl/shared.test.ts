@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { CrawlRecord } from "../../lib/api/types";
-import { estimateDataQuality, scoreFieldQuality, scoreRecordQuality, validateAdditionalFieldName } from "./shared";
+import {
+  estimateDataQuality,
+  formatCellDisplay,
+  scoreFieldQuality,
+  scoreRecordQuality,
+  validateAdditionalFieldName,
+} from "./shared";
 
 function makeRecord(id: number, data: Record<string, unknown>): CrawlRecord {
   return {
@@ -112,5 +118,13 @@ describe("validateAdditionalFieldName", () => {
   it("accepts concise business field names", () => {
     expect(validateAdditionalFieldName("supplier_color")).toBeNull();
     expect(validateAdditionalFieldName("material")).toBeNull();
+  });
+});
+
+describe("formatCellDisplay", () => {
+  it("decodes internationalized product URLs for UI display only", () => {
+    expect(
+      formatCellDisplay("https://www.shop.ving.run/product/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3"),
+    ).toBe("https://www.shop.ving.run/product/สีดำ");
   });
 });

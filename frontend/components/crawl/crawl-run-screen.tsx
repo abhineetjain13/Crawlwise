@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRightCircle, ChevronsDown, Copy, Download, Info } from "lucide-react";
+import { ArrowRightCircle, ChevronsDown, Copy, Download, Info, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -41,7 +41,6 @@ import {
   formatDuration,
   estimateDataQuality,
   humanizeVerdict,
-  humanizeFieldName,
   humanizeQuality,
   isListingRun,
   LogTerminal,
@@ -51,9 +50,7 @@ import {
   qualityTone,
   RecordsTable,
   scoreFieldQuality,
-  scoreRecordQuality,
   scrollViewportToBottom,
-  stringifyCell,
   uniqueNumbers,
   uniqueStrings,
 } from "./shared";
@@ -87,7 +84,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const [logItems, setLogItems] = useState<CrawlLog[]>([]);
   const [logCursorAfterId, setLogCursorAfterId] = useState<number | undefined>(undefined);
   const [logSocketConnected, setLogSocketConnected] = useState(false);
-  const [qualityFilter, setQualityFilter] = useState<"low" | "medium" | "high">("low");
   const logCursorRef = useRef<number | undefined>(undefined);
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const sessionStartMsRef = useRef<number>(Date.now());
@@ -418,17 +414,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     }
     return scores;
   }, [recordsForAnalysis, visibleColumns]);
-  const tableRecordScores = useMemo(
-    () =>
-      Object.fromEntries(
-        tableRecords.map((record) => [record.id, scoreRecordQuality(record, visibleColumns)]),
-      ),
-    [tableRecords, visibleColumns],
-  );
-  const filteredTableRecords = useMemo(() => {
-    const minimumScore = qualityFilter === "high" ? 0.8 : qualityFilter === "medium" ? 0.5 : 0;
-    return tableRecords.filter((record) => (tableRecordScores[record.id] ?? 0) >= minimumScore);
-  }, [qualityFilter, tableRecordScores, tableRecords]);
+  const filteredTableRecords = tableRecords;
 
   useEffect(() => {
     const availableRecordIds = new Set(
@@ -483,6 +469,26 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       terminal ? run?.completed_at : new Date(localNow).toISOString(),
     ),
   };
+
+  const missingRecentTerminalRecords =
+    terminal &&
+    summaryRecordsFromRun > 0 &&
+    !tableRecords.length &&
+    !tableTotal &&
+    !!run?.completed_at &&
+    Date.now() - parseApiDate(run.completed_at).getTime() <= POLLING_INTERVALS.STUCK_RUN_WARNING_MS;
+
+  useEffect(() => {
+    if (!missingRecentTerminalRecords) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void Promise.allSettled([tableRecordsQuery.refetch(), jsonRecordsQuery.refetch()]);
+    }, POLLING_INTERVALS.RECORDS_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [jsonRecordsQuery, missingRecentTerminalRecords, tableRecordsQuery]);
 
   async function downloadExport(kind: "csv" | "json" | "markdown") {
     const filename = `run-${runId}.${kind === "markdown" ? "md" : kind}`;
@@ -557,7 +563,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         <PageHeader
           title="Crawl Studio"
           actions={
-            <Button variant="accent" type="button" onClick={resetToConfig}>
+            <Button variant="primary" size="sm" type="button" onClick={resetToConfig}>
+              <Plus className="size-3.5" />
               New Crawl
             </Button>
           }
@@ -581,7 +588,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
           </span>
         ) : "Crawl Results"}
         actions={
-          <Button variant="secondary" size="sm" type="button" onClick={resetToConfig}>
+          <Button variant="primary" size="sm" type="button" onClick={resetToConfig}>
+            <Plus className="size-3.5" />
             New Crawl
           </Button>
         }
@@ -766,34 +774,6 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       <DataRegionLoading count={5} className="px-0" />
                     ) : tableRecords.length ? (
                       <div className="space-y-3">
-                        <div className="subtle-panel flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] px-3 py-2">
-                          <div className="flex items-center gap-2 text-body-sm text-muted">
-                            <span className="text-data-strong text-foreground">Shown rows</span>
-                            <select
-                              aria-label="Minimum row quality"
-                              value={qualityFilter}
-                              onChange={(event) => {
-                                const next = event.target.value;
-                                if (next === "low" || next === "medium" || next === "high") {
-                                  setQualityFilter(next);
-                                }
-                              }}
-                              className="control-select focus-ring h-9 min-w-[150px]"
-                            >
-                              <option value="low">Low to High</option>
-                              <option value="medium">Medium to High</option>
-                              <option value="high">High Only</option>
-                            </select>
-                            <Tooltip content="Quality means how complete and useful a row is for review. This only filters what you see in the table. Exported data and extraction output stay unchanged.">
-                              <button type="button" aria-label="Explain row quality filter" className="text-muted transition-colors hover:text-foreground">
-                                <Info className="size-3.5" aria-hidden="true" />
-                              </button>
-                            </Tooltip>
-                          </div>
-                          <div className="text-caption text-muted">
-                            Showing {filteredTableRecords.length} of {tableRecords.length} loaded rows
-                          </div>
-                        </div>
                         <RecordsTable
                           records={filteredTableRecords}
                           visibleColumns={visibleColumns}
@@ -841,7 +821,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         Copy
                       </Button>
                     </div>
-                    <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto px-4 pb-4 pt-14 text-caption">
+                    <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto pt-14 pb-4">
                       {recordsJson}
                     </pre>
                     {hasMoreJsonRecords ? (
