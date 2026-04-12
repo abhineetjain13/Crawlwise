@@ -19,6 +19,7 @@ export type RunStatus =
 export type CrawlPhase = "config" | "running" | "complete";
 
 export type CrawlModule = "category" | "pdp";
+export type CrawlDomain = "commerce" | "jobs";
 export type CrawlSurface =
   | "ecommerce_listing"
   | "ecommerce_detail"
@@ -267,7 +268,7 @@ export type LoginResponse = {
 
 export type CrawlConfig = {
   module: CrawlModule;
-  surface: CrawlSurface;
+  domain: CrawlDomain;
   mode: CrawlMode;
   target_url: string;
   bulk_urls: string;

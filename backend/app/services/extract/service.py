@@ -11,9 +11,8 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
-    ECOMMERCE_ONLY_FIELDS,
-    JOB_ONLY_FIELDS,
     REQUESTED_FIELD_ALIASES,
+    excluded_fields_for_surface,
 )
 from app.services.exceptions import ExtractionError, ExtractionParseError
 from app.services.extract.candidate_processing import (
@@ -59,13 +58,15 @@ from app.services.extract.semantic_support import (
     extract_semantic_detail_data,
     resolve_requested_field_values,
 )
+from app.services.extract.noise_policy import (
+    is_network_payload_noise_url,
+)
 from app.services.extract.signal_inventory import (
     build_signal_inventory,
     classify_page_type,
 )
 from app.services.extract.source_parsers import parse_page_sources
 from app.services.extract.variant_builder import (
-    _NETWORK_PAYLOAD_NOISE_URL_PATTERNS,  # noqa: F401 — re-exported for dom_extraction deferred import
     _build_variant_rows,
     _payload_matches_page_scope,
     _structured_source_candidates,
@@ -304,6 +305,7 @@ def extract_candidates(
         contract_by_field = _index_extraction_contract(extraction_contract or [])
         semantic = extract_semantic_detail_data(
             html,
+            surface=surface,
             requested_fields=sorted(target_fields),
             soup=soup,
             page_url=url,
@@ -720,6 +722,7 @@ def _collect_candidates(
                 start_index = len(rows)
                 semantic_rows = resolve_requested_field_values(
                     [field_name],
+                    surface=surface,
                     sections=semantic_sections,
                     specifications=semantic_specifications,
                     promoted_fields=semantic_promoted,
@@ -886,7 +889,7 @@ def _collect_network_payload_candidates(
         if not isinstance(payload, dict):
             continue
         payload_url = str(payload.get("url") or "").lower()
-        if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
+        if is_network_payload_noise_url(payload_url):
             continue
         body = payload.get("body", {})
         if isinstance(body, (dict, list)):
@@ -1186,12 +1189,7 @@ def _finalize_candidates(
         "materials",
     }
     surface_name = str(surface or "").strip().lower()
-    if surface_name in {"job_listing", "job_detail"}:
-        surface_excluded_dynamic_fields = ECOMMERCE_ONLY_FIELDS
-    elif surface_name in {"ecommerce_listing", "ecommerce_detail"}:
-        surface_excluded_dynamic_fields = JOB_ONLY_FIELDS
-    else:
-        surface_excluded_dynamic_fields = frozenset()
+    surface_excluded_dynamic_fields = excluded_fields_for_surface(surface_name)
     discovered_dynamic_fields: dict[str, object] = {}
     for field_name, rows in merged_dynamic_rows.items():
         dynamic_source_rows: dict[str, list[dict[str, Any]]] = {}
@@ -1301,9 +1299,6 @@ def _finalize_candidates(
         "mapping_hint": mappings,
         "semantic": semantic,
     }
-
-
-
 
 
 

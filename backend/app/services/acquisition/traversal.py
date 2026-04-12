@@ -11,11 +11,26 @@ from typing import Protocol
 
 from app.services.config.crawl_runtime import (
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
+    INFINITE_SCROLL_CONTAINER_OVERFLOW_THRESHOLD_PX,
+    INFINITE_SCROLL_POSITIVE_SIGNAL_MIN,
+    INFINITE_SCROLL_TALL_PAGE_RATIO,
     LISTING_MIN_ITEMS,
     LOAD_MORE_WAIT_MIN_MS,
     PAGINATION_NAVIGATION_TIMEOUT_MS,
+    PAGINATION_POST_CLICK_DOMCONTENTLOADED_TIMEOUT_MS,
+    PAGINATION_POST_CLICK_POLL_MS,
+    PAGINATION_POST_CLICK_SETTLE_TIMEOUT_MS,
+    PAGINATION_POST_CLICK_TIMEOUT_MS,
     PAGINATION_PAGE_SIZE_ANOMALY_RATIO,
     SCROLL_WAIT_MIN_MS,
+    TRAVERSAL_ACTIVE_LINK_WEIGHT,
+    TRAVERSAL_ACTIVE_SCROLLABLE_BONUS,
+    TRAVERSAL_ACTIVE_SCROLLABLE_THRESHOLD_PX,
+    TRAVERSAL_ACTIVE_TARGET_LABEL_MAX_LEN,
+    TRAVERSAL_FORCE_PROBE_MIN_ADVANCE_PX,
+    TRAVERSAL_MAX_ITERATIONS_CAP,
+    TRAVERSAL_MIN_SETTLE_WAIT_MS,
+    TRAVERSAL_WEAK_PROGRESS_STREAK_MAX,
 )
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
 from app.services.runtime_metrics import incr
@@ -148,7 +163,7 @@ _JS_DETECT_INFINITE_SCROLL = r"""
             const style = getComputedStyle(el);
             const ov = style.overflowY || '';
             if ((ov === 'auto' || ov === 'scroll') &&
-                (el.scrollHeight - el.clientHeight) > 500) {
+                (el.scrollHeight - el.clientHeight) > __OVERFLOW_THRESHOLD__) {
                 hasScrollableContainer = true;
                 break;
             }
@@ -161,7 +176,7 @@ _JS_DETECT_INFINITE_SCROLL = r"""
         document.documentElement?.scrollHeight || 0
     );
     const vpH = window.innerHeight || 0;
-    const tallPage = docH > vpH * 3;
+    const tallPage = docH > vpH * __TALL_PAGE_RATIO__;
 
     return {
         has_sentinel: hasSentinel,
@@ -174,6 +189,65 @@ _JS_DETECT_INFINITE_SCROLL = r"""
     };
 }
 """
+_JS_DETECT_INFINITE_SCROLL = _JS_DETECT_INFINITE_SCROLL.replace(
+    "__OVERFLOW_THRESHOLD__", str(INFINITE_SCROLL_CONTAINER_OVERFLOW_THRESHOLD_PX)
+).replace("__TALL_PAGE_RATIO__", str(INFINITE_SCROLL_TALL_PAGE_RATIO))
+
+_JS_PERFORM_SCROLL = """
+            ({ currentHeight, forceProbe }) => {
+                const candidates = [
+                    document.querySelector("main"),
+                    ...Array.from(document.querySelectorAll("[role='main'], [role='feed'], [role='list'], .products, .product-grid, .product-list, .results, .search-results, .items, .list, .listing"))
+                ].filter(Boolean);
+                const score = (el) => {
+                    const links = el.querySelectorAll("a[href]").length;
+                    const cards = el.querySelectorAll("article, li, [class*='product'], [class*='result'], [class*='item']").length;
+                    const scrollable = Math.max(0, (el.scrollHeight || 0) - (el.clientHeight || 0));
+                    return (links * __LINK_WEIGHT__) + cards + (scrollable > __SCROLLABLE_THRESHOLD__ ? __SCROLLABLE_BONUS__ : 0);
+                };
+                let target = null;
+                for (const candidate of candidates) {
+                    if (!candidate || !(candidate instanceof Element)) continue;
+                    if (!target || score(candidate) > score(target)) {
+                        target = candidate;
+                    }
+                }
+                const root = document.scrollingElement || document.documentElement || document.body;
+                const activeTarget =
+                    target instanceof HTMLElement &&
+                    target.scrollHeight > (target.clientHeight + __SCROLLABLE_THRESHOLD__)
+                        ? target
+                        : root;
+                const label = activeTarget === root
+                    ? "window"
+                    : (activeTarget.getAttribute("data-testid") || activeTarget.getAttribute("id") || activeTarget.className || activeTarget.tagName || "container").toString().slice(0, __LABEL_MAX_LEN__);
+                if (activeTarget === root) {
+                    const nextTop = forceProbe
+                        ? Math.max((window.scrollY || 0) + Math.max(window.innerHeight || 0, __FORCE_PROBE_MIN_ADVANCE__), currentHeight || 0)
+                        : (currentHeight || root.scrollHeight || 0);
+                    window.scrollTo(0, nextTop);
+                } else {
+                    const nextTop = forceProbe
+                        ? Math.max((activeTarget.scrollTop || 0) + Math.max(activeTarget.clientHeight || 0, __FORCE_PROBE_MIN_ADVANCE__), currentHeight || 0)
+                        : Math.max(currentHeight || 0, activeTarget.scrollTop || 0);
+                    activeTarget.scrollTo(0, nextTop || activeTarget.scrollHeight || 0);
+                }
+                return { target: label };
+            }
+"""
+_JS_PERFORM_SCROLL = (
+    _JS_PERFORM_SCROLL.replace("__LINK_WEIGHT__", str(TRAVERSAL_ACTIVE_LINK_WEIGHT))
+    .replace(
+        "__SCROLLABLE_THRESHOLD__", str(TRAVERSAL_ACTIVE_SCROLLABLE_THRESHOLD_PX)
+    )
+    .replace("__SCROLLABLE_BONUS__", str(TRAVERSAL_ACTIVE_SCROLLABLE_BONUS))
+    .replace(
+        "__LABEL_MAX_LEN__", str(TRAVERSAL_ACTIVE_TARGET_LABEL_MAX_LEN)
+    )
+    .replace(
+        "__FORCE_PROBE_MIN_ADVANCE__", str(TRAVERSAL_FORCE_PROBE_MIN_ADVANCE_PX)
+    )
+)
 
 
 async def _detect_infinite_scroll_signals(page) -> dict[str, object]:
@@ -202,7 +276,9 @@ async def _detect_infinite_scroll_signals(page) -> dict[str, object]:
         bool(raw.get("has_offset_param")),
     ])
     raw["positive_signal_count"] = positive
-    raw["is_likely_infinite_scroll"] = positive >= 2
+    raw["is_likely_infinite_scroll"] = (
+        positive >= INFINITE_SCROLL_POSITIVE_SIGNAL_MIN
+    )
     return raw
 
 
@@ -294,6 +370,28 @@ class TraversalRuntime:
     checkpoint: Callable[[], Awaitable[None]] | None = None
     progress_logger: Callable[[str], Awaitable[None]] | None = None
     goto_page: Callable[..., Awaitable[None]] | None = None
+
+
+@dataclass(slots=True)
+class TraversalRequest:
+    page: object
+    surface: str | None
+    traversal_mode: str | None
+    max_scrolls: int
+    max_pages: int
+    request_delay_ms: int
+    runtime: TraversalRuntime
+    config: TraversalConfig | None = None
+
+
+@dataclass(slots=True)
+class PaginationTraversalRequest:
+    page: object
+    surface: str | None
+    max_pages: int
+    request_delay_ms: int
+    runtime: TraversalRuntime
+    config: TraversalConfig | None = None
 
 
 @dataclass
@@ -582,26 +680,14 @@ class LoadMoreStrategy(_TraversalStrategyBase):
 class PaginationStrategy(_TraversalStrategyBase):
     async def traverse(self) -> TraversalResult:
         result = await collect_paginated_html(
-            self.context.page,
-            config=self.context.config,
-            surface=self.context.surface,
-            max_pages=self.context.max_pages,
-            request_delay_ms=self.context.request_delay_ms,
-            page_content_with_retry=self.context.page_content_with_retry,
-            wait_for_surface_readiness=self.context.wait_for_surface_readiness,
-            wait_for_listing_readiness=self.context.wait_for_listing_readiness,
-            click_and_observe_next_page=self.context.click_and_observe_next_page,
-            advance_next_page_fn=self.context.advance_next_page_fn,
-            dismiss_cookie_consent=self.context.dismiss_cookie_consent,
-            pause_after_navigation=self.context.pause_after_navigation,
-            expand_all_interactive_elements=self.context.expand_all_interactive_elements,
-            flatten_shadow_dom=self.context.flatten_shadow_dom,
-            ensure_memory_available=self.context.ensure_memory_available,
-            run_id=self.context.run_id,
-            traversal_artifact_dir=self.context.traversal_artifact_dir,
-            checkpoint=self.context.checkpoint,
-            progress_logger=self.context.progress_logger,
-            goto_page=self.context.goto_page,
+            PaginationTraversalRequest(
+                page=self.context.page,
+                config=self.context.config,
+                surface=self.context.surface,
+                max_pages=self.context.max_pages,
+                request_delay_ms=self.context.request_delay_ms,
+                runtime=self.context.runtime,
+            )
         )
         return self._log_and_return(result)
 
@@ -629,26 +715,14 @@ class AutoTraversalStrategy(_TraversalStrategyBase):
             pre_pagination_html: str | None = None,
         ) -> TraversalResult:
             paginated = await collect_paginated_html(
-                page,
-                config=self.context.config,
-                surface=self.context.surface,
-                max_pages=self.context.max_pages,
-                request_delay_ms=self.context.request_delay_ms,
-                page_content_with_retry=self.context.page_content_with_retry,
-                wait_for_surface_readiness=self.context.wait_for_surface_readiness,
-                wait_for_listing_readiness=self.context.wait_for_listing_readiness,
-                click_and_observe_next_page=self.context.click_and_observe_next_page,
-                advance_next_page_fn=self.context.advance_next_page_fn,
-                dismiss_cookie_consent=self.context.dismiss_cookie_consent,
-                pause_after_navigation=self.context.pause_after_navigation,
-                expand_all_interactive_elements=self.context.expand_all_interactive_elements,
-                flatten_shadow_dom=self.context.flatten_shadow_dom,
-                ensure_memory_available=self.context.ensure_memory_available,
-                run_id=self.context.run_id,
-                traversal_artifact_dir=self.context.traversal_artifact_dir,
-                checkpoint=self.context.checkpoint,
-                progress_logger=self.context.progress_logger,
-                goto_page=self.context.goto_page,
+                PaginationTraversalRequest(
+                    page=page,
+                    config=self.context.config,
+                    surface=self.context.surface,
+                    max_pages=self.context.max_pages,
+                    request_delay_ms=self.context.request_delay_ms,
+                    runtime=self.context.runtime,
+                )
             )
             if pre_pagination_html:
                 paginated.html = (
@@ -790,27 +864,21 @@ def _traversal_strategy_for_mode(context: _TraversalContext) -> TraversalStrateg
     return strategy_factory(context)
 
 
-async def apply_traversal_mode(
-    page,
-    surface: str | None,
-    traversal_mode: str | None,
-    max_scrolls: int,
-    *,
-    runtime: TraversalRuntime,
-    config: TraversalConfig | None = None,
-    max_pages: int,
-    request_delay_ms: int,
-) -> TraversalResult:
-    config = _resolved_config(config)
-    logger.info("[traversal] starting mode=%s surface=%s", traversal_mode, surface)
+async def apply_traversal_mode(request: TraversalRequest) -> TraversalResult:
+    config = _resolved_config(request.config)
+    logger.info(
+        "[traversal] starting mode=%s surface=%s",
+        request.traversal_mode,
+        request.surface,
+    )
 
-    normalized_surface = str(surface or "").strip().lower()
+    normalized_surface = str(request.surface or "").strip().lower()
     if normalized_surface.endswith("_detail"):
         return _log_traversal_result(
-            traversal_mode,
+            request.traversal_mode,
             TraversalResult(
                 summary={
-                    "mode": traversal_mode,
+                    "mode": request.traversal_mode,
                     "attempted": False,
                     "stop_reason": "detail_surface",
                 }
@@ -818,14 +886,14 @@ async def apply_traversal_mode(
         )
 
     context = _TraversalContext(
-        page=page,
-        surface=surface,
-        traversal_mode=traversal_mode,
+        page=request.page,
+        surface=request.surface,
+        traversal_mode=request.traversal_mode,
         config=config,
-        max_scrolls=max_scrolls,
-        max_pages=max_pages,
-        request_delay_ms=request_delay_ms,
-        runtime=runtime,
+        max_scrolls=request.max_scrolls,
+        max_pages=request.max_pages,
+        request_delay_ms=request.request_delay_ms,
+        runtime=request.runtime,
     )
     return await _traversal_strategy_for_mode(context).traverse()
 
@@ -837,33 +905,14 @@ def _log_for_pytest(level: int, message: str, *args: object) -> None:
 
 
 async def collect_paginated_html(
-    page,
-    *,
-    config: TraversalConfig | None = None,
-    surface: str | None = None,
-    max_pages: int,
-    request_delay_ms: int,
-    page_content_with_retry: Callable[..., Awaitable[str]],
-    wait_for_surface_readiness: Callable[..., Awaitable[dict[str, object] | None]],
-    wait_for_listing_readiness: Callable[..., Awaitable[dict[str, object] | None]],
-    click_and_observe_next_page: Callable[..., Awaitable[str | AdvanceResult]] | None = None,
-    advance_next_page_fn: Callable[..., Awaitable[AdvanceResult]] | None = None,
-    dismiss_cookie_consent: Callable[..., Awaitable[None]],
-    pause_after_navigation: Callable[..., Awaitable[None]],
-    expand_all_interactive_elements: Callable[..., Awaitable[dict[str, object]]],
-    flatten_shadow_dom: Callable[..., Awaitable[None]],
-    ensure_memory_available: Callable[[], None] | None = None,
-    run_id: int | None = None,
-    traversal_artifact_dir: Path | None = None,
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-    progress_logger: Callable[[str], Awaitable[None]] | None = None,
-    goto_page: Callable[..., Awaitable[None]] | None = None,
+    request: PaginationTraversalRequest,
 ) -> TraversalResult:
-    config = _resolved_config(config)
-    if advance_next_page_fn is None and click_and_observe_next_page is None:
+    config = _resolved_config(request.config)
+    runtime = request.runtime
+    if runtime.advance_next_page_fn is None and runtime.click_and_observe_next_page is None:
         raise ValueError("no pagination callback provided")
-    if ensure_memory_available is not None:
-        ensure_memory_available()
+    if runtime.ensure_memory_available is not None:
+        runtime.ensure_memory_available()
 
     fragments: list[str] = []
     page_files: list[Path] = []
@@ -871,20 +920,24 @@ async def collect_paginated_html(
     stop_reason = "max_pages_reached"
     _first_page_size: int = 0
     steps: list[dict[str, object]] = []
+    page = request.page
     current_url = str(page.url or "").strip()
     if current_url:
         visited_urls.add(current_url)
-    normalized_surface = str(surface or "").strip().lower()
+    normalized_surface = str(request.surface or "").strip().lower()
     is_listing_surface = normalized_surface.endswith("_listing")
     seen_card_identities: set[str] = set()
-    card_selectors = _card_selectors_for_surface(surface)
+    card_selectors = _card_selectors_for_surface(request.surface)
 
     async def _capture_page_html(
         current_page,
         *,
         page_number: int,
     ) -> tuple[str, int, str]:
-        full_html = await page_content_with_retry(current_page, checkpoint=checkpoint)
+        full_html = await runtime.page_content_with_retry(
+            current_page,
+            checkpoint=runtime.checkpoint,
+        )
         capture_html = full_html
         capture_mode = "full_page"
         if is_listing_surface:
@@ -919,8 +972,8 @@ async def collect_paginated_html(
             if fragment_parts:
                 capture_html = "\n".join(fragment_parts)
                 capture_mode = "targeted_fragment"
-        if progress_logger is not None:
-            await progress_logger(
+        if runtime.progress_logger is not None:
+            await runtime.progress_logger(
                 f"paginate:capture page={page_number} mode={capture_mode} html_length={len(capture_html or '')}"
             )
         return capture_html, len(full_html or ""), capture_mode
@@ -929,9 +982,12 @@ async def collect_paginated_html(
     # already_navigated); fall back to the legacy click_and_observe_next_page
     # wrapper for backward compatibility.
     async def _legacy_advance(pg, *, checkpoint=None) -> AdvanceResult:
-        if click_and_observe_next_page is None:
+        if runtime.click_and_observe_next_page is None:
             raise ValueError("no pagination callback provided")
-        result = await click_and_observe_next_page(pg, checkpoint=checkpoint)  # type: ignore[misc]
+        result = await runtime.click_and_observe_next_page(  # type: ignore[misc]
+            pg,
+            checkpoint=checkpoint,
+        )
         if isinstance(result, AdvanceResult):
             return AdvanceResult(
                 url=result.url,
@@ -939,9 +995,13 @@ async def collect_paginated_html(
             )
         return AdvanceResult(url=result, already_navigated=False)
 
-    _advance = advance_next_page_fn if advance_next_page_fn is not None else _legacy_advance
+    _advance = (
+        runtime.advance_next_page_fn
+        if runtime.advance_next_page_fn is not None
+        else _legacy_advance
+    )
 
-    page_limit = max(1, int(max_pages or 1))
+    page_limit = max(1, int(request.max_pages or 1))
     for page_index in range(page_limit):
         page_html, full_page_size, capture_mode = await _capture_page_html(
             page,
@@ -950,14 +1010,14 @@ async def collect_paginated_html(
         current_page_size = full_page_size
         if page_index == 0:
             _first_page_size = current_page_size
-        if traversal_artifact_dir is not None:
+        if runtime.traversal_artifact_dir is not None:
             await asyncio.to_thread(
-                traversal_artifact_dir.mkdir,
+                runtime.traversal_artifact_dir.mkdir,
                 parents=True,
                 exist_ok=True,
             )
-            file_prefix = str(run_id) if run_id is not None else "adhoc"
-            page_path = traversal_artifact_dir / f"{file_prefix}_page_{page_index + 1}.html"
+            file_prefix = str(runtime.run_id) if runtime.run_id is not None else "adhoc"
+            page_path = runtime.traversal_artifact_dir / f"{file_prefix}_page_{page_index + 1}.html"
             await asyncio.to_thread(
                 page_path.write_text,
                 f"<!-- PAGE BREAK:{page_index + 1}:{page.url} -->\n{page_html}",
@@ -997,7 +1057,7 @@ async def collect_paginated_html(
         if page_index + 1 >= page_limit:
             break
         current_url = str(page.url or "").strip()
-        advance_result = await _advance(page, checkpoint=checkpoint)
+        advance_result = await _advance(page, checkpoint=runtime.checkpoint)
         next_page_url = advance_result.url
         page_advanced_in_place = (
             bool(next_page_url)
@@ -1023,12 +1083,12 @@ async def collect_paginated_html(
         # (e.g. it returned an <a href> URL but did not click).
         needs_goto = not advance_result.already_navigated and not page_advanced_in_place
         if needs_goto:
-            if goto_page is not None:
-                await goto_page(
+            if runtime.goto_page is not None:
+                await runtime.goto_page(
                     page,
                     next_page_url,
-                    surface=surface,
-                    checkpoint=checkpoint,
+                    surface=request.surface,
+                    checkpoint=runtime.checkpoint,
                 )
             else:
                 await page.goto(
@@ -1044,10 +1104,10 @@ async def collect_paginated_html(
                     )
                 except PlaywrightTimeoutError:
                     pass
-            await wait_for_surface_readiness(
+            await runtime.wait_for_surface_readiness(
                 page,
-                surface=surface,
-                checkpoint=checkpoint,
+                surface=request.surface,
+                checkpoint=runtime.checkpoint,
             )
             steps.append(
                 {
@@ -1057,8 +1117,8 @@ async def collect_paginated_html(
                     "in_place": False,
                 }
             )
-            if progress_logger is not None:
-                await progress_logger(
+            if runtime.progress_logger is not None:
+                await runtime.progress_logger(
                     f"paginate:advance_goto page={page_index + 2} url={next_page_url}"
                 )
         else:
@@ -1070,15 +1130,25 @@ async def collect_paginated_html(
                     "in_place": page_advanced_in_place or advance_result.already_navigated,
                 }
             )
-            if progress_logger is not None:
-                await progress_logger(
+            if runtime.progress_logger is not None:
+                await runtime.progress_logger(
                     f"paginate:advance_in_place page={page_index + 2} url={next_page_url}"
                 )
-        await dismiss_cookie_consent(page, checkpoint=checkpoint)
-        await pause_after_navigation(request_delay_ms, checkpoint=checkpoint)
-        await expand_all_interactive_elements(page, checkpoint=checkpoint)
-        await flatten_shadow_dom(page)
-        await wait_for_listing_readiness(page, surface, checkpoint=checkpoint)
+        await runtime.dismiss_cookie_consent(page, checkpoint=runtime.checkpoint)
+        await runtime.pause_after_navigation(
+            request.request_delay_ms,
+            checkpoint=runtime.checkpoint,
+        )
+        await runtime.expand_all_interactive_elements(
+            page,
+            checkpoint=runtime.checkpoint,
+        )
+        await runtime.flatten_shadow_dom(page)
+        await runtime.wait_for_listing_readiness(
+            page,
+            request.surface,
+            checkpoint=runtime.checkpoint,
+        )
     if page_files:
         fragments = await asyncio.gather(
             *[
@@ -1333,12 +1403,15 @@ async def advance_next_page(
     initial_state = await snapshot_pagination_state(page)
     initial_hash = await _container_hash()
     try:
-        await target.click(timeout=1500)
+        await target.click(timeout=PAGINATION_POST_CLICK_TIMEOUT_MS)
     except PlaywrightError:
         logger.debug("Failed to click next-page control", exc_info=True)
         return AdvanceResult()
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=5000)
+        await page.wait_for_load_state(
+            "domcontentloaded",
+            timeout=PAGINATION_POST_CLICK_DOMCONTENTLOADED_TIMEOUT_MS,
+        )
     except PlaywrightTimeoutError:
         logger.debug(
             "Timed out waiting for domcontentloaded after pagination click",
@@ -1346,8 +1419,8 @@ async def advance_next_page(
         )
 
     waited_ms = 0
-    poll_ms = 250
-    while waited_ms < 3000:
+    poll_ms = PAGINATION_POST_CLICK_POLL_MS
+    while waited_ms < PAGINATION_POST_CLICK_SETTLE_TIMEOUT_MS:
         if hasattr(page, "wait_for_timeout"):
             try:
                 await page.wait_for_timeout(poll_ms)
@@ -1404,7 +1477,7 @@ async def scroll_to_bottom(
     forced_probe_used = False
     weak_progress_streak = 0
     seen_identities: set[str] = set()
-    max_iterations = min(max(0, int(max_scrolls or 0)), 50)
+    max_iterations = min(max(0, int(max_scrolls or 0)), TRAVERSAL_MAX_ITERATIONS_CAP)
     for index in range(max_iterations):
         current_height = await current_scroll_height(page)
         current_metrics = await snapshot_listing_page_metrics(page)
@@ -1425,7 +1498,10 @@ async def scroll_to_bottom(
             force_probe=forced_probe_used,
         )
 
-        await cooperative_sleep_ms(max(500, request_delay_ms), checkpoint=checkpoint)
+        await cooperative_sleep_ms(
+            max(TRAVERSAL_MIN_SETTLE_WAIT_MS, request_delay_ms),
+            checkpoint=checkpoint,
+        )
         network_wait_status = "skipped"
         if hasattr(page, "wait_for_load_state"):
             try:
@@ -1492,7 +1568,10 @@ async def scroll_to_bottom(
         progressed = progress_kind != "none"
         if not progressed:
             # One extra settle window for delayed/virtualized rendering pages.
-            await cooperative_sleep_ms(500, checkpoint=checkpoint)
+            await cooperative_sleep_ms(
+                TRAVERSAL_MIN_SETTLE_WAIT_MS,
+                checkpoint=checkpoint,
+            )
             settled_height = await current_scroll_height(page)
             settled_metrics = await snapshot_listing_page_metrics(page)
             settled_identity_growth = _identity_growth(seen_identities, settled_metrics)
@@ -1564,7 +1643,7 @@ async def scroll_to_bottom(
         if not progressed:
             stop_reason = "no_progress_after_scroll"
             break
-        if weak_progress_streak >= 2:
+        if weak_progress_streak >= TRAVERSAL_WEAK_PROGRESS_STREAK_MAX:
             stop_reason = "height_only_progress_exhausted"
             break
         forced_probe_used = False
@@ -1583,48 +1662,7 @@ async def perform_scroll(
     try:
         return (
             await page.evaluate(
-                """
-            ({ currentHeight, forceProbe }) => {
-                const candidates = [
-                    document.querySelector("main"),
-                    ...Array.from(document.querySelectorAll("[role='main'], [role='feed'], [role='list'], .products, .product-grid, .product-list, .results, .search-results, .items, .list, .listing"))
-                ].filter(Boolean);
-                const score = (el) => {
-                    const links = el.querySelectorAll("a[href]").length;
-                    const cards = el.querySelectorAll("article, li, [class*='product'], [class*='result'], [class*='item']").length;
-                    const scrollable = Math.max(0, (el.scrollHeight || 0) - (el.clientHeight || 0));
-                    return (links * 2) + cards + (scrollable > 150 ? 10 : 0);
-                };
-                let target = null;
-                for (const candidate of candidates) {
-                    if (!candidate || !(candidate instanceof Element)) continue;
-                    if (!target || score(candidate) > score(target)) {
-                        target = candidate;
-                    }
-                }
-                const root = document.scrollingElement || document.documentElement || document.body;
-                const activeTarget =
-                    target instanceof HTMLElement &&
-                    target.scrollHeight > (target.clientHeight + 150)
-                        ? target
-                        : root;
-                const label = activeTarget === root
-                    ? "window"
-                    : (activeTarget.getAttribute("data-testid") || activeTarget.getAttribute("id") || activeTarget.className || activeTarget.tagName || "container").toString().slice(0, 120);
-                if (activeTarget === root) {
-                    const nextTop = forceProbe
-                        ? Math.max((window.scrollY || 0) + Math.max(window.innerHeight || 0, 600), currentHeight || 0)
-                        : (currentHeight || root.scrollHeight || 0);
-                    window.scrollTo(0, nextTop);
-                } else {
-                    const nextTop = forceProbe
-                        ? Math.max((activeTarget.scrollTop || 0) + Math.max(activeTarget.clientHeight || 0, 600), currentHeight || 0)
-                        : Math.max(currentHeight || 0, activeTarget.scrollTop || 0);
-                    activeTarget.scrollTo(0, nextTop || activeTarget.scrollHeight || 0);
-                }
-                return { target: label };
-            }
-            """,
+                _JS_PERFORM_SCROLL,
                 {"currentHeight": current_height, "forceProbe": force_probe},
             )
             or {}
@@ -1732,7 +1770,10 @@ async def click_load_more(
                 button = page.locator(selector).first
                 if await button.is_visible():
                     await button.click()
-                    await cooperative_sleep_ms(max(500, request_delay_ms), checkpoint=checkpoint)
+                    await cooperative_sleep_ms(
+                        max(TRAVERSAL_MIN_SETTLE_WAIT_MS, request_delay_ms),
+                        checkpoint=checkpoint,
+                    )
                     network_wait_status = "skipped"
                     if hasattr(page, "wait_for_load_state"):
                         try:

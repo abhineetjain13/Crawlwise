@@ -169,12 +169,80 @@ async def _browser_pool_healthcheck_loop() -> None:
             logger.warning("Browser pool healthcheck iteration failed", exc_info=True)
 
 
+def _browser_pool_healthcheck_done(task: asyncio.Task) -> None:
+    state = _browser_pool_state()
+    if state.cleanup_task is task:
+        state.cleanup_task = None
+
+    if task.cancelled():
+        return
+
+    exited_unexpectedly = False
+    exc: BaseException | None = None
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    except BaseException as callback_exc:
+        exited_unexpectedly = True
+        exc = callback_exc
+    else:
+        exited_unexpectedly = exc is not None or not task.cancelled()
+
+    if not exited_unexpectedly:
+        return
+
+    if exc is None:
+        logger.error("Browser pool healthcheck task exited unexpectedly without an exception")
+    else:
+        logger.error(
+            "Browser pool healthcheck task crashed; scheduling restart",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+
+    try:
+        loop = task.get_loop()
+    except RuntimeError:
+        return
+    if loop.is_closed():
+        return
+
+    async def _restart_if_needed_async() -> None:
+        current_state = _browser_pool_state()
+        async with current_state.task_lock:
+            if current_state.cleanup_task is not None:
+                return
+            current_state.cleanup_task = loop.create_task(
+                _browser_pool_healthcheck_loop(),
+                name="browser-pool-healthcheck",
+            )
+            current_state.cleanup_task.add_done_callback(
+                _browser_pool_healthcheck_done
+            )
+            logger.warning("Restarted browser pool healthcheck task after unexpected exit")
+
+    loop.create_task(_restart_if_needed_async())
+
+
+def _start_browser_pool_maintenance_task(
+    loop: asyncio.AbstractEventLoop,
+    state: BrowserPool,
+) -> asyncio.Task:
+    task = loop.create_task(
+        _browser_pool_healthcheck_loop(),
+        name="browser-pool-healthcheck",
+    )
+    task.add_done_callback(_browser_pool_healthcheck_done)
+    state.cleanup_task = task
+    return task
+
+
 async def reset_browser_pool_state() -> None:
     state = _browser_pool_state()
-    await _shutdown_browser_pool()
     async with state.task_lock:
         task = state.cleanup_task
         state.cleanup_task = None
+    await _shutdown_browser_pool()
     if task is not None and not task.done():
         task.cancel()
         try:
@@ -188,7 +256,7 @@ async def _ensure_browser_pool_maintenance_task() -> None:
     async with state.task_lock:
         loop = asyncio.get_running_loop()
         if state.cleanup_task is None or state.cleanup_task.done():
-            state.cleanup_task = loop.create_task(_browser_pool_healthcheck_loop())
+            _start_browser_pool_maintenance_task(loop, state)
 
 
 async def _acquire_browser(

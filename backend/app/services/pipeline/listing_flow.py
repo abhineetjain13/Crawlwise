@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from app.models.crawl import CrawlRun
 from app.services.acquisition import AcquisitionResult
@@ -41,6 +42,9 @@ from .verdict import (
     VERDICT_SUCCESS,
     compute_verdict,
 )
+
+if TYPE_CHECKING:
+    from .types import PipelineContext
 
 logger = logging.getLogger(__name__)
 
@@ -90,23 +94,6 @@ def listing_quality_flags(
     return flags
 
 
-def resolve_listing_surface(
-    *,
-    surface: str,
-    acq: AcquisitionResult,
-) -> str:
-    diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
-    effective_surface = str(diagnostics.get("surface_effective") or "").strip().lower()
-    if effective_surface in {
-        "job_listing",
-        "job_detail",
-        "ecommerce_listing",
-        "ecommerce_detail",
-    }:
-        return effective_surface
-    return surface
-
-
 async def save_listing_records(
     *,
     session: AsyncSession,
@@ -121,7 +108,6 @@ async def save_listing_records(
     acquisition_trace: dict,
     manifest_trace: dict | None,
     adapter_name: str | None = None,
-    surface_requested: str | None = None,
     record_writer=None,
 ) -> tuple[list[dict], dict[str, int]]:
     try:
@@ -160,7 +146,6 @@ async def save_listing_records(
                             "adapter": adapter_name,
                             "source": record_source_label,
                             "surface_used": surface,
-                            "surface_requested": surface_requested,
                         }
                     ),
                     identity_key=identity_key,
@@ -217,14 +202,13 @@ async def extract_listing(
     record_writer=None,
 ) -> URLProcessingResult:
     adapter_name = adapter_result.adapter_name if adapter_result else None
-    effective_surface = surface
-    url_metrics["listing_surface_used"] = effective_surface
+    url_metrics["listing_surface_used"] = surface
     resolved_writer = resolve_record_writer(session, record_writer)
 
     extracted_records = await asyncio.to_thread(
         extract_listing_records,
         html=html,
-        surface=effective_surface,
+        surface=surface,
         target_fields=set(additional_fields),
         page_url=url,
         max_records=max_records,
@@ -247,7 +231,7 @@ async def extract_listing(
                     "[ANALYZE] Listing extraction found 0 records because the acquired page was blocked",
                 )
             return URLProcessingResult([], VERDICT_BLOCKED, url_metrics)
-        if _looks_like_loading_listing_shell(html, surface=effective_surface):
+        if _looks_like_loading_listing_shell(html, surface=surface):
             if persist_logs:
                 await log_event(
                     session,
@@ -256,7 +240,7 @@ async def extract_listing(
                     "[ANALYZE] Listing extraction found 0 records on a loading shell; skipping page fallback so browser retry/failure is explicit",
                 )
             return URLProcessingResult([], VERDICT_LISTING_FAILED, url_metrics)
-        if effective_surface == "job_listing":
+        if surface == "job_listing":
             if persist_logs:
                 await log_event(
                     session,
@@ -291,13 +275,12 @@ async def extract_listing(
         source_type="listing",
         source_label=source_label,
         url=url,
-        surface=effective_surface,
+        surface=surface,
         max_records=max_records,
         raw_html_path=acq.artifact_path,
         acquisition_trace=_build_acquisition_trace(acq),
         manifest_trace=manifest_trace,
         adapter_name=adapter_name,
-        surface_requested=surface if effective_surface != surface else None,
         record_writer=resolved_writer,
     )
     duplicate_drops = int(save_stats.get("duplicate_drops", 0) or 0)
@@ -306,11 +289,11 @@ async def extract_listing(
 
     if update_run_state:
         await set_stage(session, run, STAGE_SAVE)
-    verdict = compute_verdict(saved, effective_surface, is_listing=True)
-    url_metrics["listing_quality"] = listing_set_quality(saved, surface=effective_surface)
+    verdict = compute_verdict(saved, surface, is_listing=True)
+    url_metrics["listing_quality"] = listing_set_quality(saved, surface=surface)
     quality_flags = listing_quality_flags(
         saved,
-        surface=effective_surface,
+        surface=surface,
         network_payload_count=len(acq.network_payloads or []),
     )
     if quality_flags:
@@ -337,3 +320,28 @@ async def extract_listing(
 
     _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
     return URLProcessingResult(saved, verdict, url_metrics)
+
+
+async def extract_listing_from_context(ctx: "PipelineContext") -> URLProcessingResult:
+    acq = ctx.acquisition_result
+    if acq is None:
+        raise ValueError(
+            f"Missing acquisition_result for listing extraction: {ctx.url}"
+        )
+    return await extract_listing(
+        ctx.session,
+        ctx.run,
+        ctx.url,
+        acq.html,
+        acq,
+        ctx.adapter_result,
+        ctx.adapter_records,
+        ctx.additional_fields,
+        ctx.surface,
+        ctx.config.max_records,
+        ctx.url_metrics,
+        soup=ctx.soup,
+        update_run_state=ctx.update_run_state,
+        persist_logs=ctx.persist_logs,
+        record_writer=ctx.record_writer,
+    )

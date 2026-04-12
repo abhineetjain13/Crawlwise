@@ -724,6 +724,35 @@ async def test_acquire_accepts_typed_request(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_acquire_scrubs_sensitive_html_before_writing_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    html = """
+    <html><body>
+      <form>
+        <input type="hidden" name="csrf-token" value="short-lived-secret" />
+        <input type="email" value="person@example.com" />
+        <textarea name="session_token">temporary-csrf-payload</textarea>
+      </form>
+    </body></html>
+    """
+
+    with patch(
+        "app.services.acquisition.acquirer._fetch_with_content_type",
+        new_callable=AsyncMock,
+        return_value=HttpFetchResult(text=html, status_code=200, content_type="html"),
+    ):
+        result = await acquire(42, "https://example.com/contact")
+
+    artifact = Path(result.artifact_path).read_text(encoding="utf-8")
+    assert "person@example.com" not in artifact
+    assert "short-lived-secret" not in artifact
+    assert "temporary-csrf-payload" not in artifact
+    assert "[REDACTED]" in artifact
+    assert "person@example.com" in result.html
+    assert "short-lived-secret" in result.html
+
+
+@pytest.mark.asyncio
 async def test_acquire_diagnostics_include_platform_family_for_real_family_url(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
     html = "<html><body><h1>Jobs</h1><p>" + ("Open roles " * 80) + "</p><table class='iCIMS_JobsTable'></table></body></html>"
@@ -795,8 +824,8 @@ async def _reset_acquisition_state():
 async def test_acquire_uses_memory_prefer_stealth(monkeypatch, tmp_path):
     captured: list[bool] = []
 
-    async def _fake_acquire_once(**kwargs):
-        captured.append(bool(kwargs.get("prefer_stealth")))
+    async def _fake_acquire_once(request):
+        captured.append(bool(getattr(request, "prefer_stealth", False)))
         return type("Result", (), {
             "html": "<html>ok</html>",
             "json_data": None,
@@ -825,8 +854,8 @@ async def test_acquire_uses_memory_prefer_stealth(monkeypatch, tmp_path):
 async def test_acquire_enables_stealth_only_when_anti_bot_mode_is_enabled(monkeypatch, tmp_path):
     captured: list[bool] = []
 
-    async def _fake_acquire_once(**kwargs):
-        captured.append(bool(kwargs.get("prefer_stealth")))
+    async def _fake_acquire_once(request):
+        captured.append(bool(getattr(request, "prefer_stealth", False)))
         return type("Result", (), {
             "html": "<html>ok</html>",
             "json_data": None,
@@ -857,8 +886,8 @@ async def test_acquire_browser_first_platform_family_enables_anti_bot_runtime(
 ):
     captured: list[bool] = []
 
-    async def _fake_acquire_once(**kwargs):
-        runtime_options = kwargs.get("runtime_options")
+    async def _fake_acquire_once(request):
+        runtime_options = getattr(request, "runtime_options", None)
         captured.append(bool(getattr(runtime_options, "anti_bot_enabled", False)))
         return type("Result", (), {
             "html": "<html>ok</html>",
@@ -890,8 +919,8 @@ async def test_acquire_browser_first_platform_family_overrides_explicit_anti_bot
 ):
     captured: list[bool] = []
 
-    async def _fake_acquire_once(**kwargs):
-        runtime_options = kwargs.get("runtime_options")
+    async def _fake_acquire_once(request):
+        runtime_options = getattr(request, "runtime_options", None)
         captured.append(bool(getattr(runtime_options, "anti_bot_enabled", False)))
         return type("Result", (), {
             "html": "<html>ok</html>",
@@ -922,8 +951,8 @@ async def test_acquire_browser_first_platform_family_overrides_explicit_anti_bot
 async def test_acquire_prefer_browser_profile_enables_anti_bot_runtime(monkeypatch, tmp_path):
     captured: list[bool] = []
 
-    async def _fake_acquire_once(**kwargs):
-        runtime_options = kwargs.get("runtime_options")
+    async def _fake_acquire_once(request):
+        runtime_options = getattr(request, "runtime_options", None)
         captured.append(bool(getattr(runtime_options, "anti_bot_enabled", False)))
         return type("Result", (), {
             "html": "<html>ok</html>",

@@ -195,6 +195,17 @@ async def _require_accessible_run(
     return run
 
 
+async def _load_log_stream_snapshot(
+    *,
+    run_id: int,
+    after_id: int | None,
+) -> tuple[list, object | None]:
+    async with SessionLocal() as session:
+        rows = await get_run_logs(session, run_id, after_id=after_id, limit=500)
+        run = await get_run(session, run_id)
+    return rows, run
+
+
 @router.post(
     "/csv",
     responses={
@@ -431,13 +442,11 @@ async def crawls_logs_ws(
         await websocket.accept()
         cursor = after_id
         try:
-            # FIX: Maintain ONE database connection for the lifetime of the socket,
-            # rather than thrashing the connection pool 2 times a second.
             while True:
-                # Rollback resets the transaction snapshot so we see new rows
-                await session.rollback()
-                rows = await get_run_logs(session, run_id, after_id=cursor, limit=500)
-                run = await get_run(session, run_id)
+                rows, run = await _load_log_stream_snapshot(
+                    run_id=run_id,
+                    after_id=cursor,
+                )
 
                 for row in rows:
                     await websocket.send_json(serialize_log_event(row))

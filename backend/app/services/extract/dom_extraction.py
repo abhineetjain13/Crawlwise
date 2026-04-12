@@ -11,12 +11,12 @@ from app.services.config.extraction_rules import (
     CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT,
     CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS,
     CANDIDATE_DESCRIPTION_META_SELECTORS,
-    DOM_PATTERNS,
     JSONLD_STRUCTURAL_KEYS,
     NESTED_NON_PRODUCT_KEYS,
 )
 from app.services.config.field_mappings import REQUESTED_FIELD_ALIASES, get_surface_field_aliases
 from app.services.config.extraction_rules import LISTING_DESCRIPTION_CANDIDATE_FIELDS
+from app.services.config.selectors import DOM_PATTERNS
 from app.services.extract.candidate_processing import (
     _embedded_blob_payload,
     _looks_like_ga_data_layer,
@@ -315,8 +315,7 @@ def _build_label_value_text_sources(
     json_ld: list[dict],
     microdata: list[dict],
 ) -> list[str]:
-    # Import here to avoid import-time circular reference with service.py
-    from app.services.extract.service import _NETWORK_PAYLOAD_NOISE_URL_PATTERNS
+    from app.services.extract.noise_policy import is_network_payload_noise_url
 
     text_sources: list[str] = []
     seen: set[str] = set()
@@ -342,7 +341,7 @@ def _build_label_value_text_sources(
             if not isinstance(payload, dict):
                 continue
             payload_url = str(payload.get("url") or "").lower()
-            if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
+            if is_network_payload_noise_url(payload_url):
                 continue
             body = payload.get("body", {})
             if isinstance(body, (dict, list)):

@@ -8,6 +8,12 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.config.adapter_runtime_settings import (
+    ICIMS_MAX_OFFSET,
+    ICIMS_PAGE_SIZE,
+    ICIMS_PAGINATION_TIMEOUT_SECONDS,
+    ICIMS_TITLE_MIN_LENGTH,
+)
 from bs4 import BeautifulSoup, Tag
 
 try:  # pragma: no cover - optional dependency
@@ -86,12 +92,12 @@ class ICIMSAdapter(BaseAdapter):
 
         records: list[dict] = []
         seen_urls: set[str] = set()
-        for offset in range(0, 1000, 100):
+        for offset in range(0, ICIMS_MAX_OFFSET, ICIMS_PAGE_SIZE):
             page_url = self._paginate_endpoint(endpoint, offset)
             try:
                 response_text = await self._request_text(
                     page_url,
-                    timeout_seconds=15,
+                    timeout_seconds=ICIMS_PAGINATION_TIMEOUT_SECONDS,
                 )
             except _ICIMS_PAGINATION_ERRORS as exc:
                 logger.warning(
@@ -122,7 +128,7 @@ class ICIMSAdapter(BaseAdapter):
                     continue
                 seen_urls.add(record_url)
                 records.append(record)
-            if len(batch) < 100:
+            if len(batch) < ICIMS_PAGE_SIZE:
                 break
         return records
 
@@ -134,7 +140,9 @@ class ICIMSAdapter(BaseAdapter):
             endpoint = match.group(1)
             return endpoint if endpoint.startswith("http") else f"{base_url}{endpoint}"
         if "/ajax/joblisting/" in str(html or "").lower():
-            return f"{base_url}/ajax/joblisting/?num_items=100&offset=0"
+            return (
+                f"{base_url}/ajax/joblisting/?num_items={ICIMS_PAGE_SIZE}&offset=0"
+            )
         return None
 
     def _discover_embedded_board_url(self, url: str, html: str) -> str | None:
@@ -162,7 +170,7 @@ class ICIMSAdapter(BaseAdapter):
         try:
             response_text = await self._request_text(
                 url,
-                timeout_seconds=15,
+                timeout_seconds=ICIMS_PAGINATION_TIMEOUT_SECONDS,
             )
         except Exception:
             logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
@@ -172,7 +180,9 @@ class ICIMSAdapter(BaseAdapter):
     def _paginate_endpoint(self, endpoint: str, offset: int) -> str:
         page_url = re.sub(r"offset=\d+", f"offset={offset}", endpoint) if "offset=" in endpoint else f"{endpoint}{'&' if '?' in endpoint else '?'}offset={offset}"
         if "num_items=" not in page_url:
-            page_url = f"{page_url}{'&' if '?' in page_url else '?'}num_items=100"
+            page_url = (
+                f"{page_url}{'&' if '?' in page_url else '?'}num_items={ICIMS_PAGE_SIZE}"
+            )
         return page_url
 
     def _extract_from_listing_html(self, html: str, base_url: str) -> list[dict]:
@@ -220,7 +230,7 @@ class ICIMSAdapter(BaseAdapter):
         title_node = link.select_one("h1, h2, h3, h4") or link
         title = self._clean_text(title_node.get_text(" ", strip=True))
         title = re.sub(r"(?i)^posting job title\s+", "", title).strip()
-        if not title or len(title) < 3:
+        if not title or len(title) < ICIMS_TITLE_MIN_LENGTH:
             return None
         metadata = self._extract_header_fields(row)
         record = {
@@ -260,7 +270,7 @@ class ICIMSAdapter(BaseAdapter):
             return None
         title = self._clean_text(_HTML_TAG_RE.sub("", link_match.group(2)))
         title = re.sub(r"(?i)^posting job title\s+", "", title).strip()
-        if not title or len(title) < 3:
+        if not title or len(title) < ICIMS_TITLE_MIN_LENGTH:
             return None
         record: dict[str, str] = {
             "title": title,

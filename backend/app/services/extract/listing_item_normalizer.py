@@ -13,10 +13,15 @@ from app.services.config.nested_field_rules import (
     NESTED_URL_KEYS,
 )
 from app.services.extract.listing_card_extractor import (
-    _extract_image_candidates,
     _harvest_product_url_from_item,
     _infer_currency_from_page_url,
     _normalize_listing_title_text,
+)
+from app.services.extract.shared_logic import (
+    coerce_nested_text as _coerce_nested_text,
+    extract_image_candidates as _extract_image_candidates,
+    find_alias_values as _find_alias_values,
+    resolve_slug_url as _resolve_slug_url,
 )
 
 _EMPTY_VALUES = (None, "", [], {})
@@ -548,67 +553,10 @@ def _normalize_listing_value(canonical: str, value: object, *, page_url: str) ->
     return str(value).strip() if isinstance(value, str) else value
 
 
-def _find_alias_values(data: object, aliases: list[str], *, max_depth: int) -> list[object]:
-    alias_tokens = {_normalized_field_token(alias) for alias in aliases if _normalized_field_token(alias)}
-    if not alias_tokens or max_depth <= 0:
-        return []
-
-    values: list[object] = []
-
-    def _visit(node: object, depth: int) -> None:
-        if depth <= 0 or node in _EMPTY_VALUES:
-            return
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if _normalized_field_token(key) in alias_tokens and value not in _EMPTY_VALUES:
-                    values.append(value)
-            for value in node.values():
-                _visit(value, depth - 1)
-            return
-        if isinstance(node, list):
-            for item in node[:30]:
-                _visit(item, depth - 1)
-
-    _visit(data, max_depth)
-    return values
-
-
-def _normalized_field_token(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
-
-
 def _looks_like_product_short_path(value: str) -> bool:
     return bool(
         re.match(r"^p(?:/|[.-])[A-Za-z0-9][A-Za-z0-9._/-]*$", str(value or "").strip(), re.I)
     )
-
-
-def _resolve_slug_url(slug: str, *, page_url: str) -> str:
-    text = str(slug or "").strip()
-    if not text or not page_url:
-        return ""
-    parsed = urlparse(page_url)
-    if not parsed.scheme or not parsed.netloc:
-        return ""
-    if text.startswith(("http://", "https://", "/")):
-        return urljoin(page_url, text)
-    origin = f"{parsed.scheme}://{parsed.netloc}/"
-    return urljoin(origin, text)
-
-
-def _coerce_nested_text(value: object, *, keys: tuple[str, ...]) -> object | None:
-    if not isinstance(value, dict):
-        return value
-    for key in keys:
-        nested = value.get(key)
-        if nested not in _EMPTY_VALUES:
-            return nested
-    for nested in value.values():
-        if isinstance(nested, dict):
-            resolved = _coerce_nested_text(nested, keys=keys)
-            if resolved not in _EMPTY_VALUES:
-                return resolved
-    return None
 
 
 def _coerce_nested_category(value: dict) -> str:

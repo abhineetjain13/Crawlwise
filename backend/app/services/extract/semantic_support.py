@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -16,7 +17,7 @@ from app.services.config.extraction_rules import (
     SPEC_DROP_LABELS,
     SPEC_LABEL_BLOCK_PATTERNS,
 )
-from app.services.config.field_mappings import FIELD_ALIASES, REQUESTED_FIELD_ALIASES
+from app.services.config.field_mappings import REQUESTED_FIELD_ALIASES, get_surface_field_aliases
 from app.services.extract.candidate_processing import (
     _DYNAMIC_NUMERIC_FIELD_RE,
     _coerce_scalar_for_dynamic_row,
@@ -31,15 +32,27 @@ from app.services.extract.field_classifier import _dynamic_field_name_is_valid
 from app.services.requested_field_policy import normalize_requested_field
 from bs4 import BeautifulSoup, Tag
 
-_CANONICAL_TO_ALIASES: dict[str, set[str]] = {}
-for canonical, aliases in {**FIELD_ALIASES, **REQUESTED_FIELD_ALIASES}.items():
-    canonical_key = normalize_requested_field(canonical)
-    alias_set = _CANONICAL_TO_ALIASES.setdefault(canonical_key, set())
-    alias_set.add(canonical_key)
-    for alias in aliases:
-        alias_key = normalize_requested_field(alias)
-        if alias_key:
-            alias_set.add(alias_key)
+@lru_cache(maxsize=16)
+def _canonical_to_aliases(surface: str) -> dict[str, tuple[str, ...]]:
+    alias_map: dict[str, set[str]] = {}
+    for source_aliases in (
+        get_surface_field_aliases(surface),
+        REQUESTED_FIELD_ALIASES,
+    ):
+        for canonical, aliases in source_aliases.items():
+            canonical_key = normalize_requested_field(canonical)
+            if not canonical_key:
+                continue
+            alias_set = alias_map.setdefault(canonical_key, set())
+            alias_set.add(canonical_key)
+            for alias in aliases:
+                alias_key = normalize_requested_field(alias)
+                if alias_key:
+                    alias_set.add(alias_key)
+    return {
+        canonical: tuple(sorted(aliases, key=len, reverse=True))
+        for canonical, aliases in alias_map.items()
+    }
 
 _FEATURE_SKIP_PATTERN = re.compile(
     r"\b(?:shop|review(?:s)?|verified reviewer)\b|read the story",
@@ -58,6 +71,7 @@ _HAS_ALPHA_RE = re.compile(r"[a-z]", re.IGNORECASE)
 def extract_semantic_detail_data(
     html: str,
     *,
+    surface: str = "",
     requested_fields: list[str] | None = None,
     soup: BeautifulSoup | None = None,
     page_url: str = "",
@@ -79,11 +93,23 @@ def extract_semantic_detail_data(
     working_root = _semantic_content_root(working_soup)
     if working_root is not None and working_root is not working_soup:
         working_soup = BeautifulSoup(str(working_root), "html.parser")
-    sections = _extract_sections(working_soup)
+    alias_lookup = _canonical_to_aliases(surface)
+    sections = _extract_sections(working_soup, alias_lookup)
     table_groups = _extract_table_groups(working_soup)
     specifications = _extract_specifications(working_soup, table_groups)
-    promoted = _promote_semantic_fields(sections, specifications, requested_fields or [])
-    coverage = _build_coverage(requested_fields or [], sections, specifications, promoted)
+    promoted = _promote_semantic_fields(
+        sections,
+        specifications,
+        requested_fields or [],
+        alias_lookup=alias_lookup,
+    )
+    coverage = _build_coverage(
+        requested_fields or [],
+        sections,
+        specifications,
+        promoted,
+        alias_lookup=alias_lookup,
+    )
     aggregates = _build_semantic_aggregates(sections, specifications)
     semantic_rows = _build_semantic_rows(sections, specifications, table_groups, aggregates)
     return {
@@ -142,6 +168,7 @@ def _semantic_scope_product_ids(
 def resolve_requested_field_values(
     requested_fields: list[str] | None,
     *,
+    surface: str = "",
     existing_record: dict[str, Any] | None = None,
     sections: dict[str, str] | None = None,
     specifications: dict[str, str] | None = None,
@@ -155,6 +182,7 @@ def resolve_requested_field_values(
     section_data = sections or {}
     spec_data = specifications or {}
     promoted_data = promoted_fields or {}
+    alias_lookup = _canonical_to_aliases(surface)
 
     for field in requested_fields:
         normalized = normalize_requested_field(field)
@@ -165,15 +193,15 @@ def resolve_requested_field_values(
         if normalized in promoted_data and promoted_data[normalized] not in (None, "", [], {}):
             resolved[normalized] = promoted_data[normalized]
             continue
-        matched = _lookup_semantic_value(normalized, promoted_data)
+        matched = _lookup_semantic_value(normalized, promoted_data, alias_lookup)
         if matched not in (None, "", [], {}):
             resolved[normalized] = matched
             continue
-        matched = _lookup_semantic_value(normalized, section_data)
+        matched = _lookup_semantic_value(normalized, section_data, alias_lookup)
         if matched not in (None, "", [], {}):
             resolved[normalized] = matched
             continue
-        matched = _lookup_semantic_value(normalized, spec_data)
+        matched = _lookup_semantic_value(normalized, spec_data, alias_lookup)
         if matched not in (None, "", [], {}):
             resolved[normalized] = matched
     return resolved
@@ -183,17 +211,19 @@ def _promote_semantic_fields(
     sections: dict[str, str],
     specifications: dict[str, str],
     requested_fields: list[str],
+    *,
+    alias_lookup: dict[str, tuple[str, ...]],
 ) -> dict[str, str]:
     promoted: dict[str, str] = {}
     for field in requested_fields:
         normalized = normalize_requested_field(field)
         if not normalized:
             continue
-        value = _lookup_semantic_value(normalized, sections)
+        value = _lookup_semantic_value(normalized, sections, alias_lookup)
         if value not in (None, "", [], {}):
             promoted[normalized] = value
             continue
-        value = _lookup_semantic_value(normalized, specifications)
+        value = _lookup_semantic_value(normalized, specifications, alias_lookup)
         if value not in (None, "", [], {}):
             promoted[normalized] = value
     return promoted
@@ -204,6 +234,8 @@ def _build_coverage(
     sections: dict[str, str],
     specifications: dict[str, str],
     promoted_fields: dict[str, str],
+    *,
+    alias_lookup: dict[str, tuple[str, ...]],
 ) -> dict[str, int]:
     if not requested_fields:
         return {"requested": 0, "found": 0}
@@ -214,10 +246,10 @@ def _build_coverage(
         if field in promoted_fields and promoted_fields[field] not in (None, "", [], {}):
             found += 1
             continue
-        if _lookup_semantic_value(field, sections) not in (None, "", [], {}):
+        if _lookup_semantic_value(field, sections, alias_lookup) not in (None, "", [], {}):
             found += 1
             continue
-        if _lookup_semantic_value(field, specifications) not in (None, "", [], {}):
+        if _lookup_semantic_value(field, specifications, alias_lookup) not in (None, "", [], {}):
             found += 1
     return {"requested": len(normalized_fields), "found": found}
 
@@ -393,7 +425,10 @@ def _collect_feature_values(sections: dict[str, str]) -> list[str]:
     return inferred
 
 
-def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
+def _extract_sections(
+    soup: BeautifulSoup,
+    alias_lookup: dict[str, tuple[str, ...]],
+) -> dict[str, str]:
     sections: dict[str, str] = {}
 
     selectors = [
@@ -417,7 +452,7 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
         key = normalize_requested_field(label)
         if not key or not _is_section_label(label) or _is_section_label_blocked(label) or _is_ignored_section_node(node):
             continue
-        body = _extract_section_content(node, soup)
+        body = _extract_section_content(node, soup, alias_lookup)
         if _should_skip_section(key, label, body):
             continue
         if body and key not in sections:
@@ -430,7 +465,7 @@ def _extract_sections(soup: BeautifulSoup) -> dict[str, str]:
         key = normalize_requested_field(label)
         if not key or _is_section_label_blocked(label) or _is_ignored_section_node(node):
             continue
-        body = _extract_section_content(node, soup)
+        body = _extract_section_content(node, soup, alias_lookup)
         if _should_skip_section(key, label, body):
             continue
         if body and key not in sections:
@@ -707,7 +742,11 @@ def _collect_section_body(heading: Tag) -> str:
     return ""
 
 
-def _extract_section_content(node: Tag, soup: BeautifulSoup) -> str:
+def _extract_section_content(
+    node: Tag,
+    soup: BeautifulSoup,
+    alias_lookup: dict[str, tuple[str, ...]],
+) -> str:
     target_id = _clean_text(node.get("aria-controls"))
     if target_id:
         target = soup.find(id=target_id)
@@ -720,7 +759,7 @@ def _extract_section_content(node: Tag, soup: BeautifulSoup) -> str:
             return _section_text(parent, label=_label_text(node))
 
     if _is_prominent_section_label_node(node):
-        sibling_body = _collect_labeled_sibling_body(node)
+        sibling_body = _collect_labeled_sibling_body(node, alias_lookup)
         if sibling_body:
             return sibling_body
 
@@ -777,7 +816,10 @@ def _find_wrapped_section_content(node: Tag) -> str:
     return ""
 
 
-def _collect_labeled_sibling_body(node: Tag) -> str:
+def _collect_labeled_sibling_body(
+    node: Tag,
+    alias_lookup: dict[str, tuple[str, ...]],
+) -> str:
     parts: list[str] = []
     sibling = node.find_next_sibling()
     steps = 0
@@ -785,7 +827,7 @@ def _collect_labeled_sibling_body(node: Tag) -> str:
         sibling_name = str(sibling.name or "")
         if _HEADING_TAG_RE.fullmatch(sibling_name) or sibling_name.lower() == "summary":
             break
-        if _is_major_section_break(sibling):
+        if _is_major_section_break(sibling, alias_lookup):
             break
         if not _is_ignored_section_node(sibling):
             text = _clean_text(sibling.get_text(" ", strip=True))
@@ -817,21 +859,28 @@ def _is_prominent_section_label_node(node: Tag) -> bool:
     return text.endswith(":") or has_emphasis
 
 
-def _is_major_section_break(node: Tag) -> bool:
+def _is_major_section_break(
+    node: Tag,
+    alias_lookup: dict[str, tuple[str, ...]],
+) -> bool:
     if not _is_prominent_section_label_node(node):
         return False
     normalized = normalize_requested_field(_label_text(node))
-    return bool(normalized and normalized in _CANONICAL_TO_ALIASES)
+    return bool(normalized and normalized in alias_lookup)
 
 
-def _lookup_semantic_value(field: str, source: dict[str, str]) -> str | None:
+def _lookup_semantic_value(
+    field: str,
+    source: dict[str, str],
+    alias_lookup: dict[str, tuple[str, ...]],
+) -> str | None:
     if not source:
         return None
     normalized = normalize_requested_field(field)
     if normalized in source and source[normalized] not in (None, "", [], {}):
         return source[normalized]
 
-    aliases = sorted(_CANONICAL_TO_ALIASES.get(normalized, set()), key=len, reverse=True)
+    aliases = alias_lookup.get(normalized, ())
     for alias in aliases:
         if alias in source and source[alias] not in (None, "", [], {}):
             return source[alias]

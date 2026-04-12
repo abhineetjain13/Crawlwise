@@ -6,12 +6,10 @@ from app.services.config.extraction_rules import (
     CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS,
     CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN,
     CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN,
-    CANDIDATE_SCRIPT_NOISE_PATTERN,
-    CANDIDATE_UI_ICON_TOKEN_PATTERN,
-    CANDIDATE_UI_NOISE_PHRASES,
-    CANDIDATE_UI_NOISE_TOKEN_PATTERN,
 )
 from app.services.requested_field_policy import normalize_requested_field
+from app.services.text_sanitization import strip_ui_noise
+from app.services.text_utils import normalized_text
 from bs4 import Tag
 
 _COMMON_DETAIL_REJECT_PHRASES = (
@@ -88,29 +86,16 @@ _CSS_NOISE_VALUE_RE = re.compile(CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN)
 _PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_RE = re.compile(
     CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN
 )
-_UI_NOISE_TOKEN_RE = (
-    re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE)
-    if CANDIDATE_UI_NOISE_TOKEN_PATTERN
-    else None
-)
-_UI_ICON_TOKEN_RE = (
-    re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE)
-    if CANDIDATE_UI_ICON_TOKEN_PATTERN
-    else None
-)
-_SCRIPT_NOISE_RE = (
-    re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE)
-    if CANDIDATE_SCRIPT_NOISE_PATTERN
-    else None
-)
-_NON_EMPTY_UI_NOISE_PHRASES = [phrase for phrase in CANDIDATE_UI_NOISE_PHRASES if phrase]
-_UI_NOISE_PHRASES_RE = (
-    re.compile(
-        r"\b(?:" + "|".join(re.escape(phrase) for phrase in _NON_EMPTY_UI_NOISE_PHRASES) + r")\b",
-        re.IGNORECASE,
-    )
-    if _NON_EMPTY_UI_NOISE_PHRASES
-    else None
+_NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
+    r"geolocation|geoip|geo/|/geo\b|"
+    r"\banalytics\b|tracking|telemetry|"
+    r"klarna\.com|affirm\.com|afterpay\.com|"
+    r"olapic-cdn\.com|"
+    r"livechat|zendesk\.com|intercom\.io|"
+    r"facebook\.com|google-analytics|googletagmanager|"
+    r"sentry\.io|datadome|px\.ads|"
+    r"cdn-cgi/|captcha",
+    re.IGNORECASE,
 )
 
 SECTION_LABEL_SKIP_TOKENS = (
@@ -171,22 +156,13 @@ _NOISE_CONTAINER_REMOVAL_SELECTOR = (
 
 
 def normalized_noise_text(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
+    return normalized_text(value)
 
 
-def strip_ui_noise(value: object) -> str:
-    text = normalized_noise_text(value)
-    if not text:
-        return ""
-    if _UI_ICON_TOKEN_RE:
-        text = _UI_ICON_TOKEN_RE.sub(" ", text)
-    if _UI_NOISE_TOKEN_RE:
-        text = _UI_NOISE_TOKEN_RE.sub(" ", text)
-    if _SCRIPT_NOISE_RE:
-        text = _SCRIPT_NOISE_RE.sub(" ", text)
-    if _UI_NOISE_PHRASES_RE:
-        text = _UI_NOISE_PHRASES_RE.sub(" ", text)
-    return re.sub(r"\s+", " ", text).strip(" -|,:;/")
+def is_network_payload_noise_url(value: object) -> bool:
+    return bool(
+        _NETWORK_PAYLOAD_NOISE_URL_RE.search(normalized_noise_text(value).lower())
+    )
 
 
 def sanitize_detail_field_value(

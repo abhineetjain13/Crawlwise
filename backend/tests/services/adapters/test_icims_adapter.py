@@ -164,3 +164,53 @@ async def test_icims_extracts_detail_record_from_embedded_iframe() -> None:
     assert result.records[0]["location"] == "Remote"
     assert result.records[0]["description"] == "Build ingestion systems."
     assert result.records[0]["job_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_icims_pagination_stop_condition_uses_configured_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = ICIMSAdapter()
+    html = """
+    <html><body>
+      <script>var listingUrl = "/ajax/joblisting/?num_items=2&offset=0";</script>
+    </body></html>
+    """
+    page_one = """
+    <div class="iCIMS_Job">
+      <a href="/jobs/1001/platform-engineer/job">Platform Engineer</a>
+    </div>
+    <div class="iCIMS_Job">
+      <a href="/jobs/1002/data-engineer/job">Data Engineer</a>
+    </div>
+    """
+    page_two = """
+    <div class="iCIMS_Job">
+      <a href="/jobs/1003/site-reliability-engineer/job">Site Reliability Engineer</a>
+    </div>
+    """
+
+    monkeypatch.setattr("app.services.adapters.icims.ICIMS_PAGE_SIZE", 2)
+    monkeypatch.setattr("app.services.adapters.icims.ICIMS_MAX_OFFSET", 4)
+
+    with patch(
+        "app.services.adapters.base.BaseAdapter._request_text",
+        side_effect=[page_one, page_two],
+    ) as request_text_mock:
+        result = await adapter.extract(
+            "https://example.icims.com/jobs/search?pr=0&searchRelation=keyword_all",
+            html,
+            "job_listing",
+        )
+
+    assert [record["title"] for record in result.records] == [
+        "Platform Engineer",
+        "Data Engineer",
+        "Site Reliability Engineer",
+    ]
+    assert [record["url"] for record in result.records] == [
+        "https://example.icims.com/jobs/1001/platform-engineer/job",
+        "https://example.icims.com/jobs/1002/data-engineer/job",
+        "https://example.icims.com/jobs/1003/site-reliability-engineer/job",
+    ]
+    assert request_text_mock.await_count == 2

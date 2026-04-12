@@ -51,6 +51,24 @@ async def test_validate_public_target_rejects_blocked_metadata_hostname():
 
 
 @pytest.mark.asyncio
+async def test_validate_public_target_rejects_blocked_aws_metadata_hostname():
+    with pytest.raises(ValueError, match="Target host is not allowed"):
+        await validate_public_target("http://instance-data.ec2.internal/latest/meta-data/")
+
+
+@pytest.mark.asyncio
+async def test_validate_public_target_rejects_blocked_azure_metadata_hostname():
+    with pytest.raises(ValueError, match="Target host is not allowed"):
+        await validate_public_target("http://metadata.azure.internal/metadata/instance")
+
+
+@pytest.mark.asyncio
+async def test_validate_public_target_rejects_azure_platform_ip():
+    with pytest.raises(ValueError, match="blocked platform IP address"):
+        await validate_public_target("http://168.63.129.16/metadata/instance")
+
+
+@pytest.mark.asyncio
 async def test_validate_public_target_rejects_local_suffix_hostname():
     with pytest.raises(ValueError, match="Target host is not allowed"):
         await validate_public_target("http://printer.local/status")

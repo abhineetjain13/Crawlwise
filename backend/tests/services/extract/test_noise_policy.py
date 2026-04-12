@@ -24,6 +24,23 @@ def test_strip_ui_noise_removes_generic_ui_copy() -> None:
     assert cleaned == ""
 
 
+def test_strip_ui_noise_bounds_large_inputs_before_regex_substitution() -> None:
+    noisy_text = ("add to cart " * 5000) + "Core title"
+
+    cleaned = strip_ui_noise(noisy_text)
+
+    assert "add to cart" not in cleaned.lower()
+    assert len(cleaned) < len(noisy_text)
+
+
+def test_strip_ui_noise_preserves_newlines_when_requested() -> None:
+    noisy_text = "add to cart\n\nFeature one\n   Feature two"
+
+    cleaned = strip_ui_noise(noisy_text, preserve_newlines=True)
+
+    assert cleaned == "Feature one\nFeature two"
+
+
 def test_is_noise_title_rejects_generic_navigation_copy() -> None:
     assert is_noise_title(
         "Contact us",

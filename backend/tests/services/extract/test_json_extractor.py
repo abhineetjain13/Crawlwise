@@ -1,7 +1,12 @@
 # Tests for JSON listing/detail extraction.
 from __future__ import annotations
 
-from app.services.extract.json_extractor import extract_json_detail, extract_json_listing
+from app.services.extract.json_extractor import (
+    build_json_candidate_rows,
+    extract_json_detail,
+    extract_json_listing,
+)
+from app.services.extract import json_extractor
 
 
 def test_extract_jobs_from_remotive_shape():
@@ -153,6 +158,24 @@ def test_extract_json_detail_expands_job_sections():
     assert records[0]["company"] == "Acme"
     assert "responsibilities" in records[0]
     assert "Build services" in records[0]["responsibilities"]
+
+
+def test_build_json_candidate_rows_preserves_shared_reconciliation_shape():
+    record = {
+        "title": "Widget Pro",
+        "brand": "WidgetCo",
+        "_raw_item": {"title": "Widget Pro"},
+        "_source": "json_api",
+    }
+
+    candidates, extraction_audit = build_json_candidate_rows(record)
+
+    assert candidates == {
+        "title": [{"value": "Widget Pro", "source": "json_api"}],
+        "brand": [{"value": "WidgetCo", "source": "json_api"}],
+    }
+    assert extraction_audit["title"]["sources"][0]["source"] == "json_api"
+    assert extraction_audit["brand"]["sources"][0]["candidate_count"] == 1
 
 
 def test_empty_json_returns_empty():
@@ -356,3 +379,20 @@ def test_extract_json_listing_does_not_restore_fields_removed_by_job_contract():
     assert records[0]["job_id"] == "REQ-77"
     assert "sku" not in records[0]
     assert "brand" not in records[0]
+
+
+def test_score_candidate_array_respects_configured_job_weight(monkeypatch):
+    items = [
+        {
+            "title": "Senior Data Engineer",
+            "url": "https://example.com/jobs/1",
+            "company": "Acme",
+            "job_id": "REQ-1",
+            "location": "Remote",
+        }
+    ]
+
+    baseline = json_extractor._score_candidate_array(items)
+    monkeypatch.setattr(json_extractor, "JSON_CANDIDATE_JOB_SCORE", 0)
+
+    assert json_extractor._score_candidate_array(items) == baseline - 4

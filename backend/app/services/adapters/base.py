@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 from app.services.acquisition import HttpFetchResult, request_result, wait_for_host_slot
 from app.services.config.crawl_runtime import ACQUIRE_HOST_MIN_INTERVAL_MS
 
+from .types import AdapterRecords
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 class AdapterResult:
     """Structured data returned by a platform adapter."""
 
-    records: list[dict] = field(default_factory=list)
+    records: AdapterRecords = field(default_factory=list)
     source_type: str = "adapter"
     adapter_name: str = ""
 

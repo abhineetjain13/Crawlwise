@@ -14,6 +14,7 @@ from app.core.telemetry import (
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
 from app.services.acquisition import ProxyPoolExhausted
+from app.services._batch_progress import persist_batch_url_result
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
     CONTROL_REQUEST_PAUSE,
@@ -59,6 +60,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.resource_monitor import MemoryAdaptiveSemaphore
+from app.services.url_concurrency import DistributedURLSlotGuard
 
 logger = logging.getLogger(__name__)
 _global_url_semaphore: MemoryAdaptiveSemaphore | None = None
@@ -74,6 +76,19 @@ _LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS = (
     "database table is locked",
     "lock wait timeout exceeded",
     "nowait is set",
+)
+_TRANSIENT_CONNECTION_ERROR_NAMES = {
+    "ConnectionDoesNotExistError",
+    "ConnectionFailureError",
+    "InterfaceError",
+    "InternalClientError",
+}
+_TRANSIENT_CONNECTION_MESSAGE_FRAGMENTS = (
+    "connection does not exist",
+    "connection is closed",
+    "server closed the connection unexpectedly",
+    "terminating connection due to administrator command",
+    "closed the connection unexpectedly",
 )
 
 
@@ -185,16 +200,28 @@ def _resolve_run_urls(run: CrawlRun, settings_view: CrawlRunSettings) -> list[st
     ]
 
 
+def _coerce_persisted_url_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    persisted_urls: list[str] = []
+    for item in value:
+        normalized = normalize_target_url(item)
+        if normalized:
+            persisted_urls.append(normalized)
+    return persisted_urls
+
+
 def _build_batch_run_context(
     run: CrawlRun,
     settings_view: CrawlRunSettings,
     *,
     correlation_id: str,
+    url_list: list[str] | None = None,
 ) -> _BatchRunContext:
     return _BatchRunContext(
         run=run,
         correlation_id=correlation_id,
-        url_list=_resolve_run_urls(run, settings_view),
+        url_list=list(url_list) if url_list is not None else _resolve_run_urls(run, settings_view),
         proxy_list=settings_view.proxy_list(),
         traversal_mode=settings_view.traversal_mode(),
         max_pages=settings_view.max_pages(),
@@ -236,14 +263,15 @@ async def _retry_run_update(
             await session.commit()
             return
         except OperationalError as exc:
-            if _is_lock_not_available_error(exc) and attempt < len(
+            if _is_retryable_run_update_error(exc) and attempt < len(
                 _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS
             ):
                 logger.debug(
-                    "Retrying crawl run update after lock contention for run_id=%s (attempt=%s)",
+                    "Retrying crawl run update after transient database error for run_id=%s (attempt=%s)",
                     run_id,
                     attempt,
                 )
+                await session.rollback()
                 continue
             await session.rollback()
             raise
@@ -272,6 +300,29 @@ def _is_lock_not_available_error(exc: OperationalError) -> bool:
         if part
     ).lower()
     return any(fragment in message for fragment in _LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS)
+
+
+def _is_transient_connection_error(exc: OperationalError) -> bool:
+    orig = getattr(exc, "orig", None)
+    candidates = [orig, exc]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if type(candidate).__name__ in _TRANSIENT_CONNECTION_ERROR_NAMES:
+            return True
+    message = " ".join(
+        part
+        for part in (
+            str(orig or "").strip(),
+            str(exc or "").strip(),
+        )
+        if part
+    ).lower()
+    return any(fragment in message for fragment in _TRANSIENT_CONNECTION_MESSAGE_FRAGMENTS)
+
+
+def _is_retryable_run_update_error(exc: OperationalError) -> bool:
+    return _is_lock_not_available_error(exc) or _is_transient_connection_error(exc)
 
 
 class RunControlSignal(RunControlError):
@@ -336,6 +387,9 @@ async def _load_batch_run_context(
     correlation_id = str(
         persisted_summary.get("correlation_id") or generate_correlation_id()
     ).strip()
+    persisted_url_list = _coerce_persisted_url_list(
+        persisted_summary.get("resolved_url_list")
+    )
 
     if str(persisted_summary.get("correlation_id") or "").strip() != correlation_id:
 
@@ -368,10 +422,25 @@ async def _load_batch_run_context(
                 "Failed to stamp LLM config snapshot for run %s", run.id, exc_info=True
             )
 
+    resolved_url_list = _resolve_run_urls(run, settings_view)
+    if persisted_url_list:
+        run_url_list = persisted_url_list
+    else:
+        run_url_list = resolved_url_list
+
+        async def _persist_url_list_snapshot(
+            retry_session: AsyncSession, retry_run: CrawlRun
+        ) -> None:
+            retry_run.update_summary(resolved_url_list=run_url_list)
+
+        await _retry_run_update(session, run.id, _persist_url_list_snapshot)
+        await session.refresh(run)
+
     return _build_batch_run_context(
         run,
         settings_view,
         correlation_id=correlation_id,
+        url_list=run_url_list,
     )
 
 
@@ -549,27 +618,30 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 total_urls=total_urls,
             )
 
-            async with _get_global_url_semaphore():
-                url_config = URLProcessingConfig(
-                    proxy_list=proxy_list,
-                    traversal_mode=traversal_mode,
-                    max_pages=max_pages,
-                    max_scrolls=max_scrolls,
-                    max_records=remaining_records,
-                    sleep_ms=sleep_ms,
-                )
-                url_result = _ensure_url_processing_result(
-                    await asyncio.wait_for(
-                        _process_single_url(
-                            session=session,
-                            run=run,
-                            url=url,
-                            config=url_config,
-                            checkpoint=lambda: _run_control_checkpoint(session, run),
-                        ),
-                        timeout=url_timeout_seconds,
+            async with DistributedURLSlotGuard(
+                settings.system_max_concurrent_urls
+            ):
+                async with _get_global_url_semaphore():
+                    url_config = URLProcessingConfig(
+                        proxy_list=proxy_list,
+                        traversal_mode=traversal_mode,
+                        max_pages=max_pages,
+                        max_scrolls=max_scrolls,
+                        max_records=remaining_records,
+                        sleep_ms=sleep_ms,
                     )
-                )
+                    url_result = _ensure_url_processing_result(
+                        await asyncio.wait_for(
+                            _process_single_url(
+                                session=session,
+                                run=run,
+                                url=url,
+                                config=url_config,
+                                checkpoint=lambda: _run_control_checkpoint(session, run),
+                            ),
+                            timeout=url_timeout_seconds,
+                        )
+                    )
             pipeline_error = (
                 url_result.url_metrics.get("pipeline_error")
                 if isinstance(url_result.url_metrics, dict)
@@ -582,7 +654,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 combined_error = ": ".join(
                     part for part in (error_type, error_message) if part
                 ) or None
-            await progress_state.persist_url_result(
+            await persist_batch_url_result(
+                state=progress_state,
                 session=session,
                 run_id=run.id,
                 retry_run_update=_retry_run_update,
@@ -632,6 +705,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
     finally:
         if correlation_token is not None:
             reset_correlation_id(correlation_token)
+
+
 async def _sleep_with_checkpoint(sleep_ms: int, checkpoint) -> None:
     remaining_ms = max(0, int(sleep_ms or 0))
     while remaining_ms > 0:

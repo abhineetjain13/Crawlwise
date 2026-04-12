@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock
 import pytest
 from app.services.acquisition.traversal import (
     AdvanceResult,
+    PaginationTraversalRequest,
     TraversalConfig,
+    TraversalRequest,
     TraversalRuntime,
     apply_traversal_mode,
     collect_paginated_html,
@@ -237,18 +239,26 @@ async def test_paginate_mode_collects_three_button_only_pages_without_duplicates
         return AdvanceResult(url=current_page.url, already_navigated=True)
 
     result = await collect_paginated_html(
-        page,
-        surface="ecommerce_listing",
-        max_pages=5,
-        request_delay_ms=0,
-        page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
-        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
-        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
-        advance_next_page_fn=_advance_button_only_page,
-        dismiss_cookie_consent=AsyncMock(),
-        pause_after_navigation=AsyncMock(),
-        expand_all_interactive_elements=AsyncMock(return_value={}),
-        flatten_shadow_dom=AsyncMock(),
+        PaginationTraversalRequest(
+            page=page,
+            surface="ecommerce_listing",
+            max_pages=5,
+            request_delay_ms=0,
+            runtime=TraversalRuntime(
+                page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+                wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+                wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+                peek_next_page_signal=AsyncMock(return_value=None),
+                has_load_more_control=AsyncMock(return_value=False),
+                dismiss_cookie_consent=AsyncMock(),
+                pause_after_navigation=AsyncMock(),
+                expand_all_interactive_elements=AsyncMock(return_value={}),
+                flatten_shadow_dom=AsyncMock(),
+                cooperative_sleep_ms=AsyncMock(),
+                snapshot_listing_page_metrics=AsyncMock(return_value={}),
+                advance_next_page_fn=_advance_button_only_page,
+            ),
+        )
     )
 
     assert result.summary["pages_collected"] == 3
@@ -277,18 +287,26 @@ async def test_paginate_mode_uses_targeted_fragments_for_listing_pages():
         return AdvanceResult(url=current_page.url, already_navigated=True)
 
     result = await collect_paginated_html(
-        page,
-        surface="ecommerce_listing",
-        max_pages=2,
-        request_delay_ms=0,
-        page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
-        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
-        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
-        advance_next_page_fn=_advance_button_only_page,
-        dismiss_cookie_consent=AsyncMock(),
-        pause_after_navigation=AsyncMock(),
-        expand_all_interactive_elements=AsyncMock(return_value={}),
-        flatten_shadow_dom=AsyncMock(),
+        PaginationTraversalRequest(
+            page=page,
+            surface="ecommerce_listing",
+            max_pages=2,
+            request_delay_ms=0,
+            runtime=TraversalRuntime(
+                page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+                wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+                wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+                peek_next_page_signal=AsyncMock(return_value=None),
+                has_load_more_control=AsyncMock(return_value=False),
+                dismiss_cookie_consent=AsyncMock(),
+                pause_after_navigation=AsyncMock(),
+                expand_all_interactive_elements=AsyncMock(return_value={}),
+                flatten_shadow_dom=AsyncMock(),
+                cooperative_sleep_ms=AsyncMock(),
+                snapshot_listing_page_metrics=AsyncMock(return_value={}),
+                advance_next_page_fn=_advance_button_only_page,
+            ),
+        )
     )
 
     assert result.html is not None
@@ -316,19 +334,27 @@ async def test_collect_paginated_html_emits_progress_logs():
         return AdvanceResult(url=current_page.url, already_navigated=True)
 
     await collect_paginated_html(
-        page,
-        surface="ecommerce_listing",
-        max_pages=2,
-        request_delay_ms=0,
-        page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
-        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
-        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
-        advance_next_page_fn=_advance_button_only_page,
-        dismiss_cookie_consent=AsyncMock(),
-        pause_after_navigation=AsyncMock(),
-        expand_all_interactive_elements=AsyncMock(return_value={}),
-        flatten_shadow_dom=AsyncMock(),
-        progress_logger=progress_logger,
+        PaginationTraversalRequest(
+            page=page,
+            surface="ecommerce_listing",
+            max_pages=2,
+            request_delay_ms=0,
+            runtime=TraversalRuntime(
+                page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+                wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+                wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+                peek_next_page_signal=AsyncMock(return_value=None),
+                has_load_more_control=AsyncMock(return_value=False),
+                dismiss_cookie_consent=AsyncMock(),
+                pause_after_navigation=AsyncMock(),
+                expand_all_interactive_elements=AsyncMock(return_value={}),
+                flatten_shadow_dom=AsyncMock(),
+                cooperative_sleep_ms=AsyncMock(),
+                snapshot_listing_page_metrics=AsyncMock(return_value={}),
+                advance_next_page_fn=_advance_button_only_page,
+                progress_logger=progress_logger,
+            ),
+        )
     )
 
     messages = [call.args[0] for call in progress_logger.await_args_list]
@@ -346,17 +372,25 @@ async def test_collect_paginated_html_requires_pagination_callback():
 
     with pytest.raises(ValueError, match="no pagination callback provided"):
         await collect_paginated_html(
-            page,
-            surface="ecommerce_listing",
-            max_pages=2,
-            request_delay_ms=0,
-            page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
-            wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
-            wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
-            dismiss_cookie_consent=AsyncMock(),
-            pause_after_navigation=AsyncMock(),
-            expand_all_interactive_elements=AsyncMock(return_value={}),
-            flatten_shadow_dom=AsyncMock(),
+            PaginationTraversalRequest(
+                page=page,
+                surface="ecommerce_listing",
+                max_pages=2,
+                request_delay_ms=0,
+                runtime=TraversalRuntime(
+                    page_content_with_retry=AsyncMock(side_effect=_page_content_with_retry),
+                    wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+                    wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+                    peek_next_page_signal=AsyncMock(return_value=None),
+                    has_load_more_control=AsyncMock(return_value=False),
+                    dismiss_cookie_consent=AsyncMock(),
+                    pause_after_navigation=AsyncMock(),
+                    expand_all_interactive_elements=AsyncMock(return_value={}),
+                    flatten_shadow_dom=AsyncMock(),
+                    cooperative_sleep_ms=AsyncMock(),
+                    snapshot_listing_page_metrics=AsyncMock(return_value={}),
+                ),
+            )
         )
 
 
@@ -366,26 +400,28 @@ async def test_scroll_mode_preserves_all_cards_from_virtualized_infinite_scroll(
     metrics = AsyncMock(side_effect=lambda current_page: current_page.snapshot_metrics())
 
     result = await apply_traversal_mode(
-        page,
-        "ecommerce_listing",
-        "scroll",
-        5,
-        runtime=TraversalRuntime(
-            page_content_with_retry=AsyncMock(return_value=""),
-            wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
-            wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
-            peek_next_page_signal=AsyncMock(return_value=None),
-            click_and_observe_next_page=AsyncMock(return_value=""),
-            has_load_more_control=AsyncMock(return_value=False),
-            dismiss_cookie_consent=AsyncMock(),
-            pause_after_navigation=AsyncMock(),
-            expand_all_interactive_elements=AsyncMock(return_value={}),
-            flatten_shadow_dom=AsyncMock(),
-            cooperative_sleep_ms=AsyncMock(),
-            snapshot_listing_page_metrics=metrics,
-        ),
-        max_pages=1,
-        request_delay_ms=0,
+        TraversalRequest(
+            page=page,
+            surface="ecommerce_listing",
+            traversal_mode="scroll",
+            max_scrolls=5,
+            max_pages=1,
+            request_delay_ms=0,
+            runtime=TraversalRuntime(
+                page_content_with_retry=AsyncMock(return_value=""),
+                wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+                wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+                peek_next_page_signal=AsyncMock(return_value=None),
+                click_and_observe_next_page=AsyncMock(return_value=""),
+                has_load_more_control=AsyncMock(return_value=False),
+                dismiss_cookie_consent=AsyncMock(),
+                pause_after_navigation=AsyncMock(),
+                expand_all_interactive_elements=AsyncMock(return_value={}),
+                flatten_shadow_dom=AsyncMock(),
+                cooperative_sleep_ms=AsyncMock(),
+                snapshot_listing_page_metrics=metrics,
+            ),
+        )
     )
 
     assert result.summary["mode"] == "scroll"

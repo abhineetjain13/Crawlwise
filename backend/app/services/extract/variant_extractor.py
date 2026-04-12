@@ -3,8 +3,19 @@ from __future__ import annotations
 import json
 
 from app.services.extract.noise_policy import sanitize_product_attribute_map
+from app.services.extract.shared_variant_logic import (
+    normalized_variant_axis_key as _canonical_structured_key,
+    split_variant_axes as _split_variant_axes,
+)
+from app.services.extract.variant_types import (
+    VariantAxisValues,
+    VariantCandidateRow,
+    VariantCandidateRowMap,
+    VariantProductAttributes,
+    VariantRecord,
+    VariantRecords,
+)
 from app.services.normalizers import normalize_and_validate_value
-from app.services.requested_field_policy import normalize_requested_field
 
 # ---------------------------------------------------------------------------
 # Module-level constants (only used by functions in this module)
@@ -30,7 +41,6 @@ _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS = {
     "variant_axes",
     "variants",
 }
-_TRUE_VARIANT_AXES = {"color", "size", "waist", "width", "length", "inseam"}
 # ---------------------------------------------------------------------------
 # Inline helper (avoids circular import with service.py)
 # ---------------------------------------------------------------------------
@@ -43,39 +53,7 @@ def _normalized_candidate_text(value: object) -> str:
 # Moved functions
 # ---------------------------------------------------------------------------
 
-def _canonical_structured_key(value: object) -> str:
-    text = _normalized_candidate_text(value).lower()
-    if text in {"color", "colour", "colors", "colours"}:
-        return "color"
-    if text in {"size", "sizes", "dimension", "dimensions"}:
-        return "size"
-    normalized = normalize_requested_field(text)
-    if normalized in {"dimension", "dimensions"}:
-        return "size"
-    return normalized or text
-
-
-def _split_variant_axes(
-    axis_values: dict[str, list[str]],
-) -> tuple[dict[str, list[str]], dict[str, str]]:
-    selectable: dict[str, list[str]] = {}
-    product_attributes: dict[str, str] = {}
-    for axis_name, values in axis_values.items():
-        cleaned_values = list(
-            dict.fromkeys(
-                _normalized_candidate_text(value)
-                for value in values
-                if _normalized_candidate_text(value)
-            )
-        )
-        if len(cleaned_values) > 1 or axis_name in _TRUE_VARIANT_AXES:
-            selectable[axis_name] = cleaned_values
-        elif len(cleaned_values) == 1:
-            product_attributes[axis_name] = cleaned_values[0]
-    return selectable, product_attributes
-
-
-def _sync_selected_variant_root_fields(final_candidates: dict[str, list[dict]]) -> None:
+def _sync_selected_variant_root_fields(final_candidates: VariantCandidateRowMap) -> None:
     selected_rows = final_candidates.get("selected_variant")
     if not isinstance(selected_rows, list) or not selected_rows:
         return
@@ -105,8 +83,8 @@ def _sync_selected_variant_root_fields(final_candidates: dict[str, list[dict]]) 
 
 
 def _merge_product_attributes_into_candidates(
-    final_candidates: dict[str, list[dict]],
-    attributes: dict[str, object],
+    final_candidates: VariantCandidateRowMap,
+    attributes: VariantProductAttributes,
     *,
     source: str,
 ) -> None:
@@ -133,7 +111,7 @@ def _merge_product_attributes_into_candidates(
         final_candidates.pop("product_attributes", None)
 
 
-def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> None:
+def _sanitize_product_attributes(final_candidates: VariantCandidateRowMap) -> None:
     product_rows = final_candidates.get("product_attributes")
     if not isinstance(product_rows, list) or not product_rows:
         return
@@ -155,7 +133,7 @@ def _sanitize_product_attributes(final_candidates: dict[str, list[dict]]) -> Non
 
 
 def _reconcile_variant_bundle(
-    final_candidates: dict[str, list[dict]],
+    final_candidates: VariantCandidateRowMap,
     *,
     base_url: str,
 ) -> None:
@@ -271,11 +249,13 @@ def _reconcile_variant_bundle(
 
 def _merge_variant_axis_values(
     *,
-    discovered_axes: dict[str, list[str]],
-    declared_axes: dict[str, list[str]],
-) -> dict[str, list[str]]:
+    discovered_axes: VariantAxisValues,
+    declared_axes: VariantAxisValues,
+) -> VariantAxisValues:
     if not discovered_axes:
-        return dict(declared_axes)
+        return {
+            axis_name: list(values) for axis_name, values in declared_axes.items()
+        }
     merged: dict[str, list[str]] = {
         axis_name: list(values) for axis_name, values in discovered_axes.items()
     }
@@ -291,13 +271,13 @@ def _merge_variant_axis_values(
     return merged
 
 
-def _first_candidate_row(rows: object) -> dict[str, object] | None:
+def _first_candidate_row(rows: object) -> VariantCandidateRow | None:
     if isinstance(rows, list) and rows and isinstance(rows[0], dict):
         return rows[0]
     return None
 
 
-def _row_source_label(row: dict[str, object] | None, *, fallback: str) -> str:
+def _row_source_label(row: VariantCandidateRow | None, *, fallback: str) -> str:
     if not isinstance(row, dict):
         return fallback
     return str(row.get("source") or fallback).strip() or fallback
@@ -307,11 +287,11 @@ def _normalized_variant_rows_payload(
     value: object,
     *,
     base_url: str,
-) -> list[dict[str, object]]:
+) -> VariantRecords:
     normalized = normalize_and_validate_value("variants", value, base_url=base_url)
     if not isinstance(normalized, list):
         return []
-    reconciled: list[dict[str, object]] = []
+    reconciled: VariantRecords = []
     seen: set[str] = set()
     for variant in normalized:
         if not _is_meaningful_variant_record(variant):
@@ -329,7 +309,7 @@ def _normalized_selected_variant_payload(
     value: object,
     *,
     base_url: str,
-) -> dict[str, object] | None:
+) -> VariantRecord | None:
     normalized = normalize_and_validate_value("selected_variant", value, base_url=base_url)
     if not isinstance(normalized, dict) or not _is_meaningful_variant_record(normalized):
         return None
@@ -340,7 +320,7 @@ def _normalized_variant_axes_payload(
     value: object,
     *,
     base_url: str,
-) -> dict[str, list[str]]:
+) -> VariantAxisValues:
     normalized = normalize_and_validate_value("variant_axes", value, base_url=base_url)
     return normalized if isinstance(normalized, dict) else {}
 
@@ -361,7 +341,7 @@ def _is_meaningful_variant_record(value: object) -> bool:
     return False
 
 
-def _variant_record_fingerprint(value: dict[str, object]) -> str:
+def _variant_record_fingerprint(value: VariantRecord) -> str:
     variant_id = str(value.get("variant_id") or "").strip()
     if variant_id:
         return f"id:{variant_id}"
@@ -393,8 +373,8 @@ def _variant_record_fingerprint(value: dict[str, object]) -> str:
 
 
 def _find_matching_variant_index(
-    variants: list[dict[str, object]],
-    selected_variant: dict[str, object] | None,
+    variants: VariantRecords,
+    selected_variant: VariantRecord | None,
 ) -> int:
     if not selected_variant:
         return -1
@@ -412,9 +392,9 @@ def _find_matching_variant_index(
 
 
 def _merge_variant_records(
-    primary: dict[str, object],
-    secondary: dict[str, object],
-) -> dict[str, object]:
+    primary: VariantRecord,
+    secondary: VariantRecord,
+) -> VariantRecord:
     merged = dict(primary)
     for key, value in secondary.items():
         if merged.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
@@ -428,8 +408,8 @@ def _merge_variant_records(
 
 
 def _choose_default_variant(
-    variants: list[dict[str, object]],
-) -> dict[str, object] | None:
+    variants: VariantRecords,
+) -> VariantRecord | None:
     if not variants:
         return None
     return next(
@@ -439,8 +419,8 @@ def _choose_default_variant(
 
 
 def _collect_variant_axis_values(
-    variants: list[dict[str, object]],
-) -> dict[str, list[str]]:
+    variants: VariantRecords,
+) -> VariantAxisValues:
     axis_values: dict[str, list[str]] = {}
     for variant in variants:
         option_values = variant.get("option_values")

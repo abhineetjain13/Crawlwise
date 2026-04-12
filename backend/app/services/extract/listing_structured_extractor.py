@@ -849,16 +849,24 @@ def _looks_like_inline_collection_key(value: str) -> bool:
     )
 
 
+_MAX_INLINE_LITERAL_SCAN_CHARS = 250_000
+_MAX_INLINE_LITERAL_NESTING_DEPTH = 256
+
+
 def _extract_balanced_literal(text: str, start_index: int) -> str | None:
     if start_index < 0 or start_index >= len(text) or text[start_index] not in "[{":
         return None
+    scan_limit = min(len(text), start_index + _MAX_INLINE_LITERAL_SCAN_CHARS)
+    script_close_index = text.find("</script", start_index)
+    if script_close_index != -1:
+        scan_limit = min(scan_limit, script_close_index)
     stack = [text[start_index]]
     in_string = False
     escape = False
     quote_char = ""
     index = start_index + 1
 
-    while index < len(text):
+    while index < scan_limit:
         char = text[index]
         if in_string:
             if escape:
@@ -873,6 +881,8 @@ def _extract_balanced_literal(text: str, start_index: int) -> str | None:
                 quote_char = char
             elif char in "[{":
                 stack.append(char)
+                if len(stack) > _MAX_INLINE_LITERAL_NESTING_DEPTH:
+                    return None
             elif char in "]}":
                 if not stack:
                     return None

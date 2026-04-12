@@ -8,7 +8,6 @@ import logging
 import re
 from html import unescape
 from typing import Any, Protocol
-from urllib.parse import parse_qsl, urlparse
 
 import regex as regex_lib
 from app.services.xpath_service import validate_xpath_syntax
@@ -22,55 +21,6 @@ def _log_for_pytest(level: int, message: str, *args: object) -> None:
     root_logger = logging.getLogger()
     if any(type(handler).__name__ == "LogCaptureHandler" for handler in root_logger.handlers):
         root_logger.log(level, message, *args)
-
-_JOB_HOST_HINTS = (
-    "workforcenow.adp.com",
-    "myjobs.adp.com",
-    "recruiting.adp.com",
-    "icims.com",
-    "ultipro.com",
-    "ukg.com",
-    "oraclecloud.com",
-    "myworkdayjobs.com",
-    "greenhouse.io",
-    "lever.co",
-    "paycomonline.net",
-    "saashr.com",
-    "jobvite.com",
-)
-_JOB_LISTING_PATH_HINTS = (
-    "/careers",
-    "/jobs",
-    "/search-jobs",
-    "/jobboard",
-    "/requisitions",
-)
-_JOB_DETAIL_PATH_HINTS = (
-    "/job/",
-    "/jobs/",
-    "/job-detail",
-    "/job-details",
-    "/jobdetail",
-    "/jobboard/jobdetails",
-    "/opportunitydetail",
-    "/requisition/",
-)
-_COMMERCE_LISTING_PATH_HINTS = (
-    "/category/",
-    "/categories/",
-    "/collections/",
-    "/shop/",
-    "/search",
-    "/c/",
-)
-_COMMERCE_DETAIL_PATH_HINTS = (
-    "/product/",
-    "/products/",
-    "/p/",
-    "/dp/",
-    "/item/",
-)
-
 
 class _SettingsViewLike(Protocol):
     def urls(self) -> list[str]: ...
@@ -104,60 +54,6 @@ def normalize_target_url(value: object) -> str:
     if not text:
         return ""
     return re.sub(r"\s+", "", text)
-
-
-def infer_surface_from_url(url: object, fallback_surface: str = "") -> str:
-    """Infer the crawl surface from URL structure, with fallback preservation."""
-    normalized_url = normalize_target_url(url)
-    normalized_fallback = str(fallback_surface or "").strip().lower()
-    valid_surfaces = {"job_listing", "job_detail", "ecommerce_listing", "ecommerce_detail"}
-    if not normalized_fallback:
-        fallback = "ecommerce_listing"
-    elif normalized_fallback in valid_surfaces:
-        fallback = normalized_fallback
-    else:
-        raise ValueError(f"Invalid fallback_surface: {normalized_fallback}")
-    if not normalized_url:
-        return fallback
-    try:
-        parsed = urlparse(normalized_url)
-    except ValueError:
-        return fallback
-    path = str(parsed.path or "").lower()
-    query = str(parsed.query or "").lower()
-    combined = f"{path}?{query}" if query else path
-    hostname = str(parsed.hostname or "").lower()
-    query_keys = {
-        str(key or "").strip().lower()
-        for key, _value in parse_qsl(parsed.query, keep_blank_values=True)
-        if str(key or "").strip()
-    }
-
-    job_host = any(
-        hostname == hint or hostname.endswith(f".{hint}") for hint in _JOB_HOST_HINTS
-    )
-    if (
-        any(token in combined for token in _JOB_DETAIL_PATH_HINTS)
-        or {"jobid", "job_id", "opportunityid", "showjob"} & query_keys
-    ):
-        return "job_detail"
-    if (
-        any(token in combined for token in _JOB_LISTING_PATH_HINTS)
-        or job_host
-        or {"keywords", "careersearch"} & query_keys
-    ):
-        return "job_listing"
-    if (
-        any(token in combined for token in _COMMERCE_DETAIL_PATH_HINTS)
-        or {"sku", "variant"} & query_keys
-    ):
-        return "ecommerce_detail"
-    if (
-        any(token in combined for token in _COMMERCE_LISTING_PATH_HINTS)
-        or {"category", "q", "query"} & query_keys
-    ):
-        return "ecommerce_listing"
-    return fallback
 
 
 def _settings_view(settings: object) -> _SettingsViewLike | dict:

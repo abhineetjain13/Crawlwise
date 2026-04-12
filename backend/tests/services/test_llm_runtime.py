@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import app.services.llm_runtime as llm_runtime_module
 from app.core.metrics import render_prometheus_metrics
 from app.core.security import encrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
 from app.services.llm_runtime import (
     LLMErrorCategory,
+    _call_provider_with_retry,
     load_prompt_file,
     resolve_active_config,
     run_prompt_task,
@@ -18,6 +20,43 @@ from app.services.llm_runtime import (
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self._strings: dict[str, str] = {}
+        self._hashes: dict[str, dict[str, str]] = {}
+
+    async def exists(self, key: str) -> int:
+        return 1 if key in self._strings else 0
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None):
+        _ = ex
+        if nx and key in self._strings:
+            return False
+        self._strings[key] = value
+        return True
+
+    async def hincrby(self, key: str, field: str, amount: int) -> int:
+        bucket = self._hashes.setdefault(key, {})
+        next_value = int(bucket.get(field, "0")) + int(amount)
+        bucket[field] = str(next_value)
+        return next_value
+
+    async def hset(self, key: str, mapping: dict[str, object]) -> int:
+        bucket = self._hashes.setdefault(key, {})
+        for field, value in mapping.items():
+            bucket[str(field)] = str(value)
+        return len(mapping)
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        _ = (key, seconds)
+        return True
+
+    async def delete(self, key: str) -> int:
+        existed = key in self._strings
+        self._strings.pop(key, None)
+        return 1 if existed else 0
 
 
 def _seed_xpath_discovery_config(db_session: AsyncSession) -> None:
@@ -402,5 +441,48 @@ async def test_run_prompt_task_exports_prometheus_outcome_metrics(db_session: As
     assert 'llm_task_outcomes_total{error_category="none",outcome="success",provider="groq",task_type="xpath_discovery"}' in rendered
     assert 'llm_task_outcomes_total{error_category="validation_failure",outcome="error",provider="groq",task_type="schema_inference"}' in rendered
     assert "llm_task_duration_seconds_" in rendered
+
+
+@pytest.mark.asyncio
+async def test_call_provider_with_retry_uses_shared_circuit_state_across_workers(monkeypatch: pytest.MonkeyPatch):
+    fake_redis = _FakeRedis()
+
+    async def _redis_passthrough(operation, *, default, operation_name):
+        _ = (default, operation_name)
+        return await operation(fake_redis)
+
+    llm_runtime_module._provider_circuits.clear()
+    monkeypatch.setattr("app.services.llm_runtime.redis_is_enabled", lambda: True)
+    monkeypatch.setattr("app.services.llm_runtime.redis_fail_open", _redis_passthrough)
+
+    provider_call = AsyncMock(return_value=("Error: ConnectError: upstream unavailable", 0, 0))
+    monkeypatch.setattr("app.services.llm_runtime._call_provider", provider_call)
+
+    first_result = await _call_provider_with_retry(
+        provider="groq",
+        model="llama-test",
+        api_key="secret",
+        system_prompt="system",
+        user_prompt="user",
+        max_retries=5,
+    )
+
+    assert first_result[0].startswith("Error: ConnectError:")
+    assert provider_call.await_count == 5
+
+    # Simulate a separate Celery worker process with no local in-memory circuit state.
+    llm_runtime_module._provider_circuits.clear()
+
+    second_result = await _call_provider_with_retry(
+        provider="groq",
+        model="llama-test",
+        api_key="secret",
+        system_prompt="system",
+        user_prompt="user",
+        max_retries=5,
+    )
+
+    assert "Circuit breaker open" in second_result[0]
+    assert provider_call.await_count == 5
 
 

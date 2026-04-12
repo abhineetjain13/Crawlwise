@@ -20,7 +20,6 @@ from app.services.acquisition import detect_blocked_page
 from app.services.crawl_metrics import (
     build_url_metrics as _build_url_metrics,
 )
-from app.services.config.crawl_runtime import AUTO_DETECT_SURFACE
 from bs4 import BeautifulSoup
 from sqlalchemy import delete
 
@@ -233,28 +232,6 @@ class AcquireStage:
 
 
 # ---------------------------------------------------------------------------
-# Stage 1.2: Surface Validation
-# ---------------------------------------------------------------------------
-
-
-class SurfaceValidationStage:
-    """Optional auto-detection of the effective listing surface."""
-
-    async def execute(self, ctx: PipelineContext) -> None:
-        from .listing_flow import resolve_listing_surface
-
-        acq = ctx.acquisition_result
-        assert acq is not None
-        requested_surface = ctx.surface
-        ctx.url_metrics["requested_surface"] = requested_surface
-        if AUTO_DETECT_SURFACE:
-            ctx.surface = resolve_listing_surface(surface=ctx.surface, acq=acq)
-            if ctx.surface != requested_surface:
-                ctx.url_metrics["effective_surface"] = ctx.surface
-                ctx.url_metrics["surface_remapped"] = True
-
-
-# ---------------------------------------------------------------------------
 # Stage 1.5: Blocked Page Detection
 # ---------------------------------------------------------------------------
 
@@ -422,8 +399,11 @@ class ExtractStage:
     """Delegates to the appropriate extraction path based on surface/content type."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .detail_flow import extract_detail, process_json_response
-        from .listing_flow import extract_listing
+        from .detail_flow import (
+            extract_detail_from_context,
+            process_json_response_from_context,
+        )
+        from .listing_flow import extract_listing, extract_listing_from_context
 
         acq = ctx.acquisition_result
         assert acq is not None
@@ -438,19 +418,7 @@ class ExtractStage:
                     "[ANALYZE] JSON-first path — API response detected",
                 )
             extraction_started = time.perf_counter()
-            result = await process_json_response(
-                ctx.session,
-                ctx.run,
-                ctx.url,
-                acq,
-                ctx.is_listing,
-                ctx.config.max_records,
-                ctx.additional_fields,
-                ctx.url_metrics,
-                update_run_state=ctx.update_run_state,
-                persist_logs=ctx.persist_logs,
-                record_writer=ctx.record_writer,
-            )
+            result = await process_json_response_from_context(ctx)
             result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started)
             ctx.records = result.records
             ctx.verdict = result.verdict
@@ -470,46 +438,14 @@ class ExtractStage:
 
         if ctx.is_listing:
             extraction_started = time.perf_counter()
-            result = await extract_listing(
-                ctx.session,
-                ctx.run,
-                ctx.url,
-                html,
-                acq,
-                ctx.adapter_result,
-                ctx.adapter_records,
-                ctx.additional_fields,
-                ctx.surface,
-                ctx.config.max_records,
-                ctx.url_metrics,
-                soup=ctx.soup,
-                update_run_state=ctx.update_run_state,
-                persist_logs=ctx.persist_logs,
-                record_writer=ctx.record_writer,
-            )
+            result = await extract_listing_from_context(ctx)
             result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started)
             ctx.records = result.records
             ctx.verdict = result.verdict
             ctx.url_metrics = result.url_metrics
         else:
             extraction_started = time.perf_counter()
-            result = await extract_detail(
-                ctx.session,
-                ctx.run,
-                ctx.url,
-                html,
-                acq,
-                ctx.adapter_result,
-                ctx.adapter_records,
-                ctx.additional_fields,
-                ctx.extraction_contract,
-                ctx.surface,
-                ctx.url_metrics,
-                soup=ctx.soup,
-                update_run_state=ctx.update_run_state,
-                persist_logs=ctx.persist_logs,
-                record_writer=ctx.record_writer,
-            )
+            result = await extract_detail_from_context(ctx)
             result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started)
             ctx.records = result.records
             ctx.verdict = result.verdict

@@ -81,3 +81,17 @@ def test_runtime_settings_preserve_previous_runtime_defaults(monkeypatch):
     assert crawl_runtime.BROWSER_NAVIGATION_LOAD_TIMEOUT_MS == 15000
     assert crawl_runtime.BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS == 15000
     assert crawl_runtime.LISTING_READINESS_MAX_WAIT_MS == 6000
+
+
+def test_runtime_settings_expose_new_acquisition_and_traversal_tunables(monkeypatch):
+    monkeypatch.setenv("CRAWLER_RUNTIME_IFRAME_PROMOTION_MAX_CANDIDATES", "5")
+    monkeypatch.setenv("CRAWLER_RUNTIME_BROWSER_PREFERENCE_MIN_SUCCESSES", "4")
+    monkeypatch.setenv("CRAWLER_RUNTIME_TRAVERSAL_MAX_ITERATIONS_CAP", "77")
+    monkeypatch.setenv("CRAWLER_RUNTIME_PAGINATION_POST_CLICK_TIMEOUT_MS", "2100")
+
+    _, crawl_runtime = _reload_runtime_modules()
+
+    assert crawl_runtime.IFRAME_PROMOTION_MAX_CANDIDATES == 5
+    assert crawl_runtime.BROWSER_PREFERENCE_MIN_SUCCESSES == 4
+    assert crawl_runtime.TRAVERSAL_MAX_ITERATIONS_CAP == 77
+    assert crawl_runtime.PAGINATION_POST_CLICK_TIMEOUT_MS == 2100

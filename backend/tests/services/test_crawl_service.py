@@ -139,6 +139,17 @@ async def test_create_crawl_run(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_create_crawl_run_requires_explicit_surface(
+    db_session: AsyncSession, test_user
+):
+    with pytest.raises(ValueError, match="surface is required"):
+        await create_crawl_run(db_session, test_user.id, {
+            "run_type": "crawl",
+            "url": "https://example.com",
+        })
+
+
+@pytest.mark.asyncio
 async def test_create_crawl_run_sets_correlation_id_from_request_context(
     db_session: AsyncSession, test_user
 ):
@@ -580,6 +591,48 @@ async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_ses
         "completed_urls": 1,
         "url_verdicts": ["success"],
         "verdict_counts": {"success": 1},
+    }
+    await db_session.commit()
+
+    seen_urls: list[str] = []
+
+    async def _fake_process_single_url(**kwargs):
+        seen_urls.append(kwargs["url"])
+        return ([{"title": kwargs["url"]}], "success", {"method": "curl_cffi", "record_count": 1})
+
+    with patch("app.services._batch_runtime._process_single_url", side_effect=_fake_process_single_url):
+        await process_run(db_session, run.id)
+
+    assert seen_urls == ["https://example.com/2", "https://example.com/3"]
+
+
+@pytest.mark.asyncio
+async def test_process_run_resumes_against_persisted_url_snapshot_when_settings_reorder(
+    db_session: AsyncSession,
+    test_user,
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "batch",
+        "url": "https://example.com/1",
+        "surface": "ecommerce_detail",
+        "settings": {"urls": ["https://example.com/1", "https://example.com/2", "https://example.com/3"]},
+    })
+    run.status = "running"
+    run.result_summary = {
+        **(run.result_summary or {}),
+        "processed_urls": 1,
+        "completed_urls": 1,
+        "url_verdicts": ["success"],
+        "verdict_counts": {"success": 1},
+        "resolved_url_list": [
+            "https://example.com/1",
+            "https://example.com/2",
+            "https://example.com/3",
+        ],
+    }
+    run.settings = {
+        **(run.settings or {}),
+        "urls": ["https://example.com/3", "https://example.com/1", "https://example.com/2"],
     }
     await db_session.commit()
 
@@ -2013,6 +2066,49 @@ async def test_process_run_drops_commerce_leakage_from_job_listing_records(db_se
     review_bucket = record.discovered_data.get("review_bucket") or []
     assert all(row.get("key") != "currency" for row in review_bucket)
     assert all(row.get("key") != "price" for row in review_bucket)
+
+
+@pytest.mark.asyncio
+async def test_process_run_drops_commerce_leakage_from_job_detail_records(
+    db_session: AsyncSession, test_user
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://careers.clarkassociatesinc.biz/careerdetail/?id=100709",
+        "surface": "job_detail",
+    })
+
+    adapter = AdapterResult(
+        adapter_name="test",
+        records=[{
+            "title": "1st Shift Outbound Material Handler",
+            "company": "WebstaurantStore",
+            "location": "Savannah, GA",
+            "salary": "$20.00/Hr.",
+            "description": "Move product safely through the warehouse.",
+            "image_url": "https://example.com/assets/job.png",
+            "additional_images": ["https://example.com/assets/job-2.png"],
+            "part_number": "PART-100709",
+            "currency": "USD",
+            "product_attributes": {"shift": "1st"},
+        }],
+    )
+
+    with (
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq(
+            "<html><body><main><h1>Warehouse Role</h1><p>Move product safely through the warehouse.</p></main></body></html>"
+        )),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    record = (await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))).scalars().one()
+    assert record.data["salary"] == "$20.00/Hr."
+    assert "image_url" not in record.data
+    assert "additional_images" not in record.data
+    assert "part_number" not in record.data
+    assert "currency" not in record.data
+    assert "product_attributes" not in record.data
 
 
 @pytest.mark.asyncio

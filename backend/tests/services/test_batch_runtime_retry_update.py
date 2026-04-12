@@ -33,6 +33,11 @@ class _FakeLockError(Exception):
         return "could not obtain lock on row in relation crawl_runs"
 
 
+class _FakeConnectionDoesNotExistError(Exception):
+    def __str__(self) -> str:
+        return "connection does not exist"
+
+
 class _FakeResult:
     def __init__(self, run) -> None:
         self._run = run
@@ -79,7 +84,7 @@ async def test_retry_run_update_retries_fast_on_lock_contention(
     assert run.updated is True
     session.flush.assert_awaited_once()
     assert session.execute.await_count == 2
-    assert session.rollback.await_count == 0
+    assert session.rollback.await_count == 1
     assert session.commit.await_count == 1
     sleep.assert_awaited_once_with(0.05)
 
@@ -113,3 +118,38 @@ async def test_retry_run_update_does_not_retry_non_lock_operational_errors(
     assert session.rollback.await_count == 1
     assert session.commit.await_count == 0
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retry_run_update_retries_transient_connection_loss(
+    monkeypatch: pytest.MonkeyPatch,
+    batch_runtime_module,
+) -> None:
+    _retry_run_update = batch_runtime_module._retry_run_update
+    run = SimpleNamespace(id=19, updated=False)
+    session = SimpleNamespace(
+        begin_nested=lambda: _FakeNestedTransaction(),
+        commit=AsyncMock(),
+        flush=AsyncMock(),
+        rollback=AsyncMock(),
+        execute=AsyncMock(
+            side_effect=[
+                OperationalError("SELECT", {}, _FakeConnectionDoesNotExistError()),
+                _FakeResult(run),
+            ]
+        ),
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.services._batch_runtime.asyncio.sleep", sleep)
+
+    async def _mutate(_session, retry_run) -> None:
+        retry_run.updated = True
+
+    await _retry_run_update(session, run.id, _mutate)
+
+    assert run.updated is True
+    session.flush.assert_awaited_once()
+    assert session.execute.await_count == 2
+    assert session.rollback.await_count == 1
+    assert session.commit.await_count == 1
+    sleep.assert_awaited_once_with(0.05)

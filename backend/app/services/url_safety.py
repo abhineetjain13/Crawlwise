@@ -15,12 +15,18 @@ from app.services.config.crawl_runtime import (
 _ALLOWED_SCHEMES = {"http", "https"}
 _ALLOWED_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
 _BLOCKED_HOSTNAMES = {
+    "instance-data",
+    "instance-data.ec2.internal",
     "localhost",
     "localhost.localdomain",
+    "metadata.azure.internal",
     "metadata.google.internal",
 }
 _BLOCKED_SUFFIXES = (".local",)
 _CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+_BLOCKED_IPS = {
+    ipaddress.ip_address("168.63.129.16"),
+}
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,8 @@ def _raise_if_non_public_ip(
     ip_value: ipaddress.IPv4Address | ipaddress.IPv6Address,
     host_label: str,
 ) -> None:
+    if ip_value in _BLOCKED_IPS:
+        raise ValueError(f"Target host resolves to a blocked platform IP address: {host_label} -> {ip_value}")
     if (
         ip_value.is_private
         or ip_value.is_loopback

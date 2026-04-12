@@ -4,7 +4,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.schemas.crawl import CrawlRecordResponse
-from app.services.pipeline.field_normalization import _sanitize_persisted_record_payload
+from app.services.pipeline.field_normalization import (
+    _normalize_record_fields,
+    _sanitize_persisted_record_payload,
+)
 
 
 def test_crawl_record_response_exposes_review_bucket_and_hides_manifest_trace():
@@ -130,3 +133,25 @@ def test_sanitize_persisted_record_payload_redacts_pii_from_discovered_payloads(
             "source": "regex",
         },
     ]
+
+
+def test_normalize_record_fields_redacts_pii_from_canonical_payloads():
+    normalized = _normalize_record_fields(
+        {
+            "title": "Call sales@example.com",
+            "description": "Reach us at (415) 555-2671 ext 9 for details.",
+            "specs": {
+                "support": "support@example.com",
+                "phone": "+91 98765 43210",
+            },
+        }
+    )
+
+    assert normalized == {
+        "title": "Call [REDACTED]",
+        "description": "Reach us at [REDACTED] for details.",
+        "specs": {
+            "support": "[REDACTED]",
+            "phone": "[REDACTED]",
+        },
+    }

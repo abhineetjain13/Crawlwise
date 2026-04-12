@@ -60,6 +60,7 @@ from app.services.acquisition.cookie_store import (
 from app.services.acquisition.traversal import (
     AdvanceResult,
     TraversalConfig,
+    TraversalRequest,
     TraversalResult,
     TraversalRuntime,
     advance_next_page as _advance_next_page_shared,
@@ -154,6 +155,32 @@ class BrowserResult:
     diagnostics: dict[str, object] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class BrowserRenderRequest:
+    target: object
+    url: str
+    proxy: str | None
+    surface: str | None
+    traversal_mode: str | None
+    max_pages: int
+    max_scrolls: int
+    prefer_stealth: bool
+    request_delay_ms: int
+    runtime_options: BrowserRuntimeOptions
+    requested_fields: list[str] = field(default_factory=list)
+    requested_field_selectors: dict[str, list[dict]] = field(default_factory=dict)
+    checkpoint: Callable[[], Awaitable[None]] | None = None
+    run_id: int | None = None
+    session_context: SessionContext | None = None
+
+
+@dataclass(slots=True)
+class _BrowserRenderAttempt:
+    request: BrowserRenderRequest
+    launch_profile: dict[str, str | None]
+    navigation_strategies: list[tuple[str, int]] | None = None
+
+
 _STEALTH_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -186,51 +213,36 @@ async def fetch_rendered_html(
         max_scrolls: Max scroll attempts (for scroll mode).
     """
     target = await validate_public_target(url)
+    request = BrowserRenderRequest(
+        target=target,
+        url=url,
+        proxy=proxy,
+        surface=surface,
+        traversal_mode=traversal_mode,
+        max_pages=max_pages,
+        max_scrolls=max_scrolls,
+        prefer_stealth=prefer_stealth,
+        request_delay_ms=request_delay_ms,
+        runtime_options=runtime_options or BrowserRuntimeOptions(),
+        requested_fields=list(requested_fields or []),
+        requested_field_selectors=dict(requested_field_selectors or {}),
+        checkpoint=checkpoint,
+        run_id=run_id,
+        session_context=session_context,
+    )
 
     async with async_playwright() as pw:
-        return await _fetch_rendered_html_with_fallback(
-            pw,
-            target=target,
-            url=url,
-            proxy=proxy,
-            surface=surface,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            prefer_stealth=prefer_stealth,
-            request_delay_ms=request_delay_ms,
-            runtime_options=runtime_options or BrowserRuntimeOptions(),
-            requested_fields=requested_fields or [],
-            requested_field_selectors=requested_field_selectors or {},
-            checkpoint=checkpoint,
-            run_id=run_id,
-            session_context=session_context,
-        )
+        return await _fetch_rendered_html_with_fallback(pw, request)
 
 
 async def _fetch_rendered_html_with_fallback(
     pw,
-    *,
-    target,
-    url: str,
-    proxy: str | None,
-    surface: str | None = None,
-    traversal_mode: str | None,
-    max_pages: int,
-    max_scrolls: int,
-    prefer_stealth: bool,
-    request_delay_ms: int,
-    runtime_options: BrowserRuntimeOptions | None,
-    requested_fields: list[str],
-    requested_field_selectors: dict[str, list[dict]],
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-    run_id: int | None = None,
-    session_context: SessionContext | None = None,
+    request: BrowserRenderRequest,
 ) -> BrowserResult:
     last_error: Exception | None = None
     first_profile_failure_reason: str | None = None
-    options = runtime_options or BrowserRuntimeOptions()
-    profiles = _browser_launch_profiles(options, target=target)
+    options = request.runtime_options or BrowserRuntimeOptions()
+    profiles = _browser_launch_profiles(options, target=request.target)
     for index, profile in enumerate(profiles):
         navigation_strategies = (
             _shortened_navigation_strategies()
@@ -244,33 +256,21 @@ async def _fetch_rendered_html_with_fallback(
         try:
             result = await _fetch_rendered_html_attempt(
                 pw,
-                target=target,
-                url=url,
-                proxy=proxy,
-                surface=surface,
-                traversal_mode=traversal_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                prefer_stealth=prefer_stealth,
-                request_delay_ms=request_delay_ms,
-                runtime_options=options,
-                requested_fields=requested_fields,
-                requested_field_selectors=requested_field_selectors,
-                launch_profile=profile,
-                navigation_strategies=navigation_strategies,
-                checkpoint=checkpoint,
-                run_id=run_id,
-                session_context=session_context,
+                _BrowserRenderAttempt(
+                    request=request,
+                    launch_profile=profile,
+                    navigation_strategies=navigation_strategies,
+                ),
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
             if index < len(profiles) - 1 and _should_retry_launch_profile(
-                result, surface=surface
+                result, surface=request.surface
             ):
                 first_profile_failure_reason = "low_value_result"
                 logger.info(
                     "Playwright %s produced a low-value result for %s; trying next launch profile",
                     profile["label"],
-                    url,
+                    request.url,
                 )
                 continue
             return result
@@ -278,35 +278,37 @@ async def _fetch_rendered_html_with_fallback(
             last_error = exc
             first_profile_failure_reason = _classify_profile_failure_reason(exc)
             logger.warning(
-                "Playwright %s failed for %s: %s", profile["label"], url, exc
+                "Playwright %s failed for %s: %s",
+                profile["label"],
+                request.url,
+                exc,
             )
             continue
     if last_error is not None:
         raise last_error
-    raise BrowserError(f"Unable to render {url}")
+    raise BrowserError(f"Unable to render {request.url}")
 
 
 async def _fetch_rendered_html_attempt(
     pw,
-    *,
-    target,
-    url: str,
-    proxy: str | None,
-    surface: str | None,
-    traversal_mode: str | None,
-    max_pages: int,
-    max_scrolls: int,
-    prefer_stealth: bool,
-    request_delay_ms: int,
-    runtime_options: BrowserRuntimeOptions,
-    requested_fields: list[str],
-    requested_field_selectors: dict[str, list[dict]],
-    launch_profile: dict[str, str | None],
-    navigation_strategies: list[tuple[str, int]] | None = None,
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-    run_id: int | None = None,
-    session_context: SessionContext | None = None,
+    attempt: _BrowserRenderAttempt,
 ) -> BrowserResult:
+    request = attempt.request
+    launch_profile = attempt.launch_profile
+    navigation_strategies = attempt.navigation_strategies
+    url = request.url
+    proxy = request.proxy
+    target = request.target
+    surface = request.surface
+    traversal_mode = request.traversal_mode
+    max_pages = request.max_pages
+    max_scrolls = request.max_scrolls
+    prefer_stealth = request.prefer_stealth
+    request_delay_ms = request.request_delay_ms
+    runtime_options = request.runtime_options
+    run_id = request.run_id
+    checkpoint = request.checkpoint
+    session_context = request.session_context
     result = BrowserResult()
     intercepted: list[dict] = []
     blocked_non_public_requests: list[dict[str, str]] = []
@@ -377,24 +379,6 @@ async def _fetch_rendered_html_attempt(
         page = await asyncio.wait_for(
             context.new_page(), timeout=BROWSER_NEW_PAGE_TIMEOUT_MS / 1000
         )
-
-        async def _guard_non_public_request(route, request) -> None:
-            request_url = str(getattr(request, "url", "") or "").strip()
-            allowed, reason = await _is_public_browser_request_target(request_url)
-            if allowed:
-                await route.continue_()
-                return
-            blocked_non_public_requests.append(
-                {
-                    "url": request_url,
-                    "resource_type": str(getattr(request, "resource_type", "") or ""),
-                    "reason": reason,
-                }
-            )
-            try:
-                await route.abort("blockedbyclient")
-            except PlaywrightError:
-                await route.abort()
 
         async def _route_request(route, request) -> None:
             request_url = str(getattr(request, "url", "") or "").strip()
@@ -610,14 +594,16 @@ async def _fetch_rendered_html_attempt(
                     ),
                 )
                 traversal_result = await apply_traversal_mode(
-                    page,
-                    surface,
-                    traversal_mode,
-                    max_scrolls,
-                    runtime=traversal_runtime,
-                    config=_traversal_config(),
-                    max_pages=max_pages,
-                    request_delay_ms=request_delay_ms,
+                    TraversalRequest(
+                        page=page,
+                        surface=surface,
+                        traversal_mode=traversal_mode,
+                        max_scrolls=max_scrolls,
+                        max_pages=max_pages,
+                        request_delay_ms=request_delay_ms,
+                        runtime=traversal_runtime,
+                        config=_traversal_config(),
+                    )
                 )
             except (
                 PlaywrightError,

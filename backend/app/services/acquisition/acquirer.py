@@ -41,11 +41,25 @@ from app.services.config.crawl_runtime import (
     ACQUIRE_HOST_MIN_INTERVAL_MS,
     ACQUISITION_ATTEMPT_TIMEOUT_SECONDS,
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
+    BROWSER_PREFERENCE_MIN_SUCCESSES,
+    COOPERATIVE_SLEEP_POLL_MS,
     DEFAULT_MAX_SCROLLS,
+    DETAIL_FIELD_SIGNAL_MIN_COUNT,
+    EXTRACTABILITY_JSON_LD_MIN_TYPE_SIGNALS,
+    EXTRACTABILITY_NEXT_DATA_SIGNAL_MIN,
+    EXTRACTABILITY_NEXT_DATA_SIGNAL_TRIGGER,
+    EXTRACTABILITY_NON_PRODUCT_TYPE_RATIO_MAX,
+    IFRAME_PROMOTION_MAX_CANDIDATES,
     JS_GATE_PHRASES,
+    JS_SHELL_MIN_CONTENT_LEN,
+    JS_SHELL_MIN_SCRIPT_COUNT,
+    JS_SHELL_VISIBLE_RATIO_MAX,
     LISTING_MIN_ITEMS,
+    PROXY_FAILURE_BACKOFF_MAX_EXPONENT,
     PROXY_FAILURE_COOLDOWN_BASE_MS,
     PROXY_FAILURE_COOLDOWN_MAX_MS,
+    PROXY_FAILURE_STATE_MAX_ENTRIES,
+    PROXY_FAILURE_STATE_TTL_SECONDS,
 )
 from app.services.config.extraction_rules import SITE_POLICY_REGISTRY
 from app.services.config.platform_registry import (
@@ -85,17 +99,11 @@ _COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset(
         "account required",
     }
 )
-_JS_SHELL_MIN_CONTENT_LEN = 100_000
-_JS_SHELL_VISIBLE_RATIO_MAX = 0.15
-_MIN_DETAIL_FIELD_SIGNAL_COUNT = 2
 HTML_PARSER = "html.parser"
 logger = logging.getLogger(__name__)
 _REDACTED = "[REDACTED]"
-_MAX_PROXY_BACKOFF_EXPONENT = 8
 _PROXY_FAILURE_STATE: dict[str, tuple[int, float, float]] = {}
 _PROXY_FAILURE_STATE_LOCK = asyncio.Lock()
-_PROXY_FAILURE_STATE_TTL_SECONDS = 60 * 60
-_PROXY_FAILURE_STATE_MAX_ENTRIES = 1024
 _SENSITIVE_KEY_TOKENS = (
     "authorization",
     "api_key",
@@ -120,6 +128,17 @@ _LONG_TOKEN_RE = _re.compile(
 _EMAIL_RE = _re.compile(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
 _URL_CREDENTIALS_RE = _re.compile(
     r"(?i)\b([a-z][a-z0-9+\-.]*://)([^/\s:@]+)(?::([^/\s@]*))?@"
+)
+_SENSITIVE_HTML_FIELD_TOKENS = (
+    "authenticity",
+    "csrf",
+    "email",
+    "passwd",
+    "password",
+    "phone",
+    "secret",
+    "session",
+    "token",
 )
 JOB_PLATFORM_FAMILIES = frozenset({*job_platform_families(), "generic_jobs"})
 BROWSER_FIRST_DOMAINS = sorted(
@@ -165,14 +184,14 @@ class ProxyRotator:
 def _proxy_backoff_seconds(failure_count: int) -> float:
     if failure_count <= 0:
         return 0.0
-    exponent = min(failure_count - 1, _MAX_PROXY_BACKOFF_EXPONENT)
+    exponent = min(failure_count - 1, PROXY_FAILURE_BACKOFF_MAX_EXPONENT)
     delay_ms = PROXY_FAILURE_COOLDOWN_BASE_MS * (2**exponent)
     bounded_ms = min(delay_ms, PROXY_FAILURE_COOLDOWN_MAX_MS)
     return max(0.0, bounded_ms / 1000)
 
 
 def _evict_stale_proxy_entries(now: float) -> None:
-    stale_cutoff = now - _PROXY_FAILURE_STATE_TTL_SECONDS
+    stale_cutoff = now - PROXY_FAILURE_STATE_TTL_SECONDS
     stale_keys = [
         key
         for key, (
@@ -185,9 +204,9 @@ def _evict_stale_proxy_entries(now: float) -> None:
     for key in stale_keys:
         _PROXY_FAILURE_STATE.pop(key, None)
 
-    if len(_PROXY_FAILURE_STATE) <= _PROXY_FAILURE_STATE_MAX_ENTRIES:
+    if len(_PROXY_FAILURE_STATE) <= PROXY_FAILURE_STATE_MAX_ENTRIES:
         return
-    overflow = len(_PROXY_FAILURE_STATE) - _PROXY_FAILURE_STATE_MAX_ENTRIES
+    overflow = len(_PROXY_FAILURE_STATE) - PROXY_FAILURE_STATE_MAX_ENTRIES
     for key, _state in sorted(
         _PROXY_FAILURE_STATE.items(), key=lambda item: item[1][1]
     )[:overflow]:
@@ -313,6 +332,76 @@ class AcquisitionRequest:
             acquisition_profile=profile,
             checkpoint=self.checkpoint,
         )
+
+
+@dataclass(slots=True)
+class _AcquireExecutionRequest:
+    run_id: int
+    url: str
+    proxy: str | None
+    surface: str | None
+    traversal_mode: str | None
+    max_pages: int
+    max_scrolls: int
+    prefer_stealth: bool
+    sleep_ms: int
+    requested_fields: list[str] | None
+    requested_field_selectors: dict[str, list[dict]] | None
+    browser_first: bool
+    acquisition_profile: dict[str, object] | None
+    runtime_options: object
+    checkpoint: Callable[[], Awaitable[None]] | None
+    session_context: SessionContext | None = None
+
+
+@dataclass(slots=True)
+class _AcquireAttemptContext:
+    request: _AcquireExecutionRequest
+    started_at: float
+    host_wait_seconds: float
+    artifact_path: str
+
+    @property
+    def surface(self) -> str | None:
+        return self.request.surface
+
+    @property
+    def runtime_options(self):
+        return self.request.runtime_options
+
+    def finalize_diagnostics_payload(
+        self,
+        diagnostics: dict[str, object] | None,
+    ) -> dict[str, object]:
+        payload = dict(diagnostics or {})
+        timings = _merge_timing_maps(payload.get("timings_ms"))
+        total_ms = max(0, _elapsed_ms(self.started_at))
+        if not timings.get("acquisition_total_ms"):
+            timings["acquisition_total_ms"] = total_ms
+        phase_sum_ms = sum(
+            int(value)
+            for key, value in timings.items()
+            if key != "acquisition_total_ms" and isinstance(value, int)
+        )
+        timings["phases_total_ms"] = phase_sum_ms
+        timings["unattributed_ms"] = max(
+            0, int(timings.get("acquisition_total_ms", total_ms)) - phase_sum_ms
+        )
+        payload["timings_ms"] = timings
+        return payload
+
+    def result_diagnostics(self, result: AcquisitionResult) -> dict[str, object]:
+        return dict(result.diagnostics or {})
+
+    def update_result_diagnostics(
+        self,
+        result: AcquisitionResult,
+        **updates: object,
+    ) -> AcquisitionResult:
+        diagnostics = self.result_diagnostics(result)
+        diagnostics.update(updates)
+        result.diagnostics = self.finalize_diagnostics_payload(diagnostics)
+        return result
 
 
 def _coerce_acquisition_request(
@@ -444,16 +533,6 @@ async def acquire(
     diagnostics_path = _diagnostics_path(run_id, url)
     profile = dict(acquisition_request.acquisition_profile)
     platform_family = _detect_platform_family(url)
-    effective_surface = _resolve_effective_surface(
-        surface,
-        platform_family=platform_family,
-        adapter_hint=None,
-    )
-    suggested_surface = _suggest_surface_from_hints(
-        surface,
-        platform_family=platform_family,
-        adapter_hint=None,
-    )
 
     # Domain-based fast track: known problematic domains should use the
     # hardened browser runtime, not the minimal default browser settings.
@@ -461,7 +540,7 @@ async def acquire(
     browser_first = (
         _matches_domain_policy(domain, BROWSER_FIRST_DOMAINS)
         or _memory_prefers_browser(profile)
-        or _requires_browser_first(url, effective_surface)
+        or _requires_browser_first(url, platform_family)
     )
     if browser_first:
         # Browser-first targets require hardened challenge/runtime handling.
@@ -496,24 +575,24 @@ async def acquire(
         try:
             result = await asyncio.wait_for(
                 _acquire_once(
-                    run_id=run_id,
-                    url=url,
-                    proxy=proxy,
-                    requested_surface=surface,
-                    surface=effective_surface,
-                    suggested_surface=suggested_surface,
-                    traversal_mode=traversal_mode,
-                    max_pages=max_pages,
-                    max_scrolls=max_scrolls,
-                    prefer_stealth=prefer_stealth,
-                    sleep_ms=sleep_ms,
-                    requested_fields=requested_fields,
-                    requested_field_selectors=requested_field_selectors,
-                    browser_first=browser_first,
-                    acquisition_profile=profile,
-                    runtime_options=runtime_options,
-                    checkpoint=checkpoint,
-                    session_context=session_ctx,
+                    _AcquireExecutionRequest(
+                        run_id=run_id,
+                        url=url,
+                        proxy=proxy,
+                        surface=surface,
+                        traversal_mode=traversal_mode,
+                        max_pages=max_pages,
+                        max_scrolls=max_scrolls,
+                        prefer_stealth=prefer_stealth,
+                        sleep_ms=sleep_ms,
+                        requested_fields=requested_fields,
+                        requested_field_selectors=requested_field_selectors,
+                        browser_first=browser_first,
+                        acquisition_profile=profile,
+                        runtime_options=runtime_options,
+                        checkpoint=checkpoint,
+                        session_context=session_ctx,
+                    )
                 ),
                 timeout=float(ACQUISITION_ATTEMPT_TIMEOUT_SECONDS),
             )
@@ -579,7 +658,11 @@ async def acquire(
         path = path.with_suffix(".json")
         await asyncio.to_thread(path.write_text, result.html or "", encoding="utf-8")
     else:
-        await asyncio.to_thread(path.write_text, result.html, encoding="utf-8")
+        await asyncio.to_thread(
+            path.write_text,
+            _scrub_html_for_artifact(result.html),
+            encoding="utf-8",
+        )
 
     # FIX: Offload network payload and diagnostics disk I/O
     await asyncio.to_thread(
@@ -636,233 +719,9 @@ def _classify_outcome(result: AcquisitionResult) -> str:
     return AcquisitionOutcome.direct_html
 
 
-async def _acquire_once(
-    *,
-    run_id: int,
-    url: str,
-    proxy: str | None,
-    requested_surface: str | None,
-    surface: str | None,
-    suggested_surface: str | None,
-    traversal_mode: str | None,
-    max_pages: int,
-    max_scrolls: int,
-    prefer_stealth: bool,
-    sleep_ms: int,
-    requested_fields: list[str] | None,
-    requested_field_selectors: dict[str, list[dict]] | None,
-    browser_first: bool,
-    acquisition_profile: dict[str, object] | None,
-    runtime_options,
-    checkpoint: Callable[[], Awaitable[None]] | None,
-    session_context: SessionContext | None = None,
-) -> AcquisitionResult | None:
-    started = time.perf_counter()
-    requested_surface = str(requested_surface or "").strip().lower() or None
-    suggested_surface = str(suggested_surface or "").strip().lower() or None
-
-    def _finalize_diagnostics_payload(
-        diagnostics: dict[str, object] | None,
-    ) -> dict[str, object]:
-        payload = dict(diagnostics or {})
-        payload["surface_requested"] = requested_surface
-        payload["surface_effective"] = surface or requested_surface
-        payload["suggested_surface"] = (
-            suggested_surface
-            if requested_surface
-            and suggested_surface
-            and requested_surface != suggested_surface
-            else None
-        )
-        payload["surface_mismatch_detected"] = bool(
-            requested_surface
-            and suggested_surface
-            and requested_surface != suggested_surface
-        )
-        payload["surface_remapped"] = bool(
-            requested_surface and surface and requested_surface != surface
-        )
-        timings = _merge_timing_maps(payload.get("timings_ms"))
-        total_ms = max(0, _elapsed_ms(started))
-        if not timings.get("acquisition_total_ms"):
-            timings["acquisition_total_ms"] = total_ms
-        phase_sum_ms = sum(
-            int(value)
-            for key, value in timings.items()
-            if key != "acquisition_total_ms" and isinstance(value, int)
-        )
-        timings["phases_total_ms"] = phase_sum_ms
-        timings["unattributed_ms"] = max(
-            0, int(timings.get("acquisition_total_ms", total_ms)) - phase_sum_ms
-        )
-        payload["timings_ms"] = timings
-        return payload
-
-    def _result_diagnostics(result: AcquisitionResult) -> dict[str, object]:
-        return dict(result.diagnostics or {})
-
-    def _update_result_diagnostics(
-        result: AcquisitionResult,
-        **updates: object,
-    ) -> AcquisitionResult:
-        diagnostics = _result_diagnostics(result)
-        diagnostics.update(updates)
-        result.diagnostics = _finalize_diagnostics_payload(diagnostics)
-        return result
-
-    host_wait = await wait_for_host_slot(
-        urlparse(url).netloc.lower(),
-        ACQUIRE_HOST_MIN_INTERVAL_MS,
-        checkpoint=checkpoint,
-    )
-    path = str(_artifact_path(run_id, url))
-    browser_first_result = (
-        await _try_browser(
-            url,
-            proxy,
-            surface,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            prefer_stealth=prefer_stealth,
-            sleep_ms=sleep_ms,
-            runtime_options=runtime_options,
-            requested_fields=requested_fields,
-            requested_field_selectors=requested_field_selectors,
-            checkpoint=checkpoint,
-            run_id=run_id,
-            failure_log_message="Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi",
-            session_context=session_context,
-        )
-        if browser_first
-        else None
-    )
-    first_data = (
-        getattr(browser_first_result, "_acquirer_browser", {})
-        if browser_first_result is not None
-        else {}
-    )
-    first_html = str(first_data.get("html") or "")
-    first_extractability = (
-        _assess_extractable_html(
-            first_html, url=url, surface=surface, adapter_hint=None
-        )
-        if first_html
-        else {}
-    )
-    browser_first_is_usable = (
-        first_extractability.get("has_extractable_data", False)
-        if first_extractability
-        else False
-    )
-    browser_first_surface_warnings = _surface_selection_warnings(
-        requested_url=url,
-        final_url=str(first_data.get("final_url") or url),
-        html=first_html,
-        surface=surface,
-    )
-    if (
-        browser_first_result is not None
-        and first_data.get("html")
-        and not first_data.get("blocked")
-        and not _is_invalid_surface_page(
-            requested_url=url,
-            final_url=str(first_data.get("final_url") or url),
-            html=first_html,
-            surface=surface,
-        )
-        and browser_first_is_usable
-    ):
-        return AcquisitionResult(
-            html=str(first_data["html"]),
-            content_type="html",
-            method="playwright",
-            artifact_path=path,
-            network_payloads=list(first_data.get("network_payloads") or []),
-            frame_sources=getattr(browser_first_result, "frame_sources", []),
-            promoted_sources=getattr(browser_first_result, "promoted_sources", []),
-            diagnostics=_finalize_diagnostics_payload(
-                {
-                    k: v
-                    for k, v in {
-                        "browser_attempted": True,
-                        "browser_challenge_state": browser_first_result.challenge_state,
-                        "browser_origin_warmed": browser_first_result.origin_warmed,
-                        "browser_network_payloads": len(
-                            list(first_data.get("network_payloads") or [])
-                        ),
-                        "browser_diagnostics": first_data.get("diagnostics"),
-                        "timings_ms": _merge_timing_maps(
-                            {"browser_total_ms": first_data.get("browser_total_ms")},
-                            first_data.get("diagnostics", {}).get("timings_ms")
-                            if isinstance(first_data.get("diagnostics"), dict)
-                            else None,
-                            {"acquisition_total_ms": _elapsed_ms(started)},
-                        ),
-                        "memory_prefer_stealth": bool(
-                            (acquisition_profile or {}).get("prefer_stealth")
-                        ),
-                        "memory_browser_first": True,
-                        "host_wait_seconds": round(host_wait, 3)
-                        if host_wait > 0
-                        else None,
-                        "prefer_stealth": prefer_stealth,
-                        "anti_bot_enabled": runtime_options.anti_bot_enabled,
-                        "proxy_used": bool(proxy),
-                        "surface_selection_warnings": browser_first_surface_warnings
-                        or None,
-                    }.items()
-                    if v is not None
-                }
-            ),
-        )
-    if _should_force_browser_for_traversal(traversal_mode):
-        http_result = None
-        analysis = {}
-    else:
-        http_result = await _try_http(
-            url,
-            proxy,
-            surface,
-            run_id=run_id,
-            traversal_mode=traversal_mode,
-            prefer_stealth=prefer_stealth,
-            sleep_ms=sleep_ms,
-            browser_first=browser_first,
-            acquisition_profile=acquisition_profile,
-            runtime_options=runtime_options,
-            host_wait_seconds=host_wait,
-            checkpoint=checkpoint,
-            session_context=session_context,
-        )
-    analysis = (
-        getattr(http_result, "_acquirer_analysis", {})
-        if http_result is not None
-        else {}
-    )
-
-    promoted_source_result = await _try_promoted_source_acquire(
-        url=url,
-        proxy=proxy,
-        surface=surface,
-        run_id=run_id,
-        analysis=analysis,
-        started=started,
-        prefer_stealth=prefer_stealth,
-        runtime_options=runtime_options,
-        host_wait_seconds=host_wait,
-        checkpoint=checkpoint,
-        session_context=session_context,
-    )
-    if promoted_source_result is not None:
-        promoted_source_result.diagnostics = _finalize_diagnostics_payload(
-            promoted_source_result.diagnostics
-        )
-        return promoted_source_result
-
-    should_escalate, _ = _needs_browser(
-        http_result, url, surface, requested_fields, acquisition_profile
-    )
+def _extract_curl_analysis(
+    analysis: dict[str, object],
+) -> tuple[AcquisitionResult | None, dict[str, object]]:
     curl_result = (
         analysis.get("curl_result")
         if isinstance(analysis.get("curl_result"), AcquisitionResult)
@@ -873,94 +732,127 @@ async def _acquire_once(
         if isinstance(analysis.get("curl_diagnostics"), dict)
         else {}
     )
-    if (
-        http_result is not None
-        and not should_escalate
-        and not _should_force_browser_for_traversal(traversal_mode)
-    ):
-        curl_diagnostics["timings_ms"] = _merge_timing_maps(
-            curl_diagnostics.get("timings_ms"),
-            {"acquisition_total_ms": _elapsed_ms(started)},
-        )
-        if curl_result is not None:
-            return _update_result_diagnostics(
-                curl_result,
-                timings_ms=curl_diagnostics.get("timings_ms"),
-            )
-        return AcquisitionResult(
-            html=http_result.text,
-            json_data=http_result.json_data,
-            content_type=http_result.content_type,
-            method="curl_cffi",
-            artifact_path=path,
-            promoted_sources=list(
-                (analysis.get("extractability") or {}).get("promoted_sources") or []
-            ),
-            diagnostics=_finalize_diagnostics_payload(curl_diagnostics),
-        )
-    browser_result = await _try_browser(
-        url,
-        proxy,
-        surface,
-        traversal_mode=traversal_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        prefer_stealth=prefer_stealth,
-        sleep_ms=sleep_ms,
-        runtime_options=runtime_options,
-        requested_fields=requested_fields,
-        requested_field_selectors=requested_field_selectors,
-        checkpoint=checkpoint,
-        run_id=run_id,
-        diagnostics_sink=curl_result.diagnostics if curl_result is not None else None,
-        session_context=session_context,
+    return curl_result, curl_diagnostics
+
+
+def _build_curl_result(
+    ctx: _AcquireAttemptContext,
+    *,
+    http_result,
+    analysis: dict[str, object],
+    curl_diagnostics: dict[str, object],
+) -> AcquisitionResult:
+    return AcquisitionResult(
+        html=http_result.text,
+        json_data=http_result.json_data,
+        content_type=http_result.content_type,
+        method="curl_cffi",
+        artifact_path=ctx.artifact_path,
+        promoted_sources=list(
+            (analysis.get("extractability") or {}).get("promoted_sources") or []
+        ),
+        diagnostics=ctx.finalize_diagnostics_payload(curl_diagnostics),
     )
-    if browser_result is None:
-        if http_result is None:
-            http_result = await _try_http(
-                url,
-                proxy,
-                surface,
-                run_id=run_id,
-                traversal_mode=traversal_mode,
-                prefer_stealth=prefer_stealth,
-                sleep_ms=sleep_ms,
-                browser_first=browser_first,
-                acquisition_profile=acquisition_profile,
-                runtime_options=runtime_options,
-                host_wait_seconds=host_wait,
-                checkpoint=checkpoint,
-                session_context=session_context,
-            )
-            if http_result is None:
-                return None
-            analysis = getattr(http_result, "_acquirer_analysis", {})
-            curl_result = (
-                analysis.get("curl_result")
-                if isinstance(analysis.get("curl_result"), AcquisitionResult)
-                else None
-            )
-            curl_diagnostics = (
-                analysis.get("curl_diagnostics")
-                if isinstance(analysis.get("curl_diagnostics"), dict)
-                else {}
-            )
-        if curl_result is not None:
-            return _update_result_diagnostics(curl_result)
-        return AcquisitionResult(
-            html=http_result.text,
-            json_data=http_result.json_data,
-            content_type=http_result.content_type,
-            method="curl_cffi",
-            artifact_path=path,
-            promoted_sources=list(
-                (analysis.get("extractability") or {}).get("promoted_sources") or []
-            ),
-            diagnostics=_finalize_diagnostics_payload(curl_diagnostics),
+
+
+def _try_browser_first_success_result(
+    ctx: _AcquireAttemptContext,
+    *,
+    browser_result,
+) -> AcquisitionResult | None:
+    first_data = (
+        getattr(browser_result, "_acquirer_browser", {})
+        if browser_result is not None
+        else {}
+    )
+    first_html = str(first_data.get("html") or "")
+    if not first_html:
+        return None
+    browser_first_surface_warnings = _surface_selection_warnings(
+        requested_url=ctx.request.url,
+        final_url=str(first_data.get("final_url") or ctx.request.url),
+        html=first_html,
+        surface=ctx.surface,
+    )
+    first_extractability = _assess_extractable_html(
+        first_html,
+        url=ctx.request.url,
+        surface=ctx.surface,
+        adapter_hint=None,
+    )
+    browser_first_is_usable = bool(
+        first_extractability.get("has_extractable_data", False)
+    )
+    if (
+        first_data.get("blocked")
+        or _is_invalid_surface_page(
+            requested_url=ctx.request.url,
+            final_url=str(first_data.get("final_url") or ctx.request.url),
+            html=first_html,
+            surface=ctx.surface,
         )
+        or not browser_first_is_usable
+    ):
+        return None
+    return AcquisitionResult(
+        html=first_html,
+        content_type="html",
+        method="playwright",
+        artifact_path=ctx.artifact_path,
+        network_payloads=list(first_data.get("network_payloads") or []),
+        frame_sources=getattr(browser_result, "frame_sources", []),
+        promoted_sources=getattr(browser_result, "promoted_sources", []),
+        diagnostics=ctx.finalize_diagnostics_payload(
+            {
+                k: v
+                for k, v in {
+                    "browser_attempted": True,
+                    "browser_challenge_state": browser_result.challenge_state,
+                    "browser_origin_warmed": browser_result.origin_warmed,
+                    "browser_network_payloads": len(
+                        list(first_data.get("network_payloads") or [])
+                    ),
+                    "browser_diagnostics": first_data.get("diagnostics"),
+                    "timings_ms": _merge_timing_maps(
+                        {"browser_total_ms": first_data.get("browser_total_ms")},
+                        first_data.get("diagnostics", {}).get("timings_ms")
+                        if isinstance(first_data.get("diagnostics"), dict)
+                        else None,
+                        {"acquisition_total_ms": _elapsed_ms(ctx.started_at)},
+                    ),
+                    "memory_prefer_stealth": bool(
+                        (ctx.request.acquisition_profile or {}).get("prefer_stealth")
+                    ),
+                    "memory_browser_first": True,
+                    "host_wait_seconds": round(ctx.host_wait_seconds, 3)
+                    if ctx.host_wait_seconds > 0
+                    else None,
+                    "prefer_stealth": ctx.request.prefer_stealth,
+                    "anti_bot_enabled": ctx.runtime_options.anti_bot_enabled,
+                    "proxy_used": bool(ctx.request.proxy),
+                    "surface_selection_warnings": browser_first_surface_warnings
+                    or None,
+                }.items()
+                if v is not None
+            }
+        ),
+    )
+
+
+async def _finalize_browser_result(
+    ctx: _AcquireAttemptContext,
+    *,
+    browser_result,
+    http_result,
+    analysis: dict[str, object],
+    curl_result: AcquisitionResult | None,
+    curl_diagnostics: dict[str, object],
+) -> AcquisitionResult | None:
     browser_data = getattr(browser_result, "_acquirer_browser", {})
     browser_html = str(browser_data.get("html") or "")
-    browser_final_url = str(browser_data.get("final_url") or url).strip() or url
+    browser_final_url = (
+        str(browser_data.get("final_url") or ctx.request.url).strip() or ctx.request.url
+    )
     browser_public_target = True
     try:
         await validate_public_target(browser_final_url)
@@ -968,7 +860,7 @@ async def _acquire_once(
         browser_public_target = False
         logger.warning(
             "Playwright final URL is non-public and was rejected for %s -> %s",
-            url,
+            ctx.request.url,
             browser_final_url,
         )
     browser_diag = (
@@ -978,16 +870,22 @@ async def _acquire_once(
     )
     browser_payloads = list(browser_data.get("network_payloads") or [])
     browser_redirect_shell = _is_invalid_surface_page(
-        requested_url=url,
+        requested_url=ctx.request.url,
         final_url=browser_final_url,
         html=browser_html,
-        surface=surface,
+        surface=ctx.surface,
     )
     browser_surface_warnings = _surface_selection_warnings(
-        requested_url=url,
+        requested_url=ctx.request.url,
         final_url=browser_final_url,
         html=browser_html,
-        surface=surface,
+        surface=ctx.surface,
+    )
+    merged_timings = _merge_timing_maps(
+        curl_diagnostics.get("timings_ms"),
+        {"browser_total_ms": browser_data.get("browser_total_ms")},
+        browser_diag.get("timings_ms"),
+        {"acquisition_total_ms": _elapsed_ms(ctx.started_at)},
     )
     if (
         browser_html
@@ -1004,35 +902,29 @@ async def _acquire_once(
                 "browser_network_payloads": len(browser_payloads),
                 "browser_diagnostics": browser_diag,
                 "surface_selection_warnings": browser_surface_warnings or None,
-                "timings_ms": _merge_timing_maps(
-                    curl_diagnostics.get("timings_ms"),
-                    {"browser_total_ms": browser_data.get("browser_total_ms")},
-                    browser_diag.get("timings_ms"),
-                    {"acquisition_total_ms": _elapsed_ms(started)},
-                ),
+                "timings_ms": merged_timings,
             }
         )
-        # Surface traversal diagnostics at top level for pipeline/frontend consumers
-        for _tkey in (
+        for key in (
             "traversal_mode",
             "traversal_summary",
             "traversal_fallback_used",
             "traversal_fallback_reason",
         ):
-            if _tkey in browser_diag:
-                merged[_tkey] = browser_diag[_tkey]
+            if key in browser_diag:
+                merged[key] = browser_diag[key]
         return AcquisitionResult(
             html=browser_html,
             content_type="html",
             method="playwright",
-            artifact_path=path,
+            artifact_path=ctx.artifact_path,
             network_payloads=browser_payloads,
             frame_sources=getattr(browser_result, "frame_sources", []),
             promoted_sources=getattr(browser_result, "promoted_sources", []),
-            diagnostics=_finalize_diagnostics_payload(merged),
+            diagnostics=ctx.finalize_diagnostics_payload(merged),
         )
     if curl_result is not None:
-        curl_result = _update_result_diagnostics(
+        curl_result = ctx.update_result_diagnostics(
             curl_result,
             browser_attempted=True,
             browser_challenge_state=browser_result.challenge_state,
@@ -1043,15 +935,11 @@ async def _acquire_once(
             browser_redirect_shell=browser_redirect_shell or None,
             browser_non_public_target=(not browser_public_target) or None,
             surface_selection_warnings=browser_surface_warnings or None,
-            timings_ms=_merge_timing_maps(
-                _result_diagnostics(curl_result).get("timings_ms"),
-                {"browser_total_ms": browser_data.get("browser_total_ms")},
-                browser_diag.get("timings_ms"),
-                {"acquisition_total_ms": _elapsed_ms(started)},
-            ),
+            timings_ms=merged_timings,
         )
         logger.info(
-            "Playwright returned blocked/empty for %s — using curl_cffi fallback", url
+            "Playwright returned blocked/empty for %s — using curl_cffi fallback",
+            ctx.request.url,
         )
         return None if bool(analysis.get("invalid_surface_page")) else curl_result
     if (
@@ -1069,51 +957,204 @@ async def _acquire_once(
                 "browser_diagnostics": browser_diag,
                 "browser_blocked": True,
                 "browser_redirect_shell": browser_redirect_shell or None,
-                "timings_ms": _merge_timing_maps(
-                    curl_diagnostics.get("timings_ms"),
-                    {"browser_total_ms": browser_data.get("browser_total_ms")},
-                    browser_diag.get("timings_ms"),
-                    {"acquisition_total_ms": _elapsed_ms(started)},
-                ),
+                "timings_ms": merged_timings,
             }
         )
         return AcquisitionResult(
             html=browser_html,
             content_type="html",
             method="playwright",
-            artifact_path=path,
+            artifact_path=ctx.artifact_path,
             network_payloads=browser_payloads,
             frame_sources=getattr(browser_result, "frame_sources", []),
             promoted_sources=getattr(browser_result, "promoted_sources", []),
-            diagnostics=_finalize_diagnostics_payload(blocked),
+            diagnostics=ctx.finalize_diagnostics_payload(blocked),
         )
     if (
         http_result is not None
         and getattr(analysis.get("blocked"), "is_blocked", False)
         and not bool(analysis.get("invalid_surface_page"))
     ):
+        curl_diagnostics["timings_ms"] = merged_timings
+        return _build_curl_result(
+            ctx,
+            http_result=http_result,
+            analysis=analysis,
+            curl_diagnostics=curl_diagnostics,
+        )
+    if curl_result is not None:
+        return ctx.update_result_diagnostics(curl_result, browser_failed=True)
+    return None
+
+
+async def _acquire_once(
+    request: _AcquireExecutionRequest,
+) -> AcquisitionResult | None:
+    started = time.perf_counter()
+    host_wait = await wait_for_host_slot(
+        urlparse(request.url).netloc.lower(),
+        ACQUIRE_HOST_MIN_INTERVAL_MS,
+        checkpoint=request.checkpoint,
+    )
+    ctx = _AcquireAttemptContext(
+        request=request,
+        started_at=started,
+        host_wait_seconds=host_wait,
+        artifact_path=str(_artifact_path(request.run_id, request.url)),
+    )
+    browser_first_result = (
+        await _try_browser(
+            request.url,
+            request.proxy,
+            request.surface,
+            traversal_mode=request.traversal_mode,
+            max_pages=request.max_pages,
+            max_scrolls=request.max_scrolls,
+            prefer_stealth=request.prefer_stealth,
+            sleep_ms=request.sleep_ms,
+            runtime_options=request.runtime_options,
+            requested_fields=request.requested_fields,
+            requested_field_selectors=request.requested_field_selectors,
+            checkpoint=request.checkpoint,
+            run_id=request.run_id,
+            failure_log_message="Memory-led browser-first acquisition failed for %s: %s — falling back to curl_cffi",
+            session_context=request.session_context,
+        )
+        if request.browser_first
+        else None
+    )
+    browser_first_success = _try_browser_first_success_result(
+        ctx,
+        browser_result=browser_first_result,
+    )
+    if browser_first_success is not None:
+        return browser_first_success
+
+    if _should_force_browser_for_traversal(request.traversal_mode):
+        http_result = None
+        analysis = {}
+    else:
+        http_result = await _try_http(
+            request.url,
+            request.proxy,
+            request.surface,
+            run_id=request.run_id,
+            traversal_mode=request.traversal_mode,
+            prefer_stealth=request.prefer_stealth,
+            sleep_ms=request.sleep_ms,
+            browser_first=request.browser_first,
+            acquisition_profile=request.acquisition_profile,
+            runtime_options=request.runtime_options,
+            host_wait_seconds=host_wait,
+            checkpoint=request.checkpoint,
+            session_context=request.session_context,
+        )
+    analysis = (
+        getattr(http_result, "_acquirer_analysis", {})
+        if http_result is not None
+        else {}
+    )
+    promoted_source_result = await _try_promoted_source_acquire(
+        url=request.url,
+        proxy=request.proxy,
+        surface=request.surface,
+        run_id=request.run_id,
+        analysis=analysis,
+        started=started,
+        prefer_stealth=request.prefer_stealth,
+        runtime_options=request.runtime_options,
+        host_wait_seconds=host_wait,
+        checkpoint=request.checkpoint,
+        session_context=request.session_context,
+    )
+    if promoted_source_result is not None:
+        promoted_source_result.diagnostics = ctx.finalize_diagnostics_payload(
+            promoted_source_result.diagnostics
+        )
+        return promoted_source_result
+
+    should_escalate, _ = _needs_browser(
+        http_result,
+        request.url,
+        request.surface,
+        request.requested_fields,
+        request.acquisition_profile,
+    )
+    curl_result, curl_diagnostics = _extract_curl_analysis(analysis)
+    if (
+        http_result is not None
+        and not should_escalate
+        and not _should_force_browser_for_traversal(request.traversal_mode)
+    ):
         curl_diagnostics["timings_ms"] = _merge_timing_maps(
             curl_diagnostics.get("timings_ms"),
-            {"browser_total_ms": browser_data.get("browser_total_ms")},
-            browser_diag.get("timings_ms"),
             {"acquisition_total_ms": _elapsed_ms(started)},
         )
-        return AcquisitionResult(
-            html=http_result.text,
-            json_data=http_result.json_data,
-            content_type=http_result.content_type,
-            method="curl_cffi",
-            artifact_path=path,
-            promoted_sources=list(
-                (analysis.get("extractability") or {}).get("promoted_sources") or []
-            ),
-            diagnostics=_finalize_diagnostics_payload(curl_diagnostics),
+        if curl_result is not None:
+            return ctx.update_result_diagnostics(
+                curl_result,
+                timings_ms=curl_diagnostics.get("timings_ms"),
+            )
+        return _build_curl_result(
+            ctx,
+            http_result=http_result,
+            analysis=analysis,
+            curl_diagnostics=curl_diagnostics,
         )
-    # FINAL FALLBACK: If we have a curl result and browser failed or was rejected, return curl.
-    if curl_result is not None:
-        return _update_result_diagnostics(curl_result, browser_failed=True)
-
-    return None
+    browser_result = await _try_browser(
+        request.url,
+        request.proxy,
+        request.surface,
+        traversal_mode=request.traversal_mode,
+        max_pages=request.max_pages,
+        max_scrolls=request.max_scrolls,
+        prefer_stealth=request.prefer_stealth,
+        sleep_ms=request.sleep_ms,
+        runtime_options=request.runtime_options,
+        requested_fields=request.requested_fields,
+        requested_field_selectors=request.requested_field_selectors,
+        checkpoint=request.checkpoint,
+        run_id=request.run_id,
+        diagnostics_sink=curl_result.diagnostics if curl_result is not None else None,
+        session_context=request.session_context,
+    )
+    if browser_result is None:
+        if http_result is None:
+            http_result = await _try_http(
+                request.url,
+                request.proxy,
+                request.surface,
+                run_id=request.run_id,
+                traversal_mode=request.traversal_mode,
+                prefer_stealth=request.prefer_stealth,
+                sleep_ms=request.sleep_ms,
+                browser_first=request.browser_first,
+                acquisition_profile=request.acquisition_profile,
+                runtime_options=request.runtime_options,
+                host_wait_seconds=host_wait,
+                checkpoint=request.checkpoint,
+                session_context=request.session_context,
+            )
+            if http_result is None:
+                return None
+            analysis = getattr(http_result, "_acquirer_analysis", {})
+            curl_result, curl_diagnostics = _extract_curl_analysis(analysis)
+        if curl_result is not None:
+            return ctx.update_result_diagnostics(curl_result)
+        return _build_curl_result(
+            ctx,
+            http_result=http_result,
+            analysis=analysis,
+            curl_diagnostics=curl_diagnostics,
+        )
+    return await _finalize_browser_result(
+        ctx,
+        browser_result=browser_result,
+        http_result=http_result,
+        analysis=analysis,
+        curl_result=curl_result,
+        curl_diagnostics=curl_diagnostics,
+    )
 
 
 async def _try_promoted_source_acquire(
@@ -1141,8 +1182,7 @@ async def _try_promoted_source_acquire(
     if str(extractability.get("reason") or "") != "iframe_shell":
         return None
 
-    max_candidates = 2
-    for source in promoted_sources[:max_candidates]:
+    for source in promoted_sources[:IFRAME_PROMOTION_MAX_CANDIDATES]:
         if checkpoint is not None:
             await checkpoint()
         if not isinstance(source, dict):
@@ -1431,32 +1471,22 @@ async def _try_http(
     visible_len = len(visible_text)
     # Large page with low visible-text ratio (classic SPA shell).
     js_shell_detected = (
-        content_len >= _JS_SHELL_MIN_CONTENT_LEN
+        content_len >= JS_SHELL_MIN_CONTENT_LEN
         and visible_len > 0
-        and (visible_len / content_len) < _JS_SHELL_VISIBLE_RATIO_MAX
+        and (visible_len / content_len) < JS_SHELL_VISIBLE_RATIO_MAX
     )
     # Small page with near-zero visible text and deferred script bundles
     # (server-rendered wrapper shells like SaaSHR, ATS embed pages).
     if (
         not js_shell_detected
         and visible_len < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
-        and content_len < _JS_SHELL_MIN_CONTENT_LEN
-        and html.count("<script") >= 2
+        and content_len < JS_SHELL_MIN_CONTENT_LEN
+        and html.count("<script") >= JS_SHELL_MIN_SCRIPT_COUNT
         and ("defer" in html or "async" in html)
     ):
         js_shell_detected = True
     adapter_hint = await _resolve_adapter_hint(url, html)
     platform_family = _detect_platform_family(url, html)
-    effective_surface = _resolve_effective_surface(
-        surface,
-        platform_family=platform_family,
-        adapter_hint=adapter_hint,
-    )
-    suggested_surface = _suggest_surface_from_hints(
-        surface,
-        platform_family=platform_family,
-        adapter_hint=adapter_hint,
-    )
 
     # FIX: Offload extractability check
     extractability = await asyncio.to_thread(
@@ -1488,25 +1518,6 @@ async def _try_http(
             "curl_gate_phrases": gate_phrases,
             "curl_adapter_hint": adapter_hint,
             "curl_platform_family": platform_family,
-            "surface_requested": str(surface or "").strip().lower() or None,
-            "surface_effective": effective_surface,
-            "suggested_surface": (
-                suggested_surface
-                if str(surface or "").strip().lower()
-                and suggested_surface
-                and str(surface or "").strip().lower() != suggested_surface
-                else None
-            ),
-            "surface_mismatch_detected": bool(
-                str(surface or "").strip()
-                and suggested_surface
-                and str(surface or "").strip().lower() != suggested_surface
-            ),
-            "surface_remapped": bool(
-                str(surface or "").strip().lower()
-                and effective_surface
-                and str(surface or "").strip().lower() != effective_surface
-            ),
             "invalid_surface_page": invalid_surface_page or None,
             "surface_selection_warnings": surface_selection_warnings or None,
             "extractability": extractability,
@@ -1623,12 +1634,12 @@ def _needs_browser(
         normalized_surface.endswith("detail")
         and requested_field_names
         and js_shell_detected
-        and len(visible_text) < 1000
+        and len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
     ):
         needs_browser, reason = True, "requested_fields_require_browser"
     elif (
         len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
-        and content_len < _JS_SHELL_MIN_CONTENT_LEN
+        and content_len < JS_SHELL_MIN_CONTENT_LEN
     ):
         needs_browser, reason = True, "low_visible_text"
     elif gate_phrases:
@@ -1809,58 +1820,6 @@ def _should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
     return normalized_mode in {"auto", "scroll", "load_more", "paginate"}
 
 
-def _resolve_effective_surface(
-    surface: str | None,
-    *,
-    platform_family: str | None,
-    adapter_hint: str | None,
-) -> str | None:
-    requested_surface = str(surface or "").strip().lower()
-    if not requested_surface:
-        return None
-    suggested_surface = _suggest_surface_from_hints(
-        requested_surface,
-        platform_family=platform_family,
-        adapter_hint=adapter_hint,
-    )
-    return suggested_surface or requested_surface
-
-
-def _suggest_surface_from_hints(
-    surface: str | None,
-    *,
-    platform_family: str | None,
-    adapter_hint: str | None,
-) -> str | None:
-    requested_surface = str(surface or "").strip().lower()
-    if not requested_surface:
-        return None
-    if requested_surface not in {
-        "ecommerce_listing",
-        "ecommerce_detail",
-        "job_listing",
-        "job_detail",
-    }:
-        return requested_surface
-
-    normalized_platform = str(platform_family or "").strip().lower()
-    normalized_hint = str(adapter_hint or "").strip().lower()
-    is_job_like = (
-        is_job_platform_signal(
-            platform_family=normalized_platform,
-            adapter_hint=normalized_hint,
-        )
-        or normalized_platform in JOB_PLATFORM_FAMILIES
-    )
-    if not is_job_like:
-        return requested_surface
-    if requested_surface.endswith("listing"):
-        return "job_listing"
-    if requested_surface.endswith("detail"):
-        return "job_detail"
-    return requested_surface
-
-
 async def _cooperative_sleep_ms(
     delay_ms: int,
     *,
@@ -1871,7 +1830,7 @@ async def _cooperative_sleep_ms(
         if checkpoint is not None:
             await checkpoint()
         return
-    poll_ms = 250
+    poll_ms = COOPERATIVE_SLEEP_POLL_MS
     while remaining_ms > 0:
         if checkpoint is not None:
             await checkpoint()
@@ -2131,9 +2090,14 @@ def _assess_extractable_html(
         non_product_types = _count_json_ld_non_product_types(html)
         total_types = json_ld_count + non_product_types
         is_mostly_non_product = (
-            total_types > 0 and (non_product_types / total_types) > 0.8
+            total_types > 0
+            and (non_product_types / total_types)
+            > EXTRACTABILITY_NON_PRODUCT_TYPE_RATIO_MAX
         )
-        if json_ld_count >= 2 and not is_mostly_non_product:
+        if (
+            json_ld_count >= EXTRACTABILITY_JSON_LD_MIN_TYPE_SIGNALS
+            and not is_mostly_non_product
+        ):
             return {
                 "has_extractable_data": True,
                 "reason": "structured_listing_markup",
@@ -2144,7 +2108,10 @@ def _assess_extractable_html(
         # (b) __NEXT_DATA__ signal density OR general product signals in HTML
         signal_hits = sum(html.count(sig) for sig in NEXT_DATA_PRODUCT_SIGNALS)
         has_next_data = "__NEXT_DATA__" in html
-        if (has_next_data or signal_hits >= 15) and signal_hits >= 4:
+        if (
+            has_next_data
+            or signal_hits >= EXTRACTABILITY_NEXT_DATA_SIGNAL_TRIGGER
+        ) and signal_hits >= EXTRACTABILITY_NEXT_DATA_SIGNAL_MIN:
             return {
                 "has_extractable_data": True,
                 "reason": "next_data_signals"
@@ -2204,7 +2171,7 @@ def _assess_extractable_html(
         visible_text = soup.get_text(" ", strip=True).lower()
         detail_tokens = ("title", "price", "brand", "description", "sku")
         field_hits = sum(1 for tok in detail_tokens if tok in visible_text)
-        if field_hits >= _MIN_DETAIL_FIELD_SIGNAL_COUNT:
+        if field_hits >= DETAIL_FIELD_SIGNAL_MIN_COUNT:
             return {
                 "has_extractable_data": True,
                 "reason": "detail_field_signals",
@@ -2351,6 +2318,31 @@ def _scrub_payload_for_artifact(value: object) -> object:
     return value
 
 
+def _scrub_html_for_artifact(html: str) -> str:
+    scrubbed = _scrub_sensitive_text(html)
+    if not scrubbed:
+        return scrubbed
+    soup = BeautifulSoup(scrubbed, HTML_PARSER)
+    for tag in soup.find_all(True):
+        marker_values = [
+            str(tag.get(attr) or "").strip().lower()
+            for attr in ("name", "id", "property", "http-equiv")
+        ]
+        if not any(
+            token in marker
+            for marker in marker_values
+            for token in _SENSITIVE_HTML_FIELD_TOKENS
+        ):
+            continue
+        if tag.has_attr("value"):
+            tag["value"] = _REDACTED
+        if tag.has_attr("content"):
+            tag["content"] = _REDACTED
+        if tag.name == "textarea":
+            tag.string = _REDACTED
+    return str(soup)
+
+
 def _looks_sensitive_key(key: str) -> bool:
     normalized = str(key or "").strip().lower()
     return any(token in normalized for token in _SENSITIVE_KEY_TOKENS)
@@ -2466,16 +2458,19 @@ def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bo
         return True
     browser_successes = int(acquisition_profile.get("browser_success_count", 0) or 0)
     curl_successes = int(acquisition_profile.get("curl_success_count", 0) or 0)
-    return browser_successes >= 2 and curl_successes == 0
+    return (
+        browser_successes >= BROWSER_PREFERENCE_MIN_SUCCESSES
+        and curl_successes == 0
+    )
 
 
-def _requires_browser_first(url: str, surface: str | None) -> bool:
-    normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface not in {"job_listing", "job_detail"}:
-        return False
+def _requires_browser_first(url: str, platform_family: str | None) -> bool:
     domain = urlparse(url).netloc.lower().replace("www.", "")
     configured_domain_match = _matches_domain_policy(domain, BROWSER_FIRST_DOMAINS)
     if configured_domain_match:
+        return True
+    normalized_platform = str(platform_family or "").strip().lower()
+    if normalized_platform in JOB_PLATFORM_FAMILIES:
         return True
     policy = resolve_platform_runtime_policy(url)
     return bool(policy.get("requires_browser"))

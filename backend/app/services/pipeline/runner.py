@@ -28,7 +28,7 @@ class PipelineRunner:
     Usage::
 
         runner = PipelineRunner(
-            stages=[AcquireStage(), SurfaceValidationStage(), ...],
+            stages=[AcquireStage(), ...],
             on_after_stage=my_timing_hook,
         )
         ctx = PipelineContext(...)
@@ -134,7 +134,7 @@ class PipelineRunner:
 def build_default_stages(*, prefetch_only: bool = False) -> list[PipelineStage]:
     """Build the default stage chain matching the legacy ``_process_single_url`` behaviour.
 
-    Order: Acquire → SurfaceValidation → BlockedDetection → Adapter → Parse → Extract → ListingBrowserRetry
+    Order: Acquire → BlockedDetection → Parse → Adapter → Extract → ListingBrowserRetry
     """
     from .stages import (
         AcquireStage,
@@ -143,12 +143,10 @@ def build_default_stages(*, prefetch_only: bool = False) -> list[PipelineStage]:
         ExtractStage,
         ListingBrowserRetryStage,
         ParseStage,
-        SurfaceValidationStage,
     )
 
     stages: list[PipelineStage] = [
         AcquireStage(),
-        SurfaceValidationStage(),
         BlockedDetectionStage(),
         ParseStage(),
     ]

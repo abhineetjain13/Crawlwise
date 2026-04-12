@@ -550,6 +550,17 @@ def test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by
     assert records[1]["title"] == "Philips lumea prestige"
 
 
+def test_extract_balanced_literal_rejects_oversized_unterminated_inline_array():
+    html = "<script>window.__STATE__ = {\"listListingDetails\": [" + ("{" * 300_000)
+
+    result = listing_extractor._listing_structured_extractor._extract_balanced_literal(
+        html,
+        html.index("["),
+    )
+
+    assert result is None
+
+
 def test_extract_listing_records_handles_react_hydrate_props_payloads():
     html = """
     <html><body>
@@ -2068,6 +2079,23 @@ def test_card_title_skips_price_heading():
     assert records[0]["title"] == "Asus VivoBook 15"
     assert records[1]["title"] == "Lenovo IdeaPad"
     assert records[0]["price"] == "$295.99"
+
+
+def test_infer_listing_title_min_chars_is_configurable(monkeypatch):
+    html = """
+    <html><body>
+      <div class="product-card">
+        <a href="/p/tv">TV</a>
+      </div>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    card = soup.select_one(".product-card")
+    assert card is not None
+
+    monkeypatch.setattr(listing_card_extractor, "LISTING_CARD_LISTING_TITLE_MIN_CHARS", 2)
+
+    assert listing_card_extractor._infer_listing_title_from_links(card) == "TV"
 
 
 def test_card_title_uses_itemprop_name():

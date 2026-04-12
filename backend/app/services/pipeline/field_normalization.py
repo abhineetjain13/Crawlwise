@@ -69,6 +69,7 @@ def _normalize_record_fields(
             continue
         normalized_value = normalize_value(normalized_key, value)
         validated_value = validate_value(normalized_key, normalized_value)
+        validated_value = _scrub_persisted_value(validated_value)
         if validated_value in (None, "", [], {}):
             continue
         normalized[normalized_key] = validated_value
@@ -136,6 +137,21 @@ def _scrub_persisted_text(text: str) -> str:
     return _DISCOVERED_PHONE_CANDIDATE_RE.sub(_replace_phone, scrubbed)
 
 
+def _scrub_persisted_value(value: object) -> object:
+    if isinstance(value, str):
+        return _scrub_persisted_text(value)
+    if isinstance(value, dict):
+        return {
+            key: _scrub_persisted_value(inner_value)
+            for key, inner_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_scrub_persisted_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_persisted_value(item) for item in value)
+    return value
+
+
 def _sanitize_review_bucket(value: object) -> object:
     if not isinstance(value, list):
         return _sanitize_discovered_data_value(value)
@@ -165,7 +181,7 @@ def _sanitize_discovered_fields(value: object) -> object:
 
 def _sanitize_discovered_data_value(value: object) -> object:
     if isinstance(value, str):
-        return _scrub_persisted_text(value)
+        return _scrub_persisted_value(value)
     if isinstance(value, dict):
         sanitized: dict[object, object] = {}
         for key, inner_value in value.items():
@@ -176,12 +192,12 @@ def _sanitize_discovered_data_value(value: object) -> object:
             if key_text == "discovered_fields":
                 sanitized[key] = _sanitize_discovered_fields(inner_value)
                 continue
-            sanitized[key] = _sanitize_discovered_data_value(inner_value)
+            sanitized[key] = _scrub_persisted_value(inner_value)
         return sanitized
     if isinstance(value, list):
-        return [_sanitize_discovered_data_value(item) for item in value]
+        return [_scrub_persisted_value(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(_sanitize_discovered_data_value(item) for item in value)
+        return tuple(_scrub_persisted_value(item) for item in value)
     return value
 
 

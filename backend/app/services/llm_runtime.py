@@ -24,13 +24,33 @@ from app.services.config.llm_runtime import (
     LLM_ANTHROPIC_MAX_TOKENS,
     LLM_ANTHROPIC_TEMPERATURE,
     LLM_CANDIDATE_EVIDENCE_MAX_CHARS,
+    LLM_CIRCUIT_COOLDOWN_SECONDS,
+    LLM_CIRCUIT_FAILURE_THRESHOLD,
     LLM_DISCOVERED_SOURCES_MAX_CHARS,
     LLM_EXISTING_VALUES_MAX_CHARS,
     LLM_GROQ_MAX_TOKENS,
     LLM_GROQ_TEMPERATURE,
+    LLM_HTML_ANCHOR_MIN_LENGTH,
     LLM_HTML_SNIPPET_MAX_CHARS,
+    LLM_HTML_SNIPPET_MAX_CHUNKS,
+    LLM_HTML_SNIPPET_MIN_BUDGET,
+    LLM_HTML_SNIPPET_WINDOW_MAX_CHARS,
+    LLM_HTML_SNIPPET_WINDOW_MIN_CHARS,
     LLM_NVIDIA_MAX_TOKENS,
     LLM_NVIDIA_TEMPERATURE,
+    LLM_PROVIDER_RETRY_BASE_DELAY_SECONDS,
+    LLM_PROVIDER_RETRY_MAX_RETRIES,
+    LLM_PROVIDER_ERROR_EXCERPT_CHARS,
+    LLM_PROVIDER_TIMEOUT_SECONDS,
+    LLM_PROMPT_COMPACT_JSON_MAX_DEPTH,
+    LLM_PROMPT_COMPACT_JSON_MAX_KEYS,
+    LLM_PROMPT_COMPACT_JSON_MAX_LIST_ITEMS,
+    LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS,
+    LLM_PROMPT_SAFE_TRUNCATE_MAX_LIST_ITEMS,
+    LLM_PROMPT_SAFE_TRUNCATE_MAX_STR_LEN,
+    LLM_PROMPT_TOKEN_CHAR_MULTIPLIER,
+    LLM_PROMPT_TOKEN_LIMIT,
+    LLM_SCHEMA_FIELD_NAME_MAX_LENGTH,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,7 +61,33 @@ SUPPORTED_LLM_PROVIDERS = {"groq", "anthropic", "nvidia"}
 logger = logging.getLogger(__name__)
 _PAGE_CLASSIFICATION_TYPES = {"listing", "detail", "challenge", "error", "unknown"}
 _LLM_CACHE_KEY_PREFIX = "crawl:llm:result"
+_LLM_CIRCUIT_KEY_PREFIX = "crawl:llm:circuit"
 _PROMPTS_DIR = Path(__file__).resolve().parents[1] / "data" / "knowledge_base" / "prompts"
+_RECORD_LLM_FAILURE_LUA = """
+local stats_key = KEYS[1]
+local open_key = KEYS[2]
+local category = ARGV[1]
+local stats_ttl = tonumber(ARGV[2])
+local failure_threshold = tonumber(ARGV[3])
+local cooldown_seconds = tonumber(ARGV[4])
+local opened_at = ARGV[5]
+
+local consecutive_failures = redis.call('HINCRBY', stats_key, 'consecutive_failures', 1)
+redis.call('HINCRBY', stats_key, 'total_failures', 1)
+redis.call('HSET', stats_key, 'last_error_category', category)
+redis.call('EXPIRE', stats_key, stats_ttl)
+
+local opened_now = 0
+if consecutive_failures >= failure_threshold then
+    local set_result = redis.call('SET', open_key, opened_at, 'NX', 'EX', cooldown_seconds)
+    if set_result then
+        redis.call('HSET', stats_key, 'opened_at_epoch', opened_at)
+        opened_now = 1
+    end
+end
+
+return {consecutive_failures, opened_now}
+"""
 
 
 def get_prompt_task(task_type: str) -> dict | None:
@@ -101,10 +147,6 @@ def _classify_error(raw: str) -> LLMErrorCategory:
 # Per-provider circuit breaker
 # ---------------------------------------------------------------------------
 
-_CIRCUIT_FAILURE_THRESHOLD = 5
-_CIRCUIT_COOLDOWN_SECONDS = 120
-
-
 @dataclass
 class _CircuitState:
     consecutive_failures: int = 0
@@ -123,33 +165,34 @@ def _get_circuit(provider: str) -> _CircuitState:
     return _provider_circuits[provider]
 
 
-def _circuit_is_open(provider: str) -> bool:
+def _local_circuit_is_open(provider: str) -> bool:
     circuit = _get_circuit(provider)
-    if circuit.consecutive_failures < _CIRCUIT_FAILURE_THRESHOLD:
+    if circuit.consecutive_failures < LLM_CIRCUIT_FAILURE_THRESHOLD:
         return False
     if circuit.opened_at is None:
         return False
     elapsed = time.monotonic() - circuit.opened_at
-    if elapsed >= _CIRCUIT_COOLDOWN_SECONDS:
+    if elapsed >= LLM_CIRCUIT_COOLDOWN_SECONDS:
         logger.info("Circuit half-open for provider=%s — allowing probe request", provider)
         return False
     return True
 
 
-def _record_success(provider: str) -> None:
+def _record_local_success(provider: str) -> None:
     circuit = _get_circuit(provider)
     circuit.consecutive_failures = 0
     circuit.opened_at = None
+    circuit.last_error_category = LLMErrorCategory.NONE
     circuit.total_successes += 1
 
 
-def _record_failure(provider: str, category: LLMErrorCategory) -> None:
+def _record_local_failure(provider: str, category: LLMErrorCategory) -> None:
     circuit = _get_circuit(provider)
     circuit.consecutive_failures += 1
     circuit.total_failures += 1
     circuit.last_error_category = category
     if (
-        circuit.consecutive_failures >= _CIRCUIT_FAILURE_THRESHOLD
+        circuit.consecutive_failures >= LLM_CIRCUIT_FAILURE_THRESHOLD
         and circuit.opened_at is None
     ):
         circuit.opened_at = time.monotonic()
@@ -159,6 +202,86 @@ def _record_failure(provider: str, category: LLMErrorCategory) -> None:
         )
 
 
+def _shared_circuit_stats_key(provider: str) -> str:
+    return f"{_LLM_CIRCUIT_KEY_PREFIX}:{provider}:stats"
+
+
+def _shared_circuit_open_key(provider: str) -> str:
+    return f"{_LLM_CIRCUIT_KEY_PREFIX}:{provider}:open"
+
+
+def _shared_circuit_stats_ttl_seconds() -> int:
+    return max(300, int(LLM_CIRCUIT_COOLDOWN_SECONDS or 0) * 10)
+
+
+async def _circuit_is_open(provider: str) -> bool:
+    local_default = _local_circuit_is_open(provider)
+    if not redis_is_enabled():
+        return local_default
+
+    async def _check(redis) -> bool:
+        return bool(await redis.exists(_shared_circuit_open_key(provider)))
+
+    return await redis_fail_open(
+        _check,
+        default=local_default,
+        operation_name=f"llm_circuit_check:{provider}",
+    )
+
+
+async def _record_success(provider: str) -> None:
+    _record_local_success(provider)
+    if not redis_is_enabled():
+        return
+
+    async def _update(redis) -> None:
+        stats_key = _shared_circuit_stats_key(provider)
+        await redis.hincrby(stats_key, "total_successes", 1)
+        await redis.hset(
+            stats_key,
+            mapping={
+                "consecutive_failures": 0,
+                "opened_at_epoch": "",
+                "last_error_category": str(LLMErrorCategory.NONE),
+            },
+        )
+        await redis.expire(stats_key, _shared_circuit_stats_ttl_seconds())
+        await redis.delete(_shared_circuit_open_key(provider))
+
+    await redis_fail_open(
+        _update,
+        default=None,
+        operation_name=f"llm_circuit_success:{provider}",
+    )
+
+
+async def _record_failure(provider: str, category: LLMErrorCategory) -> None:
+    _record_local_failure(provider, category)
+    if not redis_is_enabled():
+        return
+
+    async def _update(redis) -> None:
+        stats_key = _shared_circuit_stats_key(provider)
+        opened_at = f"{time.time():.6f}"
+        await redis.eval(
+            _RECORD_LLM_FAILURE_LUA,
+            2,
+            stats_key,
+            _shared_circuit_open_key(provider),
+            str(category),
+            _shared_circuit_stats_ttl_seconds(),
+            LLM_CIRCUIT_FAILURE_THRESHOLD,
+            max(1, int(LLM_CIRCUIT_COOLDOWN_SECONDS or 0)),
+            opened_at,
+        )
+
+    await redis_fail_open(
+        _update,
+        default=None,
+        operation_name=f"llm_circuit_failure:{provider}",
+    )
+
+
 def circuit_breaker_snapshot() -> dict[str, dict]:
     """Return a snapshot of all circuit breaker states for observability."""
     return {
@@ -166,7 +289,7 @@ def circuit_breaker_snapshot() -> dict[str, dict]:
             "consecutive_failures": s.consecutive_failures,
             "total_failures": s.total_failures,
             "total_successes": s.total_successes,
-            "is_open": _circuit_is_open(provider),
+            "is_open": _local_circuit_is_open(provider),
             "last_error_category": s.last_error_category,
         }
         for provider, s in _provider_circuits.items()
@@ -275,7 +398,7 @@ async def run_prompt_task(
     # Guard: prevent 413 Payload Too Large by truncating user prompt if it exceeds safety limits.
     # We use a conservative character-to-token ratio (4 chars = 1 token).
     # Groq's 8b/70b models often have a 6k-8k limit on some tiers.
-    safe_user_prompt = _enforce_token_limit(rendered_user_prompt, limit=5600)
+    safe_user_prompt = _enforce_token_limit(rendered_user_prompt)
     provider = str(config.get("provider") or "")
     model = str(config.get("model") or "")
     response_type = str(task.get("response_type") or "object")
@@ -653,8 +776,8 @@ async def _call_provider_with_retry(
     api_key: str,
     system_prompt: str,
     user_prompt: str,
-    max_retries: int = 1,
-    base_delay_s: float = 0.0,
+    max_retries: int = LLM_PROVIDER_RETRY_MAX_RETRIES,
+    base_delay_s: float = LLM_PROVIDER_RETRY_BASE_DELAY_SECONDS,
 ) -> tuple[str, int, int]:
     """Call provider with circuit breaker protection.
 
@@ -666,13 +789,12 @@ async def _call_provider_with_retry(
     _ = base_delay_s
     normalized_provider = str(provider or "").strip().lower()
 
-    if _circuit_is_open(normalized_provider):
-        msg = f"{_ERROR_PREFIX} Circuit breaker open for provider {provider} (circuit_open)"
-        logger.warning(msg)
-        return msg, 0, 0
-
     last_error = ""
     for attempt in range(max(1, max_retries)):
+        if await _circuit_is_open(normalized_provider):
+            msg = f"{_ERROR_PREFIX} Circuit breaker open for provider {provider} (circuit_open)"
+            logger.warning(msg)
+            return msg, 0, 0
         result, input_tokens, output_tokens = await _call_provider(
             provider=provider,
             model=model,
@@ -681,11 +803,11 @@ async def _call_provider_with_retry(
             user_prompt=user_prompt,
         )
         if not result.startswith(_ERROR_PREFIX):
-            _record_success(normalized_provider)
+            await _record_success(normalized_provider)
             return result, input_tokens, output_tokens
 
         category = _classify_error(result)
-        _record_failure(normalized_provider, category)
+        await _record_failure(normalized_provider, category)
 
         if category == LLMErrorCategory.RATE_LIMITED:
             logger.warning(
@@ -719,7 +841,7 @@ async def _call_groq(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=LLM_PROVIDER_TIMEOUT_SECONDS) as client:
         response = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
@@ -737,7 +859,10 @@ async def _call_groq(
             },
         )
     if response.status_code != 200:
-        return f"{_ERROR_PREFIX} HTTP {response.status_code}: {response.text[:300]}", 0, 0
+        return (
+            f"{_ERROR_PREFIX} HTTP {response.status_code}: "
+            f"{response.text[:LLM_PROVIDER_ERROR_EXCERPT_CHARS]}"
+        ), 0, 0
     data = response.json()
     return _extract_chat_completion_payload(data)
 
@@ -748,7 +873,7 @@ async def _call_anthropic(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=LLM_PROVIDER_TIMEOUT_SECONDS) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -765,7 +890,10 @@ async def _call_anthropic(
             },
         )
     if response.status_code != 200:
-        return f"{_ERROR_PREFIX} HTTP {response.status_code}: {response.text[:300]}", 0, 0
+        return (
+            f"{_ERROR_PREFIX} HTTP {response.status_code}: "
+            f"{response.text[:LLM_PROVIDER_ERROR_EXCERPT_CHARS]}"
+        ), 0, 0
     data = response.json()
     content = data.get("content")
     if not isinstance(content, list):
@@ -785,7 +913,7 @@ async def _call_nvidia(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=LLM_PROVIDER_TIMEOUT_SECONDS) as client:
         response = await client.post(
             "https://integrate.api.nvidia.com/v1/chat/completions",
             headers={
@@ -803,7 +931,10 @@ async def _call_nvidia(
             },
         )
     if response.status_code != 200:
-        return f"{_ERROR_PREFIX} HTTP {response.status_code}: {response.text[:300]}", 0, 0
+        return (
+            f"{_ERROR_PREFIX} HTTP {response.status_code}: "
+            f"{response.text[:LLM_PROVIDER_ERROR_EXCERPT_CHARS]}"
+        ), 0, 0
     data = response.json()
     return _extract_chat_completion_payload(data)
 
@@ -953,7 +1084,14 @@ def _validate_schema_inference_payload(payload: object) -> str | None:
 
 
 def _is_valid_schema_field_name(value: str) -> bool:
-    return bool(value) and len(value) <= 40 and value.replace("_", "").isalnum() and value.lower() == value and not value.startswith("_") and not value.isdigit()
+    return (
+        bool(value)
+        and len(value) <= LLM_SCHEMA_FIELD_NAME_MAX_LENGTH
+        and value.replace("_", "").isalnum()
+        and value.lower() == value
+        and not value.startswith("_")
+        and not value.isdigit()
+    )
 
 
 def _parse_json_object(raw_text: str) -> dict | None:
@@ -995,8 +1133,14 @@ def _build_targeted_html_snippet(html_text: str, anchors: list[str], limit: int)
     if not normalized_anchors:
         return ""
     lowered_html = html_text.lower()
-    snippet_budget = max(100, limit)
-    window = max(180, min(800, snippet_budget // 3))
+    snippet_budget = max(LLM_HTML_SNIPPET_MIN_BUDGET, limit)
+    window = max(
+        LLM_HTML_SNIPPET_WINDOW_MIN_CHARS,
+        min(
+            LLM_HTML_SNIPPET_WINDOW_MAX_CHARS,
+            snippet_budget // LLM_PROMPT_TOKEN_CHAR_MULTIPLIER,
+        ),
+    )
     chunks: list[str] = []
     seen_ranges: list[tuple[int, int]] = []
     for anchor in normalized_anchors:
@@ -1012,7 +1156,7 @@ def _build_targeted_html_snippet(html_text: str, anchors: list[str], limit: int)
         rendered = "\n...\n".join(chunks)
         if len(rendered) >= snippet_budget:
             return rendered[:snippet_budget]
-        if len(chunks) >= 6:
+        if len(chunks) >= LLM_HTML_SNIPPET_MAX_CHUNKS:
             break
     return "\n...\n".join(chunks)[:snippet_budget]
 
@@ -1030,7 +1174,7 @@ def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
             raw.replace("&", "and"),
         }:
             cleaned = " ".join(candidate.split())
-            if len(cleaned) < 3 or cleaned in seen:
+            if len(cleaned) < LLM_HTML_ANCHOR_MIN_LENGTH or cleaned in seen:
                 continue
             seen.add(cleaned)
             terms.append(cleaned)
@@ -1039,8 +1183,8 @@ def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
 
 def _safe_truncate_for_prompt(
     value: object,
-    max_str_len: int = 400,
-    max_list_items: int = 5,
+    max_str_len: int = LLM_PROMPT_SAFE_TRUNCATE_MAX_STR_LEN,
+    max_list_items: int = LLM_PROMPT_SAFE_TRUNCATE_MAX_LIST_ITEMS,
 ) -> object:
     """Recursively truncate prompt data while preserving JSON structure."""
     if isinstance(value, str):
@@ -1087,9 +1231,9 @@ def _truncate_json_literal(value: Any, limit: int) -> str:
     return json.dumps(str(compact)[: max(0, limit - 2)], default=str)
 
 
-def _enforce_token_limit(text: str, limit: int = 5600) -> str:
+def _enforce_token_limit(text: str, limit: int = LLM_PROMPT_TOKEN_LIMIT) -> str:
     """Shrink oversize prompts without slicing JSON blocks mid-token."""
-    char_limit = limit * 3
+    char_limit = limit * LLM_PROMPT_TOKEN_CHAR_MULTIPLIER
     if len(text) <= char_limit:
         return text
     suffix = "\n\n[TRUNCATED DUE TO TOKEN LIMIT]"
@@ -1159,7 +1303,12 @@ def _trim_prompt_section_body(body: str, budget: int, placeholder: str) -> str:
     return stripped[: budget - len(placeholder)].rstrip() + placeholder
 
 
-def _compact_json_value(value: Any, *, depth: int = 0, max_depth: int = 3) -> Any:
+def _compact_json_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    max_depth: int = LLM_PROMPT_COMPACT_JSON_MAX_DEPTH,
+) -> Any:
     if value in (None, "", [], {}):
         return value
     if depth >= max_depth:
@@ -1167,19 +1316,26 @@ def _compact_json_value(value: Any, *, depth: int = 0, max_depth: int = 3) -> An
     if isinstance(value, dict):
         compact: dict[str, Any] = {}
         for index, (key, item) in enumerate(value.items()):
-            if index >= 12:
+            if index >= LLM_PROMPT_COMPACT_JSON_MAX_KEYS:
                 break
             compact[str(key)] = _compact_json_value(item, depth=depth + 1, max_depth=max_depth)
         return compact
     if isinstance(value, list):
-        return [_compact_json_value(item, depth=depth + 1, max_depth=max_depth) for item in value[:10]]
+        return [
+            _compact_json_value(item, depth=depth + 1, max_depth=max_depth)
+            for item in value[:LLM_PROMPT_COMPACT_JSON_MAX_LIST_ITEMS]
+        ]
     return _compact_leaf_value(value)
 
 
 def _compact_leaf_value(value: Any) -> Any:
     if isinstance(value, str):
         stripped = value.strip()
-        return stripped[:220] if len(stripped) > 220 else stripped
+        return (
+            stripped[:LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS]
+            if len(stripped) > LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS
+            else stripped
+        )
     return value
 
 

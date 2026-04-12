@@ -1,8 +1,8 @@
 # Value normalization rules.
 from __future__ import annotations
 
-import json
 import re
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -31,13 +31,9 @@ from app.services.config.extraction_rules import (
     CANDIDATE_RATING_WORD_TOKENS,
     CANDIDATE_REVIEW_COUNT_TOKENS,
     CANDIDATE_SALARY_TOKENS,
-    CANDIDATE_SCRIPT_NOISE_PATTERN,
     CANDIDATE_SIZE_CSS_NOISE_TOKENS,
     CANDIDATE_SIZE_PACKAGE_TOKENS,
     CANDIDATE_TITLE_NOISE_PHRASES,
-    CANDIDATE_UI_ICON_TOKEN_PATTERN,
-    CANDIDATE_UI_NOISE_PHRASES,
-    CANDIDATE_UI_NOISE_TOKEN_PATTERN,
     CANDIDATE_URL_ABSOLUTE_PREFIXES,
     CANDIDATE_URL_SUFFIXES,
     COLOR_NOISE_TOKENS,
@@ -49,23 +45,9 @@ from app.services.config.extraction_rules import (
     SALARY_RANGE_REGEX,
     SIZE_NOISE_TOKENS,
 )
+from app.services.text_sanitization import strip_ui_noise as strip_ui_noise_policy
+from app.services.text_utils import normalized_text as normalized_text_policy
 from bs4 import BeautifulSoup
-
-_UI_NOISE_TOKEN_RE = (
-    re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE)
-    if CANDIDATE_UI_NOISE_TOKEN_PATTERN
-    else None
-)
-_UI_ICON_TOKEN_RE = (
-    re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE)
-    if CANDIDATE_UI_ICON_TOKEN_PATTERN
-    else None
-)
-_SCRIPT_NOISE_RE = (
-    re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE)
-    if CANDIDATE_SCRIPT_NOISE_PATTERN
-    else None
-)
 _PROMO_ONLY_TITLE_RE = (
     re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE)
     if CANDIDATE_PROMO_ONLY_TITLE_PATTERN
@@ -229,7 +211,42 @@ def _is_empty_value(value: object) -> bool:
     return value in (None, "", [], {})
 
 def _normalized_candidate_text(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
+    return normalized_text_policy(value)
+
+
+def normalize_decimal_price(
+    value: object, *, interpret_integral_as_cents: bool = False
+) -> str | None:
+    if value is None:
+        return None
+
+    def _quantized_text(decimal_value: Decimal) -> str:
+        return format(
+            decimal_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            "f",
+        )
+
+    if isinstance(value, int):
+        decimal_value = Decimal(value)
+        if interpret_integral_as_cents:
+            decimal_value /= Decimal("100")
+        return _quantized_text(decimal_value)
+    if isinstance(value, Decimal):
+        return _quantized_text(value)
+    if isinstance(value, float):
+        return _quantized_text(Decimal(str(value)))
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            decimal_value = Decimal(raw)
+        except InvalidOperation:
+            return None
+        if interpret_integral_as_cents and re.fullmatch(r"\d+", raw):
+            decimal_value /= Decimal("100")
+        return _quantized_text(decimal_value)
+    return None
 
 
 def _normalize_rich_candidate_text(value: str) -> str:
@@ -246,18 +263,9 @@ def _normalize_rich_candidate_text(value: str) -> str:
 
 
 def _parse_json_like_value(value: str) -> dict | list | None:
-    candidate = str(value or "").strip()
-    if not candidate:
-        return None
-    if candidate.endswith(";"):
-        candidate = candidate[:-1].rstrip()
-    if candidate[:1] not in "{[":
-        return None
-    try:
-        parsed = json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, (dict, list)) else None
+    from app.services.extract.shared_json_helpers import parse_json_fragment
+
+    return parse_json_fragment(value)
 
 
 def _coerce_url_field(value: str, base_url: str) -> str | None:
@@ -1092,25 +1100,7 @@ def _looks_like_variant_selector_text(value: str) -> bool:
         or _CROSSFIELD_VARIANT_VALUE_RE.match(text)
     )
 def _strip_ui_noise(value: str, *, preserve_newlines: bool = False) -> str:
-    text = unescape(value).strip()
-    if not text:
-        return ""
-    if _UI_ICON_TOKEN_RE:
-        text = _UI_ICON_TOKEN_RE.sub(" ", text)
-    if _UI_NOISE_TOKEN_RE:
-        text = _UI_NOISE_TOKEN_RE.sub(" ", text)
-    if _SCRIPT_NOISE_RE:
-        text = _SCRIPT_NOISE_RE.sub(" ", text)
-    for phrase in CANDIDATE_UI_NOISE_PHRASES:
-        if phrase:
-            text = re.sub(rf"\b{re.escape(phrase)}\b", " ", text, flags=re.IGNORECASE)
-    if preserve_newlines:
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        text = "\n".join(line.strip(" -|,:;/") for line in text.split("\n"))
-    else:
-        text = re.sub(r"\s+", " ", text).strip(" -|,:;/")
-    return text.strip()
+    return strip_ui_noise_policy(value, preserve_newlines=preserve_newlines)
 
 
 def _field_token(field_name: str) -> str:

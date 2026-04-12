@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from app.api.crawls import (
@@ -11,6 +12,7 @@ from app.api.crawls import (
     crawls_create_csv,
     crawls_delete,
     crawls_kill,
+    crawls_logs_ws,
     crawls_pause,
     crawls_resume,
 )
@@ -193,4 +195,85 @@ async def test_conflict_endpoints_preserve_value_error_as_http_cause(
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == str(source_error)
     assert exc_info.value.__cause__ is source_error
+
+
+@pytest.mark.asyncio
+async def test_crawls_logs_ws_releases_db_session_between_polls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered_sessions: list[object] = []
+
+    @asynccontextmanager
+    async def _session_factory():
+        session = object()
+        entered_sessions.append(session)
+        yield session
+
+    async def _resolve_user(_websocket):
+        return User(id=1, email="ws@example.com", hashed_password="x", role="admin")
+
+    async def _require_accessible_run(session, *, run_id: int, user: User):
+        assert session is entered_sessions[0]
+        assert run_id == 42
+        assert user.id == 1
+        return SimpleNamespace(id=run_id, status_value="running")
+
+    log_batches = [
+        [SimpleNamespace(id=10)],
+        [],
+    ]
+    run_states = iter(
+        [
+            SimpleNamespace(id=42, status_value="running"),
+            SimpleNamespace(id=42, status_value="completed"),
+        ]
+    )
+
+    async def _get_run_logs(session, run_id: int, *, after_id=None, limit=None):
+        assert session in entered_sessions[1:]
+        assert run_id == 42
+        return log_batches.pop(0)
+
+    async def _get_run(session, run_id: int):
+        assert session in entered_sessions[1:]
+        assert run_id == 42
+        return next(run_states)
+
+    monkeypatch.setattr("app.api.crawls.SessionLocal", _session_factory)
+    monkeypatch.setattr("app.api.crawls._resolve_websocket_user", _resolve_user)
+    monkeypatch.setattr(
+        "app.api.crawls._require_accessible_run",
+        _require_accessible_run,
+    )
+    monkeypatch.setattr("app.api.crawls.get_run_logs", _get_run_logs)
+    monkeypatch.setattr("app.api.crawls.get_run", _get_run)
+    monkeypatch.setattr(
+        "app.api.crawls.serialize_log_event",
+        lambda row: {"id": row.id},
+    )
+
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self.accepted = False
+            self.messages: list[dict[str, int]] = []
+            self.closed: tuple[int, str] | None = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def send_json(self, payload: dict[str, int]) -> None:
+            self.messages.append(payload)
+
+        async def close(self, code: int, reason: str) -> None:
+            self.closed = (code, reason)
+
+    websocket = _FakeWebSocket()
+
+    await crawls_logs_ws(websocket=websocket, run_id=42)
+
+    assert websocket.accepted is True
+    assert websocket.messages == [{"id": 10}]
+    assert websocket.closed == (1000, "Run completed")
+    assert len(entered_sessions) == 3
+    assert len({id(session) for session in entered_sessions}) == 3
 

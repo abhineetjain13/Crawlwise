@@ -9,6 +9,7 @@ from typing import Protocol, runtime_checkable
 
 from app.models.crawl import CrawlRecord
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -349,6 +350,25 @@ async def persist_crawl_record(
                 CrawlRecord.__table__.c.url_identity_key,
             ],
             index_where=CrawlRecord.__table__.c.url_identity_key.isnot(None),
+        )
+        result = await session.execute(statement)
+        return bool(getattr(result, "rowcount", 0) or 0)
+    if dialect_name == "sqlite" and db_record.url_identity_key:
+        statement = sqlite_insert(CrawlRecord.__table__).values(
+            run_id=db_record.run_id,
+            source_url=db_record.source_url,
+            url_identity_key=db_record.url_identity_key,
+            data=db_record.data,
+            raw_data=db_record.raw_data,
+            discovered_data=db_record.discovered_data,
+            source_trace=db_record.source_trace,
+            raw_html_path=db_record.raw_html_path,
+        ).on_conflict_do_nothing(
+            index_elements=[
+                CrawlRecord.__table__.c.run_id,
+                CrawlRecord.__table__.c.url_identity_key,
+            ],
+            index_where=CrawlRecord.__table__.c.url_identity_key.is_not(None),
         )
         result = await session.execute(statement)
         return bool(getattr(result, "rowcount", 0) or 0)

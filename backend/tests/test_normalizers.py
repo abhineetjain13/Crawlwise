@@ -1,7 +1,12 @@
 # Tests for field normalizers.
 from __future__ import annotations
 
-from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
+from app.services.normalizers import (
+    extract_currency_hint,
+    normalize_decimal_price,
+    normalize_value,
+    validate_value,
+)
 
 
 def test_normalize_price():
@@ -12,6 +17,12 @@ def test_normalize_price():
 
 def test_normalize_sale_price():
     assert normalize_value("sale_price", "$9.99") == "9.99"
+
+
+def test_normalize_decimal_price_supports_cents_style_inputs():
+    assert normalize_decimal_price(1299, interpret_integral_as_cents=True) == "12.99"
+    assert normalize_decimal_price("1299", interpret_integral_as_cents=True) == "12.99"
+    assert normalize_decimal_price("19.5", interpret_integral_as_cents=True) == "19.50"
 
 
 def test_normalize_whitespace():
@@ -30,6 +41,16 @@ def test_normalize_empty_string():
 
 def test_normalize_description_strips_html():
     assert normalize_value("description", "<p>Hello <strong>World</strong></p>") == "Hello World"
+
+
+def test_normalize_description_uses_shared_noise_policy_and_preserves_newlines():
+    assert (
+        normalize_value(
+            "description",
+            "<div>add to cart</div><p>Feature one</p><p>Feature two</p>",
+        )
+        == "Feature one\nFeature two"
+    )
 
 
 def test_normalize_availability_schema_url():

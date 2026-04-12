@@ -2,11 +2,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.config.field_mappings import (
-    ECOMMERCE_ONLY_FIELDS,
-    INTERNAL_ONLY_FIELDS,
-    JOB_ONLY_FIELDS,
+    CANONICAL_SCHEMAS,
+    field_allowed_for_surface as _field_allowed_for_surface,
 )
 from app.services.domain_utils import normalize_domain
 from app.services.pipeline.pipeline_config import SCHEMA_MAX_AGE_DAYS
@@ -42,20 +40,6 @@ def _dedupe_fields(values: list[str] | None) -> list[str]:
         deduped.append(normalized)
         seen.add(normalized)
     return deduped
-
-
-def _field_allowed_for_surface(surface: str, field_name: str) -> bool:
-    normalized_surface = str(surface or "").strip().lower()
-    normalized_field = str(field_name or "").strip().lower()
-    if not normalized_field or normalized_field in INTERNAL_ONLY_FIELDS:
-        return False
-    if normalized_surface in {"job_listing", "job_detail"}:
-        return normalized_field not in ECOMMERCE_ONLY_FIELDS
-    if normalized_surface in {"ecommerce_listing", "ecommerce_detail"}:
-        return normalized_field not in JOB_ONLY_FIELDS
-    return True
-
-
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 

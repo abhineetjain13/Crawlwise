@@ -149,3 +149,41 @@ async def test_persist_crawl_record_reraises_non_duplicate_integrity_errors() ->
 
     with pytest.raises(IntegrityError):
         await persist_crawl_record(session, db_record)
+
+
+@pytest.mark.asyncio
+async def test_persist_crawl_record_uses_sqlite_conflict_ignore_for_identity_key() -> None:
+    db_record = CrawlRecord(
+        run_id=1,
+        source_url="https://example.com/jobs/1",
+        url_identity_key="job-1",
+        data={},
+        raw_data={},
+        discovered_data={},
+        source_trace={},
+    )
+
+    class _FakeSession:
+        def __init__(self, rowcount: int) -> None:
+            self._bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            self.rowcount = rowcount
+            self.executed = False
+
+        def get_bind(self):
+            return self._bind
+
+        async def execute(self, _statement):
+            self.executed = True
+            return SimpleNamespace(rowcount=self.rowcount)
+
+        def begin_nested(self):
+            raise AssertionError("sqlite identity-key inserts should not use savepoints")
+
+    inserted_session = _FakeSession(rowcount=1)
+    duplicate_session = _FakeSession(rowcount=0)
+
+    assert await persist_crawl_record(inserted_session, db_record)
+    assert inserted_session.executed is True
+
+    assert not await persist_crawl_record(duplicate_session, db_record)
+    assert duplicate_session.executed is True

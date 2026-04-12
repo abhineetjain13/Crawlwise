@@ -75,6 +75,60 @@ def test_parse_page_sources_hydrated_state_backfills_next_data():
     assert page_sources["next_data"]["_hydrated_states"] == page_sources["hydrated_states"]
 
 
+def test_score_datalayer_payload_respects_configured_field_weights(monkeypatch):
+    payload = {
+        "price": "19.99",
+        "sale_price": "14.99",
+        "price_currency": "USD",
+    }
+
+    score, populated, push_index = source_parsers._score_datalayer_payload(
+        payload,
+        push_index=2,
+    )
+    assert (score, populated, push_index) == (7, 3, 2)
+
+    monkeypatch.setattr(
+        source_parsers,
+        "SOURCE_PARSER_DATALAYER_FIELD_WEIGHTS",
+        {"price": 10, "sale_price": 1, "price_currency": 1},
+    )
+
+    rescored = source_parsers._score_datalayer_payload(payload, push_index=2)
+    assert rescored == (12, 3, 2)
+
+
+def test_infer_embedded_blob_family_respects_configured_signal_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    payload = {
+        "name": "Widget",
+        "title": "Widget",
+        "price": "19.99",
+        "sku": "SKU-1",
+    }
+
+    assert source_parsers._infer_embedded_blob_family(payload) == "product_json"
+
+    monkeypatch.setattr(
+        source_parsers,
+        "SOURCE_PARSER_EMBEDDED_BLOB_STRONG_SIGNAL_THRESHOLD",
+        3,
+    )
+    monkeypatch.setattr(
+        source_parsers,
+        "SOURCE_PARSER_EMBEDDED_BLOB_SUPPORTING_SIGNAL_THRESHOLD",
+        3,
+    )
+    monkeypatch.setattr(
+        source_parsers,
+        "SOURCE_PARSER_EMBEDDED_BLOB_STRONG_ONLY_THRESHOLD",
+        5,
+    )
+
+    assert source_parsers._infer_embedded_blob_family(payload) is None
+
+
 def test_parse_page_sources_hydrated_assignment_preserves_semicolon_in_string():
     html = """
     <html><body>

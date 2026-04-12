@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 
 from app.services.acquisition import AcquisitionResult
 from app.services.acquisition import detect_blocked_page
+from app.services.config.field_mappings import excluded_fields_for_surface
 
 from .utils import _clean_candidate_text
 
@@ -80,20 +81,7 @@ def _sanitize_listing_record_fields(
     ):
         sanitized["salary"] = sanitized.get("price")
 
-    for field_name in (
-        "price",
-        "sale_price",
-        "original_price",
-        "currency",
-        "sku",
-        "part_number",
-        "color",
-        "availability",
-        "rating",
-        "review_count",
-        "image_url",
-        "additional_images",
-    ):
+    for field_name in excluded_fields_for_surface(surface):
         sanitized.pop(field_name, None)
     
     # Summarize job description

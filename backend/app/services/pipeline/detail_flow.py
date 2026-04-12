@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from typing import TYPE_CHECKING
 
 from app.models.crawl import CrawlRun
 from app.services.acquisition import AcquisitionResult
+from app.services.adapters.base import AdapterResult
+from app.services.adapters.types import AdapterRecords, AdapterRecord
 from app.services.crawl_metrics import finalize_url_metrics as _finalize_url_metrics
 from app.services.domain_utils import normalize_domain
 from app.services.extract import (
@@ -54,6 +57,9 @@ from .types import URLProcessingResult
 from .utils import _compact_dict, parse_html
 from .verdict import VERDICT_SCHEMA_MISS, compute_verdict
 
+if TYPE_CHECKING:
+    from .types import PipelineContext
+
 _domain = normalize_domain
 
 
@@ -72,6 +78,7 @@ async def process_json_response(
 ) -> URLProcessingResult:
     from .listing_flow import save_listing_records
     from app.services.extract import extract_json_detail, extract_json_listing
+    from app.services.extract.json_extractor import build_json_candidate_rows
 
     max_records = await effective_max_records(session, run, max_records)
     if max_records <= 0:
@@ -152,7 +159,28 @@ async def process_json_response(
             if len(saved) >= max_records:
                 break
             allowed_fields = set(resolved_schema.fields)
-            public_fields = _public_record_fields(raw_record)
+            candidates, extraction_audit = build_json_candidate_rows(raw_record)
+            candidate_values, reconciliation = reconcile_detail_candidate_values(
+                candidates,
+                allowed_fields=allowed_fields,
+                url=url,
+            )
+            source_trace = {
+                **_build_acquisition_trace(acq),
+                "candidates": candidates,
+                "extraction_audit": extraction_audit,
+            }
+            source_trace = _build_field_discovery_summary(
+                source_trace,
+                candidates,
+                candidate_values,
+                requested_fields,
+                run.surface,
+            )
+            public_fields = {
+                **_public_record_fields(raw_record),
+                **candidate_values,
+            }
             normalized, discovered_fields = split_detail_output_fields(
                 public_fields,
                 allowed_fields=allowed_fields,
@@ -164,6 +192,7 @@ async def process_json_response(
             requested_coverage = _requested_field_coverage(normalized, requested_fields)
             review_bucket = _build_review_bucket(
                 discovered_fields,
+                source_trace=source_trace,
                 fallback_source=str(raw_record.get("_source") or "json_api"),
             )
             if await writer.persist_normalized_record(
@@ -175,10 +204,11 @@ async def process_json_response(
                 requested_field_coverage=requested_coverage,
                 source_trace=_compact_dict(
                     {
-                        "type": "json_api",
+                        **source_trace,
+                        "type": "detail",
                         "method": acq.method,
                         "schema_resolution": schema_trace_payload(resolved_schema),
-                        "acquisition": _build_acquisition_trace(acq).get("acquisition"),
+                        "reconciliation": reconciliation or None,
                         "requested_fields": requested_fields or None,
                         "requested_field_coverage": requested_coverage or None,
                         "manifest_trace": _build_manifest_trace(
@@ -220,14 +250,37 @@ async def process_json_response(
     return URLProcessingResult(saved, verdict, url_metrics)
 
 
+async def process_json_response_from_context(
+    ctx: "PipelineContext",
+) -> URLProcessingResult:
+    acq = ctx.acquisition_result
+    if acq is None:
+        raise ValueError(
+            f"Missing acquisition_result for JSON response processing: {ctx.url}"
+        )
+    return await process_json_response(
+        ctx.session,
+        ctx.run,
+        ctx.url,
+        acq,
+        ctx.is_listing,
+        ctx.config.max_records,
+        ctx.additional_fields,
+        ctx.url_metrics,
+        update_run_state=ctx.update_run_state,
+        persist_logs=ctx.persist_logs,
+        record_writer=ctx.record_writer,
+    )
+
+
 async def extract_detail(
     session: AsyncSession,
     run: CrawlRun,
     url: str,
     html: str,
     acq: AcquisitionResult,
-    adapter_result,
-    adapter_records: list[dict],
+    adapter_result: AdapterResult | None,
+    adapter_records: AdapterRecords,
     additional_fields: list[str],
     extraction_contract: list[dict],
     surface: str,
@@ -258,9 +311,7 @@ async def extract_detail(
         run_id=run.id,
         explicit_fields=additional_fields,
         html=html,
-        sample_record=adapter_records[0]
-        if adapter_records and isinstance(adapter_records[0], dict)
-        else None,
+        sample_record=adapter_records[0] if adapter_records else None,
         llm_enabled=run.settings_view.llm_enabled(),
     )
 
@@ -304,7 +355,7 @@ async def extract_detail(
         surface,
     )
 
-    extracted_records = adapter_records if adapter_records else []
+    extracted_records: list[AdapterRecord] = adapter_records if adapter_records else []
     llm_review_bucket: list[dict[str, object]] = []
     if html and run.settings_view.llm_enabled():
         source_trace, llm_review_bucket = await collect_detail_llm_suggestions(
@@ -462,6 +513,31 @@ async def extract_detail(
     return URLProcessingResult(saved, verdict, url_metrics)
 
 
+async def extract_detail_from_context(ctx: "PipelineContext") -> URLProcessingResult:
+    acq = ctx.acquisition_result
+    if acq is None:
+        raise ValueError(
+            f"Missing acquisition_result for detail extraction: {ctx.url}"
+        )
+    return await extract_detail(
+        ctx.session,
+        ctx.run,
+        ctx.url,
+        acq.html,
+        acq,
+        ctx.adapter_result,
+        ctx.adapter_records,
+        ctx.additional_fields,
+        ctx.extraction_contract,
+        ctx.surface,
+        ctx.url_metrics,
+        soup=ctx.soup,
+        update_run_state=ctx.update_run_state,
+        persist_logs=ctx.persist_logs,
+        record_writer=ctx.record_writer,
+    )
+
+
 def reconcile_detail_candidate_values(
     candidates: dict[str, list[dict]],
     *,
@@ -540,7 +616,7 @@ async def collect_detail_llm_suggestions(
     html: str,
     xhr_payloads: list[dict],
     additional_fields: list[str],
-    adapter_records: list[dict],
+    adapter_records: AdapterRecords,
     candidate_values: dict,
     source_trace: dict,
     resolved_schema: ResolvedSchema,

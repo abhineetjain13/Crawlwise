@@ -12,7 +12,6 @@ from app.services.crawl_state import ACTIVE_STATUSES, CrawlStatus
 from app.models.crawl_settings import normalize_crawl_settings
 from app.services.crawl_utils import (
     collect_target_urls,
-    infer_surface_from_url,
     normalize_committed_field_name,
     normalize_target_url,
     validate_extraction_contract,
@@ -39,12 +38,9 @@ async def create_crawl_run(
     ]
     urls = [value for value in (payload.get("urls") or []) if value]
     primary_url = payload.get("url") or (urls[0] if urls else "")
-    requested_surface = str(payload.get("surface") or "").strip()
-    normalized_surface = (
-        requested_surface
-        if requested_surface
-        else infer_surface_from_url(primary_url, requested_surface)
-    )
+    normalized_surface = str(payload.get("surface") or "").strip().lower()
+    if not normalized_surface:
+        raise ValueError("surface is required")
     await ensure_public_crawl_targets(collect_target_urls(payload, settings_view))
     validate_extraction_contract(settings_view.extraction_contract())
     domain_requested_fields = await load_domain_requested_fields(

@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup, Tag
 
+from app.services.adapters.types import AdapterRecord, AdapterRecords
 from app.services.config.extraction_rules import (
     DIMENSION_KEYWORDS,
     LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT,
@@ -26,28 +27,28 @@ from app.services.extract.candidate_processing import (
 from app.services.extract.dom_extraction import (
     _scoped_url_key,
 )
-from app.services.extract.noise_policy import sanitize_product_attribute_map
+from app.services.extract.noise_policy import (
+    is_network_payload_noise_url,
+    sanitize_product_attribute_map,
+)
+from app.services.extract.shared_variant_logic import (
+    normalized_variant_axis_key as _canonical_structured_key,
+    split_variant_axes as _split_variant_axes,
+)
+from app.services.extract.variant_types import (
+    ParsedDemandwareVariantPayload,
+    ScoredVariantBundle,
+    VariantAxisValues,
+    VariantBundle,
+    VariantCandidateRowMap,
+    VariantProductAttributes,
+    VariantRecord,
+    VariantRecords,
+)
 from app.services.extract.variant_extractor import (
     _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS,
-    _canonical_structured_key,
-    _split_variant_axes,
 )
 
-# ---------------------------------------------------------------------------
-# Network payload noise filter (shared with service.py)
-# ---------------------------------------------------------------------------
-
-_NETWORK_PAYLOAD_NOISE_URL_PATTERNS = re.compile(
-    r"geolocation|geoip|geo/|/geo\b|"
-    r"\banalytics\b|tracking|telemetry|"
-    r"klarna\.com|affirm\.com|afterpay\.com|"
-    r"olapic-cdn\.com|"
-    r"livechat|zendesk\.com|intercom\.io|"
-    r"facebook\.com|google-analytics|googletagmanager|"
-    r"sentry\.io|datadome|px\.ads|"
-    r"cdn-cgi/|captcha",
-    re.IGNORECASE,
-)
 _VARIANT_PRODUCT_ATTRIBUTE_BLOCKLIST = frozenset(_STRUCTURED_CANONICAL_ATTRIBUTE_KEYS)
 
 
@@ -155,7 +156,7 @@ def _structured_source_payloads(
         if not isinstance(payload, dict):
             continue
         payload_url = str(payload.get("url") or "").lower()
-        if _NETWORK_PAYLOAD_NOISE_URL_PATTERNS.search(payload_url):
+        if is_network_payload_noise_url(payload_url):
             continue
         if _payload_matches_page_scope(payload.get("body"), base_url=base_url):
             sources.append(("network_intercept", payload.get("body"), {}))
@@ -223,8 +224,8 @@ def _structured_source_candidates(
 # ---------------------------------------------------------------------------
 
 def _merge_dynamic_row_map(
-    target: dict[str, list[dict]],
-    source: dict[str, list[dict]],
+    target: VariantCandidateRowMap,
+    source: VariantCandidateRowMap,
 ) -> None:
     for field_name, field_rows in source.items():
         target.setdefault(field_name, []).extend(field_rows)
@@ -234,7 +235,7 @@ def _selected_variant_rows(
     selected_variant: object,
     *,
     source: str,
-) -> dict[str, list[dict]]:
+) -> VariantCandidateRowMap:
     if not isinstance(selected_variant, dict) or not selected_variant:
         return {}
     return {
@@ -246,7 +247,7 @@ def _product_attribute_rows(
     product_attributes: object,
     *,
     source: str,
-) -> dict[str, list[dict]]:
+) -> VariantCandidateRowMap:
     sanitized = sanitize_product_attribute_map(
         product_attributes,
         blocked_keys=_VARIANT_PRODUCT_ATTRIBUTE_BLOCKLIST,
@@ -263,8 +264,8 @@ def _product_attribute_rows(
 # ---------------------------------------------------------------------------
 
 def _find_variant_adapter_record(
-    adapter_records: list[dict],
-) -> dict[str, object] | None:
+    adapter_records: AdapterRecords,
+) -> AdapterRecord | None:
     for record in adapter_records:
         if isinstance(record, dict) and isinstance(record.get("variants"), list):
             return record
@@ -272,12 +273,12 @@ def _find_variant_adapter_record(
 
 
 def _build_adapter_variant_rows(
-    adapter_records: list[dict],
-) -> dict[str, list[dict]]:
+    adapter_records: AdapterRecords,
+) -> VariantCandidateRowMap:
     record = _find_variant_adapter_record(adapter_records)
     if not isinstance(record, dict):
         return {}
-    rows: dict[str, list[dict]] = {}
+    rows: VariantCandidateRowMap = {}
     source = str(record.get("_source") or "adapter").strip() or "adapter"
     variants = record.get("variants")
     if isinstance(variants, list) and variants:
@@ -296,7 +297,7 @@ def _build_adapter_variant_rows(
 
 def _build_demandware_variant_rows(
     network_payloads: list[dict], *, base_url: str
-) -> dict[str, list[dict]]:
+) -> VariantCandidateRowMap:
     parsed_variants = _extract_demandware_variants_from_payloads(
         network_payloads,
         base_url=base_url,
@@ -305,7 +306,7 @@ def _build_demandware_variant_rows(
         return {}
 
     source = "network_intercept"
-    rows: dict[str, list[dict]] = {}
+    rows: VariantCandidateRowMap = {}
     variants = parsed_variants.get("variants")
     if isinstance(variants, list) and variants:
         rows["variants"] = [{"value": variants, "source": source}]
@@ -321,11 +322,11 @@ def _build_demandware_variant_rows(
 
 def _extract_demandware_variants_from_payloads(
     network_payloads: list[dict], *, base_url: str
-) -> dict[str, object]:
-    variants: list[dict[str, object]] = []
+) -> VariantBundle:
+    variants: VariantRecords = []
     axis_values: dict[str, list[str]] = {}
     seen_variants: set[str] = set()
-    selected_variant: dict[str, object] | None = None
+    selected_variant: VariantRecord | None = None
     selected_score = -1
 
     for payload in network_payloads:
@@ -353,7 +354,7 @@ def _extract_demandware_variants_from_payloads(
             selected_score = score
 
     selectable_axes, product_attributes = _split_variant_axes(axis_values)
-    result: dict[str, object] = {}
+    result: VariantBundle = {}
     if variants:
         result["variants"] = variants
     if selectable_axes:
@@ -367,7 +368,7 @@ def _extract_demandware_variants_from_payloads(
 
 def _parse_demandware_variation_payload(
     payload: dict[str, object], *, base_url: str
-) -> dict[str, object] | None:
+) -> ParsedDemandwareVariantPayload | None:
     if not isinstance(payload, dict):
         return None
     payload_url = str(payload.get("url") or "")
@@ -480,8 +481,8 @@ def _build_demandware_selected_variant(
     base_url: str,
     payload_url: str,
     selected_values: dict[str, str],
-) -> dict[str, object] | None:
-    row: dict[str, object] = {}
+) -> VariantRecord | None:
+    row: VariantRecord = {}
     _append_demandware_variant_identity(row, root)
     resolved_url = _resolve_candidate_url(_demandware_variant_url(root, base_url), base_url)
     if resolved_url:
@@ -798,10 +799,10 @@ def _variant_button_selected(button) -> bool:
 
 def _selected_dom_variant(
     base_url: str, *, selected_values: dict[str, str]
-) -> dict[str, object] | None:
+) -> VariantRecord | None:
     if not selected_values:
         return None
-    row: dict[str, object] = {"url": base_url}
+    row: VariantRecord = {"url": base_url}
     option_values = {
         axis_name: value for axis_name, value in selected_values.items() if value
     }
@@ -813,13 +814,13 @@ def _selected_dom_variant(
 
 def _build_dom_variant_rows(
     soup: BeautifulSoup, *, base_url: str
-) -> dict[str, list[dict]]:
+) -> VariantCandidateRowMap:
     axis_values, selected_values = _extract_dom_variant_axes(soup)
     if not axis_values:
         return {}
 
     selectable_axes, product_attributes = _split_variant_axes(axis_values)
-    rows: dict[str, list[dict]] = {}
+    rows: VariantCandidateRowMap = {}
     if selectable_axes:
         rows["variant_axes"] = [{"value": selectable_axes, "source": "dom_variant"}]
     rows.update(
@@ -843,7 +844,7 @@ def _build_structured_variant_rows(
     structured_sources: list[tuple[str, object, dict[str, object]]],
     *,
     base_url: str,
-) -> dict[str, list[dict]]:
+) -> VariantCandidateRowMap:
     parsed_variants = _extract_structured_variants_from_sources(
         structured_sources,
         base_url=base_url,
@@ -852,7 +853,7 @@ def _build_structured_variant_rows(
         return {}
 
     source = "structured_variant"
-    rows: dict[str, list[dict]] = {}
+    rows: VariantCandidateRowMap = {}
     variants = parsed_variants.get("variants")
     if isinstance(variants, list) and variants:
         rows["variants"] = [{"value": variants, "source": source}]
@@ -870,11 +871,11 @@ def _extract_structured_variants_from_sources(
     structured_sources: list[tuple[str, object, dict[str, object]]],
     *,
     base_url: str,
-) -> dict[str, object]:
-    variants: list[dict[str, object]] = []
-    axis_values: dict[str, list[str]] = {}
+) -> VariantBundle:
+    variants: VariantRecords = []
+    axis_values: VariantAxisValues = {}
     seen_variants: set[str] = set()
-    selected_variant: dict[str, object] | None = None
+    selected_variant: VariantRecord | None = None
     selected_score = -1
     selection_hints = _structured_variant_selection_hints(base_url)
 
@@ -911,7 +912,7 @@ def _extract_structured_variants_from_sources(
                 selected_score = score
 
     selectable_axes, product_attributes = _split_variant_axes(axis_values)
-    result: dict[str, object] = {}
+    result: VariantBundle = {}
     if variants:
         result["variants"] = variants
     if selectable_axes:
@@ -1005,7 +1006,7 @@ def _parse_structured_variant_container(
     *,
     base_url: str,
     selection_hints: dict[str, str],
-) -> dict[str, object] | None:
+) -> ScoredVariantBundle | None:
     sizes = payload.get("sizes")
     if isinstance(sizes, list) and sizes:
         parsed_sizes = _parse_structured_size_variant_container(
@@ -1026,8 +1027,8 @@ def _parse_structured_variant_container(
         if color_name not in axis_values["color"]:
             axis_values["color"].append(color_name)
 
-    parsed_variants: list[dict[str, object]] = []
-    selected_variant: dict[str, object] | None = None
+    parsed_variants: VariantRecords = []
+    selected_variant: VariantRecord | None = None
     selected_score = -1
     for item in variations:
         if not isinstance(item, dict):
@@ -1075,10 +1076,10 @@ def _parse_structured_size_variant_container(
     *,
     base_url: str,
     selection_hints: dict[str, str],
-) -> dict[str, object] | None:
+) -> ScoredVariantBundle | None:
     axis_values: dict[str, list[str]] = {}
-    parsed_variants: list[dict[str, object]] = []
-    selected_variant: dict[str, object] | None = None
+    parsed_variants: VariantRecords = []
+    selected_variant: VariantRecord | None = None
     selected_score = -1
 
     for item in sizes:
@@ -1162,8 +1163,8 @@ def _build_structured_variant_row(
     *,
     base_url: str,
     selection_hints: dict[str, str],
-) -> dict[str, object] | None:
-    row: dict[str, object] = {}
+) -> VariantRecord | None:
+    row: VariantRecord = {}
     variant_id = _normalized_candidate_text(
         payload.get("variantId")
         or payload.get("ean")
@@ -1214,8 +1215,8 @@ def _build_structured_size_variant_row(
     *,
     base_url: str,
     selection_hints: dict[str, str],
-) -> dict[str, object] | None:
-    row: dict[str, object] = {}
+) -> VariantRecord | None:
+    row: VariantRecord = {}
     variant_id = _normalized_candidate_text(
         payload.get("skuId") or payload.get("sku") or payload.get("id")
     )
@@ -1572,11 +1573,11 @@ def _build_variant_rows(
     *,
     base_url: str,
     soup: BeautifulSoup,
-    adapter_records: list[dict],
+    adapter_records: AdapterRecords,
     network_payloads: list[dict],
     structured_sources: list[tuple[str, object, dict[str, object]]] | None = None,
-) -> dict[str, list[dict]]:
-    rows: dict[str, list[dict]] = {}
+) -> VariantCandidateRowMap:
+    rows: VariantCandidateRowMap = {}
     adapter_variant_rows = _build_adapter_variant_rows(adapter_records)
     if adapter_variant_rows:
         _merge_dynamic_row_map(rows, adapter_variant_rows)

@@ -1,15 +1,13 @@
 # Crawl run, record, log, and promotion models.
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from collections.abc import Awaitable, Callable
-from collections.abc import Mapping
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import Base
 from app.models.crawl_domain import (
@@ -23,10 +21,6 @@ from app.models.crawl_settings import CrawlRunSettings
 from app.services.run_summary import as_int, merge_run_summary_patch
 
 CRAWL_RUN_FK = "crawl_runs.id"
-RetryRunUpdate = Callable[
-    [AsyncSession, int, Callable[[AsyncSession, "CrawlRun"], Awaitable[None]]],
-    Awaitable[None],
-]
 
 
 class CrawlRun(Base):
@@ -249,68 +243,6 @@ class BatchRunProgressState:
             "verdict_counts": self.verdict_counts,
         }
 
-    async def persist_patch(
-        self,
-        *,
-        session: AsyncSession,
-        run_id: int,
-        retry_run_update: RetryRunUpdate,
-        patch: dict[str, object],
-    ) -> None:
-        async def _mutation(retry_session: AsyncSession, retry_run: CrawlRun) -> None:
-            apply_patch = getattr(retry_run, "apply_batch_progress_patch", None)
-            if callable(apply_patch):
-                apply_patch(patch)
-                return
-            retry_run.merge_summary_patch(patch)
-
-        await retry_run_update(session, run_id, _mutation)
-
-    async def persist_url_result(
-        self,
-        *,
-        session: AsyncSession,
-        run_id: int,
-        retry_run_update: RetryRunUpdate,
-        idx: int,
-        url: str,
-        records_count: int,
-        verdict: str,
-        url_metrics: dict[str, object],
-        error_message: str | None = None,
-    ) -> None:
-        self.record_url_result(
-            idx=idx,
-            records_count=records_count,
-            verdict=verdict,
-            url_metrics=url_metrics,
-        )
-        await self.persist_patch(
-            session=session,
-            run_id=run_id,
-            retry_run_update=retry_run_update,
-            patch=self.build_progress_patch(
-                current_url=url,
-                current_url_index=idx + 1,
-                error_message=error_message,
-            ),
-        )
-
-    async def persist_final_summary(
-        self,
-        *,
-        session: AsyncSession,
-        run_id: int,
-        retry_run_update: RetryRunUpdate,
-        aggregate_verdict: str,
-    ) -> None:
-        await self.persist_patch(
-            session=session,
-            run_id=run_id,
-            retry_run_update=retry_run_update,
-            patch=self.build_final_patch(aggregate_verdict),
-        )
-
     def _progress_percent(self, *, final: bool = False) -> int:
         if self.total_urls <= 0:
             return 100 if final else 0
@@ -339,24 +271,10 @@ def _merge_run_acquisition_metrics(
         platform_families[platform_family] = (
             int(platform_families.get(platform_family, 0) or 0) + 1
         )
-    requested_surfaces = dict(current.get("requested_surfaces") or {})
-    requested_surface = str(url_metrics.get("requested_surface") or "").strip()
-    if requested_surface:
-        requested_surfaces[requested_surface] = int(
-            requested_surfaces.get(requested_surface, 0) or 0
-        ) + 1
-    effective_surfaces = dict(current.get("effective_surfaces") or {})
-    effective_surface = str(url_metrics.get("effective_surface") or "").strip()
-    if effective_surface:
-        effective_surfaces[effective_surface] = int(
-            effective_surfaces.get(effective_surface, 0) or 0
-        ) + 1
 
     summary = {
         "methods": methods,
         "platform_families": platform_families,
-        "requested_surfaces": requested_surfaces,
-        "effective_surfaces": effective_surfaces,
         "browser_attempted_urls": int(current.get("browser_attempted_urls", 0) or 0)
         + int(bool(url_metrics.get("browser_attempted"))),
         "browser_used_urls": int(current.get("browser_used_urls", 0) or 0)

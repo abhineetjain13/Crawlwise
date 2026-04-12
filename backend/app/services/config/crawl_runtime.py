@@ -53,12 +53,25 @@ LISTING_MIN_ITEMS = crawler_runtime_settings.listing_min_items
 CARD_AUTODETECT_MIN_SIBLINGS = crawler_runtime_settings.card_autodetect_min_siblings
 JSON_MAX_SEARCH_DEPTH = crawler_runtime_settings.json_max_search_depth
 MAX_JSON_RECURSION_DEPTH = crawler_runtime_settings.max_json_recursion_depth
+JS_SHELL_MIN_CONTENT_LEN = crawler_runtime_settings.js_shell_min_content_len
+JS_SHELL_VISIBLE_RATIO_MAX = crawler_runtime_settings.js_shell_visible_ratio_max
+JS_SHELL_MIN_SCRIPT_COUNT = crawler_runtime_settings.js_shell_min_script_count
+DETAIL_FIELD_SIGNAL_MIN_COUNT = crawler_runtime_settings.detail_field_signal_min_count
 HTTP_RETRY_STATUS_CODES = crawler_runtime_settings.http_retry_status_codes
 HTTP_MAX_RETRIES = crawler_runtime_settings.http_max_retries
 HTTP_RETRY_BACKOFF_BASE_MS = crawler_runtime_settings.http_retry_backoff_base_ms
 HTTP_RETRY_BACKOFF_MAX_MS = crawler_runtime_settings.http_retry_backoff_max_ms
 PROXY_FAILURE_COOLDOWN_BASE_MS = crawler_runtime_settings.proxy_failure_cooldown_base_ms
 PROXY_FAILURE_COOLDOWN_MAX_MS = crawler_runtime_settings.proxy_failure_cooldown_max_ms
+PROXY_FAILURE_BACKOFF_MAX_EXPONENT = (
+    crawler_runtime_settings.proxy_failure_backoff_max_exponent
+)
+PROXY_FAILURE_STATE_TTL_SECONDS = (
+    crawler_runtime_settings.proxy_failure_state_ttl_seconds
+)
+PROXY_FAILURE_STATE_MAX_ENTRIES = (
+    crawler_runtime_settings.proxy_failure_state_max_entries
+)
 DNS_RESOLUTION_RETRIES = crawler_runtime_settings.dns_resolution_retries
 DNS_RESOLUTION_RETRY_DELAY_MS = crawler_runtime_settings.dns_resolution_retry_delay_ms
 ACQUIRE_HOST_MIN_INTERVAL_MS = crawler_runtime_settings.acquire_host_min_interval_ms
@@ -92,16 +105,56 @@ BROWSER_NAVIGATION_MIN_FINAL_COMMIT_TIMEOUT_MS = (
     crawler_runtime_settings.browser_navigation_min_final_commit_timeout_ms
 )
 INTERRUPTIBLE_WAIT_POLL_MS = crawler_runtime_settings.interruptible_wait_poll_ms
+COOPERATIVE_SLEEP_POLL_MS = crawler_runtime_settings.cooperative_sleep_poll_ms
 PAGINATION_NAVIGATION_TIMEOUT_MS = (
     crawler_runtime_settings.pagination_navigation_timeout_ms
 )
 PAGINATION_PAGE_SIZE_ANOMALY_RATIO = (
     crawler_runtime_settings.pagination_page_size_anomaly_ratio
 )
+PAGINATION_POST_CLICK_TIMEOUT_MS = (
+    crawler_runtime_settings.pagination_post_click_timeout_ms
+)
+PAGINATION_POST_CLICK_DOMCONTENTLOADED_TIMEOUT_MS = (
+    crawler_runtime_settings.pagination_post_click_domcontentloaded_timeout_ms
+)
+PAGINATION_POST_CLICK_POLL_MS = (
+    crawler_runtime_settings.pagination_post_click_poll_ms
+)
+PAGINATION_POST_CLICK_SETTLE_TIMEOUT_MS = (
+    crawler_runtime_settings.pagination_post_click_settle_timeout_ms
+)
 LISTING_READINESS_MAX_WAIT_MS = crawler_runtime_settings.listing_readiness_max_wait_ms
 LISTING_READINESS_POLL_MS = crawler_runtime_settings.listing_readiness_poll_ms
 SCROLL_WAIT_MIN_MS = crawler_runtime_settings.scroll_wait_min_ms
 LOAD_MORE_WAIT_MIN_MS = crawler_runtime_settings.load_more_wait_min_ms
+TRAVERSAL_MAX_ITERATIONS_CAP = crawler_runtime_settings.traversal_max_iterations_cap
+TRAVERSAL_MIN_SETTLE_WAIT_MS = crawler_runtime_settings.traversal_min_settle_wait_ms
+TRAVERSAL_WEAK_PROGRESS_STREAK_MAX = (
+    crawler_runtime_settings.traversal_weak_progress_streak_max
+)
+TRAVERSAL_ACTIVE_SCROLLABLE_THRESHOLD_PX = (
+    crawler_runtime_settings.traversal_active_scrollable_threshold_px
+)
+TRAVERSAL_ACTIVE_SCROLLABLE_BONUS = (
+    crawler_runtime_settings.traversal_active_scrollable_bonus
+)
+TRAVERSAL_ACTIVE_LINK_WEIGHT = crawler_runtime_settings.traversal_active_link_weight
+TRAVERSAL_ACTIVE_TARGET_LABEL_MAX_LEN = (
+    crawler_runtime_settings.traversal_active_target_label_max_len
+)
+TRAVERSAL_FORCE_PROBE_MIN_ADVANCE_PX = (
+    crawler_runtime_settings.traversal_force_probe_min_advance_px
+)
+INFINITE_SCROLL_CONTAINER_OVERFLOW_THRESHOLD_PX = (
+    crawler_runtime_settings.infinite_scroll_container_overflow_threshold_px
+)
+INFINITE_SCROLL_TALL_PAGE_RATIO = (
+    crawler_runtime_settings.infinite_scroll_tall_page_ratio
+)
+INFINITE_SCROLL_POSITIVE_SIGNAL_MIN = (
+    crawler_runtime_settings.infinite_scroll_positive_signal_min
+)
 COOKIE_CONSENT_PREWAIT_MS = crawler_runtime_settings.cookie_consent_prewait_ms
 COOKIE_CONSENT_POSTCLICK_WAIT_MS = (
     crawler_runtime_settings.cookie_consent_postclick_wait_ms
@@ -110,6 +163,24 @@ SHADOW_DOM_FLATTEN_MAX_HOSTS = crawler_runtime_settings.shadow_dom_flatten_max_h
 BROWSER_CONTEXT_TIMEOUT_MS = crawler_runtime_settings.browser_context_timeout_ms
 BROWSER_NEW_PAGE_TIMEOUT_MS = crawler_runtime_settings.browser_new_page_timeout_ms
 BROWSER_CLOSE_TIMEOUT_MS = crawler_runtime_settings.browser_close_timeout_ms
+IFRAME_PROMOTION_MAX_CANDIDATES = (
+    crawler_runtime_settings.iframe_promotion_max_candidates
+)
+EXTRACTABILITY_NON_PRODUCT_TYPE_RATIO_MAX = (
+    crawler_runtime_settings.extractability_non_product_type_ratio_max
+)
+EXTRACTABILITY_JSON_LD_MIN_TYPE_SIGNALS = (
+    crawler_runtime_settings.extractability_json_ld_min_type_signals
+)
+EXTRACTABILITY_NEXT_DATA_SIGNAL_TRIGGER = (
+    crawler_runtime_settings.extractability_next_data_signal_trigger
+)
+EXTRACTABILITY_NEXT_DATA_SIGNAL_MIN = (
+    crawler_runtime_settings.extractability_next_data_signal_min
+)
+BROWSER_PREFERENCE_MIN_SUCCESSES = (
+    crawler_runtime_settings.browser_preference_min_successes
+)
 LONG_RUN_THRESHOLD_SECONDS: int = 30 * 60
 STALLED_RUN_THRESHOLD_SECONDS: int = 2 * 60
 MAX_DURATION_SAMPLE_SIZE: int = 1000

@@ -9,6 +9,7 @@ import pytest
 from app.core.config import settings
 from app.services.acquisition.cookie_store import is_persistable_cookie
 from app.services.acquisition.http_client import (
+    _retry_backoff_seconds,
     fetch_html_result,
 )
 from app.services.url_safety import ValidatedTarget
@@ -266,6 +267,23 @@ def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(monkeypatch):
         assert allowed is True
         assert mock_log.called
         assert "max_persisted_ttl_seconds" in mock_log.call_args[0][2]
+
+
+def test_retry_backoff_seconds_adds_jitter(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_BASE_MS",
+        400,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_MAX_MS",
+        5000,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.random.uniform",
+        lambda start, end: 40.0,
+    )
+
+    assert _retry_backoff_seconds(1) == pytest.approx(0.44)
 
 @pytest.mark.asyncio
 async def test_fetch_html_result_honors_retry_after_header(monkeypatch):

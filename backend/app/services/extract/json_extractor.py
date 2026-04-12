@@ -4,12 +4,10 @@
 # Searches for arrays of objects that look like product or job records
 # and normalizes them into the standard record shape.
 #
-# Fields are routed through FieldDecisionEngine for unified arbitration
-# with the same sanitization/ranking logic used by HTML extraction.
+# JSON records are normalized here, then converted into candidate rows so
+# the pipeline can arbitrate them alongside any other extraction evidence.
 from __future__ import annotations
 
-import logging
-import re
 from urllib.parse import urljoin, urlparse
 
 from app.services.config.field_mappings import (
@@ -17,16 +15,31 @@ from app.services.config.field_mappings import (
     COLLECTION_KEYS,
     get_surface_field_aliases,
 )
-from app.services.config.crawl_runtime import JSON_MAX_SEARCH_DEPTH
+from app.services.config.extraction_audit_settings import (
+    JSON_ALIAS_VISIT_LIST_LIMIT,
+    JSON_CANDIDATE_ARRAY_SAMPLE_SIZE,
+    JSON_CANDIDATE_COMMERCE_SCORE,
+    JSON_CANDIDATE_JOB_SCORE,
+    JSON_CANDIDATE_TITLE_SCORE,
+    JSON_CANDIDATE_URL_SCORE,
+    JSON_IMAGE_LIST_LIMIT,
+    JSON_LISTING_DEFAULT_MAX_RECORDS,
+    JSON_LISTING_ALIAS_MAX_DEPTH,
+    JSON_LISTING_SEARCH_MAX_DEPTH,
+)
+from app.services.extract.shared_logic import (
+    coerce_scalar_text,
+    extract_image_values,
+    find_alias_values,
+    resolve_slug_url,
+)
 from app.services.normalizers import validate_value
-
-logger = logging.getLogger(__name__)
 
 
 def extract_json_listing(
     json_data: dict | list,
     page_url: str = "",
-    max_records: int = 100,
+    max_records: int = JSON_LISTING_DEFAULT_MAX_RECORDS,
     *,
     surface: str = "",
     requested_fields: list[str] | None = None,
@@ -34,9 +47,7 @@ def extract_json_listing(
     """Extract records from a JSON API response.
 
     Finds the main data array, then normalizes each object into the
-    canonical field set for the given surface.  Each record's fields are
-    routed through ``FieldDecisionEngine`` for unified sanitization and
-    ranking consistent with the HTML extraction path.
+    canonical field set for the given surface.
     """
     items = _find_items_array(json_data)
     if not items:
@@ -48,7 +59,6 @@ def extract_json_listing(
         if not isinstance(item, dict):
             continue
         record = _normalize_item(item, page_url, surface=surface)
-        record = _arbitrate_record_fields(record, page_url=page_url)
         record = _filter_requested_fields(record, normalized_requested_fields)
         if record and any(v for k, v in record.items() if not k.startswith("_")):
             record["_source"] = "json_api"
@@ -66,8 +76,8 @@ def extract_json_detail(
 ) -> list[dict]:
     """Extract a single record from a JSON API response (detail page).
 
-    Fields are routed through ``FieldDecisionEngine`` for unified
-    sanitization and ranking consistent with the HTML extraction path.
+    The detail pipeline performs arbitration after this normalization step
+    so JSON candidates participate in the shared reconciliation path.
     """
     normalized_requested_fields = _normalize_requested_fields(requested_fields)
     if isinstance(json_data, list):
@@ -79,7 +89,6 @@ def extract_json_detail(
         return []
 
     record = _normalize_item(json_data, page_url, surface=surface)
-    record = _arbitrate_record_fields(record, page_url=page_url)
     record = _filter_requested_fields(record, normalized_requested_fields)
     if record and any(v for k, v in record.items() if not k.startswith("_")):
         record["_source"] = "json_api"
@@ -87,47 +96,33 @@ def extract_json_detail(
     return []
 
 
-def _arbitrate_record_fields(record: dict, *, page_url: str) -> dict:
-    """Route each field in *record* through FieldDecisionEngine.
+def build_json_candidate_rows(
+    record: dict,
+    *,
+    source: str = "json_api",
+) -> tuple[dict[str, list[dict]], dict[str, dict[str, object]]]:
+    """Convert a normalized JSON record into detail-style candidate rows."""
+    candidates: dict[str, list[dict]] = {}
+    extraction_audit: dict[str, dict[str, object]] = {}
 
-    This ensures JSON-extracted fields go through the same sanitization,
-    noise filtering, and validation that HTML-extracted candidates receive.
-    JSON candidates are injected with source ``"json_api"`` so they rank
-    at the top of the source hierarchy (preserving JSON-first priority).
-
-    Internal fields (``_``-prefixed) are passed through unchanged.
-    """
-    from app.services.extract.field_decision import FieldDecisionEngine
-
-    if not record:
-        return record
-
-    engine = FieldDecisionEngine(base_url=page_url)
-    arbitrated: dict = {}
-
-    for key, value in record.items():
-        # Pass through internal metadata fields untouched
-        if key.startswith("_"):
-            arbitrated[key] = value
+    for key, value in dict(record or {}).items():
+        if key.startswith("_") or value in (None, "", [], {}):
             continue
+        row = {"value": value, "source": source}
+        candidates[key] = [row]
+        extraction_audit[key] = {
+            "sources": [
+                {
+                    "source": source,
+                    "status": "produced_candidates",
+                    "candidate_count": 1,
+                    "row_sources": [source],
+                    "value_previews": [" ".join(str(value).split()).strip()[:80]],
+                }
+            ]
+        }
 
-        if value in (None, "", [], {}):
-            continue
-
-        # Build a single-candidate row list for the engine
-        row = {"value": value, "source": "json_api"}
-        decision = engine.decide_from_rows(key, [row])
-
-        if decision.accepted and decision.value not in (None, "", [], {}):
-            arbitrated[key] = decision.value
-        else:
-            logger.debug(
-                "FieldDecisionEngine rejected JSON field %s: %s",
-                key,
-                decision.rejection_reason or "rejected",
-            )
-
-    return arbitrated
+    return candidates, extraction_audit
 
 
 def _normalize_requested_fields(
@@ -157,7 +152,7 @@ def _filter_requested_fields(
 
 
 def _find_items_array(
-    data: dict | list, max_depth: int = JSON_MAX_SEARCH_DEPTH
+    data: dict | list, max_depth: int = JSON_LISTING_SEARCH_MAX_DEPTH
 ) -> list[dict]:
     """Find the most likely data array in a JSON response."""
     # If top-level is already a list of objects, use it directly.
@@ -231,7 +226,12 @@ def _normalize_item(item: dict, page_url: str, *, surface: str = "") -> dict:
 
     for canonical, aliases in surface_aliases.items():
         candidate_keys = [canonical, *aliases]
-        values = _find_alias_values(flat, candidate_keys, max_depth=4)
+        values = find_alias_values(
+            flat,
+            candidate_keys,
+            max_depth=JSON_LISTING_ALIAS_MAX_DEPTH,
+            list_limit=JSON_ALIAS_VISIT_LIST_LIMIT,
+        )
         for value in values:
             normalized = _normalize_json_value(
                 canonical,
@@ -265,7 +265,7 @@ def _normalize_item(item: dict, page_url: str, *, surface: str = "") -> dict:
                 record["url"] = product_url
     raw_slug = flat.get("slug")
     if "url" not in record and raw_slug not in (None, "", [], {}):
-        slug_url = _derive_slug_url(page_url, str(raw_slug))
+        slug_url = resolve_slug_url(str(raw_slug), page_url=page_url)
         if slug_url:
             record["url"] = slug_url
 
@@ -302,14 +302,14 @@ def _normalize_item(item: dict, page_url: str, *, surface: str = "") -> dict:
 def _score_candidate_array(items: list[dict]) -> int:
     if not items:
         return -1
-    sample = items[:5]
+    sample = items[:JSON_CANDIDATE_ARRAY_SAMPLE_SIZE]
     score = len(items)
     for item in sample:
         keys = {str(key).strip().lower() for key in item}
         if keys & {"title", "name", "job_title", "position"}:
-            score += 3
+            score += JSON_CANDIDATE_TITLE_SCORE
         if keys & {"url", "href", "link", "positionuri", "apply_url"}:
-            score += 3
+            score += JSON_CANDIDATE_URL_SCORE
         if keys & {
             "company",
             "company_name",
@@ -320,9 +320,9 @@ def _score_candidate_array(items: list[dict]) -> int:
             "job_id",
             "location",
         }:
-            score += 4
+            score += JSON_CANDIDATE_JOB_SCORE
         if keys & {"price", "sale_price", "brand", "sku"}:
-            score += 2
+            score += JSON_CANDIDATE_COMMERCE_SCORE
     return score
 
 
@@ -391,11 +391,15 @@ def _normalize_json_value(
         return None
 
     if canonical == "url":
-        text = _coerce_scalar_text(value)
+        text = coerce_scalar_text(value)
         return urljoin(page_url, text) if text and page_url else text or None
 
     if canonical in {"image_url", "additional_images"}:
-        images = _extract_image_values(value, page_url=page_url)
+        images = extract_image_values(
+            value,
+            page_url=page_url,
+            list_limit=JSON_IMAGE_LIST_LIMIT,
+        )
         if not images:
             return None
         return images[0] if canonical == "image_url" else ", ".join(images)
@@ -403,7 +407,7 @@ def _normalize_json_value(
     if isinstance(value, list):
         if canonical in list_join_fields:
             scalar_values = [
-                text for item in value if (text := _coerce_scalar_text(item))
+                text for item in value if (text := coerce_scalar_text(item))
             ]
             return " | ".join(dict.fromkeys(scalar_values)) if scalar_values else None
         for item in value:
@@ -464,104 +468,6 @@ def _normalize_json_value(
     return str(value).strip() if not isinstance(value, (int, float, bool)) else value
 
 
-def _find_alias_values(
-    data: object, aliases: list[str], max_depth: int
-) -> list[object]:
-    alias_tokens = {
-        _normalized_field_token(alias)
-        for alias in aliases
-        if _normalized_field_token(alias)
-    }
-    values: list[object] = []
-
-    def _visit(node: object, depth: int) -> None:
-        if depth <= 0 or node in (None, "", [], {}):
-            return
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if _normalized_field_token(key) in alias_tokens and value not in (
-                    None,
-                    "",
-                    [],
-                    {},
-                ):
-                    values.append(value)
-                _visit(value, depth - 1)
-            return
-        if isinstance(node, list):
-            for item in node[:40]:
-                _visit(item, depth - 1)
-
-    _visit(data, max_depth)
-    return values
-
-
-def _normalized_field_token(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
-
-
-def _coerce_scalar_text(value: object) -> str:
-    if isinstance(value, dict):
-        for key in (
-            "url",
-            "href",
-            "src",
-            "contentUrl",
-            "name",
-            "title",
-            "value",
-            "content",
-            "text",
-            "description",
-        ):
-            nested = value.get(key)
-            if nested not in (None, "", [], {}):
-                return _coerce_scalar_text(nested)
-        return ""
-    if isinstance(value, list):
-        for item in value:
-            text = _coerce_scalar_text(item)
-            if text:
-                return text
-        return ""
-    return str(value).strip() if value not in (None, "", [], {}) else ""
-
-
-def _extract_image_values(value: object, *, page_url: str) -> list[str]:
-    images: list[str] = []
-    seen: set[str] = set()
-
-    def _append(candidate: str) -> None:
-        resolved = urljoin(page_url, candidate) if candidate and page_url else candidate
-        if not resolved or resolved in seen:
-            return
-        seen.add(resolved)
-        images.append(resolved)
-
-    def _visit(node: object) -> None:
-        if node in (None, "", [], {}):
-            return
-        if isinstance(node, dict):
-            for key in ("src", "url", "contentUrl", "image", "thumbnail"):
-                candidate = node.get(key)
-                if isinstance(candidate, str) and candidate.strip():
-                    _append(candidate.strip())
-            for nested in node.values():
-                if nested is not node:
-                    _visit(nested)
-            return
-        if isinstance(node, list):
-            for item in node[:20]:
-                _visit(item)
-            return
-        text = str(node).strip()
-        if text:
-            _append(text)
-
-    _visit(value)
-    return images
-
-
 def _derive_product_url(page_url: str, handle: str) -> str:
     parsed = urlparse(page_url)
     if not parsed.scheme or not parsed.netloc:
@@ -572,19 +478,6 @@ def _derive_product_url(page_url: str, handle: str) -> str:
     if not handle:
         return ""
     return f"{parsed.scheme}://{parsed.netloc}/products/{handle}"
-
-
-def _derive_slug_url(page_url: str, slug: str) -> str:
-    parsed = urlparse(page_url)
-    text = str(slug or "").strip()
-    if not text or not parsed.scheme or not parsed.netloc:
-        return ""
-    if text.startswith(("http://", "https://", "/")):
-        return urljoin(page_url, text)
-    origin = f"{parsed.scheme}://{parsed.netloc}/"
-    return urljoin(origin, text)
-
-
 def _flatten_one_level(item: dict) -> dict:
     """Flatten nested dicts one level deep for field matching.
 

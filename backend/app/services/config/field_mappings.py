@@ -381,6 +381,7 @@ FIELD_ALIASES = {
 # These must NOT be resolved on job_listing or job_detail surfaces.
 ECOMMERCE_ONLY_FIELDS: frozenset[str] = frozenset(
     {
+        "additional_images",
         "availability",
         "brand",
         "color",
@@ -388,11 +389,16 @@ ECOMMERCE_ONLY_FIELDS: frozenset[str] = frozenset(
         "condition",
         "currency",
         "exterior_color",
+        "image_url",
         "interior_color",
         "part_number",
         "price",
+        "product_attributes",
         "price_original",
         "original_price",
+        "rating",
+        "review_count",
+        "sale_price",
         "sku",
         "stock_quantity",
     }
@@ -432,6 +438,23 @@ INTERNAL_ONLY_FIELDS: frozenset[str] = frozenset(
 )
 
 
+def excluded_fields_for_surface(surface: str) -> frozenset[str]:
+    normalized = (surface or "").strip().lower()
+    excluded: frozenset[str] = INTERNAL_ONLY_FIELDS
+    if normalized in {"job_listing", "job_detail"}:
+        return excluded | ECOMMERCE_ONLY_FIELDS
+    if normalized in {"ecommerce_listing", "ecommerce_detail"}:
+        return excluded | JOB_ONLY_FIELDS
+    return excluded
+
+
+def field_allowed_for_surface(surface: str, field_name: str) -> bool:
+    normalized_field = str(field_name or "").strip().lower()
+    return bool(
+        normalized_field and normalized_field not in excluded_fields_for_surface(surface)
+    )
+
+
 def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
     """
     Return FIELD_ALIASES filtered to only the fields appropriate for the given surface.
@@ -441,17 +464,10 @@ def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
     - Unknown/unset surface: exclude only INTERNAL_ONLY_FIELDS.
     """
     normalized = (surface or "").strip().lower()
-    is_job = normalized in {"job_listing", "job_detail"}
-    is_ecommerce = normalized in {"ecommerce_listing", "ecommerce_detail"}
-
-    excluded: frozenset[str] = INTERNAL_ONLY_FIELDS
-    if is_job:
-        excluded = excluded | ECOMMERCE_ONLY_FIELDS
-    elif is_ecommerce:
-        excluded = excluded | JOB_ONLY_FIELDS
+    excluded = excluded_fields_for_surface(normalized)
 
     aliases = {
-        canonical: aliases
+        canonical: list(aliases)
         for canonical, aliases in FIELD_ALIASES.items()
         if canonical not in excluded
     }
@@ -475,7 +491,6 @@ COLLECTION_KEYS = [
     "products",
     "items",
     "results",
-    "data",
     "records",
     "listings",
     "jobs",
@@ -485,30 +500,14 @@ COLLECTION_KEYS = [
     "positions",
     "openings",
     "hits",
-    "entries",
     "nodes",
-    "drinks",
-    "meals",
     "categories",
     "collections",
     "offers",
     "deals",
-    "articles",
-    "content",
-    "users",
-    "works",
-    "books",
-    "movies",
-    "shows",
-    "tracks",
     "events",
     "properties",
-    "features",
-    "objects",
-    "documents",
     "rows",
-    "values",
-    "response",
 ]
 
 def _dedupe_aliases(*groups: object) -> list[str]:

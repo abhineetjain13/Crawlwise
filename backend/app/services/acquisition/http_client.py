@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import time
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -244,7 +245,8 @@ def _retry_backoff_seconds(attempt: int) -> float:
     _validate_retry_backoff_config()
     delay_ms = HTTP_RETRY_BACKOFF_BASE_MS * max(1, 2 ** (attempt - 1))
     bounded_ms = min(delay_ms, HTTP_RETRY_BACKOFF_MAX_MS)
-    return bounded_ms / 1000
+    jitter_ms = random.uniform(0.0, bounded_ms * 0.2) if bounded_ms > 0 else 0.0
+    return (bounded_ms + jitter_ms) / 1000
 
 
 def _build_attempt_entry(

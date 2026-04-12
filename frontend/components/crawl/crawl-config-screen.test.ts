@@ -6,7 +6,7 @@ import type { CrawlConfig } from "../../lib/api/types";
 function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
   return {
     module: "category",
-    surface: "ecommerce_listing",
+    domain: "commerce",
     mode: "single",
     target_url: "https://example.com/collections/chairs",
     bulk_urls: "",
@@ -35,15 +35,25 @@ describe("buildDispatch", () => {
     expect(dispatch.url).toBe("https://example.com/collections/chairs");
   });
 
-  it("preserves category surface for job URLs", () => {
+  it("keeps commerce listing when the URL is job-like", () => {
     const dispatch = buildDispatch(
       baseConfig({
         target_url: "https://workforcenow.adp.com/careers",
-        surface: "ecommerce_listing",
       }),
     );
 
     expect(dispatch.surface).toBe("ecommerce_listing");
+  });
+
+  it("maps jobs category runs to job listing surface", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        domain: "jobs",
+        target_url: "https://example.com/anything",
+      }),
+    );
+
+    expect(dispatch.surface).toBe("job_listing");
   });
 
   it("preserves advanced_mode auto when auto is selected", () => {
@@ -73,7 +83,6 @@ describe("buildDispatch", () => {
     const dispatch = buildDispatch(
       baseConfig({
         module: "pdp",
-        surface: "ecommerce_detail",
         mode: "batch",
         target_url: "",
         bulk_urls: "https://example.com/p/1\nhttps://example.com/p/2",
@@ -86,18 +95,18 @@ describe("buildDispatch", () => {
     expect(dispatch.settings.urls).toEqual(["https://example.com/p/1", "https://example.com/p/2"]);
   });
 
-  it("preserves pdp batch surface for job URLs", () => {
+  it("maps jobs pdp batch runs to job detail surface", () => {
     const dispatch = buildDispatch(
       baseConfig({
         module: "pdp",
-        surface: "ecommerce_detail",
+        domain: "jobs",
         mode: "batch",
         target_url: "",
         bulk_urls: "https://recruiting.ultipro.com/org/JobBoard/id/OpportunityDetail?opportunityId=1",
       }),
     );
 
-    expect(dispatch.surface).toBe("ecommerce_detail");
+    expect(dispatch.surface).toBe("job_detail");
   });
 
   it("throws when batch mode has no URLs", () => {
@@ -105,7 +114,6 @@ describe("buildDispatch", () => {
       buildDispatch(
         baseConfig({
           module: "pdp",
-          surface: "ecommerce_detail",
           mode: "batch",
           target_url: "",
           bulk_urls: "   ",

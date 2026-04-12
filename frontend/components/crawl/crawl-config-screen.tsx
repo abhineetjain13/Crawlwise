@@ -8,7 +8,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader, SectionHeader, TabBar } from "../ui/patterns";
 import { Button, Card, Input, Textarea } from "../ui/primitives";
 import { api } from "../../lib/api";
-import type { AdvancedCrawlMode, CrawlConfig, CrawlSurface } from "../../lib/api/types";
+import type { AdvancedCrawlMode, CrawlConfig, CrawlDomain } from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
 import { UI_DELAYS } from "../../lib/constants/timing";
@@ -18,9 +18,9 @@ import {
   clampNumber,
   type CategoryMode,
   type CrawlTab,
+  deriveSurface,
   type FieldRow,
   ManualFieldEditor,
-  inferSurfaceFromUrl,
   type PendingDispatch,
   parseRequestedCategoryMode,
   parseRequestedCrawlTab,
@@ -49,6 +49,7 @@ export function CrawlConfigScreen({
 }: Readonly<CrawlConfigScreenProps>) {
   const router = useRouter();
   const [crawlTab, setCrawlTab] = useState<CrawlTab>(() => requestedTab ?? "category");
+  const [crawlDomain, setCrawlDomain] = useState<CrawlDomain>("commerce");
   const [categoryMode, setCategoryMode] = useState<CategoryMode>(() => requestedCategoryMode ?? "single");
   const [pdpMode, setPdpMode] = useState<PdpMode>(() => requestedPdpMode ?? "single");
   const [targetUrl, setTargetUrl] = useState("");
@@ -74,7 +75,7 @@ export function CrawlConfigScreen({
   const bulkPrefillRouteSyncGuardRef = useRef(false);
 
   const activeMode = crawlTab === "category" ? categoryMode : pdpMode;
-  const surface: CrawlSurface = inferSurfaceFromUrl(targetUrl, crawlTab);
+  const surface = deriveSurface(crawlDomain, crawlTab);
 
   useEffect(() => {
     if (bulkPrefillRouteSyncGuardRef.current) {
@@ -141,7 +142,7 @@ export function CrawlConfigScreen({
   const config = useMemo<CrawlConfig>(
     () => ({
       module: crawlTab,
-      surface,
+      domain: crawlDomain,
       mode: crawlTab === "category" ? categoryMode : pdpMode,
       target_url: targetUrl,
       bulk_urls: bulkUrls,
@@ -169,6 +170,7 @@ export function CrawlConfigScreen({
       advancedMode,
       bulkUrls,
       categoryMode,
+      crawlDomain,
       crawlTab,
       csvFile,
       maxPages,
@@ -178,7 +180,6 @@ export function CrawlConfigScreen({
       proxyEnabled,
       proxyInput,
       requestDelay,
-      surface,
       smartExtraction,
       targetUrl,
       antiBotEnabled,
@@ -194,15 +195,6 @@ export function CrawlConfigScreen({
     setIsSubmitting(true);
     try {
       const dispatch = buildDispatch(config, fieldRows);
-      const surfaceMismatch = isSurfaceMismatch(config.module, dispatch.surface);
-      if (surfaceMismatch) {
-        trackEvent("crawl_submit_surface_mismatch", {
-          module: config.module,
-          mode: config.mode,
-          selected_surface: config.surface,
-          effective_surface: dispatch.surface,
-        });
-      }
       if (config.advanced_enabled) {
         trackEvent("advanced_mode_selected_vs_effective", {
           module: config.module,
@@ -239,7 +231,7 @@ export function CrawlConfigScreen({
         telemetryErrorPayload(error, {
           module: config.module,
           mode: config.mode,
-          surface: config.surface,
+          surface,
           advanced_enabled: config.advanced_enabled,
           advanced_mode: config.advanced_mode,
           smart_extraction: config.smart_extraction,
@@ -443,6 +435,22 @@ export function CrawlConfigScreen({
           <Card className="flex h-full flex-col space-y-4">
             <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
             <div className="flex-1 space-y-4">
+              <div className="space-y-2 px-1">
+                <div className="label-caps">Domain</div>
+                <TabBar
+                  value={crawlDomain}
+                  compact
+                  onChange={(value) => {
+                    if (value === "commerce" || value === "jobs") {
+                      setCrawlDomain(value);
+                    }
+                  }}
+                  options={[
+                    { value: "commerce", label: "Commerce" },
+                    { value: "jobs", label: "Jobs" },
+                  ]}
+                />
+              </div>
               <div className="divide-y divide-[var(--divider)]">
                 <SettingSection
                   label="Smart Extraction"
@@ -557,24 +565,6 @@ export function CrawlConfigScreen({
   );
 }
 
-function isSurfaceMismatch(module: CrawlConfig["module"], surface: CrawlSurface) {
-  if (module === "category") {
-    return !surface.endsWith("listing");
-  }
-  return !surface.endsWith("detail");
-}
-
-function resolveDispatchSurface(config: CrawlConfig) {
-  const primaryUrl = config.module === "category"
-    ? (config.mode === "bulk" ? parseLines(config.bulk_urls)[0] ?? "" : config.target_url)
-    : (
-        config.mode === "batch"
-          ? parseLines(config.bulk_urls)[0] ?? ""
-          : config.target_url
-      );
-  return inferSurfaceFromUrl(primaryUrl, config.module);
-}
-
 function inferRunTypeHint(config: CrawlConfig) {
   if (config.module === "category") {
     return config.mode === "bulk" ? "batch" : "crawl";
@@ -619,7 +609,7 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
     throw new Error(`Invalid additional field "${invalidAdditionalField}": ${reason}`);
   }
   const resolvedAdvancedMode = config.advanced_enabled ? config.advanced_mode : null;
-  const surface = resolveDispatchSurface(config);
+  const surface = deriveSurface(config.domain, config.module);
   const commonSettings = {
     llm_enabled: config.smart_extraction,
     advanced_enabled: config.advanced_enabled,

@@ -6,6 +6,7 @@ import pytest
 
 from app.services._batch_progress import (
     BatchRunProgressState,
+    persist_batch_url_result,
 )
 
 
@@ -29,8 +30,6 @@ def test_batch_run_progress_state_builds_progress_patch() -> None:
         url_metrics={
             "method": "browser",
             "browser_used": True,
-            "requested_surface": "ecommerce_detail",
-            "effective_surface": "ecommerce_detail",
             "record_count": 2,
         },
     )
@@ -101,7 +100,8 @@ async def test_batch_run_progress_state_persists_url_result() -> None:
         captured["run_id"] = run_id
         captured["summary"] = run.result_summary
 
-    await state.persist_url_result(
+    await persist_batch_url_result(
+        state=state,
         session=None,
         run_id=7,
         retry_run_update=fake_retry_run_update,

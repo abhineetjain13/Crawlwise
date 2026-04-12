@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BASE_DIR.parent
+
+
+def _resolve_project_path(value: str | Path, *, anchor: Path = PROJECT_ROOT) -> Path:
+    raw_path = Path(value)
+    return raw_path if raw_path.is_absolute() else (anchor / raw_path).resolve()
 
 
 class Settings(BaseSettings):
@@ -49,9 +54,21 @@ class Settings(BaseSettings):
     crawl_log_file_dir: Path = Field(default=BASE_DIR / "artifacts" / "run_logs")
     system_max_concurrent_urls: int = 8
     llm_cache_ttl_seconds: int = 86400
-    default_admin_email: str = "admin@example.invalid"
-    default_admin_password: str | None = None
-    bootstrap_admin_once: bool = False
+    default_admin_email: str = Field(
+        default="admin@example.invalid",
+        validation_alias=AliasChoices("DEFAULT_ADMIN_EMAIL", "default_admin_email"),
+    )
+    default_admin_password: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "DEFAULT_ADMIN_PASSWORD",
+            "default_admin_password",
+        ),
+    )
+    bootstrap_admin_once: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("BOOTSTRAP_ADMIN_ONCE", "bootstrap_admin_once"),
+    )
     # When false, POST /api/auth/register returns 403 (POC single-admin dev). Enable for production multi-tenant.
     registration_enabled: bool = False
 
@@ -62,26 +79,19 @@ class Settings(BaseSettings):
     db_pool_timeout_seconds: int = 10
     db_pool_pre_ping: bool = True
 
+    @field_validator(
+        "artifacts_dir",
+        "acquisition_cache_dir",
+        "cookie_store_dir",
+        "crawl_log_file_dir",
+        mode="before",
+    )
+    @classmethod
+    def _resolve_repo_relative_paths(cls, value: str | Path) -> Path:
+        return _resolve_project_path(value, anchor=PROJECT_ROOT)
+
 
 settings = Settings()
-
-
-def _resolve_project_path(value: str | Path, *, anchor: Path = PROJECT_ROOT) -> Path:
-    raw_path = Path(value)
-    return raw_path if raw_path.is_absolute() else (anchor / raw_path).resolve()
-
-settings.artifacts_dir = _resolve_project_path(
-    settings.artifacts_dir, anchor=PROJECT_ROOT
-)
-settings.acquisition_cache_dir = _resolve_project_path(
-    settings.acquisition_cache_dir, anchor=PROJECT_ROOT
-)
-settings.cookie_store_dir = _resolve_project_path(
-    settings.cookie_store_dir, anchor=PROJECT_ROOT
-)
-settings.crawl_log_file_dir = _resolve_project_path(
-    settings.crawl_log_file_dir, anchor=PROJECT_ROOT
-)
 
 
 # ---------------------------------------------------------------------------
@@ -150,3 +160,19 @@ def get_frontend_origins() -> list[str]:
     if "localhost" in origin:
         variants.add(origin.replace("localhost", "127.0.0.1"))
     return sorted(variants)
+
+
+def load_admin_bootstrap_settings() -> Settings:
+    import os
+
+    fresh = Settings()
+    resolved = settings.model_copy()
+    if os.getenv("DEFAULT_ADMIN_EMAIL") is not None or os.getenv("default_admin_email") is not None:
+        resolved = resolved.model_copy(update={"default_admin_email": fresh.default_admin_email})
+    if os.getenv("DEFAULT_ADMIN_PASSWORD") is not None or os.getenv("default_admin_password") is not None:
+        resolved = resolved.model_copy(
+            update={"default_admin_password": fresh.default_admin_password}
+        )
+    if os.getenv("BOOTSTRAP_ADMIN_ONCE") is not None or os.getenv("bootstrap_admin_once") is not None:
+        resolved = resolved.model_copy(update={"bootstrap_admin_once": fresh.bootstrap_admin_once})
+    return resolved

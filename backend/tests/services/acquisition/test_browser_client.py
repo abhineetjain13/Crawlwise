@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from app.services.acquisition import browser_client
+from app.services.acquisition import browser_pool
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.resource_monitor import MemoryPressureLevel
 
@@ -85,23 +87,63 @@ async def test_fetch_rendered_html_attempt_passes_page_content_helper_to_low_val
 
     result = await browser_client._fetch_rendered_html_attempt(
         pw,
-        target=SimpleNamespace(),
-        url="https://example.com/listing",
-        proxy=None,
-        surface="ecommerce_listing",
-        traversal_mode=None,
-        max_pages=1,
-        max_scrolls=1,
-        prefer_stealth=False,
-        request_delay_ms=0,
-        runtime_options=BrowserRuntimeOptions(wait_for_readiness=True),
-        requested_fields=[],
-        requested_field_selectors={},
-        launch_profile={"browser_type": "chromium", "channel": None},
-        navigation_strategies=[],
+        browser_client._BrowserRenderAttempt(
+            request=browser_client.BrowserRenderRequest(
+                target=SimpleNamespace(),
+                url="https://example.com/listing",
+                proxy=None,
+                surface="ecommerce_listing",
+                traversal_mode=None,
+                max_pages=1,
+                max_scrolls=1,
+                prefer_stealth=False,
+                request_delay_ms=0,
+                runtime_options=BrowserRuntimeOptions(wait_for_readiness=True),
+            ),
+            launch_profile={"browser_type": "chromium", "channel": None},
+            navigation_strategies=[],
+        ),
     )
 
     assert captured["page"] is page
     assert captured["page_content_with_retry"] is browser_client._page_content_with_retry
     assert result.diagnostics["listing_readiness"] == {"ready": False}
     context.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_browser_pool_healthcheck_task_restarts_after_unexpected_crash(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await browser_pool.reset_browser_pool_state()
+    state = browser_pool._browser_pool_state()
+    loop = asyncio.get_running_loop()
+    restarted = asyncio.Event()
+
+    async def _crash() -> None:
+        raise RuntimeError("boom")
+
+    async def _replacement_healthcheck_loop() -> None:
+        restarted.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(
+        browser_pool,
+        "_browser_pool_healthcheck_loop",
+        _replacement_healthcheck_loop,
+    )
+
+    task = loop.create_task(_crash(), name="browser-pool-healthcheck-test-crash")
+    task.add_done_callback(browser_pool._browser_pool_healthcheck_done)
+    state.cleanup_task = task
+
+    await asyncio.wait_for(restarted.wait(), timeout=1.0)
+
+    restarted_task = browser_pool._browser_pool_state().cleanup_task
+    assert restarted_task is not None
+    assert restarted_task is not task
+    assert not restarted_task.done()
+
+    restarted_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await restarted_task

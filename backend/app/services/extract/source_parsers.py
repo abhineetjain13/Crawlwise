@@ -3,9 +3,22 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from json import loads as parse_json
 
+from app.services.config.extraction_audit_settings import (
+    SOURCE_PARSER_DATALAYER_FIELD_WEIGHTS,
+    SOURCE_PARSER_EMBEDDED_BLOB_LIST_SAMPLE_SIZE,
+    SOURCE_PARSER_EMBEDDED_BLOB_MAX_DEPTH,
+    SOURCE_PARSER_EMBEDDED_BLOB_STRONG_ONLY_THRESHOLD,
+    SOURCE_PARSER_EMBEDDED_BLOB_STRONG_SIGNAL_THRESHOLD,
+    SOURCE_PARSER_EMBEDDED_BLOB_SUPPORTING_SIGNAL_THRESHOLD,
+    SOURCE_PARSER_EMBEDDED_BLOB_WEAK_SIGNAL_THRESHOLD,
+    SOURCE_PARSER_PREVIOUS_HEADING_LIMIT,
+)
 from app.services.config.extraction_rules import HYDRATED_STATE_PATTERNS
+from app.services.extract.shared_json_helpers import (
+    extract_balanced_json_fragment,
+    parse_json_fragment,
+)
 from bs4 import BeautifulSoup, Tag
 
 _DATALAYER_PUSH_RE = re.compile(r"dataLayer\.push\s*\(")
@@ -138,7 +151,7 @@ def extract_json_ld(soup: BeautifulSoup) -> list[dict]:
         if not raw_text:
             raw_text = "".join(node.strings)
             
-        data = _parse_json_blob(raw_text.strip())
+        data = parse_json_fragment(raw_text.strip())
         results.extend(_flatten_json_ld_payloads(data))
     return results
 
@@ -159,12 +172,12 @@ def parse_datalayer(html: str) -> dict[str, object]:
     for push_index, match in enumerate(_DATALAYER_PUSH_RE.finditer(html)):
         start_pos = match.end()
         # Extract balanced JSON fragment starting from the opening brace
-        json_fragment = _extract_balanced_json_fragment(html[start_pos:])
+        json_fragment = extract_balanced_json_fragment(html[start_pos:])
         
         if not json_fragment:
             continue
         
-        parsed = _parse_json_blob(json_fragment)
+        parsed = parse_json_fragment(json_fragment)
         if not isinstance(parsed, dict):
             continue
         
@@ -286,23 +299,15 @@ def _datalayer_discount_looks_like_percentage(
 def _score_datalayer_payload(
     result: dict[str, object], *, push_index: int
 ) -> tuple[int, int, int]:
-    weighted_fields = {
-        "price": 3,
-        "sale_price": 2,
-        "discount_amount": 1,
-        "discount_percentage": 1,
-        "price_currency": 2,
-        "availability": 2,
-        "category": 1,
-        "google_product_category": 1,
-    }
     populated_fields = {
         key
         for key, value in result.items()
         if key != "_selected_push_index" and value not in (None, "", [], {})
     }
     weighted_score = sum(
-        weight for key, weight in weighted_fields.items() if key in populated_fields
+        weight
+        for key, weight in SOURCE_PARSER_DATALAYER_FIELD_WEIGHTS.items()
+        if key in populated_fields
     )
     result["_selected_push_index"] = push_index
     return weighted_score, len(populated_fields), push_index
@@ -313,7 +318,7 @@ def extract_apollo_state_from_meta(soup: BeautifulSoup) -> dict | None:
     for node in soup.find_all("meta", attrs={"name": _APOLLO_STATE_META_NAME_RE}):
         content = node.get("content")
         if content:
-            parsed = _parse_json_blob(str(content))
+            parsed = parse_json_fragment(str(content))
             if isinstance(parsed, dict):
                 return parsed
     return None
@@ -322,7 +327,7 @@ def extract_apollo_state_from_meta(soup: BeautifulSoup) -> dict | None:
 def extract_next_data(soup: BeautifulSoup) -> dict | None:
     node = soup.select_one("script#__NEXT_DATA__")
     if node and node.string:
-        parsed = _parse_json_blob(node.string)
+        parsed = parse_json_fragment(node.string)
         return parsed if isinstance(parsed, dict) else None
     return None
 
@@ -343,7 +348,11 @@ def extract_hydrated_states(soup: BeautifulSoup) -> tuple[list[dict | list], set
         parsed_blobs: list[dict | list] = []
         candidate_texts = [text, *_extract_next_bootstrap_children(text)]
         for candidate_text in candidate_texts:
-            parsed = _parse_json_blob(candidate_text) if script_type == "application/json" else None
+            parsed = (
+                parse_json_fragment(candidate_text)
+                if script_type == "application/json"
+                else None
+            )
             if parsed is None:
                 parsed = _parse_hydrated_assignment(candidate_text)
             if parsed is None:
@@ -379,7 +388,7 @@ def extract_embedded_json(
         )
         if should_probe_script:
             for candidate_text in [text]:
-                parsed = _parse_json_blob(candidate_text)
+                parsed = parse_json_fragment(candidate_text)
                 if parsed is None:
                     continue
                 fingerprint = json.dumps(parsed, sort_keys=True, default=str)
@@ -416,7 +425,7 @@ def extract_embedded_json(
                 attr_text = " ".join(str(item) for item in attr_value)
             else:
                 attr_text = str(attr_value or "")
-            parsed = _parse_json_blob(attr_text)
+            parsed = parse_json_fragment(attr_text)
             if parsed is None:
                 continue
             family = _classify_embedded_blob_family(
@@ -577,7 +586,7 @@ def _family_from_hint(hint: str) -> str | None:
 def _infer_embedded_blob_family(
     parsed: dict | list,
     *,
-    max_depth: int = 5,
+    max_depth: int = SOURCE_PARSER_EMBEDDED_BLOB_MAX_DEPTH,
     _visited: set[int] | None = None,
 ) -> str | None:
     if max_depth < 0:
@@ -589,7 +598,7 @@ def _infer_embedded_blob_family(
             return None
         visited = set(visited)
         visited.add(payload_id)
-        for item in parsed[:5]:
+        for item in parsed[:SOURCE_PARSER_EMBEDDED_BLOB_LIST_SAMPLE_SIZE]:
             family = _infer_embedded_blob_family(item, max_depth=max_depth - 1, _visited=visited)
             if family:
                 return family
@@ -631,11 +640,19 @@ def _infer_embedded_blob_family(
         {"price", "sku", "inventory"} & normalized_keys
     ):
         return "inventory_json"
-    if strong_signal_count >= 2 and supporting_signal_count >= 1:
+    if (
+        strong_signal_count >= SOURCE_PARSER_EMBEDDED_BLOB_STRONG_SIGNAL_THRESHOLD
+        and supporting_signal_count
+        >= SOURCE_PARSER_EMBEDDED_BLOB_SUPPORTING_SIGNAL_THRESHOLD
+    ):
         return "product_json"
-    if strong_signal_count >= 3:
+    if strong_signal_count >= SOURCE_PARSER_EMBEDDED_BLOB_STRONG_ONLY_THRESHOLD:
         return "product_json"
-    if strong_signal_count >= 1 and supporting_signal_count >= 1:
+    if (
+        strong_signal_count >= SOURCE_PARSER_EMBEDDED_BLOB_WEAK_SIGNAL_THRESHOLD
+        and supporting_signal_count
+        >= SOURCE_PARSER_EMBEDDED_BLOB_SUPPORTING_SIGNAL_THRESHOLD
+    ):
         return "product_json"
     return None
 
@@ -644,7 +661,7 @@ def _payload_supports_embedded_family(
     payload: object,
     family: str,
     *,
-    max_depth: int = 5,
+    max_depth: int = SOURCE_PARSER_EMBEDDED_BLOB_MAX_DEPTH,
     _visited: set[int] | None = None,
 ) -> bool:
     if max_depth < 0:
@@ -665,7 +682,7 @@ def _normalize_embedded_blob_hint(value: object) -> str:
 def _has_embedded_product_signals(
     payload: object,
     *,
-    max_depth: int = 5,
+    max_depth: int = SOURCE_PARSER_EMBEDDED_BLOB_MAX_DEPTH,
     _visited: set[int] | None = None,
 ) -> bool:
     if max_depth < 0:
@@ -682,37 +699,15 @@ def _has_embedded_product_signals(
     }
 
 
-def _normalized_json_candidate(text: str) -> str | None:
-    candidate = str(text or "").strip()
-    if not candidate:
-        return None
-    if candidate.endswith(";"):
-        candidate = candidate[:-1].rstrip()
-    if candidate[:1] not in "{[":
-        return None
-    return candidate
-
-
-def _parse_json_blob(text: str) -> dict | list | None:
-    candidate = _normalized_json_candidate(text)
-    if candidate is None:
-        return None
-    try:
-        parsed = parse_json(candidate)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, (dict, list)) else None
-
-
 def _parse_hydrated_assignment(text: str) -> dict | list | None:
     for assignment_pattern in _HYDRATED_ASSIGNMENT_PATTERNS:
         match = assignment_pattern.search(text)
         if not match:
             continue
-        fragment = _extract_balanced_json_fragment(text[match.end():])
+        fragment = extract_balanced_json_fragment(text[match.end():])
         if not fragment:
             continue
-        parsed = _parse_json_blob(fragment)
+        parsed = parse_json_fragment(fragment)
         if parsed is not None:
             return parsed
     return None
@@ -727,10 +722,10 @@ def _parse_react_create_element_props(text: str) -> dict | list | None:
         args = _split_top_level_arguments(text[args_start:args_end])
         if len(args) < 2:
             continue
-        props_fragment = _extract_balanced_json_fragment(args[1].strip())
+        props_fragment = extract_balanced_json_fragment(args[1].strip())
         if not props_fragment:
             continue
-        parsed = _parse_json_blob(props_fragment)
+        parsed = parse_json_fragment(props_fragment)
         if parsed is not None:
             return parsed
     return None
@@ -739,45 +734,6 @@ def _parse_react_create_element_props(text: str) -> dict | list | None:
 def _extract_next_bootstrap_children(text: str) -> list[str]:
     matches = _NEXT_BOOTSTRAP_CHILD_RE.findall(text)
     return [match for match in matches if isinstance(match, str)]
-
-
-def _extract_balanced_json_fragment(text: str) -> str:
-    source_text = str(text or "")
-    candidate = source_text.lstrip()
-    if not candidate or candidate[0] not in "{[":
-        return ""
-    start_index = len(source_text) - len(candidate)
-    try:
-        _, end_index = json.JSONDecoder().raw_decode(source_text, start_index)
-    except json.JSONDecodeError:
-        pass
-    else:
-        return source_text[start_index:end_index]
-
-    closing = "}" if candidate[0] == "{" else "]"
-    depth = 0
-    in_string = False
-    escape = False
-    for index, char in enumerate(candidate):
-        if in_string:
-            if escape:
-                escape = False
-            elif char == "\\":
-                escape = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-            continue
-        if char == candidate[0]:
-            depth += 1
-            continue
-        if char == closing:
-            depth -= 1
-            if depth == 0:
-                return candidate[: index + 1]
-    return ""
 
 
 def _find_matching_delimiter(text: str, start_index: int, opening: str, closing: str) -> int:
@@ -889,7 +845,10 @@ def _serialize_table_cell(cell: Tag, cell_index: int) -> dict[str, object]:
 
 
 def _nearest_section_heading(node: Tag) -> str | None:
-    for previous in node.find_all_previous(["h1", "h2", "h3", "h4", "h5", "h6"], limit=6):
+    for previous in node.find_all_previous(
+        ["h1", "h2", "h3", "h4", "h5", "h6"],
+        limit=SOURCE_PARSER_PREVIOUS_HEADING_LIMIT,
+    ):
         text = previous.get_text(" ", strip=True)
         if text:
             return text

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, replace
 from json import loads as parse_json
 
 from app.services.extract import listing_structured_extractor as _listing_structured_extractor
@@ -81,6 +82,18 @@ _LISTING_HOST_TOKEN_STOPWORDS = {
     "io",
     "app",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ListingExtractionRequest:
+    html: str
+    surface: str
+    target_fields: set[str]
+    page_url: str = ""
+    max_records: int = 100
+    xhr_payloads: list[dict] | None = None
+    adapter_records: list[dict] | None = None
+    soup: BeautifulSoup | None = None
 # Listing extraction still enforces the field contract for DOM card records by
 # stripping detail-only fields before persistence.
 def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
@@ -142,63 +155,77 @@ def extract_listing_records(
     adapter_records: list[dict] | None = None,
     soup: BeautifulSoup | None = None,
 ) -> list[dict]:
-    page_fragments = _split_paginated_html_fragments(html)
-    if len(page_fragments) > 1:
-        merged_records: list[dict] = []
-        for _index, fragment in enumerate(page_fragments):
-            merged_records.extend(
-                _extract_listing_records_single_page(
-                    fragment,
-                    surface,
-                    target_fields,
-                    page_url=page_url,
-                    max_records=max_records,
-                    xhr_payloads=xhr_payloads,
-                    adapter_records=adapter_records,
-                )
-            )
-            if len(merged_records) >= max_records:
-                break
-        return _dedupe_listing_records(merged_records)[:max_records]
-
-    return _extract_listing_records_single_page(
-        html,
-        surface,
-        target_fields,
+    request = ListingExtractionRequest(
+        html=html,
+        surface=surface,
+        target_fields=target_fields,
         page_url=page_url,
         max_records=max_records,
         xhr_payloads=xhr_payloads,
         adapter_records=adapter_records,
         soup=soup,
     )
+    page_fragments = _split_paginated_html_fragments(request.html)
+    if len(page_fragments) > 1:
+        return _extract_paginated_listing_records(request, page_fragments=page_fragments)
+
+    return _extract_listing_records_single_page(request)
+
+
+def _extract_paginated_listing_records(
+    request: ListingExtractionRequest,
+    *,
+    page_fragments: list[str],
+) -> list[dict]:
+    merged_records: list[dict] = []
+    for fragment in page_fragments:
+        merged_records.extend(
+            _extract_listing_records_single_page(
+                replace(request, html=fragment, soup=None)
+            )
+        )
+        if len(merged_records) >= request.max_records:
+            break
+    return _dedupe_listing_records(merged_records)[: request.max_records]
 
 
 def _extract_listing_records_single_page(
-    html: str,
-    surface: str,
-    target_fields: set[str],
-    *,
-    page_url: str = "",
-    max_records: int = 100,
-    xhr_payloads: list[dict] | None = None,
-    adapter_records: list[dict] | None = None,
-    soup: BeautifulSoup | None = None,
+    request: ListingExtractionRequest,
 ) -> list[dict]:
-    soup = soup or BeautifulSoup(html, "html.parser")
-    page_sources = parse_page_sources(html, soup=soup)
-    adapter_records = adapter_records or []
-    xhr_payloads = xhr_payloads or []
-    json_ld_records = _extract_from_json_ld(soup, surface, page_url)
+    soup = request.soup or BeautifulSoup(request.html, "html.parser")
+    raw_record_sets = _collect_raw_listing_record_sets(request, soup=soup)
+    normalized_record_sets = _normalize_listing_record_sets(
+        raw_record_sets,
+        surface=request.surface,
+        page_url=request.page_url,
+        target_fields=request.target_fields,
+    )
+    return _merge_listing_record_sets(
+        normalized_record_sets,
+        surface=request.surface,
+        max_records=request.max_records,
+    )
+
+
+def _collect_raw_listing_record_sets(
+    request: ListingExtractionRequest,
+    *,
+    soup: BeautifulSoup,
+) -> dict[str, list[dict]]:
+    page_sources = parse_page_sources(request.html, soup=soup)
+    adapter_records = request.adapter_records or []
+    xhr_payloads = request.xhr_payloads or []
+    json_ld_records = _extract_from_json_ld(soup, request.surface, request.page_url)
     structured_records = _extract_from_structured_sources(
         page_sources=page_sources,
         xhr_payloads=xhr_payloads,
-        surface=surface,
-        page_url=page_url,
+        surface=request.surface,
+        page_url=request.page_url,
     )
     comparison_table_records = _extract_from_comparison_tables(
         soup,
-        surface=surface,
-        page_url=page_url,
+        surface=request.surface,
+        page_url=request.page_url,
     )
     raw_record_sets = {
         "structured": structured_records,
@@ -212,24 +239,31 @@ def _extract_listing_records_single_page(
         json_ld_records=json_ld_records,
         structured_records=structured_records,
     ):
-        raw_record_sets["next_flight"] = _extract_from_next_flight_scripts(html, page_url)
+        raw_record_sets["next_flight"] = _extract_from_next_flight_scripts(
+            request.html,
+            request.page_url,
+        )
         raw_record_sets["inline_array"] = _extract_from_inline_object_arrays(
-            html, surface, page_url
+            request.html,
+            request.surface,
+            request.page_url,
         )
     raw_record_sets["dom"] = _extract_dom_listing_records(
         soup,
-        surface=surface,
-        target_fields=target_fields,
-        page_url=page_url,
-        max_records=max_records,
+        surface=request.surface,
+        target_fields=request.target_fields,
+        page_url=request.page_url,
+        max_records=request.max_records,
     )
+    return raw_record_sets
 
-    normalized_record_sets = _normalize_listing_record_sets(
-        raw_record_sets,
-        surface=surface,
-        page_url=page_url,
-        target_fields=target_fields,
-    )
+
+def _merge_listing_record_sets(
+    normalized_record_sets: dict[str, list[dict]],
+    *,
+    surface: str,
+    max_records: int,
+) -> list[dict]:
     primary_label, primary_records = choose_primary_record_set(
         normalized_record_sets,
         surface=surface,

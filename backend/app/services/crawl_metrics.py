@@ -39,10 +39,6 @@ def build_url_metrics(
             "content_type": acq.content_type,
             "platform_family": str(diagnostics.get("curl_platform_family") or "").strip()
             or None,
-            "requested_surface": str(diagnostics.get("surface_requested") or "").strip()
-            or None,
-            "effective_surface": str(diagnostics.get("surface_effective") or "").strip()
-            or None,
             "browser_attempted": bool(diagnostics.get("browser_attempted")),
             "browser_used": acq.method == "playwright",
             "acquisition_outcome": str(diagnostics.get("acquisition_outcome") or "").strip()
@@ -75,7 +71,6 @@ def build_url_metrics(
             "traversal_pages_collected": pages_collected,
             "traversal_mode_used": mode_used,
             "traversal_stop_reason": stop_reason,
-            "surface_remapped": bool(diagnostics.get("surface_remapped")),
         }.items()
         if value not in (None, "", [], {})
     }

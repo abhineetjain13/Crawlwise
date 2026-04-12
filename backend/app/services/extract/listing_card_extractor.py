@@ -16,6 +16,33 @@ from app.services.config.extraction_rules import (
     LISTING_IMAGE_EXCLUDE_TOKENS,
     LISTING_SWATCH_CONTAINER_SELECTORS,
 )
+from app.services.config.extraction_audit_settings import (
+    LISTING_CARD_COLOR_LABEL_MAX_CHARS,
+    LISTING_CARD_COMMERCE_PARTIAL_SIGNAL_SCORE,
+    LISTING_CARD_COMMERCE_STRONG_SIGNAL_SCORE,
+    LISTING_CARD_GENERIC_HEADING_SIGNAL_SCORE,
+    LISTING_CARD_GENERIC_MEDIA_SIGNAL_SCORE,
+    LISTING_CARD_GENERIC_TEXT_SIGNAL_SCORE,
+    LISTING_CARD_GROUP_MIN_SIGNAL_RATIO,
+    LISTING_CARD_GROUP_MIN_SIZE,
+    LISTING_CARD_GROUP_SAMPLE_SIZE,
+    LISTING_CARD_JOB_COMPANY_LINE_MAX_CHARS,
+    LISTING_CARD_JOB_COMPANY_SUFFIX_MAX_CHARS,
+    LISTING_CARD_JOB_LOCATION_LINE_MAX_CHARS,
+    LISTING_CARD_JOB_METADATA_TEXT_MAX_CHARS,
+    LISTING_CARD_JOB_METADATA_SALARY_MAX_CHARS,
+    LISTING_CARD_JOB_PARTIAL_SIGNAL_SCORE,
+    LISTING_CARD_JOB_STRONG_SIGNAL_SCORE,
+    LISTING_CARD_JOB_TITLE_MIN_CHARS,
+    LISTING_CARD_LISTING_TITLE_MIN_CHARS,
+    LISTING_CARD_MAX_REGEX_INPUT_CHARS,
+    LISTING_CARD_MIN_PATH_SEGMENTS,
+    LISTING_CARD_MULTI_ELEMENT_MIN_CHILDREN,
+    LISTING_CARD_PRODUCT_URL_SCAN_MAX_DEPTH,
+    LISTING_CARD_PRODUCT_URL_SCAN_MAX_LIST_ITEMS,
+    LISTING_CARD_REPEATED_LINK_ROOT_MAX_DEPTH,
+    LISTING_CARD_SUBSTANTIAL_TEXT_MIN_CHARS,
+)
 from app.services.config.nested_field_rules import PAGE_URL_CURRENCY_HINTS
 from app.services.config.selectors import CARD_SELECTORS as _CARD_SELECTORS
 from app.services.extract.listing_quality import (
@@ -43,8 +70,6 @@ _LISTING_VARIANT_PROMPT_RE = re.compile(
     r"style|styles|fit|fits|waist|length|width)\b",
     re.IGNORECASE,
 )
-_MIN_CARD_SIGNAL_RATIO = 0.45
-_MAX_REGEX_INPUT_LEN = 500
 _PRICE_LIKE_RE = re.compile(r"^[\s$£€¥₹]?\d[\d,.\s]*$")
 _PRICE_WITH_CURRENCY_RE = re.compile(r"[\$£€¥₹]\s*\d[\d,.\s]*")
 _PRICE_EXTRACT_RE = re.compile(r"[\$£€¥₹]?\s*\d[\d,.\s]*")
@@ -82,7 +107,7 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
 
     best_cards: list[Tag] = []
     best_selector = ""
-    best_score: tuple[float, int] = (_MIN_CARD_SIGNAL_RATIO, 0)
+    best_score: tuple[float, int] = (LISTING_CARD_GROUP_MIN_SIGNAL_RATIO, 0)
     score_group = _card_group_scorer(surface)
 
     primary_container_selector = (
@@ -94,7 +119,7 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
 
     def _scan_containers(containers: list[Tag]) -> None:
         nonlocal best_cards, best_selector, best_score
-        min_group_size = 2
+        min_group_size = LISTING_CARD_GROUP_MIN_SIZE
         for container in containers:
             children = [c for c in container.children if isinstance(c, Tag)]
             if len(children) < min_group_size:
@@ -127,7 +152,7 @@ def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag
     )
     for selector in selectors:
         found = soup_copy.select(selector)
-        if len(found) >= 2:
+        if len(found) >= LISTING_CARD_GROUP_MIN_SIZE:
             return found, selector
     return best_cards, best_selector
 
@@ -143,7 +168,7 @@ def _card_group_scorer(surface: str = "") -> Callable[[list[Tag]], tuple[float, 
         if is_listing_noise_group(group):
             return (0.0, 0)
         signals = 0.0
-        sample_size = min(len(group), 30)
+        sample_size = min(len(group), LISTING_CARD_GROUP_SAMPLE_SIZE)
         for el in group[:sample_size]:
             sample = _card_group_sample(el)
             if not sample.has_link:
@@ -173,36 +198,37 @@ def _card_group_sample(el: Tag) -> _CardGroupSample:
             el.select_one("[itemprop='price'], .price, [class*='price'], .amount")
         ),
         has_heading=bool(el.select_one("h1, h2, h3, h4, h5, [class*='title' i]")),
-        has_substantial_text=len(text) > 40,
+        has_substantial_text=len(text) > LISTING_CARD_SUBSTANTIAL_TEXT_MIN_CHARS,
         has_multi_elements=(
-            len([child for child in el.children if isinstance(child, Tag)]) > 1
+            len([child for child in el.children if isinstance(child, Tag)])
+            >= LISTING_CARD_MULTI_ELEMENT_MIN_CHILDREN
         ),
     )
 
 
 def _score_commerce_card_sample(sample: _CardGroupSample) -> float:
     if sample.has_image and sample.has_price:
-        return 1.0
+        return LISTING_CARD_COMMERCE_STRONG_SIGNAL_SCORE
     if sample.has_image or sample.has_price:
-        return 0.5
+        return LISTING_CARD_COMMERCE_PARTIAL_SIGNAL_SCORE
     return 0.0
 
 
 def _score_job_card_sample(sample: _CardGroupSample) -> float:
     if sample.has_heading and sample.has_multi_elements:
-        return 1.0
+        return LISTING_CARD_JOB_STRONG_SIGNAL_SCORE
     if sample.has_heading or sample.has_substantial_text:
-        return 0.6
+        return LISTING_CARD_JOB_PARTIAL_SIGNAL_SCORE
     return 0.0
 
 
 def _score_generic_card_sample(sample: _CardGroupSample) -> float:
     if sample.has_image or sample.has_price:
-        return 1.0
+        return LISTING_CARD_GENERIC_MEDIA_SIGNAL_SCORE
     if sample.has_heading and sample.has_substantial_text:
-        return 0.5
+        return LISTING_CARD_GENERIC_HEADING_SIGNAL_SCORE
     if sample.has_substantial_text and sample.has_multi_elements:
-        return 0.4
+        return LISTING_CARD_GENERIC_TEXT_SIGNAL_SCORE
     return 0.0
 
 
@@ -211,7 +237,7 @@ def _detect_repeated_link_card_roots(
     *,
     surface: str,
 ) -> tuple[list[Tag], str]:
-    min_group_size = 2
+    min_group_size = LISTING_CARD_GROUP_MIN_SIZE
     grouped: dict[tuple[str, tuple[str, ...]], list[Tag]] = {}
     score_group = _card_group_scorer(surface)
 
@@ -220,7 +246,7 @@ def _detect_repeated_link_card_roots(
         if not _looks_like_card_link_href(href):
             continue
         current: Tag | None = link
-        for _depth in range(4):
+        for _depth in range(LISTING_CARD_REPEATED_LINK_ROOT_MAX_DEPTH):
             current = current.parent if isinstance(current.parent, Tag) else None
             if not isinstance(current, Tag) or current.name in {"body", "html"}:
                 break
@@ -238,7 +264,7 @@ def _detect_repeated_link_card_roots(
 
     best_cards: list[Tag] = []
     best_selector = ""
-    best_score: tuple[float, int] = (_MIN_CARD_SIGNAL_RATIO, 0)
+    best_score: tuple[float, int] = (LISTING_CARD_GROUP_MIN_SIGNAL_RATIO, 0)
     for signature, group in grouped.items():
         deduped = _dedupe_card_tags(group)
         if len(deduped) < min_group_size:
@@ -279,7 +305,7 @@ def _looks_like_card_link_href(href: str) -> bool:
     if not path:
         return False
     segments = [segment for segment in path.split("/") if segment]
-    if len(segments) < 2:
+    if len(segments) < LISTING_CARD_MIN_PATH_SEGMENTS:
         return False
     if _looks_like_category_url(f"https://example.com/{path}"):
         return False
@@ -313,39 +339,46 @@ def _extract_from_card(
     is_ecommerce_surface = "ecommerce" in normalized_surface
 
     if is_ecommerce_surface:
-        _extract_ecommerce_price_fields(card, record)
+        record |= _extract_ecommerce_price_fields(card)
 
-    _extract_card_link_and_title(
+    record |= _extract_card_link_and_title(
         card,
-        record,
         page_url=page_url,
         is_job_surface=is_job_surface,
     )
 
     if not is_job_surface:
-        _extract_card_image_fields(card, record, page_url=page_url)
+        record |= _extract_card_image_fields(card, page_url=page_url)
 
-    _extract_card_common_metadata(card, record)
+    record |= _extract_card_common_metadata(card)
     card_text_lines = _card_text_lines(card)
-    _extract_card_identifier_fields(record, card, card_text_lines)
+    record |= _extract_card_identifier_fields(card, card_text_lines)
     if is_ecommerce_surface:
-        _extract_ecommerce_card_fields(record, card, card_text_lines, page_url=page_url)
+        record |= _extract_ecommerce_card_fields(
+            card,
+            card_text_lines,
+            page_url=page_url,
+            record=record,
+        )
 
     if is_job_surface:
-        _extract_job_card_fields(card, record, card_text_lines=card_text_lines)
-        _finalize_job_card_record(record)
+        record |= _extract_job_card_fields(
+            card,
+            card_text_lines=card_text_lines,
+            record=record,
+        )
+        record = _finalize_job_card_record(record)
 
     return record
 
 
 def _extract_card_link_and_title(
     card: Tag,
-    record: dict,
     *,
     page_url: str,
     is_job_surface: bool,
-) -> None:
-    _extract_card_title(card, record)
+) -> dict[str, str]:
+    record = _extract_card_title(card)
     if "title" not in record and not is_job_surface:
         inferred_title = _infer_listing_title_from_links(card)
         if inferred_title:
@@ -358,9 +391,11 @@ def _extract_card_link_and_title(
         inferred_title = _infer_job_title_from_links(card)
         if inferred_title:
             record["title"] = _normalize_listing_title_text(inferred_title)
+    return record
 
 
-def _extract_card_common_metadata(card: Tag, record: dict) -> None:
+def _extract_card_common_metadata(card: Tag) -> dict[str, str]:
+    record: dict[str, str] = {}
     brand_text = _extract_card_text_value(
         card,
         ".brand, [itemprop='brand'], .product-brand",
@@ -382,6 +417,7 @@ def _extract_card_common_metadata(card: Tag, record: dict) -> None:
     )
     if review_count_text:
         record["review_count"] = review_count_text
+    return record
 
 
 def _extract_card_text_value(
@@ -402,47 +438,53 @@ def _extract_card_text_value(
 
 
 def _extract_card_identifier_fields(
-    record: dict,
     card: Tag,
     card_text_lines: list[str],
-) -> None:
-    for field_name, value in _extract_card_identifiers(card, card_text_lines).items():
-        if value:
-            record[field_name] = value
+) -> dict[str, str]:
+    return {
+        field_name: value
+        for field_name, value in _extract_card_identifiers(card, card_text_lines).items()
+        if value
+    }
 
 
 def _extract_ecommerce_card_fields(
-    record: dict,
     card: Tag,
     card_text_lines: list[str],
     *,
     page_url: str,
-) -> None:
+    record: dict[str, object],
+) -> dict[str, str]:
+    patch: dict[str, str] = {}
     color_text = _extract_card_color(card, card_text_lines)
     if color_text:
-        record["color"] = color_text
+        patch["color"] = color_text
 
     size_text = _extract_card_size(card_text_lines)
     if size_text:
-        record["size"] = size_text
+        patch["size"] = size_text
 
     dimensions_text = _match_dimensions_line(card_text_lines)
     if dimensions_text:
-        record["dimensions"] = dimensions_text
+        patch["dimensions"] = dimensions_text
     if record.get("price") and not record.get("currency"):
         inferred_currency = _infer_currency_from_page_url(page_url)
         if inferred_currency:
-            record["currency"] = inferred_currency
+            patch["currency"] = inferred_currency
+    return patch
 
 
-def _finalize_job_card_record(record: dict) -> None:
-    if record.get("url") and not record.get("apply_url"):
-        record["apply_url"] = str(record["url"])
-    record.pop("image_url", None)
-    record.pop("additional_images", None)
+def _finalize_job_card_record(record: dict) -> dict:
+    finalized = dict(record)
+    if finalized.get("url") and not finalized.get("apply_url"):
+        finalized["apply_url"] = str(finalized["url"])
+    finalized.pop("image_url", None)
+    finalized.pop("additional_images", None)
+    return finalized
 
 
-def _extract_ecommerce_price_fields(card: Tag, record: dict) -> None:
+def _extract_ecommerce_price_fields(card: Tag) -> dict[str, str]:
+    record: dict[str, str] = {}
     price_el = card.select_one(
         "[itemprop='price'], .price, .product-price, .a-price .a-offscreen, "
         ".s-item__price, span[data-price], .amount, [class*='price']"
@@ -463,9 +505,10 @@ def _extract_ecommerce_price_fields(card: Tag, record: dict) -> None:
         original_price = _clean_price_text(raw_op)
         if original_price is not None:
             record["original_price"] = original_price
+    return record
 
 
-def _extract_card_title(card: Tag, record: dict) -> None:
+def _extract_card_title(card: Tag) -> dict[str, str]:
     for selector in LISTING_CARD_TITLE_SELECTORS:
         title_el = card.select_one(selector)
         if not title_el or title_el.name == "meta":
@@ -476,9 +519,11 @@ def _extract_card_title(card: Tag, record: dict) -> None:
             and not _PRICE_LIKE_RE.match(text)
             and not _LISTING_VARIANT_PROMPT_RE.match(text)
         ):
-            record["title"] = _normalize_listing_title_text(text)
-            record["_selector_title"] = selector
-            return
+            return {
+                "title": _normalize_listing_title_text(text),
+                "_selector_title": selector,
+            }
+    return {}
 
 
 def _extract_listing_title_text(node: Tag) -> str:
@@ -496,7 +541,8 @@ def _extract_listing_title_text(node: Tag) -> str:
     return ""
 
 
-def _extract_card_image_fields(card: Tag, record: dict, *, page_url: str) -> None:
+def _extract_card_image_fields(card: Tag, *, page_url: str) -> dict[str, str]:
+    record: dict[str, str] = {}
     img_el = card.select_one("[itemprop='image']")
     if img_el:
         src = img_el.get("src") or img_el.get("data-src") or img_el.get("content", "")
@@ -508,14 +554,16 @@ def _extract_card_image_fields(card: Tag, record: dict, *, page_url: str) -> Non
             record["image_url"] = images[0]
             if len(images) > 1:
                 record["additional_images"] = ", ".join(images[1:])
+    return record
 
 
 def _extract_job_card_fields(
     card: Tag,
-    record: dict,
     *,
     card_text_lines: list[str],
-) -> None:
+    record: dict[str, object],
+) -> dict[str, str]:
+    patch: dict[str, str] = {}
     metadata_fields = _extract_job_metadata_fields(card)
     company_el = card.select_one(
         ".company, .companyName, [data-testid='company-name'], [data-testid*='company-name'], "
@@ -526,7 +574,7 @@ def _extract_job_card_fields(
         company_value = company_el.get("content") or company_el.get_text(" ", strip=True)
         company_value = " ".join(str(company_value or "").split()).strip()
         if company_value:
-            record["company"] = company_value
+            patch["company"] = company_value
     location_el = card.select_one(
         ".location, .companyLocation, [data-testid='text-location'], [data-testid*='job-location'], "
         "[data-testid*='listing-job-location'], [itemprop='jobLocation']"
@@ -535,35 +583,38 @@ def _extract_job_card_fields(
         location_value = location_el.get("content") or location_el.get_text(" ", strip=True)
         location_value = " ".join(str(location_value or "").split()).strip()
         if location_value:
-            record["location"] = location_value
+            patch["location"] = location_value
     salary_el = card.select_one(
         ".salary, .salary-snippet-container, [data-testid*='salary']"
     )
     if salary_el:
         salary_value = " ".join(salary_el.get_text(" ", strip=True).split()).strip()
         if salary_value:
-            record["salary"] = salary_value
+            patch["salary"] = salary_value
     for field_name, value in metadata_fields.items():
-        if value:
-            record.setdefault(field_name, value)
-    if not record.get("company") and not record.get("department"):
-        inferred_company = _infer_job_company(card_text_lines, title=record.get("title"))
+        if value and field_name not in patch and field_name not in record:
+            patch[field_name] = value
+    title = patch.get("title") or record.get("title")
+    department = patch.get("department") or record.get("department")
+    if not (patch.get("company") or record.get("company")) and not department:
+        inferred_company = _infer_job_company(card_text_lines, title=title)
         if inferred_company:
-            record["company"] = inferred_company
-    if not record.get("location"):
-        inferred_location = _infer_job_location(card_text_lines, title=record.get("title"))
+            patch["company"] = inferred_company
+    if not (patch.get("location") or record.get("location")):
+        inferred_location = _infer_job_location(card_text_lines, title=title)
         if inferred_location:
-            record["location"] = inferred_location
-    if not record.get("salary"):
+            patch["location"] = inferred_location
+    if not (patch.get("salary") or record.get("salary")):
         inferred_salary = _infer_job_salary(card_text_lines)
         if inferred_salary:
-            record["salary"] = inferred_salary
+            patch["salary"] = inferred_salary
     inferred_job_type = _infer_job_type(card_text_lines)
-    if inferred_job_type:
-        record.setdefault("job_type", inferred_job_type)
+    if inferred_job_type and "job_type" not in patch and "job_type" not in record:
+        patch["job_type"] = inferred_job_type
     inferred_posted_date = _infer_job_posted_date(card_text_lines)
-    if inferred_posted_date:
-        record.setdefault("posted_date", inferred_posted_date)
+    if inferred_posted_date and "posted_date" not in patch and "posted_date" not in record:
+        patch["posted_date"] = inferred_posted_date
+    return patch
 
 
 def _extract_image_candidates(value: object, *, page_url: str = "") -> list[str]:
@@ -642,7 +693,7 @@ def _compile_case_insensitive_regex(pattern: str) -> re.Pattern[str]:
 
 def _clean_price_text(raw: str) -> str | None:
     raw = raw.strip()
-    if len(raw) > _MAX_REGEX_INPUT_LEN:
+    if len(raw) > LISTING_CARD_MAX_REGEX_INPUT_CHARS:
         incr("listing_price_regex_input_too_long_total")
         logger.debug(
             "Skipping price regex extraction for overlong input: len=%d",
@@ -691,7 +742,7 @@ def _infer_job_title_from_links(card: Tag) -> str:
         if not candidate:
             continue
         candidate = re.sub(r"\([0-9a-f]{24,}\)$", "", candidate, flags=re.I).strip()
-        if not candidate or len(candidate) < 4:
+        if not candidate or len(candidate) < LISTING_CARD_JOB_TITLE_MIN_CHARS:
             continue
         if _PRICE_LIKE_RE.match(candidate):
             continue
@@ -706,7 +757,7 @@ def _infer_job_title_from_links(card: Tag) -> str:
         candidate = str(link_el.get("aria-label") or "").strip()
         candidate = re.sub(r"(?i)^view details for\s+", "", candidate).strip()
         candidate = re.sub(r"\([0-9a-f]{24,}\)$", "", candidate, flags=re.I).strip()
-        if not candidate or len(candidate) < 4:
+        if not candidate or len(candidate) < LISTING_CARD_JOB_TITLE_MIN_CHARS:
             continue
         if candidate.lower() in {"apply now", "easy apply", "company logo", "save job"}:
             continue
@@ -718,7 +769,7 @@ def _infer_job_title_from_links(card: Tag) -> str:
 def _infer_listing_title_from_links(card: Tag) -> str:
     for link_el in card.select("a[href]"):
         candidate = link_el.get_text(" ", strip=True)
-        if not candidate or len(candidate) < 3:
+        if not candidate or len(candidate) < LISTING_CARD_LISTING_TITLE_MIN_CHARS:
             continue
         if _PRICE_LIKE_RE.match(candidate):
             continue
@@ -730,7 +781,7 @@ def _infer_listing_title_from_links(card: Tag) -> str:
         return candidate
     for link_el in card.select("a[aria-label]"):
         candidate = str(link_el.get("aria-label") or "").strip()
-        if not candidate or len(candidate) < 3:
+        if not candidate or len(candidate) < LISTING_CARD_LISTING_TITLE_MIN_CHARS:
             continue
         if _looks_like_navigation_or_action_title(
             candidate,
@@ -793,9 +844,9 @@ def _infer_job_company(lines: list[str], *, title: object = None) -> str:
             continue
         if re.fullmatch(r"[A-Z]\d{4,}", line):
             continue
-        if lowered.endswith(":") and len(line) <= 40:
+        if lowered.endswith(":") and len(line) <= LISTING_CARD_JOB_COMPANY_SUFFIX_MAX_CHARS:
             continue
-        if len(line) <= 60:
+        if len(line) <= LISTING_CARD_JOB_COMPANY_LINE_MAX_CHARS:
             return line
     return ""
 
@@ -829,7 +880,7 @@ def _infer_job_location(lines: list[str], *, title: object = None) -> str:
             )
         ):
             continue
-        if len(line) > 80:
+        if len(line) > LISTING_CARD_JOB_LOCATION_LINE_MAX_CHARS:
             continue
         if (
             "," in line
@@ -875,7 +926,7 @@ def _extract_job_metadata_fields(card: Tag) -> dict[str, str]:
         if icon is None:
             continue
         text = " ".join(container.get_text(" ", strip=True).split()).strip()
-        if not text or len(text) > 120:
+        if not text or len(text) > LISTING_CARD_JOB_METADATA_TEXT_MAX_CHARS:
             continue
         marker = " ".join(
             part
@@ -911,7 +962,8 @@ def _assign_job_metadata_field(
         fields.setdefault("location", normalized_value)
         return
     if any(token in normalized_label for token in ("salary", "pay", "compensation")) or (
-        len(normalized_value) <= 40 and _infer_job_salary([normalized_value])
+        len(normalized_value) <= LISTING_CARD_JOB_METADATA_SALARY_MAX_CHARS
+        and _infer_job_salary([normalized_value])
     ):
         fields.setdefault("salary", normalized_value)
         return
@@ -1014,7 +1066,7 @@ def _extract_color_label_from_node(node: Tag) -> str:
             lowered.startswith(prefix) for prefix in LISTING_COLOR_ACTION_PREFIXES
         ):
             continue
-        if len(text) > 40:
+        if len(text) > LISTING_CARD_COLOR_LABEL_MAX_CHARS:
             continue
         return text
     return ""
@@ -1210,7 +1262,7 @@ def _coerce_listing_product_url_candidate(text: str, page_url: str) -> str:
 
 
 def _scan_payload_for_product_url(item: object, page_url: str, depth: int) -> str:
-    if depth > 6 or not page_url:
+    if depth > LISTING_CARD_PRODUCT_URL_SCAN_MAX_DEPTH or not page_url:
         return ""
     if isinstance(item, dict):
         for key, value in item.items():
@@ -1235,7 +1287,7 @@ def _scan_payload_for_product_url(item: object, page_url: str, depth: int) -> st
             if nested:
                 return nested
     elif isinstance(item, list):
-        for element in item[:40]:
+        for element in item[:LISTING_CARD_PRODUCT_URL_SCAN_MAX_LIST_ITEMS]:
             nested = _scan_payload_for_product_url(element, page_url, depth + 1)
             if nested:
                 return nested

@@ -3,12 +3,21 @@ from __future__ import annotations
 
 import json
 import re
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import loads as parse_json
 from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
+from app.services.config.adapter_runtime_settings import (
+    SHOPIFY_CATALOG_LIMIT,
+    SHOPIFY_MAX_OPTION_AXIS_COUNT,
+    SHOPIFY_REQUEST_TIMEOUT_SECONDS,
+)
+from app.services.extract.shared_variant_logic import (
+    normalized_variant_axis_key,
+    split_variant_axes,
+)
+from app.services.normalizers import normalize_decimal_price
 
 _FETCH_ERRORS = (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError)
 
@@ -67,16 +76,19 @@ class ShopifyAdapter(BaseAdapter):
             if collection_handle:
                 api_url = (
                     f"{parsed.scheme}://{parsed.netloc}/collections/"
-                    f"{collection_handle}/products.json?limit=250"
+                    f"{collection_handle}/products.json?limit={SHOPIFY_CATALOG_LIMIT}"
                 )
             else:
-                api_url = f"{parsed.scheme}://{parsed.netloc}/products.json?limit=250"
+                api_url = (
+                    f"{parsed.scheme}://{parsed.netloc}/products.json"
+                    f"?limit={SHOPIFY_CATALOG_LIMIT}"
+                )
         try:
             data = await self._request_json_with_curl(
                 curl_requests.get,
                 api_url,
                 proxy=proxy,
-                timeout_seconds=6,
+                timeout_seconds=SHOPIFY_REQUEST_TIMEOUT_SECONDS,
             )
             if data is None:
                 return []
@@ -186,7 +198,10 @@ class ShopifyAdapter(BaseAdapter):
                     records.append({
                         "title": product.get("title"),
                         "brand": product.get("vendor"),
-                        "price": self._normalize_price(selected_price),
+                        "price": normalize_decimal_price(
+                            selected_price,
+                            interpret_integral_as_cents=True,
+                        ),
                         "category": product.get("type"),
                         "variants": normalized_variants,
                         "variant_axes": selectable_axes,
@@ -237,10 +252,16 @@ class ShopifyAdapter(BaseAdapter):
             row["url"] = f"{base_url}{'&' if '?' in base_url else '?'}variant={row['variant_id']}"
         if variant.get("sku"):
             row["sku"] = variant.get("sku")
-        price = self._normalize_price(variant.get("price"))
+        price = normalize_decimal_price(
+            variant.get("price"),
+            interpret_integral_as_cents=True,
+        )
         if price is not None:
             row["price"] = price
-        original_price = self._normalize_price(variant.get("compare_at_price"))
+        original_price = normalize_decimal_price(
+            variant.get("compare_at_price"),
+            interpret_integral_as_cents=True,
+        )
         if original_price is not None:
             row["original_price"] = original_price
         raw_available = variant.get("available")
@@ -260,15 +281,9 @@ class ShopifyAdapter(BaseAdapter):
             row["image_url"] = featured
         option_values: dict[str, str] = {}
         raw_options = variant.get("options") if isinstance(variant.get("options"), list) else []
-        for index in range(1, 4):
+        for index in range(1, SHOPIFY_MAX_OPTION_AXIS_COUNT + 1):
             axis_name = option_names[index - 1] if index - 1 < len(option_names) else f"option_{index}"
-            axis_name_text = str(axis_name or "").strip().lower()
-            if axis_name_text in {"size", "sizes"}:
-                axis_key = "size"
-            elif axis_name_text in {"color", "colour", "colors", "colours"}:
-                axis_key = "color"
-            else:
-                axis_key = self._normalize_axis(axis_name)
+            axis_key = normalized_variant_axis_key(axis_name) or self._normalize_axis(axis_name)
             value = variant.get(f"option{index}")
             if value in (None, "", [], {}) and index - 1 < len(raw_options):
                 value = raw_options[index - 1]
@@ -341,19 +356,10 @@ class ShopifyAdapter(BaseAdapter):
     def _split_selectable_axes(
         self, axes: dict[str, list[str]]
     ) -> tuple[dict[str, list[str]], dict[str, str]]:
-        selectable: dict[str, list[str]] = {}
-        attributes: dict[str, str] = {}
-        for axis_name, values in axes.items():
-            cleaned_values = [
-                str(value or "").strip()
-                for value in values
-                if str(value or "").strip()
-            ]
-            if len(cleaned_values) > 1 or axis_name == "size":
-                selectable[axis_name] = cleaned_values
-            elif len(cleaned_values) == 1:
-                attributes[axis_name] = cleaned_values[0]
-        return selectable, attributes
+        return split_variant_axes(
+            axes,
+            always_selectable_axes=frozenset({"size"}),
+        )
 
     def _select_shopify_variant(
         self,
@@ -386,36 +392,9 @@ class ShopifyAdapter(BaseAdapter):
         return next((row for row in variants if row.get("available") is True), None) or variants[0]
 
     def _normalize_axis(self, value: object) -> str:
+        normalized = normalized_variant_axis_key(value)
+        if normalized:
+            return normalized
         text = str(value or "").strip().lower().replace("&", " ")
         text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
         return text or "option"
-
-    def _normalize_price(self, value: object) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, int):
-            return format(
-                (Decimal(value) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-                "f",
-            )
-        if isinstance(value, Decimal):
-            return format(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
-        if isinstance(value, float):
-            return format(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
-        if isinstance(value, str):
-            raw = value.strip()
-            if not raw:
-                return None
-            try:
-                if re.fullmatch(r"\d+", raw):
-                    return format(
-                        (Decimal(raw) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-                        "f",
-                    )
-                return format(
-                    Decimal(raw).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-                    "f",
-                )
-            except InvalidOperation:
-                return None
-        return None
