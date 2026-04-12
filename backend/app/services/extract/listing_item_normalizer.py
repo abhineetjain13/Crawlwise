@@ -99,7 +99,7 @@ def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | N
 
     slug_url = _resolve_slug_url(str(raw_slug or ""), page_url=page_url)
     if (
-        "ecommerce" in surface
+        "ecommerce" in str(surface or "").lower()
         and record.get("url") in _EMPTY_VALUES
         and not slug_url
         and record.get("price") in _EMPTY_VALUES

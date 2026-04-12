@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { api } from "../../../lib/api";
-import type { User } from "../../../lib/api/types";
+import type { Paginated, User } from "../../../lib/api/types";
 import { formatAdminUserDate as formatDate } from "../../../lib/format/date";
 import { Badge, Card, Input } from "../../../components/ui/primitives";
 import {
@@ -23,7 +23,7 @@ export default function AdminUsersPage() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [pendingUserId, setPendingUserId] = useState<number | null>(null);
   const [updateError, setUpdateError] = useState("");
-  const usersQuery = useQuery({
+  const usersQuery = useQuery<Paginated<User>>({
     queryKey: ["users", search, status],
     queryFn: () =>
       api.listUsers({
@@ -103,7 +103,7 @@ export default function AdminUsersPage() {
               <tbody>
                 {users.map((user) => (
                   <tr key={user.id}>
-                    <td className="font-medium text-foreground">{user.email}</td>
+                    <td className="text-data-strong">{user.email}</td>
                     <td>
                       <select
                         value={user.role}
@@ -125,13 +125,13 @@ export default function AdminUsersPage() {
                         {user.is_active ? "active" : "inactive"}
                       </Badge>
                     </td>
-                    <td className="text-sm text-muted">{formatDate(user.created_at)}</td>
+                    <td className="text-body-sm text-muted">{formatDate(user.created_at)}</td>
                     <td>
                       <button
                         type="button"
                         disabled={pendingUserId === user.id}
                         onClick={() => void updateUser(user.id, { is_active: !user.is_active })}
-                        className="focus-ring h-8 rounded-[var(--radius-md)] border border-border bg-transparent px-3 text-xs font-medium text-foreground transition hover:bg-background-elevated disabled:opacity-40"
+                        className="focus-ring h-8 rounded-[var(--radius-md)] border border-border bg-transparent px-3 text-link-ui text-foreground transition hover:bg-background-elevated disabled:opacity-40"
                       >
                         {user.is_active ? "Deactivate" : "Reactivate"}
                       </button>
@@ -151,10 +151,9 @@ export default function AdminUsersPage() {
 
 function MetricCard({ label, value }: Readonly<{ label: string; value: number }>) {
   return (
-    <div className="rounded-[10px] border border-border bg-panel p-4 shadow-[var(--shadow-sm)]">
+    <div className="surface-panel p-4">
       <div className="label-caps">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tracking-[var(--tracking-tight)]">{value}</div>
+      <div className="mt-1 text-title-md text-primary">{value}</div>
     </div>
   );
 }
-

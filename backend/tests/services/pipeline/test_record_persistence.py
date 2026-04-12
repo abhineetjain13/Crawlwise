@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRecord, CrawlRun
@@ -107,3 +110,42 @@ async def test_persist_crawl_record_skips_duplicate_listing_record_without_poiso
         "https://example.com/jobs/1",
         "https://example.com/jobs/2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_persist_crawl_record_reraises_non_duplicate_integrity_errors() -> None:
+    class _FakeOrig(Exception):
+        sqlstate = "23503"
+
+    db_record = CrawlRecord(run_id=1, source_url="https://example.com/jobs/1")
+
+    class _NestedTx:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self._bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+        def get_bind(self):
+            return self._bind
+
+        def begin_nested(self):
+            return _NestedTx()
+
+        def add(self, _record):
+            return None
+
+        async def flush(self):
+            raise IntegrityError("INSERT", {}, _FakeOrig())
+
+        def __contains__(self, _record):
+            return False
+
+    session = _FakeSession()
+
+    with pytest.raises(IntegrityError):
+        await persist_crawl_record(session, db_record)

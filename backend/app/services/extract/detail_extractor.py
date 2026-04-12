@@ -47,6 +47,8 @@ from app.services.extract.field_classifier import (
     _dynamic_field_name_is_valid,
 )
 
+_PRODUCT_DETAIL_FEATURE_SECTION_LIMIT = 12
+
 
 # ---------------------------------------------------------------------------
 # Section content / rich text
@@ -440,7 +442,7 @@ def _product_detail_features(value: object) -> str | None:
     if not isinstance(value, list):
         return None
     sections: list[str] = []
-    for row in value[:12]:
+    for row in value[:_PRODUCT_DETAIL_FEATURE_SECTION_LIMIT]:
         if not isinstance(row, dict):
             continue
         label = _normalized_candidate_text(row.get("label"))

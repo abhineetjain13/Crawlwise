@@ -85,15 +85,20 @@ def _aggregate_verdict(verdicts: list[str]) -> str:
     if not verdicts:
         return VERDICT_EMPTY
 
+    if all(v == VERDICT_ERROR for v in verdicts):
+        return VERDICT_ERROR
     if all(v == VERDICT_BLOCKED for v in verdicts):
         return VERDICT_BLOCKED
     if all(v == VERDICT_SUCCESS for v in verdicts):
         return VERDICT_SUCCESS
+    if VERDICT_ERROR in verdicts:
+        return VERDICT_ERROR
     if any(v in {VERDICT_SUCCESS, VERDICT_PARTIAL} for v in verdicts):
         return VERDICT_PARTIAL
 
     # Return first matching verdict by priority order
     for v in [
+        VERDICT_ERROR,
         VERDICT_LISTING_FAILED,
         VERDICT_SCHEMA_MISS,
         VERDICT_BLOCKED,

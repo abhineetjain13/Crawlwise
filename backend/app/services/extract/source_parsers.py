@@ -120,8 +120,13 @@ async def parse_page_sources_async(
     *,
     soup: BeautifulSoup | None = None,
 ) -> dict[str, object]:
-    """Async wrapper for CPU-bound page source parsing."""
-    return await asyncio.to_thread(parse_page_sources, html, soup=soup)
+    """Async wrapper for CPU-bound page source parsing.
+
+    Any provided ``soup`` is ignored so the worker thread always parses a fresh
+    BeautifulSoup instance and does not share mutable parser state.
+    """
+    _ = soup
+    return await asyncio.to_thread(parse_page_sources, html, soup=None)
 
 
 def extract_json_ld(soup: BeautifulSoup) -> list[dict]:

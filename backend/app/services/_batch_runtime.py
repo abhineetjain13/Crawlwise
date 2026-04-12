@@ -65,6 +65,16 @@ _global_url_semaphore: MemoryAdaptiveSemaphore | None = None
 _global_url_semaphore_limit: int | None = None
 _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS = (0.0, 0.05, 0.1, 0.2, 0.5)
 _LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
+_LOCK_NOT_AVAILABLE_ERROR_CODES = {"1205", "1222", "3572"}
+_LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS = (
+    "could not obtain lock",
+    "lock not available",
+    "could not acquire lock",
+    "database is locked",
+    "database table is locked",
+    "lock wait timeout exceeded",
+    "nowait is set",
+)
 
 
 @dataclass(slots=True)
@@ -201,8 +211,8 @@ async def _retry_run_update(
     run_id: int,
     mutate,
 ) -> None:
-    """Persist flushed records, then update the run row with fast lock retries."""
-    await session.commit()
+    """Persist pending changes and update the run row in one retried transaction."""
+    await session.flush()
     for attempt, delay_seconds in enumerate(
         _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS,
         start=1,
@@ -210,17 +220,22 @@ async def _retry_run_update(
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
         try:
-            result = await session.execute(
-                select(CrawlRun).where(CrawlRun.id == run_id).with_for_update(nowait=True)
-            )
-            run = result.scalar_one_or_none()
-            if run is None:
+            run_missing = False
+            async with session.begin_nested():
+                result = await session.execute(
+                    select(CrawlRun).where(CrawlRun.id == run_id).with_for_update(nowait=True)
+                )
+                run = result.scalar_one_or_none()
+                if run is None:
+                    run_missing = True
+                else:
+                    await mutate(session, run)
+            if run_missing:
+                await session.commit()
                 return
-            await mutate(session, run)
             await session.commit()
             return
         except OperationalError as exc:
-            await session.rollback()
             if _is_lock_not_available_error(exc) and attempt < len(
                 _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS
             ):
@@ -230,6 +245,7 @@ async def _retry_run_update(
                     attempt,
                 )
                 continue
+            await session.rollback()
             raise
         except Exception:
             await session.rollback()
@@ -242,6 +258,11 @@ def _is_lock_not_available_error(exc: OperationalError) -> bool:
         code = str(getattr(orig, attr_name, "") or "").strip()
         if code == _LOCK_NOT_AVAILABLE_SQLSTATE:
             return True
+    args = getattr(orig, "args", ())
+    if args:
+        code = str(args[0] or "").strip()
+        if code in _LOCK_NOT_AVAILABLE_ERROR_CODES:
+            return True
     message = " ".join(
         part
         for part in (
@@ -250,7 +271,7 @@ def _is_lock_not_available_error(exc: OperationalError) -> bool:
         )
         if part
     ).lower()
-    return "could not obtain lock" in message or "lock not available" in message
+    return any(fragment in message for fragment in _LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS)
 
 
 class RunControlSignal(RunControlError):
@@ -549,6 +570,18 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                         timeout=url_timeout_seconds,
                     )
                 )
+            pipeline_error = (
+                url_result.url_metrics.get("pipeline_error")
+                if isinstance(url_result.url_metrics, dict)
+                else None
+            )
+            combined_error: str | None = None
+            if isinstance(pipeline_error, dict):
+                error_type = str(pipeline_error.get("type") or "").strip()
+                error_message = str(pipeline_error.get("message") or "").strip()
+                combined_error = ": ".join(
+                    part for part in (error_type, error_message) if part
+                ) or None
             await progress_state.persist_url_result(
                 session=session,
                 run_id=run.id,
@@ -558,28 +591,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 records_count=len(url_result.records),
                 verdict=url_result.verdict,
                 url_metrics=url_result.url_metrics,
+                error_message=combined_error,
             )
-            pipeline_error = (
-                url_result.url_metrics.get("pipeline_error")
-                if isinstance(url_result.url_metrics, dict)
-                else None
-            )
-            if isinstance(pipeline_error, dict):
-                error_type = str(pipeline_error.get("type") or "").strip()
-                error_message = str(pipeline_error.get("message") or "").strip()
-                combined_error = ": ".join(
-                    part for part in (error_type, error_message) if part
-                )
-                if combined_error:
-                    await _retry_run_update(
-                        session,
-                        run.id,
-                        lambda retry_session, retry_run: _apply_run_error_summary(
-                            retry_session,
-                            retry_run,
-                            combined_error,
-                        ),
-                    )
             persisted_record_count = progress_state.persisted_record_count
             url_verdicts = progress_state.url_verdicts
             acquisition_summary = progress_state.acquisition_summary
@@ -652,11 +665,3 @@ async def _handle_run_control_signal(
 
 
 _domain = normalize_domain
-
-
-async def _apply_run_error_summary(
-    _session: AsyncSession,
-    run: CrawlRun,
-    error_message: str,
-) -> None:
-    run.merge_summary_patch({"error": error_message})

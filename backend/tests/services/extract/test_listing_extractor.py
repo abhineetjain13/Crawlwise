@@ -1890,6 +1890,51 @@ def test_extract_structured_sources_reads_deep_hydrated_state_records(monkeypatc
     assert [record["title"] for record in records] == ["Deep Product A", "Deep Product B"]
 
 
+def test_extract_structured_sources_does_not_mutate_structured_extractor_depth(monkeypatch):
+    monkeypatch.setattr(listing_extractor, "MAX_JSON_RECURSION_DEPTH", 1)
+    original_structured_depth = listing_extractor._listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
+    monkeypatch.setattr(
+        listing_extractor._listing_structured_extractor,
+        "MAX_JSON_RECURSION_DEPTH",
+        original_structured_depth + 7,
+    )
+    manifest = _sources(
+        _hydrated_states=[
+            {
+                "props": {
+                    "pageProps": {
+                        "initialState": {
+                            "search": {
+                                "results": {
+                                    "products": [
+                                        {"title": "Deep Product A", "url": "/p/a", "price": "10.00"},
+                                        {"title": "Deep Product B", "url": "/p/b", "price": "20.00"},
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        ]
+    )
+
+    records = extract_listing_records(
+        "<html><body></body></html>",
+        "ecommerce_listing",
+        set(),
+        page_url="https://example.com/category",
+        max_records=10,
+        manifest=manifest,
+    )
+
+    assert [record["title"] for record in records] == ["Deep Product A", "Deep Product B"]
+    assert (
+        listing_extractor._listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
+        == original_structured_depth + 7
+    )
+
+
 def test_normalize_ld_item_preserves_zero_price():
     record = listing_extractor._normalize_ld_item(
         {

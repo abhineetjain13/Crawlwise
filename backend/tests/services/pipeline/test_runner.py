@@ -6,7 +6,7 @@ import pytest
 
 from app.services.pipeline.runner import PipelineRunner
 from app.services.pipeline.types import PipelineContext, URLProcessingConfig
-from app.services.pipeline.verdict import VERDICT_ERROR
+from app.services.pipeline.verdict import VERDICT_ERROR, _aggregate_verdict
 
 
 class _ExplodingStage:
@@ -83,3 +83,8 @@ async def test_pipeline_runner_converts_after_hook_error_into_url_error() -> Non
     assert ctx.records == []
     assert ctx.url_metrics["pipeline_error"]["stage"] == "_NoopStage"
     assert ctx.url_metrics["pipeline_error"]["type"] == "RuntimeError"
+
+
+def test_aggregate_verdict_preserves_error_when_no_successful_urls() -> None:
+    assert _aggregate_verdict([VERDICT_ERROR]) == VERDICT_ERROR
+    assert _aggregate_verdict([VERDICT_ERROR, "listing_detection_failed"]) == VERDICT_ERROR

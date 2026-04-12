@@ -3,8 +3,10 @@ from __future__ import annotations
 from bs4 import BeautifulSoup
 
 from app.services.extract.detail_extractor import (
+    _PRODUCT_DETAIL_FEATURE_SECTION_LIMIT,
     _build_dom_gallery_rows,
     _normalize_product_detail_payload,
+    _product_detail_features,
     _rich_text_from_node,
 )
 
@@ -64,3 +66,16 @@ def test_normalize_product_detail_payload_resolves_sizing_chart_against_base_url
     )
 
     assert record["fit_and_sizing"] == "Sizing chart: https://example.com/size-guide"
+
+
+def test_product_detail_features_uses_named_section_limit() -> None:
+    rows = [
+        {"label": f"Section {index}", "value": [f"Bullet {index}"]}
+        for index in range(_PRODUCT_DETAIL_FEATURE_SECTION_LIMIT + 2)
+    ]
+
+    rendered = _product_detail_features(rows)
+
+    assert rendered is not None
+    assert f"Section {_PRODUCT_DETAIL_FEATURE_SECTION_LIMIT - 1}" in rendered
+    assert f"Section {_PRODUCT_DETAIL_FEATURE_SECTION_LIMIT}" not in rendered

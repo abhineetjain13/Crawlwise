@@ -71,9 +71,10 @@ class PipelineRunner:
             try:
                 from .runtime_helpers import log_event
 
+                run_id = getattr(ctx.run, "id", None)
                 await log_event(
                     ctx.session,
-                    ctx.run.id,
+                    run_id,
                     "error",
                     f"[PIPELINE] {stage_name} failed: {type(exc).__name__}: {exc}",
                 )

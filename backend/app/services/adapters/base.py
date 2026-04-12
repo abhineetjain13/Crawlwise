@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,6 +10,8 @@ from urllib.parse import urlparse
 
 from app.services.acquisition import HttpFetchResult, request_result, wait_for_host_slot
 from app.services.config.crawl_runtime import ACQUIRE_HOST_MIN_INTERVAL_MS
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -154,4 +157,9 @@ class BaseAdapter(ABC):
         try:
             return parser()
         except Exception:
+            logger.debug(
+                "Failed to decode adapter JSON response for %s via curl request helper",
+                url,
+                exc_info=True,
+            )
             return None

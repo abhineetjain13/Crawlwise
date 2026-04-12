@@ -215,10 +215,11 @@ async def extract_listing(
     update_run_state: bool = True,
     persist_logs: bool = True,
     record_writer=None,
-) -> tuple[list[dict], str, dict]:
+) -> URLProcessingResult:
     adapter_name = adapter_result.adapter_name if adapter_result else None
     effective_surface = surface
     url_metrics["listing_surface_used"] = effective_surface
+    resolved_writer = resolve_record_writer(session, record_writer)
 
     extracted_records = await asyncio.to_thread(
         extract_listing_records,
@@ -297,7 +298,7 @@ async def extract_listing(
         manifest_trace=manifest_trace,
         adapter_name=adapter_name,
         surface_requested=surface if effective_surface != surface else None,
-        record_writer=record_writer,
+        record_writer=resolved_writer,
     )
     duplicate_drops = int(save_stats.get("duplicate_drops", 0) or 0)
     if duplicate_drops:
@@ -331,7 +332,8 @@ async def extract_listing(
             "info",
             f"[SAVE] Saved {len(saved)} listing records (verdict={verdict})",
         )
-    await resolve_record_writer(session, record_writer).flush()
+    if resolved_writer is not None:
+        await resolved_writer.flush()
 
     _finalize_url_metrics(url_metrics, records=saved, requested_fields=additional_fields)
     return URLProcessingResult(saved, verdict, url_metrics)

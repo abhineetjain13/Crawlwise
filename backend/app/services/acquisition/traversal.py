@@ -731,7 +731,7 @@ class AutoTraversalStrategy(_TraversalStrategyBase):
                 ),
                 checkpoint=self.context.checkpoint,
             )
-            progress_steps = [load_more_summary]
+            progress_steps.append(load_more_summary)
 
         await self._fragments.capture_fragment(page, "auto-pre-pagination")
         pre_pagination_html = await self._fragments.render_html(page)
@@ -950,21 +950,6 @@ async def collect_paginated_html(
         current_page_size = full_page_size
         if page_index == 0:
             _first_page_size = current_page_size
-        elif (
-            _first_page_size > 0
-            and current_page_size
-            >= _first_page_size * PAGINATION_PAGE_SIZE_ANOMALY_RATIO
-        ):
-            logger.warning(
-                "[TRAVERSAL] paginate:page_size_anomaly page=%s "
-                "first_page=%s current_page=%s ratio=%.1f — aborting",
-                page_index + 1,
-                _first_page_size,
-                current_page_size,
-                current_page_size / _first_page_size,
-            )
-            stop_reason = "page_size_anomaly"
-            break
         if traversal_artifact_dir is not None:
             await asyncio.to_thread(
                 traversal_artifact_dir.mkdir,
@@ -993,6 +978,22 @@ async def collect_paginated_html(
                 "html_path": str(page_files[-1]) if page_files else None,
             }
         )
+        if (
+            page_index > 0
+            and _first_page_size > 0
+            and current_page_size
+            >= _first_page_size * PAGINATION_PAGE_SIZE_ANOMALY_RATIO
+        ):
+            logger.warning(
+                "[TRAVERSAL] paginate:page_size_anomaly page=%s "
+                "first_page=%s current_page=%s ratio=%.1f — aborting",
+                page_index + 1,
+                _first_page_size,
+                current_page_size,
+                current_page_size / _first_page_size,
+            )
+            stop_reason = "page_size_anomaly"
+            break
         if page_index + 1 >= page_limit:
             break
         current_url = str(page.url or "").strip()

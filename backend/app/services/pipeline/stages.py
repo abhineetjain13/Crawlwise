@@ -22,6 +22,7 @@ from app.services.crawl_metrics import (
 )
 from app.services.config.crawl_runtime import AUTO_DETECT_SURFACE
 from bs4 import BeautifulSoup
+from sqlalchemy import delete
 
 from .pipeline_config import PIPELINE_CONFIG
 from .runtime_helpers import STAGE_ANALYZE, STAGE_FETCH, log_event, set_stage
@@ -151,6 +152,37 @@ def _looks_like_category_tile_listing(records: list[dict]) -> bool:
         ):
             tile_hints += 1
     return tile_hints >= max(1, len(records) // 2)
+
+
+async def _discard_listing_records_for_sources(
+    ctx: PipelineContext,
+    *,
+    source_urls: set[str],
+) -> None:
+    from app.models.crawl import CrawlRecord
+
+    normalized_source_urls = {str(source_url or "").strip() for source_url in source_urls}
+    normalized_source_urls = {source_url for source_url in normalized_source_urls if source_url}
+    if not normalized_source_urls:
+        return
+
+    await ctx.session.execute(
+        delete(CrawlRecord).where(
+            CrawlRecord.run_id == ctx.run.id,
+            CrawlRecord.source_url.in_(sorted(normalized_source_urls)),
+        )
+    )
+    record_writer = ctx.record_writer
+    if record_writer is not None and hasattr(record_writer, "records"):
+        record_writer.records[:] = [
+            record
+            for record in record_writer.records
+            if not (
+                getattr(record, "run_id", None) == ctx.run.id
+                and getattr(record, "source_url", None) in normalized_source_urls
+            )
+        ]
+    await ctx.session.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -509,9 +541,10 @@ class ListingBrowserRetryStage:
             acq.html or "",
             page_url=ctx.url,
         )
+        category_tile_listing = _looks_like_category_tile_listing(ctx.records)
         promote_child_listing = bool(child_listing_url) and (
             ctx.verdict == VERDICT_LISTING_FAILED
-            or _looks_like_category_tile_listing(ctx.records)
+            or category_tile_listing
         )
         if promote_child_listing:
             promotion_reason = (
@@ -584,6 +617,23 @@ class ListingBrowserRetryStage:
                 ctx.verdict = promoted_result.verdict
                 ctx.url_metrics = promoted_result.url_metrics
                 return
+            if category_tile_listing:
+                if ctx.persist_logs:
+                    await log_event(
+                        ctx.session,
+                        ctx.run.id,
+                        "warning",
+                        "[ANALYZE] Child listing promotion produced 0 records from category-tile results; forcing browser retry",
+                    )
+                source_urls = {
+                    str(record.get("source_url") or record.get("url") or ctx.url).strip()
+                    for record in ctx.records
+                    if isinstance(record, dict)
+                }
+                source_urls.add(str(ctx.url or "").strip())
+                await _discard_listing_records_for_sources(ctx, source_urls=source_urls)
+                ctx.records = []
+                ctx.verdict = VERDICT_LISTING_FAILED
 
         if ctx.verdict != VERDICT_LISTING_FAILED:
             return

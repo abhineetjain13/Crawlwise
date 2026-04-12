@@ -358,7 +358,9 @@ async def persist_crawl_record(
             session.add(db_record)
             await session.flush()
         return True
-    except IntegrityError:
+    except IntegrityError as exc:
+        if not _is_duplicate_integrity_error(exc):
+            raise
         if db_record in session:
             session.expunge(db_record)
         logger.debug(
@@ -368,6 +370,15 @@ async def persist_crawl_record(
             exc_info=True,
         )
         return False
+
+
+def _is_duplicate_integrity_error(exc: IntegrityError) -> bool:
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+    if sqlstate == "23505":
+        return True
+    message = str(orig or exc).lower()
+    return "duplicate key" in message or "unique constraint failed" in message
 
 
 def listing_fallback_identity_key(record: dict[str, object]) -> str:

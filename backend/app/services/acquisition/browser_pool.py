@@ -114,7 +114,7 @@ def _browser_pool_key(launch_profile: dict[str, str | None], proxy: str | None) 
 def _browser_is_connected(browser: object) -> bool:
     checker = getattr(browser, "is_connected", None)
     if not callable(checker):
-        return False
+        return True
     try:
         return bool(checker())
     except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
@@ -292,37 +292,17 @@ def prepare_browser_pool_for_worker_process() -> None:
 
 def shutdown_browser_pool_sync() -> None:
     global _BROWSER_POOL_STATE
-    state = _BROWSER_POOL_STATE
-    lock = getattr(state, "_lock", None) if state is not None else None
-    if lock is not None:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            running_loop = None
-        else:
-            running_loop = True
-        lock_loop = getattr(lock, "_loop", None)
-        candidate_loop = None
-        loop_mismatch = False
-        if running_loop:
-            loop_mismatch = True
-        elif lock_loop is not None:
-            candidate_loop = asyncio.new_event_loop()
-            loop_mismatch = lock_loop is not candidate_loop
-        if candidate_loop is not None:
-            candidate_loop.close()
-        if loop_mismatch:
-            logger.warning(
-                "Skipping async browser pool shutdown due to event loop mismatch; force-killing browser child processes"
-            )
-            _kill_orphaned_browser_processes()
-            _BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
-            return
     try:
         asyncio.run(_shutdown_browser_pool())
     except RuntimeError:
-        logger.warning(
-            "Async shutdown unavailable; force-killing browser child processes"
-        )
-        _kill_orphaned_browser_processes()
-        _BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_shutdown_browser_pool())
+        except RuntimeError:
+            logger.warning(
+                "Async shutdown unavailable; force-killing browser child processes"
+            )
+            _kill_orphaned_browser_processes()
+            _BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
+        finally:
+            loop.close()

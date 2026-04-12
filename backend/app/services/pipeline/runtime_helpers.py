@@ -52,7 +52,10 @@ def is_error_page_record(record: dict) -> bool:
 
 async def count_run_records(session: AsyncSession, run_id: int) -> int:
     if not hasattr(session, "execute"):
-        return 0
+        raise TypeError(
+            "count_run_records expected AsyncSession-like object with execute, "
+            f"got {type(session)}"
+        )
     return int(
         (
             await session.execute(
@@ -72,7 +75,12 @@ async def effective_max_records(
 ) -> int:
     settings_view = getattr(run, "settings_view", None)
     if settings_view is not None and hasattr(settings_view, "max_records"):
-        configured_max = settings_view.max_records()
+        attr = getattr(settings_view, "max_records", None)
+        try:
+            configured_max = attr() if callable(attr) else attr
+            configured_max = int(configured_max or 0)
+        except (TypeError, ValueError):
+            configured_max = 0
     else:
         configured_max = int(requested_max_records or 0)
     budget_limit = max(0, min(int(requested_max_records or 0), configured_max))

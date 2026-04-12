@@ -37,7 +37,7 @@ function DomainBar({
   return (
     <div className="flex items-center gap-3 py-1.5">
       <span
-        className="min-w-0 flex-1 truncate text-[12px] font-medium text-[var(--text-secondary)]"
+        className="min-w-0 flex-1 truncate text-link-ui text-secondary"
         title={domain}
       >
         {domain}
@@ -49,7 +49,7 @@ function DomainBar({
             style={{ width: `${pct}%` }}
           />
         </div>
-        <span className="w-7 text-right text-[11px] tabular-nums text-[var(--text-muted)]">{count}</span>
+        <span className="w-7 text-right text-meta tabular-nums text-muted">{count}</span>
       </div>
     </div>
   );
@@ -86,19 +86,19 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       {/* Status dot */}
       <StatusDot tone={statusTone(run.status)} />
       {/* Domain */}
-      <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] transition-colors">
+      <span className="min-w-0 flex-1 truncate text-link-ui text-primary transition-colors group-hover:text-accent">
         {domain || `Run #${run.id}`}
       </span>
       {/* Record count */}
       {typeof recordCount === "number" && recordCount > 0 ? (
-        <span className="shrink-0 text-[11px] tabular-nums text-[var(--text-muted)]">
+        <span className="shrink-0 text-meta tabular-nums text-muted">
           {recordCount.toLocaleString()} rec
         </span>
       ) : null}
       {/* Badge */}
       <Badge tone={statusTone(run.status)}>{statusLabel(run.status)}</Badge>
       {/* Arrow */}
-      <ArrowUpRight className="size-3 shrink-0 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 transition-opacity" />
+      <ArrowUpRight className="size-3 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100" />
     </Link>
   );
 }
@@ -200,9 +200,9 @@ export default function DashboardPage() {
             {Object.entries(statusCounts)
               .sort(([, a], [, b]) => b - a)
               .map(([status, count]) => (
-                <div key={status} className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
+                <div key={status} className="flex items-center gap-1.5 text-meta text-muted">
                   <Badge tone={statusTone(status)}>{statusLabel(status)}</Badge>
-                  <span className="tabular-nums font-medium">{count}</span>
+                  <span className="text-data-strong tabular-nums">{count}</span>
                 </div>
               ))}
           </div>
@@ -213,9 +213,9 @@ export default function DashboardPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)]">
         {/* Recent runs */}
         <SurfacePanel>
-          <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <div className="flex items-center justify-between border-b border-[var(--divider)] px-4 py-3">
             <SectionHeader title="Recent Runs" description="Last 10 jobs" />
-            <Link href="/runs" className="no-underline text-[12px] font-medium text-[var(--accent)] hover:underline">
+            <Link href="/runs" className="no-underline text-link-ui text-accent hover:underline">
               View all
             </Link>
           </div>
@@ -236,7 +236,7 @@ export default function DashboardPage() {
 
         {/* Top domains */}
         <SurfacePanel>
-          <div className="border-b border-[var(--border)] px-4 py-3">
+          <div className="border-b border-[var(--divider)] px-4 py-3">
             <SectionHeader title="Top Domains" description="By run count" />
           </div>
           <div className="p-4">
@@ -262,4 +262,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-

@@ -14,7 +14,7 @@ export default function RegisterPage() {
       </div>
       <InlineAlert message="Use the bootstrap admin account from your backend environment (BOOTSTRAP_ADMIN_ONCE, DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_PASSWORD). Public registration will be re-enabled for production multi-tenant deployments." />
       <div>
-        <Link className="text-[13px] font-medium text-accent" href="/login">
+        <Link className="text-link-ui text-accent" href="/login">
           Back to sign in
         </Link>
       </div>

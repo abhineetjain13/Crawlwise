@@ -379,21 +379,13 @@ def _structured_record_join_key(record: dict) -> str:
 
 
 def _extract_from_structured_sources(*args, **kwargs):
-    original_depth = _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
-    _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH = MAX_JSON_RECURSION_DEPTH
-    try:
-        return _extract_from_structured_sources_impl(*args, **kwargs)
-    finally:
-        _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH = original_depth
+    kwargs.setdefault("max_json_recursion_depth", MAX_JSON_RECURSION_DEPTH)
+    return _extract_from_structured_sources_impl(*args, **kwargs)
 
 
 def _extract_items_from_json(*args, **kwargs):
-    original_depth = _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
-    _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH = MAX_JSON_RECURSION_DEPTH
-    try:
-        return _extract_items_from_json_impl(*args, **kwargs)
-    finally:
-        _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH = original_depth
+    kwargs.setdefault("max_depth", MAX_JSON_RECURSION_DEPTH)
+    return _extract_items_from_json_impl(*args, **kwargs)
 
 
 def _is_merchandising_record(record: dict[str, object]) -> bool:

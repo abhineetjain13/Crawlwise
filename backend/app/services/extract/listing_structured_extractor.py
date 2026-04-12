@@ -55,6 +55,7 @@ def _extract_from_structured_sources(
     xhr_payloads: list[dict],
     surface: str,
     page_url: str,
+    max_json_recursion_depth: int = MAX_JSON_RECURSION_DEPTH,
 ) -> list[dict]:
     """Try JSON-LD, __NEXT_DATA__, hydrated states, and network payloads."""
     structured_groups: list[list[dict]] = []
@@ -90,7 +91,7 @@ def _extract_from_structured_sources(
                 state,
                 surface,
                 page_url,
-                max_depth=max(MAX_JSON_RECURSION_DEPTH + 4, 8),
+                max_depth=max(max_json_recursion_depth + 4, 8),
             )
             if state_records:
                 for r in state_records:
@@ -113,7 +114,7 @@ def _extract_from_structured_sources(
             body,
             surface,
             extraction_page_url,
-            max_depth=max(MAX_JSON_RECURSION_DEPTH + 4, 8),
+            max_depth=max(max_json_recursion_depth + 4, 8),
         )
         if net_records:
             for r in net_records:

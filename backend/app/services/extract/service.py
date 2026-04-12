@@ -1277,7 +1277,6 @@ def _finalize_candidates(
         specifications = semantic.get("specifications")
         if (
             "product_attributes" not in final_candidates
-            and specifications
             and isinstance(specifications, dict)
             and specifications
         ):

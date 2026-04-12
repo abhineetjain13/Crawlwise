@@ -46,7 +46,7 @@ function RunRow({
             <Tooltip content={run.url}>
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="no-underline block truncate text-[13px] font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors max-w-[280px]"
+                className="no-underline block max-w-[280px] truncate text-link-ui text-primary transition-colors hover:text-accent"
               >
                 {domain || `Run #${run.id}`}
               </Link>
@@ -60,7 +60,7 @@ function RunRow({
                   e.stopPropagation();
                   void navigator.clipboard.writeText(run.url);
                 }}
-                className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                className="text-muted transition-colors hover:text-accent"
                 title="Copy URL"
               >
                 <Copy className="size-3" />
@@ -69,7 +69,7 @@ function RunRow({
                 href={run.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+                className="text-muted transition-colors hover:text-accent"
                 title="Open original URL"
               >
                 <ExternalLink className="size-3" />
@@ -81,7 +81,7 @@ function RunRow({
 
       {/* Mode */}
       <td>
-        <span className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+        <span className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-meta font-mono text-muted">
           {formatRunType(run.run_type)}
         </span>
       </td>
@@ -93,23 +93,23 @@ function RunRow({
 
       {/* Records */}
       <td>
-        <span className={cn("tabular-nums text-[12px]", recordCount > 0 ? "text-[var(--text-primary)] font-medium" : "text-[var(--text-muted)]")}>
+        <span className={cn("text-data-strong tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
           {recordCount > 0 ? recordCount.toLocaleString() : "—"}
         </span>
       </td>
 
       {/* Date */}
       <td>
-        <span className="text-[11px] text-[var(--text-muted)]">{formatDate(run.created_at)}</span>
+        <span className="text-meta text-muted">{formatDate(run.created_at)}</span>
       </td>
 
       {/* Actions */}
       <td className="text-right whitespace-nowrap">
         <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Link
-            href={`/crawl?run_id=${run.id}`}
-            className="ui-on-accent-surface no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent)] bg-[var(--accent)] px-2.5 text-[12px] font-medium transition-colors hover:opacity-90"
-          >
+              <Link
+                href={`/crawl?run_id=${run.id}`}
+                className="ui-on-accent-surface no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent)] bg-[var(--accent)] px-2.5 text-link-ui transition-colors hover:opacity-90"
+              >
             Open <ArrowUpRight className="size-3" />
           </Link>
           <Button
@@ -272,7 +272,7 @@ export default function RunsPage() {
 
       {/* Total count */}
       {visibleRuns.length > 0 && (
-        <p className="text-[11px] text-[var(--text-muted)]">
+        <p className="text-meta text-muted">
           Showing {visibleRuns.length} of {query.data?.meta?.total ?? visibleRuns.length} runs
         </p>
       )}

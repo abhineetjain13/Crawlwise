@@ -385,7 +385,7 @@ function isIdentityField(field: string) {
   return QUALITY_IDENTITY_FIELD_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-function isInformativeValue(value: unknown) {
+function isInformativeValue(value: unknown): boolean {
   if (isEmptyCandidateValue(value)) {
     return false;
   }
@@ -583,11 +583,11 @@ export const LogTerminal = memo(function LogTerminal({
     >
       {logs.length ? (
         logs.map((log) => (
-          <div key={log.id} className="font-mono text-xs leading-6">
+          <div key={log.id} className="text-mono-data leading-6">
             <span className="text-muted">[{formatTimeHms(log.created_at)}]</span>{" "}
             <span
               className={cn(
-                "inline-flex items-center px-1.5 py-0.5 text-xs font-semibold tracking-[0.08em]",
+                "label-caps inline-flex items-center px-1.5 py-0.5",
                 logTone(log.level),
               )}
             >
@@ -597,7 +597,7 @@ export const LogTerminal = memo(function LogTerminal({
           </div>
         ))
       ) : (
-        <div className="text-sm text-muted">{live ? "Waiting for log output..." : "No logs captured for this run."}</div>
+        <div className="text-body-sm text-muted">{live ? "Waiting for log output..." : "No logs captured for this run."}</div>
       )}
     </div>
   );
@@ -624,17 +624,17 @@ export function AdvancedModePicker({
             className={cn(
               "rounded-[var(--radius-lg)] border px-3 py-2.5 text-left transition-all",
               active
-                ? "advanced-picker-active border-[color:var(--accent)] shadow-[var(--shadow-sm)]"
+                ? "advanced-picker-active border-[color:var(--accent)]"
                 : "border-border bg-[var(--advanced-picker-bg)] hover:border-[var(--border-strong)] hover:bg-[var(--advanced-picker-hover-bg)]",
             )}
           >
             <div className="flex items-center justify-between gap-3">
-              <span className="text-sm font-semibold leading-none text-[var(--text-primary)]">
+              <span className="text-data-strong leading-none text-primary">
                 {option.label}
               </span>
               <span
                 className={cn(
-                  "rounded-full px-2 py-0.5 text-xs font-semibold uppercase tracking-[0.08em]",
+                  "label-caps rounded-full px-2 py-0.5",
                   active
                     ? "bg-accent text-[var(--accent-foreground)]"
                     : "bg-[var(--bg-elevated)] text-[var(--text-secondary)]",
@@ -643,7 +643,7 @@ export function AdvancedModePicker({
                 {active ? "Active" : "Mode"}
               </span>
             </div>
-            <p className="mt-1.5 text-xs leading-4 text-[var(--text-secondary)]">{option.description}</p>
+            <p className="mt-1.5 text-caption leading-4 text-secondary">{option.description}</p>
           </button>
         );
       })}
@@ -681,23 +681,26 @@ export function SettingSection({
           : "hover:bg-[var(--bg-alt)]/50",
       )}
     >
-      <div className="flex min-h-[56px] items-center justify-between gap-4 px-4 py-4">
+      <div className="flex min-h-[68px] items-center justify-between gap-4 px-4 py-4">
         <div className="flex min-w-0 items-center gap-3.5">
           <div
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border-2 transition-colors",
+              "flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border transition-colors",
               checked
-                ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--shadow-xs)]"
+                ? "border-[color:color-mix(in_srgb,var(--accent)_22%,transparent)] bg-[var(--setting-icon-active-bg)] text-[var(--accent)] shadow-[var(--setting-icon-active-shadow)]"
                 : "border-[var(--border)] bg-[var(--setting-icon-bg)] text-[var(--text-secondary)]",
             )}
           >
             {renderedIcon}
           </div>
-          <div className="flex items-center gap-1.5 min-w-0">
-            <div className="text-[12px] font-medium uppercase tracking-[0.08em] text-[var(--text-primary)] leading-none">{label}</div>
-            <Tooltip content={description}>
-               <Info className="size-3 text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-help transition-colors" />
-            </Tooltip>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <div className="text-body-sm font-semibold text-primary leading-none">{label}</div>
+              <Tooltip content={description}>
+                 <Info className="size-3 text-muted hover:text-secondary cursor-help transition-colors" />
+              </Tooltip>
+            </div>
+            <p className="mt-1 text-caption text-muted">{description}</p>
           </div>
         </div>
         <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
@@ -709,7 +712,7 @@ export function SettingSection({
             checked ? "max-h-[500px]" : "max-h-0",
           )}
         >
-          <div className="border-t-2 border-[var(--border-strong)] bg-[var(--bg-base)]/30 p-4 space-y-4">{children}</div>
+          <div className="border-t border-[var(--divider)] bg-[var(--setting-body-bg)] p-4 space-y-4">{children}</div>
         </div>
       ) : null}
     </div>
@@ -739,12 +742,12 @@ export function SliderRow({
     <div className="rounded-[var(--radius-lg)] border border-border bg-[var(--slider-row-bg)] px-3 py-1.5 shadow-[var(--slider-row-highlight)]">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <div className="text-xs font-semibold text-[var(--text-secondary)]">{label}</div>
+          <div className="text-body-sm font-semibold text-secondary">{label}</div>
           <button
             type="button"
             onClick={onReset}
             aria-label={`Reset ${label}`}
-            className="text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+            className="text-muted transition-colors hover:text-primary"
           >
             <RotateCcw className="size-3" aria-hidden="true" />
           </button>
@@ -764,9 +767,9 @@ export function SliderRow({
               value={value}
               onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
               onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
-              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right font-mono text-xs tabular-nums text-[var(--accent)] focus:ring-0"
+              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right text-mono-data tabular-nums text-accent focus:ring-0"
             />
-            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-xs lowercase text-[var(--accent)] opacity-60">
+            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-caption lowercase text-accent opacity-60">
               {suffix ?? ""}
             </span>
           </div>
@@ -827,10 +830,10 @@ export function AdditionalFieldInput({
         onChange={(event) => handleChange(event.target.value)}
         onBlur={handleBlur}
         placeholder="price, sku, availability, brand"
-        className="font-mono text-sm"
+        className="text-mono-body"
       />
-      <p className="text-xs text-muted">Use short snake_case names (2-60 chars).</p>
-      {validationHint ? <p className="text-xs text-danger">{validationHint}</p> : null}
+      <p className="text-caption text-muted">Use short snake_case names (2-60 chars).</p>
+      {validationHint ? <p className="text-caption text-danger">{validationHint}</p> : null}
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
           {chips.map((field) => (
@@ -839,7 +842,7 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-              className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-xs text-foreground"
+          className="subtle-panel inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption text-foreground"
             >
               <span>{field}</span>
               <X className="size-3.5" aria-hidden="true" />
@@ -867,7 +870,7 @@ export function ManualFieldEditor({
       </div>
       <label className="grid gap-1">
         <span className="label-caps">Field</span>
-        <Input value={row.fieldName} onChange={(event) => onChange({ fieldName: event.target.value })} placeholder="price" className="font-mono text-sm" />
+        <Input value={row.fieldName} onChange={(event) => onChange({ fieldName: event.target.value })} placeholder="price" className="text-mono-body" />
       </label>
       <ValidatedField
         label="XPath"
@@ -890,7 +893,7 @@ export function ManualFieldEditor({
           type="button"
           onClick={onDelete}
           aria-label={`Delete ${row.fieldName || "manual field"}`}
-          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border text-danger hover:bg-danger/10"
+          className="subtle-panel inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
         >
           <Trash2 className="size-3.5" aria-hidden="true" />
         </button>
@@ -952,7 +955,7 @@ export const RecordsTable = memo(function RecordsTable({
     <div
       ref={setContainerRef}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      className="max-h-[70vh] overflow-auto rounded-[var(--radius-lg)] border border-border"
+      className="subtle-panel max-h-[70vh] overflow-auto"
     >
       <table className="compact-data-table min-w-[960px]">
         <thead>
@@ -1037,9 +1040,9 @@ export function ActionButton({
 
 export function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: ReactNode; mono?: boolean }>) {
   return (
-    <div className="flex items-start justify-between gap-4 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2">
+    <div className="subtle-panel flex items-start justify-between gap-4 rounded-[var(--radius-md)] px-3 py-2">
       <div className="shrink-0 label-caps">{label}</div>
-      <div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-sm text-[var(--text-secondary)]", mono && "font-mono text-xs")}>
+      <div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-body-sm text-secondary", mono && "text-mono-data")}>
         {value || "--"}
       </div>
     </div>
@@ -1162,7 +1165,7 @@ function ValidatedField({
           onChange={(event) => onChange(event.target.value)}
           onBlur={(event) => onBlur(event.target.value)}
           placeholder={placeholder}
-          className="pr-10 font-mono text-sm"
+          className="pr-10 text-mono-body"
         />
         <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
           {state === "valid" ? <CheckCircle2 className="size-4 text-success" /> : null}

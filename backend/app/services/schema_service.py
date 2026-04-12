@@ -16,7 +16,7 @@ _SCHEMA_MAX_AGE = timedelta(days=SCHEMA_MAX_AGE_DAYS)
 
 
 def get_canonical_fields(surface: str) -> list[str]:
-    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip(), []))
+    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip().lower(), []))
 
 
 @dataclass

@@ -249,7 +249,7 @@ export default function SelectorsPage() {
               value={url}
               onChange={(event) => setUrl(event.target.value)}
               placeholder="https://example.com/products/oak-chair"
-              className="font-mono text-sm"
+              className="text-mono-body"
             />
           </label>
           <label className="grid gap-1.5">
@@ -258,7 +258,7 @@ export default function SelectorsPage() {
               value={expectedColumns}
               onChange={(event) => setExpectedColumns(event.target.value)}
               placeholder="price, sku, availability, brand"
-              className="min-h-[80px] text-sm"
+              className="min-h-[80px] text-body-sm"
             />
           </label>
           <Button type="button" variant="accent" onClick={() => void loadPageAndSuggestions()} disabled={loadingSuggestions}>
@@ -266,13 +266,13 @@ export default function SelectorsPage() {
             {loadingSuggestions ? "Loading..." : "Load Page"}
           </Button>
         </div>
-        {loadError ? <div className="rounded-[var(--radius-md)] border border-danger/20 bg-danger/10 px-3 py-2 text-sm text-danger">{loadError}</div> : null}
+        {loadError ? <div className="alert-surface alert-danger">{loadError}</div> : null}
       </Card>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)]">
         <Card className="space-y-4">
           <SectionHeader title="Page Preview" description={loadedUrl || "Load a page to preview its DOM context."} />
-          <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-panel shadow-[var(--shadow-sm)]">
+          <div className="surface-panel overflow-hidden p-0">
             {loadedUrl ? (
               <iframe
                 key={loadedUrl}
@@ -284,7 +284,7 @@ export default function SelectorsPage() {
                 sandbox=""
               />
             ) : (
-              <div className="grid h-[760px] place-items-center text-sm text-muted">
+              <div className="grid h-[760px] place-items-center text-body-sm text-muted">
                 No page loaded.
               </div>
             )}
@@ -342,7 +342,7 @@ export default function SelectorsPage() {
                               value={row.selectorValue}
                               onChange={(event) => updateRow(row.key, { selectorValue: event.target.value, state: nextEditedState(row.state) })}
                               placeholder={selectorPlaceholder(row.kind)}
-                              className="pr-10 font-mono text-sm"
+                              className="pr-10 text-mono-body"
                             />
                             <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
                               {row.selectorValue.trim() ? <CheckCircle2 className="size-4 text-success" /> : <AlertCircle className="size-4 text-muted" />}
@@ -351,14 +351,16 @@ export default function SelectorsPage() {
                         </label>
 
                         <div className="flex items-end justify-end">
-                          <button
+                          <Button
                             type="button"
+                            variant="danger"
+                            size="icon"
                             onClick={() => removeFieldRow(row.key)}
-                            className="inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] border border-border bg-danger text-white transition hover:bg-danger/90"
+                            className="size-8"
                             aria-label="Delete field row"
                           >
                             <Trash2 className="size-3.5" />
-                          </button>
+                          </Button>
                         </div>
                       </div>
 
@@ -368,7 +370,7 @@ export default function SelectorsPage() {
                           value={row.extractedValue}
                           onChange={(event) => updateRow(row.key, { extractedValue: event.target.value })}
                           placeholder="Extracted value"
-                          className="font-mono text-sm"
+                          className="text-mono-body"
                         />
                       </label>
 
@@ -398,10 +400,10 @@ export default function SelectorsPage() {
                       {message ? (
                         <div
                           className={cn(
-                            "rounded-[var(--radius-md)] px-3 py-2 text-sm",
-                            message.tone === "success" && "bg-success/10 text-success",
-                            message.tone === "warning" && "bg-warning/10 text-warning",
-                            message.tone === "danger" && "bg-danger/10 text-danger",
+                            "alert-surface",
+                            message.tone === "success" && "alert-success",
+                            message.tone === "warning" && "alert-warning",
+                            message.tone === "danger" && "alert-danger",
                           )}
                         >
                           {message.message}

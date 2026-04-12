@@ -288,27 +288,15 @@ function requestWithBody<T>(
   });
 }
 
-function createBodyRequest(method: BodyRequestMethod) {
-  return <T,>(path: string, body: unknown) => requestWithBody<T>(method, path, body);
-}
-
-function createReadRequest<T>(responseKind: ResponseKind) {
-  return (path: string) => requestWithResponseType<T>(path, responseKind);
-}
-
-function createDeleteRequest<T>() {
-  return (path: string) => requestJson<T>(path, { method: "DELETE" });
-}
-
 export const apiClient = {
-  get: createReadRequest("json"),
-  getText: createReadRequest<string>("text"),
-  getBlob: createReadRequest<Blob>("blob"),
-  post: createBodyRequest("POST"),
-  postForm: createBodyRequest("POST"),
-  put: createBodyRequest("PUT"),
-  patch: createBodyRequest("PATCH"),
-  delete: createDeleteRequest(),
+  get: <T,>(path: string) => requestWithResponseType<T>(path, "json"),
+  getText: (path: string) => requestWithResponseType<string>(path, "text"),
+  getBlob: (path: string) => requestWithResponseType<Blob>(path, "blob"),
+  post: <T,>(path: string, body: unknown) => requestWithBody<T>("POST", path, body),
+  postForm: <T,>(path: string, body: unknown) => requestWithBody<T>("POST", path, body),
+  put: <T,>(path: string, body: unknown) => requestWithBody<T>("PUT", path, body),
+  patch: <T,>(path: string, body: unknown) => requestWithBody<T>("PATCH", path, body),
+  delete: <T,>(path: string) => requestJson<T>(path, { method: "DELETE" }),
 };
 
 async function readErrorBody(response: Response) {

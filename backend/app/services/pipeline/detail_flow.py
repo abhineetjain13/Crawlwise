@@ -69,7 +69,7 @@ async def process_json_response(
     update_run_state: bool = True,
     persist_logs: bool = True,
     record_writer=None,
-) -> tuple[list[dict], str, dict]:
+) -> URLProcessingResult:
     from .listing_flow import save_listing_records
     from app.services.extract import extract_json_detail, extract_json_listing
 
@@ -236,7 +236,7 @@ async def extract_detail(
     update_run_state: bool = True,
     persist_logs: bool = True,
     record_writer=None,
-) -> tuple[list[dict], str, dict]:
+) -> URLProcessingResult:
     if await effective_max_records(
         session,
         run,

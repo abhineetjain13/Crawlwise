@@ -30,6 +30,7 @@ _CGROUP_V2_MEMORY_MAX = Path("/sys/fs/cgroup/memory.max")
 _CGROUP_V2_MEMORY_CURRENT = Path("/sys/fs/cgroup/memory.current")
 _CGROUP_V1_MEMORY_LIMIT = Path("/sys/fs/cgroup/memory.limit_in_bytes")
 _CGROUP_V1_MEMORY_USAGE = Path("/sys/fs/cgroup/memory.usage_in_bytes")
+_CGROUP_V1_UNLIMITED_MIN = 1 << 60
 
 
 class MemoryPressureLevel(enum.Enum):
@@ -68,6 +69,8 @@ def _cgroup_memory_percent() -> float | None:
             limit_bytes = int(limit_raw)
         except ValueError:
             continue
+        if limit_path == _CGROUP_V1_MEMORY_LIMIT and limit_bytes >= _CGROUP_V1_UNLIMITED_MIN:
+            continue
         if limit_bytes <= 0:
             continue
         usage_raw = _read_cgroup_value(usage_path)
@@ -99,6 +102,14 @@ def get_memory_pressure_level(
     if pct >= pressure_threshold_pct:
         return MemoryPressureLevel.ELEVATED
     return MemoryPressureLevel.NORMAL
+
+
+def get_memory_pressure_percent() -> float:
+    """Return current memory pressure percent using the same source as pressure levels."""
+    cgroup_percent = _cgroup_memory_percent()
+    if cgroup_percent is not None:
+        return cgroup_percent
+    return float(psutil.virtual_memory().percent)
 
 
 class MemoryAdaptiveSemaphore:
@@ -150,14 +161,14 @@ class MemoryAdaptiveSemaphore:
 
     async def _wait_for_memory(self) -> None:
         """Block until memory pressure is below threshold."""
-        mem = psutil.virtual_memory()
-        if mem.percent < self._pressure_threshold:
+        memory_percent = get_memory_pressure_percent()
+        if memory_percent < self._pressure_threshold:
             if self._throttled_since is not None:
                 elapsed = time.monotonic() - self._throttled_since
                 logger.info(
                     "Memory pressure resolved after %.1fs (%.1f%% used)",
                     elapsed,
-                    mem.percent,
+                    memory_percent,
                 )
                 self._throttled_since = None
             return
@@ -168,20 +179,20 @@ class MemoryAdaptiveSemaphore:
             logger.warning(
                 "Memory pressure detected: %.1f%% used (threshold=%.0f%%), "
                 "throttling new URL acquisition; active_tokens=%d",
-                mem.percent,
+                memory_percent,
                 self._pressure_threshold,
                 self._active_tokens,
             )
 
         while True:
             await asyncio.sleep(_PRESSURE_POLL_INTERVAL_SECONDS)
-            mem = psutil.virtual_memory()
-            if mem.percent < self._pressure_threshold:
+            memory_percent = get_memory_pressure_percent()
+            if memory_percent < self._pressure_threshold:
                 elapsed = time.monotonic() - (self._throttled_since or time.monotonic())
                 logger.info(
                     "Memory pressure resolved after %.1fs (%.1f%% used)",
                     elapsed,
-                    mem.percent,
+                    memory_percent,
                 )
                 self._throttled_since = None
                 return

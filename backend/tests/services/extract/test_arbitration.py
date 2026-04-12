@@ -88,6 +88,15 @@ def test_field_decision_merge_keeps_existing_when_candidate_is_noisy_or_too_long
     assert shorter.used_candidate is False
     assert shorter.rejection_reason == "field_pollution_rule"
 
+    too_long = engine.decide_merge(
+        "brand",
+        "Nike",
+        "Nike " * 80,
+    )
+    assert too_long.value == "Nike"
+    assert too_long.used_candidate is False
+    assert too_long.rejection_reason == "candidate_too_long"
+
 
 def test_merge_record_fields_returns_reconciliation_for_kept_existing_candidates():
     merged, reconciliation = _merge_record_fields(

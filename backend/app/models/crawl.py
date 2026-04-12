@@ -215,8 +215,9 @@ class BatchRunProgressState:
         *,
         current_url: str,
         current_url_index: int,
+        error_message: str | None = None,
     ) -> dict[str, object]:
-        return {
+        patch = {
             "url_count": self.total_urls,
             "record_count": self.persisted_record_count,
             "domain": self.url_domain,
@@ -230,6 +231,9 @@ class BatchRunProgressState:
             "current_url": current_url,
             "current_url_index": current_url_index,
         }
+        if error_message:
+            patch["error"] = error_message
+        return patch
 
     def build_final_patch(self, aggregate_verdict: str) -> dict[str, object]:
         return {
@@ -273,6 +277,7 @@ class BatchRunProgressState:
         records_count: int,
         verdict: str,
         url_metrics: dict[str, object],
+        error_message: str | None = None,
     ) -> None:
         self.record_url_result(
             idx=idx,
@@ -287,6 +292,7 @@ class BatchRunProgressState:
             patch=self.build_progress_patch(
                 current_url=url,
                 current_url_index=idx + 1,
+                error_message=error_message,
             ),
         )
 
