@@ -4,6 +4,12 @@ import re
 from pathlib import Path
 
 from app.services.config.extraction_rules import SALARY_RANGE_REGEX
+from app.services.config.extraction_rules import (
+    CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS,
+    CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS,
+    CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN,
+    CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN,
+)
 from app.services.config.field_mappings import CANONICAL_SCHEMAS, FIELD_ALIASES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -20,3 +26,10 @@ def test_salary_range_regex_expands_currency_placeholders():
 def test_field_mapping_modules_export_schema_and_alias_data():
     assert "ecommerce_detail" in CANONICAL_SCHEMAS
     assert "title" in FIELD_ALIASES
+
+
+def test_candidate_attribute_cleanup_rules_load_from_normalization_config():
+    assert "iframe" in CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS
+    assert "privacy" in CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS
+    assert CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN
+    assert CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN == r"^\d+(?:[_-]\d+)*$"

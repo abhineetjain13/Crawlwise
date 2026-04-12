@@ -131,8 +131,8 @@
   --segmented-shadow: none;
   --segmented-item-active-bg: rgba(255, 255, 255, 0.96);
   --segmented-item-active-fg: var(--accent);
-  --segmented-item-hover-bg: rgba(255, 255, 255, 0.92);  --advanced-picker-bg: rgba(255, 255, 255, 0.5);
-  --advanced-picker-hover-bg: rgba(255, 255, 255, 0.72);
+  --segmented-item-hover-bg: rgba(255, 255, 255, 0.92);
+  --advanced-picker-bg: rgba(255, 255, 255, 0.5);  --advanced-picker-hover-bg: rgba(255, 255, 255, 0.72);
   --advanced-picker-active-bg: rgba(255, 255, 255, 0.94);
   --advanced-picker-active-shadow: none;
   --advanced-panel-bg: rgba(255, 255, 255, 0.72);
@@ -450,11 +450,11 @@ button:active:not(:disabled),
   transform: scale(0.97);
 }
 
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
+button:focus-visible:not(.focus-ring),
+a:focus-visible:not(.focus-ring),
+input:focus-visible:not(.focus-ring),
+textarea:focus-visible:not(.focus-ring),
+select:focus-visible:not(.focus-ring) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -755,8 +755,8 @@ select:focus-visible {
 
 .crawl-terminal-json {
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
   word-break: break-word;
+  tab-size: 2;
 }
 
 .markdown-document {

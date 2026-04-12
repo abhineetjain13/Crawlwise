@@ -14,6 +14,7 @@ from app.services.acquisition.acquirer import (
     AcquisitionRequest,
     AcquisitionResult,
     ProxyRotator,
+    _try_browser_first_success_result,
     acquire,
     acquire_html,
 )
@@ -377,7 +378,7 @@ async def test_acquire_iframe_shell_promoted_source_used_before_browser(tmp_path
 
     assert result.method == "curl_cffi"
     assert result.diagnostics.get("promoted_source_used")
-    browser_mock.assert_not_awaited()
+    browser_mock.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -750,6 +751,69 @@ async def test_acquire_scrubs_sensitive_html_before_writing_artifact(tmp_path, m
     assert "[REDACTED]" in artifact
     assert "person@example.com" in result.html
     assert "short-lived-secret" in result.html
+
+
+@pytest.mark.asyncio
+async def test_acquire_scrubs_sensitive_json_before_writing_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    json_data = {
+        "email": "person@example.com",
+        "auth_token": "short-lived-secret",
+        "nested": {"bearer": "Bearer abcdefghijklmnopqrstuvwxyz0123456789"},
+    }
+
+    with patch(
+        "app.services.acquisition.acquirer._fetch_with_content_type",
+        new_callable=AsyncMock,
+        return_value=HttpFetchResult(
+            text=json.dumps(json_data),
+            status_code=200,
+            content_type="json",
+            json_data=json_data,
+        ),
+    ):
+        result = await acquire(42, "https://example.com/api")
+
+    artifact = Path(result.artifact_path).read_text(encoding="utf-8")
+    assert "person@example.com" not in artifact
+    assert "short-lived-secret" not in artifact
+    assert "[REDACTED]" in artifact
+
+
+def test_browser_first_accepts_non_blocked_rendered_page_without_extractability_signal() -> None:
+    ctx = SimpleNamespace(
+        request=SimpleNamespace(
+            url="https://example.com/products/widget",
+            acquisition_profile={},
+            prefer_stealth=False,
+            proxy=None,
+        ),
+        surface="ecommerce_detail",
+        artifact_path="artifact.html",
+        started_at=0.0,
+        host_wait_seconds=0.0,
+        runtime_options=SimpleNamespace(anti_bot_enabled=True),
+        finalize_diagnostics_payload=lambda payload: payload,
+    )
+    browser_result = SimpleNamespace(
+        challenge_state="none",
+        origin_warmed=False,
+        frame_sources=[],
+        promoted_sources=[],
+        _acquirer_browser={
+            "html": "<html><body><main><div id='app'>Rendered shell</div></main></body></html>",
+            "final_url": "https://example.com/products/widget",
+            "network_payloads": [],
+            "diagnostics": {},
+            "browser_total_ms": 10,
+            "blocked": False,
+        },
+    )
+
+    result = _try_browser_first_success_result(ctx, browser_result=browser_result)
+
+    assert result is not None
+    assert result.method == "playwright"
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -30,7 +31,7 @@ class ResolvedSchema:
     stale: bool
 
 
-def _dedupe_fields(values: list[str] | None) -> list[str]:
+def _dedupe_fields(values: Iterable[str] | None) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
     for value in values or []:
@@ -187,7 +188,7 @@ async def resolve_schema(
     sample_record: dict | None = None,
     llm_enabled: bool = False,
 ) -> ResolvedSchema:
-    del run_id, html, url, llm_enabled
+    del run_id, html, url, sample_record, llm_enabled
     resolved = await load_resolved_schema(
         session,
         surface,

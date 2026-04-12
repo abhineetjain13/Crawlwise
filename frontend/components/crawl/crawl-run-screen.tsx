@@ -35,6 +35,7 @@ import {
   ActionButton,
   cleanRecord,
   copyJson,
+  decodeUrlsForDisplay,
   extractRecordUrl,
   extractionVerdict,
   extractionVerdictTone,
@@ -42,6 +43,7 @@ import {
   estimateDataQuality,
   humanizeVerdict,
   humanizeQuality,
+  inferDomainFromSurface,
   isListingRun,
   LogTerminal,
   type OutputTabKey,
@@ -93,6 +95,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     queryKey: ["crawl-run", runId],
     queryFn: () => api.getCrawl(runId),
     refetchInterval: false,
+    refetchOnMount: "always",
   });
   const { refetch: refetchRunQuery } = runQuery;
   const run = runQuery.data;
@@ -121,6 +124,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     queryFn: () => api.getRecords(runId, { page: tablePage, limit: CRAWL_DEFAULTS.TABLE_PAGE_SIZE * 4 }),
     enabled: shouldFetchTableRecords,
     refetchInterval: false,
+    refetchOnMount: "always",
   });
 
   const jsonRecordsQuery = useQuery({
@@ -128,6 +132,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     queryFn: () => api.getRecords(runId, { limit: recordsFetchLimit }),
     enabled: shouldFetchJsonRecords,
     refetchInterval: false,
+    refetchOnMount: "always",
   });
 
   const logsQuery = useQuery({
@@ -163,7 +168,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const recordsJson = useMemo(
     () =>
       outputTab === "json"
-        ? JSON.stringify(deferredJsonRecords.map(cleanRecord), null, 2)
+        ? JSON.stringify(deferredJsonRecords.map((record) => decodeUrlsForDisplay(cleanRecord(record))), null, 2)
         : "",
     [deferredJsonRecords, outputTab],
   );
@@ -548,9 +553,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     if (!urls.length) {
       return;
     }
+    const domain = inferDomainFromSurface(run?.surface) ?? "commerce";
     window.sessionStorage.setItem(
       STORAGE_KEYS.BULK_PREFILL,
       JSON.stringify({
+        domain,
         urls,
       }),
     );

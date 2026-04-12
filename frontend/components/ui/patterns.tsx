@@ -159,7 +159,7 @@ export function TabBar({
     >
       <span
         aria-hidden="true"
-        className="tab-indicator-active pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[var(--segmented-item-active-bg)] transition-[left,width] duration-200 ease-out"
+        className="tab-indicator-active pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[var(--accent)] transition-[left,width] duration-200 ease-out"
         style={pillStyle}
       />      {options.map((option) => (
         <button
@@ -171,7 +171,7 @@ export function TabBar({
             "relative z-10 inline-flex min-w-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-meta font-bold transition-all duration-200",
             padX,
             value === option.value
-              ? "text-primary"
+              ? "text-white"
               : "text-muted hover:text-primary",
           )}
         >

@@ -187,3 +187,22 @@ async def test_persist_crawl_record_uses_sqlite_conflict_ignore_for_identity_key
 
     assert not await persist_crawl_record(duplicate_session, db_record)
     assert duplicate_session.executed is True
+
+
+def test_build_listing_record_derives_identity_when_candidate_key_is_missing() -> None:
+    record = build_listing_record(
+        run_id=1,
+        candidate=ListingPersistenceCandidate(
+            source_url="https://example.com/jobs/1",
+            data={"title": "Platform Engineer"},
+            raw_data={"title": "Platform Engineer"},
+            source_trace={"type": "listing"},
+            identity_key=None,
+            fallback_key=None,
+        ),
+        index=0,
+        manifest_trace=None,
+        raw_html_path=None,
+    )
+
+    assert record.url_identity_key

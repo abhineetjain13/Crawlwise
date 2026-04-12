@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.services.config.field_mappings import COLLECTION_KEYS, get_surface_field_aliases
+from app.services.config.field_mappings import (
+    CANONICAL_SCHEMAS,
+    COLLECTION_KEYS,
+    excluded_fields_for_surface,
+    field_allowed_for_surface,
+    get_surface_field_aliases,
+)
 
 
 def test_get_surface_field_aliases_scopes_surface_specific_and_internal_fields():
@@ -26,6 +32,22 @@ def test_get_surface_field_aliases_returns_detached_alias_lists():
     first["make"].append("custom_make_alias")
 
     assert "custom_make_alias" not in second["make"]
+
+
+def test_automobile_surfaces_exclude_job_and_ecommerce_only_fields():
+    excluded = excluded_fields_for_surface("automobile_detail")
+    automobile_aliases = get_surface_field_aliases("automobile_detail")
+
+    assert "apply_url" in excluded
+    assert "salary" in excluded
+    assert "brand" in excluded
+    assert "sku" in excluded
+    assert field_allowed_for_surface("automobile_detail", "make")
+    assert not field_allowed_for_surface("automobile_detail", "apply_url")
+    assert not field_allowed_for_surface("automobile_detail", "salary")
+    assert "apply_url" not in automobile_aliases
+    assert "salary" not in automobile_aliases
+    assert "make" in CANONICAL_SCHEMAS["automobile_detail"]
 
 
 def test_collection_keys_excludes_generic_payload_wrappers():

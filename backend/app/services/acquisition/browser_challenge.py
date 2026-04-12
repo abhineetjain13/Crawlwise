@@ -107,7 +107,7 @@ async def _wait_for_challenge_resolution(
         logger.debug(
             "Failed to read page content for challenge detection", exc_info=True
         )
-        return True, "none", []
+        return False, "page_content_unavailable", ["page_content_read_failed"]
 
     assessment = _assess_challenge_signals(html)
     if assessment.state == "blocked_signal":
@@ -210,8 +210,15 @@ def _assess_challenge_signals(html: str) -> ChallengeAssessment:
         return ChallengeAssessment(
             state="waiting_unresolved", should_wait=True, reasons=reasons
         )
-    if strong_hits or weak_hits:
-        reasons = (strong_hits + weak_hits)[:]
+    if weak_hits:
+        reasons = weak_hits[:]
+        if short_html:
+            reasons.append("short_html")
+        return ChallengeAssessment(
+            state="waiting_unresolved", should_wait=True, reasons=reasons
+        )
+    if strong_hits:
+        reasons = strong_hits[:]
         if short_html:
             reasons.append("short_html")
         return ChallengeAssessment(

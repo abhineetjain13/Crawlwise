@@ -141,7 +141,7 @@ export function Button({
     primary:
       "bg-[var(--accent)] !text-[var(--button-filled-fg)] hover:bg-[var(--accent-hover)] shadow-[0_14px_30px_color-mix(in_srgb,var(--accent)_24%,transparent)]",
     secondary:
-      "button-secondary-surface text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-focus)]",
+      "button-secondary-surface text-[var(--text-primary)] hover:bg-[var(--bg-elevated)] hover:border-[var(--border-focus)] hover:shadow-sm",
     ghost:
       "button-ghost-surface text-[var(--text-primary)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
     accent: "accent-fill",

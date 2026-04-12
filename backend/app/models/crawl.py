@@ -174,11 +174,20 @@ class BatchRunProgressState:
         persisted_record_count: int,
     ) -> "BatchRunProgressState":
         summary = dict(current_summary) if isinstance(current_summary, dict) else {}
+        raw_verdicts = [
+            str(item or "").strip() for item in list(summary.get("url_verdicts") or [])
+        ][:total_urls]
         completed_count = min(as_int(summary.get("completed_urls", 0)), total_urls)
+        if raw_verdicts:
+            completed_count = 0
+            for verdict in raw_verdicts:
+                if not verdict:
+                    break
+                completed_count += 1
         return cls(
             total_urls=total_urls,
             url_domain=str(url_domain or ""),
-            url_verdicts=list(summary.get("url_verdicts") or [])[:completed_count],
+            url_verdicts=raw_verdicts,
             verdict_counts=dict(summary.get("verdict_counts") or {}),
             acquisition_summary=dict(summary.get("acquisition_summary") or {}),
             persisted_record_count=max(0, as_int(persisted_record_count)),

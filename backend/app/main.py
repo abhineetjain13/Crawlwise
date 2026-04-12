@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
+import re
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -76,11 +78,22 @@ def _sanitize_header_value(value: str) -> str:
     return value.replace("\r", "").replace("\n", "")
 
 
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def _sanitize_header_name(value: str) -> str:
+    text = str(value or "")
+    sanitized = _sanitize_header_value(text).strip()
+    if sanitized != text.strip():
+        return "X-Request-ID"
+    if sanitized and _HEADER_NAME_RE.fullmatch(sanitized):
+        return sanitized
+    return "X-Request-ID"
+
+
 @app.middleware("http")
 async def correlation_middleware(request: Request, call_next) -> Response:
-    request_id_header = _sanitize_header_value(settings.request_id_header).strip()
-    if not request_id_header:
-        request_id_header = "X-Request-ID"
+    request_id_header = _sanitize_header_name(settings.request_id_header)
     raw_correlation_id = request.headers.get(request_id_header)
     correlation_id = (
         _sanitize_header_value(raw_correlation_id)

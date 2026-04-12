@@ -78,6 +78,17 @@ export function deriveSurface(domain: CrawlDomain, module: CrawlTab): CrawlSurfa
   return module === "category" ? "ecommerce_listing" : "ecommerce_detail";
 }
 
+export function inferDomainFromSurface(surface: string | null | undefined): CrawlDomain | null {
+  const normalizedSurface = String(surface || "").toLowerCase();
+  if (normalizedSurface.startsWith("job_")) {
+    return "jobs";
+  }
+  if (normalizedSurface.startsWith("ecommerce_")) {
+    return "commerce";
+  }
+  return null;
+}
+
 const SCHEMA_TYPE_FIELD_NAMES = new Set([
   "aggregaterating",
   "breadcrumblist",
@@ -157,14 +168,33 @@ export function stringifyCell(value: unknown) {
   return JSON.stringify(value);
 }
 
-export function formatCellDisplay(value: unknown) {
-  const text = stringifyCell(value).trim();
+export function decodeUrlForDisplay(value: string) {
+  const text = String(value || "").trim();
   if (!/^https?:\/\//i.test(text)) return text;
   try {
     return decodeURI(text);
   } catch {
     return text;
   }
+}
+
+export function formatCellDisplay(value: unknown) {
+  return decodeUrlForDisplay(stringifyCell(value));
+}
+
+export function decodeUrlsForDisplay<T>(value: T): T {
+  if (typeof value === "string") {
+    return decodeUrlForDisplay(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => decodeUrlsForDisplay(entry)) as T;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, decodeUrlsForDisplay(entry)]),
+    ) as T;
+  }
+  return value;
 }
 
 export function humanizeFieldName(value: string) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Shield, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { Plus, Shield, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -69,7 +69,6 @@ export function CrawlConfigScreen({
   const [additionalFields, setAdditionalFields] = useState<string[]>([]);
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
   const [configError, setConfigError] = useState("");
-  const [bulkBanner, setBulkBanner] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   /** While set, ignore route→state sync until the URL shows PDP (bulk prefill). */
   const bulkPrefillRouteSyncGuardRef = useRef(false);
@@ -112,16 +111,22 @@ export function CrawlConfigScreen({
       return;
     }
     try {
-      const parsed = JSON.parse(stored) as { urls: string[]; additional_fields?: string[] };
+      const parsed = JSON.parse(stored) as {
+        domain?: CrawlDomain;
+        urls: string[];
+        additional_fields?: string[];
+      };
       if (Array.isArray(parsed.urls) && parsed.urls.length) {
         bulkPrefillRouteSyncGuardRef.current = true;
         setCrawlTab("pdp");
         setPdpMode("batch");
+        if (parsed.domain === "commerce" || parsed.domain === "jobs") {
+          setCrawlDomain(parsed.domain);
+        }
         setBulkUrls(parsed.urls.join("\n"));
         if (Array.isArray(parsed.additional_fields)) {
           setAdditionalFields(uniqueFields(parsed.additional_fields));
         }
-        setBulkBanner(`${parsed.urls.length} URLs loaded into PDP batch crawl.`);
         router.replace("/crawl?module=pdp&mode=batch" as Route);
       }
     } catch {
@@ -131,13 +136,7 @@ export function CrawlConfigScreen({
     }
   }, [router]);
 
-  useEffect(() => {
-    if (!bulkBanner) {
-      return;
-    }
-    const timer = window.setTimeout(() => setBulkBanner(""), UI_DELAYS.BANNER_AUTO_HIDE_MS);
-    return () => window.clearTimeout(timer);
-  }, [bulkBanner]);
+
 
   const config = useMemo<CrawlConfig>(
     () => ({
@@ -262,19 +261,6 @@ export function CrawlConfigScreen({
     <div className="space-y-4">
       <PageHeader title="Crawl Studio" />
 
-      {bulkBanner ? (
-        <div className="surface-banner flex items-center justify-between px-4 py-3 text-body-sm">
-          <div>{bulkBanner}</div>
-          <button
-            type="button"
-            onClick={() => setBulkBanner("")}
-            aria-label="Close banner"
-            className="inline-flex size-7 items-center justify-center rounded-md text-muted transition hover:text-foreground"
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
       <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
         <div className="space-y-4">
           <Card className="space-y-5">
@@ -343,13 +329,20 @@ export function CrawlConfigScreen({
             {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
               <label className="grid gap-1.5">
                 <span className="label-caps">URLs (one per line)</span>
-                <Textarea
-                  value={bulkUrls}
-                  onChange={(event) => setBulkUrls(event.target.value)}
-                  placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
-                  className="min-h-[220px] text-mono-body"
-                  aria-label="Bulk URLs input"
-                />
+                <div className="relative">
+                  <Textarea
+                    value={bulkUrls}
+                    onChange={(event) => setBulkUrls(event.target.value)}
+                    placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
+                    className="min-h-[220px] text-mono-body"
+                    aria-label="Bulk URLs input"
+                  />
+                  {bulkUrls.trim() && (
+                    <div className="absolute bottom-2 right-2 rounded bg-background/80 px-2 py-1 text-xs text-muted backdrop-blur-sm">
+                      {parseLines(bulkUrls).length} URLs
+                    </div>
+                  )}
+                </div>
               </label>
             ) : crawlTab === "pdp" && pdpMode === "csv" ? (
               <label className="grid gap-1.5">

@@ -445,6 +445,8 @@ def excluded_fields_for_surface(surface: str) -> frozenset[str]:
         return excluded | ECOMMERCE_ONLY_FIELDS
     if normalized in {"ecommerce_listing", "ecommerce_detail"}:
         return excluded | JOB_ONLY_FIELDS
+    if normalized in {"automobile_listing", "automobile_detail"}:
+        return excluded | JOB_ONLY_FIELDS | ECOMMERCE_ONLY_FIELDS
     return excluded
 
 

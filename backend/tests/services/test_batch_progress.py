@@ -71,6 +71,23 @@ def test_batch_run_progress_state_aligns_out_of_order_verdict_indices() -> None:
 
     assert state.url_verdicts == ["success", "", "", "blocked"]
 
+
+def test_batch_run_progress_state_reconstructs_out_of_order_verdicts_without_truncation() -> None:
+    state = BatchRunProgressState.from_summary(
+        {
+            "completed_urls": 3,
+            "url_verdicts": ["success", "", "blocked"],
+            "verdict_counts": {"success": 1, "blocked": 1},
+        },
+        total_urls=4,
+        url_domain="example.com",
+        persisted_record_count=0,
+    )
+
+    assert state.completed_count == 1
+    assert state.url_verdicts == ["success", "", "blocked"]
+
+
 @pytest.mark.asyncio
 async def test_batch_run_progress_state_persists_url_result() -> None:
     state = BatchRunProgressState.from_summary(

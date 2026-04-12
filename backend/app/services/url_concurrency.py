@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 _URL_SLOT_KEY_PREFIX = "crawl:url-slot"
 _URL_SLOT_POLL_INTERVAL_SECONDS = 0.1
 _URL_SLOT_TTL_SECONDS = max(30, int(MAX_URL_PROCESS_TIMEOUT_SECONDS) + 30)
+_URL_SLOT_ACQUIRE_TIMEOUT_SECONDS = float(_URL_SLOT_TTL_SECONDS)
 _RELEASE_SLOT_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
@@ -31,7 +32,7 @@ class DistributedURLSlotGuard:
         self._slot_key: str | None = None
         self._token: str | None = None
 
-    async def acquire(self) -> None:
+    async def acquire(self, *, acquire_timeout: float = _URL_SLOT_ACQUIRE_TIMEOUT_SECONDS) -> None:
         global _redis_disabled_warning_logged
         if not redis_is_enabled():
             if not _redis_disabled_warning_logged:
@@ -42,6 +43,7 @@ class DistributedURLSlotGuard:
             return
         _redis_disabled_warning_logged = False
         redis = get_redis()
+        deadline = asyncio.get_running_loop().time() + max(0.0, float(acquire_timeout))
         while True:
             for slot_index in range(self._limit):
                 token = uuid4().hex
@@ -56,6 +58,10 @@ class DistributedURLSlotGuard:
                     self._slot_key = slot_key
                     self._token = token
                     return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise SlotAcquisitionTimeout(
+                    f"Timed out acquiring distributed URL slot for limit={self._limit} after {acquire_timeout:.2f}s"
+                )
             await asyncio.sleep(_URL_SLOT_POLL_INTERVAL_SECONDS)
 
     async def release(self) -> None:
@@ -86,3 +92,7 @@ class DistributedURLSlotGuard:
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.release()
+
+
+class SlotAcquisitionTimeout(TimeoutError):
+    """Raised when a distributed URL slot cannot be acquired in time."""

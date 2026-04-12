@@ -582,12 +582,16 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             url_domain=_domain(url_list[0]) if url_list else "",
             persisted_record_count=persisted_record_count,
         )
-        pending_items = list(
-            enumerate(
-                url_list[progress_state.completed_count :],
-                start=progress_state.completed_count,
-            )
-        )
+        pending_items = [
+            (idx, url)
+            for idx, url in enumerate(url_list)
+            if idx >= progress_state.completed_count
+            and not str(
+                progress_state.url_verdicts[idx]
+                if idx < len(progress_state.url_verdicts)
+                else ""
+            ).strip()
+        ]
         persisted_record_count = progress_state.persisted_record_count
         url_verdicts = progress_state.url_verdicts
         acquisition_summary = progress_state.acquisition_summary

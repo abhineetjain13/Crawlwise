@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CrawlRecord } from "../../lib/api/types";
 import {
+  decodeUrlsForDisplay,
   estimateDataQuality,
   formatCellDisplay,
   scoreFieldQuality,
@@ -126,5 +127,19 @@ describe("formatCellDisplay", () => {
     expect(
       formatCellDisplay("https://www.shop.ving.run/product/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3"),
     ).toBe("https://www.shop.ving.run/product/สีดำ");
+  });
+});
+
+describe("decodeUrlsForDisplay", () => {
+  it("decodes URL strings nested inside preview JSON objects", () => {
+    expect(
+      decodeUrlsForDisplay({
+        url: "https://www.shop.ving.run/product/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3",
+        images: ["https://cdn.example.com/a.jpg"],
+      }),
+    ).toEqual({
+      url: "https://www.shop.ving.run/product/สีดำ",
+      images: ["https://cdn.example.com/a.jpg"],
+    });
   });
 });

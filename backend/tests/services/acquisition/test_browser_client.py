@@ -6,9 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 from app.services.acquisition import browser_client
+from app.services.acquisition import browser_challenge
 from app.services.acquisition import browser_pool
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.resource_monitor import MemoryPressureLevel
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 
 class _FakePage:
@@ -147,3 +150,82 @@ async def test_browser_pool_healthcheck_task_restarts_after_unexpected_crash(
     restarted_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await restarted_task
+
+
+@pytest.mark.asyncio
+async def test_wait_for_challenge_resolution_treats_content_read_failure_as_unsuccessful() -> None:
+    class _BrokenPage:
+        async def content(self):
+            raise PlaywrightError("content failed")
+
+    ok, state, reasons = await browser_challenge._wait_for_challenge_resolution(
+        _BrokenPage()
+    )
+
+    assert ok is False
+    assert state == "page_content_unavailable"
+    assert reasons == ["page_content_read_failed"]
+
+
+def test_assess_challenge_signals_waits_on_weak_markers() -> None:
+    original = browser_challenge.detect_blocked_page
+    browser_challenge.detect_blocked_page = lambda _html: SimpleNamespace(
+        is_blocked=False,
+        provider=None,
+    )
+    try:
+        assessment = browser_challenge._assess_challenge_signals(
+            "<html><body><h1>One more step</h1>" + ("x" * 3000) + "</body></html>"
+        )
+    finally:
+        browser_challenge.detect_blocked_page = original
+
+    assert assessment.should_wait is True
+    assert assessment.state == "waiting_unresolved"
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_html_retries_profile_after_playwright_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = browser_client.BrowserResult(html="<html><body>ok</body></html>")
+    attempts = iter(
+        [
+            PlaywrightTimeoutError("nav timeout"),
+            result,
+        ]
+    )
+
+    async def _fake_attempt(_pw, _attempt):
+        current = next(attempts)
+        if isinstance(current, Exception):
+            raise current
+        return current
+
+    monkeypatch.setattr(
+        browser_client,
+        "_browser_launch_profiles",
+        lambda *_args, **_kwargs: [
+            {"label": "p1", "channel": None},
+            {"label": "p2", "channel": None},
+        ],
+    )
+    monkeypatch.setattr(browser_client, "_fetch_rendered_html_attempt", _fake_attempt)
+
+    output = await browser_client._fetch_rendered_html_with_fallback(
+        SimpleNamespace(),
+        browser_client.BrowserRenderRequest(
+            target=SimpleNamespace(),
+            url="https://example.com",
+            proxy=None,
+            surface="ecommerce_detail",
+            traversal_mode=None,
+            max_pages=1,
+            max_scrolls=1,
+            prefer_stealth=False,
+            request_delay_ms=0,
+            runtime_options=BrowserRuntimeOptions(),
+        ),
+    )
+
+    assert output is result

@@ -651,12 +651,20 @@ async def acquire(
         path = path.with_suffix(".json")
         await asyncio.to_thread(
             path.write_text,
-            json.dumps(result.json_data, indent=2, default=str),
+            json.dumps(
+                _scrub_payload_for_artifact(result.json_data),
+                indent=2,
+                default=str,
+            ),
             encoding="utf-8",
         )
     elif result.content_type == "json":
         path = path.with_suffix(".json")
-        await asyncio.to_thread(path.write_text, result.html or "", encoding="utf-8")
+        await asyncio.to_thread(
+            path.write_text,
+            _scrub_sensitive_text(result.html or ""),
+            encoding="utf-8",
+        )
     else:
         await asyncio.to_thread(
             path.write_text,
@@ -782,7 +790,7 @@ def _try_browser_first_success_result(
     )
     browser_first_is_usable = bool(
         first_extractability.get("has_extractable_data", False)
-    )
+    ) or not str(ctx.surface or "").strip().lower().endswith("listing")
     if (
         first_data.get("blocked")
         or _is_invalid_surface_page(

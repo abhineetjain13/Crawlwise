@@ -98,6 +98,9 @@ from playwright.async_api import (
     Error as PlaywrightError,
 )
 from playwright.async_api import (
+    TimeoutError as PlaywrightTimeoutError,
+)
+from playwright.async_api import (
     async_playwright,
 )
 
@@ -274,7 +277,13 @@ async def _fetch_rendered_html_with_fallback(
                 )
                 continue
             return result
-        except (TimeoutError, PlaywrightError, RuntimeError, OSError) as exc:
+        except (
+            TimeoutError,
+            PlaywrightTimeoutError,
+            PlaywrightError,
+            RuntimeError,
+            OSError,
+        ) as exc:
             last_error = exc
             first_profile_failure_reason = _classify_profile_failure_reason(exc)
             logger.warning(

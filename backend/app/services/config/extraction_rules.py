@@ -1379,6 +1379,7 @@ NORMALIZATION_RULES = {
 }
 
 _CANDIDATE_CLEANUP = EXTRACTION_RULES.get("candidate_cleanup", {})
+_CANDIDATE_NORMALIZATION = NORMALIZATION_RULES
 _CANDIDATE_FIELD_GROUPS = _CANDIDATE_CLEANUP.get("field_groups", {})
 CANDIDATE_FIELD_GROUPS = {
     str(group): {str(field) for field in fields}
@@ -1454,13 +1455,13 @@ CANDIDATE_SIZE_CSS_NOISE_TOKENS = tuple(
     _CANDIDATE_CLEANUP.get("size_css_noise_tokens", [])
 )
 CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS = frozenset(
-    _CANDIDATE_CLEANUP.get(
+    _CANDIDATE_NORMALIZATION.get(
         "non_content_rich_text_tags",
         ["script", "style", "svg", "noscript", "iframe", "template", "meta", "link"],
     )
 )
 CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS = frozenset(
-    _CANDIDATE_CLEANUP.get(
+    _CANDIDATE_NORMALIZATION.get(
         "noisy_product_attribute_key_tokens",
         [
             "about",
@@ -1488,13 +1489,13 @@ CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS = frozenset(
     )
 )
 CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN = str(
-    _CANDIDATE_CLEANUP.get(
+    _CANDIDATE_NORMALIZATION.get(
         "product_attribute_css_noise_pattern",
         r"(?i)(?:^|\s)(?:@media|@supports|\.?[a-z0-9_-]+\s*\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\s*:)",
     )
 )
 CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN = str(
-    _CANDIDATE_CLEANUP.get(
+    _CANDIDATE_NORMALIZATION.get(
         "product_attribute_digit_only_key_pattern",
         r"^\d+(?:[_-]\d+)*$",
     )

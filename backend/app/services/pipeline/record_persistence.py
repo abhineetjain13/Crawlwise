@@ -303,6 +303,12 @@ def build_listing_record(
         url_identity_key = hashlib.sha256(
             hash_input.encode("utf-8", errors="replace")
         ).hexdigest()[:64]
+    else:
+        url_identity_key = record_identity_fingerprint(
+            source_url=candidate.source_url,
+            data=candidate.data,
+            raw_data=candidate.raw_data,
+        )
 
     record_source_trace = dict(candidate.source_trace)
     if index == 0 and manifest_trace:

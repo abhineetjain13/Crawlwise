@@ -82,6 +82,16 @@ function renderRunScreen(runId = 101) {
   return { queryClient };
 }
 
+function renderRunScreenWithClient(queryClient: QueryClient, runId = 101) {
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TopBarProvider>
+        <CrawlRunScreen runId={runId} />
+      </TopBarProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("CrawlRunScreen", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -161,6 +171,38 @@ describe("CrawlRunScreen", () => {
     expect(screen.getByRole("button", { name: "Retry failed panels" })).toBeInTheDocument();
   });
 
+  it("refetches table records on mount even if the cache contains a fresh empty page", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          staleTime: 60_000,
+        },
+      },
+    });
+
+    queryClient.setQueryData(["crawl-run", 101], terminalRun(101));
+    queryClient.setQueryData(["crawl-records-table", 101, 1], {
+      items: [],
+      meta: { page: 1, limit: 100, total: 0 },
+    });
+
+    apiMock.getRecords.mockResolvedValue({
+      items: [makeRecord(1), makeRecord(2)],
+      meta: { page: 1, limit: 100, total: 2 },
+    });
+
+    renderRunScreenWithClient(queryClient);
+
+    await waitFor(() => {
+      expect(apiMock.getRecords).toHaveBeenCalledWith(101, { page: 1, limit: 100 });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 1")).toBeInTheDocument();
+    });
+  });
+
   it("refetches recent completed runs when summary records are present but the first table fetch is empty", async () => {
     const completedAt = new Date().toISOString();
     apiMock.getCrawl.mockResolvedValue({
@@ -204,5 +246,63 @@ describe("CrawlRunScreen", () => {
     await waitFor(() => {
       expect(screen.getByText("Item 1")).toBeInTheDocument();
     });
+  });
+
+  it("renders decoded Thai URLs in the JSON preview without changing the underlying records payload", async () => {
+    apiMock.getRecords.mockResolvedValue({
+      items: [
+        {
+          ...makeRecord(1),
+          data: {
+            title: "Item 1",
+            url: "https://www.shop.ving.run/product/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3",
+          },
+        },
+      ],
+      meta: { page: 1, limit: 400, total: 1 },
+    });
+
+    renderRunScreen();
+
+    const jsonButtons = await screen.findAllByRole("button", { name: "JSON" });
+    fireEvent.click(jsonButtons.at(-1)!);
+
+    await waitFor(() => {
+      expect(screen.getByText(/https:\/\/www\.shop\.ving\.run\/product\/สีดำ/)).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3/)).not.toBeInTheDocument();
+  });
+
+  it("prefills batch crawl with the originating jobs domain from listing runs", async () => {
+    apiMock.getCrawl.mockResolvedValue({
+      ...terminalRun(101),
+      surface: "job_listing",
+      url: "https://example.com/careers",
+      settings: { crawl_module: "category", crawl_mode: "single" },
+    });
+    apiMock.getRecords.mockResolvedValue({
+      items: [
+        {
+          ...makeRecord(1),
+          source_url: "https://jobs.example.com/posting/1",
+          data: { title: "Role 1", url: "https://jobs.example.com/posting/1" },
+        },
+      ],
+      meta: { page: 1, limit: 100, total: 1 },
+    });
+
+    renderRunScreen();
+
+    const batchButton = await screen.findByRole("button", { name: "Batch Crawl Results (1)" });
+    fireEvent.click(batchButton);
+
+    expect(replaceMock).toHaveBeenCalledWith("/crawl?module=pdp&mode=batch");
+    expect(window.sessionStorage.getItem("bulk-crawl-prefill-v1")).toBe(
+      JSON.stringify({
+        domain: "jobs",
+        urls: ["https://jobs.example.com/posting/1"],
+      }),
+    );
   });
 });
