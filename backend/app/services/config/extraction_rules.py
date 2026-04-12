@@ -9,10 +9,37 @@ from app.services.config.crawl_runtime import (
 from app.services.config.platform_registry import known_ats_domains
 from app.services.config.selectors import DOM_PATTERNS as _DOM_PATTERNS
 
+__all__ = [
+    "DYNAMIC_FIELD_NAME_MAX_TOKENS",
+    "MAX_CANDIDATES_PER_FIELD",
+]
+
 SITE_POLICY_REGISTRY = {}
 ACTION_ADD_TO_CART = "add to cart"
 ACTION_BUY_NOW = "buy now"
 ACTION_SIGN_IN = "sign in"
+NEXT_FLIGHT_BACK_WINDOW = 1200
+NEXT_FLIGHT_FORWARD_WINDOW = 2200
+NEXT_FLIGHT_PAIR_PATTERNS: tuple[str, ...] = (
+    r'"displayName":"(?P<title>[^"]+)".{0,900}?"listingUrl":"(?P<url>[^"]+)"',
+    r'"listingUrl":"(?P<url>[^"]+)".{0,900}?"displayName":"(?P<title>[^"]+)"',
+)
+NEXT_FLIGHT_BRAND_PATTERNS: tuple[str, ...] = (
+    r'"name":"(?P<brand>[^"]+)","__typename":"ManufacturerCuratedBrand"',
+    r'"brand":\{"name":"(?P<brand>[^"]+)"',
+)
+NEXT_FLIGHT_SALE_PRICE_PATTERN = (
+    r'"priceVariation":"(?:SALE|PRIMARY)".{0,220}?"amount":"(?P<amount>[\d.]+)"'
+)
+NEXT_FLIGHT_ORIGINAL_PRICE_PATTERN = (
+    r'"priceVariation":"PREVIOUS".{0,220}?"amount":"(?P<amount>[\d.]+)"'
+)
+NEXT_FLIGHT_RATING_PATTERN = (
+    r'"averageRating":(?P<rating>[\d.]+),"totalCount":(?P<count>\d+)'
+)
+NEXT_FLIGHT_AVAILABILITY_PATTERN = (
+    r'"(?:shortInventoryStatusMessage|stockStatus)":"(?P<availability>[^"]+)"'
+)
 
 EXTRACTION_RULES = {
     "field_aliases": {
@@ -1860,6 +1887,20 @@ CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT = _coerce_int_config(
     40,
 )
 CANDIDATE_PLACEHOLDER_VALUES = tuple(_CANDIDATE_CLEANUP.get("placeholder_values", []))
+NORMALIZATION_SENTINEL_VALUES = frozenset(
+    {
+        "object",
+        "array",
+        "boolean",
+        "null",
+        "none",
+        "undefined",
+        "unknown",
+        "pending",
+        "n/a",
+        "na",
+    }
+).union(CANDIDATE_PLACEHOLDER_VALUES)
 CANDIDATE_GENERIC_CATEGORY_VALUES = tuple(
     _CANDIDATE_CLEANUP.get("generic_category_values", [])
 )

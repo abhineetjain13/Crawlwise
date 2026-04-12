@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.schemas.crawl import CrawlRecordResponse
+from app.services.pipeline.field_normalization import _sanitize_persisted_record_payload
 
 
 def test_crawl_record_response_exposes_review_bucket_and_hides_manifest_trace():
@@ -66,3 +67,66 @@ def test_crawl_record_response_dedupes_review_bucket_case_only_variants():
 
     assert len(payload.review_bucket) == 1
     assert payload.review_bucket[0].value == "Supelco"
+
+
+def test_sanitize_persisted_record_payload_strips_raw_item_and_schema_keys():
+    data, discovered = _sanitize_persisted_record_payload(
+        {
+            "title": "Example Product",
+            "_raw_item": {"token": "secret"},
+            "_source": "next_data",
+        },
+        discovered_data={
+            "review_bucket": [{"key": "brand", "value": "Acme", "source": "json_ld"}],
+            "_raw_item": {"token": "secret"},
+            "__typename": "ProductCard",
+            "@context": "https://schema.org",
+        },
+    )
+
+    assert "_raw_item" not in data
+    assert "_source" not in data
+    assert discovered == {
+        "review_bucket": [{"key": "brand", "value": "Acme", "source": "json_ld"}]
+    }
+
+
+def test_sanitize_persisted_record_payload_redacts_pii_from_discovered_payloads():
+    _, discovered = _sanitize_persisted_record_payload(
+        {"title": "Example Product"},
+        discovered_data={
+            "discovered_fields": {
+                "support_email": "support@example.com",
+                "notes": "Call +91 98765 43210 or email sales@example.com",
+            },
+            "review_bucket": [
+                {
+                    "key": "contact_email",
+                    "value": "sales@example.com",
+                    "source": "llm_cleanup",
+                },
+                {
+                    "key": "contact_notes",
+                    "value": "Reach us on (415) 555-2671 ext 9",
+                    "source": "regex",
+                },
+            ],
+        },
+    )
+
+    assert discovered["discovered_fields"] == {
+        "support_email": "[REDACTED]",
+        "notes": "Call [REDACTED] or email [REDACTED]",
+    }
+    assert discovered["review_bucket"] == [
+        {
+            "key": "contact_email",
+            "value": "[REDACTED]",
+            "source": "llm_cleanup",
+        },
+        {
+            "key": "contact_notes",
+            "value": "Reach us on [REDACTED]",
+            "source": "regex",
+        },
+    ]

@@ -21,10 +21,8 @@ from app.services.extract.candidate_processing import (
     _embedded_blob_payload,
     _looks_like_ga_data_layer,
     _normalized_candidate_text,
-    _strip_tracking_query_params,
     coerce_field_candidate_value,
     normalize_html_rich_text,
-    resolve_candidate_url,
 )
 from app.services.extract.field_classifier import _field_alias_tokens, _normalized_field_token
 from app.services.xpath_service import build_absolute_xpath

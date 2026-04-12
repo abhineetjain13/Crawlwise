@@ -50,8 +50,17 @@ def get_prompt_task(task_type: str) -> dict | None:
 
 
 def load_prompt_file(relative_path: str) -> str:
-    candidate = _PROMPTS_DIR / str(relative_path or "").strip()
-    if not str(relative_path or "").strip() or not candidate.is_file():
+    relative_path = str(relative_path or "").strip()
+    candidate = _PROMPTS_DIR / relative_path
+    if not relative_path:
+        return ""
+    prompts_dir_resolved = _PROMPTS_DIR.resolve(strict=False)
+    candidate_resolved = candidate.resolve(strict=False)
+    try:
+        candidate_resolved.relative_to(prompts_dir_resolved)
+    except ValueError:
+        return ""
+    if not candidate.is_file():
         return ""
     return candidate.read_text(encoding="utf-8")
 

@@ -78,7 +78,9 @@ def _sanitize_header_value(value: str) -> str:
 
 @app.middleware("http")
 async def correlation_middleware(request: Request, call_next) -> Response:
-    request_id_header = settings.request_id_header
+    request_id_header = _sanitize_header_value(settings.request_id_header).strip()
+    if not request_id_header:
+        request_id_header = "X-Request-ID"
     raw_correlation_id = request.headers.get(request_id_header)
     correlation_id = (
         _sanitize_header_value(raw_correlation_id)

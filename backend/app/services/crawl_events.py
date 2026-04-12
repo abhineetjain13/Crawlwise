@@ -94,6 +94,10 @@ def _db_log_counter_key(run_id: int) -> str:
     return f"{_REDIS_KEY_PREFIX}:db:{int(run_id)}"
 
 
+def _should_persist_log_without_redis(level: str) -> bool:
+    return _LEVEL_ORDER[_normalize_level(level)] >= _LEVEL_ORDER["info"]
+
+
 async def _should_persist_log(level: str, run_id: int, message: str) -> bool:
     min_level = _normalize_level(settings.crawl_log_db_min_level)
     log_level = _normalize_level(level)
@@ -116,7 +120,7 @@ async def _should_persist_log(level: str, run_id: int, message: str) -> bool:
 
     return await redis_fail_open(
         _decide,
-        default=True,
+        default=_should_persist_log_without_redis(log_level),
         operation_name=f"should_persist_log:{run_id}",
     )
 

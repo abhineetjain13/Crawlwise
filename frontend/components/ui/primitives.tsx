@@ -24,7 +24,7 @@ export function Card({
     <section
       {...props}
       className={cn(
-        "rounded-[var(--radius-xl)] border-2 border-[var(--border-strong)] bg-[var(--surface-card)] shadow-[var(--shadow-card-value)]",
+        "surface-panel",
         "relative",
         "p-5",
         animate && "animate-fade-in",
@@ -45,11 +45,11 @@ export function Title({
   return (
     <div className={cn("space-y-1", className)}>
       {kicker ? (
-        <p className="text-kicker text-[var(--accent)]">
+        <p className="text-kicker text-accent">
           {kicker}
         </p>
       ) : null}
-      <h1 className="text-title-sm text-[var(--text-primary)] sm:text-[20px]">
+      <h1 className="text-page-title text-primary">
         {children}
       </h1>
     </div>
@@ -57,7 +57,7 @@ export function Title({
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="max-w-2xl text-body-sm leading-5 text-[var(--text-muted)]">{children}</p>;
+  return <p className="max-w-2xl text-page-subtitle">{children}</p>;
 }
 
 /* ─── Field ──────────────────────────────────────────────────────────────── */
@@ -70,7 +70,7 @@ export function Field({
     <label className="grid gap-1.5">
       <span className="label-caps">{label}</span>
       {children}
-      {hint ? <span className="text-meta text-[var(--text-muted)]">{hint}</span> : null}
+      {hint ? <span className="text-meta text-muted">{hint}</span> : null}
     </label>
   );
 }
@@ -88,7 +88,7 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
     <input
       {...normalizedProps}
       className={cn(
-        "focus-ring h-[var(--control-height)] w-full rounded-[var(--radius-md)] border-2 border-[var(--border-strong)]",
+        "control-field focus-ring h-[var(--control-height)] w-full rounded-[var(--radius-md)]",
         "bg-[var(--control-input-bg)] px-3 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
@@ -112,7 +112,7 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
     <textarea
       {...normalizedProps}
       className={cn(
-        "focus-ring min-h-20 w-full rounded-[var(--radius-md)] border-2 border-[var(--border-strong)]",
+        "control-field focus-ring min-h-20 w-full rounded-[var(--radius-md)]",
         "bg-[var(--control-input-bg)] px-3 py-2 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
@@ -139,13 +139,13 @@ export function Button({
 >) {
   const variants: Record<string, string> = {
     primary:
-      "bg-[var(--accent)] !text-[var(--button-filled-fg)] hover:bg-[var(--accent-hover)] shadow-[var(--shadow-xs)]",
+      "bg-[var(--accent)] !text-[var(--button-filled-fg)] hover:bg-[var(--accent-hover)] shadow-[0_14px_30px_color-mix(in_srgb,var(--accent)_24%,transparent)]",
     secondary:
-      "border-2 border-[var(--border-strong)] bg-[var(--button-secondary-bg)] text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-focus)]",
+      "button-secondary-surface text-[var(--text-primary)] hover:bg-[var(--button-secondary-hover-bg)] hover:border-[var(--border-focus)]",
     ghost:
-      "border-2 border-transparent bg-transparent text-[var(--text-primary)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
+      "button-ghost-surface text-[var(--text-primary)] hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--text-primary)]",
     accent: "accent-fill",
-    danger: "border-2 border-[var(--danger)] bg-[var(--danger)] !text-[var(--button-filled-fg)] hover:opacity-90",
+    danger: "border-[length:var(--interactive-border-width)] border-[var(--danger)] danger-fill",
   };
   const sizes: Record<string, string> = {
     sm:   "h-8 px-2.5 text-caption",
@@ -191,7 +191,7 @@ export function Badge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5",
-        "text-[10px] font-medium uppercase tracking-[0.04em] leading-none",
+        "text-kicker leading-none",
         tones[tone] ?? tones.neutral,
         className,
       )}
@@ -220,12 +220,12 @@ export function Toggle({
       onClick={() => onChange(!checked)}
       className={cn(
         "focus-ring relative inline-flex h-[18px] w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors",
-        checked ? "bg-[var(--accent)]" : "bg-[var(--border-strong)]",
+        checked ? "bg-[var(--accent)] shadow-[0_8px_18px_color-mix(in_srgb,var(--accent)_26%,transparent)]" : "bg-[var(--border-strong)]",
       )}
     >
       <span
         className={cn(
-          "inline-block h-3.5 w-3.5 rounded-full bg-[var(--accent-fg)] shadow-[var(--shadow-xs)] transition-transform",
+          "inline-block h-3.5 w-3.5 rounded-full bg-[var(--accent-fg)] shadow-[0_3px_10px_rgba(0,0,0,0.18)] transition-transform",
           checked ? "translate-x-[14px]" : "translate-x-0.5",
         )}
       />
@@ -240,12 +240,12 @@ export function Metric({
   loading = false,
 }: Readonly<{ label: string; value: ReactNode; loading?: boolean }>) {
   return (
-    <div className="rounded-[var(--radius-xl)] border border-[var(--border)] bg-[var(--bg-panel)] p-4 space-y-1.5 shadow-[var(--shadow-card-value)]">
+    <div className="surface-panel space-y-1.5 p-4">
       <p className="label-caps">{label}</p>
       {loading ? (
         <div className="skeleton h-7 w-20" aria-hidden />
       ) : (
-        <div className="text-title-md text-[var(--text-primary)]">
+        <div className="text-title-md text-primary">
           {value}
         </div>
       )}
@@ -290,12 +290,12 @@ export function StatCard({
       {loading ? (
         <div className="mt-2.5 skeleton h-9 w-28" aria-hidden />
       ) : (
-        <div className="mt-2 text-[var(--text-2xl)] font-bold tracking-[var(--tracking-tighter)] text-[var(--text-primary)]">
+        <div className="mt-2 text-stat-value text-primary">
           {value}
         </div>
       )}
       {sub && !loading && (
-        <div className="mt-1.5 text-meta font-medium text-[var(--text-muted)]">
+        <div className="mt-1.5 text-meta text-muted">
           {sub}
         </div>
       )}
@@ -311,13 +311,13 @@ export function DataList({
 }: Readonly<{ title: string; items: ReactNode[]; empty: string }>) {
   return (
     <Card className="space-y-3">
-      <h2 className="text-[var(--text-md)] font-semibold tracking-[var(--tracking-tight)] text-[var(--text-primary)]">
+      <h2 className="text-section-title text-primary">
         {title}
       </h2>
       {items.length ? (
         <div className="grid gap-2">{items}</div>
       ) : (
-        <p className="text-body-sm text-[var(--text-muted)]">{empty}</p>
+        <p className="text-body-sm text-muted">{empty}</p>
       )}
     </Card>
   );
@@ -332,7 +332,7 @@ export function CodeBlock({
     <pre
       className={cn(
         "max-h-[28rem] overflow-auto rounded-[var(--radius-lg)] border border-[var(--border)]",
-        "bg-[var(--bg-elevated)] p-4 font-mono text-caption leading-[1.6] text-[var(--text-primary)]",
+        "bg-[var(--subtle-panel-bg)] p-4 font-mono text-caption leading-[1.6] text-primary",
         className,
       )}
     >
@@ -345,7 +345,7 @@ export function CodeBlock({
 export function Table({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
     <div className="relative w-full overflow-auto">
-      <table className={cn("w-full caption-bottom text-sm", className)}>{children}</table>
+      <table className={cn("w-full caption-bottom text-body-sm", className)}>{children}</table>
     </div>
   );
 }
@@ -367,7 +367,7 @@ export function TableRow({
     <tr
       {...props}
       className={cn(
-        "border-b border-[var(--border)] transition-colors hover:bg-[var(--bg-elevated)]",
+          "border-b border-[var(--divider)] transition-colors hover:bg-[var(--bg-elevated)]",
         className,
       )}
     >
@@ -380,7 +380,7 @@ export function TableHead({ children, className }: Readonly<{ children: ReactNod
   return (
     <th
       className={cn(
-        "h-9 px-4 text-left align-middle text-meta font-semibold uppercase tracking-[0.05em] text-[var(--text-muted)]",
+        "h-9 px-4 text-left align-middle label-caps tone-muted",
         className,
       )}
     >
@@ -395,7 +395,7 @@ export function TableCell({
   colSpan,
 }: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
   return (
-    <td className={cn("p-4 align-middle text-[var(--text-secondary)]", className)} colSpan={colSpan}>
+    <td className={cn("text-data p-4 align-middle", className)} colSpan={colSpan}>
       {children}
     </td>
   );
@@ -446,13 +446,13 @@ export function Tooltip({
         role="tooltip"
         className={cn(
           "pointer-events-none absolute bottom-full left-1/2 mb-2 w-max max-w-[320px] -translate-x-1/2",
-          "rounded-[var(--radius-md)] border-2 border-[var(--border-strong)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
-          "text-[10px] font-medium leading-normal text-[var(--text-primary)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+          "tooltip-surface rounded-[var(--radius-md)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
+          "text-meta font-medium leading-normal text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
           "z-50 break-words",
         )}
       >
         {content}
-        <div className="absolute -bottom-[6px] left-1/2 size-2.5 -translate-x-1/2 rotate-45 border-b-2 border-r-2 border-[var(--border-strong)] bg-[var(--bg-panel)]" />
+        <div className="absolute -bottom-[6px] left-1/2 size-2.5 -translate-x-1/2 rotate-45 border-b border-r border-[var(--border-strong)] bg-[var(--bg-panel)]" />
       </div>
     </div>
   );

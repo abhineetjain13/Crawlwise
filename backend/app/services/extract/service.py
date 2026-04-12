@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from bs4 import BeautifulSoup
 
@@ -79,6 +80,156 @@ from app.services.requested_field_policy import expand_requested_fields
 from app.services.xpath_service import extract_selector_value
 
 logger = logging.getLogger(__name__)
+_SOURCE_COLLECTION_TIERS: dict[str, tuple[str, ...]] = {
+    "contract": ("contract_xpath", "contract_regex"),
+    "adapter": ("adapter",),
+    "json_ld": ("json_ld",),
+    "datalayer": ("datalayer",),
+    "network_intercept": ("network_intercept",),
+    "structured_state": (
+        "next_data",
+        "hydrated_state",
+        "embedded_json",
+        "network_intercept",
+    ),
+    "dom_meta": ("selector", "dom", "microdata", "open_graph", "dom_breadcrumb"),
+    "semantic_section": ("semantic_section",),
+    "text_pattern": ("text_pattern",),
+}
+
+
+def _preview_audit_value(value: object, *, limit: int = 80) -> str:
+    text = " ".join(str(value).split()).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
+
+
+def _record_audit_source_attempt(
+    extraction_audit: dict[str, dict[str, object]],
+    *,
+    field_name: str,
+    source_label: str,
+    rows: list[dict],
+    start_index: int,
+) -> None:
+    field_audit = extraction_audit.setdefault(field_name, {"sources": []})
+    new_rows = [
+        row for row in rows[start_index:] if isinstance(row, dict)
+    ]
+    entry = {
+        "source": source_label,
+        "status": "produced_candidates" if new_rows else "empty",
+        "candidate_count": len(new_rows),
+        "row_sources": [
+            str(row.get("source") or source_label)
+            for row in new_rows
+            if str(row.get("source") or source_label).strip()
+        ],
+        "value_previews": [
+            _preview_audit_value(row.get("value"))
+            for row in new_rows[-3:]
+            if row.get("value") not in (None, "", [], {})
+        ],
+    }
+    field_audit.setdefault("sources", []).append(entry)
+    logger.debug(
+        "[EXTRACT] field=%s source=%s candidates=%d values=%s",
+        field_name,
+        source_label,
+        len(new_rows),
+        entry["value_previews"],
+    )
+
+
+def _record_audit_source_skipped(
+    extraction_audit: dict[str, dict[str, object]],
+    *,
+    field_name: str,
+    source_label: str,
+    reason: str,
+) -> None:
+    field_audit = extraction_audit.setdefault(field_name, {"sources": []})
+    field_audit.setdefault("sources", []).append(
+        {
+            "source": source_label,
+            "status": "skipped",
+            "reason": reason,
+            "candidate_count": 0,
+            "row_sources": [],
+            "value_previews": [],
+        }
+    )
+
+
+def _record_field_decision_audit(
+    extraction_audit: dict[str, dict[str, object]],
+    *,
+    field_name: str,
+    decision,
+    total_rows: int,
+) -> None:
+    field_audit = extraction_audit.setdefault(field_name, {"sources": []})
+    field_audit["candidate_count"] = total_rows
+    field_audit["rejected"] = list(decision.rejected_rows)
+
+    if not decision.accepted or decision.winning_row is None:
+        field_audit["status"] = "rejected"
+        field_audit["winner"] = None
+        if decision.rejection_reason:
+            field_audit["decision_reason"] = decision.rejection_reason
+        return
+
+    losing_rows: list[dict[str, object]] = []
+    for row in decision.accepted_rows:
+        if row is decision.winning_row:
+            continue
+        losing_rank = candidate_source_rank(field_name, row.get("source"))
+        reason = (
+            "lower_source_rank"
+            if losing_rank < decision.rank
+            else "tie_lost_to_earlier_candidate"
+        )
+        losing_rows.append(
+            {
+                "source": row.get("source"),
+                "value_preview": _preview_audit_value(row.get("value")),
+                "reason": reason,
+                "rank": losing_rank,
+            }
+        )
+
+    field_audit["status"] = "accepted"
+    field_audit["winner"] = {
+        "source": decision.source,
+        "value_preview": _preview_audit_value(decision.value),
+        "rank": decision.rank,
+        "losing_candidate_count": len(losing_rows),
+        "rejected_candidate_count": len(decision.rejected_rows),
+    }
+    field_audit["losers"] = losing_rows
+    logger.info(
+        "[EXTRACT] field=%s winner_source=%s value_preview=%s rejected=%d",
+        field_name,
+        decision.source,
+        _preview_audit_value(decision.value),
+        max(total_rows - 1, 0),
+    )
+
+
+def _record_final_output_audit(
+    extraction_audit: dict[str, dict[str, object]],
+    final_candidates: dict[str, list[dict]],
+) -> None:
+    for field_name, rows in final_candidates.items():
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            continue
+        row = rows[0]
+        field_audit = extraction_audit.setdefault(field_name, {"sources": []})
+        field_audit["final_output"] = {
+            "source": row.get("source"),
+            "value_preview": _preview_audit_value(row.get("value")),
+        }
 
 
 def get_canonical_fields(surface: str) -> list[str]:
@@ -132,6 +283,7 @@ def extract_candidates(
         if "listing" in str(surface or "").lower():
             return {}, {
                 "candidates": {},
+                "extraction_audit": {},
                 "mapping_hint": {},
                 "semantic": {},
                 "surface_gate": "listing",
@@ -182,7 +334,7 @@ def extract_candidates(
         ) from exc
 
     # Step 1: Collect all candidates from all sources
-    candidates = _collect_candidates(
+    candidates, extraction_audit = _collect_candidates(
         url=url,
         surface=surface,
         html=html,
@@ -204,6 +356,7 @@ def extract_candidates(
     # Step 3: Finalize candidates (deduplicate, add dynamic fields)
     return _finalize_candidates(
         candidates=candidates,
+        extraction_audit=extraction_audit,
         surface=surface,
         url=url,
         semantic=semantic,
@@ -233,7 +386,7 @@ def _collect_candidates(
     contract_by_field: dict,
     semantic: dict,
     label_value_text_sources: dict,
-) -> dict[str, list[dict]]:
+) -> tuple[dict[str, list[dict]], dict[str, dict[str, object]]]:
     """Gather candidate values using a Strategy iteration pattern (first-match wins).
 
     Implements extraction hierarchy with first-match wins:
@@ -250,6 +403,7 @@ def _collect_candidates(
     Returns: {field_name: [candidate_rows]}
     """
     candidates: dict[str, list[dict]] = {}
+    extraction_audit: dict[str, dict[str, object]] = {}
     domain = _domain(url)
 
     # Extract all page sources
@@ -274,12 +428,16 @@ def _collect_candidates(
         if isinstance(semantic.get("promoted_fields"), dict)
         else {}
     )
+    from app.services.extract.field_decision import FieldDecisionEngine
+
+    engine = FieldDecisionEngine(base_url=url)
 
     for field_name in target_fields:
         rows: list[dict] = []
+        short_circuited = False
 
-        # 1-2. Collect contract and adapter candidates, but do not short-circuit:
-        # downstream arbitration must see all sources to choose the winner.
+        # Contract rows are terminal when they already beat every remaining tier.
+        start_index = len(rows)
         _collect_contract_candidates(
             rows,
             field_name=field_name,
@@ -287,13 +445,95 @@ def _collect_candidates(
             html=html,
             contract_by_field=contract_by_field,
         )
+        _record_audit_source_attempt(
+            extraction_audit,
+            field_name=field_name,
+            source_label="contract",
+            rows=rows,
+            start_index=start_index,
+        )
+        if _collection_is_decisive(
+            field_name,
+            rows,
+            engine=engine,
+            remaining_tiers=(
+                "adapter",
+                "json_ld",
+                "datalayer",
+                "network_intercept",
+                "structured_state",
+                "dom_meta",
+                "semantic_section",
+                "text_pattern",
+            ),
+        ):
+            _record_remaining_source_skips(
+                extraction_audit,
+                field_name=field_name,
+                source_labels=(
+                    "adapter",
+                    "json_ld",
+                    "datalayer",
+                    "network_intercept",
+                    "structured_state",
+                    "dom_meta",
+                    "semantic_section",
+                    "text_pattern",
+                ),
+            )
+            short_circuited = True
+
+        if short_circuited:
+            if rows:
+                candidates[field_name] = rows
+            continue
+
+        start_index = len(rows)
         _collect_adapter_candidates(
             rows, field_name=field_name, adapter_records=adapter_records
         )
+        _record_audit_source_attempt(
+            extraction_audit,
+            field_name=field_name,
+            source_label="adapter",
+            rows=rows,
+            start_index=start_index,
+        )
+        if _collection_is_decisive(
+            field_name,
+            rows,
+            engine=engine,
+            remaining_tiers=(
+                "json_ld",
+                "datalayer",
+                "network_intercept",
+                "structured_state",
+                "dom_meta",
+                "semantic_section",
+                "text_pattern",
+            ),
+        ):
+            _record_remaining_source_skips(
+                extraction_audit,
+                field_name=field_name,
+                source_labels=(
+                    "json_ld",
+                    "datalayer",
+                    "network_intercept",
+                    "structured_state",
+                    "dom_meta",
+                    "semantic_section",
+                    "text_pattern",
+                ),
+            )
+            short_circuited = True
 
-        # 3-6. Collect from ALL remaining structured sources so
-        # _finalize_candidates can pick the highest-ranked candidate
-        # via SOURCE_RANKING (e.g. json_ld=6 beats datalayer=2).
+        if short_circuited:
+            if rows:
+                candidates[field_name] = rows
+            continue
+
+        start_index = len(rows)
         _collect_jsonld_candidates(
             rows,
             field_name=field_name,
@@ -301,7 +541,85 @@ def _collect_candidates(
             base_url=url,
             surface=surface,
         )
+        _record_audit_source_attempt(
+            extraction_audit,
+            field_name=field_name,
+            source_label="json_ld",
+            rows=rows,
+            start_index=start_index,
+        )
+        if _collection_is_decisive(
+            field_name,
+            rows,
+            engine=engine,
+            remaining_tiers=(
+                "datalayer",
+                "network_intercept",
+                "structured_state",
+                "dom_meta",
+                "semantic_section",
+                "text_pattern",
+            ),
+        ):
+            _record_remaining_source_skips(
+                extraction_audit,
+                field_name=field_name,
+                source_labels=(
+                    "datalayer",
+                    "network_intercept",
+                    "structured_state",
+                    "dom_meta",
+                    "semantic_section",
+                    "text_pattern",
+                ),
+            )
+            short_circuited = True
+
+        if short_circuited:
+            if rows:
+                candidates[field_name] = rows
+            continue
+
+        start_index = len(rows)
         _collect_datalayer_candidates(rows, field_name=field_name, datalayer=datalayer)
+        _record_audit_source_attempt(
+            extraction_audit,
+            field_name=field_name,
+            source_label="datalayer",
+            rows=rows,
+            start_index=start_index,
+        )
+        if _collection_is_decisive(
+            field_name,
+            rows,
+            engine=engine,
+            remaining_tiers=(
+                "network_intercept",
+                "structured_state",
+                "dom_meta",
+                "semantic_section",
+                "text_pattern",
+            ),
+        ):
+            _record_remaining_source_skips(
+                extraction_audit,
+                field_name=field_name,
+                source_labels=(
+                    "network_intercept",
+                    "structured_state",
+                    "dom_meta",
+                    "semantic_section",
+                    "text_pattern",
+                ),
+            )
+            short_circuited = True
+
+        if short_circuited:
+            if rows:
+                candidates[field_name] = rows
+            continue
+
+        start_index = len(rows)
         _collect_network_payload_candidates(
             rows,
             field_name=field_name,
@@ -309,6 +627,42 @@ def _collect_candidates(
             base_url=url,
             surface=surface,
         )
+        _record_audit_source_attempt(
+            extraction_audit,
+            field_name=field_name,
+            source_label="network_intercept",
+            rows=rows,
+            start_index=start_index,
+        )
+        if _collection_is_decisive(
+            field_name,
+            rows,
+            engine=engine,
+            remaining_tiers=(
+                "structured_state",
+                "dom_meta",
+                "semantic_section",
+                "text_pattern",
+            ),
+        ):
+            _record_remaining_source_skips(
+                extraction_audit,
+                field_name=field_name,
+                source_labels=(
+                    "structured_state",
+                    "dom_meta",
+                    "semantic_section",
+                    "text_pattern",
+                ),
+            )
+            short_circuited = True
+
+        if short_circuited:
+            if rows:
+                candidates[field_name] = rows
+            continue
+
+        start_index = len(rows)
         _collect_structured_state_candidates(
             rows,
             field_name=field_name,
@@ -319,44 +673,90 @@ def _collect_candidates(
             base_url=url,
             surface=surface,
         )
-
-        # 7. DOM selectors
-        _collect_dom_and_meta_candidates(
-            rows,
+        _record_audit_source_attempt(
+            extraction_audit,
             field_name=field_name,
-            html=html,
-            soup=soup,
-            domain=domain,
-            microdata=microdata,
-            open_graph=open_graph,
-            base_url=url,
-            surface=surface,
+            source_label="structured_state",
+            rows=rows,
+            start_index=start_index,
         )
-
-        # 8. Semantic extraction
-        if _is_semantic_requested_field(field_name, canonical_target_fields):
-            semantic_rows = resolve_requested_field_values(
-                [field_name],
-                sections=semantic_sections,
-                specifications=semantic_specifications,
-                promoted_fields=semantic_promoted,
+        if _collection_is_decisive(
+            field_name,
+            rows,
+            engine=engine,
+            remaining_tiers=("dom_meta", "semantic_section", "text_pattern"),
+        ):
+            _record_remaining_source_skips(
+                extraction_audit,
+                field_name=field_name,
+                source_labels=("dom_meta", "semantic_section", "text_pattern"),
             )
-            semantic_value = semantic_rows.get(field_name)
-            if semantic_value not in (None, "", [], {}):
-                rows.append({"value": semantic_value, "source": "semantic_section"})
+            short_circuited = True
 
-        # 9. Text patterns
-        if _is_semantic_requested_field(field_name, canonical_target_fields):
-            text_value = _extract_label_value_from_text(
-                field_name, label_value_text_sources, html, surface=surface
+        if not short_circuited:
+            # 7. DOM selectors
+            start_index = len(rows)
+            _collect_dom_and_meta_candidates(
+                rows,
+                field_name=field_name,
+                html=html,
+                soup=soup,
+                domain=domain,
+                microdata=microdata,
+                open_graph=open_graph,
+                base_url=url,
+                surface=surface,
             )
-            if text_value:
-                rows.append({"value": text_value, "source": "text_pattern"})
+            _record_audit_source_attempt(
+                extraction_audit,
+                field_name=field_name,
+                source_label="dom_meta",
+                rows=rows,
+                start_index=start_index,
+            )
+
+            # 8. Semantic extraction
+            if _is_semantic_requested_field(field_name, canonical_target_fields):
+                start_index = len(rows)
+                semantic_rows = resolve_requested_field_values(
+                    [field_name],
+                    sections=semantic_sections,
+                    specifications=semantic_specifications,
+                    promoted_fields=semantic_promoted,
+                )
+                semantic_value = semantic_rows.get(field_name)
+                if semantic_value not in (None, "", [], {}):
+                    rows.append(
+                        {"value": semantic_value, "source": "semantic_section"}
+                    )
+                _record_audit_source_attempt(
+                    extraction_audit,
+                    field_name=field_name,
+                    source_label="semantic_section",
+                    rows=rows,
+                    start_index=start_index,
+                )
+
+            # 9. Text patterns
+            if _is_semantic_requested_field(field_name, canonical_target_fields):
+                start_index = len(rows)
+                text_value = _extract_label_value_from_text(
+                    field_name, label_value_text_sources, html, surface=surface
+                )
+                if text_value:
+                    rows.append({"value": text_value, "source": "text_pattern"})
+                _record_audit_source_attempt(
+                    extraction_audit,
+                    field_name=field_name,
+                    source_label="text_pattern",
+                    rows=rows,
+                    start_index=start_index,
+                )
 
         if rows:
             candidates[field_name] = rows
 
-    return candidates
+    return candidates, extraction_audit
 
 
 def _is_semantic_requested_field(
@@ -366,6 +766,51 @@ def _is_semantic_requested_field(
     return (
         field_name in canonical_target_fields or field_name in REQUESTED_FIELD_ALIASES
     )
+
+
+def _collection_is_decisive(
+    field_name: str,
+    rows: list[dict],
+    *,
+    engine,
+    remaining_tiers: tuple[str, ...],
+) -> bool:
+    if not rows:
+        return False
+    decision = engine.decide_from_rows(field_name, rows)
+    if not decision.accepted:
+        return False
+    remaining_best_rank = _max_remaining_source_rank(field_name, remaining_tiers)
+    return decision.rank >= remaining_best_rank
+
+
+def _max_remaining_source_rank(
+    field_name: str,
+    source_labels: tuple[str, ...],
+) -> int:
+    best_rank = 0
+    for source_label in source_labels:
+        for candidate_source in _SOURCE_COLLECTION_TIERS.get(source_label, (source_label,)):
+            best_rank = max(
+                best_rank,
+                candidate_source_rank(field_name, candidate_source),
+            )
+    return best_rank
+
+
+def _record_remaining_source_skips(
+    extraction_audit: dict[str, dict[str, object]],
+    *,
+    field_name: str,
+    source_labels: tuple[str, ...],
+) -> None:
+    for source_label in source_labels:
+        _record_audit_source_skipped(
+            extraction_audit,
+            field_name=field_name,
+            source_label=source_label,
+            reason="decisive_higher_rank_candidate",
+        )
 
 
 def _collect_contract_candidates(
@@ -629,6 +1074,7 @@ def _filter_candidates(
 
 def _finalize_candidates(
     candidates: dict[str, list[dict]],
+    extraction_audit: dict[str, dict[str, object]],
     surface: str,
     url: str,
     semantic: dict,
@@ -659,6 +1105,12 @@ def _finalize_candidates(
     for field_name, rows in candidates.items():
         if rows:
             decision = engine.decide_from_rows(field_name, rows)
+            _record_field_decision_audit(
+                extraction_audit,
+                field_name=field_name,
+                decision=decision,
+                total_rows=len(rows),
+            )
             if decision.accepted and decision.winning_row is not None:
                 final_candidates[field_name] = [decision.winning_row]
 
@@ -680,6 +1132,8 @@ def _finalize_candidates(
         structured_sources=structured_sources,
         allowed_fields=target_fields,
     )
+    for variant_bundle_field in ("variants", "variant_axes", "selected_variant"):
+        structured_rows.pop(variant_bundle_field, None)
     product_detail_rows = _build_product_detail_rows(
         soup,
         base_url=url,
@@ -740,6 +1194,29 @@ def _finalize_candidates(
         surface_excluded_dynamic_fields = frozenset()
     discovered_dynamic_fields: dict[str, object] = {}
     for field_name, rows in merged_dynamic_rows.items():
+        dynamic_source_rows: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            dynamic_source_rows.setdefault(
+                str(row.get("source") or "dynamic"),
+                [],
+            ).append(row)
+        for source_label, source_rows in dynamic_source_rows.items():
+            field_audit = extraction_audit.setdefault(field_name, {"sources": []})
+            field_audit.setdefault("sources", []).append(
+                {
+                    "source": source_label,
+                    "status": "produced_candidates",
+                    "candidate_count": len(source_rows),
+                    "row_sources": [source_label],
+                    "value_previews": [
+                        _preview_audit_value(row.get("value"))
+                        for row in source_rows[-3:]
+                        if row.get("value") not in (None, "", [], {})
+                    ],
+                }
+            )
         if field_name in surface_excluded_dynamic_fields:
             continue
         filtered_rows = _finalize_candidate_rows(field_name, rows, base_url=url)
@@ -770,6 +1247,12 @@ def _finalize_candidates(
                 field_name,
                 [*final_candidates[field_name], *filtered_rows],
             )
+            _record_field_decision_audit(
+                extraction_audit,
+                field_name=field_name,
+                decision=decision,
+                total_rows=len(final_candidates[field_name]) + len(filtered_rows),
+            )
             if decision.accepted and decision.winning_row is not None:
                 final_candidates[field_name] = [decision.winning_row]
             continue
@@ -794,7 +1277,6 @@ def _finalize_candidates(
         specifications = semantic.get("specifications")
         if (
             "product_attributes" not in final_candidates
-            and specifications
             and isinstance(specifications, dict)
             and specifications
         ):
@@ -808,9 +1290,11 @@ def _finalize_candidates(
     _reconcile_variant_bundle(final_candidates, base_url=url)
     _sync_selected_variant_root_fields(final_candidates)
     _sanitize_product_attributes(final_candidates)
+    _record_final_output_audit(extraction_audit, final_candidates)
 
     return final_candidates, {
         "candidates": dict(final_candidates),
+        "extraction_audit": extraction_audit,
         "discovered_data": {
             "discovered_fields": discovered_dynamic_fields,
         },

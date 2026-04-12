@@ -22,8 +22,10 @@ from app.services.crawl_metrics import (
 )
 from app.services.config.crawl_runtime import AUTO_DETECT_SURFACE
 from bs4 import BeautifulSoup
+from sqlalchemy import delete
 
 from .pipeline_config import PIPELINE_CONFIG
+from .runtime_helpers import STAGE_ANALYZE, STAGE_FETCH, log_event, set_stage
 from .types import PipelineContext
 from .utils import _elapsed_ms, parse_html
 from .verdict import VERDICT_BLOCKED, VERDICT_LISTING_FAILED
@@ -152,6 +154,37 @@ def _looks_like_category_tile_listing(records: list[dict]) -> bool:
     return tile_hints >= max(1, len(records) // 2)
 
 
+async def _discard_listing_records_for_sources(
+    ctx: PipelineContext,
+    *,
+    source_urls: set[str],
+) -> None:
+    from app.models.crawl import CrawlRecord
+
+    normalized_source_urls = {str(source_url or "").strip() for source_url in source_urls}
+    normalized_source_urls = {source_url for source_url in normalized_source_urls if source_url}
+    if not normalized_source_urls:
+        return
+
+    await ctx.session.execute(
+        delete(CrawlRecord).where(
+            CrawlRecord.run_id == ctx.run.id,
+            CrawlRecord.source_url.in_(sorted(normalized_source_urls)),
+        )
+    )
+    record_writer = ctx.record_writer
+    if record_writer is not None and hasattr(record_writer, "records"):
+        record_writer.records[:] = [
+            record
+            for record in record_writer.records
+            if not (
+                getattr(record, "run_id", None) == ctx.run.id
+                and getattr(record, "source_url", None) in normalized_source_urls
+            )
+        ]
+    await ctx.session.flush()
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: Acquisition
 # ---------------------------------------------------------------------------
@@ -161,16 +194,18 @@ class AcquireStage:
     """Fetch the target URL via the acquisition waterfall (curl → Playwright)."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .core import STAGE_FETCH, _log, _set_stage, acquire
+        from . import core as pipeline_core
 
         if ctx.update_run_state:
-            await _set_stage(ctx.session, ctx.run, STAGE_FETCH)
+            await set_stage(ctx.session, ctx.run, STAGE_FETCH)
         if ctx.persist_logs:
-            await _log(ctx.session, ctx.run.id, "info", f"[FETCH] Fetching {ctx.url}")
+            await log_event(ctx.session, ctx.run.id, "info", f"[FETCH] Fetching {ctx.url}")
 
         if ctx.acquisition_result is None:
             started_at = time.perf_counter()
-            ctx.acquisition_result = await acquire(request=ctx.acquisition_request)
+            ctx.acquisition_result = await pipeline_core.acquire(
+                request=ctx.acquisition_request
+            )
             ctx.acquisition_ms = _elapsed_ms(started_at)
         ctx.url_metrics = _build_url_metrics(
             ctx.acquisition_result, requested_fields=ctx.additional_fields
@@ -194,7 +229,7 @@ class AcquireStage:
             )
             if _t_fallback:
                 _t_msg += " (fallback to single-page)"
-            await _log(ctx.session, ctx.run.id, "info", _t_msg)
+            await log_event(ctx.session, ctx.run.id, "info", _t_msg)
 
 
 # ---------------------------------------------------------------------------
@@ -206,14 +241,14 @@ class SurfaceValidationStage:
     """Optional auto-detection of the effective listing surface."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .core import _resolve_listing_surface
+        from .listing_flow import resolve_listing_surface
 
         acq = ctx.acquisition_result
         assert acq is not None
         requested_surface = ctx.surface
         ctx.url_metrics["requested_surface"] = requested_surface
         if AUTO_DETECT_SURFACE:
-            ctx.surface = _resolve_listing_surface(surface=ctx.surface, acq=acq)
+            ctx.surface = resolve_listing_surface(surface=ctx.surface, acq=acq)
             if ctx.surface != requested_surface:
                 ctx.url_metrics["effective_surface"] = ctx.surface
                 ctx.url_metrics["surface_remapped"] = True
@@ -230,7 +265,7 @@ class BlockedDetectionStage:
     async def execute(self, ctx: PipelineContext) -> None:
         from app.models.crawl import CrawlRecord
 
-        from .core import _log, acquire, try_blocked_adapter_recovery
+        from . import core as pipeline_core
         from .trace_builders import _build_acquisition_trace
 
         acq = ctx.acquisition_result
@@ -243,14 +278,14 @@ class BlockedDetectionStage:
         # Listing + curl blocked → one browser-first retry
         if blocked.is_blocked and ctx.is_listing and acq.method != "playwright":
             if ctx.persist_logs:
-                await _log(
+                await log_event(
                     ctx.session,
                     ctx.run.id,
                     "info",
                     "[BLOCKED] Listing page matched blocked signals on initial acquire; retrying once with browser-first recovery",
                 )
             browser_retry_started = time.perf_counter()
-            browser_acq = await acquire(
+            browser_acq = await pipeline_core.acquire(
                 request=ctx.acquisition_request.with_profile_updates(
                     prefer_browser=True,
                     anti_bot_enabled=True,
@@ -271,7 +306,7 @@ class BlockedDetectionStage:
                 )
                 ctx.url_metrics["acquisition_ms"] = ctx.acquisition_ms
                 if ctx.persist_logs:
-                    await _log(
+                    await log_event(
                         ctx.session,
                         ctx.run.id,
                         "info",
@@ -290,11 +325,11 @@ class BlockedDetectionStage:
         recovered = (
             None
             if ctx.config.proxy_list or not ctx.is_listing
-            else await try_blocked_adapter_recovery(ctx.url, ctx.surface)
+            else await pipeline_core.try_blocked_adapter_recovery(ctx.url, ctx.surface)
         )
         if recovered and recovered.records:
             if ctx.persist_logs:
-                await _log(
+                await log_event(
                     ctx.session,
                     ctx.run.id,
                     "info",
@@ -308,7 +343,7 @@ class BlockedDetectionStage:
 
         # Irrecoverably blocked
         if ctx.persist_logs:
-            await _log(
+            await log_event(
                 ctx.session,
                 ctx.run.id,
                 "warning",
@@ -358,7 +393,7 @@ class AdapterStage:
     """Run domain-matched platform adapters against the acquired HTML."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .core import STAGE_ANALYZE, _log, _set_stage, run_adapter
+        from . import core as pipeline_core
 
         acq = ctx.acquisition_result
         assert acq is not None
@@ -367,13 +402,13 @@ class AdapterStage:
         if ctx.adapter_result is not None or ctx.adapter_records:
             return
         html = acq.html
-        ctx.adapter_result = await run_adapter(ctx.url, html, ctx.surface)
+        ctx.adapter_result = await pipeline_core.run_adapter(ctx.url, html, ctx.surface)
         ctx.adapter_records = ctx.adapter_result.records if ctx.adapter_result else []
 
         if ctx.update_run_state:
-            await _set_stage(ctx.session, ctx.run, STAGE_ANALYZE)
+            await set_stage(ctx.session, ctx.run, STAGE_ANALYZE)
         if ctx.persist_logs:
-            await _log(
+            await log_event(
                 ctx.session, ctx.run.id, "info", "[ANALYZE] Extracting candidates"
             )
 
@@ -387,14 +422,8 @@ class ExtractStage:
     """Delegates to the appropriate extraction path based on surface/content type."""
 
     async def execute(self, ctx: PipelineContext) -> None:
-        from .core import (
-            STAGE_ANALYZE,
-            _extract_detail,
-            _extract_listing,
-            _log,
-            _process_json_response,
-            _set_stage,
-        )
+        from .detail_flow import extract_detail, process_json_response
+        from .listing_flow import extract_listing
 
         acq = ctx.acquisition_result
         assert acq is not None
@@ -402,14 +431,14 @@ class ExtractStage:
         # JSON path
         if acq.content_type == "json" and acq.json_data is not None:
             if ctx.persist_logs:
-                await _log(
+                await log_event(
                     ctx.session,
                     ctx.run.id,
                     "info",
                     "[ANALYZE] JSON-first path — API response detected",
                 )
             extraction_started = time.perf_counter()
-            result = await _process_json_response(
+            result = await process_json_response(
                 ctx.session,
                 ctx.run,
                 ctx.url,
@@ -420,6 +449,7 @@ class ExtractStage:
                 ctx.url_metrics,
                 update_run_state=ctx.update_run_state,
                 persist_logs=ctx.persist_logs,
+                record_writer=ctx.record_writer,
             )
             result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started)
             ctx.records = result.records
@@ -429,9 +459,9 @@ class ExtractStage:
 
         html = acq.html
         if ctx.update_run_state:
-            await _set_stage(ctx.session, ctx.run, STAGE_ANALYZE)
+            await set_stage(ctx.session, ctx.run, STAGE_ANALYZE)
         if ctx.persist_logs:
-            await _log(
+            await log_event(
                 ctx.session,
                 ctx.run.id,
                 "info",
@@ -440,7 +470,7 @@ class ExtractStage:
 
         if ctx.is_listing:
             extraction_started = time.perf_counter()
-            result = await _extract_listing(
+            result = await extract_listing(
                 ctx.session,
                 ctx.run,
                 ctx.url,
@@ -452,8 +482,10 @@ class ExtractStage:
                 ctx.surface,
                 ctx.config.max_records,
                 ctx.url_metrics,
+                soup=ctx.soup,
                 update_run_state=ctx.update_run_state,
                 persist_logs=ctx.persist_logs,
+                record_writer=ctx.record_writer,
             )
             result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started)
             ctx.records = result.records
@@ -461,7 +493,7 @@ class ExtractStage:
             ctx.url_metrics = result.url_metrics
         else:
             extraction_started = time.perf_counter()
-            result = await _extract_detail(
+            result = await extract_detail(
                 ctx.session,
                 ctx.run,
                 ctx.url,
@@ -473,8 +505,10 @@ class ExtractStage:
                 ctx.extraction_contract,
                 ctx.surface,
                 ctx.url_metrics,
+                soup=ctx.soup,
                 update_run_state=ctx.update_run_state,
                 persist_logs=ctx.persist_logs,
+                record_writer=ctx.record_writer,
             )
             result.url_metrics["extraction_ms"] = _elapsed_ms(extraction_started)
             ctx.records = result.records
@@ -493,7 +527,8 @@ class ListingBrowserRetryStage:
     async def execute(self, ctx: PipelineContext) -> None:
         from app.services.acquisition import AcquisitionRequest
 
-        from .core import _extract_listing, _log, acquire, run_adapter
+        from . import core as pipeline_core
+        from .listing_flow import extract_listing
 
         acq = ctx.acquisition_result
         assert acq is not None
@@ -506,9 +541,10 @@ class ListingBrowserRetryStage:
             acq.html or "",
             page_url=ctx.url,
         )
+        category_tile_listing = _looks_like_category_tile_listing(ctx.records)
         promote_child_listing = bool(child_listing_url) and (
             ctx.verdict == VERDICT_LISTING_FAILED
-            or _looks_like_category_tile_listing(ctx.records)
+            or category_tile_listing
         )
         if promote_child_listing:
             promotion_reason = (
@@ -517,7 +553,7 @@ class ListingBrowserRetryStage:
                 else "Listing shell matched a deeper same-host category candidate"
             )
             if ctx.persist_logs:
-                await _log(
+                await log_event(
                     ctx.session,
                     ctx.run.id,
                     "info",
@@ -529,7 +565,7 @@ class ListingBrowserRetryStage:
                 url=child_listing_url,
                 proxy_list=list(ctx.acquisition_request.proxy_list),
                 surface=ctx.acquisition_request.surface,
-                traversal_mode=None,
+                traversal_mode=ctx.acquisition_request.traversal_mode,
                 max_pages=ctx.acquisition_request.max_pages,
                 max_scrolls=ctx.acquisition_request.max_scrolls,
                 sleep_ms=ctx.acquisition_request.sleep_ms,
@@ -539,7 +575,7 @@ class ListingBrowserRetryStage:
                 checkpoint=ctx.acquisition_request.checkpoint,
             )
             promoted_started = time.perf_counter()
-            promoted_acq = await acquire(request=child_request)
+            promoted_acq = await pipeline_core.acquire(request=child_request)
             promoted_retry_ms = _elapsed_ms(promoted_started)
             promoted_metrics = _build_url_metrics(
                 promoted_acq,
@@ -549,7 +585,7 @@ class ListingBrowserRetryStage:
             promoted_metrics["listing_child_promotion"] = True
             promoted_metrics["listing_child_promotion_url"] = child_listing_url
             promoted_metrics["listing_child_parent_url"] = ctx.url
-            promoted_adapter_result = await run_adapter(
+            promoted_adapter_result = await pipeline_core.run_adapter(
                 child_listing_url,
                 promoted_acq.html,
                 ctx.surface,
@@ -557,7 +593,7 @@ class ListingBrowserRetryStage:
             promoted_adapter_records = (
                 promoted_adapter_result.records if promoted_adapter_result else []
             )
-            promoted_result = await _extract_listing(
+            promoted_result = await extract_listing(
                 ctx.session,
                 ctx.run,
                 child_listing_url,
@@ -571,6 +607,7 @@ class ListingBrowserRetryStage:
                 promoted_metrics,
                 update_run_state=ctx.update_run_state,
                 persist_logs=ctx.persist_logs,
+                record_writer=ctx.record_writer,
             )
             promoted_result.url_metrics["listing_child_promotion"] = True
             promoted_result.url_metrics["listing_child_promotion_url"] = child_listing_url
@@ -580,13 +617,30 @@ class ListingBrowserRetryStage:
                 ctx.verdict = promoted_result.verdict
                 ctx.url_metrics = promoted_result.url_metrics
                 return
+            if category_tile_listing:
+                if ctx.persist_logs:
+                    await log_event(
+                        ctx.session,
+                        ctx.run.id,
+                        "warning",
+                        "[ANALYZE] Child listing promotion produced 0 records from category-tile results; forcing browser retry",
+                    )
+                source_urls = {
+                    str(record.get("source_url") or record.get("url") or ctx.url).strip()
+                    for record in ctx.records
+                    if isinstance(record, dict)
+                }
+                source_urls.add(str(ctx.url or "").strip())
+                await _discard_listing_records_for_sources(ctx, source_urls=source_urls)
+                ctx.records = []
+                ctx.verdict = VERDICT_LISTING_FAILED
 
         if ctx.verdict != VERDICT_LISTING_FAILED:
             return
         existing_metrics = dict(ctx.url_metrics or {})
         if bool(existing_metrics.get("browser_attempted")):
             if ctx.persist_logs:
-                await _log(
+                await log_event(
                     ctx.session,
                     ctx.run.id,
                     "warning",
@@ -595,7 +649,7 @@ class ListingBrowserRetryStage:
             return
 
         if ctx.persist_logs:
-            await _log(
+            await log_event(
                 ctx.session,
                 ctx.run.id,
                 "info",
@@ -603,7 +657,7 @@ class ListingBrowserRetryStage:
             )
 
         browser_retry_started = time.perf_counter()
-        browser_acq = await acquire(
+        browser_acq = await pipeline_core.acquire(
             request=ctx.acquisition_request.with_profile_updates(prefer_browser=True),
         )
         browser_retry_ms = _elapsed_ms(browser_retry_started)
@@ -619,13 +673,17 @@ class ListingBrowserRetryStage:
         merged_retry_metrics["acquisition_ms"] = ctx.acquisition_ms
         merged_retry_metrics["original_url_metrics"] = original_metrics
         merged_retry_metrics["retry_url_metrics"] = retry_metrics
-        browser_adapter_result = await run_adapter(ctx.url, browser_html, ctx.surface)
+        browser_adapter_result = await pipeline_core.run_adapter(
+            ctx.url,
+            browser_html,
+            ctx.surface,
+        )
         browser_adapter_records = (
             browser_adapter_result.records if browser_adapter_result else []
         )
 
         extraction_started = time.perf_counter()
-        result = await _extract_listing(
+        result = await extract_listing(
             ctx.session,
             ctx.run,
             ctx.url,
@@ -639,6 +697,7 @@ class ListingBrowserRetryStage:
             merged_retry_metrics,
             update_run_state=ctx.update_run_state,
             persist_logs=ctx.persist_logs,
+            record_writer=ctx.record_writer,
         )
         result.url_metrics["listing_browser_retry"] = True
         result.url_metrics["listing_browser_retry_method"] = browser_acq.method

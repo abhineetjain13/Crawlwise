@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from functools import lru_cache
 from json import loads as parse_json
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
@@ -12,92 +11,29 @@ from bs4 import BeautifulSoup
 
 from app.services.config.extraction_rules import (
     CANDIDATE_ASSET_FILE_EXTENSIONS,
-    CANDIDATE_AVAILABILITY_NOISE_PHRASES,
-    CANDIDATE_AVAILABILITY_TOKENS,
-    CANDIDATE_CATEGORY_NOISE_PHRASES,
-    CANDIDATE_CATEGORY_TOKENS,
-    CANDIDATE_COLOR_CSS_NOISE_TOKENS,
     CANDIDATE_COLOR_VARIANT_COUNT_PATTERN,
-    CANDIDATE_CURRENCY_TOKENS,
-    CANDIDATE_DESCRIPTION_TOKENS,
     CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN,
-    CANDIDATE_IDENTIFIER_TOKENS,
-    CANDIDATE_IMAGE_COLLECTION_TOKENS,
-    CANDIDATE_IMAGE_FILE_EXTENSIONS,
-    CANDIDATE_IMAGE_NOISE_TOKENS,
-    CANDIDATE_IMAGE_TOKENS,
-    CANDIDATE_IMAGE_URL_HINT_TOKENS,
-    CANDIDATE_NESTED_COLLECTION_SCAN_LIMIT,
-    CANDIDATE_PLACEHOLDER_VALUES,  # noqa: F401 — re-exported for callers
-    CANDIDATE_PRICE_TOKENS,
-    CANDIDATE_PROMO_ONLY_TITLE_PATTERN,
-    CANDIDATE_RATING_TOKENS,
-    CANDIDATE_REVIEW_COUNT_TOKENS,
-    CANDIDATE_SALARY_TOKENS,
-    CANDIDATE_SCRIPT_NOISE_PATTERN,
-    CANDIDATE_TITLE_NOISE_PHRASES,
     CANDIDATE_TRACKING_PARAM_EXACT_KEYS,
     CANDIDATE_TRACKING_PARAM_PREFIXES,
-    CANDIDATE_UI_ICON_TOKEN_PATTERN,
-    CANDIDATE_UI_NOISE_PHRASES,
-    CANDIDATE_UI_NOISE_TOKEN_PATTERN,
     CANDIDATE_URL_ABSOLUTE_PREFIXES,
     CANDIDATE_URL_ALLOWED_SCHEMES,
-    CANDIDATE_URL_SUFFIXES,
     CURRENCY_CODES,
     CURRENCY_SYMBOL_MAP,
-    DIMENSION_KEYWORDS,
     FIELD_POLLUTION_RULES,
     GA_DATA_LAYER_KEYS,
     MAX_CANDIDATES_PER_FIELD,
+    NORMALIZATION_SENTINEL_VALUES,
     SOURCE_RANKING,
 )
 from app.services.normalizers import (
     dispatch_string_field_coercer as _dispatch_normalizer_string_field_coercer,
     normalize_and_validate_value,
 )
-from app.services.extract.noise_policy import (
-    _BREADCRUMB_STYLE_BRAND_RE,
-    sanitize_detail_field_value,
-)
+from app.services.extract.noise_policy import sanitize_detail_field_value
 
 # ---------------------------------------------------------------------------
 # Module-level constants and compiled regexes
 # ---------------------------------------------------------------------------
-
-_UI_NOISE_TOKEN_RE = (
-    re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE)
-    if CANDIDATE_UI_NOISE_TOKEN_PATTERN
-    else None
-)
-_UI_ICON_TOKEN_RE = (
-    re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE)
-    if CANDIDATE_UI_ICON_TOKEN_PATTERN
-    else None
-)
-_SCRIPT_NOISE_RE = (
-    re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE)
-    if CANDIDATE_SCRIPT_NOISE_PATTERN
-    else None
-)
-_PROMO_ONLY_TITLE_RE = (
-    re.compile(CANDIDATE_PROMO_ONLY_TITLE_PATTERN, re.IGNORECASE)
-    if CANDIDATE_PROMO_ONLY_TITLE_PATTERN
-    else None
-)
-_NON_EMPTY_UI_NOISE_PHRASES = [phrase for phrase in CANDIDATE_UI_NOISE_PHRASES if phrase]
-_UI_NOISE_PHRASES_RE = (
-    re.compile(
-        r"\b(?:"
-        + "|".join(re.escape(phrase) for phrase in _NON_EMPTY_UI_NOISE_PHRASES)
-        + r")\b",
-        re.IGNORECASE,
-    )
-    if _NON_EMPTY_UI_NOISE_PHRASES
-    else None
-)
-_DYNAMIC_NUMERIC_FIELD_RE = re.compile(CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN)
-
 
 def _build_salary_money_re() -> re.Pattern[str]:
     currency_symbols = sorted(
@@ -132,6 +68,7 @@ def _build_salary_money_re() -> re.Pattern[str]:
 
 _SALARY_MONEY_RE = _build_salary_money_re()
 _COLOR_VARIANT_COUNT_RE = re.compile(CANDIDATE_COLOR_VARIANT_COUNT_PATTERN, re.IGNORECASE)
+_DYNAMIC_NUMERIC_FIELD_RE = re.compile(CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN)
 _UNRESOLVED_TEMPLATE_VALUE_RE = re.compile(r"\{[A-Za-z0-9_.-]+\}")
 _VARIANT_SELECTOR_PROMPT_RE = re.compile(
     r"^(?:select|choose|pick)\s+(?:a|an|the|your)?\s*"
@@ -144,23 +81,8 @@ _CROSSFIELD_VARIANT_VALUE_RE = re.compile(
     r"[A-Za-z0-9.+/-]{1,8}(?:\s*,\s*\.?)?$",
     re.IGNORECASE,
 )
-_TITLE_NOISE_PHRASES = tuple(CANDIDATE_TITLE_NOISE_PHRASES)
-_CATEGORY_NOISE_PHRASES = tuple(CANDIDATE_CATEGORY_NOISE_PHRASES)
-_AVAILABILITY_NOISE_PHRASES = tuple(CANDIDATE_AVAILABILITY_NOISE_PHRASES)
-_GENERIC_SENTINEL_VALUES = {
-    "object",
-    "array",
-    "boolean",
-    "null",
-    "none",
-    "undefined",
-    "unknown",
-    "pending",
-    "n/a",
-    "na",
-}
 _RISKY_DETAIL_FIELDS = frozenset(
-    {"title", "brand", "category", "availability", "color", "size"}
+    {"title", "brand", "category", "availability", "color", "size", "features", "care"}
 )
 _DETAIL_FIELD_SOURCE_RANK_OVERRIDES: dict[str, dict[str, int]] = {
     "title": {"datalayer": 2, "embedded_json": 8, "adapter": 10},
@@ -228,7 +150,7 @@ def _coerce_scalar_for_dynamic_row(value: object) -> str | int | float | None:
         return joined if joined else None
     if isinstance(value, str):
         cleaned = _normalized_candidate_text(value)
-        if not cleaned or cleaned.lower() in _GENERIC_SENTINEL_VALUES:
+        if not cleaned or cleaned.lower() in NORMALIZATION_SENTINEL_VALUES:
             return None
         return cleaned
     if isinstance(value, (int, float)):

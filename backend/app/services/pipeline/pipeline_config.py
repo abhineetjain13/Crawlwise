@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True, slots=True)
 class PipelineConfig:
+    schema_max_age_days: int = 7
     listing_promotion_text_hints: tuple[str, ...] = (
         "shop all",
         "all ",
@@ -55,3 +56,4 @@ class PipelineConfig:
 
 
 PIPELINE_CONFIG = PipelineConfig()
+SCHEMA_MAX_AGE_DAYS = PIPELINE_CONFIG.schema_max_age_days

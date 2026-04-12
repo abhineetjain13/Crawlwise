@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from app.services.extract.field_decision import FieldDecisionEngine
+
 _EMPTY_VALUES = (None, "", [], {})
 _STRONG_IDENTITY_FIELDS = ("job_id", "sku", "part_number", "id", "url", "apply_url")
-_LONG_TEXT_FIELDS = {"description", "company", "location", "salary", "department"}
 _WHITESPACE_RE = re.compile(r"\s+")
 _JOB_PRIMARY_SIGNAL_FIELDS = frozenset(
     {
@@ -21,6 +22,7 @@ _JOB_PRIMARY_SIGNAL_FIELDS = frozenset(
         "description",
     }
 )
+_MERGE_ENGINE = FieldDecisionEngine()
 
 
 def strong_identity_key(record: dict) -> str:
@@ -135,24 +137,15 @@ def merge_listing_record(base: dict, incoming: dict) -> dict:
         # If we're adding discount_amount but discount_percentage already exists, skip it
         if key == "discount_amount" and merged.get("discount_percentage") not in _EMPTY_VALUES:
             continue
-        
-        if _should_prefer_listing_value(key, merged.get(key), value):
-            merged[key] = value
+
+        decision = _MERGE_ENGINE.decide_merge(
+            key,
+            merged.get(key),
+            value,
+            candidate_source="listing_identity",
+        )
+        merged[key] = decision.value
     return merged
-
-
-def _should_prefer_listing_value(field_name: str, current: object, candidate: object) -> bool:
-    if candidate in _EMPTY_VALUES:
-        return False
-    if current in _EMPTY_VALUES:
-        return True
-    if field_name in _LONG_TEXT_FIELDS:
-        return len(str(candidate)) > len(str(current))
-    if field_name == "additional_images":
-        current_count = len([part for part in str(current).split(",") if part.strip()])
-        candidate_count = len([part for part in str(candidate).split(",") if part.strip()])
-        return candidate_count > current_count
-    return False
 
 
 def _merge_source_labels(*values: object) -> str:

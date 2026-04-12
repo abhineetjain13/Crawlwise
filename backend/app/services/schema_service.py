@@ -9,13 +9,14 @@ from app.services.config.field_mappings import (
     JOB_ONLY_FIELDS,
 )
 from app.services.domain_utils import normalize_domain
+from app.services.pipeline.pipeline_config import SCHEMA_MAX_AGE_DAYS
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_MAX_SCHEMA_AGE = timedelta(days=7)
+_SCHEMA_MAX_AGE = timedelta(days=SCHEMA_MAX_AGE_DAYS)
 
 
 def get_canonical_fields(surface: str) -> list[str]:
-    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip(), []))
+    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip().lower(), []))
 
 
 @dataclass
@@ -80,7 +81,7 @@ def _snapshot_to_resolved(
     payload = snapshot if isinstance(snapshot, dict) else {}
     saved_at = str(payload.get("saved_at") or "").strip() or None
     saved_at_dt = _parse_saved_at(saved_at)
-    stale = bool(saved_at_dt and datetime.now(UTC) - saved_at_dt > _MAX_SCHEMA_AGE)
+    stale = bool(saved_at_dt and datetime.now(UTC) - saved_at_dt > _SCHEMA_MAX_AGE)
     stored_fields = _dedupe_fields(
         field
         for field in (
@@ -122,8 +123,13 @@ def _snapshot_to_resolved(
         baseline_set = set(baseline)
         new_fields = [field for field in fields if field not in baseline_set]
     if not deprecated_fields:
-        stored_field_set = set(stored_fields)
-        deprecated_fields = [field for field in baseline if field not in stored_field_set]
+        if stored_fields:
+            stored_field_set = set(stored_fields)
+            deprecated_fields = [
+                field for field in baseline if field not in stored_field_set
+            ]
+        else:
+            deprecated_fields = []
     return ResolvedSchema(
         surface=surface,
         domain=domain,

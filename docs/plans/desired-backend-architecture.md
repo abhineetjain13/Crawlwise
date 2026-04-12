@@ -266,8 +266,8 @@ from app.services.acquisition.browser_client import (
 | `/api/dashboard/*` | `api/dashboard.py` | ✅ Correct |
 | `/api/jobs/*` | `api/jobs.py` | ✅ Correct |
 | `/api/users/*` | `api/users.py` | ✅ Correct |
-| `/api/selectors/*` | — | ❌ DELETED. Do not add. Fix frontend instead. |
-| `/api/llm/configs` | — | ❌ DELETED. Do not add. Fix frontend instead. |
+| `/api/selectors/*` | — | 
+| `/api/llm/configs` | — | 
 
 ---
 

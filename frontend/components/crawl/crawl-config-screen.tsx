@@ -271,7 +271,7 @@ export function CrawlConfigScreen({
       <PageHeader title="Crawl Studio" />
 
       {bulkBanner ? (
-        <div className="surface-banner flex items-center justify-between px-4 py-3 text-sm">
+        <div className="surface-banner flex items-center justify-between px-4 py-3 text-body-sm">
           <div>{bulkBanner}</div>
           <button
             type="button"
@@ -283,7 +283,7 @@ export function CrawlConfigScreen({
           </button>
         </div>
       ) : null}
-      <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px]" onSubmit={(event) => void startCrawl(event)}>
+      <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
         <div className="space-y-4">
           <Card className="space-y-5">
             <SectionHeader
@@ -355,7 +355,7 @@ export function CrawlConfigScreen({
                   value={bulkUrls}
                   onChange={(event) => setBulkUrls(event.target.value)}
                   placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
-                  className="min-h-[220px] font-mono text-sm"
+                  className="min-h-[220px] text-mono-body"
                   aria-label="Bulk URLs input"
                 />
               </label>
@@ -383,7 +383,7 @@ export function CrawlConfigScreen({
                       ? "https://example.com/collections/chairs"
                       : "https://example.com/products/oak-chair"
                   }
-                  className="font-mono text-sm"
+                  className="text-mono-body"
                   aria-label="Target URL input"
                 />
               </label>
@@ -424,7 +424,7 @@ export function CrawlConfigScreen({
                   />
                 ))
               ) : (
-                <div className="rounded-[var(--radius-lg)] border border-dashed border-border bg-panel px-4 py-6 text-sm text-muted">
+                <div className="subtle-panel border-dashed px-4 py-6 text-body-sm text-muted">
                   No manual fields yet.
                 </div>
               )}
@@ -432,17 +432,18 @@ export function CrawlConfigScreen({
           </Card>
 
           {configError ? (
-            <div className="rounded-[var(--radius-lg)] border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
+            <div className="alert-surface alert-danger rounded-[var(--radius-lg)] px-4 py-3">
               {configError}
             </div>
           ) : null}
         </div>
 
-        <div className="space-y-4 xl:sticky xl:top-[68px] xl:self-start">
-          <Card className="space-y-4">
+        <div className="h-full xl:self-stretch">
+          <div className="h-full xl:sticky xl:top-[68px]">
+          <Card className="flex h-full flex-col space-y-4">
             <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
-            <div className="space-y-4">
-              <div className="divide-y divide-[var(--border-strong)]">
+            <div className="flex-1 space-y-4">
+              <div className="divide-y divide-[var(--divider)]">
                 <SettingSection
                   label="Smart Extraction"
                   description="AI-assisted enrichment"
@@ -459,7 +460,7 @@ export function CrawlConfigScreen({
                 >
                   <div className="space-y-4 px-1 py-3">
                     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
-                      <div className="text-sm font-medium text-[var(--text-secondary)]">Mode</div>
+                      <div className="text-data-strong text-secondary">Mode</div>
                       <select
                         aria-label="Advanced crawl mode"
                         value={advancedMode}
@@ -540,7 +541,7 @@ export function CrawlConfigScreen({
                       value={proxyInput}
                       onChange={(event) => setProxyInput(event.target.value)}
                       placeholder={"host:port\nhost:port:user:pass"}
-                      className="min-h-[104px] font-mono text-sm"
+                      className="min-h-[104px] text-mono-body"
                       aria-label="Proxy pool input"
                     />
                   </div>
@@ -548,6 +549,7 @@ export function CrawlConfigScreen({
               </div>
             </div>
           </Card>
+          </div>
         </div>
       </form>
 

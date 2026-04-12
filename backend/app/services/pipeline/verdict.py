@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from app.services.extract.listing_quality import assess_listing_record_quality
+from app.services.extract import assess_listing_record_quality
 from app.services.config.extraction_rules import REQUIRED_FIELDS_BY_SURFACE
 
 # Verdict constants
@@ -23,13 +23,13 @@ __all__ = [
     "VERDICT_LISTING_FAILED",
     "VERDICT_EMPTY",
     "VERDICT_ERROR",
-    "_compute_verdict",
+    "compute_verdict",
     "_passes_core_verdict",
     "_aggregate_verdict",
 ]
 
 
-def _compute_verdict(records: list[dict], surface: str, *, is_listing: bool) -> str:
+def compute_verdict(records: list[dict], surface: str, *, is_listing: bool) -> str:
     """Compute extraction quality verdict for a single URL.
 
     Verdict is based on core field presence, not requested fields.
@@ -44,6 +44,9 @@ def _compute_verdict(records: list[dict], surface: str, *, is_listing: bool) -> 
             return VERDICT_SUCCESS
 
     return VERDICT_PARTIAL
+
+
+_compute_verdict = compute_verdict
 
 
 def _passes_core_verdict(record: dict, surface: str, *, is_listing: bool) -> bool:
@@ -82,15 +85,20 @@ def _aggregate_verdict(verdicts: list[str]) -> str:
     if not verdicts:
         return VERDICT_EMPTY
 
+    if all(v == VERDICT_ERROR for v in verdicts):
+        return VERDICT_ERROR
     if all(v == VERDICT_BLOCKED for v in verdicts):
         return VERDICT_BLOCKED
     if all(v == VERDICT_SUCCESS for v in verdicts):
         return VERDICT_SUCCESS
+    if VERDICT_ERROR in verdicts:
+        return VERDICT_ERROR
     if any(v in {VERDICT_SUCCESS, VERDICT_PARTIAL} for v in verdicts):
         return VERDICT_PARTIAL
 
     # Return first matching verdict by priority order
     for v in [
+        VERDICT_ERROR,
         VERDICT_LISTING_FAILED,
         VERDICT_SCHEMA_MISS,
         VERDICT_BLOCKED,

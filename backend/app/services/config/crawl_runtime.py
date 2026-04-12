@@ -85,9 +85,18 @@ BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS = (
 BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS = (
     crawler_runtime_settings.browser_navigation_optimistic_wait_ms
 )
+BROWSER_NAVIGATION_MIN_COMMIT_WAIT_MS = (
+    crawler_runtime_settings.browser_navigation_min_commit_wait_ms
+)
+BROWSER_NAVIGATION_MIN_FINAL_COMMIT_TIMEOUT_MS = (
+    crawler_runtime_settings.browser_navigation_min_final_commit_timeout_ms
+)
 INTERRUPTIBLE_WAIT_POLL_MS = crawler_runtime_settings.interruptible_wait_poll_ms
 PAGINATION_NAVIGATION_TIMEOUT_MS = (
     crawler_runtime_settings.pagination_navigation_timeout_ms
+)
+PAGINATION_PAGE_SIZE_ANOMALY_RATIO = (
+    crawler_runtime_settings.pagination_page_size_anomaly_ratio
 )
 LISTING_READINESS_MAX_WAIT_MS = crawler_runtime_settings.listing_readiness_max_wait_ms
 LISTING_READINESS_POLL_MS = crawler_runtime_settings.listing_readiness_poll_ms

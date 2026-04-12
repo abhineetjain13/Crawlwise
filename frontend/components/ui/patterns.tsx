@@ -19,15 +19,18 @@ function stableNodeSignature(value: ReactNode): string {
     return `[${value.map((entry) => stableNodeSignature(entry)).join("|")}]`;
   }
   if (isValidElement(value)) {
+    const props = (value.props ?? {}) as Record<string, unknown>;
     const typeName =
       typeof value.type === "string"
         ? value.type
-        : (value.type.displayName ?? value.type.name ?? "component");
-    const propEntries = Object.entries(value.props ?? {})
+        : ("displayName" in value.type && typeof value.type.displayName === "string"
+            ? value.type.displayName
+            : value.type.name ?? "component");
+    const propEntries = Object.entries(props)
       .filter(([key, propValue]) => key !== "children" && typeof propValue !== "function")
       .map(([key, propValue]) => `${key}:${stableNodeSignature(propValue as ReactNode)}`)
       .sort();
-    return `<${typeName}${propEntries.length ? ` ${propEntries.join(",")}` : ""}>${stableNodeSignature(value.props.children)}</${typeName}>`;
+    return `<${typeName}${propEntries.length ? ` ${propEntries.join(",")}` : ""}>${stableNodeSignature(props.children as ReactNode)}</${typeName}>`;
   }
   return Children.toArray(value).map((entry) => stableNodeSignature(entry)).join("|");
 }
@@ -72,13 +75,13 @@ export function SectionHeader({
     <div className="flex items-center justify-between gap-4">
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-center gap-2">
-          {Icon && <Icon className="size-3.5 shrink-0 text-[var(--accent)]" />}
-          <h2 className="text-body font-semibold tracking-[-0.015em] text-[var(--text-primary)]">
+          {Icon && <Icon className="size-3.5 shrink-0 text-muted" />}
+          <h2 className="text-section-title text-primary">
             {title}
           </h2>
         </div>
         {description ? (
-          <div className="text-caption text-[var(--text-muted)] w-full">{description}</div>
+          <div className="w-full text-caption text-muted">{description}</div>
         ) : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
@@ -121,7 +124,7 @@ export function TabBar({
     return (
       <div
         className={cn(
-          "flex h-[var(--control-height)] items-stretch border-b-2 border-[var(--border-strong)] bg-transparent p-0",
+          "flex h-[var(--control-height)] items-stretch border-b border-[var(--divider)] bg-transparent p-0",
           className,
         )}
       >
@@ -132,11 +135,11 @@ export function TabBar({
             aria-pressed={value === option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-[12px] font-bold transition-all",
+              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-link-ui font-bold transition-all",
               padX,
               value === option.value
-                ? "border-b-[3px] border-[var(--accent)] text-[var(--accent)]"
-                : "border-b-[3px] border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border)]",
+                ? "border-b-[3px] border-[var(--accent)] text-accent"
+                : "border-b-[3px] border-transparent text-muted hover:text-primary hover:border-[var(--border)]",
             )}
           >
             {option.label}
@@ -149,27 +152,27 @@ export function TabBar({
   return (
     <div
       className={cn(
-        "relative grid h-[var(--control-height)] items-stretch rounded-[var(--radius-md)] border-2 border-[var(--border-strong)] bg-[var(--bg-elevated)] p-0.5 shadow-[var(--shadow-xs)]",
+        "segmented-root relative grid h-[var(--control-height)] items-stretch rounded-[var(--radius-md)] p-0.5",
         className,
       )}
       style={{ gridTemplateColumns: `repeat(${Math.max(options.length, 1)}, minmax(0, 1fr))` }}
     >
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[var(--accent)] shadow-[0_1px_2px_rgba(0,0,0,0.1)] transition-[left,width] duration-200 ease-out"
+        className="tab-indicator-active pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[var(--segmented-item-active-bg)] transition-[left,width] duration-200 ease-out"
         style={pillStyle}
-      />      {options.map((option, index) => (
+      />      {options.map((option) => (
         <button
           key={option.value}
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "relative z-10 inline-flex min-w-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-[11px] font-bold transition-all duration-200",
+            "relative z-10 inline-flex min-w-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-meta font-bold transition-all duration-200",
             padX,
             value === option.value
-              ? "text-white"
-              : "text-[var(--text-muted)] hover:text-[var(--text-primary)]",
+              ? "text-primary"
+              : "text-muted hover:text-primary",
           )}
         >
           {option.label}
@@ -192,7 +195,7 @@ export function ProgressBar({ percent }: Readonly<{ percent: number }>) {
           style={{ width: `${Math.min(percent, 100)}%` }}
         />
       </div>
-      <div className="text-meta text-[var(--text-muted)] tabular-nums">{percent}%</div>
+      <div className="text-meta tabular-nums text-muted">{percent}%</div>
     </div>
   );
 }
@@ -212,10 +215,10 @@ export function EmptyPanel({
   description,
 }: Readonly<{ title: string; description: string }>) {
   return (
-    <div className="grid min-h-32 place-items-center rounded-[var(--radius-lg)] border-2 border-dashed border-[var(--border-strong)] bg-[var(--bg-panel)] text-center px-6 py-8">
+    <div className="grid min-h-32 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--divider)] bg-[var(--subtle-panel-bg)] text-center px-6 py-8">
       <div className="space-y-1">
-        <p className="text-body-sm font-medium text-[var(--text-primary)]">{title}</p>
-        <p className="text-caption text-[var(--text-muted)]">{description}</p>
+        <p className="text-body-sm font-medium text-primary">{title}</p>
+        <p className="text-caption text-muted">{description}</p>
       </div>
     </div>
   );
@@ -258,7 +261,7 @@ export function SkeletonRows({
 /* ─── MetricSkeleton ─────────────────────────────────────────────────────── */
 export function MetricSkeleton() {
   return (
-    <div className="stat-card space-y-2 border-2 border-[var(--border-strong)] bg-[var(--surface-card)] p-4 rounded-[var(--radius-xl)] shadow-[var(--shadow-card-value)]">
+    <div className="surface-panel stat-card space-y-2 p-4">
       <Skeleton className="h-3 w-20" />
       <Skeleton className="h-9 w-28" />
       <Skeleton className="h-3 w-16" />
@@ -274,7 +277,7 @@ export function Divider({ className }: Readonly<{ className?: string }>) {
 /* ─── InlineCode ─────────────────────────────────────────────────────────── */
 export function InlineCode({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <code className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-meta text-[var(--text-secondary)]">
+    <code className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-meta font-mono text-secondary">
       {children}
     </code>
   );
@@ -291,11 +294,11 @@ export function InlineAlert({
   if (!message) return null;
   const toneClass =
     tone === "danger"
-      ? "border-danger/20 bg-danger/10 text-danger"
+      ? "alert-surface alert-danger"
       : tone === "warning"
-        ? "border-warning/30 bg-warning/10 text-warning"
-        : "border-border bg-panel text-muted";
-  return <div className={cn("rounded-md border px-3 py-2 text-sm", toneClass)}>{message}</div>;
+        ? "alert-surface alert-warning"
+        : "alert-surface bg-panel text-muted";
+  return <div className={cn(toneClass)}>{message}</div>;
 }
 
 /* ─── StatusDot ──────────────────────────────────────────────────────────── */
@@ -348,7 +351,7 @@ export function RunWorkspaceShell({
 }>) {
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border-2 border-[var(--border-strong)] bg-[var(--bg-elevated)] px-4 py-3 shadow-[var(--shadow-sm)]">
+      <div className="surface-elevated flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0 flex-1">{header}</div>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
@@ -379,13 +382,13 @@ export function RunSummaryChips({
     { label: "Quality", value: quality },
   ];
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       {chips.map((chip) => (
         <span
           key={chip.label}
-          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-panel px-2.5 py-1 text-muted"
+          className="inline-flex items-center gap-1.5 rounded-full border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-2.5 py-1 text-caption text-muted"
         >
-          <span className="font-semibold text-foreground">{chip.label}:</span>
+          <span className="text-data-strong text-foreground">{chip.label}:</span>
           <span>{chip.value}</span>
         </span>
       ))}

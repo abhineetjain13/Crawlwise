@@ -378,7 +378,50 @@ ruff check app/services/extract/ --select F
 pytest tests/services/extract/ -q --tb=short
 ```
 
-### Step B-3: ~~Extract `listing_record_filter.py`~~ — ELIMINATED
+### Step B-3: Extract `listing_item_normalizer.py`
+
+**Why:** After B-1 and B-2, the remaining bulk in `listing_extractor.py` is no longer card or structured-source extraction. It is the generic record normalization/product-search cohort used by hydrated arrays and adapter-like payloads. Keeping that logic in `listing_extractor.py` prevents the final shell reduction even after the extraction owners are clean.
+
+**Functions to move:**
+
+```
+_normalize_generic_item
+_apply_surface_record_contract
+_promote_job_salary
+_normalize_job_title
+_fill_missing_job_identifier
+_fill_missing_job_urls
+_strip_job_commerce_fields
+_preferred_generic_item_values
+_extract_generic_job_identifier
+_synthesize_job_detail_url
+_clean_identifier
+_default_job_detail_url_synthesis
+_looks_like_listing_variant_option
+_normalize_product_search_item
+_is_product_search_item
+_product_search_base_record
+_append_product_search_images
+_append_product_search_attributes
+_compact_product_search_record
+_product_search_detail_url
+_product_search_images
+_product_search_attribute_map
+_product_search_dimensions
+_normalize_listing_value
+_find_alias_values
+_normalized_field_token
+_looks_like_product_short_path
+_resolve_slug_url
+_coerce_nested_text
+_coerce_nested_category
+```
+
+**New file:** `app/services/extract/listing_item_normalizer.py`
+
+**Compatibility rule:** `listing_extractor.py` may re-export thin wrappers for legacy private helper names that tests or stale callers still import, but ownership lives in `listing_item_normalizer.py`.
+
+### Step B-4: ~~Extract `listing_record_filter.py`~~ — ELIMINATED
 
 > **This step is removed.** The URL classification and listing record quality functions from `listing_extractor.py` now go into `listing_quality.py` (done in B-0). There is no third home for these functions. `listing_quality.py` already owns this cohort:
 > - `is_meaningful_listing_record`, `is_meaningful_structured_listing_record`, `has_meaningful_listing_set`, `listing_set_quality`
@@ -389,7 +432,7 @@ pytest tests/services/extract/ -q --tb=short
 
 After B-0 and B-1 and B-2, verify `listing_extractor.py` is ≤ 400 lines without a B-3 step. If it exceeds 400 lines, audit what remains and extend B-2 or add a targeted B-3 rather than pre-defining it.
 
-### Step B-4: Slim `listing_extractor.py` to entry-point shell
+### Step B-5: Slim `listing_extractor.py` to entry-point shell
 
 After B-1 through B-3, `listing_extractor.py` should contain only:
 - `extract_listing_records` (public entry point)

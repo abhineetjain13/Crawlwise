@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from app.services.acquisition.traversal import (
+    TraversalRuntime,
     apply_traversal_mode,
 )
 
@@ -119,20 +120,22 @@ async def _run_fragment_capture_case(
             "ecommerce_listing",
             traversal_mode,
             traversal_count,
+            runtime=TraversalRuntime(
+                page_content_with_retry=AsyncMock(return_value=page_content),
+                wait_for_surface_readiness=AsyncMock(),
+                wait_for_listing_readiness=AsyncMock(),
+                peek_next_page_signal=AsyncMock(return_value=None),
+                click_and_observe_next_page=AsyncMock(return_value=""),
+                has_load_more_control=AsyncMock(return_value=False),
+                dismiss_cookie_consent=AsyncMock(),
+                pause_after_navigation=AsyncMock(),
+                expand_all_interactive_elements=AsyncMock(return_value={}),
+                flatten_shadow_dom=AsyncMock(),
+                cooperative_sleep_ms=AsyncMock(),
+                snapshot_listing_page_metrics=AsyncMock(return_value={}),
+            ),
             max_pages=1,
             request_delay_ms=0,
-            page_content_with_retry=AsyncMock(return_value=page_content),
-            wait_for_surface_readiness=AsyncMock(),
-            wait_for_listing_readiness=AsyncMock(),
-            peek_next_page_signal=AsyncMock(return_value=None),
-            click_and_observe_next_page=AsyncMock(return_value=""),
-            has_load_more_control=AsyncMock(return_value=False),
-            dismiss_cookie_consent=AsyncMock(),
-            pause_after_navigation=AsyncMock(),
-            expand_all_interactive_elements=AsyncMock(return_value={}),
-            flatten_shadow_dom=AsyncMock(),
-            cooperative_sleep_ms=AsyncMock(),
-            snapshot_listing_page_metrics=AsyncMock(return_value={}),
         )
     finally:
         setattr(traversal_mod, traversal_attr, original_traversal)

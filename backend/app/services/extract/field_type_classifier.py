@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from app.services.config.extraction_rules import (
+    CANDIDATE_AVAILABILITY_NOISE_PHRASES,
     CANDIDATE_AVAILABILITY_TOKENS,
     CANDIDATE_CATEGORY_TOKENS,
     CANDIDATE_COLOR_CSS_NOISE_TOKENS,
@@ -25,14 +26,10 @@ from app.services.extract.field_classifier import (
 )
 from app.services.extract.candidate_processing import (
     _normalized_candidate_text,
-    _AVAILABILITY_NOISE_PHRASES,
-    _UI_ICON_TOKEN_RE,
-    _UI_NOISE_TOKEN_RE,
-    _SCRIPT_NOISE_RE,
-    _UI_NOISE_PHRASES_RE,
     _VARIANT_SELECTOR_PROMPT_RE,
     _CROSSFIELD_VARIANT_VALUE_RE,
 )
+from app.services.extract.noise_policy import strip_ui_noise
 
 
 # ---------------------------------------------------------------------------
@@ -156,19 +153,7 @@ def _field_is_numeric_type(field_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _strip_ui_noise(value: str) -> str:
-    text = _normalized_candidate_text(value)
-    if not text:
-        return ""
-    if _UI_ICON_TOKEN_RE:
-        text = _UI_ICON_TOKEN_RE.sub(" ", text)
-    if _UI_NOISE_TOKEN_RE:
-        text = _UI_NOISE_TOKEN_RE.sub(" ", text)
-    if _SCRIPT_NOISE_RE:
-        text = _SCRIPT_NOISE_RE.sub(" ", text)
-    if _UI_NOISE_PHRASES_RE:
-        text = _UI_NOISE_PHRASES_RE.sub(" ", text)
-    text = re.sub(r"\s+", " ", text).strip(" -|,:;/")
-    return text
+    return strip_ui_noise(value)
 
 
 def _looks_like_variant_selector_text(value: str) -> bool:
@@ -208,6 +193,6 @@ def _normalize_color_candidate(value: str) -> str | None:
     if len(cleaned.split()) > 6:
         return None
     lowered_clean = cleaned.lower()
-    if any(phrase in lowered_clean for phrase in _AVAILABILITY_NOISE_PHRASES):
+    if any(phrase in lowered_clean for phrase in CANDIDATE_AVAILABILITY_NOISE_PHRASES):
         return None
     return cleaned or None

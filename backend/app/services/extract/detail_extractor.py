@@ -8,7 +8,6 @@ from bs4 import BeautifulSoup, Tag
 from app.services.config.extraction_rules import (
     CANDIDATE_NON_CONTENT_RICH_TEXT_TAGS,
     DIMENSION_KEYWORDS,
-    JSONLD_TYPE_NOISE,
     SEMANTIC_AGGREGATE_SEPARATOR,
 )
 from app.services.config.extraction_rules import (
@@ -47,10 +46,8 @@ from app.services.extract.candidate_processing import (
 from app.services.extract.field_classifier import (
     _dynamic_field_name_is_valid,
 )
-from app.services.extract.noise_policy import (
-    is_inside_site_chrome,
-    is_noisy_product_attribute_entry,
-)
+
+_PRODUCT_DETAIL_FEATURE_SECTION_LIMIT = 12
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +73,7 @@ def _rich_text_from_node(node) -> str:
 
     if node.name in {"table", "tbody", "thead"}:
         rows: list[str] = []
-        for tr in node.find_all("tr", recursive=True):
+        for tr in node.find_all("tr", recursive=False):
             cells = [
                 _section_content_text(cell)
                 for cell in tr.find_all(["th", "td"], recursive=False)
@@ -121,138 +118,6 @@ def _rich_text_from_node(node) -> str:
     return _normalized_candidate_text(node.get_text(" ", strip=True))
 
 
-# ---------------------------------------------------------------------------
-# DOM sections
-# ---------------------------------------------------------------------------
-
-def _build_dom_section_rows(soup: BeautifulSoup) -> dict[str, list[dict]]:
-    rows: dict[str, list[dict]] = {}
-
-    product_attributes: dict[str, object] = {}
-    for header_text, content_text in _iter_dom_sections(soup):
-        normalized_header = normalize_requested_field(header_text)
-        if not normalized_header or not content_text:
-            continue
-        if is_noisy_product_attribute_entry(normalized_header, content_text):
-            continue
-        if normalized_header in {"description", "summary", "overview"}:
-            rows.setdefault("description", []).append(
-                {"value": content_text, "source": "dom_section"}
-            )
-            continue
-        if normalized_header in {
-            "details",
-            "specifications",
-            "product_details",
-            "technical_details",
-        }:
-            rows.setdefault("specifications", []).append(
-                {"value": content_text, "source": "dom_section"}
-            )
-            product_attributes.setdefault(normalized_header, content_text)
-            continue
-        if normalized_header in {"features", "key_features", "highlights"}:
-            rows.setdefault("features", []).append(
-                {"value": content_text, "source": "dom_section"}
-            )
-            continue
-        if normalized_header in {
-            "materials",
-            "material_composition",
-            "fabric",
-            "composition",
-        }:
-            rows.setdefault("materials", []).append(
-                {"value": content_text, "source": "dom_section"}
-            )
-        product_attributes.setdefault(normalized_header, content_text)
-
-    if product_attributes:
-        rows.setdefault("product_attributes", []).append(
-            {"value": product_attributes, "source": "dom_section"}
-        )
-    return rows
-
-
-def _iter_dom_sections(soup: BeautifulSoup) -> list[tuple[str, str]]:
-    sections: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-
-    def _append(header: str, content: str) -> None:
-        normalized_header = _normalized_candidate_text(header)
-        normalized_content = _normalized_candidate_text(content)
-        if not normalized_header or not normalized_content:
-            return
-        key = (normalized_header.casefold(), normalized_content.casefold())
-        if key in seen:
-            return
-        seen.add(key)
-        sections.append((normalized_header, content.strip()))
-
-    for details in soup.find_all("details"):
-        if not isinstance(details, Tag) or is_inside_site_chrome(details):
-            continue
-        summary = details.find("summary")
-        if not isinstance(summary, Tag):
-            continue
-        body_parts = [
-            _section_content_text(child)
-            for child in details.children
-            if child is not summary and isinstance(child, Tag)
-        ]
-        _append(
-            _normalized_candidate_text(summary.get_text(" ", strip=True)),
-            "\n\n".join(part for part in body_parts if part),
-        )
-
-    for node in soup.select(
-        "[data-tab], [data-tab-content], [data-panel], [role='tabpanel']"
-    ):
-        if not isinstance(node, Tag):
-            continue
-        if is_inside_site_chrome(node):
-            continue
-        label = _normalized_candidate_text(
-            node.get("data-tab")
-            or node.get("data-title")
-            or node.get("aria-label")
-            or (
-                node.find_previous(["button", "h2", "h3", "h4"]).get_text(
-                    " ", strip=True
-                )
-                if node.find_previous(["button", "h2", "h3", "h4"])
-                else ""
-            )
-        )
-        _append(label, _section_content_text(node))
-
-    for heading in soup.find_all(["h2", "h3", "h4", "h5"]):
-        if not isinstance(heading, Tag):
-            continue
-        if is_inside_site_chrome(heading):
-            continue
-        header = _normalized_candidate_text(heading.get_text(" ", strip=True))
-        if not header:
-            continue
-        content = _collect_heading_section_content(heading)
-        _append(header, content)
-
-    return sections
-
-
-def _collect_heading_section_content(heading: Tag) -> str:
-    parts: list[str] = []
-    for sibling in tuple(getattr(heading, "next_siblings", ())):
-        if not isinstance(sibling, Tag):
-            continue
-        if sibling.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-            break
-        text = _section_content_text(sibling)
-        if text:
-            parts.append(text)
-    return "\n\n".join(parts).strip()
-
-
 def _collect_non_empty_section_text(nodes: object) -> list[str]:
     parts: list[str] = []
     for node in list(nodes or []):
@@ -286,12 +151,13 @@ def _build_dom_gallery_rows(
     rows: dict[str, list[dict]] = {
         "image_url": [{"value": image_urls[0], "source": "dom_gallery"}]
     }
-    rows["additional_images"] = [
-        {
-            "value": ", ".join(image_urls[1:] if len(image_urls) > 1 else image_urls),
-            "source": "dom_gallery",
-        }
-    ]
+    if len(image_urls) > 1:
+        rows["additional_images"] = [
+            {
+                "value": ", ".join(image_urls[1:]),
+                "source": "dom_gallery",
+            }
+        ]
     return rows
 
 
@@ -502,9 +368,9 @@ def _normalize_product_detail_payload(
             break
     if images:
         record["image_url"] = images[0]
-        record["additional_images"] = ", ".join(
-            images[1:] if len(images) > 1 else images
-        )
+        additional_images = images[1:]
+        if additional_images:
+            record["additional_images"] = ", ".join(additional_images)
 
     attributes = detail.get("attributes")
     if isinstance(attributes, list):
@@ -532,7 +398,7 @@ def _normalize_product_detail_payload(
     elif feature_tile_text:
         record["features"] = feature_tile_text
 
-    fit_text = _product_detail_fit_and_sizing(detail)
+    fit_text = _product_detail_fit_and_sizing(detail, base_url=base_url)
     if fit_text:
         record["fit_and_sizing"] = fit_text
 
@@ -576,7 +442,7 @@ def _product_detail_features(value: object) -> str | None:
     if not isinstance(value, list):
         return None
     sections: list[str] = []
-    for row in value[:12]:
+    for row in value[:_PRODUCT_DETAIL_FEATURE_SECTION_LIMIT]:
         if not isinstance(row, dict):
             continue
         label = _normalized_candidate_text(row.get("label"))
@@ -619,7 +485,7 @@ def _product_detail_feature_tiles(value: object) -> str | None:
     return SEMANTIC_AGGREGATE_SEPARATOR.join(dict.fromkeys(rows)) if rows else None
 
 
-def _product_detail_fit_and_sizing(detail: dict) -> str | None:
+def _product_detail_fit_and_sizing(detail: dict, *, base_url: str) -> str | None:
     rows: list[str] = []
     widgets = detail.get("bigWidgets")
     if isinstance(widgets, list):
@@ -648,7 +514,7 @@ def _product_detail_fit_and_sizing(detail: dict) -> str | None:
     if isinstance(sizing_chart, dict):
         label = _normalized_candidate_text(sizing_chart.get("label"))
         url = _resolve_candidate_url(
-            _normalized_candidate_text(sizing_chart.get("url")), base_url=""
+            _normalized_candidate_text(sizing_chart.get("url")), base_url=base_url
         )
         if label and url:
             rows.append(f"{label}: {url}")
@@ -808,148 +674,29 @@ def _extract_structured_spec_map(payload: object) -> dict[str, str]:
     return structured
 
 
-def _extract_structured_field_value(payload: object, field_name: str) -> str | None:
-    spec_map = _extract_structured_spec_map(payload)
-    if not spec_map:
-        return None
-    if field_name == "specifications":
-        return (
-            SEMANTIC_AGGREGATE_SEPARATOR.join(
-                f"{label}: {value}" for label, value in spec_map.items()
-            )
-            or None
-        )
-    if field_name == "dimensions":
-        dimension_pairs = [
-            f"{label}: {value}"
-            for label, value in spec_map.items()
-            if any(token in label.lower() for token in DIMENSION_KEYWORDS)
-        ]
-        return SEMANTIC_AGGREGATE_SEPARATOR.join(dimension_pairs) or None
-    return spec_map.get(normalize_requested_field(field_name)) or spec_map.get(
-        field_name
-    )
-
-
-# ---------------------------------------------------------------------------
-# Dynamic semantic / structured rows
-# ---------------------------------------------------------------------------
-
 def _build_dynamic_semantic_rows(
     semantic: dict,
     *,
     surface: str = "",
     allowed_fields: set[str] | None = None,
 ) -> dict[str, list[dict]]:
-    specifications = (
-        semantic.get("specifications")
-        if isinstance(semantic.get("specifications"), dict)
-        else {}
+    del allowed_fields
+    semantic_rows = (
+        semantic.get("semantic_rows") if isinstance(semantic.get("semantic_rows"), dict) else {}
     )
-    aggregates = (
-        semantic.get("aggregates")
-        if isinstance(semantic.get("aggregates"), dict)
-        else {}
-    )
-    table_groups = (
-        semantic.get("table_groups")
-        if isinstance(semantic.get("table_groups"), list)
-        else []
-    )
+    if not semantic_rows:
+        return {}
+
     rows: dict[str, list[dict]] = {}
-
-    for field_name, value in specifications.items():
-        normalized = normalize_requested_field(field_name)
-        if (
-            not normalized
-            or value in (None, "", [], {})
-            or _DYNAMIC_NUMERIC_FIELD_RE.fullmatch(normalized)
-        ):
+    skip_spec_aggregate = str(surface or "").lower().startswith("job_")
+    for field_name, field_rows in semantic_rows.items():
+        if skip_spec_aggregate and field_name == "specifications":
             continue
-        if normalized in JSONLD_TYPE_NOISE:
+        if not isinstance(field_rows, list):
             continue
-        if not _dynamic_field_name_is_valid(normalized):
-            continue
-        coerced = _coerce_scalar_for_dynamic_row(value)
-        if coerced is None:
-            continue
-        rows.setdefault(normalized, []).append(
-            {"value": coerced, "source": "semantic_spec"}
-        )
-
-    for group in table_groups:
-        if not isinstance(group, dict):
-            continue
-        group_label = _normalized_candidate_text(
-            group.get("title")
-        ) or _normalized_candidate_text(group.get("caption"))
-        for row in group.get("rows") or []:
-            if not isinstance(row, dict):
-                continue
-            normalized = normalize_requested_field(
-                row.get("normalized_key") or row.get("label")
-            )
-            display_label = _normalized_candidate_text(row.get("label")) or normalized
-            value = row.get("value")
-            if (
-                not normalized
-                or value in (None, "", [], {})
-                or _DYNAMIC_NUMERIC_FIELD_RE.fullmatch(normalized)
-            ):
-                continue
-            if not _dynamic_field_name_is_valid(normalized):
-                continue
-            coerced = _coerce_scalar_for_dynamic_row(value)
-            if coerced is None:
-                continue
-            target_fields = [normalized]
-            if normalized == "dimensions" and display_label.casefold() == "size":
-                target_fields.append("size")
-            for target_field in target_fields:
-                rows.setdefault(target_field, []).append(
-                    {
-                        "value": coerced,
-                        "source": "semantic_spec",
-                        "display_label": display_label,
-                        "group_label": group_label or None,
-                        "href": _normalized_candidate_text(row.get("href")) or None,
-                        "preserve_visible": bool(row.get("preserve_visible")),
-                        "row_index": row.get("row_index"),
-                        "table_index": group.get("table_index"),
-                    }
-                )
-
-    # Only emit specification/dimension aggregates when the semantic extractor
-    # found real spec entries (tables, dl, data-attributes). Skip phantom
-    # aggregates built from inline label/value guesses on JS-shell pages.
-    spec_entry_count = len(specifications)
-    for aggregate_field in ("specifications", "dimensions"):
-        value = aggregates.get(aggregate_field)
-        if value in (None, "", [], {}):
-            continue
-        if aggregate_field == "specifications" and str(
-            surface or ""
-        ).lower().startswith("job_"):
-            continue
-        if aggregate_field in {"specifications", "dimensions"} and spec_entry_count < 2:
-            continue
-        coerced_agg = _coerce_scalar_for_dynamic_row(value)
-        if coerced_agg is None:
-            continue
-        rows.setdefault(aggregate_field, []).append(
-            {"value": coerced_agg, "source": "semantic_spec"}
-        )
-
-    feature_value = aggregates.get("features")
-    if feature_value not in (None, "", [], {}):
-        coerced_features = _coerce_scalar_for_dynamic_row(feature_value)
-        if coerced_features is not None:
-            rows.setdefault("features", []).append(
-                {
-                    "value": coerced_features,
-                    "source": "semantic_section",
-                }
-            )
+        copied_rows = [dict(row) for row in field_rows if isinstance(row, dict)]
+        if copied_rows:
+            rows[field_name] = copied_rows
     return rows
 
 
@@ -1057,6 +804,5 @@ def _build_platform_detail_rows(
             rows,
             _build_shopify_content_rows(shopify_product, base_url=base_url),
         )
-    _merge_dynamic_row_map(rows, _build_dom_section_rows(soup))
     _merge_dynamic_row_map(rows, _build_dom_gallery_rows(soup, base_url=base_url))
     return rows

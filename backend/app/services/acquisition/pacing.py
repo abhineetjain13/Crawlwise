@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from math import ceil
 from uuid import uuid4
 
-from app.core.redis import get_redis, redis_fail_open
+from app.core.redis import get_redis, redis_fail_open, redis_failure_total, redis_is_enabled
 from app.services.config.crawl_runtime import (
     INTERRUPTIBLE_WAIT_POLL_MS,
     PACING_HOST_CACHE_TTL_SECONDS,
@@ -73,6 +73,10 @@ async def wait_for_host_slot(
     next_key = _next_allowed_key(normalized_host)
     interval_seconds = minimum_interval_ms / 1000.0
 
+    if not redis_is_enabled():
+        await _cooperative_delay(interval_seconds, checkpoint=checkpoint)
+        return interval_seconds
+
     async def _wait(redis) -> float:
         total_delay = 0.0
         while True:
@@ -119,11 +123,16 @@ async def wait_for_host_slot(
             finally:
                 await _release_lock(lock_key, token)
 
-    return await redis_fail_open(
+    failure_count_before = redis_failure_total()
+    result = await redis_fail_open(
         _wait,
-        default=0.0,
+        default=interval_seconds,
         operation_name=f"wait_for_host_slot:{normalized_host}",
     )
+    if redis_failure_total() != failure_count_before:
+        await _cooperative_delay(interval_seconds, checkpoint=checkpoint)
+        return interval_seconds
+    return result
 
 
 async def reset_pacing_state() -> None:

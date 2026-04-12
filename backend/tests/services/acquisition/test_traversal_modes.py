@@ -6,8 +6,11 @@ from unittest.mock import AsyncMock
 import pytest
 from app.services.acquisition.traversal import (
     AdvanceResult,
+    TraversalConfig,
+    TraversalRuntime,
     apply_traversal_mode,
     collect_paginated_html,
+    scroll_to_bottom,
 )
 from app.services.crawl_utils import resolve_traversal_mode
 
@@ -200,6 +203,23 @@ class _VirtualizedScrollPage:
         self.wait_for_load_state_calls.append((state, timeout))
 
 
+class _ConnectionLostScrollPage:
+    def __init__(self) -> None:
+        self.url = "https://example.com/disconnected"
+        self.wait_for_load_state_calls: list[tuple[str, int]] = []
+
+    async def evaluate(self, script: str, arg=None):
+        if "return Math.max(root.scrollHeight" in script:
+            return 1000
+        if "forceProbe" in script:
+            return {"target": "window"}
+        raise AssertionError(f"Unexpected evaluate script: {script[:80]!r}")
+
+    async def wait_for_load_state(self, state: str, *, timeout: int) -> None:
+        self.wait_for_load_state_calls.append((state, timeout))
+        raise ConnectionResetError("network connection lost")
+
+
 @pytest.mark.asyncio
 async def test_paginate_mode_collects_three_button_only_pages_without_duplicates():
     page = _ButtonOnlyPaginationPage()
@@ -350,20 +370,22 @@ async def test_scroll_mode_preserves_all_cards_from_virtualized_infinite_scroll(
         "ecommerce_listing",
         "scroll",
         5,
+        runtime=TraversalRuntime(
+            page_content_with_retry=AsyncMock(return_value=""),
+            wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
+            wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
+            peek_next_page_signal=AsyncMock(return_value=None),
+            click_and_observe_next_page=AsyncMock(return_value=""),
+            has_load_more_control=AsyncMock(return_value=False),
+            dismiss_cookie_consent=AsyncMock(),
+            pause_after_navigation=AsyncMock(),
+            expand_all_interactive_elements=AsyncMock(return_value={}),
+            flatten_shadow_dom=AsyncMock(),
+            cooperative_sleep_ms=AsyncMock(),
+            snapshot_listing_page_metrics=metrics,
+        ),
         max_pages=1,
         request_delay_ms=0,
-        page_content_with_retry=AsyncMock(return_value=""),
-        wait_for_surface_readiness=AsyncMock(return_value={"ready": True}),
-        wait_for_listing_readiness=AsyncMock(return_value={"ready": True}),
-        peek_next_page_signal=AsyncMock(return_value=None),
-        click_and_observe_next_page=AsyncMock(return_value=""),
-        has_load_more_control=AsyncMock(return_value=False),
-        dismiss_cookie_consent=AsyncMock(),
-        pause_after_navigation=AsyncMock(),
-        expand_all_interactive_elements=AsyncMock(return_value={}),
-        flatten_shadow_dom=AsyncMock(),
-        cooperative_sleep_ms=AsyncMock(),
-        snapshot_listing_page_metrics=metrics,
     )
 
     assert result.summary["mode"] == "scroll"
@@ -374,4 +396,40 @@ async def test_scroll_mode_preserves_all_cards_from_virtualized_infinite_scroll(
     assert len(result.html.encode("utf-8")) < 1_000_000
     for product_id in range(50):
         assert result.html.count(f'href="/products/{product_id}"') == 1
+
+
+@pytest.mark.asyncio
+async def test_scroll_to_bottom_reports_connection_loss_instead_of_masking_it():
+    page = _ConnectionLostScrollPage()
+
+    async def _sleep(*_args, **_kwargs) -> None:
+        return None
+
+    async def _metrics(_page) -> dict[str, object]:
+        return {
+            "link_count": 0,
+            "cardish_count": 0,
+            "text_length": 0,
+            "html_length": 0,
+            "identity_count": 0,
+            "identities": [],
+            "dom_signature": "stable",
+        }
+
+    result = await scroll_to_bottom(
+        page,
+        max_scrolls=1,
+        config=TraversalConfig(scroll_wait_min_ms=1234),
+        request_delay_ms=0,
+        cooperative_sleep_ms=_sleep,
+        snapshot_listing_page_metrics=_metrics,
+    )
+
+    assert result["mode"] == "scroll"
+    assert result["attempted"] is True
+    assert result["attempt_count"] == 1
+    assert result["stop_reason"] == "network_wait_connection_lost"
+    assert result["network_wait_error"]["type"] == "ConnectionResetError"
+    assert result["steps"][0]["network_wait_status"] == "connection_lost"
+    assert page.wait_for_load_state_calls == [("networkidle", 1234)]
 

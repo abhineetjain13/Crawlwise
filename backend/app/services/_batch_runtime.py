@@ -30,12 +30,14 @@ from app.services.crawl_utils import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.pipeline.core import (
-    STAGE_FETCH,
-    STAGE_SAVE,
-    _log,
     _mark_run_failed,
     _process_single_url,
-    _set_stage,
+)
+from app.services.pipeline.runtime_helpers import (
+    STAGE_FETCH,
+    STAGE_SAVE,
+    log_event,
+    set_stage,
 )
 from app.services.pipeline.verdict import (
     VERDICT_BLOCKED,
@@ -47,15 +49,13 @@ from app.services.pipeline.verdict import (
     _aggregate_verdict,
 )
 from app.services.llm_runtime import snapshot_active_configs
-from app.services.pipeline.types import URLProcessingResult
+from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
 from app.services.config.crawl_runtime import (
     MAX_URL_PROCESS_TIMEOUT_SECONDS,
     URL_PROCESS_TIMEOUT_SECONDS,
 )
-from app.services._batch_progress import (
-    BatchRunProgressState,
-)
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.resource_monitor import MemoryAdaptiveSemaphore
@@ -63,6 +63,18 @@ from app.services.resource_monitor import MemoryAdaptiveSemaphore
 logger = logging.getLogger(__name__)
 _global_url_semaphore: MemoryAdaptiveSemaphore | None = None
 _global_url_semaphore_limit: int | None = None
+_RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS = (0.0, 0.05, 0.1, 0.2, 0.5)
+_LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
+_LOCK_NOT_AVAILABLE_ERROR_CODES = {"1205", "1222", "3572"}
+_LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS = (
+    "could not obtain lock",
+    "lock not available",
+    "could not acquire lock",
+    "database is locked",
+    "database table is locked",
+    "lock wait timeout exceeded",
+    "nowait is set",
+)
 
 
 @dataclass(slots=True)
@@ -105,7 +117,7 @@ async def _log_with_retry(
     message: str,
 ) -> None:
     tagged_message = _with_correlation_tag(message)
-    await _log(session, run_id, level, tagged_message)
+    await log_event(session, run_id, level, tagged_message)
     await session.commit()
 
 
@@ -199,28 +211,68 @@ async def _retry_run_update(
     run_id: int,
     mutate,
 ) -> None:
-    """Atomically update a run using DB-level row locks (FOR UPDATE).
+    """Persist pending changes and update the run row in one retried transaction."""
+    await session.flush()
+    for attempt, delay_seconds in enumerate(
+        _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS,
+        start=1,
+    ):
+        if delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+        try:
+            run_missing = False
+            async with session.begin_nested():
+                result = await session.execute(
+                    select(CrawlRun).where(CrawlRun.id == run_id).with_for_update(nowait=True)
+                )
+                run = result.scalar_one_or_none()
+                if run is None:
+                    run_missing = True
+                else:
+                    await mutate(session, run)
+            if run_missing:
+                await session.commit()
+                return
+            await session.commit()
+            return
+        except OperationalError as exc:
+            if _is_lock_not_available_error(exc) and attempt < len(
+                _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS
+            ):
+                logger.debug(
+                    "Retrying crawl run update after lock contention for run_id=%s (attempt=%s)",
+                    run_id,
+                    attempt,
+                )
+                continue
+            await session.rollback()
+            raise
+        except Exception:
+            await session.rollback()
+            raise
 
-    This is the **single commit point** for each URL iteration in the batch
-    loop.  ``_process_single_url`` adds ``CrawlRecord`` objects and flushes
-    them (in-transaction, uncommitted).  This function then locks the
-    ``CrawlRun`` row, applies the progress mutation, and issues a single
-    ``session.commit()`` that persists *both* the new records and the
-    updated run summary atomically.
 
-    If the commit fails the entire transaction — records included — is
-    rolled back, so a crash between record insertion and progress update
-    can never produce phantom progress or orphaned records.
-    """
-    result = await session.execute(
-        select(CrawlRun).where(CrawlRun.id == run_id).with_for_update()
-    )
-    run = result.scalar_one_or_none()
-    if run is None:
-        return
-    await mutate(session, run)
-    # Single commit: records (already flushed by pipeline) + progress patch.
-    await session.commit()
+def _is_lock_not_available_error(exc: OperationalError) -> bool:
+    orig = getattr(exc, "orig", None)
+    for attr_name in ("sqlstate", "pgcode"):
+        code = str(getattr(orig, attr_name, "") or "").strip()
+        if code == _LOCK_NOT_AVAILABLE_SQLSTATE:
+            return True
+    args = getattr(orig, "args", ())
+    if args:
+        code = str(args[0] or "").strip()
+        if code in _LOCK_NOT_AVAILABLE_ERROR_CODES:
+            return True
+    message = " ".join(
+        part
+        for part in (
+            str(orig or "").strip(),
+            str(exc or "").strip(),
+        )
+        if part
+    ).lower()
+    return any(fragment in message for fragment in _LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS)
+
 
 class RunControlSignal(RunControlError):
     def __init__(self, request: str) -> None:
@@ -414,7 +466,7 @@ async def _handle_batch_run_exception(
                     "extraction_verdict": "proxy_exhausted",
                 }
             )
-            await _log(retry_session, retry_run.id, "error", error_message)
+            await log_event(retry_session, retry_run.id, "error", error_message)
 
         await _retry_run_update(session, run.id, _proxy_exhausted_mutation)
         return
@@ -455,10 +507,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         )
 
         total_urls = context.total_urls
-        persisted_summary = run.summary_dict()
         persisted_record_count = await _count_run_records(session, run.id)
-        progress_state = BatchRunProgressState.from_summary(
-            persisted_summary,
+        progress_state = run.build_batch_progress_state(
             total_urls=total_urls,
             url_domain=_domain(url_list[0]) if url_list else "",
             persisted_record_count=persisted_record_count,
@@ -476,7 +526,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         for idx, url in pending_items:
             remaining_records = max(max_records - persisted_record_count, 0)
             if remaining_records <= 0:
-                await _log(
+                await log_event(
                     session,
                     run.id,
                     "info",
@@ -484,13 +534,13 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
                 break
 
-            await _log(
+            await log_event(
                 session,
                 run.id,
                 "info",
                 f"Processing URL {idx + 1}/{total_urls}: {url}",
             )
-            await _set_stage(
+            await set_stage(
                 session,
                 run,
                 STAGE_FETCH,
@@ -520,6 +570,18 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                         timeout=url_timeout_seconds,
                     )
                 )
+            pipeline_error = (
+                url_result.url_metrics.get("pipeline_error")
+                if isinstance(url_result.url_metrics, dict)
+                else None
+            )
+            combined_error: str | None = None
+            if isinstance(pipeline_error, dict):
+                error_type = str(pipeline_error.get("type") or "").strip()
+                error_message = str(pipeline_error.get("message") or "").strip()
+                combined_error = ": ".join(
+                    part for part in (error_type, error_message) if part
+                ) or None
             await progress_state.persist_url_result(
                 session=session,
                 run_id=run.id,
@@ -529,12 +591,13 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 records_count=len(url_result.records),
                 verdict=url_result.verdict,
                 url_metrics=url_result.url_metrics,
+                error_message=combined_error,
             )
             persisted_record_count = progress_state.persisted_record_count
             url_verdicts = progress_state.url_verdicts
             acquisition_summary = progress_state.acquisition_summary
             if persisted_record_count >= max_records:
-                await _log(
+                await log_event(
                     session,
                     run.id,
                     "info",
@@ -591,13 +654,13 @@ async def _handle_run_control_signal(
         if run.status_value != CrawlStatus.PAUSED:
             update_run_status(run, CrawlStatus.PAUSED)
         set_control_request(run, None)
-        await _log(session, run.id, "warning", "Run paused at checkpoint")
+        await log_event(session, run.id, "warning", "Run paused at checkpoint")
         await session.commit()
         return
     if run.status_value != CrawlStatus.KILLED:
         update_run_status(run, CrawlStatus.KILLED)
     set_control_request(run, None)
-    await _log(session, run.id, "warning", "Run killed at checkpoint")
+    await log_event(session, run.id, "warning", "Run killed at checkpoint")
     await session.commit()
 
 

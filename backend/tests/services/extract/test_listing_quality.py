@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from app.services.extract.listing_quality import (
     assess_listing_record_quality,
+    looks_like_editorial_or_taxonomy_title,
 )
 from app.services.config.extraction_rules import LISTING_WEAK_TITLES
 
 
-def test_assess_listing_record_quality_records_weak_title_reason():
+def test_assess_listing_record_quality_rejects_merchandising_weak_titles():
     weak_title = next(iter(LISTING_WEAK_TITLES), "sale")
 
     assessment = assess_listing_record_quality(
@@ -18,5 +19,8 @@ def test_assess_listing_record_quality_records_weak_title_reason():
         surface="ecommerce_listing",
     )
 
-    assert "weak_title" in assessment.reasons
-    assert "merchandising_noise" not in assessment.reasons
+    assert "merchandising_noise" in assessment.reasons
+
+
+def test_looks_like_editorial_or_taxonomy_title_rejects_empty_title():
+    assert looks_like_editorial_or_taxonomy_title("") is False

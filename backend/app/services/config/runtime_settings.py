@@ -110,8 +110,11 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_navigation_load_timeout_ms: int = 15000
     browser_navigation_domcontentloaded_timeout_ms: int = 15000
     browser_navigation_optimistic_wait_ms: int = 3000
+    browser_navigation_min_commit_wait_ms: int = 8000
+    browser_navigation_min_final_commit_timeout_ms: int = 15000
     interruptible_wait_poll_ms: int = 250
     pagination_navigation_timeout_ms: int = 20000
+    pagination_page_size_anomaly_ratio: int = 5
     listing_readiness_max_wait_ms: int = 6000
     listing_readiness_poll_ms: int = 500
     scroll_wait_min_ms: int = 1500

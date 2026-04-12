@@ -16,6 +16,7 @@ import asyncio
 import enum
 import logging
 import time
+from pathlib import Path
 
 import psutil
 
@@ -25,6 +26,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MEMORY_PRESSURE_THRESHOLD_PCT = 90
 _DEFAULT_MEMORY_CRITICAL_THRESHOLD_PCT = 95
 _PRESSURE_POLL_INTERVAL_SECONDS = 1.0
+_CGROUP_V2_MEMORY_MAX = Path("/sys/fs/cgroup/memory.max")
+_CGROUP_V2_MEMORY_CURRENT = Path("/sys/fs/cgroup/memory.current")
+_CGROUP_V1_MEMORY_LIMIT = Path("/sys/fs/cgroup/memory.limit_in_bytes")
+_CGROUP_V1_MEMORY_USAGE = Path("/sys/fs/cgroup/memory.usage_in_bytes")
+_CGROUP_V1_UNLIMITED_MIN = 1 << 60
 
 
 class MemoryPressureLevel(enum.Enum):
@@ -42,6 +48,43 @@ class MemoryPressureLevel(enum.Enum):
     CRITICAL = "critical"
 
 
+def _read_cgroup_value(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _cgroup_memory_percent() -> float | None:
+    for limit_path, usage_path in (
+        (_CGROUP_V2_MEMORY_MAX, _CGROUP_V2_MEMORY_CURRENT),
+        (_CGROUP_V1_MEMORY_LIMIT, _CGROUP_V1_MEMORY_USAGE),
+    ):
+        limit_raw = _read_cgroup_value(limit_path)
+        if limit_raw is None:
+            continue
+        if limit_raw == "max":
+            return None
+        try:
+            limit_bytes = int(limit_raw)
+        except ValueError:
+            continue
+        if limit_path == _CGROUP_V1_MEMORY_LIMIT and limit_bytes >= _CGROUP_V1_UNLIMITED_MIN:
+            continue
+        if limit_bytes <= 0:
+            continue
+        usage_raw = _read_cgroup_value(usage_path)
+        if usage_raw is None:
+            continue
+        try:
+            usage_bytes = int(usage_raw)
+        except ValueError:
+            continue
+        usage_bytes = max(0, usage_bytes)
+        return min(100.0, max(0.0, (usage_bytes / limit_bytes) * 100.0))
+    return None
+
+
 def get_memory_pressure_level(
     *,
     pressure_threshold_pct: float = _DEFAULT_MEMORY_PRESSURE_THRESHOLD_PCT,
@@ -52,12 +95,21 @@ def get_memory_pressure_level(
     This is a cheap, non-blocking call suitable for hot-path decisions
     like choosing browser fidelity settings.
     """
-    pct = psutil.virtual_memory().percent
+    cgroup_percent = _cgroup_memory_percent()
+    pct = cgroup_percent if cgroup_percent is not None else psutil.virtual_memory().percent
     if pct >= critical_threshold_pct:
         return MemoryPressureLevel.CRITICAL
     if pct >= pressure_threshold_pct:
         return MemoryPressureLevel.ELEVATED
     return MemoryPressureLevel.NORMAL
+
+
+def get_memory_pressure_percent() -> float:
+    """Return current memory pressure percent using the same source as pressure levels."""
+    cgroup_percent = _cgroup_memory_percent()
+    if cgroup_percent is not None:
+        return cgroup_percent
+    return float(psutil.virtual_memory().percent)
 
 
 class MemoryAdaptiveSemaphore:
@@ -109,14 +161,14 @@ class MemoryAdaptiveSemaphore:
 
     async def _wait_for_memory(self) -> None:
         """Block until memory pressure is below threshold."""
-        mem = psutil.virtual_memory()
-        if mem.percent < self._pressure_threshold:
+        memory_percent = get_memory_pressure_percent()
+        if memory_percent < self._pressure_threshold:
             if self._throttled_since is not None:
                 elapsed = time.monotonic() - self._throttled_since
                 logger.info(
                     "Memory pressure resolved after %.1fs (%.1f%% used)",
                     elapsed,
-                    mem.percent,
+                    memory_percent,
                 )
                 self._throttled_since = None
             return
@@ -127,20 +179,20 @@ class MemoryAdaptiveSemaphore:
             logger.warning(
                 "Memory pressure detected: %.1f%% used (threshold=%.0f%%), "
                 "throttling new URL acquisition; active_tokens=%d",
-                mem.percent,
+                memory_percent,
                 self._pressure_threshold,
                 self._active_tokens,
             )
 
         while True:
             await asyncio.sleep(_PRESSURE_POLL_INTERVAL_SECONDS)
-            mem = psutil.virtual_memory()
-            if mem.percent < self._pressure_threshold:
+            memory_percent = get_memory_pressure_percent()
+            if memory_percent < self._pressure_threshold:
                 elapsed = time.monotonic() - (self._throttled_since or time.monotonic())
                 logger.info(
                     "Memory pressure resolved after %.1fs (%.1f%% used)",
                     elapsed,
-                    mem.percent,
+                    memory_percent,
                 )
                 self._throttled_since = None
                 return

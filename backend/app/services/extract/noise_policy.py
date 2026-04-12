@@ -6,6 +6,10 @@ from app.services.config.extraction_rules import (
     CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS,
     CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN,
     CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN,
+    CANDIDATE_SCRIPT_NOISE_PATTERN,
+    CANDIDATE_UI_ICON_TOKEN_PATTERN,
+    CANDIDATE_UI_NOISE_PHRASES,
+    CANDIDATE_UI_NOISE_TOKEN_PATTERN,
 )
 from app.services.requested_field_policy import normalize_requested_field
 from bs4 import Tag
@@ -27,6 +31,8 @@ _DETAIL_FIELD_REJECT_PHRASES: dict[str, tuple[str, ...]] = {
     "availability": ("add to cart", "choose options", "select options", "view details"),
     "color": ("add to cart", "choose options", "select options"),
     "size": ("select size", "choose size"),
+    "features": ("livechat",),
+    "care": ("care instructions",),
 }
 _BREADCRUMB_STYLE_BRAND_RE = re.compile(r"\s(?:>|/)\s")
 
@@ -81,6 +87,30 @@ _NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS = (
 _CSS_NOISE_VALUE_RE = re.compile(CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN)
 _PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_RE = re.compile(
     CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN
+)
+_UI_NOISE_TOKEN_RE = (
+    re.compile(CANDIDATE_UI_NOISE_TOKEN_PATTERN, re.IGNORECASE)
+    if CANDIDATE_UI_NOISE_TOKEN_PATTERN
+    else None
+)
+_UI_ICON_TOKEN_RE = (
+    re.compile(CANDIDATE_UI_ICON_TOKEN_PATTERN, re.IGNORECASE)
+    if CANDIDATE_UI_ICON_TOKEN_PATTERN
+    else None
+)
+_SCRIPT_NOISE_RE = (
+    re.compile(CANDIDATE_SCRIPT_NOISE_PATTERN, re.IGNORECASE)
+    if CANDIDATE_SCRIPT_NOISE_PATTERN
+    else None
+)
+_NON_EMPTY_UI_NOISE_PHRASES = [phrase for phrase in CANDIDATE_UI_NOISE_PHRASES if phrase]
+_UI_NOISE_PHRASES_RE = (
+    re.compile(
+        r"\b(?:" + "|".join(re.escape(phrase) for phrase in _NON_EMPTY_UI_NOISE_PHRASES) + r")\b",
+        re.IGNORECASE,
+    )
+    if _NON_EMPTY_UI_NOISE_PHRASES
+    else None
 )
 
 SECTION_LABEL_SKIP_TOKENS = (
@@ -142,6 +172,21 @@ _NOISE_CONTAINER_REMOVAL_SELECTOR = (
 
 def normalized_noise_text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
+
+
+def strip_ui_noise(value: object) -> str:
+    text = normalized_noise_text(value)
+    if not text:
+        return ""
+    if _UI_ICON_TOKEN_RE:
+        text = _UI_ICON_TOKEN_RE.sub(" ", text)
+    if _UI_NOISE_TOKEN_RE:
+        text = _UI_NOISE_TOKEN_RE.sub(" ", text)
+    if _SCRIPT_NOISE_RE:
+        text = _SCRIPT_NOISE_RE.sub(" ", text)
+    if _UI_NOISE_PHRASES_RE:
+        text = _UI_NOISE_PHRASES_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip(" -|,:;/")
 
 
 def sanitize_detail_field_value(
@@ -208,6 +253,30 @@ def is_noisy_product_attribute_entry(key: object, value: object) -> bool:
     if text_value.count(" - ") >= 2:
         return True
     return False
+
+
+def sanitize_product_attribute_map(
+    value: object,
+    *,
+    blocked_keys: tuple[str, ...] | frozenset[str] | set[str] = (),
+) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+
+    blocked = {
+        normalize_requested_field(key) or str(key).strip().lower()
+        for key in blocked_keys
+        if str(key or "").strip()
+    }
+    sanitized: dict[str, object] = {}
+    for key, raw_value in value.items():
+        normalized_key = normalize_requested_field(key)
+        if not normalized_key or normalized_key in blocked:
+            continue
+        if is_noisy_product_attribute_entry(normalized_key, raw_value):
+            continue
+        sanitized[normalized_key] = raw_value
+    return sanitized or None
 
 
 def is_noise_title(

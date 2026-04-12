@@ -564,7 +564,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         />
         <Card className="space-y-3 px-6 py-8">
           <SectionHeader title="Unable to Load Crawl" description="The run workspace could not be restored." />
-          <div className="text-sm text-danger">
+          <div className="text-body-sm text-danger">
             {runQuery.error instanceof Error ? runQuery.error.message : "Unknown crawl loading error."}
           </div>
         </Card>
@@ -577,7 +577,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       <PageHeader
         title={run?.url ? (
           <span className="flex items-center gap-1.5">
-            Run Details: <a href={run.url} target="_blank" rel="noreferrer" className="font-mono text-[13px] text-[var(--accent)] underline-offset-2 hover:underline">{getDomain(run.url)}</a>
+            Run Details: <a href={run.url} target="_blank" rel="noreferrer" className="text-mono-data text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
           </span>
         ) : "Crawl Results"}
         actions={
@@ -590,17 +590,17 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       {showRunLoadingState ? (
         <Card className="space-y-3 px-6 py-8">
           <SectionHeader title="Loading Crawl" description="Fetching run details and restoring the workspace." />
-          <div className="text-sm text-muted">Run #{runId} is loading.</div>
+          <div className="text-body-sm text-muted">Run #{runId} is loading.</div>
         </Card>
       ) : null}
 
       {panelRefreshErrors.length ? (
-        <Card className="space-y-3 border-danger/30 bg-danger/5">
+        <Card className="space-y-3">
           <SectionHeader
             title="Some live panels failed to refresh"
             description="Data may be stale until these requests recover."
           />
-          <div className="space-y-1 text-sm text-danger">
+          <div className="alert-surface alert-danger space-y-1">
             {panelRefreshErrors.map((panel) => (
               <div key={panel.key}>
                 Unable to refresh {panel.label}:{" "}
@@ -678,7 +678,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         scrollViewportToBottom(logViewportRef);
                         setLiveJumpAvailable(false);
                       }}
-                      className="inline-flex items-center gap-1 rounded-md border border-border bg-panel px-2.5 py-1.5 text-xs"
+                      className="subtle-panel inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-caption"
                     >
                       <ChevronsDown className="size-3.5" aria-hidden="true" />
                       Jump to Latest
@@ -708,12 +708,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   href={run.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="block truncate text-sm font-medium text-accent underline-offset-2 hover:underline"
+                  className="block truncate text-link-ui text-accent underline-offset-2 hover:underline"
                 >
                   {run.url}
                 </a>
               ) : (
-                <p className="text-sm text-muted">Waiting for completed run data.</p>
+                <p className="text-body-sm text-muted">Waiting for completed run data.</p>
               )
             }
             actions={
@@ -766,9 +766,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       <DataRegionLoading count={5} className="px-0" />
                     ) : tableRecords.length ? (
                       <div className="space-y-3">
-                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2">
-                          <div className="flex items-center gap-2 text-sm text-muted">
-                            <span className="font-medium text-foreground">Shown rows</span>
+                        <div className="subtle-panel flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] px-3 py-2">
+                          <div className="flex items-center gap-2 text-body-sm text-muted">
+                            <span className="text-data-strong text-foreground">Shown rows</span>
                             <select
                               aria-label="Minimum row quality"
                               value={qualityFilter}
@@ -790,7 +790,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                               </button>
                             </Tooltip>
                           </div>
-                          <div className="text-xs text-muted">
+                          <div className="text-caption text-muted">
                             Showing {filteredTableRecords.length} of {tableRecords.length} loaded rows
                           </div>
                         </div>
@@ -807,7 +807,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           }
                         />
                         {hasMoreTableRecords ? (
-                          <div className="flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2 text-xs text-muted">
+                          <div className="subtle-panel flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-caption text-muted">
                             <span>
                               Showing {tableRecords.length} of {tableTotal} records
                             </span>
@@ -841,11 +841,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         Copy
                       </Button>
                     </div>
-                    <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto px-4 pb-4 pt-14 text-xs">
+                    <pre className="crawl-terminal crawl-terminal-json min-h-[55vh] max-h-[72vh] overflow-y-auto px-4 pb-4 pt-14 text-caption">
                       {recordsJson}
                     </pre>
                     {hasMoreJsonRecords ? (
-                      <div className="mt-2 flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-panel px-3 py-2 text-xs text-muted">
+                      <div className="subtle-panel mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-caption text-muted">
                         <span>
                           JSON previewing {jsonRecords.length} of {recordsTotal} records
                         </span>
@@ -881,13 +881,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       </Button>
                     </div>
                     {markdownQuery.isLoading && !markdown ? (
-                      <div className="space-y-2 rounded-[var(--radius-lg)] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
+                      <div className="subtle-panel space-y-2 px-3 pb-3 pt-12">
                         {Array.from({ length: 8 }, (_, index) => (
                           <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]" />
                         ))}
                       </div>
                     ) : markdown ? (
-                      <div className="min-h-[55vh] max-h-[72vh] overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-[var(--surface-card)] px-3 pb-3 pt-12">
+                      <div className="subtle-panel min-h-[55vh] max-h-[72vh] overflow-y-auto px-3 pb-3 pt-12">
                         <article className="markdown-document max-w-none">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
@@ -905,7 +905,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         </article>
                       </div>
                     ) : (
-                      <div className="grid min-h-40 place-items-center rounded-[var(--radius-lg)] border border-dashed border-border bg-panel text-sm text-muted">
+                      <div className="subtle-panel grid min-h-40 place-items-center border-dashed text-body-sm text-muted">
                         No markdown is available for this run.
                       </div>
                     )}

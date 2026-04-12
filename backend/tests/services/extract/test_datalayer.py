@@ -231,7 +231,7 @@ def test_datalayer_skips_invalid_push_and_uses_next_valid_payload():
     assert result["google_product_category"] == "Shoes"
 
 
-def test_datalayer_prefers_richer_later_ecommerce_push_and_records_selected_index():
+def test_datalayer_keeps_first_valid_ecommerce_push_and_records_selected_index():
     html = """
     <html><body>
     <script>
@@ -266,11 +266,11 @@ def test_datalayer_prefers_richer_later_ecommerce_push_and_records_selected_inde
 
     result = parse_datalayer(html)
 
-    assert result["price"] == 29.99
-    assert result["price_currency"] == "USD"
-    assert result["google_product_category"] == "Cameras"
-    assert result["availability"] == "InStock"
-    assert result["_selected_push_index"] == 1
+    assert result["price"] == 19.99
+    assert "price_currency" not in result
+    assert "google_product_category" not in result
+    assert "availability" not in result
+    assert result["_selected_push_index"] == 0
 
 
 def test_datalayer_parses_json_with_braces_inside_string_values():

@@ -9,6 +9,14 @@ from app.services.config.crawl_runtime import MAX_JSON_RECURSION_DEPTH
 from app.services.config.field_mappings import COLLECTION_KEYS
 from app.services.config.extraction_rules import (
     LISTING_FILTER_OPTION_KEYS,
+    NEXT_FLIGHT_AVAILABILITY_PATTERN,
+    NEXT_FLIGHT_BACK_WINDOW,
+    NEXT_FLIGHT_BRAND_PATTERNS,
+    NEXT_FLIGHT_FORWARD_WINDOW,
+    NEXT_FLIGHT_ORIGINAL_PRICE_PATTERN,
+    NEXT_FLIGHT_PAIR_PATTERNS,
+    NEXT_FLIGHT_RATING_PATTERN,
+    NEXT_FLIGHT_SALE_PRICE_PATTERN,
 )
 from app.services.extract.listing_identity import (
     choose_primary_record_set,
@@ -27,6 +35,18 @@ logger = logging.getLogger(__name__)
 
 _EMPTY_VALUES = (None, "", [], {})
 MIN_VIABLE_RECORDS = 2
+_NEXT_FLIGHT_PAIR_PATTERNS = tuple(
+    re.compile(pattern, re.S) for pattern in NEXT_FLIGHT_PAIR_PATTERNS
+)
+_NEXT_FLIGHT_BRAND_PATTERNS = tuple(
+    re.compile(pattern) for pattern in NEXT_FLIGHT_BRAND_PATTERNS
+)
+_NEXT_FLIGHT_SALE_PRICE_PATTERN = re.compile(NEXT_FLIGHT_SALE_PRICE_PATTERN, re.S)
+_NEXT_FLIGHT_ORIGINAL_PRICE_PATTERN = re.compile(
+    NEXT_FLIGHT_ORIGINAL_PRICE_PATTERN, re.S
+)
+_NEXT_FLIGHT_RATING_PATTERN = re.compile(NEXT_FLIGHT_RATING_PATTERN)
+_NEXT_FLIGHT_AVAILABILITY_PATTERN = re.compile(NEXT_FLIGHT_AVAILABILITY_PATTERN)
 
 
 def _extract_from_structured_sources(
@@ -35,6 +55,7 @@ def _extract_from_structured_sources(
     xhr_payloads: list[dict],
     surface: str,
     page_url: str,
+    max_json_recursion_depth: int = MAX_JSON_RECURSION_DEPTH,
 ) -> list[dict]:
     """Try JSON-LD, __NEXT_DATA__, hydrated states, and network payloads."""
     structured_groups: list[list[dict]] = []
@@ -70,7 +91,7 @@ def _extract_from_structured_sources(
                 state,
                 surface,
                 page_url,
-                max_depth=max(MAX_JSON_RECURSION_DEPTH + 4, 8),
+                max_depth=max(max_json_recursion_depth + 4, 8),
             )
             if state_records:
                 for r in state_records:
@@ -88,11 +109,12 @@ def _extract_from_structured_sources(
         body = payload.get("body")
         if not isinstance(body, (dict, list)):
             continue
+        extraction_page_url = payload_url or page_url
         net_records = _extract_items_from_json(
             body,
             surface,
-            page_url,
-            max_depth=max(MAX_JSON_RECURSION_DEPTH + 4, 8),
+            extraction_page_url,
+            max_depth=max(max_json_recursion_depth + 4, 8),
         )
         if net_records:
             for r in net_records:
@@ -388,7 +410,7 @@ def _extract_next_data_payload(soup) -> dict | None:
 
 def _normalize_ld_item(item: dict, surface: str, page_url: str) -> dict | None:
     """Normalize a JSON-LD Product or JobPosting into a flat record."""
-    from app.services.extract.listing_extractor import (
+    from app.services.extract.listing_card_extractor import (
         _extract_image_candidates,
         _infer_currency_from_page_url,
     )
@@ -639,7 +661,7 @@ def _query_state_data(node: object) -> object | None:
 
 def _try_normalize_array(items: list[dict], surface: str, page_url: str) -> list[dict]:
     """Try to normalize an array of objects into records."""
-    from app.services.extract.listing_extractor import _normalize_generic_item
+    from app.services.extract.listing_item_normalizer import _normalize_generic_item
 
     records = []
     for item in items:
@@ -695,3 +717,193 @@ def _parse_json_script(value: str) -> dict | list | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, (dict, list)) else None
+
+
+def _extract_from_next_flight_scripts(html: str, page_url: str) -> list[dict]:
+    if "__next_f.push" not in html:
+        return []
+
+    decoded_chunks: list[str] = []
+    for match in re.finditer(
+        r"self\.__next_f\.push\(\[\d+,\s*\"((?:\\.|[^\"\\])*)\"\]\)", html, re.S
+    ):
+        try:
+            decoded = parse_json(f'"{match.group(1)}"')
+        except json.JSONDecodeError:
+            continue
+        if decoded:
+            decoded_chunks.append(decoded)
+
+    if not decoded_chunks:
+        return []
+
+    records_by_url: dict[str, dict] = {}
+    for chunk in decoded_chunks:
+        for pair_pattern in _NEXT_FLIGHT_PAIR_PATTERNS:
+            for match in pair_pattern.finditer(chunk):
+                raw_url = match.group("url")
+                title = match.group("title")
+                if not title:
+                    continue
+
+                start_index = max(0, match.start() - NEXT_FLIGHT_BACK_WINDOW)
+                end_index = min(len(chunk), match.end() + NEXT_FLIGHT_FORWARD_WINDOW)
+                window = chunk[start_index:end_index]
+
+                resolved_url = urljoin(page_url, raw_url)
+                record = records_by_url.setdefault(
+                    resolved_url, {"url": resolved_url, "_source": "next_flight"}
+                )
+                record["title"] = title
+
+                brand_match = None
+                for brand_pattern in _NEXT_FLIGHT_BRAND_PATTERNS:
+                    brand_match = brand_pattern.search(window)
+                    if brand_match:
+                        break
+                if brand_match:
+                    record.setdefault("brand", brand_match.group("brand"))
+                if sale_price_match := _NEXT_FLIGHT_SALE_PRICE_PATTERN.search(window):
+                    record.setdefault("price", sale_price_match.group("amount"))
+                if original_price_match := _NEXT_FLIGHT_ORIGINAL_PRICE_PATTERN.search(
+                    window
+                ):
+                    record.setdefault(
+                        "original_price", original_price_match.group("amount")
+                    )
+                if rating_match := _NEXT_FLIGHT_RATING_PATTERN.search(window):
+                    record.setdefault("rating", rating_match.group("rating"))
+                    record.setdefault("review_count", rating_match.group("count"))
+                if availability_match := _NEXT_FLIGHT_AVAILABILITY_PATTERN.search(
+                    window
+                ):
+                    record.setdefault(
+                        "availability", availability_match.group("availability")
+                    )
+
+    return [
+        record
+        for record in records_by_url.values()
+        if is_meaningful_listing_record(record, surface="ecommerce_listing")
+    ]
+
+
+def _extract_from_inline_object_arrays(
+    html: str,
+    surface: str,
+    page_url: str,
+) -> list[dict]:
+    seen: set[str] = set()
+    key_pattern = re.compile(
+        r'(?P<key>["\']?[A-Za-z_][A-Za-z0-9_-]*["\']?)\s*:\s*\['
+    )
+
+    for match in key_pattern.finditer(html):
+        raw_key = str(match.group("key") or "").strip("\"' ")
+        if not _looks_like_inline_collection_key(raw_key):
+            continue
+        array_text = _extract_balanced_literal(html, match.end() - 1)
+        if not array_text:
+            continue
+        fingerprint = f"{raw_key}:{array_text[:200]}"
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        try:
+            parsed = parse_json(array_text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, list):
+            continue
+        objects = [item for item in parsed if isinstance(item, dict)]
+        if len(objects) < 2:
+            continue
+        normalized = _try_normalize_array(objects, surface, page_url)
+        if normalized:
+            for record in normalized:
+                record["_source"] = "inline_object_array"
+            return normalized
+
+    return []
+
+
+def _looks_like_inline_collection_key(value: str) -> bool:
+    normalized = _normalized_field_token(value)
+    if not normalized:
+        return False
+    collection_tokens = {
+        _normalized_field_token(token)
+        for token in COLLECTION_KEYS
+        if _normalized_field_token(token)
+    }
+    if normalized in collection_tokens:
+        return True
+    if normalized.startswith("list") and any(
+        token in normalized
+        for token in ("listing", "result", "product", "item", "record")
+    ):
+        return True
+    return any(
+        token in normalized
+        for token in ("listingdetails", "searchresults", "productresults")
+    )
+
+
+def _extract_balanced_literal(text: str, start_index: int) -> str | None:
+    if start_index < 0 or start_index >= len(text) or text[start_index] not in "[{":
+        return None
+    stack = [text[start_index]]
+    in_string = False
+    escape = False
+    quote_char = ""
+    index = start_index + 1
+
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+        else:
+            if char in {'"', "'"}:
+                in_string = True
+                quote_char = char
+            elif char in "[{":
+                stack.append(char)
+            elif char in "]}":
+                if not stack:
+                    return None
+                opening = stack.pop()
+                if (opening, char) not in {("[", "]"), ("{", "}")}:
+                    return None
+                if not stack:
+                    return text[start_index : index + 1]
+        index += 1
+    return None
+
+
+def _lookup_next_flight_window_index(
+    combined: str,
+    raw_url: str,
+    page_url: str,
+) -> int | None:
+    candidates: list[str] = []
+    for candidate in (
+        str(raw_url or "").strip(),
+        urljoin(page_url, str(raw_url or "").strip()),
+    ):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    raw_path = urlparse(str(raw_url or "").strip()).path.strip()
+    if raw_path and raw_path not in candidates:
+        candidates.append(raw_path)
+
+    for candidate in candidates:
+        lookup_index = combined.find(candidate)
+        if lookup_index != -1:
+            return lookup_index
+    return None

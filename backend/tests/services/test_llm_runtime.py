@@ -11,6 +11,7 @@ from app.core.security import encrypt_secret
 from app.models.llm import LLMConfig, LLMCostLog
 from app.services.llm_runtime import (
     LLMErrorCategory,
+    load_prompt_file,
     resolve_active_config,
     run_prompt_task,
     snapshot_active_configs,
@@ -299,6 +300,10 @@ async def test_run_prompt_task_rejects_invalid_page_classification_schema(db_ses
     assert result.payload is None
     assert result.error_category == LLMErrorCategory.VALIDATION_FAILURE
     assert "page_classification" in result.error_message
+
+
+def test_load_prompt_file_rejects_parent_path_traversal():
+    assert load_prompt_file("../secrets.txt") == ""
 
 
 @pytest.mark.asyncio
