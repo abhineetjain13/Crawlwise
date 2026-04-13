@@ -79,6 +79,29 @@ _LISTING_HOST_TOKEN_STOPWORDS = {
     "io",
     "app",
 }
+_TRANSACTIONAL_PATH_TOKENS = frozenset(
+    {
+        "cart",
+        "cartupdate",
+        "cartupdate.aspx",
+        "checkout",
+        "basket",
+        "bag",
+        "addtocart",
+        "add-to-cart",
+    }
+)
+_TRANSACTIONAL_QUERY_ACTION_VALUES = frozenset(
+    {
+        "add",
+        "addtocart",
+        "add-to-cart",
+        "buy",
+        "buy-now",
+        "buynow",
+        "checkout",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -193,6 +216,19 @@ def assess_listing_record_quality(record: dict, *, surface: str = "") -> Listing
 
     if is_job_surface and title_value and not (set(public_fields) & _JOB_REQUIRED_CONTEXT_FIELDS):
         return _invalid_assessment(normalized_surface, public_fields, product_signal_keys, job_signal_keys, "job_title_without_context")
+
+    if (
+        ("commerce" in normalized_surface or "ecommerce" in normalized_surface)
+        and url_value
+        and _looks_like_transactional_url_for_listing(url_value)
+    ):
+        return _invalid_assessment(
+            normalized_surface,
+            public_fields,
+            product_signal_keys,
+            job_signal_keys,
+            "transactional_url",
+        )
 
     if (
         ("commerce" in normalized_surface or "ecommerce" in normalized_surface)
@@ -390,6 +426,10 @@ def looks_like_listing_hub_url_for_listing(url_value: str) -> bool:
 
 def looks_like_detail_record_url_for_listing(url_value: str) -> bool:
     return _looks_like_detail_record_url_for_listing(url_value)
+
+
+def looks_like_transactional_url_for_listing(url_value: str) -> bool:
+    return _looks_like_transactional_url_for_listing(url_value)
 
 
 def looks_like_navigation_or_action_title(title: str, url: str = "") -> bool:
@@ -614,6 +654,8 @@ def _looks_like_detail_record_url_for_listing(url_value: str) -> bool:
     lowered = str(url_value or "").lower()
     if not lowered.startswith("http"):
         return False
+    if _looks_like_transactional_url_for_listing(lowered):
+        return False
     if _looks_like_facet_or_filter_url_for_listing(lowered):
         return False
     if _looks_like_category_url_for_listing(lowered):
@@ -621,9 +663,41 @@ def _looks_like_detail_record_url_for_listing(url_value: str) -> bool:
     return any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS)
 
 
+def _looks_like_transactional_url_for_listing(url_value: str) -> bool:
+    parsed = urlparse(str(url_value or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    path = parsed.path.lower()
+    segments = [
+        segment.lower()
+        for segment in re.split(r"[^a-z0-9.]+", path)
+        if segment.strip(".")
+    ]
+    if any(
+        segment in _TRANSACTIONAL_PATH_TOKENS or "cartupdate" in segment
+        for segment in segments
+    ):
+        return True
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    query_map = {
+        str(key or "").strip().lower(): str(value or "").strip().lower()
+        for key, value in query_items
+    }
+    if any(key in {"addtocart", "add-to-cart"} for key in query_map):
+        return True
+    action_value = query_map.get("action", "")
+    if action_value in _TRANSACTIONAL_QUERY_ACTION_VALUES and any(
+        token in path for token in ("/checkout", "/cart", "/basket", "/bag")
+    ):
+        return True
+    return False
+
+
 def _record_url_matches_listing_page(record: dict, *, page_url: str) -> bool:
     record_url = str(record.get("url") or record.get("apply_url") or "").strip()
     if not record_url:
+        return False
+    if _looks_like_transactional_url_for_listing(record_url):
         return False
     if is_social_url(record_url):
         return False

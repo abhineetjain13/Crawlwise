@@ -69,7 +69,7 @@ def _build_salary_money_re() -> re.Pattern[str]:
 _SALARY_MONEY_RE = _build_salary_money_re()
 _COLOR_VARIANT_COUNT_RE = re.compile(CANDIDATE_COLOR_VARIANT_COUNT_PATTERN, re.IGNORECASE)
 _DYNAMIC_NUMERIC_FIELD_RE = re.compile(CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN)
-_UNRESOLVED_TEMPLATE_VALUE_RE = re.compile(r"(\{\{.*?\}\}|\[\[.*?\]\]|<%.*?%>|\{%\s*.*?\s*%\}|\(\$[a-zA-Z0-9_]+\)|\$[a-zA-Z0-9_]+(?=/|$))")
+_UNRESOLVED_TEMPLATE_VALUE_RE = re.compile(r"(\{\{.*?\}\}|\[\[.*?\]\]|\{%\s*.*?\s*%\}|\{[a-zA-Z0-9_-]+\}|<%.*?%>|\(\$[a-zA-Z0-9_]+\)|\$[a-zA-Z0-9_]+(?=/|$))")
 _VARIANT_SELECTOR_PROMPT_RE = re.compile(
     r"^(?:select|choose|pick)\s+(?:a|an|the|your)?\s*"
     r"(?:size|sizes|color|colors|colour|colours|option|options|variant|variants|"

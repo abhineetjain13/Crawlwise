@@ -122,7 +122,7 @@ class CrawlRunSettings:
 
     def acquisition_profile(self) -> dict[str, object]:
         profile: dict[str, object] = {}
-        for key in ("anti_bot_enabled", "ignore_https_errors", "bypass_csp"):
+        for key in ("ignore_https_errors", "bypass_csp"):
             if key in self.data:
                 profile[key] = bool(self.data.get(key))
         return profile

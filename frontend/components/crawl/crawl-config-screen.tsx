@@ -58,7 +58,6 @@ export function CrawlConfigScreen({
   const [smartExtraction, setSmartExtraction] = useState(false);
   const [advancedEnabled, setAdvancedEnabled] = useState(false);
   const [advancedMode, setAdvancedMode] = useState<AdvancedCrawlMode>("auto");
-  const [antiBotEnabled, setAntiBotEnabled] = useState(false);
   const [requestDelay, setRequestDelay] = useState(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS));
   const [maxRecords, setMaxRecords] = useState(String(CRAWL_DEFAULTS.MAX_RECORDS));
   const [maxPages, setMaxPages] = useState(String(CRAWL_DEFAULTS.MAX_PAGES));
@@ -149,7 +148,6 @@ export function CrawlConfigScreen({
       smart_extraction: smartExtraction,
       advanced_enabled: advancedEnabled,
       advanced_mode: advancedMode,
-      anti_bot_enabled: antiBotEnabled,
       request_delay_ms: clampNumber(
         requestDelay,
         CRAWL_LIMITS.MIN_REQUEST_DELAY_MS,
@@ -181,7 +179,6 @@ export function CrawlConfigScreen({
       requestDelay,
       smartExtraction,
       targetUrl,
-      antiBotEnabled,
     ],
   );
 
@@ -523,13 +520,6 @@ export function CrawlConfigScreen({
                   </div>
                 </SettingSection>
                 <SettingSection
-                  label="Anti-Bot Mode"
-                  description="Adds browser-style waits for protected sites."
-                  icon={<Shield className="size-4" />}
-                  checked={antiBotEnabled}
-                  onChange={setAntiBotEnabled}
-                />
-                <SettingSection
                   label="Proxy"
                   description="Use a proxy pool."
                   icon={<Shield className="size-4" />}
@@ -607,7 +597,6 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
     llm_enabled: config.smart_extraction,
     advanced_enabled: config.advanced_enabled,
     advanced_mode: resolvedAdvancedMode,
-    anti_bot_enabled: config.anti_bot_enabled,
     sleep_ms: config.request_delay_ms,
     max_records: config.max_records,
     max_pages: config.max_pages,

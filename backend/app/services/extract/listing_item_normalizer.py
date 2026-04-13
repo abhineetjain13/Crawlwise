@@ -17,6 +17,9 @@ from app.services.extract.listing_card_extractor import (
     _infer_currency_from_page_url,
     _normalize_listing_title_text,
 )
+from app.services.extract.listing_quality import (
+    looks_like_transactional_url_for_listing,
+)
 from app.services.extract.shared_logic import (
     coerce_nested_text as _coerce_nested_text,
     extract_image_candidates as _extract_image_candidates,
@@ -513,8 +516,10 @@ def _normalize_listing_value(canonical: str, value: object, *, page_url: str) ->
             parsed = urlparse(page_url)
             origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else page_url
             if "/" not in text or _looks_like_product_short_path(text):
-                return urljoin(origin, text)
-        return urljoin(page_url, text) if text and page_url else text or None
+                resolved_url = urljoin(origin, text)
+                return None if looks_like_transactional_url_for_listing(resolved_url) else resolved_url
+        resolved_url = urljoin(page_url, text) if text and page_url else text or None
+        return None if looks_like_transactional_url_for_listing(str(resolved_url or "")) else resolved_url
     if canonical == "image_url":
         images = _extract_image_candidates(value, page_url=page_url)
         return images[0] if images else None

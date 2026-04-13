@@ -19,6 +19,20 @@ def build_url_metrics(
     requested_fields: list[str],
 ) -> dict[str, object]:
     diagnostics = acq.diagnostics if isinstance(acq.diagnostics, dict) else {}
+    surface_selection_warnings = (
+        diagnostics.get("surface_selection_warnings")
+        if isinstance(diagnostics.get("surface_selection_warnings"), list)
+        else []
+    )
+    surface_warning_signals = sorted(
+        {
+            str(signal).strip()
+            for warning in surface_selection_warnings
+            if isinstance(warning, dict)
+            for signal in (warning.get("signals") or [])
+            if str(signal).strip()
+        }
+    )
     timing_map = (
         diagnostics.get("timings_ms")
         if isinstance(diagnostics.get("timings_ms"), dict)
@@ -43,6 +57,10 @@ def build_url_metrics(
             "browser_used": acq.method == "playwright",
             "acquisition_outcome": str(diagnostics.get("acquisition_outcome") or "").strip()
             or None,
+            "invalid_surface_page": bool(diagnostics.get("invalid_surface_page")),
+            "soft_404_page": bool(diagnostics.get("soft_404_page")),
+            "transactional_page": bool(diagnostics.get("transactional_page")),
+            "surface_warning_signals": surface_warning_signals or None,
             "memory_browser_first": bool(diagnostics.get("memory_browser_first")),
             "proxy_used": bool(diagnostics.get("proxy_used")),
             "network_payloads": len(acq.network_payloads or []),

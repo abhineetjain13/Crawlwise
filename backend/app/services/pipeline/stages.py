@@ -265,7 +265,6 @@ class BlockedDetectionStage:
             browser_acq = await pipeline_core.acquire(
                 request=ctx.acquisition_request.with_profile_updates(
                     prefer_browser=True,
-                    anti_bot_enabled=True,
                 ),
             )
             browser_retry_ms = _elapsed_ms(browser_retry_started)

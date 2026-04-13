@@ -11,6 +11,7 @@ from app.services.acquisition.cookie_store import is_persistable_cookie
 from app.services.acquisition.http_client import (
     _retry_backoff_seconds,
     fetch_html_result,
+    request_result,
 )
 from app.services.acquisition.session_context import create_session_context
 from app.services.url_safety import ValidatedTarget
@@ -110,7 +111,7 @@ async def test_fetch_html_result_pins_dns_without_rewriting_hostname(monkeypatch
     assert captured["url"] == "https://example.com/product"
     assert "headers" not in captured["kwargs"]
     assert captured["session_kwargs"]["trust_env"] is False
-    assert captured["session_kwargs"]["curl_options"][CurlOpt.RESOLVE] == ["example.com:443:93.184.216.34"]
+    assert captured["kwargs"]["curl_options"][CurlOpt.RESOLVE] == ["example.com:443:93.184.216.34"]
 
 
 @pytest.mark.asyncio
@@ -286,6 +287,50 @@ async def test_fetch_html_result_session_context_does_not_seed_from_legacy_domai
     assert result.status_code == 200
     assert captured["cookies"] is None
 
+
+@pytest.mark.asyncio
+async def test_request_result_session_context_applies_only_safe_fingerprint_headers(
+    monkeypatch,
+):
+    session_context = create_session_context()
+    session_context.fingerprint.locale = "en-GB"
+    session_context.fingerprint.extra_headers = {
+        "Accept-Language": "en-GB,en;q=0.9",
+        "sec-ch-ua": '"Chromium";v="131"',
+        "Sec-Fetch-Site": "same-origin",
+    }
+    captured: dict[str, object] = {}
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            _ = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            return FakeResponse(
+                status_code=200,
+                text="<html><body>ok</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+                url=str(url),
+            )
+
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+
+    result = await request_result(
+        "https://example.com/product",
+        session_context=session_context,
+        allow_stealth_retry=False,
+    )
+
+    assert result.status_code == 200
+    assert captured["headers"] == {"Accept-Language": "en-GB,en;q=0.9"}
+
 def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(monkeypatch):
     import logging
     from unittest.mock import patch
@@ -423,6 +468,95 @@ async def test_fetch_html_result_revalidates_redirect_targets(monkeypatch):
     assert result.status_code == 200
     assert calls == ["https://example.com/start", "https://example.com/next"]
     assert validated_urls == ["https://example.com/start", "https://example.com/next"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_preserves_request_headers_across_redirects(monkeypatch):
+    captured_headers: list[dict[str, str] | None] = []
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            _ = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            captured_headers.append(kwargs.get("headers"))
+            if str(url).endswith("/start"):
+                return FakeResponse(
+                    status_code=302,
+                    text="",
+                    headers={"location": "/next", "content-type": "text/html"},
+                    url=str(url),
+                )
+            return FakeResponse(
+                status_code=200,
+                text="<html><body>ok</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+                url=str(url),
+            )
+
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+
+    result = await request_result(
+        "https://example.com/start",
+        headers={"x-test-header": "preserved"},
+        allow_stealth_retry=False,
+    )
+
+    assert result.status_code == 200
+    assert captured_headers == [
+        {"x-test-header": "preserved"},
+        {"x-test-header": "preserved"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_caches_blocked_page_detection(monkeypatch):
+    calls = 0
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            _ = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            _ = (url, kwargs)
+            return FakeResponse(
+                status_code=200,
+                text="<html><body>plain content</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+
+    class FakeBlockedResult:
+        is_blocked = False
+
+    def _fake_detect_blocked_page(_html: str):
+        nonlocal calls
+        calls += 1
+        return FakeBlockedResult()
+
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.detect_blocked_page",
+        _fake_detect_blocked_page,
+    )
+
+    result = await fetch_html_result("https://example.com/product", allow_stealth_retry=False)
+
+    assert result.status_code == 200
+    assert calls == 1
 
 
 @pytest.mark.asyncio

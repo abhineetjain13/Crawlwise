@@ -1,5 +1,15 @@
 """Acquisition strategy protocol and composable chain.
 
+.. warning:: **NOT CALLED IN PRODUCTION** (BUG-03)
+
+   ``AcquisitionChain`` and all strategy classes defined here are
+   never invoked by the live ``acquire()`` orchestrator.  The production
+   path calls ``_acquire_once()`` which directly dispatches to
+   ``_try_http()`` / ``_try_browser()`` in ``acquirer.py``.
+
+   Any fix applied here has **no effect** on live behaviour.
+   See ``acquirer._acquire_once()`` for the real acquisition path.
+
 Decomposes the monolithic ``_acquire_once`` waterfall into pluggable
 strategy classes.  A new acquisition backend (e.g. BrightData, Zyte)
 can be added by implementing :class:`AcquisitionStrategy` and inserting

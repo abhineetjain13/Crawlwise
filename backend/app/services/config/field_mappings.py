@@ -226,6 +226,7 @@ FIELD_ALIASES = {
         "imageUrl",
     ],
     "additional_images": [
+        "image",
         "images",
         "gallery",
         "gallery_images",

@@ -51,6 +51,7 @@ from app.services.extract.listing_quality import (
     looks_like_facet_or_filter_url_for_listing as _looks_like_facet_or_filter_url,
     looks_like_listing_hub_url_for_listing as _looks_like_listing_hub_url,
     looks_like_navigation_or_action_title as _looks_like_navigation_or_action_title,
+    looks_like_transactional_url_for_listing as _looks_like_transactional_url,
 )
 from app.services.extract.noise_policy import (
     is_listing_noise_group,
@@ -370,6 +371,8 @@ def _looks_like_card_link_href(href: str) -> bool:
     if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
         return False
     lowered = href.lower()
+    if _looks_like_transactional_url(lowered):
+        return False
     if _looks_like_facet_or_filter_url(lowered):
         return False
     if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
@@ -387,18 +390,33 @@ def _looks_like_card_link_href(href: str) -> bool:
 
 
 def _best_card_link(card: Tag, page_url: str) -> str:
-    fallback = ""
+    best_fallback = ""
+    best_fallback_score = -1
+    
     for link_el in card.select("a[href]"):
         href = str(link_el.get("href") or "").strip()
         if not href or href.startswith(("#", "javascript:", "mailto:")):
             continue
+            
         resolved = urljoin(page_url, href) if page_url else href
-        if not fallback:
-            fallback = resolved
+        if _looks_like_transactional_url(resolved):
+            continue
         parsed_path = urlparse(resolved).path.lower()
         if any(marker in parsed_path for marker in LISTING_DETAIL_PATH_MARKERS):
             return resolved
-    return fallback
+            
+        segments = [s for s in parsed_path.strip("/").split("/") if s]
+        max_digits = max((len(m) for m in re.findall(r"\d+", parsed_path)), default=0)
+        
+        # Prioritize robust path segments over semantic SEO links:
+        # Long identifiers (like DB ids) give a large score boost, segment depth breaks ties.
+        score = len(segments) + (max_digits * 2)
+        
+        if score > best_fallback_score:
+            best_fallback_score = score
+            best_fallback = resolved
+            
+    return best_fallback
 
 
 def _extract_from_card(

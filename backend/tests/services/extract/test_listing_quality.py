@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.services.extract.listing_quality import (
     assess_listing_record_quality,
     looks_like_editorial_or_taxonomy_title,
+    looks_like_transactional_url_for_listing,
 )
 from app.services.config.extraction_rules import LISTING_WEAK_TITLES
 
@@ -24,3 +25,23 @@ def test_assess_listing_record_quality_rejects_merchandising_weak_titles():
 
 def test_looks_like_editorial_or_taxonomy_title_rejects_empty_title():
     assert looks_like_editorial_or_taxonomy_title("") is False
+
+
+def test_assess_listing_record_quality_rejects_transactional_cart_urls():
+    assessment = assess_listing_record_quality(
+        {
+            "title": "Ultra Omega 3 Fish Oil",
+            "url": "https://www.vitacost.com/CheckOut/CartUpdate.aspx?SKUNumber=733739070746&action=add",
+            "price": "$24.99",
+        },
+        surface="ecommerce_listing",
+    )
+
+    assert assessment.quality == "invalid"
+    assert assessment.reasons == ("transactional_url",)
+
+
+def test_looks_like_transactional_url_for_listing_detects_add_to_cart_endpoints():
+    assert looks_like_transactional_url_for_listing(
+        "https://www.vitacost.com/CheckOut/CartUpdate.aspx?SKUNumber=733739070746&action=add"
+    )

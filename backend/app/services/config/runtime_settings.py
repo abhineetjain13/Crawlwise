@@ -49,7 +49,7 @@ class CrawlerRuntimeSettings(BaseSettings):
 
     performance_profile: Literal["ULTRA_FAST", "BALANCED", "STEALTH"] = "BALANCED"
     http_timeout_seconds: int = 20
-    acquisition_attempt_timeout_seconds: int = 90
+    acquisition_attempt_timeout_seconds: int = 60
     impersonation_target: str = "chrome131"
     http_impersonation_profiles: list[str] = Field(
         default_factory=lambda: ["chrome110", "chrome116", "chrome123", "chrome131"]
@@ -148,6 +148,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_context_timeout_ms: int = 15000
     browser_new_page_timeout_ms: int = 10000
     browser_close_timeout_ms: int = 5000
+    browser_render_timeout_seconds: float = 30.0
     iframe_promotion_max_candidates: int = 2
     extractability_non_product_type_ratio_max: float = 0.8
     extractability_json_ld_min_type_signals: int = 2
@@ -215,6 +216,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("url_process_timeout_seconds must be > 0")
         if self.max_url_process_timeout_seconds <= 0:
             raise ValueError("max_url_process_timeout_seconds must be > 0")
+        if self.browser_render_timeout_seconds <= 0:
+            raise ValueError("browser_render_timeout_seconds must be > 0")
         if self.acquisition_artifact_ttl_seconds < 0:
             raise ValueError("acquisition_artifact_ttl_seconds must be >= 0")
         if self.acquisition_artifact_cleanup_interval_seconds < 0:

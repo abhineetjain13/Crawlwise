@@ -14,7 +14,6 @@ function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
     smart_extraction: false,
     advanced_enabled: false,
     advanced_mode: "auto",
-    anti_bot_enabled: false,
     request_delay_ms: 2000,
     max_records: 100,
     max_pages: 5,

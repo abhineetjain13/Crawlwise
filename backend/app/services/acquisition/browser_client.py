@@ -22,6 +22,10 @@ from app.services.acquisition.browser_challenge import (
     _page_looks_low_value,
     _wait_for_challenge_resolution,
 )
+from app.services.acquisition.browser_stealth import (
+    apply_browser_stealth,
+    probe_browser_automation_surfaces,
+)
 from app.services.acquisition.browser_navigation import (
     _classify_profile_failure_reason,
     _goto_with_fallback,
@@ -77,6 +81,7 @@ from app.services.exceptions import BrowserError
 from app.services.resource_monitor import MemoryPressureLevel, get_memory_pressure_level
 from app.services.config.crawl_runtime import (
     ACCORDION_EXPAND_WAIT_MS,
+    BROWSER_CLOSE_TIMEOUT_MS,
     BROWSER_CONTEXT_TIMEOUT_MS,
     BROWSER_NEW_PAGE_TIMEOUT_MS,
     COOKIE_CONSENT_POSTCLICK_WAIT_MS,
@@ -245,6 +250,8 @@ async def _fetch_rendered_html_with_fallback(
     first_profile_failure_reason: str | None = None
     options = request.runtime_options or BrowserRuntimeOptions()
     profiles = _browser_launch_profiles(options, target=request.target)
+    if not options.retry_launch_profiles:
+        profiles = profiles[:1]
     for index, profile in enumerate(profiles):
         navigation_strategies = (
             _shortened_navigation_strategies()
@@ -358,25 +365,20 @@ async def _fetch_rendered_html_attempt(
         ctx_kwargs["viewport"] = _DEGRADED_VIEWPORT
     try:
         # FIX: Wrap context creation in a strict timeout to prevent zombie browsers
-        context = await asyncio.wait_for(
-            browser.new_context(**ctx_kwargs),
-            timeout=BROWSER_CONTEXT_TIMEOUT_MS / 1000,
-        )
-    except (TimeoutError, PlaywrightError):
-        # Browser in pool may have died or hung; evict and retry once.
-        await _evict_browser(_browser_pool_key(launch_profile, proxy), browser)
-        browser, _ = await _acquire_browser(
+        browser, context, stealth_applied = await _new_context_with_recovery(
+            browser=browser,
             browser_type=browser_type,
             launch_kwargs=launch_kwargs,
-            browser_pool_key=_browser_pool_key(launch_profile, proxy),
-            force_new=True,
+            launch_profile=launch_profile,
+            proxy=proxy,
+            ctx_kwargs=ctx_kwargs,
+            session_context=session_context,
         )
-        context = await asyncio.wait_for(
-            browser.new_context(**ctx_kwargs),
-            timeout=BROWSER_CONTEXT_TIMEOUT_MS / 1000,
-        )
+    except (TimeoutError, PlaywrightError):
+        raise
 
     original_domain = _domain(url)
+    page = None
     try:
         await _load_cookies(
             context,
@@ -402,31 +404,46 @@ async def _fetch_rendered_html_attempt(
                     }
                 )
                 try:
-                    await route.abort("blockedbyclient")
+                    await _abort_route(route, "blockedbyclient")
                 except PlaywrightError:
-                    await route.abort()
+                    await _abort_route(route)
                 return
 
             if degraded:
                 resource_type = str(getattr(request, "resource_type", "") or "")
                 if resource_type in _DEGRADED_BLOCKED_RESOURCE_TYPES:
                     try:
-                        await route.abort("blockedbyclient")
+                        await _abort_route(route, "blockedbyclient")
                     except PlaywrightError:
-                        await route.abort()
+                        await _abort_route(route)
                     return
 
-            await route.continue_()
+            await _continue_route(route)
 
         route_fn = getattr(page, "route", None)
         if callable(route_fn):
             await route_fn("**/*", _route_request)
 
+        # DEBT-07: Cap intercepted payload accumulation to prevent
+        # unbounded memory growth on analytics-heavy pages.
+        _MAX_INTERCEPTED_PAYLOADS = 100
+        _MAX_INTERCEPTED_BYTES = 5_000_000
+        _intercepted_bytes = 0
+
         async def _on_response(response):
+            nonlocal _intercepted_bytes
+            if len(intercepted) >= _MAX_INTERCEPTED_PAYLOADS:
+                return
+            if _intercepted_bytes >= _MAX_INTERCEPTED_BYTES:
+                return
             content_type = response.headers.get("content-type", "")
             if "application/json" in content_type:
                 try:
                     body = await response.json()
+                    body_size = len(str(body))
+                    if _intercepted_bytes + body_size > _MAX_INTERCEPTED_BYTES:
+                        return
+                    _intercepted_bytes += body_size
                     intercepted.append(
                         {
                             "url": response.url,
@@ -492,7 +509,11 @@ async def _fetch_rendered_html_attempt(
         result.challenge_state = challenge_state
         result.diagnostics["challenge_reasons"] = reasons
         result.diagnostics["challenge_ok"] = challenge_ok
-        result.diagnostics["anti_bot_enabled"] = runtime_options.anti_bot_enabled
+        result.diagnostics["browser_runtime_hardened"] = runtime_options.hardened_mode
+        result.diagnostics["browser_runtime_reason"] = (
+            runtime_options.hardened_mode_reason
+        )
+        result.diagnostics["playwright_stealth_applied"] = stealth_applied
         if not challenge_ok:
             await _populate_result(result, page, intercepted, checkpoint=checkpoint)
             result.diagnostics["final_url"] = page.url or url
@@ -614,6 +635,8 @@ async def _fetch_rendered_html_attempt(
                     )
                 )
             except (
+                asyncio.TimeoutError,
+                PlaywrightTimeoutError,
                 PlaywrightError,
                 RuntimeError,
                 ValueError,
@@ -767,7 +790,120 @@ async def _fetch_rendered_html_attempt(
         )
         return result
     finally:
-        await context.close()
+        await _teardown_page_session(page, context)
+
+
+def _is_closed_target_playwright_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    return "target page, context or browser has been closed" in text
+
+
+async def _abort_route(route, error_code: str | None = None) -> None:
+    try:
+        if error_code:
+            await route.abort(error_code)
+        else:
+            await route.abort()
+    except PlaywrightError as exc:
+        if _is_closed_target_playwright_error(exc):
+            logger.debug("Ignoring route.abort on closed Playwright target")
+            return
+        raise
+
+
+async def _continue_route(route) -> None:
+    try:
+        await route.continue_()
+    except PlaywrightError as exc:
+        if _is_closed_target_playwright_error(exc):
+            logger.debug("Ignoring route.continue_ on closed Playwright target")
+            return
+        raise
+
+
+async def _teardown_page_session(page, context) -> None:
+    cancelled = False
+    if page is not None:
+        unroute_all = getattr(page, "unroute_all", None)
+        if callable(unroute_all):
+            try:
+                await unroute_all(behavior="ignoreErrors")
+            except asyncio.CancelledError:
+                logger.debug("Playwright page unroute cancelled during teardown")
+                cancelled = True
+            except TypeError:
+                try:
+                    await unroute_all()
+                except asyncio.CancelledError:
+                    logger.debug("Playwright page unroute cancelled during teardown")
+                    cancelled = True
+            except PlaywrightError as exc:
+                if not _is_closed_target_playwright_error(exc):
+                    logger.debug("Failed to unroute Playwright page", exc_info=True)
+    try:
+        await asyncio.wait_for(
+            context.close(),
+            timeout=BROWSER_CLOSE_TIMEOUT_MS / 1000,
+        )
+    except asyncio.CancelledError:
+        logger.debug("Playwright context close cancelled during teardown")
+        cancelled = True
+    except TimeoutError:
+        logger.debug("Timed out while closing Playwright context")
+    except PlaywrightError as exc:
+        if not _is_closed_target_playwright_error(exc):
+            logger.debug("Failed to close Playwright context", exc_info=True)
+    if cancelled:
+        raise asyncio.CancelledError()
+
+
+async def _new_context_with_recovery(
+    *,
+    browser,
+    browser_type,
+    launch_kwargs: dict,
+    launch_profile: dict[str, str | None],
+    proxy: str | None,
+    ctx_kwargs: dict,
+    session_context: SessionContext | None,
+):
+    try:
+        context = await asyncio.wait_for(
+            browser.new_context(**ctx_kwargs),
+            timeout=BROWSER_CONTEXT_TIMEOUT_MS / 1000,
+        )
+    except (TimeoutError, PlaywrightError):
+        await _evict_browser(_browser_pool_key(launch_profile, proxy), browser)
+        browser, _ = await _acquire_browser(
+            browser_type=browser_type,
+            launch_kwargs=launch_kwargs,
+            browser_pool_key=_browser_pool_key(launch_profile, proxy),
+            force_new=True,
+        )
+        context = await asyncio.wait_for(
+            browser.new_context(**ctx_kwargs),
+            timeout=BROWSER_CONTEXT_TIMEOUT_MS / 1000,
+        )
+    stealth_applied = await _apply_browser_stealth_with_fallback(
+        context,
+        session_context=session_context,
+    )
+    return browser, context, stealth_applied
+
+
+async def _apply_browser_stealth_with_fallback(
+    context,
+    *,
+    session_context: SessionContext | None,
+) -> bool:
+    try:
+        return await apply_browser_stealth(
+            context,
+            session_context=session_context,
+        )
+    except (PlaywrightError, RuntimeError, ValueError, TypeError):
+        logger.debug("Failed to apply Playwright stealth init scripts", exc_info=True)
+        return False
 async def _is_public_browser_request_target(request_url: str) -> tuple[bool, str]:
     parsed = urlparse(str(request_url or "").strip())
     scheme = str(parsed.scheme or "").lower()

@@ -82,20 +82,16 @@ def _navigation_attempts(
                 ),
             )
         )
-    max_commit_timeout = max(
-        (
-            int(timeout)
-            for wait_until, timeout in attempts
-            if wait_until == "commit"
-        ),
-        default=0,
-    )
-    final_commit_timeout = max(
-        BROWSER_NAVIGATION_MIN_FINAL_COMMIT_TIMEOUT_MS,
-        max_commit_timeout,
-    )
-    if final_commit_timeout > max_commit_timeout:
-        attempts.append(("commit", final_commit_timeout))
+    commit_indexes = [
+        idx for idx, (wait_until, _timeout) in enumerate(attempts) if wait_until == "commit"
+    ]
+    if commit_indexes:
+        last_commit_index = commit_indexes[-1]
+        wait_until, timeout = attempts[last_commit_index]
+        attempts[last_commit_index] = (
+            wait_until,
+            max(int(timeout), BROWSER_NAVIGATION_MIN_FINAL_COMMIT_TIMEOUT_MS),
+        )
     return attempts
 
 

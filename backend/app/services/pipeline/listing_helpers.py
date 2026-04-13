@@ -7,6 +7,9 @@ from urllib.parse import urljoin
 from app.services.acquisition import AcquisitionResult
 from app.services.acquisition import detect_blocked_page
 from app.services.config.field_mappings import excluded_fields_for_surface
+from app.services.extract.listing_quality import (
+    looks_like_transactional_url_for_listing,
+)
 
 from .utils import _clean_candidate_text
 
@@ -67,6 +70,14 @@ def _sanitize_listing_record_fields(
             sanitized[url_field] = (
                 urljoin(page_base_url, raw_url) if page_base_url else raw_url
             )
+        normalized_url = str(sanitized.get(url_field) or "").strip()
+        if (
+            normalized_url
+            and url_field == "url"
+            and "job" not in str(surface or "").lower()
+            and looks_like_transactional_url_for_listing(normalized_url)
+        ):
+            sanitized.pop(url_field, None)
 
     # Job-specific sanitization
     if "job" not in str(surface or "").lower():

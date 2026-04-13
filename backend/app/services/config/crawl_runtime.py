@@ -163,6 +163,7 @@ SHADOW_DOM_FLATTEN_MAX_HOSTS = crawler_runtime_settings.shadow_dom_flatten_max_h
 BROWSER_CONTEXT_TIMEOUT_MS = crawler_runtime_settings.browser_context_timeout_ms
 BROWSER_NEW_PAGE_TIMEOUT_MS = crawler_runtime_settings.browser_new_page_timeout_ms
 BROWSER_CLOSE_TIMEOUT_MS = crawler_runtime_settings.browser_close_timeout_ms
+BROWSER_RENDER_TIMEOUT_SECONDS = crawler_runtime_settings.browser_render_timeout_seconds
 IFRAME_PROMOTION_MAX_CANDIDATES = (
     crawler_runtime_settings.iframe_promotion_max_candidates
 )

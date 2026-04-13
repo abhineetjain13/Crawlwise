@@ -955,6 +955,35 @@ def test_extract_listing_next_flight_uses_generic_brand_fallback():
     assert records[0]["brand"] == "Acme"
 
 
+def test_extract_listing_prefers_detail_link_over_transactional_cart_action():
+    html = """
+    <html><body>
+      <div class="product-card">
+        <a class="product-link" href="/now-foods-ultra-omega-3-fish-oil-500-epa-250-dha-180-softgels">
+          <h3>NOW Foods Ultra Omega 3 Fish Oil</h3>
+        </a>
+        <a class="add-to-cart" href="/CheckOut/CartUpdate.aspx?SKUNumber=733739070746&action=add">
+          Add to Cart
+        </a>
+        <span class="price">$24.99</span>
+      </div>
+    </body></html>
+    """
+
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
+        set(),
+        page_url="https://www.vitacost.com/fish-oil",
+        max_records=10,
+    )
+
+    assert len(records) == 1
+    assert records[0]["url"] == (
+        "https://www.vitacost.com/now-foods-ultra-omega-3-fish-oil-500-epa-250-dha-180-softgels"
+    )
+
+
 def test_extract_listing_rejects_weak_collection_json_ld_without_item_fields():
     html = """
     <html><body>

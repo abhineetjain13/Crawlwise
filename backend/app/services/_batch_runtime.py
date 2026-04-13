@@ -432,6 +432,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         if context is None:
             return
         run = context.run
+        active_run_id = int(getattr(run, "id", run_id) or run_id)
         correlation_token = set_correlation_id(context.correlation_id)
         url_list = context.url_list
         proxy_list = context.proxy_list
@@ -443,13 +444,13 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         url_timeout_seconds = context.url_timeout_seconds
         await _log_with_retry(
             session,
-            run.id,
+            active_run_id,
             "info",
             f"[traversal] mode={traversal_mode}, advanced={context.advanced_enabled}, url={url_list[0] if url_list else ''}",
         )
 
         total_urls = context.total_urls
-        persisted_record_count = await _count_run_records(session, run.id)
+        persisted_record_count = await _count_run_records(session, active_run_id)
         progress_state = run.build_batch_progress_state(
             total_urls=total_urls,
             url_domain=_domain(url_list[0]) if url_list else "",
@@ -474,7 +475,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             if remaining_records <= 0:
                 await log_event(
                     session,
-                    run.id,
+                    active_run_id,
                     "info",
                     f"Reached max_records ceiling ({max_records})",
                 )
@@ -482,7 +483,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
             await log_event(
                 session,
-                run.id,
+                active_run_id,
                 "info",
                 f"Processing URL {idx + 1}/{total_urls}: {url}",
             )
@@ -525,7 +526,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             await persist_batch_url_result(
                 state=progress_state,
                 session=session,
-                run_id=run.id,
+                run_id=active_run_id,
                 retry_run_update=_retry_run_update,
                 idx=idx,
                 url=url,
@@ -540,7 +541,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             if persisted_record_count >= max_records:
                 await log_event(
                     session,
-                    run.id,
+                    active_run_id,
                     "info",
                     f"Stopped after reaching max_records={max_records}",
                 )
@@ -554,7 +555,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         aggregate_verdict = _aggregate_verdict(url_verdicts)
         await _finalize_batch_run(
             session,
-            run.id,
+            active_run_id,
             summary_patch=progress_state.build_final_patch(aggregate_verdict),
             aggregate_verdict=aggregate_verdict,
             acquisition_summary=acquisition_summary,

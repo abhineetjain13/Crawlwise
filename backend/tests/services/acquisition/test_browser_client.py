@@ -19,6 +19,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 class _FakePage:
     def __init__(self) -> None:
         self.url = "https://example.com/listing"
+        self.unroute_all = AsyncMock()
 
     async def route(self, _pattern, _handler) -> None:
         return None
@@ -31,6 +32,7 @@ class _FakeContext:
     def __init__(self, page: _FakePage) -> None:
         self._page = page
         self.close = AsyncMock()
+        self.add_init_script = AsyncMock()
 
     async def new_page(self) -> _FakePage:
         return self._page
@@ -113,7 +115,36 @@ async def test_fetch_rendered_html_attempt_passes_page_content_helper_to_low_val
     assert captured["page"] is page
     assert captured["page_content_with_retry"] is browser_client._page_content_with_retry
     assert result.diagnostics["listing_readiness"] == {"ready": False}
+    assert result.diagnostics["playwright_stealth_applied"] is True
+    context.add_init_script.assert_awaited()
+    page.unroute_all.assert_awaited_once_with(behavior="ignoreErrors")
     context.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_teardown_page_session_unroutes_before_context_close() -> None:
+    page = _FakePage()
+    context = _FakeContext(page)
+
+    await browser_client._teardown_page_session(page, context)
+
+    page.unroute_all.assert_awaited_once_with(behavior="ignoreErrors")
+    context.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_abort_route_ignores_closed_target_error() -> None:
+    route = SimpleNamespace(
+        abort=AsyncMock(
+            side_effect=PlaywrightError(
+                "Route.abort: Target page, context or browser has been closed"
+            )
+        )
+    )
+
+    await browser_client._abort_route(route, "blockedbyclient")
+
+    route.abort.assert_awaited_once_with("blockedbyclient")
 
 
 @pytest.mark.asyncio
@@ -280,8 +311,47 @@ async def test_fetch_rendered_html_retries_profile_after_playwright_timeout(
             max_scrolls=1,
             prefer_stealth=False,
             request_delay_ms=0,
-            runtime_options=BrowserRuntimeOptions(),
+            runtime_options=BrowserRuntimeOptions(retry_launch_profiles=True),
         ),
     )
 
     assert output is result
+
+
+@pytest.mark.asyncio
+async def test_apply_browser_stealth_uses_session_fingerprint_overrides() -> None:
+    context = SimpleNamespace(add_init_script=AsyncMock())
+    session_context = SimpleNamespace(
+        fingerprint=SimpleNamespace(
+            locale="en-GB",
+            platform="MacIntel",
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+        )
+    )
+
+    applied = await browser_client.apply_browser_stealth(
+        context,
+        session_context=session_context,
+    )
+
+    assert applied is True
+    context.add_init_script.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_probe_browser_automation_surfaces_returns_page_evaluation() -> None:
+    expected = {
+        "navigator_webdriver": False,
+        "chrome_present": True,
+        "chrome_runtime_present": True,
+    }
+    page = SimpleNamespace(evaluate=AsyncMock(return_value=expected))
+
+    result = await browser_client.probe_browser_automation_surfaces(page)
+
+    assert result is expected
+    page.evaluate.assert_awaited_once()

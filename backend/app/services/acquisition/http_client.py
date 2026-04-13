@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 _MAX_REDIRECTS = 5
 _ALLOWED_REDIRECT_SCHEMES = {"http", "https"}
+_SESSION_HEADER_ALLOWLIST = {"accept-language"}
 
 
 def _validate_retry_backoff_config() -> None:
@@ -62,6 +63,12 @@ class HttpFetchResult:
     error: str = ""
     attempt_log: list[dict[str, object]] = field(default_factory=list)
     retry_after_seconds: float | None = None
+    _blocked_result: object | None = field(default=None, repr=False, compare=False)
+
+    def blocked_result(self):
+        if self._blocked_result is None:
+            self._blocked_result = detect_blocked_page(self.text)
+        return self._blocked_result
 
 
 async def fetch_html(url: str, proxy: str | None = None) -> str:
@@ -221,7 +228,7 @@ async def _fetch_with_retry(
         if (
             result.text
             and result.content_type == "html"
-            and detect_blocked_page(result.text).is_blocked
+            and result.blocked_result().is_blocked
         ):
             return result
         if result.error and not result.status_code:
@@ -242,7 +249,6 @@ async def _fetch_with_retry(
 
 
 def _retry_backoff_seconds(attempt: int) -> float:
-    _validate_retry_backoff_config()
     delay_ms = HTTP_RETRY_BACKOFF_BASE_MS * max(1, 2 ** (attempt - 1))
     bounded_ms = min(delay_ms, HTTP_RETRY_BACKOFF_MAX_MS)
     jitter_ms = random.uniform(0.0, bounded_ms * 0.2) if bounded_ms > 0 else 0.0
@@ -265,7 +271,7 @@ def _build_attempt_entry(
     if result.retry_after_seconds is not None:
         entry["retry_after_seconds"] = result.retry_after_seconds
     if result.text and result.content_type == "html":
-        entry["blocked"] = detect_blocked_page(result.text).is_blocked
+        entry["blocked"] = result.blocked_result().is_blocked
     return entry
 
 
@@ -290,47 +296,52 @@ async def _fetch_once(
     # cookies from redirect targets.
     _cookies_seeded = False
 
-    while True:
-        target = await validate_public_target(request_url)
-        session_kwargs: dict[str, Any] = {}
-        session_kwargs["trust_env"] = False
-        kwargs: dict[str, Any] = {
-            "impersonate": impersonate,
-            "timeout": float(timeout_seconds or HTTP_TIMEOUT_SECONDS),
-            "allow_redirects": False,
-        }
-        if headers:
-            kwargs["headers"] = dict(headers)
-        if json_body is not None:
-            kwargs["json"] = json_body
-        if data is not None:
-            kwargs["data"] = data
-        if target.resolved_ips:
-            session_kwargs["curl_options"] = _resolve_options(target)
-        # Session-affinity: use SessionContext's proxy and isolated cookies
-        # when available, falling back to legacy domain-scoped cookie store.
-        effective_proxy = (
-            session_context.proxy if session_context is not None else proxy
-        )
-        if effective_proxy:
-            kwargs["proxies"] = {"http": effective_proxy, "https": effective_proxy}
-        if session_context is not None:
-            if not _cookies_seeded:
-                # Seed once from the session-scoped store only.
-                session_cookies = load_session_cookies_for_http(
-                    target.hostname, session_context.identity_key
-                )
-                if session_cookies:
-                    session_context.merge_http_cookies(session_cookies)
-                _cookies_seeded = True
-            if session_context.cookies:
-                kwargs["cookies"] = dict(session_context.cookies)
-        else:
-            cookies = load_cookies_for_http(target.hostname)
-            if cookies:
-                kwargs["cookies"] = cookies
-        try:
-            async with requests.AsyncSession(**session_kwargs) as session:
+    async with requests.AsyncSession(trust_env=False) as session:
+        while True:
+            target = await validate_public_target(request_url)
+            request_headers = _merge_request_headers(
+                headers,
+                session_context=session_context,
+            )
+            kwargs: dict[str, Any] = {
+                "impersonate": impersonate,
+                "timeout": float(timeout_seconds or HTTP_TIMEOUT_SECONDS),
+                "allow_redirects": False,
+            }
+            if request_headers:
+                kwargs["headers"] = request_headers
+            if json_body is not None:
+                kwargs["json"] = json_body
+            if data is not None:
+                kwargs["data"] = data
+            if target.resolved_ips:
+                resolve_options = _resolve_options(target)
+                if hasattr(session, "curl_options"):
+                    session.curl_options = dict(resolve_options)
+                else:
+                    kwargs["curl_options"] = resolve_options
+            # Session-affinity: use SessionContext's proxy and isolated cookies
+            # when available, falling back to legacy domain-scoped cookie store.
+            effective_proxy = (
+                session_context.proxy if session_context is not None else proxy
+            )
+            if effective_proxy:
+                kwargs["proxies"] = {"http": effective_proxy, "https": effective_proxy}
+            if session_context is not None:
+                if not _cookies_seeded:
+                    session_cookies = load_session_cookies_for_http(
+                        target.hostname, session_context.identity_key
+                    )
+                    if session_cookies:
+                        session_context.merge_http_cookies(session_cookies)
+                    _cookies_seeded = True
+                if session_context.cookies:
+                    kwargs["cookies"] = dict(session_context.cookies)
+            else:
+                cookies = load_cookies_for_http(target.hostname)
+                if cookies:
+                    kwargs["cookies"] = cookies
+            try:
                 request_fn = getattr(session, request_method.lower(), None)
                 if request_fn is None:
                     response = await session.request(
@@ -340,66 +351,91 @@ async def _fetch_once(
                     )
                 else:
                     response = await request_fn(request_url, **kwargs)
-        except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError) as exc:
+            except (OSError, RuntimeError, ValueError, TypeError, CurlRequestsError) as exc:
+                return HttpFetchResult(
+                    error=str(exc),
+                    stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+                    impersonate_profile=impersonate,
+                    final_url=request_url,
+                )
+
+            response_headers = {
+                str(key).lower(): str(value)
+                for key, value in getattr(response, "headers", {}).items()
+            }
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            location = str(response_headers.get("location") or "").strip()
+            if status_code in {301, 302, 303, 307, 308} and location:
+                redirect_count += 1
+                if redirect_count > _MAX_REDIRECTS:
+                    return HttpFetchResult(
+                        status_code=status_code,
+                        headers=response_headers,
+                        final_url=str(getattr(response, "url", request_url)),
+                        content_type="html",
+                        stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+                        impersonate_profile=impersonate,
+                        attempts=1,
+                        error="too_many_redirects",
+                    )
+                next_url = _resolve_redirect_url(request_url, location)
+                if next_url is None:
+                    return HttpFetchResult(
+                        status_code=status_code,
+                        headers=response_headers,
+                        final_url=str(getattr(response, "url", request_url)),
+                        content_type="html",
+                        stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
+                        impersonate_profile=impersonate,
+                        attempts=1,
+                        error="invalid_redirect_target",
+                    )
+                request_url = next_url
+                continue
+
+            text = getattr(response, "text", "") or ""
+            content_type, json_data = _parse_content(text, response_headers)
+            error = ""
+            if status_code >= 400:
+                error = f"HTTP {status_code}"
             return HttpFetchResult(
-                error=str(exc),
+                text=text,
+                status_code=status_code,
+                headers=response_headers,
+                final_url=str(getattr(response, "url", request_url)),
+                content_type=content_type,
+                json_data=json_data,
                 stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
                 impersonate_profile=impersonate,
-                final_url=request_url,
+                attempts=1,
+                error=error,
+                retry_after_seconds=_parse_retry_after(response_headers),
             )
 
-        headers = {
-            str(key).lower(): str(value)
-            for key, value in getattr(response, "headers", {}).items()
-        }
-        status_code = int(getattr(response, "status_code", 0) or 0)
-        location = str(headers.get("location") or "").strip()
-        if status_code in {301, 302, 303, 307, 308} and location:
-            redirect_count += 1
-            if redirect_count > _MAX_REDIRECTS:
-                return HttpFetchResult(
-                    status_code=status_code,
-                    headers=headers,
-                    final_url=str(getattr(response, "url", request_url)),
-                    content_type="html",
-                    stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
-                    impersonate_profile=impersonate,
-                    attempts=1,
-                    error="too_many_redirects",
-                )
-            next_url = _resolve_redirect_url(request_url, location)
-            if next_url is None:
-                return HttpFetchResult(
-                    status_code=status_code,
-                    headers=headers,
-                    final_url=str(getattr(response, "url", request_url)),
-                    content_type="html",
-                    stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
-                    impersonate_profile=impersonate,
-                    attempts=1,
-                    error="invalid_redirect_target",
-                )
-            request_url = next_url
-            continue
 
-        text = getattr(response, "text", "") or ""
-        content_type, json_data = _parse_content(text, headers)
-        error = ""
-        if status_code >= 400:
-            error = f"HTTP {status_code}"
-        return HttpFetchResult(
-            text=text,
-            status_code=status_code,
-            headers=headers,
-            final_url=str(getattr(response, "url", request_url)),
-            content_type=content_type,
-            json_data=json_data,
-            stealth_used=impersonate == HTTP_STEALTH_IMPERSONATION_PROFILE,
-            impersonate_profile=impersonate,
-            attempts=1,
-            error=error,
-            retry_after_seconds=_parse_retry_after(headers),
+def _merge_request_headers(
+    headers: dict[str, str] | None,
+    *,
+    session_context: SessionContext | None = None,
+) -> dict[str, str] | None:
+    merged: dict[str, str] = {}
+    if session_context is not None:
+        fingerprint = getattr(session_context, "fingerprint", None)
+        extra_headers = (
+            dict(getattr(fingerprint, "extra_headers", {}) or {})
+            if fingerprint is not None
+            else {}
         )
+        for key, value in extra_headers.items():
+            normalized_key = str(key or "").strip().lower()
+            if normalized_key in _SESSION_HEADER_ALLOWLIST:
+                merged[str(key)] = str(value)
+        locale = str(getattr(fingerprint, "locale", "") or "").strip()
+        if locale and not any(key.lower() == "accept-language" for key in merged):
+            merged["Accept-Language"] = locale
+    if headers:
+        merged.update(dict(headers))
+    return merged or None
 
 
 def _resolve_options(target: ValidatedTarget) -> dict[int, list[str]]:
@@ -447,7 +483,7 @@ def _should_retry_with_stealth(result: HttpFetchResult) -> bool:
         return True
     if result.error and not result.status_code:
         return True
-    if result.content_type != "json" and detect_blocked_page(result.text).is_blocked:
+    if result.content_type != "json" and result.blocked_result().is_blocked:
         return True
     return False
 
