@@ -9,19 +9,22 @@ import re as _re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from json import loads as parse_json
 from pathlib import Path
 from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.core.metrics import observe_acquisition_duration
+from app.services.acquisition.artifact_store import (
+    artifact_paths,
+    persist_acquisition_artifacts,
+    persist_failure_artifacts,
+)
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import BrowserResult, fetch_rendered_html
 from app.services.acquisition.browser_runtime import resolve_browser_runtime_options
 from app.services.acquisition.cookie_store import (
     discard_session_cookies,
-    load_cookies_for_http,
 )
 from app.services.acquisition.http_client import HttpFetchResult, fetch_html_result
 from app.services.acquisition.pacing import wait_for_host_slot
@@ -530,7 +533,6 @@ async def acquire(
     requested_fields = acquisition_request.requested_fields
     requested_field_selectors = acquisition_request.requested_field_selectors
     checkpoint = acquisition_request.checkpoint
-    diagnostics_path = _diagnostics_path(run_id, url)
     profile = dict(acquisition_request.acquisition_profile)
     platform_family = _detect_platform_family(url)
 
@@ -569,8 +571,7 @@ async def acquire(
     for proxy in proxy_candidates:
         # Create a fresh SessionContext per proxy attempt.  When a proxy
         # dies, the entire context (cookies + fingerprint) is discarded.
-        domain_cookies = load_cookies_for_http(target_domain)
-        session_ctx = create_session_context(proxy=proxy, domain_cookies=domain_cookies)
+        session_ctx = create_session_context(proxy=proxy)
         session_ctx.remember_domain(target_domain)
         try:
             result = await asyncio.wait_for(
@@ -627,12 +628,9 @@ async def acquire(
             break
 
     if result is None:
-        # FIX: Offload disk I/O
-        await asyncio.to_thread(
-            _write_failed_diagnostics,
+        await persist_failure_artifacts(
             run_id,
             url,
-            diagnostics_path,
             error_detail="All acquisition attempts failed",
         )
         if proxy_list:
@@ -644,44 +642,17 @@ async def acquire(
             ) from last_timeout_error
         raise AcquisitionFailureError(f"Unable to acquire content for {url}")
 
-    path = _artifact_path(run_id, url)
-    await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
-
-    if result.content_type == "json" and result.json_data is not None:
-        path = path.with_suffix(".json")
-        await asyncio.to_thread(
-            path.write_text,
-            json.dumps(
-                _scrub_payload_for_artifact(result.json_data),
-                indent=2,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
-    elif result.content_type == "json":
-        path = path.with_suffix(".json")
-        await asyncio.to_thread(
-            path.write_text,
-            _scrub_sensitive_text(result.html or ""),
-            encoding="utf-8",
-        )
-    else:
-        await asyncio.to_thread(
-            path.write_text,
-            _scrub_html_for_artifact(result.html),
-            encoding="utf-8",
-        )
-
-    # FIX: Offload network payload and diagnostics disk I/O
-    await asyncio.to_thread(
-        _write_network_payloads, run_id, url, result.network_payloads
-    )
-    await asyncio.to_thread(
-        _write_diagnostics, run_id, url, result, path, diagnostics_path
+    artifact_path, diagnostics_path = await persist_acquisition_artifacts(
+        run_id,
+        url,
+        result,
+        scrub_payload=_scrub_payload_for_artifact,
+        scrub_html=_scrub_html_for_artifact,
+        scrub_text=_scrub_sensitive_text,
     )
 
-    result.artifact_path = str(path)
-    result.diagnostics_path = str(diagnostics_path)
+    result.artifact_path = artifact_path
+    result.diagnostics_path = diagnostics_path
     diagnostics = result.diagnostics if isinstance(result.diagnostics, dict) else {}
     if bool(diagnostics.get("browser_blocked")) or bool(
         diagnostics.get("curl_blocked")
@@ -2217,110 +2188,30 @@ def _normalize_fetch_result(
 
 
 def _artifact_path(run_id: int, url: str) -> Path:
-    return settings.artifacts_dir / "html" / f"{_artifact_basename(run_id, url)}.html"
+    return artifact_paths(run_id, url).artifact_path
 
 
 def _network_payload_path(run_id: int, url: str) -> Path:
-    return (
-        settings.artifacts_dir / "network" / f"{_artifact_basename(run_id, url)}.json"
-    )
+    return artifact_paths(run_id, url).network_payload_path
 
 
 def _diagnostics_path(run_id: int, url: str) -> Path:
-    return (
-        settings.artifacts_dir
-        / "diagnostics"
-        / f"{_artifact_basename(run_id, url)}.json"
-    )
-
-
-def _write_network_payloads(run_id: int, url: str, payloads: list[dict]) -> None:
-    if not payloads:
-        return
-    path = _network_payload_path(run_id, url)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    scrubbed_payloads = scrub_network_payloads_for_storage(payloads)
-    path.write_text(json.dumps(scrubbed_payloads, indent=2), encoding="utf-8")
-
-
-def _write_failed_diagnostics(
-    run_id: int,
-    url: str,
-    diagnostics_path: Path,
-    *,
-    error_detail: str,
-) -> None:
-    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "timestamp_utc": datetime.now(UTC).isoformat(),
-        "run_id": run_id,
-        "url": url,
-        "status": "failed",
-        "artifact_path": None,
-        "network_payload_path": None,
-        "html_length": 0,
-        "json_kind": None,
-        "network_payloads": 0,
-        "blocked": None,
-        "diagnostics": {
-            "error_code": "acquisition_failed",
-            "error_detail": error_detail,
-        },
-    }
-    diagnostics_path.write_text(
-        json.dumps(payload, indent=2, default=str), encoding="utf-8"
-    )
-
-
-def _write_diagnostics(
-    run_id: int,
-    url: str,
-    result: AcquisitionResult,
-    artifact_path: Path,
-    diagnostics_path: Path,
-) -> None:
-    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
-    blocked = (
-        detect_blocked_page(result.html).as_dict()
-        if result.content_type == "html"
-        else None
-    )
-    payload = {
-        "timestamp_utc": datetime.now(UTC).isoformat(),
-        "run_id": run_id,
-        "url": url,
-        "status": "completed",
-        "method": result.method,
-        "content_type": result.content_type,
-        "artifact_path": str(artifact_path),
-        "network_payload_path": str(_network_payload_path(run_id, url))
-        if result.network_payloads
-        else None,
-        "html_length": len(result.html or ""),
-        "json_kind": type(result.json_data).__name__
-        if result.json_data is not None
-        else None,
-        "network_payloads": len(result.network_payloads or []),
-        "blocked": blocked,
-        "diagnostics": _scrub_payload_for_artifact(result.diagnostics),
-    }
-    diagnostics_path.write_text(
-        json.dumps(payload, indent=2, default=str), encoding="utf-8"
-    )
+    return artifact_paths(run_id, url).diagnostics_path
 
 
 def _scrub_payload_for_artifact(value: object) -> object:
     if isinstance(value, dict):
-        output: dict[str, object] = {}
-        for key, item in value.items():
-            key_text = str(key)
-            if _looks_sensitive_key(key_text):
-                output[key_text] = _REDACTED
-                continue
-            output[key_text] = _scrub_payload_for_artifact(item)
-        return output
+        scrubbed: dict[object, object] = {}
+        for key, nested_value in value.items():
+            if _looks_sensitive_key(str(key)):
+                scrubbed[key] = _REDACTED
+            else:
+                scrubbed[key] = _scrub_payload_for_artifact(nested_value)
+        return scrubbed
     if isinstance(value, list):
         return [_scrub_payload_for_artifact(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_payload_for_artifact(item) for item in value)
     if isinstance(value, str):
         return _scrub_sensitive_text(value)
     return value
@@ -2328,27 +2219,18 @@ def _scrub_payload_for_artifact(value: object) -> object:
 
 def _scrub_html_for_artifact(html: str) -> str:
     scrubbed = _scrub_sensitive_text(html)
-    if not scrubbed:
-        return scrubbed
-    soup = BeautifulSoup(scrubbed, HTML_PARSER)
-    for tag in soup.find_all(True):
-        marker_values = [
-            str(tag.get(attr) or "").strip().lower()
-            for attr in ("name", "id", "property", "http-equiv")
-        ]
-        if not any(
-            token in marker
-            for marker in marker_values
-            for token in _SENSITIVE_HTML_FIELD_TOKENS
-        ):
-            continue
-        if tag.has_attr("value"):
-            tag["value"] = _REDACTED
-        if tag.has_attr("content"):
-            tag["content"] = _REDACTED
-        if tag.name == "textarea":
-            tag.string = _REDACTED
-    return str(soup)
+    for token in _SENSITIVE_HTML_FIELD_TOKENS:
+        scrubbed = _re.sub(
+            rf'(?is)(<input\b[^>]*?\b(?:name|id)=["\'][^"\']*{_re.escape(token)}[^"\']*["\'][^>]*?\bvalue=)(["\']).*?\2',
+            rf"\1\2{_REDACTED}\2",
+            scrubbed,
+        )
+        scrubbed = _re.sub(
+            rf'(?is)(<meta\b[^>]*?\b(?:name|property)=["\'][^"\']*{_re.escape(token)}[^"\']*["\'][^>]*?\bcontent=)(["\']).*?\2',
+            rf"\1\2{_REDACTED}\2",
+            scrubbed,
+        )
+    return scrubbed
 
 
 def _looks_sensitive_key(key: str) -> bool:
@@ -2358,8 +2240,8 @@ def _looks_sensitive_key(key: str) -> bool:
 
 def _scrub_sensitive_text(text: str) -> str:
     scrubbed = str(text or "")
-    scrubbed = _URL_CREDENTIALS_RE.sub(r"\1***:***@", scrubbed)
-    scrubbed = _BEARER_TOKEN_RE.sub(_REDACTED, scrubbed)
+    scrubbed = _BEARER_TOKEN_RE.sub(f"Bearer {_REDACTED}", scrubbed)
+    scrubbed = _URL_CREDENTIALS_RE.sub(r"\1[REDACTED]@", scrubbed)
     scrubbed = _EMAIL_RE.sub(_REDACTED, scrubbed)
     scrubbed = _LONG_TOKEN_RE.sub(_REDACTED, scrubbed)
     return scrubbed

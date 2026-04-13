@@ -798,6 +798,54 @@ def test_extract_product_cards_captures_listing_metadata():
     assert records[0]["original_price"] == "$79.99"
 
 
+def test_extract_product_cards_skips_old_price_nodes_for_current_price():
+    html = """
+    <html><body>
+    <div class="product-card">
+        <img src="https://img.example.com/a-1.jpg" />
+        <h3><a href="/product/1">Accent Mirror</a></h3>
+        <span class="price was-price">$79.99</span>
+        <span class="price">$61.99</span>
+    </div>
+    <div class="product-card">
+        <img src="https://img.example.com/b-1.jpg" />
+        <h3><a href="/product/2">Second Mirror</a></h3>
+        <span class="price">$45.00</span>
+    </div>
+    </body></html>
+    """
+    records = extract_listing_records(
+        html, "ecommerce_listing", set(), page_url="https://example.com", max_records=10
+    )
+
+    assert len(records) == 2
+    assert records[0]["price"] == "$61.99"
+
+
+def test_extract_product_cards_requires_context_for_generic_strikethrough_original_price():
+    html = """
+    <html><body>
+    <div class="product-card">
+        <img src="https://img.example.com/a-1.jpg" />
+        <h3><a href="/product/1">Accent Mirror</a></h3>
+        <span class="price">$61.99</span>
+        <del>Limited time offer</del>
+    </div>
+    <div class="product-card">
+        <img src="https://img.example.com/b-1.jpg" />
+        <h3><a href="/product/2">Second Mirror</a></h3>
+        <span class="price">$45.00</span>
+    </div>
+    </body></html>
+    """
+    records = extract_listing_records(
+        html, "ecommerce_listing", set(), page_url="https://example.com", max_records=10
+    )
+
+    assert len(records) == 2
+    assert "original_price" not in records[0]
+
+
 def test_extract_product_cards_infers_currency_from_locale_and_reads_swatch_color():
     html = """
     <html><body>
@@ -2235,6 +2283,21 @@ def test_normalize_generic_item_prefers_product_full_url_over_nested_shop_url():
 
     assert record is not None
     assert record["url"] == "https://www.shop.ving.run/product/nirun/11000742818002390"
+
+
+def test_normalize_generic_item_keeps_slugged_record_when_slug_url_cannot_be_resolved():
+    record = listing_extractor._normalize_generic_item(
+        {
+            "product_name": "Widget",
+            "slug": "widget",
+            "product_images": "https://cdn.example.com/widget.jpg",
+        },
+        "ecommerce_listing",
+        "",
+    )
+
+    assert record is not None
+    assert record["title"] == "Widget"
 
 
 def test_normalize_listing_record_drops_dimensions_when_it_duplicates_size_choices():

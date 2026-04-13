@@ -46,7 +46,7 @@ function RunRow({
             <Tooltip content={run.url}>
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="no-underline block max-w-[280px] truncate text-link-ui text-primary transition-colors hover:text-accent"
+                className="no-underline block max-w-[280px] truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-primary transition-colors hover:text-accent"
               >
                 {domain || `Run #${run.id}`}
               </Link>
@@ -81,7 +81,7 @@ function RunRow({
 
       {/* Mode */}
       <td>
-        <span className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-meta font-mono text-muted">
+        <span className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[11px] leading-[1.45] font-mono text-muted">
           {formatRunType(run.run_type)}
         </span>
       </td>
@@ -93,14 +93,14 @@ function RunRow({
 
       {/* Records */}
       <td>
-        <span className={cn("text-data-strong tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
+        <span className={cn("text-sm font-medium leading-[1.45] text-foreground tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
           {recordCount > 0 ? recordCount.toLocaleString() : "—"}
         </span>
       </td>
 
       {/* Date */}
       <td>
-        <span className="text-meta text-muted">{formatDate(run.created_at)}</span>
+        <span className="text-[11px] leading-[1.45] text-muted">{formatDate(run.created_at)}</span>
       </td>
 
       {/* Actions */}
@@ -108,7 +108,7 @@ function RunRow({
         <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 group-hover:opacity-100 transition-opacity">
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="ui-on-accent-surface no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent)] bg-[var(--accent)] px-2.5 text-link-ui transition-colors hover:opacity-90"
+                className="ui-on-accent-surface no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent)] bg-[var(--accent)] px-2.5 text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover transition-colors hover:opacity-90"
               >
             Open <ArrowUpRight className="size-3" />
           </Link>
@@ -272,7 +272,7 @@ export default function RunsPage() {
 
       {/* Total count */}
       {visibleRuns.length > 0 && (
-        <p className="text-meta text-muted">
+        <p className="text-[11px] leading-[1.45] text-muted">
           Showing {visibleRuns.length} of {query.data?.meta?.total ?? visibleRuns.length} runs
         </p>
       )}

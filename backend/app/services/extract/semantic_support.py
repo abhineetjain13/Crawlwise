@@ -403,26 +403,7 @@ def _collect_feature_values(sections: dict[str, str]) -> list[str]:
         for key, body in sections.items()
         if key in FEATURE_SECTION_ALIASES and body not in (None, "", [], {})
     ]
-    if feature_values:
-        return feature_values
-
-    inferred: list[str] = []
-    for key, body in sections.items():
-        if body in (None, "", [], {}):
-            continue
-        normalized_key = normalize_requested_field(key)
-        normalized_body = _clean_text(body)
-        lowered_body = normalized_body.lower()
-        if normalized_key in {"description", "summary", "specifications", "dimensions", "materials", "care"}:
-            continue
-        if len(normalized_body) < 24 or len(normalized_body) > 280:
-            continue
-        if _PRICE_ONLY_TEXT_RE.fullmatch(normalized_body):
-            continue
-        if _FEATURE_SKIP_PATTERN.search(lowered_body):
-            continue
-        inferred.append(normalized_body)
-    return inferred
+    return feature_values
 
 
 def _extract_sections(
@@ -628,6 +609,8 @@ def _extract_table_groups(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
 
 def _extract_inline_spec_pair(node: Tag) -> tuple[str, str] | None:
+    if node.find(["div", "p", "ul", "li", "dl", "table"]):
+        return None
     text = _clean_text(node.get_text(" ", strip=True))
     if not text or len(text) < 4 or len(text) > 240 or ":" not in text:
         return None
@@ -899,6 +882,8 @@ def _lookup_semantic_value(
                 or normalized_key.endswith(f"_{alias}")
                 or f"_{alias}_" in normalized_key
             ):
+                if alias == "care" and any(word in normalized_key for word in ("hair", "skin", "customer", "body", "personal", "health")):
+                    continue
                 return value
     return None
 

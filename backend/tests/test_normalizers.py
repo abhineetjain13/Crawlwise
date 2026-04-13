@@ -116,15 +116,14 @@ def test_validate_color_hex_accepts_only_valid_css_hex_lengths():
     assert validate_value("color", "#abcdefg") is None
 
 
-def test_normalize_variant_axes_promotes_localized_generic_choice_bucket_to_named_axis():
+def test_normalize_variant_axes_drops_waitlist_ctas_and_size_guide_headers():
     assert normalize_and_validate_value(
         "variant_axes",
         {
-            "key": "AT5",
-            "name": "สี",
-            "all_choices": ["Sand Beige", "Sirrocco Nude", "Machine Grey"],
+            "size": ["1", "2", "UK", "US", "EU", "Jeans", "Join the waitlist"],
+            "color": ["Black", "color Black", "Check availability in store"],
         },
-    ) == {"color": ["Sand Beige", "Sirrocco Nude", "Machine Grey"]}
+    ) == {"size": ["1", "2"], "color": ["Black"]}
 
 
 def test_normalize_product_attributes_drops_variant_axis_metadata_payload():
@@ -138,3 +137,15 @@ def test_normalize_product_attributes_drops_variant_axis_metadata_payload():
         )
         is None
     )
+
+
+def test_normalize_product_attributes_drops_selector_and_promo_noise():
+    assert normalize_and_validate_value(
+        "product_attributes",
+        {
+            "colour": "Chocolate Select a Size : Size Guide XS S M L",
+            "select_a_size": "Size Guide XS S M L",
+            "extra_15_off_everything_code": "KMEXTRA15",
+            "brand": "KarenMillen",
+        },
+    ) == {"colour": "Chocolate", "brand": "KarenMillen"}

@@ -181,6 +181,12 @@ EXTRACTABILITY_NEXT_DATA_SIGNAL_MIN = (
 BROWSER_PREFERENCE_MIN_SUCCESSES = (
     crawler_runtime_settings.browser_preference_min_successes
 )
+ACQUISITION_ARTIFACT_TTL_SECONDS = (
+    crawler_runtime_settings.acquisition_artifact_ttl_seconds
+)
+ACQUISITION_ARTIFACT_CLEANUP_INTERVAL_SECONDS = (
+    crawler_runtime_settings.acquisition_artifact_cleanup_interval_seconds
+)
 LONG_RUN_THRESHOLD_SECONDS: int = 30 * 60
 STALLED_RUN_THRESHOLD_SECONDS: int = 2 * 60
 MAX_DURATION_SAMPLE_SIZE: int = 1000

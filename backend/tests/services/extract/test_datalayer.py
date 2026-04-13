@@ -375,7 +375,7 @@ def test_datalayer_treats_plain_numeric_discount_as_amount_without_currency_cont
 
     assert result["price"] == "80"
     assert result["discount_amount"] == "40"
-    assert result["sale_price"] == 40
+    assert result["original_price"] == 120.0
     assert "discount_percentage" not in result
 
 
@@ -403,5 +403,5 @@ def test_datalayer_does_not_assume_plain_numeric_discount_is_percentage_for_jpy(
     assert result["price"] == "12000"
     assert result["price_currency"] == "JPY"
     assert result["discount_amount"] == "40"
-    assert result["sale_price"] == 11960
+    assert result["original_price"] == 12040.0
     assert "discount_percentage" not in result

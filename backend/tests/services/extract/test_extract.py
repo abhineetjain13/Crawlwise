@@ -7,7 +7,9 @@ from unittest.mock import patch
 
 import pytest
 from app.services.exceptions import ExtractionParseError
+from app.services.extract.source_parsers import parse_page_sources
 from app.services.extract.candidate_processing import (
+    candidate_source_rank,
     finalize_candidate_row,
     coerce_field_candidate_value,
 )
@@ -77,6 +79,19 @@ def test_extract_candidates_raises_typed_parse_error_with_cause():
                 [],
                 [],
             )
+
+    assert exc_info.value.__cause__ is parse_exc
+
+
+def test_parse_page_sources_raises_typed_parse_error_with_cause():
+    parse_exc = ValueError("broken embedded JSON payload")
+
+    with patch(
+        "app.services.extract.source_parsers.extract_hydrated_states",
+        side_effect=parse_exc,
+    ):
+        with pytest.raises(ExtractionParseError) as exc_info:
+            parse_page_sources("<html></html>")
 
     assert exc_info.value.__cause__ is parse_exc
 
@@ -314,6 +329,67 @@ def test_extract_job_company_from_open_graph_site_name():
         )
     assert candidates["company"][0]["source"] == "open_graph"
     assert candidates["company"][0]["value"] == "Woodbine Entertainment"
+
+
+def test_extract_candidates_prefers_saashr_job_detail_payload_over_generic_network_title_matches():
+    html = """
+    <html>
+      <body>
+        <div class="c-career-search-header-bar__comp-name">
+          LEWIS &amp; CLARK BEHAVIORAL HEALTH SERVICES INC.
+        </div>
+        <div class="c-career-search-details-view__title-heading-text">Case Manager</div>
+      </body>
+    </html>
+    """
+    manifest = _manifest(
+        network_payloads=[
+            {
+                "url": "https://secure7.saashr.com/ta/rest/ui/recruitment/companies/%7C6208610/job-search/config?ein_id=118959061&career_portal_id=6062087&lang=en-US",
+                "body": {
+                    "comp_name": "LEWIS & CLARK BEHAVIORAL HEALTH SERVICES INC.",
+                },
+            },
+            {
+                "url": "https://secure7.saashr.com/ta/rest/ui/recruitment/companies/%7C6208610/job-requisitions/570929092?showMap=1&lang=en-US",
+                "body": {
+                    "id": 570929092,
+                    "job_title": "Case Manager",
+                    "location": {
+                        "address_line_1": "3111 Shirley Bridge Ave",
+                        "city": "Yankton",
+                        "state": "SD",
+                        "zip": "57078",
+                        "country": "USA",
+                    },
+                    "employee_type": {"name": "Full-Time"},
+                    "job_description": "<p>Community-based case management.</p>",
+                    "job_requirement": "<ul><li>High school diploma</li></ul>",
+                    "job_preview": "<p>Three weeks paid vacation.</p>",
+                    "is_remote_job": False,
+                },
+            },
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://secure7.saashr.com/ta/6208610.careers?offset=1&size=20&sort=desc&ein_id=118959061&lang=en-US&career_portal_id=6062087&ShowJob=570929092",
+            "job_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert candidates["title"][0]["source"] == "saashr_detail"
+    assert candidates["title"][0]["value"] == "Case Manager"
+    assert candidates["company"][0]["value"] == "LEWIS & CLARK BEHAVIORAL HEALTH SERVICES INC."
+    assert candidates["location"][0]["value"] == "3111 Shirley Bridge Ave, Yankton, SD, 57078, USA"
+    assert candidates["job_type"][0]["value"] == "Full-Time"
+    assert candidates["description"][0]["value"] == "Community-based case management."
+    assert candidates["requirements"][0]["value"].startswith("High")
+    assert "diploma" in candidates["requirements"][0]["value"]
+    assert candidates["benefits"][0]["value"] == "Three weeks paid vacation."
+    assert candidates["apply_url"][0]["value"].endswith("ShowJob=570929092")
 
 
 def test_extract_label_value_fallback_uses_salary_alias_labels():
@@ -1802,6 +1878,78 @@ def test_extract_dom_variant_rows_do_not_create_multi_axis_cartesian_variants():
     assert candidates["selected_variant"][0]["value"]["size"] == "S"
 
 
+def test_extract_dom_variant_rows_build_real_variants_from_combination_urls_and_availability():
+    html = """
+    <html>
+      <body>
+        <h1>Combination Variant Product</h1>
+        <a
+          class="btn b-product-attributes__color-btn selected js-variation-button js-variation--color"
+          data-attr="color"
+          data-attr-display-value="Black"
+          data-variation-url="https://example.com/productvariation?dwvar_W0905_color=Black&pid=W0905"
+          href="https://example.com/products/widget?dwvar_W0905_color=Black"
+        >
+          <span id="variation-color-Black">Black</span>
+        </a>
+        <label
+          class="btn b-product-attributes__size-btn selected js-variation-button js-variation--size js-variation--size-32 available"
+          data-attr="size"
+          data-attr-display-value="4"
+          data-url="https://example.com/productvariation?dwvar_W0905_color=Black&dwvar_W0905_size=32&pid=W0905"
+        >
+          <input aria-label="size 4" name="size" type="radio" value="32" />
+          <span aria-hidden="true">4</span>
+        </label>
+        <label
+          class="btn b-product-attributes__size-btn js-variation-button js-variation--size js-variation--size-34 sold"
+          data-attr="size"
+          data-attr-display-value="6"
+          data-url="https://example.com/productvariation?dwvar_W0905_color=Black&dwvar_W0905_size=34&pid=W0905"
+        >
+          <input aria-label="size 6" name="size" type="radio" value="34" />
+          <span aria-hidden="true">6</span>
+        </label>
+      </body>
+    </html>
+    """
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/widget",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+    assert candidates["variant_axes"][0]["value"] == {"color": ["Black"], "size": ["4", "6"]}
+    assert candidates["variants"][0]["source"] == "dom_variant"
+    assert candidates["variants"][0]["value"] == [
+        {
+            "option_values": {"color": "Black", "size": "4"},
+            "url": "https://example.com/productvariation?dwvar_W0905_color=Black&dwvar_W0905_size=32&pid=W0905",
+            "color": "Black",
+            "size": "4",
+            "availability": "in_stock",
+        },
+        {
+            "option_values": {"color": "Black", "size": "6"},
+            "url": "https://example.com/productvariation?dwvar_W0905_color=Black&dwvar_W0905_size=34&pid=W0905",
+            "color": "Black",
+            "size": "6",
+            "availability": "out_of_stock",
+        },
+    ]
+    assert candidates["selected_variant"][0]["value"]["size"] == "4"
+    assert candidates["selected_variant"][0]["value"]["availability"] == "in_stock"
+
+
+def test_candidate_source_rank_prefers_saashr_detail_source():
+    assert candidate_source_rank("title", "saashr_detail") > candidate_source_rank(
+        "title", "open_graph"
+    )
+
+
 def test_extract_dom_variant_rows_do_not_infer_unknown_axis_selection():
     html = """
     <html>
@@ -1831,6 +1979,61 @@ def test_extract_dom_variant_rows_do_not_infer_unknown_axis_selection():
     assert candidates["variant_axes"][0]["value"] == {"color": ["Red", "Blue"], "size": ["S", "M"]}
     assert candidates["selected_variant"][0]["value"]["color"] == "Red"
     assert "size" not in candidates["selected_variant"][0]["value"]
+
+
+def test_extract_dom_variant_rows_ignore_ui_cta_values():
+    html = """
+    <html>
+      <body>
+        <fieldset>
+          <legend>Color</legend>
+          <button class="variant-option" aria-label="color Black" type="button">Black</button>
+          <button class="variant-option" aria-label="color Share" type="button">Share</button>
+        </fieldset>
+        <fieldset>
+          <legend>Size</legend>
+          <button class="variant-option" aria-label="size 6" type="button">6</button>
+          <button class="variant-option" aria-label="size 8" type="button">8</button>
+          <button class="variant-option" aria-label="size See more" type="button">See more</button>
+          <button class="variant-option" aria-label="size Size Guide" type="button">Size Guide</button>
+        </fieldset>
+      </body>
+    </html>
+    """
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/widget",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["variant_axes"][0]["value"] == {"color": ["Black"], "size": ["6", "8"]}
+
+
+def test_extract_ganni_artifact_builds_variants_from_dom_size_buttons():
+    html = _artifact_text("artifacts/html/www-ganni-com-60ee8c5ac9-run_129.html")
+
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://www.ganni.com/en-gb/black-cotton-poplin-mini-dress-W0905.html",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["variant_axes"][0]["value"] == {
+        "color": ["Black"],
+        "size": ["4", "6", "8", "10", "12", "14", "16", "18", "20", "22", "24"],
+    }
+    assert candidates["variants"][0]["source"] == "dom_variant"
+    variant_rows = candidates["variants"][0]["value"]
+    assert len(variant_rows) == 11
+    assert variant_rows[0]["option_values"] == {"color": "Black", "size": "4"}
+    assert variant_rows[-1]["option_values"] == {"color": "Black", "size": "24"}
 
 
 def test_extract_structured_state_variants_are_discovered_without_site_hardcode():
@@ -2004,6 +2207,86 @@ def test_extract_text_pattern_does_not_promote_long_form_fields_from_raw_html_fa
 
     assert "materials" not in candidates
     assert "specifications" not in candidates
+
+
+def test_extract_semantic_sections_skip_related_product_blocks_on_detail_pages():
+    html = """
+    <html><body>
+      <main>
+        <h1>iPhone 14 Battery</h1>
+        <h2>Description</h2>
+        <p>Main battery description.</p>
+        <h2>Compatibility</h2>
+        <p>iPhone 14 A2649 US A2881 Canada</p>
+        <h2>Featured Products</h2>
+        <a href="/products/other-part">Other Part</a>
+        <p>$3.99 Add to cart</p>
+        <h2>Frequently Bought Together</h2>
+        <a href="/products/accessory">Accessory</a>
+        <p>$24.95 Add to cart</p>
+      </main>
+    </body></html>
+    """
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/battery",
+            "ecommerce_detail",
+            html,
+            None,
+            ["rating", "review_count"],
+        )
+
+    assert candidates["description"][0]["value"] == "Main battery description."
+    assert candidates["product_attributes"][0]["value"] == {
+        "compatibility": "iPhone 14 A2649 US A2881 Canada"
+    }
+    assert "features" not in candidates
+
+
+def test_extract_text_pattern_captures_visible_rating_and_review_count():
+    html = """
+    <html><body>
+      <main>
+        <h1>iPhone 14 Battery</h1>
+        <div>5 25 reviews</div>
+        <h2>Description</h2>
+        <p>Main battery description.</p>
+      </main>
+    </body></html>
+    """
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/battery",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["rating"][0]["value"] == "5"
+    assert candidates["review_count"][0]["value"] == "25"
+
+
+def test_extract_text_pattern_prefers_labeled_rating_and_accepts_ratings_wording():
+    html = """
+    <html><body>
+      <main>
+        <div>Rating: 4.2</div>
+        <div>128 ratings</div>
+      </main>
+    </body></html>
+    """
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, _ = extract_candidates(
+            "https://example.com/products/widget",
+            "ecommerce_detail",
+            html,
+            None,
+            [],
+        )
+
+    assert candidates["rating"][0]["value"] == "4.2"
+    assert candidates["review_count"][0]["value"] == "128"
 
 
 def test_finalize_candidate_row_normalizes_product_json_cents_values():

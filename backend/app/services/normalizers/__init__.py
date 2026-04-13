@@ -1,6 +1,7 @@
 # Value normalization rules.
 from __future__ import annotations
 
+import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from html import unescape
@@ -43,7 +44,9 @@ from app.services.config.extraction_rules import (
     PRICE_FIELDS,
     PRICE_REGEX,
     SALARY_RANGE_REGEX,
+    SIZE_GUIDE_NOISE_VALUES,
     SIZE_NOISE_TOKENS,
+    VARIANT_AXIS_ALIASES,
 )
 from app.services.text_sanitization import strip_ui_noise as strip_ui_noise_policy
 from app.services.text_utils import normalized_text as normalized_text_policy
@@ -104,7 +107,7 @@ _CATEGORY_NOISE_VALUES = {
     "oversized",
     "husky",
 }
-_CATEGORY_INVALID_TERMINALS = {"detail-page", "product", "category", "page", "object"}
+_CATEGORY_INVALID_TERMINALS = {"detail-page", "product", "category", "page", "object", "homepage"}
 _NON_SIZE_VALUES = {
     "base",
     "default",
@@ -137,16 +140,6 @@ _VARIANT_AXIS_GENERIC_BUCKET_KEYS = (
     "options",
     "values",
 )
-_LOCALIZED_VARIANT_AXIS_ALIASES = {
-    "สี": "color",
-    "สีสินค้า": "color",
-    "สีของสินค้า": "color",
-    "ขนาด": "size",
-    "ไซซ์": "size",
-    "ไซส์": "size",
-}
-
-
 def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
     if not tokens:
         return re.compile(r"(?!.*)", re.IGNORECASE)
@@ -320,6 +313,10 @@ def _coerce_color_field(value: str) -> str | None:
     cleaned = _strip_ui_noise(value)
     if not cleaned or _looks_like_variant_selector_text(cleaned):
         return None
+    cleaned = re.sub(r"(?i)^(?:color|colour)\s+", "", cleaned).strip(" ,:-")
+    cleaned = cleaned.strip("'\"\\ ")
+    if not cleaned:
+        return None
     lowered = cleaned.lower()
     if any(token in lowered for token in CANDIDATE_COLOR_CSS_NOISE_TOKENS):
         return None
@@ -329,9 +326,8 @@ def _coerce_color_field(value: str) -> str | None:
         return None
     if re.search(r"!\d", cleaned) or re.search(r"(?<![A-Za-z ])\s*:\s*!", cleaned):
         return None
-    hex_match = _HEX_COLOR_RE.search(lowered)
-    if hex_match:
-        return hex_match.group(0)
+    if "#" in cleaned:
+        return None
     if _COLOR_NOISE_RE.search(lowered):
         return None
     cleaned = _strip_choose_an_option_prefix(cleaned)
@@ -348,8 +344,14 @@ def _coerce_size_field(value: str) -> str | None:
     cleaned = _strip_ui_noise(value)
     if not cleaned:
         return None
+    cleaned = re.sub(r"(?i)^size\s+", "", cleaned).strip(" ,:-")
+    cleaned = cleaned.strip("'\"\\ ")
+    if not cleaned:
+        return None
     lowered = cleaned.lower()
     if lowered in _NON_SIZE_VALUES:
+        return None
+    if lowered in SIZE_GUIDE_NOISE_VALUES:
         return None
     if len(cleaned) > 100 or "gsm:" in lowered or "weight:" in lowered or "lbs" in lowered:
         return None
@@ -372,14 +374,10 @@ def _coerce_size_field(value: str) -> str | None:
 
 def _coerce_category_field(value: str) -> str | None:
     cleaned = _normalized_candidate_text(value)
-    if not cleaned:
-        return None
-    if _is_rejected_category_candidate(cleaned):
+    if not cleaned or _is_rejected_category_candidate(cleaned):
         return None
     cleaned = _normalize_category_path(cleaned)
-    if not cleaned:
-        return None
-    if _is_invalid_normalized_category(cleaned):
+    if not cleaned or _is_invalid_normalized_category(cleaned):
         return None
     return cleaned
 
@@ -416,12 +414,24 @@ def _looks_like_compound_camel_case(value: str) -> bool:
 
 
 def _normalize_category_path(value: str) -> str:
-    if ">" not in value and "/" not in value:
-        return value
     parts = [part.strip() for part in re.split(r"\s*(?:>|/)\s*", value) if part.strip()]
-    if parts and parts[0].lower() == "home":
-        parts = parts[1:]
-    return " > ".join(parts)
+    if not parts:
+        return ""
+    cleaned_parts: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        normalized = re.sub(r"[^a-z0-9]+", " ", part.lower()).strip()
+        if (
+            not normalized
+            or normalized == "home"
+            or normalized in _GENERIC_SENTINEL_VALUES
+            or normalized in _CATEGORY_INVALID_TERMINALS
+            or normalized in seen
+        ):
+            continue
+        seen.add(normalized)
+        cleaned_parts.append(part)
+    return " > ".join(cleaned_parts)
 
 
 def _coerce_rating_field(value: str) -> str | None:
@@ -432,7 +442,12 @@ def _coerce_rating_field(value: str) -> str | None:
         return token.capitalize() if token else None
     numeric_match = re.search(r"\d+(?:\.\d+)?", value)
     if numeric_match:
-        return numeric_match.group(0)
+        numeric = numeric_match.group(0)
+        try:
+            if 0 < float(numeric) <= 5:
+                return numeric
+        except ValueError:
+            return None
     rating_tokens = [re.escape(token) for token in CANDIDATE_RATING_WORD_TOKENS if token]
     word_match = re.search(r"\b(" + "|".join(rating_tokens) + r")\b", lowered) if rating_tokens else None
     if word_match:
@@ -555,6 +570,19 @@ def _coerce_care_field(value: str) -> str | None:
 
 
 def _coerce_materials_field(value: str) -> str | None:
+    text = _normalized_candidate_text(value)
+    if not text:
+        return None
+    composition_matches = re.findall(
+        r"(?i)\b\d{1,3}%\s*(?:[A-Za-z-]+\s+){0,2}"
+        r"(?:cotton|polyester|spandex|elastane|nylon|leather|wool|silk|viscose|"
+        r"rayon|linen|acrylic|synthetic|blend|fibres)\b",
+        text,
+    )
+    if composition_matches:
+        return ", ".join(
+            dict.fromkeys(_normalized_candidate_text(match) for match in composition_matches)
+        )
     return _coerce_keyword_field(
         value,
         {
@@ -581,6 +609,8 @@ def _dispatch_string_field_coercer(
         return _coerce_currency_field(value)
     if _is_category_field(field_name):
         return _coerce_category_field(value)
+    if _field_token(field_name) in {"rating", "reviewrating", "starrating"}:
+        return _coerce_rating_field(value)
     if _is_numeric_field(field_name) or _field_has_any_token(field_name, CANDIDATE_REVIEW_COUNT_TOKENS):
         return _coerce_price_field(value)
     if _is_salary_field(field_name):
@@ -591,8 +621,6 @@ def _dispatch_string_field_coercer(
         return _coerce_title_field(value)
     if _is_description_field(field_name) or _is_entity_name_field(field_name) or _is_job_text_field(field_name):
         return _coerce_description_field(value)
-    if _field_token(field_name) in {"rating", "reviewrating", "starrating"}:
-        return _coerce_rating_field(value)
     if _field_token(field_name) == "care":
         return _coerce_care_field(value)
     if _field_token(field_name) == "materials":
@@ -613,14 +641,10 @@ def _normalized_variant_axis_name(value: object) -> str:
     if not text:
         return ""
     lowered = text.casefold()
-    if lowered in _LOCALIZED_VARIANT_AXIS_ALIASES:
-        return _LOCALIZED_VARIANT_AXIS_ALIASES[lowered]
+    if lowered in VARIANT_AXIS_ALIASES:
+        return VARIANT_AXIS_ALIASES[lowered]
     normalized = _normalized_mapping_key(text)
-    if normalized in {"color", "colour", "colors", "colours"}:
-        return "color"
-    if normalized in {"size", "sizes", "dimension", "dimensions"}:
-        return "size"
-    return normalized
+    return VARIANT_AXIS_ALIASES.get(normalized, normalized)
 
 
 def _normalize_structured_scalar(
@@ -672,6 +696,8 @@ def _normalize_option_values(value: object) -> dict[str, str] | None:
 
 
 def _normalize_product_attributes(value: object) -> dict[str, object] | None:
+    from app.services.extract.noise_policy import sanitize_product_attribute_map
+
     if not isinstance(value, dict):
         return None
     normalized: dict[str, object] = {}
@@ -683,7 +709,7 @@ def _normalize_product_attributes(value: object) -> dict[str, object] | None:
         if attr_value in (None, "", [], {}):
             continue
         normalized[attr_key] = attr_value
-    return normalized or None
+    return sanitize_product_attribute_map(normalized)
 
 
 def _normalize_variant_axes(value: object) -> dict[str, list[str]] | None:
@@ -982,8 +1008,6 @@ def validate_value(field_name: str, value: object) -> object | None:
         if re.search(r"[{};]|rgb\(|rgba\(", lowered):
             return None
         if "#" in lowered:
-            if _HEX_COLOR_RE.fullmatch(lowered):
-                return text
             return None
         if "cookie" in lowered or "select" in lowered:
             return None
@@ -1164,8 +1188,23 @@ def _extract_positive_number(value: str) -> float | None:
     match = re.search(PRICE_REGEX, str(value or ""))
     if not match:
         return None
+    raw_num = match.group(0)
+    
+    # Handle European formatting (e.g., 1.499,99 or 14,99)
+    if "," in raw_num and "." in raw_num:
+        if raw_num.rfind(",") > raw_num.rfind("."):
+            raw_num = raw_num.replace(".", "").replace(",", ".")
+        else:
+            raw_num = raw_num.replace(",", "")
+    elif "," in raw_num:
+        # If only comma, assume decimal if exactly 2 digits follow, else thousand separator
+        if re.search(r",\d{2}$", raw_num):
+            raw_num = raw_num.replace(",", ".")
+        else:
+            raw_num = raw_num.replace(",", "")
+            
     try:
-        return float(match.group(0).replace(",", ""))
+        return float(raw_num)
     except ValueError:
         return None
 

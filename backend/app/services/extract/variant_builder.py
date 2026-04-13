@@ -12,6 +12,7 @@ from app.services.config.extraction_rules import (
     DIMENSION_KEYWORDS,
     LISTING_PRODUCT_DETAIL_LIST_SCAN_LIMIT,
     SEMANTIC_AGGREGATE_SEPARATOR,
+    VARIANT_AXIS_ALIASES,
 )
 from app.services.normalizers import normalize_and_validate_value
 from app.services.requested_field_policy import (
@@ -50,6 +51,22 @@ from app.services.extract.variant_extractor import (
 )
 
 _VARIANT_PRODUCT_ATTRIBUTE_BLOCKLIST = frozenset(_STRUCTURED_CANONICAL_ATTRIBUTE_KEYS)
+_DOM_VARIANT_REJECT_TOKENS = frozenset(
+    {
+        "guide",
+        "size chart",
+        "select",
+        "choose",
+        "type",
+        "fit",
+        "waitlist",
+        "notify",
+        "share",
+        "see more",
+        "check availability",
+        "availability in store",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -454,10 +471,8 @@ def _normalize_demandware_axis_name(attribute: dict[str, object]) -> str:
     if normalized:
         return normalized
     text = _normalized_candidate_text(label).lower()
-    if text in {"colour", "colors", "colours"}:
-        return "color"
-    if text == "sizes":
-        return "size"
+    if text in VARIANT_AXIS_ALIASES:
+        return VARIANT_AXIS_ALIASES[text]
     return text
 
 
@@ -467,8 +482,7 @@ def _demandware_selected_values_from_url(payload_url: str) -> dict[str, str]:
     for key, value in parse_qsl(parsed.query, keep_blank_values=False):
         if not key.lower().startswith("dwvar_"):
             continue
-        axis_name = key.split("_")[-1]
-        normalized_axis = _canonical_structured_key(axis_name)
+        normalized_axis = _canonical_structured_key(key)
         cleaned_value = _normalized_candidate_text(value)
         if normalized_axis and cleaned_value:
             selected[normalized_axis] = cleaned_value
@@ -701,11 +715,7 @@ def _demandware_selected_option_query_score(
 
 def _variant_axis_name(button) -> str:
     raw_data_attr = _normalized_candidate_text(button.get("data-attr")).lower()
-    if raw_data_attr in {"color", "colour"}:
-        return "color"
-    if raw_data_attr == "size":
-        return "size"
-    data_attr = normalize_requested_field(raw_data_attr)
+    data_attr = _canonical_structured_key(raw_data_attr)
     if data_attr:
         return data_attr
     class_names = " ".join(button.get("class", []))
@@ -736,22 +746,24 @@ def _variant_axis_name(button) -> str:
     attr_name = _normalized_candidate_text(
         button.get("name") or button.get("data-name")
     )
-    normalized_attr_name = normalize_requested_field(attr_name)
+    normalized_attr_name = _canonical_structured_key(attr_name)
     if normalized_attr_name:
         return normalized_attr_name
     return ""
 
 
 def _variant_button_label(button, *, axis_name: str) -> str:
+    for attr_name in ("data-attr-display-value", "data-display-value", "data-displayvalue"):
+        label = _normalized_candidate_text(button.get(attr_name))
+        if label:
+            return label
     for attr_name in (
         "data-size",
         "data-color",
         "data-colour",
-        "data-value",
         "data-label",
         "data-name",
         "title",
-        "value",
         "aria-label",
     ):
         label = _normalized_candidate_text(button.get(attr_name))
@@ -776,10 +788,15 @@ def _variant_button_label(button, *, axis_name: str) -> str:
         parts = aria_label.split(" ", 2)
         if len(parts) == 3:
             return parts[2].strip()
+    value = _normalized_candidate_text(button.get("value"))
     text = _normalized_candidate_text(button.get_text(" ", strip=True))
+    if axis_name == "size" and value and re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return value
     if text:
         return text
-    return axis_name
+    if value:
+        return value
+    return ""
 
 
 def _variant_button_selected(button) -> bool:
@@ -812,6 +829,68 @@ def _selected_dom_variant(
     return row
 
 
+def _dom_variant_availability(node: Tag) -> str | None:
+    class_names = " ".join(node.get("class", [])).lower()
+    attr_blob = " ".join(
+        filter(
+            None,
+            (
+                class_names,
+                str(node.get("aria-label") or ""),
+                str(node.get("title") or ""),
+                str(node.get("data-status") or ""),
+                str(node.get("data-availability") or ""),
+            ),
+        )
+    ).lower()
+    if any(token in attr_blob for token in ("sold", "out of stock", "unavailable", "oos")):
+        return "out_of_stock"
+    if any(token in attr_blob for token in ("available", "in stock", "orderable")):
+        return "in_stock"
+    return None
+
+
+def _dom_variant_rows(
+    soup: BeautifulSoup, *, base_url: str, selected_values: dict[str, str]
+) -> VariantRecords:
+    color_value = selected_values.get("color")
+    if not color_value:
+        return []
+    rows: VariantRecords = []
+    seen: set[str] = set()
+    for node in soup.find_all(["button", "label", "option", "a"]):
+        if not isinstance(node, Tag):
+            continue
+        if _variant_axis_name(node) != "size":
+            continue
+        size_value = _variant_button_label(node, axis_name="size")
+        if not _dom_variant_value_is_valid(size_value, axis_name="size"):
+            continue
+        variant_url = _normalized_candidate_text(
+            node.get("data-url")
+            or node.get("data-variation-url")
+            or node.get("href")
+        )
+        resolved_url = _resolve_candidate_url(variant_url, base_url) if variant_url else None
+        if not resolved_url:
+            continue
+        row: VariantRecord = {
+            "option_values": {"color": color_value, "size": size_value},
+            "url": resolved_url,
+            "color": color_value,
+            "size": size_value,
+        }
+        availability = _dom_variant_availability(node)
+        if availability:
+            row["availability"] = availability
+        fingerprint = json.dumps(row, sort_keys=True, default=str)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        rows.append(row)
+    return rows
+
+
 def _build_dom_variant_rows(
     soup: BeautifulSoup, *, base_url: str
 ) -> VariantCandidateRowMap:
@@ -821,6 +900,9 @@ def _build_dom_variant_rows(
 
     selectable_axes, product_attributes = _split_variant_axes(axis_values)
     rows: VariantCandidateRowMap = {}
+    variants = _dom_variant_rows(soup, base_url=base_url, selected_values=selected_values)
+    if variants:
+        rows["variants"] = [{"value": variants, "source": "dom_variant"}]
     if selectable_axes:
         rows["variant_axes"] = [{"value": selectable_axes, "source": "dom_variant"}]
     rows.update(
@@ -1404,6 +1486,8 @@ def _extract_dom_variant_axes(
     for select in soup.find_all("select"):
         if not isinstance(select, Tag) or is_inside_site_chrome(select):
             continue
+        if _looks_like_quantity_selector(select):
+            continue
         axis_name = _variant_axis_name(select) or _variant_axis_name_from_context(select)
         if not axis_name:
             continue
@@ -1454,6 +1538,22 @@ def _extract_dom_variant_axes(
     return axis_values, selected_values
 
 
+def _looks_like_quantity_selector(node: Tag) -> bool:
+    attr_blob = " ".join(
+        filter(
+            None,
+            (
+                str(node.get("aria-label") or ""),
+                str(node.get("title") or ""),
+                str(node.get("name") or ""),
+                str(node.get("id") or ""),
+                " ".join(node.get("class", [])),
+            ),
+        )
+    ).lower()
+    return "quantity" in attr_blob
+
+
 def _variant_axis_name_from_context(node: Tag) -> str:
     candidates = [
         node.get("aria-label"),
@@ -1464,13 +1564,6 @@ def _variant_axis_name_from_context(node: Tag) -> str:
     ]
     for candidate in candidates:
         axis_name = _normalized_variant_axis_token(candidate)
-        if axis_name:
-            return axis_name
-
-    for sibling in list(node.previous_siblings)[:4]:
-        if not isinstance(sibling, Tag):
-            continue
-        axis_name = _normalized_variant_axis_token(sibling.get_text(" ", strip=True))
         if axis_name:
             return axis_name
 
@@ -1492,8 +1585,9 @@ def _variant_axis_name_from_context(node: Tag) -> str:
         )
         if axis_name:
             return axis_name
-        heading = parent.find(["legend", "label", "h2", "h3", "h4", "p", "span"])
-        if isinstance(heading, Tag):
+        for heading in parent.find_all(["legend", "label"], recursive=False):
+            if not isinstance(heading, Tag):
+                continue
             axis_name = _normalized_variant_axis_token(
                 heading.get_text(" ", strip=True)
             )
@@ -1508,9 +1602,9 @@ def _normalized_variant_axis_token(value: object) -> str:
     text = _normalized_candidate_text(value).lower()
     if not text:
         return ""
-    if any(token in text for token in ("size", "fit")):
+    if re.search(r"\bsize\b", text):
         return "size"
-    if any(token in text for token in ("color", "colour", "swatch")):
+    if re.search(r"\b(?:color|colour|swatch)\b", text):
         return "color"
     return ""
 
@@ -1560,9 +1654,13 @@ def _dom_variant_value_is_valid(value: str, *, axis_name: str) -> bool:
         return False
     if _VARIANT_SELECTOR_PROMPT_RE.match(text):
         return False
+    if re.fullmatch(r"\(\s*\+\d+\s*\)", text):
+        return False
+    if any(token in lowered for token in _DOM_VARIANT_REJECT_TOKENS):
+        return False
     if axis_name == "size" and re.fullmatch(r"[A-Za-z0-9.+/-]{1,8}", text):
         return True
-    return len(text.split()) <= 5
+    return len(text.split()) <= 3
 
 
 # ---------------------------------------------------------------------------

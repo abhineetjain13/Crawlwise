@@ -156,6 +156,30 @@ def extract_label_value_from_text(
                 if 1 < len(value) < 200:
                     return value
 
+    if field_name == "rating":
+        for text in combined_text_sources:
+            if match := re.search(
+                r"\b(?P<rating>[0-5](?:\.\d+)?)\s+(?P<count>\d[\d,]*)\s+reviews?\b",
+                text,
+                re.IGNORECASE,
+            ):
+                return match.group("rating")
+            if match := re.search(
+                r"\b(?P<rating>[0-5](?:\.\d+)?)\s*out\s+of\s+5\b",
+                text,
+                re.IGNORECASE,
+            ):
+                return match.group("rating")
+
+    if field_name == "review_count":
+        for text in combined_text_sources:
+            if match := re.search(
+                r"\b(?:[0-5](?:\.\d+)?\s+)?(?P<count>\d[\d,]*)\s+(?:reviews?|ratings?)\b",
+                text,
+                re.IGNORECASE,
+            ):
+                return match.group("count")
+
     return None
 
 
@@ -416,8 +440,19 @@ def _extract_breadcrumb_category(soup: BeautifulSoup) -> str | None:
             break
     if not parts:
         return None
-    if parts and parts[0].lower() == "home":
-        parts = parts[1:]
+    cleaned_parts: list[str] = []
+    previous_normalized = ""
+    for part in parts:
+        normalized = re.sub(r"[^a-z0-9]+", " ", part.lower()).strip()
+        if (
+            not normalized
+            or normalized in {"home", "homepage"}
+            or normalized == previous_normalized
+        ):
+            continue
+        previous_normalized = normalized
+        cleaned_parts.append(part)
+    parts = cleaned_parts
     title_text = _normalized_candidate_text(
         (
             soup.select_one("main h1")
@@ -431,7 +466,7 @@ def _extract_breadcrumb_category(soup: BeautifulSoup) -> str | None:
         )
         else ""
     )
-    if parts and title_text and _breadcrumb_item_matches_title(parts[-1], title_text):
+    while parts and title_text and _breadcrumb_item_matches_title(parts[-1], title_text):
         parts = parts[:-1]
     if not parts:
         return None

@@ -55,7 +55,7 @@ from .trace_builders import (
 )
 from .types import URLProcessingResult
 from .utils import _compact_dict, parse_html
-from .verdict import VERDICT_SCHEMA_MISS, compute_verdict
+from .verdict import VERDICT_SCHEMA_MISS, VERDICT_SUCCESS, compute_verdict
 
 if TYPE_CHECKING:
     from .types import PipelineContext
@@ -412,7 +412,11 @@ async def extract_detail(
                 allowed_fields=persisted_field_names,
                 surface=surface,
             )
-            if not normalized or is_error_page_record(normalized):
+            if (
+                not normalized
+                or is_error_page_record(normalized)
+                or compute_verdict([normalized], surface, is_listing=False) != VERDICT_SUCCESS
+            ):
                 continue
             raw_data = _raw_record_payload(merged_record)
             requested_coverage = _requested_field_coverage(normalized, additional_fields)
@@ -452,7 +456,10 @@ async def extract_detail(
             allowed_fields=persisted_field_names,
             surface=surface,
         )
-        if is_error_page_record(normalized):
+        if (
+            is_error_page_record(normalized)
+            or compute_verdict([normalized], surface, is_listing=False) != VERDICT_SUCCESS
+        ):
             normalized = {}
         raw_data = candidate_values
         requested_coverage = _requested_field_coverage(normalized, additional_fields)
@@ -855,11 +862,16 @@ def normalize_detail_candidate_values(
     if additional_images:
         image_parts = [part.strip() for part in additional_images.split(",") if part.strip()]
         deduped_parts: list[str] = []
-        seen: set[str] = set()
+        from urllib.parse import urlparse
+        
+        primary_path = urlparse(primary_image).path if primary_image else ""
+        seen_paths: set[str] = {primary_path} if primary_path else set()
+        
         for part in image_parts:
-            if part == primary_image or part in seen:
+            part_path = urlparse(part).path
+            if not part_path or part_path in seen_paths:
                 continue
-            seen.add(part)
+            seen_paths.add(part_path)
             deduped_parts.append(part)
         if deduped_parts:
             normalized["additional_images"] = ", ".join(deduped_parts)

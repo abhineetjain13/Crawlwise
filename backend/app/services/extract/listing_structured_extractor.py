@@ -109,11 +109,10 @@ def _extract_from_structured_sources(
         body = payload.get("body")
         if not isinstance(body, (dict, list)):
             continue
-        extraction_page_url = payload_url or page_url
         net_records = _extract_items_from_json(
             body,
             surface,
-            extraction_page_url,
+            page_url,
             max_depth=max(max_json_recursion_depth + 4, 8),
         )
         if net_records:

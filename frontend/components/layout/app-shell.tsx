@@ -79,13 +79,13 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
     return (
       <div className="min-h-screen bg-[var(--bg-base)] text-[var(--text-primary)]">
         <header
-          className="surface-header header-blur flex h-[52px] items-center justify-between border-b border-[var(--divider)] px-6"
+          className="bg-panel shadow-sm backdrop-blur-md header-blur flex h-[52px] items-center justify-between border-b border-[var(--divider)] px-6"
         >
           <LogoMark />
           <ThemeToggle compact />
         </header>
         <main className="grid min-h-[calc(100vh-52px)] place-items-center px-4 py-10">
-          <div className="surface-panel w-full max-w-[400px] p-8 shadow-[var(--shadow-modal)]">
+          <div className="bg-panel rounded-xl shadow-card backdrop-blur-md w-full max-w-[400px] p-8 shadow-[var(--shadow-modal)]">
             {children}
           </div>
         </main>
@@ -97,7 +97,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   if (authQuery.isPending) {
     return (
       <div className="min-h-screen lg:grid lg:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--divider)] lg:flex lg:flex-col lg:w-[220px]">
+        <aside className="bg-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--divider)] lg:flex lg:flex-col lg:w-[220px]">
           <div className="flex h-[52px] items-center gap-3 border-b border-[var(--divider)] px-4">
             <div className="size-7 rounded-lg bg-[var(--border)]" />
             <div className="skeleton h-3 w-24" />
@@ -109,7 +109,7 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
           </div>
         </aside>
         <div className="flex min-w-0 flex-col">
-          <div className="surface-header sticky top-0 z-20 h-[52px] border-b border-[var(--divider)]">
+          <div className="bg-panel shadow-sm backdrop-blur-md sticky top-0 z-20 h-[52px] border-b border-[var(--divider)]">
             <div className="flex h-full items-center gap-4 px-6">
               <div className="skeleton h-4 w-36" />
             </div>
@@ -133,9 +133,9 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   if (authQuery.error && httpErrorStatus(authQuery.error) === 401) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--bg-base)] px-4 text-center">
-        <div className="surface-panel max-w-sm p-6">
-          <p className="text-section-title text-primary">Session expired</p>
-          <p className="mt-1.5 text-body-sm text-muted">Redirecting to login…</p>
+        <div className="bg-panel rounded-xl shadow-card backdrop-blur-md max-w-sm p-6">
+          <p className="text-base font-semibold leading-snug tracking-normal text-primary">Session expired</p>
+          <p className="mt-1.5 text-sm leading-[1.55] text-muted">Redirecting to login…</p>
         </div>
       </div>
     );
@@ -144,9 +144,9 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
   if (authQuery.error) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--bg-base)] px-4 text-center">
-        <div className="surface-panel max-w-sm p-6">
-          <p className="text-section-title text-primary">Unable to load session</p>
-          <p className="mt-1.5 text-body-sm text-muted">
+        <div className="bg-panel rounded-xl shadow-card backdrop-blur-md max-w-sm p-6">
+          <p className="text-base font-semibold leading-snug tracking-normal text-primary">Unable to load session</p>
+          <p className="mt-1.5 text-sm leading-[1.55] text-muted">
             Refresh to retry, or sign in again if the session expired.
           </p>
           <div className="mt-4 flex justify-center"><ThemeToggle compact /></div>
@@ -160,11 +160,11 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
       <div className="min-h-screen bg-[var(--bg-base)] text-[var(--text-primary)]">
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-body-sm focus:text-[var(--button-filled-fg)]"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-sm leading-[1.55] focus:text-[var(--button-filled-fg)]"
         >
           Skip to main content
         </a>
-        <div className="lg:hidden border-b border-[var(--divider)] bg-[var(--warning-bg)] px-4 py-2 text-caption text-secondary">
+        <div className="lg:hidden border-b border-[var(--divider)] bg-[var(--warning-bg)] px-4 py-2 text-xs leading-[1.45] text-secondary">
           Best viewed on desktop (1024px+).
         </div>
         <div className="min-h-screen lg:grid lg:grid-cols-[auto_minmax(0,1fr)]">
@@ -187,7 +187,7 @@ function LogoMark({ collapsed = false }: Readonly<{ collapsed?: boolean }>) {
         <Zap className="size-3.5" strokeWidth={2.5} />
       </div>
       {!collapsed && (
-        <span className="truncate text-link-ui font-semibold tracking-[var(--tracking-tight)] text-primary">
+        <span className="truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover font-semibold tracking-[var(--tracking-tight)] text-primary">
           CrawlFlow
         </span>
       )}
@@ -211,7 +211,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
   return (
     <aside
       className={cn(
-        "surface-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--divider)] backdrop-blur-xl lg:flex lg:flex-col sidebar-animated",
+        "bg-sidebar sticky top-0 hidden h-screen shrink-0 border-r border-[var(--divider)] backdrop-blur-xl lg:flex lg:flex-col sidebar-animated",
         collapsed ? "lg:w-[52px]" : "lg:w-[220px]",
       )}
     >
@@ -238,7 +238,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
         {navGroups.map((group) => (
           <div key={group.label} className="mb-4">
             {!collapsed && (
-              <p className="label-caps mb-1 px-2 text-muted">
+              <p className="text-[11px] font-semibold tracking-wide text-muted uppercase mb-1 px-2 text-muted">
                 {group.label}
               </p>
             )}
@@ -252,7 +252,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
                     href={item.href}
                     title={collapsed ? item.label : undefined}
                     className={cn(
-                      "no-underline group relative flex h-[var(--control-height)] items-center rounded-[12px] px-2.5 text-link-ui transition-all",
+                      "no-underline group relative flex h-[var(--control-height)] items-center rounded-[12px] px-2.5 text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover transition-all",
                       collapsed ? "justify-center" : "gap-2.5",
                       active
                         ? "nav-item-active text-accent"
@@ -279,7 +279,7 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
       {!collapsed && (
         <div className="shrink-0 border-t border-[var(--divider)] px-3 py-3">
           <div className="flex items-center justify-between">
-            <span className="text-meta text-muted">Theme</span>
+            <span className="text-[11px] leading-[1.45] text-muted">Theme</span>
             <ThemeToggle compact />
           </div>
         </div>
@@ -331,7 +331,7 @@ function ShellContent({
   return (
     <div className="flex min-w-0 flex-col">
       <header
-        className="surface-header header-blur sticky top-0 z-20 h-[52px] border-b border-[var(--divider)]"
+        className="bg-panel shadow-sm backdrop-blur-md header-blur sticky top-0 z-20 h-[52px] border-b border-[var(--divider)]"
       >
         <div className="flex h-full items-center justify-between gap-3 px-4 lg:px-6">
           <div className="flex min-w-0 items-center gap-3">
@@ -344,7 +344,7 @@ function ShellContent({
             >
               <Menu className="size-4" />
             </Button>
-            <h1 className="truncate text-section-title text-primary">
+            <h1 className="truncate text-base font-semibold leading-snug tracking-normal text-primary">
               {topBar.title}
             </h1>
           </div>
@@ -394,7 +394,7 @@ function MobileNav({
       />
       <aside
         className={cn(
-          "surface-sidebar surface-drawer absolute inset-y-0 left-0 flex w-[260px] max-w-[85vw] flex-col border-r border-[var(--divider)] transition-transform duration-200 ease-out",
+          "bg-sidebar shadow-elevated absolute inset-y-0 left-0 flex w-[260px] max-w-[85vw] flex-col border-r border-[var(--divider)] transition-transform duration-200 ease-out",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
@@ -407,7 +407,7 @@ function MobileNav({
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           {navGroups.map((group) => (
             <div key={group.label} className="mb-4">
-              <p className="label-caps mb-1 px-2 text-muted">
+              <p className="text-[11px] font-semibold tracking-wide text-muted uppercase mb-1 px-2 text-muted">
                 {group.label}
               </p>
               <div className="space-y-0.5">
@@ -420,7 +420,7 @@ function MobileNav({
                       href={item.href}
                       onClick={onClose}
                       className={cn(
-                        "no-underline flex h-[var(--control-height)] items-center gap-2.5 rounded-[var(--radius-md)] px-2 text-link-ui transition-all",
+                        "no-underline flex h-[var(--control-height)] items-center gap-2.5 rounded-[var(--radius-md)] px-2 text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover transition-all",
                         active
                           ? "bg-[var(--accent-subtle)] text-accent"
                           : "text-secondary hover:bg-[var(--bg-elevated)] hover:text-primary",
@@ -437,7 +437,7 @@ function MobileNav({
         </nav>
         <div className="shrink-0 border-t border-[var(--divider)] px-3 py-3">
           <div className="flex items-center justify-between">
-            <span className="text-meta text-muted">Theme</span>
+            <span className="text-[11px] leading-[1.45] text-muted">Theme</span>
             <ThemeToggle compact />
           </div>
         </div>

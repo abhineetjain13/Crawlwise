@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import socket
 from uuid import uuid4
 
 from app.core.redis import get_redis, redis_is_enabled
@@ -22,13 +24,30 @@ return 0
 _redis_disabled_warning_logged = False
 
 
-def _slot_key(limit: int, slot_index: int) -> str:
-    return f"{_URL_SLOT_KEY_PREFIX}:{limit}:{slot_index}"
+def _resolve_slot_namespace() -> str:
+    try:
+        hostname_fallback = socket.gethostname()
+    except OSError:
+        hostname_fallback = None
+    raw_namespace = str(
+        os.getenv("URL_CONCURRENCY_NAMESPACE")
+        or os.getenv("HOSTNAME")
+        or hostname_fallback
+        or "default"
+    ).strip()
+    normalized = "".join(
+        ch.lower() if ch.isalnum() else "-" for ch in raw_namespace
+    ).strip("-")
+    return normalized[:80] or "default"
+
+def _slot_key(namespace: str, limit: int, slot_index: int) -> str:
+    return f"{_URL_SLOT_KEY_PREFIX}:{namespace}:{limit}:{slot_index}"
 
 
 class DistributedURLSlotGuard:
-    def __init__(self, limit: int) -> None:
+    def __init__(self, limit: int, *, namespace: str | None = None) -> None:
         self._limit = max(1, int(limit))
+        self._namespace = str(namespace or _resolve_slot_namespace()).strip() or "default"
         self._slot_key: str | None = None
         self._token: str | None = None
 
@@ -47,7 +66,7 @@ class DistributedURLSlotGuard:
         while True:
             for slot_index in range(self._limit):
                 token = uuid4().hex
-                slot_key = _slot_key(self._limit, slot_index)
+                slot_key = _slot_key(self._namespace, self._limit, slot_index)
                 acquired = await redis.set(
                     slot_key,
                     token,

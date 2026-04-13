@@ -12,7 +12,11 @@ from app.services.extract import extract_listing_records, listing_set_quality, s
 from app.services.runtime_metrics import incr
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .field_normalization import _normalize_record_fields, _public_record_fields, _raw_record_payload
+from .field_normalization import (
+    _normalize_record_fields,
+    _surface_public_record_fields,
+    _surface_raw_record_payload,
+)
 from .listing_helpers import (
     _listing_acquisition_blocked,
     _looks_like_loading_listing_shell,
@@ -123,7 +127,7 @@ async def save_listing_records(
                 str(raw_record.get("_source") or source_label).strip() or source_label
             )
             public_record = _sanitize_listing_record_fields(
-                _public_record_fields(raw_record),
+                _surface_public_record_fields(raw_record, surface=surface),
                 surface=surface,
                 page_base_url=url,
             )
@@ -138,7 +142,7 @@ async def save_listing_records(
                 ListingPersistenceCandidate(
                     source_url=str(raw_record.get("source_url") or raw_record.get("url", url)),
                     data=normalized,
-                    raw_data=_raw_record_payload(raw_record),
+                    raw_data=_surface_raw_record_payload(raw_record, surface=surface),
                     source_trace=_compact_dict(
                         {
                             "type": source_type,

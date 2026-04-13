@@ -84,7 +84,7 @@ async def test_retry_run_update_retries_fast_on_lock_contention(
     assert run.updated is True
     session.flush.assert_awaited_once()
     assert session.execute.await_count == 2
-    assert session.rollback.await_count == 1
+    session.rollback.assert_not_awaited()
     assert session.commit.await_count == 1
     sleep.assert_awaited_once_with(0.05)
 
@@ -153,3 +153,85 @@ async def test_retry_run_update_retries_transient_connection_loss(
     assert session.rollback.await_count == 1
     assert session.commit.await_count == 1
     sleep.assert_awaited_once_with(0.05)
+
+
+@pytest.mark.asyncio
+async def test_start_or_resume_run_uses_locked_status_for_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services._batch_run_store import BatchRunStore
+    from app.services.crawl_state import CrawlStatus
+
+    session = SimpleNamespace(refresh=AsyncMock())
+    store = BatchRunStore(session)
+    run = SimpleNamespace(id=31, status_value=CrawlStatus.PENDING)
+    locked_run = SimpleNamespace(id=31, status_value=CrawlStatus.RUNNING)
+
+    async def _apply(run_id, mutate):
+        assert run_id == run.id
+        await mutate(session, locked_run)
+        run.status_value = locked_run.status_value
+
+    async def _apply_method(self, run_id, mutate):
+        await _apply(run_id, mutate)
+
+    log_calls: list[tuple[int, str, str]] = []
+
+    async def _log_method(self, run_id, level, message):
+        log_calls.append((run_id, level, message))
+
+    monkeypatch.setattr(BatchRunStore, "apply", _apply_method)
+    monkeypatch.setattr(BatchRunStore, "_log", _log_method)
+
+    update_calls: list[tuple[object, object]] = []
+
+    def _update_run_status(target_run, status):
+        update_calls.append((target_run, status))
+
+    monkeypatch.setattr("app.services._batch_run_store.update_run_status", _update_run_status)
+
+    await store.start_or_resume_run(run)
+
+    assert update_calls == []
+    assert log_calls == [(run.id, "info", "Pipeline resumed")]
+    session.refresh.assert_awaited_once_with(run)
+
+
+@pytest.mark.asyncio
+async def test_start_or_resume_run_starts_when_locked_status_is_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services._batch_run_store import BatchRunStore
+    from app.services.crawl_state import CrawlStatus
+
+    session = SimpleNamespace(refresh=AsyncMock())
+    store = BatchRunStore(session)
+    run = SimpleNamespace(id=32, status_value=CrawlStatus.PENDING)
+    locked_run = SimpleNamespace(id=32, status_value=CrawlStatus.PENDING)
+
+    async def _apply(run_id, mutate):
+        assert run_id == run.id
+        await mutate(session, locked_run)
+        run.status_value = locked_run.status_value
+
+    async def _apply_method(self, run_id, mutate):
+        await _apply(run_id, mutate)
+
+    log_calls: list[tuple[int, str, str]] = []
+
+    async def _log_method(self, run_id, level, message):
+        log_calls.append((run_id, level, message))
+
+    monkeypatch.setattr(BatchRunStore, "apply", _apply_method)
+    monkeypatch.setattr(BatchRunStore, "_log", _log_method)
+
+    def _update_run_status(target_run, status):
+        target_run.status_value = status
+
+    monkeypatch.setattr("app.services._batch_run_store.update_run_status", _update_run_status)
+
+    await store.start_or_resume_run(run)
+
+    assert locked_run.status_value == CrawlStatus.RUNNING
+    assert log_calls == [(run.id, "info", "Pipeline started")]
+    session.refresh.assert_awaited_once_with(run)

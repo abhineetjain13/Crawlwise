@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from app.services.acquisition import browser_client
@@ -150,6 +152,60 @@ async def test_browser_pool_healthcheck_task_restarts_after_unexpected_crash(
     restarted_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await restarted_task
+
+
+def test_kill_orphaned_browser_processes_uses_registry_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_dir = browser_pool.Path("backend/.codex-test-browser-pool") / uuid4().hex
+    try:
+        record = browser_pool._BrowserProcessRecord(
+            record_id="dead-owner-browser",
+            owner_pid=111,
+            owner_create_time=1.0,
+            browser_pid=222,
+            browser_create_time=2.0,
+        )
+        browser_pool._BROWSER_PROCESS_REGISTRY_DIR = registry_dir
+        browser_pool._write_browser_process_record(record)
+
+        killed: list[int] = []
+
+        class _FakeBrowserProcess:
+            pid = 222
+
+            def name(self) -> str:
+                return "chromium"
+
+        def _fake_process_matches_create_time(pid: int, expected_create_time: float):
+            if (pid, expected_create_time) == (111, 1.0):
+                return None
+            if (pid, expected_create_time) == (222, 2.0):
+                return _FakeBrowserProcess()
+            return None
+
+        def _fake_kill_browser_process_tree(process) -> int:
+            killed.append(process.pid)
+            return 1
+
+        monkeypatch.setattr(browser_pool.os, "getpid", lambda: 333)
+        monkeypatch.setattr(
+            browser_pool,
+            "_process_matches_create_time",
+            _fake_process_matches_create_time,
+        )
+        monkeypatch.setattr(
+            browser_pool,
+            "_kill_browser_process_tree",
+            _fake_kill_browser_process_tree,
+        )
+
+        browser_pool._kill_orphaned_browser_processes()
+
+        assert killed == [222]
+        assert list(registry_dir.glob("*.json")) == []
+    finally:
+        shutil.rmtree(registry_dir, ignore_errors=True)
 
 
 @pytest.mark.asyncio

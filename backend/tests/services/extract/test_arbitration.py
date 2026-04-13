@@ -133,6 +133,21 @@ def test_merge_detail_reconciliation_preserves_candidate_rejections_and_merge_re
     assert combined["brand"]["merge"]["reason"] == "existing_preferred"
 
 
+def test_field_decision_keeps_first_highest_rank_across_different_sources():
+    engine = FieldDecisionEngine()
+
+    decision = engine.decide_from_rows(
+        "title",
+        [
+            {"value": "Structured Winner", "source": "embedded_json"},
+            {"value": "Structured Winner With Extra Promo Copy", "source": "open_graph"},
+        ],
+    )
+
+    assert decision.value == "Structured Winner"
+    assert decision.source == "embedded_json"
+
+
 def test_extract_candidates_skips_dom_when_jsonld_winner_is_decisive(monkeypatch):
     html = """
     <html>

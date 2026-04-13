@@ -50,7 +50,10 @@ class ADPAdapter(BaseAdapter):
             }
             if job_dom_id:
                 record["job_id"] = job_dom_id
-                record["url"] = f"{url}#{job_dom_id}"
+                detail_url = self._build_apply_url(url, job_dom_id)
+                record["url"] = detail_url or f"{url}#{job_dom_id}"
+                if detail_url:
+                    record["apply_url"] = detail_url
             else:
                 record["url"] = url
 
@@ -156,7 +159,10 @@ class ADPAdapter(BaseAdapter):
         params = dict(parse_qsl(parsed.query, keep_blank_values=True))
         params["jobId"] = job_id
         next_query = urlencode(params)
-        return urlunparse(parsed._replace(query=next_query))
+        # ADP boards are inconsistent: some resolve detail state from `jobId`,
+        # others still rely on the hash route. Carry both so listing->detail
+        # handoff stays valid for browser navigation and follow-up detail fetches.
+        return urlunparse(parsed._replace(query=next_query, fragment=job_id))
 
     def _extract_job_dom_id(self, card: BeautifulSoup) -> str | None:
         candidates = [

@@ -7,6 +7,8 @@ from app.schemas.crawl import CrawlRecordResponse
 from app.services.pipeline.field_normalization import (
     _normalize_record_fields,
     _sanitize_persisted_record_payload,
+    _surface_public_record_fields,
+    _surface_raw_record_payload,
 )
 
 
@@ -94,7 +96,7 @@ def test_sanitize_persisted_record_payload_strips_raw_item_and_schema_keys():
     }
 
 
-def test_sanitize_persisted_record_payload_redacts_pii_from_discovered_payloads():
+def test_sanitize_persisted_record_payload_preserves_discovered_payload_values():
     _, discovered = _sanitize_persisted_record_payload(
         {"title": "Example Product"},
         discovered_data={
@@ -118,24 +120,24 @@ def test_sanitize_persisted_record_payload_redacts_pii_from_discovered_payloads(
     )
 
     assert discovered["discovered_fields"] == {
-        "support_email": "[REDACTED]",
-        "notes": "Call [REDACTED] or email [REDACTED]",
+        "support_email": "support@example.com",
+        "notes": "Call +91 98765 43210 or email sales@example.com",
     }
     assert discovered["review_bucket"] == [
         {
             "key": "contact_email",
-            "value": "[REDACTED]",
+            "value": "sales@example.com",
             "source": "llm_cleanup",
         },
         {
             "key": "contact_notes",
-            "value": "Reach us on [REDACTED]",
+            "value": "Reach us on (415) 555-2671 ext 9",
             "source": "regex",
         },
     ]
 
 
-def test_normalize_record_fields_redacts_pii_from_canonical_payloads():
+def test_normalize_record_fields_preserves_canonical_payload_values():
     normalized = _normalize_record_fields(
         {
             "title": "Call sales@example.com",
@@ -148,10 +150,35 @@ def test_normalize_record_fields_redacts_pii_from_canonical_payloads():
     )
 
     assert normalized == {
-        "title": "Call [REDACTED]",
-        "description": "Reach us at [REDACTED] for details.",
+        "title": "Call sales@example.com",
+        "description": "Reach us at (415) 555-2671 ext 9 for details.",
         "specs": {
-            "support": "[REDACTED]",
-            "phone": "[REDACTED]",
+            "support": "support@example.com",
+            "phone": "+91 98765 43210",
         },
+    }
+
+
+def test_surface_record_filters_drop_cross_surface_listing_fields_at_boundary():
+    record = {
+        "title": "Platform Engineer",
+        "salary": "$120k",
+        "price": "$9.99",
+        "sku": "SKU-1",
+        "_source": "listing_card",
+        "_raw_item": {
+            "title": "Platform Engineer",
+            "salary": "$120k",
+            "price": "$9.99",
+            "sku": "SKU-1",
+        },
+    }
+
+    assert _surface_public_record_fields(record, surface="job_listing") == {
+        "title": "Platform Engineer",
+        "salary": "$120k",
+    }
+    assert _surface_raw_record_payload(record, surface="job_listing") == {
+        "title": "Platform Engineer",
+        "salary": "$120k",
     }

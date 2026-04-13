@@ -507,11 +507,11 @@ export const LogTerminal = memo(function LogTerminal({
     >
       {logs.length ? (
         logs.map((log) => (
-          <div key={log.id} className="text-mono-data leading-6">
+          <div key={log.id} className="font-mono text-xs leading-6">
             <span className="text-muted">[{formatTimeHms(log.created_at)}]</span>{" "}
             <span
               className={cn(
-                "label-caps inline-flex items-center px-1.5 py-0.5",
+                "text-[11px] font-semibold tracking-wide text-muted uppercase inline-flex items-center px-1.5 py-0.5",
                 logTone(log.level),
               )}
             >
@@ -521,7 +521,7 @@ export const LogTerminal = memo(function LogTerminal({
           </div>
         ))
       ) : (
-        <div className="text-body-sm text-muted">{live ? "Waiting for log output..." : "No logs captured for this run."}</div>
+        <div className="text-sm leading-[1.55] text-muted">{live ? "Waiting for log output..." : "No logs captured for this run."}</div>
       )}
     </div>
   );
@@ -553,12 +553,12 @@ export function AdvancedModePicker({
             )}
           >
             <div className="flex items-center justify-between gap-3">
-              <span className="text-data-strong leading-none text-primary">
+              <span className="text-sm font-medium leading-[1.45] text-foreground leading-none text-primary">
                 {option.label}
               </span>
               <span
                 className={cn(
-                  "label-caps rounded-full px-2 py-0.5",
+                  "text-[11px] font-semibold tracking-wide text-muted uppercase rounded-full px-2 py-0.5",
                   active
                     ? "bg-accent text-[var(--accent-foreground)]"
                     : "bg-[var(--bg-elevated)] text-[var(--text-secondary)]",
@@ -567,7 +567,7 @@ export function AdvancedModePicker({
                 {active ? "Active" : "Mode"}
               </span>
             </div>
-            <p className="mt-1.5 text-caption leading-4 text-secondary">{option.description}</p>
+            <p className="mt-1.5 text-xs leading-[1.45] leading-4 text-secondary">{option.description}</p>
           </button>
         );
       })}
@@ -619,12 +619,12 @@ export function SettingSection({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <div className="text-body-sm font-semibold text-primary leading-none">{label}</div>
+              <div className="text-sm font-semibold text-primary leading-none">{label}</div>
               <Tooltip content={description}>
-                 <Info className="size-3 text-muted hover:text-secondary cursor-help transition-colors" />
+                <Info className="size-3 text-muted hover:text-secondary cursor-help transition-colors" />
               </Tooltip>
             </div>
-            <p className="mt-1 text-caption text-muted">{description}</p>
+            <p className="mt-1 text-xs leading-[1.45] text-muted">{description}</p>
           </div>
         </div>
         <PrimitiveToggle checked={checked} onChange={onChange} ariaLabel={label} />
@@ -666,7 +666,7 @@ export function SliderRow({
     <div className="rounded-[var(--radius-lg)] border border-border bg-[var(--slider-row-bg)] px-3 py-1.5 shadow-[var(--slider-row-highlight)]">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <div className="text-body-sm font-semibold text-secondary">{label}</div>
+          <div className="text-sm font-semibold text-primary leading-none">{label}</div>
           <button
             type="button"
             onClick={onReset}
@@ -691,9 +691,9 @@ export function SliderRow({
               value={value}
               onChange={(event) => onChange(event.target.value.replace(/[^\d]/g, ""))}
               onBlur={() => onChange(String(clampNumber(value, min, max, min)))}
-              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right text-mono-data tabular-nums text-accent focus:ring-0"
+              className="h-7 w-16 rounded-[var(--radius-md)] border-none bg-transparent pr-5 text-right font-mono text-xs leading-[1.5] tabular-nums text-accent focus:ring-0"
             />
-            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-caption lowercase text-accent opacity-60">
+            <span className="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 text-xs leading-[1.45] lowercase text-accent opacity-60">
               {suffix ?? ""}
             </span>
           </div>
@@ -748,7 +748,7 @@ export function AdditionalFieldInput({
 
   return (
     <label className="grid gap-1.5">
-      <span className="label-caps">Additional Fields</span>
+      <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Additional Fields</span>
       <Input
         value={value}
         onChange={(event) => handleChange(event.target.value)}
@@ -756,8 +756,8 @@ export function AdditionalFieldInput({
         placeholder="price, sku, availability, brand"
         className="text-mono-body"
       />
-      <p className="text-caption text-muted">Use short snake_case names (2-60 chars).</p>
-      {validationHint ? <p className="text-caption text-danger">{validationHint}</p> : null}
+      <p className="text-xs leading-[1.45] text-muted">Use short snake_case names (2-60 chars).</p>
+      {validationHint ? <p className="text-xs leading-[1.45] text-danger">{validationHint}</p> : null}
       {chips.length ? (
         <div className="flex flex-wrap gap-1.5">
           {chips.map((field) => (
@@ -766,9 +766,8 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-          className="subtle-panel inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption text-foreground"
+              className="bg-background-alt rounded-md shadow-card inline-flex items-center gap-1 px-2 py-1 text-xs leading-[1.45] text-foreground"
             >
-              <span>{field}</span>
               <X className="size-3.5" aria-hidden="true" />
             </button>
           ))}
@@ -793,7 +792,7 @@ export function ManualFieldEditor({
         <GripVertical className="size-4" />
       </div>
       <label className="grid gap-1">
-        <span className="label-caps">Field</span>
+        <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Field</span>
         <Input value={row.fieldName} onChange={(event) => onChange({ fieldName: event.target.value })} placeholder="price" className="text-mono-body" />
       </label>
       <ValidatedField
@@ -817,9 +816,9 @@ export function ManualFieldEditor({
           type="button"
           onClick={onDelete}
           aria-label={`Delete ${row.fieldName || "manual field"}`}
-          className="subtle-panel inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
+          className="bg-background-alt shadow-card inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
         >
-          <Trash2 className="size-3.5" aria-hidden="true" />
+          <Trash2 className="size-4" />
         </button>
       </div>
     </div>
@@ -879,7 +878,7 @@ export const RecordsTable = memo(function RecordsTable({
     <div
       ref={setContainerRef}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      className="subtle-panel max-h-[70vh] overflow-auto"
+      className="bg-background-alt rounded-lg shadow-card max-h-[70vh] overflow-auto"
     >
       <table className="compact-data-table min-w-[960px]">
         <thead>
@@ -955,7 +954,7 @@ export function ActionButton({
       size="sm"
       disabled={disabled}
       onClick={onClick}
-      className={cn("h-8 min-w-0 px-3", !danger && "text-caption")}
+      className={cn("h-8 min-w-0 px-3", !danger && "text-xs leading-[1.45]")}
     >
       {label}
     </Button>
@@ -964,9 +963,9 @@ export function ActionButton({
 
 export function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: ReactNode; mono?: boolean }>) {
   return (
-    <div className="subtle-panel flex items-start justify-between gap-4 rounded-[var(--radius-md)] px-3 py-2">
-      <div className="shrink-0 label-caps">{label}</div>
-      <div className={cn("min-w-0 max-w-[65%] overflow-hidden break-all text-right text-body-sm text-secondary", mono && "text-mono-data")}>
+    <div className="bg-background-alt shadow-card flex items-start justify-between gap-4 rounded-[var(--radius-md)] px-3 py-2">
+      <div className="shrink-0 text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</div>
+      <div className={cn("min-w-0 flex-1 text-right text-xs leading-[1.45] text-foreground", mono && "font-mono")}>
         {value || "--"}
       </div>
     </div>
@@ -1082,7 +1081,7 @@ function ValidatedField({
 }>) {
   return (
     <label className="grid gap-1">
-      <span className="label-caps">{label}</span>
+      <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</span>
       <div className="relative">
         <Input
           value={value}

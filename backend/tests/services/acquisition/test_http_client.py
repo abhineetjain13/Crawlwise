@@ -12,6 +12,7 @@ from app.services.acquisition.http_client import (
     _retry_backoff_seconds,
     fetch_html_result,
 )
+from app.services.acquisition.session_context import create_session_context
 from app.services.url_safety import ValidatedTarget
 from curl_cffi.const import CurlOpt
 
@@ -238,6 +239,49 @@ async def test_fetch_html_result_attaches_harvested_cookies(monkeypatch, tmp_pat
     monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
 
     result = await fetch_html_result("https://example.com/product", allow_stealth_retry=False)
+
+    assert result.status_code == 200
+    assert captured["cookies"] is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_html_result_session_context_does_not_seed_from_legacy_domain_store(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(settings, "cookie_store_dir", tmp_path)
+    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_IMPERSONATION_PROFILES", ("chrome110",))
+    (tmp_path / "example.com.json").write_text(
+        '[{"name":"legacy","value":"shared","domain":"example.com","path":"/","expires":4102444800}]',
+        encoding="utf-8",
+    )
+    session_context = create_session_context()
+    captured: dict[str, object] = {}
+
+    class FakeAsyncSession:
+        def __init__(self, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            captured["cookies"] = kwargs.get("cookies")
+            return FakeResponse(
+                status_code=200,
+                text="<html><body>ok</body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+
+    monkeypatch.setattr("app.services.acquisition.http_client.requests.AsyncSession", FakeAsyncSession)
+
+    result = await fetch_html_result(
+        "https://example.com/product",
+        allow_stealth_retry=False,
+        session_context=session_context,
+    )
 
     assert result.status_code == 200
     assert captured["cookies"] is None

@@ -13,6 +13,23 @@ __all__ = [
     "MAX_CANDIDATES_PER_FIELD",
 ]
 
+VARIANT_AXIS_ALIASES = {
+    "color": "color",
+    "colour": "color",
+    "colors": "color",
+    "colours": "color",
+    "size": "size",
+    "sizes": "size",
+    "dimension": "size",
+    "dimensions": "size",
+    "สี": "color",
+    "สีสินค้า": "color",
+    "สีของสินค้า": "color",
+    "ขนาด": "size",
+    "ไซซ์": "size",
+    "ไซส์": "size",
+}
+
 SITE_POLICY_REGISTRY = {}
 ACTION_ADD_TO_CART = "add to cart"
 ACTION_BUY_NOW = "buy now"
@@ -235,6 +252,9 @@ EXTRACTION_RULES = {
             ACTION_ADD_TO_CART,
             "quantity",
             "wishlist",
+            "join the waitlist",
+            "check availability in store",
+            "check availability in stores",
         ],
         "ga_data_layer_keys": [
             "event",
@@ -307,6 +327,9 @@ EXTRACTION_RULES = {
             "out of stock",
             "view more",
             "learn more",
+            "join the waitlist",
+            "check availability in store",
+            "check availability in stores",
         ],
         "image_noise_tokens": ["logo", "sprite", "icon", "badge", "favicon"],
         "image_url_hint_tokens": ["/image", "/images/", "/img", "image=", "im/"],
@@ -1276,6 +1299,15 @@ NORMALIZATION_RULES = {
         "border:",
         "auto",
     ],
+    "size_guide_noise_values": [
+        "uk",
+        "us",
+        "it",
+        "au",
+        "kr",
+        "eu",
+        "jeans",
+    ],
     "non_content_rich_text_tags": [
         "script",
         "style",
@@ -1290,16 +1322,22 @@ NORMALIZATION_RULES = {
         "about",
         "acerca",
         "account",
+        "address",
         "ayuda",
+        "compliance",
         "contact",
         "cookie",
         "customer",
+        "email",
         "faq",
         "footer",
         "help",
+        "importer",
+        "manufacturer",
         "newsletter",
         "policy",
         "privacy",
+        "responsible",
         "return",
         "service",
         "servicios",
@@ -1308,6 +1346,7 @@ NORMALIZATION_RULES = {
         "store",
         "suscrib",
         "terms",
+        "trade_name",
     ],
     "product_attribute_css_noise_pattern": r"(?i)(?:^|\s)(?:@media|@supports|\.?[a-z0-9_-]+\s*\{|(?:padding|margin|display|position|justify-content|align-items|font-size|font-weight|line-height|z-index|flex(?:-direction)?|background|border|width|height|min-width|max-width)\s*:)",
     "product_attribute_digit_only_key_pattern": r"^\d+(?:[_-]\d+)*$",
@@ -1467,16 +1506,22 @@ CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS = frozenset(
             "about",
             "acerca",
             "account",
+            "address",
             "ayuda",
+            "compliance",
             "contact",
             "cookie",
             "customer",
+            "email",
             "faq",
             "footer",
             "help",
+            "importer",
+            "manufacturer",
             "newsletter",
             "policy",
             "privacy",
+            "responsible",
             "return",
             "service",
             "servicios",
@@ -1485,6 +1530,7 @@ CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS = frozenset(
             "store",
             "suscrib",
             "terms",
+            "trade_name",
         ],
     )
 )
@@ -1724,6 +1770,11 @@ CURRENCY_CODES = tuple(NORMALIZATION_RULES.get("currency_codes", []))
 CURRENCY_SYMBOL_MAP = _coerce_symbol_map(NORMALIZATION_RULES.get("currency_symbol_map"))
 COLOR_NOISE_TOKENS = tuple(NORMALIZATION_RULES.get("color_noise_tokens", []))
 SIZE_NOISE_TOKENS = tuple(NORMALIZATION_RULES.get("size_noise_tokens", []))
+SIZE_GUIDE_NOISE_VALUES = frozenset(
+    str(value).strip().lower()
+    for value in NORMALIZATION_RULES.get("size_guide_noise_values", [])
+    if str(value).strip()
+)
 HTTP_URL_PREFIXES: tuple[str, str] = ("http://", "https://")
 
 VERDICT_RULES = {

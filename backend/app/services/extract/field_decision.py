@@ -118,6 +118,15 @@ class FieldDecisionEngine:
             if candidate_rank > best_rank:
                 best_row = candidate_row
                 best_rank = candidate_rank
+        if field_name in {"title", "description", "responsibilities", "requirements", "company", "location", "salary"}:
+            for candidate_row in accepted_rows:
+                if (
+                    candidate_source_rank(field_name, candidate_row.get("source")) == best_rank
+                    and str(candidate_row.get("source") or "").strip()
+                    == str(best_row.get("source") or "").strip()
+                    and len(str(candidate_row["value"]).strip()) > len(str(best_row["value"]).strip())
+                ):
+                    best_row = candidate_row
 
         decision.value = best_row["value"]
         decision.source = best_row.get("source")

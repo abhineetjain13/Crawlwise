@@ -19,6 +19,32 @@ class TestNormalizeTargetUrl:
     
     def test_url_with_html_entities(self):
         assert normalize_target_url("https://example.com?q=hello&amp;world") == "https://example.com?q=hello&world"
+
+    def test_adp_detail_url_keeps_query_semantics_without_adding_fragment(self):
+        assert normalize_target_url(
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings&jobId=9202013693704_1"
+        ) == (
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html"
+            "?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings"
+            "&jobId=9202013693704_1"
+        )
+
+    def test_adp_listing_url_without_job_id_is_unchanged(self):
+        assert normalize_target_url(
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings"
+        ) == (
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html"
+            "?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings"
+        )
+
+    def test_adp_detail_url_keeps_existing_fragment(self):
+        assert normalize_target_url(
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings&jobId=9202013693704_1#already-there"
+        ) == (
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html"
+            "?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings"
+            "&jobId=9202013693704_1#already-there"
+        )
     
     def test_empty_string(self):
         assert normalize_target_url("") == ""

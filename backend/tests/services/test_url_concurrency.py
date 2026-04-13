@@ -58,3 +58,22 @@ async def test_distributed_url_slot_guard_times_out_when_slot_never_frees(
     finally:
         await first.release()
         await second.release()
+
+
+@pytest.mark.asyncio
+async def test_distributed_url_slot_guard_scopes_slots_by_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.url_concurrency._URL_SLOT_POLL_INTERVAL_SECONDS",
+        0.001,
+    )
+    first = DistributedURLSlotGuard(limit=1, namespace="worker-a")
+    second = DistributedURLSlotGuard(limit=1, namespace="worker-b")
+
+    try:
+        await first.acquire()
+        await asyncio.wait_for(second.acquire(), timeout=0.05)
+    finally:
+        await first.release()
+        await second.release()

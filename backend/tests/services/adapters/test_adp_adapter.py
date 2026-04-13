@@ -42,7 +42,8 @@ async def test_adp_extracts_listing_rows() -> None:
     assert result.records[0]["location"] == "MIDTOWN MEDICAL, New York, NY, US"
     assert result.records[0]["posted_date"] == "5 days ago"
     assert result.records[0]["job_id"] == "9202663521477_1"
-    assert result.records[0]["url"].endswith("#9202663521477_1")
+    assert result.records[0]["url"].endswith("&jobId=9202663521477_1#9202663521477_1")
+    assert result.records[0]["apply_url"] == result.records[0]["url"]
 
 
 @pytest.mark.asyncio
@@ -78,3 +79,4 @@ async def test_adp_extracts_detail_record() -> None:
     assert result.records[0]["job_id"] == "582883"
     assert result.records[0]["salary"] == "$51,000.00 To $60,000.00 Annually"
     assert "Health Center Inc." in result.records[0]["description"]
+    assert result.records[0]["apply_url"].endswith("&jobId=582883#582883")

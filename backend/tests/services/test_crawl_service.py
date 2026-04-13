@@ -577,6 +577,42 @@ async def test_process_run_batch(db_session: AsyncSession, test_user):
 
 
 @pytest.mark.asyncio
+async def test_process_run_batch_continues_after_url_level_parse_error(
+    db_session: AsyncSession,
+    test_user,
+):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "batch",
+        "url": "https://example.com/1",
+        "surface": "ecommerce_detail",
+        "settings": {"urls": ["https://example.com/1", "https://example.com/2"]},
+    })
+
+    seen_urls: list[str] = []
+
+    async def _fake_process_single_url(**kwargs):
+        url = kwargs["url"]
+        seen_urls.append(url)
+        if url.endswith("/1"):
+            raise ValueError("broken source payload")
+        return ([{"title": url}], "success", {"method": "curl_cffi", "record_count": 1})
+
+    with patch("app.services._batch_runtime._process_single_url", side_effect=_fake_process_single_url):
+        await process_run(db_session, run.id)
+
+    await db_session.refresh(run)
+    assert seen_urls == ["https://example.com/1", "https://example.com/2"]
+    assert run.status == "failed"
+    assert run.result_summary["record_count"] == 1
+    assert run.result_summary["processed_urls"] == 2
+    assert run.result_summary["completed_urls"] == 2
+    assert run.result_summary["remaining_urls"] == 0
+    assert run.result_summary["url_verdicts"] == ["error", "success"]
+    assert run.result_summary["verdict_counts"] == {"error": 1, "success": 1}
+    assert "ValueError: broken source payload" in str(run.result_summary.get("error", ""))
+
+
+@pytest.mark.asyncio
 async def test_process_run_resumes_from_completed_urls_not_processed_urls(db_session: AsyncSession, test_user):
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "batch",
@@ -1987,6 +2023,33 @@ async def test_process_run_normalizes_html_escaped_target_url_before_acquire(db_
 
 
 @pytest.mark.asyncio
+async def test_process_run_normalizes_adp_detail_url_with_missing_fragment_before_acquire(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": (
+            "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html"
+            "?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings"
+            "&jobId=9202013693704_1"
+        ),
+        "surface": "job_detail",
+    })
+
+    with (
+        patch("app.services.pipeline.core.acquire", new_callable=AsyncMock, return_value=_make_acq("<html><body></body></html>")) as acquire_mock,
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=AdapterResult(adapter_name="test", records=[{"title": "Item"}])),
+    ):
+        await process_run(db_session, run.id)
+
+    request = acquire_mock.await_args.kwargs["request"]
+    assert isinstance(request, AcquisitionRequest)
+    assert request.url == (
+        "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html"
+        "?cid=tenant&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings"
+        "&jobId=9202013693704_1#9202013693704_1"
+    )
+
+
+@pytest.mark.asyncio
 async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_extras_to_review_bucket(db_session: AsyncSession, test_user):
     detail_html = """
     <html><body>
@@ -2022,6 +2085,40 @@ async def test_process_run_filters_detail_data_to_canonical_fields_and_routes_ex
     )
     assert record.source_trace["manifest_trace"]["tables"][0]["rows"][0]["cells"][1]["text"] == "26 AWG"
     assert record.source_trace["schema_resolution"]["resolved_fields"]
+
+
+@pytest.mark.asyncio
+async def test_process_run_skips_low_signal_ecommerce_detail_record(db_session: AsyncSession, test_user):
+    run = await create_crawl_run(db_session, test_user.id, {
+        "run_type": "crawl",
+        "url": "https://example.com/pages/information/delivery",
+        "surface": "ecommerce_detail",
+    })
+
+    adapter = AdapterResult(
+        adapter_name="test",
+        records=[{
+            "title": "Premier Delivery Information | Example",
+            "description": "Premier Delivery",
+        }],
+    )
+
+    with (
+        patch(
+            "app.services.pipeline.core.acquire",
+            new_callable=AsyncMock,
+            return_value=_make_acq(
+                "<html><body><main><h1>Premier Delivery Information</h1><p>"
+                + ("Delivery information only. " * 40)
+                + "</p></main></body></html>"
+            ),
+        ),
+        patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=adapter),
+    ):
+        await process_run(db_session, run.id)
+
+    records = (await db_session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))).scalars().all()
+    assert records == []
 
 
 @pytest.mark.asyncio

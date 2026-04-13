@@ -24,7 +24,7 @@ export function Card({
     <section
       {...props}
       className={cn(
-        "surface-panel",
+        "bg-panel rounded-xl shadow-card backdrop-blur-md",
         "relative",
         "p-5",
         animate && "animate-fade-in",
@@ -45,11 +45,11 @@ export function Title({
   return (
     <div className={cn("space-y-1", className)}>
       {kicker ? (
-        <p className="text-kicker text-accent">
+        <p className="text-[11px] font-semibold tracking-[0.07em] uppercase text-accent">
           {kicker}
         </p>
       ) : null}
-      <h1 className="text-page-title text-primary">
+      <h1 className="text-[clamp(1.5rem,1.2rem+0.9vw,1.9rem)] font-[650] leading-[1.08] tracking-tight text-primary">
         {children}
       </h1>
     </div>
@@ -57,7 +57,7 @@ export function Title({
 }
 
 export function Subtitle({ children }: Readonly<{ children: ReactNode }>) {
-  return <p className="max-w-2xl text-page-subtitle">{children}</p>;
+  return <p className="max-w-2xl text-sm leading-relaxed text-muted">{children}</p>;
 }
 
 /* ─── Field ──────────────────────────────────────────────────────────────── */
@@ -68,9 +68,9 @@ export function Field({
 }: Readonly<{ label: string; hint?: string; children: ReactNode }>) {
   return (
     <label className="grid gap-1.5">
-      <span className="label-caps">{label}</span>
+      <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</span>
       {children}
-      {hint ? <span className="text-meta text-muted">{hint}</span> : null}
+      {hint ? <span className="text-[11px] leading-[1.45] text-muted">{hint}</span> : null}
     </label>
   );
 }
@@ -89,11 +89,10 @@ export function Input(props: ComponentPropsWithoutRef<"input">) {
       {...normalizedProps}
       className={cn(
         "control-field focus-ring h-[var(--control-height)] w-full rounded-[var(--radius-md)]",
-        "bg-[var(--control-input-bg)] px-3 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
+        "bg-[var(--control-input-bg)] px-3 text-sm leading-[1.55] text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
         "placeholder:text-[var(--text-muted)]",
-        "hover:border-[var(--border-strong)]",
         "transition-all",
         normalizedProps.className,
       )}
@@ -113,11 +112,10 @@ export function Textarea(props: ComponentPropsWithoutRef<"textarea">) {
       {...normalizedProps}
       className={cn(
         "control-field focus-ring min-h-20 w-full rounded-[var(--radius-md)]",
-        "bg-[var(--control-input-bg)] px-3 py-2 text-body-sm text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
+        "bg-[var(--control-input-bg)] px-3 py-2 text-sm leading-[1.55] text-[var(--text-primary)] shadow-[var(--control-input-shadow)]",
         "hover:bg-[var(--control-input-hover-bg)] hover:shadow-[var(--control-input-hover-shadow)]",
         "focus:shadow-[var(--control-input-focus-shadow)]",
         "placeholder:text-[var(--text-muted)]",
-        "hover:border-[var(--border-strong)]",
         "transition-all",
         normalizedProps.className,
       )}
@@ -148,9 +146,9 @@ export function Button({
     danger: "border-[length:var(--interactive-border-width)] border-[var(--danger)] danger-fill",
   };
   const sizes: Record<string, string> = {
-    sm:   "h-8 px-2.5 text-caption",
-    md:   "h-[var(--control-height)] px-3.5 text-body-sm",
-    lg:   "h-10 px-4 text-body",
+    sm:   "h-8 px-2.5 text-xs leading-[1.45]",
+    md:   "h-[var(--control-height)] px-3.5 text-sm leading-[1.55]",
+    lg:   "h-10 px-4 text-base leading-[1.6]",
     icon: "h-[var(--control-height)] w-[var(--control-height)] p-0",
   };
   const onAccent = variant === "primary" || variant === "danger" || variant === "accent";
@@ -191,7 +189,7 @@ export function Badge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5",
-        "text-kicker leading-none",
+        "text-[11px] font-semibold tracking-[0.07em] uppercase leading-none",
         tones[tone] ?? tones.neutral,
         className,
       )}
@@ -226,7 +224,7 @@ export function Toggle({
       <span
         className={cn(
           "inline-block h-3.5 w-3.5 rounded-full bg-[var(--accent-fg)] shadow-[0_3px_10px_rgba(0,0,0,0.18)] transition-transform",
-          checked ? "translate-x-[14px]" : "translate-x-0.5",
+          checked ? "translate-x-[14px]" : "translate-x-0.5"
         )}
       />
     </button>
@@ -240,12 +238,12 @@ export function Metric({
   loading = false,
 }: Readonly<{ label: string; value: ReactNode; loading?: boolean }>) {
   return (
-    <div className="surface-panel space-y-1.5 p-4">
-      <p className="label-caps">{label}</p>
+    <div className="bg-panel rounded-xl shadow-card backdrop-blur-md space-y-1.5 p-4">
+      <p className="text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</p>
       {loading ? (
         <div className="skeleton h-7 w-20" aria-hidden />
       ) : (
-        <div className="text-title-md text-primary">
+        <div className="text-xl font-bold tracking-tighter text-primary">
           {value}
         </div>
       )}
@@ -277,7 +275,7 @@ export function StatCard({
       style={{ "--stat-accent": stripeColor } as React.CSSProperties}
     >
       <div className="flex items-start justify-between gap-3">
-        <p className="label-caps">{label}</p>
+        <p className="text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</p>
         {icon && (
           <div
             className="flex size-7 items-center justify-center rounded-[var(--radius-md)]"
@@ -290,12 +288,12 @@ export function StatCard({
       {loading ? (
         <div className="mt-2.5 skeleton h-9 w-28" aria-hidden />
       ) : (
-        <div className="mt-2 text-stat-value text-primary">
+        <div className="mt-2 text-2xl font-bold leading-[1.05] tracking-tighter text-primary">
           {value}
         </div>
       )}
       {sub && !loading && (
-        <div className="mt-1.5 text-meta text-muted">
+        <div className="mt-1.5 text-[11px] leading-[1.45] text-muted">
           {sub}
         </div>
       )}
@@ -311,13 +309,13 @@ export function DataList({
 }: Readonly<{ title: string; items: ReactNode[]; empty: string }>) {
   return (
     <Card className="space-y-3">
-      <h2 className="text-section-title text-primary">
+      <h2 className="text-base font-semibold leading-snug tracking-normal text-primary">
         {title}
       </h2>
       {items.length ? (
         <div className="grid gap-2">{items}</div>
       ) : (
-        <p className="text-body-sm text-muted">{empty}</p>
+        <p className="text-sm leading-[1.55] text-muted">{empty}</p>
       )}
     </Card>
   );
@@ -332,8 +330,7 @@ export function CodeBlock({
     <pre
       className={cn(
         "max-h-[28rem] overflow-auto rounded-[var(--radius-lg)] border border-[var(--border)]",
-        "bg-[var(--subtle-panel-bg)] p-4 font-mono text-caption leading-[1.6] text-primary",
-        className,
+        "bg-[var(--subtle-panel-bg)] p-4 font-mono text-xs leading-[1.6] text-primary"
       )}
     >
       {children}
@@ -345,7 +342,7 @@ export function CodeBlock({
 export function Table({ children, className }: Readonly<{ children: ReactNode; className?: string }>) {
   return (
     <div className="relative w-full overflow-auto">
-      <table className={cn("w-full caption-bottom text-body-sm", className)}>{children}</table>
+      <table className={cn("w-full caption-bottom text-sm leading-[1.55]", className)}>{children}</table>
     </div>
   );
 }
@@ -380,7 +377,7 @@ export function TableHead({ children, className }: Readonly<{ children: ReactNod
   return (
     <th
       className={cn(
-        "h-9 px-4 text-left align-middle label-caps tone-muted",
+        "h-9 px-4 text-left align-middle text-[11px] font-semibold tracking-wide text-muted uppercase tone-muted",
         className,
       )}
     >
@@ -395,7 +392,7 @@ export function TableCell({
   colSpan,
 }: Readonly<{ children: ReactNode; className?: string; colSpan?: number }>) {
   return (
-    <td className={cn("text-data p-4 align-middle", className)} colSpan={colSpan}>
+    <td className={cn("text-sm leading-[1.5] text-muted p-4 align-middle", className)} colSpan={colSpan}>
       {children}
     </td>
   );
@@ -447,7 +444,7 @@ export function Tooltip({
         className={cn(
           "pointer-events-none absolute bottom-full left-1/2 mb-2 w-max max-w-[320px] -translate-x-1/2",
           "tooltip-surface rounded-[var(--radius-md)] bg-[var(--bg-panel)] px-2 py-1.5 shadow-[var(--shadow-lg)]",
-          "text-meta font-medium leading-normal text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+          "text-[11px] leading-[1.45] font-medium leading-normal text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
           "z-50 break-words",
         )}
       >

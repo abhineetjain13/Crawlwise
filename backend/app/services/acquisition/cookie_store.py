@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import tempfile
 import time
 from json import loads as parse_json
 from pathlib import Path
@@ -139,18 +140,10 @@ def load_cookies_for_http(domain: str) -> dict[str, str]:
 
 
 def save_cookies_payload(payload: object, *, domain: str) -> None:
-    path = cookie_store_path(domain)
-    if path is None:
-        return
-    filtered = filter_persistable_cookies(payload, domain=domain)
-    if not filtered:
-        if path.exists():
-            path.unlink(missing_ok=True)
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(filtered, indent=2), encoding="utf-8")
-    Path(tmp_path).replace(path)
+    logger.debug(
+        "Skipping legacy domain-scoped cookie persistence for %s; use session-scoped persistence instead",
+        domain,
+    )
 
 
 def is_persistable_cookie(cookie: dict, *, domain: str) -> bool:
@@ -312,9 +305,17 @@ def save_session_cookies_payload(
             path.unlink(missing_ok=True)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(filtered, indent=2), encoding="utf-8")
-    Path(tmp_path).replace(path)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f"{path.stem}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(json.dumps(filtered, indent=2))
+        tmp_path = Path(handle.name)
+    tmp_path.replace(path)
 
 
 def discard_session_cookies(domain: str, session_identity: str) -> None:

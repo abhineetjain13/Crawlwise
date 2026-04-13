@@ -37,7 +37,7 @@ function DomainBar({
   return (
     <div className="flex items-center gap-3 py-1.5">
       <span
-        className="min-w-0 flex-1 truncate text-link-ui text-secondary"
+        className="min-w-0 flex-1 truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-secondary"
         title={domain}
       >
         {domain}
@@ -49,7 +49,7 @@ function DomainBar({
             style={{ width: `${pct}%` }}
           />
         </div>
-        <span className="w-7 text-right text-meta tabular-nums text-muted">{count}</span>
+        <span className="w-7 text-right text-[11px] leading-[1.45] tabular-nums text-muted">{count}</span>
       </div>
     </div>
   );
@@ -86,12 +86,12 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       {/* Status dot */}
       <StatusDot tone={statusTone(run.status)} />
       {/* Domain */}
-      <span className="min-w-0 flex-1 truncate text-link-ui text-primary transition-colors group-hover:text-accent">
+      <span className="min-w-0 flex-1 truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-primary transition-colors group-hover:text-accent">
         {domain || `Run #${run.id}`}
       </span>
       {/* Record count */}
       {typeof recordCount === "number" && recordCount > 0 ? (
-        <span className="shrink-0 text-meta tabular-nums text-muted">
+        <span className="shrink-0 text-[11px] leading-[1.45] tabular-nums text-muted">
           {recordCount.toLocaleString()} rec
         </span>
       ) : null}
@@ -200,9 +200,9 @@ export default function DashboardPage() {
             {Object.entries(statusCounts)
               .sort(([, a], [, b]) => b - a)
               .map(([status, count]) => (
-                <div key={status} className="flex items-center gap-1.5 text-meta text-muted">
+                <div key={status} className="flex items-center gap-1.5 text-[11px] leading-[1.45] text-muted">
                   <Badge tone={statusTone(status)}>{statusLabel(status)}</Badge>
-                  <span className="text-data-strong tabular-nums">{count}</span>
+                  <span className="text-sm font-medium leading-[1.45] text-foreground tabular-nums">{count}</span>
                 </div>
               ))}
           </div>
@@ -215,7 +215,7 @@ export default function DashboardPage() {
         <SurfacePanel>
           <div className="flex items-center justify-between border-b border-[var(--divider)] px-4 py-3">
             <SectionHeader title="Recent Runs" description="Last 10 jobs" />
-            <Link href="/runs" className="no-underline text-link-ui text-accent hover:underline">
+            <Link href="/runs" className="no-underline text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-accent hover:underline">
               View all
             </Link>
           </div>

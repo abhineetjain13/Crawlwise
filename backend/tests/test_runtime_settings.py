@@ -88,6 +88,11 @@ def test_runtime_settings_expose_new_acquisition_and_traversal_tunables(monkeypa
     monkeypatch.setenv("CRAWLER_RUNTIME_BROWSER_PREFERENCE_MIN_SUCCESSES", "4")
     monkeypatch.setenv("CRAWLER_RUNTIME_TRAVERSAL_MAX_ITERATIONS_CAP", "77")
     monkeypatch.setenv("CRAWLER_RUNTIME_PAGINATION_POST_CLICK_TIMEOUT_MS", "2100")
+    monkeypatch.setenv("CRAWLER_RUNTIME_ACQUISITION_ARTIFACT_TTL_SECONDS", "7200")
+    monkeypatch.setenv(
+        "CRAWLER_RUNTIME_ACQUISITION_ARTIFACT_CLEANUP_INTERVAL_SECONDS",
+        "45",
+    )
 
     _, crawl_runtime = _reload_runtime_modules()
 
@@ -95,3 +100,5 @@ def test_runtime_settings_expose_new_acquisition_and_traversal_tunables(monkeypa
     assert crawl_runtime.BROWSER_PREFERENCE_MIN_SUCCESSES == 4
     assert crawl_runtime.TRAVERSAL_MAX_ITERATIONS_CAP == 77
     assert crawl_runtime.PAGINATION_POST_CLICK_TIMEOUT_MS == 2100
+    assert crawl_runtime.ACQUISITION_ARTIFACT_TTL_SECONDS == 7200
+    assert crawl_runtime.ACQUISITION_ARTIFACT_CLEANUP_INTERVAL_SECONDS == 45

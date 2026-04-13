@@ -693,7 +693,7 @@ def _collect_candidates(
                 field_name=field_name,
                 source_labels=("dom_meta", "semantic_section", "text_pattern"),
             )
-            short_circuited = True
+            short_circuited = bool(rows)
 
         if not short_circuited:
             # 7. DOM selectors
@@ -1146,6 +1146,7 @@ def _finalize_candidates(
         base_url=url,
         soup=soup,
         adapter_records=adapter_records or [],
+        network_payloads=network_payloads,
     )
     variant_rows = _build_variant_rows(
         base_url=url,
@@ -1170,6 +1171,15 @@ def _finalize_candidates(
 
     # Add dynamic fields if not already present
     dynamic_override_fields = {
+        "title",
+        "company",
+        "location",
+        "salary",
+        "job_type",
+        "apply_url",
+        "requirements",
+        "benefits",
+        "remote",
         "color",
         "size",
         "image_url",
@@ -1256,19 +1266,6 @@ def _finalize_candidates(
             continue
         final_candidates[field_name] = filtered_rows[:1]
 
-    # Mirror image_url to additional_images if needed
-    if (
-        "additional_images" in target_fields
-        and "additional_images" not in final_candidates
-        and final_candidates.get("image_url")
-    ):
-        mirrored_rows = [
-            {**row, "value": row.get("value")}
-            for row in final_candidates["image_url"]
-            if row.get("value") not in (None, "", [], {})
-        ]
-        if mirrored_rows:
-            final_candidates["additional_images"] = mirrored_rows
 
     # Add product_attributes from semantic extraction to output
     if "detail" in str(surface or "").lower():
@@ -1299,8 +1296,5 @@ def _finalize_candidates(
         "mapping_hint": mappings,
         "semantic": semantic,
     }
-
-
-
 
 

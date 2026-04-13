@@ -63,6 +63,10 @@ _NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES = (
     "terms of service",
     "shipping policy",
     "return policy",
+    "select a size",
+    "size guide",
+    "join the waitlist",
+    "check availability in store",
     "request a catalog",
     "join our team",
     "account login",
@@ -86,6 +90,24 @@ _CSS_NOISE_VALUE_RE = re.compile(CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN)
 _PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_RE = re.compile(
     CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN
 )
+_SIZE_CHART_PRODUCT_ATTRIBUTE_KEY_RE = re.compile(
+    r"^(?:xxs|xs|s|m|l|xl|xxl|xxxl)(?:_\d+(?:_\d+)*)+$",
+    re.IGNORECASE,
+)
+_SIZE_CHART_REGION_KEYS = frozenset(
+    {
+        "eu",
+        "eu_it",
+        "uk",
+        "us",
+        "asia",
+        "europe",
+        "oceania",
+        "africa",
+        "south_america",
+        "north_america",
+    }
+)
 _NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
     r"geolocation|geoip|geo/|/geo\b|"
     r"\banalytics\b|tracking|telemetry|"
@@ -103,6 +125,8 @@ SECTION_LABEL_SKIP_TOKENS = (
     "share",
     "top searches",
     "you may also like",
+    "featured products",
+    "frequently bought together",
     "similar",
     "related",
 )
@@ -205,7 +229,24 @@ def is_noisy_product_attribute_entry(key: object, value: object) -> bool:
         return True
     if not re.search(r"[a-z]", normalized_key):
         return True
+    if len(normalized_key) > 40:
+        return True
+    text_value_slug = re.sub(r"[^a-z0-9]+", "_", text_value).strip("_")
+    if len(normalized_key) > 15 and (normalized_key in text_value_slug or text_value_slug in normalized_key):
+        return True
     if normalized_key in _NOISY_PRODUCT_ATTRIBUTE_KEYS:
+        return True
+    if normalized_key in _SIZE_CHART_REGION_KEYS:
+        return True
+    if _SIZE_CHART_PRODUCT_ATTRIBUTE_KEY_RE.fullmatch(normalized_key):
+        return True
+    if "sizeguide" in normalized_key or normalized_key.startswith("size_guide"):
+        return True
+    if normalized_key.startswith(("select_a_size", "select_size", "choose_size")):
+        return True
+    if normalized_key.endswith("_code") and any(
+        token in normalized_key for token in ("promo", "coupon", "offer", "discount", "_off")
+    ):
         return True
     if normalized_key.startswith(("contact_", "customer_", "privacy_", "terms_")):
         return True
@@ -228,6 +269,8 @@ def is_noisy_product_attribute_entry(key: object, value: object) -> bool:
         return True
     if text_value.count(" - ") >= 2:
         return True
+    if len(text_value) > 200:
+        return True
     return False
 
 
@@ -249,6 +292,12 @@ def sanitize_product_attribute_map(
         normalized_key = normalize_requested_field(key)
         if not normalized_key or normalized_key in blocked:
             continue
+        if isinstance(raw_value, str):
+            raw_value = re.sub(
+                r"(?i)\s+select\s+(?:a\s+)?(?:size|color|colour)\s*:.*$",
+                "",
+                normalized_noise_text(raw_value),
+            ).strip(" ,:-")
         if is_noisy_product_attribute_entry(normalized_key, raw_value):
             continue
         sanitized[normalized_key] = raw_value

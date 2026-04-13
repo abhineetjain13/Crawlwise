@@ -28,9 +28,9 @@ export default function LoginPage() {
       <div className="space-y-2">
         <Title kicker="Auth">Sign in</Title>
         <Subtitle>
-          Enter the bootstrap admin credentials from your backend <code className="text-body-sm">.env</code>{" "}
-          (<code className="text-body-sm">DEFAULT_ADMIN_EMAIL</code> / <code className="text-body-sm">DEFAULT_ADMIN_PASSWORD</code>
-          , with <code className="text-body-sm">BOOTSTRAP_ADMIN_ONCE=1</code>). Registration is disabled in this POC build.
+          Enter the bootstrap admin credentials from your backend <code className="text-sm leading-[1.55]">.env</code>{" "}
+          (<code className="text-sm leading-[1.55]">DEFAULT_ADMIN_EMAIL</code> / <code className="text-sm leading-[1.55]">DEFAULT_ADMIN_PASSWORD</code>
+          , with <code className="text-sm leading-[1.55]">BOOTSTRAP_ADMIN_ONCE=1</code>). Registration is disabled in this POC build.
         </Subtitle>
       </div>
       <form className="grid gap-4" onSubmit={onSubmit}>

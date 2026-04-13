@@ -316,17 +316,12 @@ async def _fetch_once(
             kwargs["proxies"] = {"http": effective_proxy, "https": effective_proxy}
         if session_context is not None:
             if not _cookies_seeded:
-                # Seed once: load session-scoped cookies first, then fall
-                # back to domain-scoped store for the initial request only.
+                # Seed once from the session-scoped store only.
                 session_cookies = load_session_cookies_for_http(
                     target.hostname, session_context.identity_key
                 )
                 if session_cookies:
                     session_context.merge_http_cookies(session_cookies)
-                else:
-                    domain_cookies = load_cookies_for_http(target.hostname)
-                    if domain_cookies:
-                        session_context.merge_http_cookies(domain_cookies)
                 _cookies_seeded = True
             if session_context.cookies:
                 kwargs["cookies"] = dict(session_context.cookies)

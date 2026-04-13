@@ -791,6 +791,7 @@ def _build_platform_detail_rows(
     base_url: str,
     soup: BeautifulSoup,
     adapter_records: list[dict],
+    network_payloads: list[dict],
 ) -> dict[str, list[dict]]:
     from app.services.extract.variant_builder import (
         _find_variant_adapter_record,
@@ -804,5 +805,111 @@ def _build_platform_detail_rows(
             rows,
             _build_shopify_content_rows(shopify_product, base_url=base_url),
         )
+    _merge_dynamic_row_map(
+        rows,
+        _build_saashr_detail_rows(
+            base_url=base_url,
+            soup=soup,
+            network_payloads=network_payloads,
+        ),
+    )
     _merge_dynamic_row_map(rows, _build_dom_gallery_rows(soup, base_url=base_url))
+    return rows
+
+
+def _build_saashr_detail_rows(
+    *,
+    base_url: str,
+    soup: BeautifulSoup,
+    network_payloads: list[dict],
+) -> dict[str, list[dict]]:
+    detail_payload: dict[str, object] | None = None
+    config_payload: dict[str, object] | None = None
+    for payload in network_payloads:
+        if not isinstance(payload, dict):
+            continue
+        payload_url = str(payload.get("url") or "")
+        body = payload.get("body")
+        if not isinstance(body, dict):
+            continue
+        if not payload_url:
+            continue
+        if re.search(r"/job-requisitions/\d+(?:\?|$)", payload_url):
+            detail_payload = body
+        elif payload_url.endswith("/job-search/config") or "/job-search/config?" in payload_url:
+            config_payload = body
+
+    if not detail_payload:
+        return {}
+
+    def _add_scalar(
+        target_rows: dict[str, list[dict]],
+        field_name: str,
+        value: object,
+    ) -> None:
+        coerced = _coerce_scalar_for_dynamic_row(value)
+        if coerced is None:
+            return
+        target_rows.setdefault(field_name, []).append(
+            {"value": coerced, "source": "saashr_detail"}
+        )
+
+    rows: dict[str, list[dict]] = {}
+    _add_scalar(rows, "title", detail_payload.get("job_title"))
+    _add_scalar(
+        rows,
+        "company",
+        (config_payload or {}).get("comp_name")
+        or (
+            soup.select_one(".c-career-search-header-bar__comp-name")
+            .get_text(" ", strip=True)
+            if soup.select_one(".c-career-search-header-bar__comp-name")
+            else ""
+        ),
+    )
+
+    location = detail_payload.get("location")
+    if isinstance(location, dict):
+        location_parts = [
+            _normalized_candidate_text(location.get("address_line_1")),
+            _normalized_candidate_text(location.get("city")),
+            _normalized_candidate_text(location.get("state")),
+            _normalized_candidate_text(location.get("zip")),
+            _normalized_candidate_text(location.get("country")),
+        ]
+        _add_scalar(rows, "location", ", ".join(part for part in location_parts if part))
+
+    employee_type = detail_payload.get("employee_type")
+    if isinstance(employee_type, dict):
+        _add_scalar(rows, "job_type", employee_type.get("name"))
+
+    salary_parts: list[str] = []
+    pay_from = detail_payload.get("base_pay_from")
+    pay_to = detail_payload.get("base_pay_to")
+    if isinstance(pay_from, (int, float)):
+        salary_parts.append(f"${pay_from:,.2f}")
+    if isinstance(pay_to, (int, float)):
+        right = f"${pay_to:,.2f}"
+        if salary_parts:
+            salary_parts[0] = f"{salary_parts[0]} - {right}"
+        else:
+            salary_parts.append(right)
+    pay_frequency = _normalized_candidate_text(detail_payload.get("base_pay_frequency"))
+    if salary_parts and pay_frequency:
+        salary_parts[0] = f"{salary_parts[0]} per {pay_frequency.lower()}"
+    if salary_parts:
+        _add_scalar(rows, "salary", salary_parts[0])
+
+    _add_scalar(rows, "apply_url", base_url)
+    _add_scalar(rows, "remote", detail_payload.get("is_remote_job"))
+
+    rich_text_fields = (
+        ("description", detail_payload.get("job_description")),
+        ("requirements", detail_payload.get("job_requirement")),
+        ("benefits", detail_payload.get("job_preview")),
+    )
+    for field_name, raw_value in rich_text_fields:
+        normalized = _normalize_html_rich_text(str(raw_value or ""))
+        _add_scalar(rows, field_name, normalized)
+
     return rows

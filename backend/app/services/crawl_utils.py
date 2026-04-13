@@ -8,6 +8,7 @@ import logging
 import re
 from html import unescape
 from typing import Any, Protocol
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import regex as regex_lib
 from app.services.xpath_service import validate_xpath_syntax
@@ -53,7 +54,41 @@ def normalize_target_url(value: object) -> str:
     text = unescape(str(value or "")).strip()
     if not text:
         return ""
-    return re.sub(r"\s+", "", text)
+    normalized = re.sub(r"\s+", "", text)
+    return _normalize_adp_detail_url(normalized)
+
+
+def _normalize_adp_detail_url(url: str) -> str:
+    parsed = urlsplit(str(url or "").strip())
+    hostname = str(parsed.hostname or "").lower()
+    if hostname not in {
+        "workforcenow.adp.com",
+        "myjobs.adp.com",
+        "recruiting.adp.com",
+    }:
+        return url
+    if "recruitment/recruitment.html" not in parsed.path.lower():
+        return url
+    if parsed.fragment:
+        return url
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    job_id = " ".join(str(query.get("jobId") or "").split()).strip()
+    if not job_id:
+        return url
+    normalized_pairs = []
+    replaced_job_id = False
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if key == "jobId":
+            normalized_pairs.append((key, job_id))
+            replaced_job_id = True
+            continue
+        normalized_pairs.append((key, value))
+    if not replaced_job_id:
+        normalized_pairs.append(("jobId", job_id))
+    encoded_query = urlencode(normalized_pairs, doseq=True)
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, encoded_query, parsed.fragment)
+    )
 
 
 def _settings_view(settings: object) -> _SettingsViewLike | dict:

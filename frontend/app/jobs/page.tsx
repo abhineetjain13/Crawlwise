@@ -60,7 +60,7 @@ export default function JobsPage() {
         description="Live run state for the local dev runner."
         actions={
           <div className="flex items-center gap-2">
-            <span className="text-meta text-muted">Last refreshed {lastRefreshed}</span>
+            <span className="text-[11px] leading-[1.45] text-muted">Last refreshed {lastRefreshed}</span>
             <Button variant="secondary" type="button" onClick={() => void jobsQuery.refetch()}>
               <RefreshCw className="size-3.5" />
               Refresh
@@ -96,15 +96,15 @@ export default function JobsPage() {
               <tbody>
                 {jobs.map((job) => (
                   <tr key={job.run_id}>
-                    <td className="text-mono-data text-foreground">{job.run_id}</td>
-                    <td className="text-body-sm text-muted">{formatJobType(job.type)}</td>
-                    <td className="max-w-[320px] truncate text-body-sm text-foreground" title={job.url}>
+                    <td className="font-mono text-xs leading-[1.5] text-foreground">{job.run_id}</td>
+                    <td className="text-sm leading-[1.55] text-muted">{formatJobType(job.type)}</td>
+                    <td className="max-w-[320px] truncate text-sm leading-[1.55] text-foreground" title={job.url}>
                       {job.url}
                     </td>
                     <td>
                       <ProgressBar percent={job.progress} />
                     </td>
-                    <td className="text-body-sm text-muted">{formatTimestamp(job.started_at)}</td>
+                    <td className="text-sm leading-[1.55] text-muted">{formatTimestamp(job.started_at)}</td>
                     <td>
                       <StatusPill status={job.status} />
                     </td>
@@ -156,7 +156,7 @@ function ActionButton({
       onClick={onClick}
       variant={danger ? "ghost" : "secondary"}
       disabled={disabled}
-      className={cn("h-7 px-2.5 text-caption", danger && "text-danger hover:bg-danger/10 hover:text-danger")}
+      className={cn("h-7 px-2.5 text-xs leading-[1.45]", danger && "text-danger hover:bg-danger/10 hover:text-danger")}
       title={label}
     >
       <Icon className="size-3.5" />

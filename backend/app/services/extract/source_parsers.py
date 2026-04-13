@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 
+from app.services.exceptions import ExtractionParseError
 from app.services.config.extraction_audit_settings import (
     SOURCE_PARSER_DATALAYER_FIELD_WEIGHTS,
     SOURCE_PARSER_EMBEDDED_BLOB_LIST_SAMPLE_SIZE,
@@ -105,27 +106,32 @@ def parse_page_sources(
     *,
     soup: BeautifulSoup | None = None,
 ) -> dict[str, object]:
-    soup = soup if soup is not None else BeautifulSoup(html or "", "html.parser")
-    hydrated_states, hydrated_script_ids = extract_hydrated_states(soup)
-    # Extract Apollo state from meta tags used by GraphQL-driven apps
-    apollo_state = extract_apollo_state_from_meta(soup)
-    if apollo_state:
-        hydrated_states.append(apollo_state)
-    next_data = extract_next_data(soup)
-    if next_data is None and hydrated_states:
-        next_data = {"_hydrated_states": hydrated_states}
-    elif next_data is not None and hydrated_states:
-        next_data = {**dict(next_data), "_hydrated_states": hydrated_states}
-    return {
-        "next_data": next_data,
-        "hydrated_states": hydrated_states,
-        "embedded_json": extract_embedded_json(soup, seen_script_ids=hydrated_script_ids),
-        "open_graph": extract_open_graph(soup),
-        "json_ld": extract_json_ld(soup),
-        "microdata": extract_microdata(soup),
-        "tables": extract_tables(soup),
-        "datalayer": parse_datalayer(html),
-    }
+    try:
+        soup = soup if soup is not None else BeautifulSoup(html or "", "html.parser")
+        hydrated_states, hydrated_script_ids = extract_hydrated_states(soup)
+        # Extract Apollo state from meta tags used by GraphQL-driven apps
+        apollo_state = extract_apollo_state_from_meta(soup)
+        if apollo_state:
+            hydrated_states.append(apollo_state)
+        next_data = extract_next_data(soup)
+        if next_data is None and hydrated_states:
+            next_data = {"_hydrated_states": hydrated_states}
+        elif next_data is not None and hydrated_states:
+            next_data = {**dict(next_data), "_hydrated_states": hydrated_states}
+        return {
+            "next_data": next_data,
+            "hydrated_states": hydrated_states,
+            "embedded_json": extract_embedded_json(soup, seen_script_ids=hydrated_script_ids),
+            "open_graph": extract_open_graph(soup),
+            "json_ld": extract_json_ld(soup),
+            "microdata": extract_microdata(soup),
+            "tables": extract_tables(soup),
+            "datalayer": parse_datalayer(html),
+        }
+    except ExtractionParseError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise ExtractionParseError("Failed to parse page sources") from exc
 
 
 async def parse_page_sources_async(
@@ -235,7 +241,7 @@ def _extract_datalayer_ecommerce_payload(ecommerce: dict[str, object]) -> dict[s
                     else:
                         result["discount_amount"] = discount_value
                         if price_val is not None and disc_val is not None and price_val >= 0 and disc_val >= 0:
-                            result["sale_price"] = max(0, price_val - disc_val)
+                            result["original_price"] = price_val + disc_val
             if "item_category" in item:
                 result["category"] = item["item_category"]
                 result["google_product_category"] = item["item_category"]
@@ -738,45 +744,84 @@ def _extract_next_bootstrap_children(text: str) -> list[str]:
 
 def _find_matching_delimiter(text: str, start_index: int, opening: str, closing: str) -> int:
     depth = 0
-    current_string_char = ""
+    context_stack: list[tuple[str, str | int | None]] = [("code", None)]
     escape = False
-    template_expression_depth = 0
-    for index in range(start_index, len(text)):
+    index = start_index
+    while index < len(text):
         char = text[index]
         next_char = text[index + 1] if index + 1 < len(text) else ""
-        if current_string_char:
+        context, marker = context_stack[-1]
+
+        if context == "string":
             if escape:
                 escape = False
-                continue
-            if char == "\\":
+            elif char == "\\":
                 escape = True
-                continue
-            if current_string_char == "`":
-                if char == "$" and next_char == "{":
-                    template_expression_depth = 1 if template_expression_depth == 0 else template_expression_depth + 1
-                    continue
-                if char == "{" and template_expression_depth > 0 and (index == 0 or text[index - 1] != "$"):
-                    template_expression_depth += 1
-                    continue
-                if char == "}" and template_expression_depth > 0:
-                    template_expression_depth -= 1
-                    continue
-                if char == "`" and template_expression_depth == 0:
-                    current_string_char = ""
-                continue
-            if char == current_string_char:
-                current_string_char = ""
+            elif char == marker:
+                context_stack.pop()
+            index += 1
             continue
-        if char in {'"', "'", "`"}:
-            current_string_char = char
+        if context == "line_comment":
+            if char == "\n":
+                context_stack.pop()
+            index += 1
             continue
+        if context == "block_comment":
+            if char == "*" and next_char == "/":
+                context_stack.pop()
+                index += 2
+                continue
+            index += 1
+            continue
+        if context == "template":
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == "`":
+                context_stack.pop()
+            elif char == "$" and next_char == "{":
+                context_stack.append(("template_expr", 0))
+                index += 2
+                continue
+            index += 1
+            continue
+
+        if char == "/" and next_char == "/":
+            context_stack.append(("line_comment", None))
+            index += 2
+            continue
+        if char == "/" and next_char == "*":
+            context_stack.append(("block_comment", None))
+            index += 2
+            continue
+        if char in {'"', "'"}:
+            context_stack.append(("string", char))
+            index += 1
+            continue
+        if char == "`":
+            context_stack.append(("template", None))
+            index += 1
+            continue
+        if context == "template_expr":
+            template_brace_depth = int(marker or 0)
+            if char == "{":
+                context_stack[-1] = ("template_expr", template_brace_depth + 1)
+            elif char == "}":
+                if template_brace_depth == 0:
+                    context_stack.pop()
+                else:
+                    context_stack[-1] = ("template_expr", template_brace_depth - 1)
+            index += 1
+            continue
+
         if char == opening:
             depth += 1
-            continue
-        if char == closing:
+        elif char == closing:
             depth -= 1
             if depth == 0:
                 return index
+        index += 1
     return -1
 
 
@@ -786,41 +831,90 @@ def _split_top_level_arguments(text: str) -> list[str]:
     paren_depth = 0
     brace_depth = 0
     bracket_depth = 0
-    in_string = ""
+    context_stack: list[tuple[str, str | int | None]] = [("code", None)]
     escape = False
-    for index, char in enumerate(text):
-        if in_string:
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        context, marker = context_stack[-1]
+        if context == "string":
             if escape:
                 escape = False
             elif char == "\\":
                 escape = True
-            elif char == in_string:
-                in_string = ""
+            elif char == marker:
+                context_stack.pop()
+            index += 1
             continue
-        if char in {'"', "'", "`"}:
-            in_string = char
+        if context == "line_comment":
+            if char == "\n":
+                context_stack.pop()
+            index += 1
+            continue
+        if context == "block_comment":
+            if char == "*" and next_char == "/":
+                context_stack.pop()
+                index += 2
+                continue
+            index += 1
+            continue
+        if context == "template":
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == "`":
+                context_stack.pop()
+            elif char == "$" and next_char == "{":
+                context_stack.append(("template_expr", 0))
+                index += 2
+                continue
+            index += 1
+            continue
+        if char == "/" and next_char == "/":
+            context_stack.append(("line_comment", None))
+            index += 2
+            continue
+        if char == "/" and next_char == "*":
+            context_stack.append(("block_comment", None))
+            index += 2
+            continue
+        if char in {'"', "'"}:
+            context_stack.append(("string", char))
+            index += 1
+            continue
+        if char == "`":
+            context_stack.append(("template", None))
+            index += 1
+            continue
+        if context == "template_expr":
+            template_brace_depth = int(marker or 0)
+            if char == "{":
+                context_stack[-1] = ("template_expr", template_brace_depth + 1)
+            elif char == "}":
+                if template_brace_depth == 0:
+                    context_stack.pop()
+                else:
+                    context_stack[-1] = ("template_expr", template_brace_depth - 1)
+            index += 1
             continue
         if char == "(":
             paren_depth += 1
-            continue
-        if char == ")":
+        elif char == ")":
             paren_depth = max(0, paren_depth - 1)
-            continue
-        if char == "{":
+        elif char == "{":
             brace_depth += 1
-            continue
-        if char == "}":
+        elif char == "}":
             brace_depth = max(0, brace_depth - 1)
-            continue
-        if char == "[":
+        elif char == "[":
             bracket_depth += 1
-            continue
-        if char == "]":
+        elif char == "]":
             bracket_depth = max(0, bracket_depth - 1)
-            continue
-        if char == "," and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0:
+        elif char == "," and paren_depth == 0 and brace_depth == 0 and bracket_depth == 0:
             args.append(text[start:index].strip())
             start = index + 1
+        index += 1
     trailing = text[start:].strip()
     if trailing:
         args.append(trailing)

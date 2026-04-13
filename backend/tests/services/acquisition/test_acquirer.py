@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -15,9 +17,13 @@ from app.services.acquisition.acquirer import (
     AcquisitionResult,
     ProxyRotator,
     _try_browser_first_success_result,
+    _scrub_html_for_artifact,
+    _scrub_payload_for_artifact,
+    _scrub_sensitive_text,
     acquire,
     acquire_html,
 )
+from app.services.acquisition.artifact_store import _write_artifact_file
 from app.services.acquisition.http_client import HttpFetchResult
 from app.services.acquisition.pacing import reset_pacing_state
 from app.services.exceptions import AcquisitionTimeoutError
@@ -229,6 +235,66 @@ async def test_acquire_raises_acquisition_timeout_with_preserved_cause(tmp_path)
             await acquire(1, "https://example.com/slow-page")
 
     assert exc_info.value.__cause__ is timeout_exc
+
+
+def test_scrub_payload_for_artifact_redacts_sensitive_values():
+    payload = {
+        "Authorization": "Bearer abcdefghijklmnopqrstuvwxyz012345",
+        "profile": {
+            "email": "user@example.com",
+            "notes": "Reach me at user@example.com",
+        },
+        "token_value": "abcdefghijklmnopqrstuvwxyz0123456789",
+    }
+
+    scrubbed = _scrub_payload_for_artifact(payload)
+
+    assert scrubbed["Authorization"] == "[REDACTED]"
+    assert scrubbed["profile"]["email"] == "[REDACTED]"
+    assert scrubbed["profile"]["notes"] == "Reach me at [REDACTED]"
+    assert scrubbed["token_value"] == "[REDACTED]"
+
+
+def test_scrub_html_for_artifact_redacts_tokens_and_input_values():
+    html = (
+        '<input type="hidden" name="csrf_token" value="abc1234567890abcdef1234567890">'
+        '<meta name="authenticity-token" content="secret-token-value">'
+        '<div>Bearer abcdefghijklmnopqrstuvwxyz012345</div>'
+        '<a href="https://user:pass@example.com/private">private</a>'
+    )
+
+    scrubbed = _scrub_html_for_artifact(html)
+
+    assert 'value="[REDACTED]"' in scrubbed
+    assert 'content="[REDACTED]"' in scrubbed
+    assert "Bearer [REDACTED]" in scrubbed
+    assert "https://[REDACTED]@example.com/private" in scrubbed
+
+
+def test_scrub_sensitive_text_redacts_emails_and_credentials():
+    text = "Contact user@example.com with Bearer abcdefghijklmnopqrstuvwxyz012345 via https://user:pass@example.com/path"
+
+    scrubbed = _scrub_sensitive_text(text)
+
+    assert "user@example.com" not in scrubbed
+    assert "[REDACTED]" in scrubbed
+    assert "https://[REDACTED]@example.com/path" in scrubbed
+
+
+def test_write_artifact_file_handles_missing_html(tmp_path):
+    result = SimpleNamespace(content_type="html", html=None, json_data=None)
+    artifact_path = tmp_path / "artifacts" / "page.html"
+
+    written_path = _write_artifact_file(
+        artifact_path,
+        result,
+        scrub_payload=lambda payload: payload,
+        scrub_html=lambda html: f"sanitized:{html}",
+        scrub_text=lambda text: text,
+    )
+
+    assert written_path == artifact_path
+    assert artifact_path.read_text(encoding="utf-8") == "sanitized:"
 
 
 
@@ -725,7 +791,7 @@ async def test_acquire_accepts_typed_request(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_acquire_scrubs_sensitive_html_before_writing_artifact(tmp_path, monkeypatch):
+async def test_acquire_preserves_sensitive_html_in_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
     html = """
     <html><body>
@@ -745,16 +811,15 @@ async def test_acquire_scrubs_sensitive_html_before_writing_artifact(tmp_path, m
         result = await acquire(42, "https://example.com/contact")
 
     artifact = Path(result.artifact_path).read_text(encoding="utf-8")
-    assert "person@example.com" not in artifact
-    assert "short-lived-secret" not in artifact
-    assert "temporary-csrf-payload" not in artifact
-    assert "[REDACTED]" in artifact
+    assert "person@example.com" in artifact
+    assert "short-lived-secret" in artifact
+    assert "temporary-csrf-payload" in artifact
     assert "person@example.com" in result.html
     assert "short-lived-secret" in result.html
 
 
 @pytest.mark.asyncio
-async def test_acquire_scrubs_sensitive_json_before_writing_artifact(tmp_path, monkeypatch):
+async def test_acquire_preserves_sensitive_json_in_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
     json_data = {
         "email": "person@example.com",
@@ -775,9 +840,52 @@ async def test_acquire_scrubs_sensitive_json_before_writing_artifact(tmp_path, m
         result = await acquire(42, "https://example.com/api")
 
     artifact = Path(result.artifact_path).read_text(encoding="utf-8")
-    assert "person@example.com" not in artifact
-    assert "short-lived-secret" not in artifact
-    assert "[REDACTED]" in artifact
+    assert "person@example.com" in artifact
+    assert "short-lived-secret" in artifact
+    assert "Bearer abcdefghijklmnopqrstuvwxyz0123456789" in artifact
+    assert result.json_data == json_data
+
+
+@pytest.mark.asyncio
+async def test_acquire_prunes_expired_artifacts_before_persisting_new_results(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("app.services.acquisition.acquirer.settings.artifacts_dir", tmp_path)
+    monkeypatch.setattr(
+        "app.services.acquisition.artifact_store.ACQUISITION_ARTIFACT_TTL_SECONDS",
+        60,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.artifact_store.ACQUISITION_ARTIFACT_CLEANUP_INTERVAL_SECONDS",
+        0,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.artifact_store._LAST_ARTIFACT_CLEANUP_STARTED_AT",
+        0.0,
+    )
+    expired_at = time.time() - 3600
+    stale_paths = [
+        tmp_path / "html" / "stale.html",
+        tmp_path / "network" / "stale.json",
+        tmp_path / "diagnostics" / "stale.json",
+    ]
+    for path in stale_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("stale", encoding="utf-8")
+        os.utime(path, (expired_at, expired_at))
+
+    html = "<html><body><h1>Fresh</h1><p>" + ("x" * 600) + "</p></body></html>"
+    with patch(
+        "app.services.acquisition.acquirer._fetch_with_content_type",
+        new_callable=AsyncMock,
+        return_value=HttpFetchResult(text=html, status_code=200, content_type="html"),
+    ):
+        result = await acquire(42, "https://example.com/fresh")
+
+    assert Path(result.artifact_path).exists()
+    assert Path(result.diagnostics_path).exists()
+    for path in stale_paths:
+        assert not path.exists()
 
 
 def test_browser_first_accepts_non_blocked_rendered_page_without_extractability_signal() -> None:

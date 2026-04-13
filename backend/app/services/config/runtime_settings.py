@@ -154,6 +154,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     extractability_next_data_signal_trigger: int = 15
     extractability_next_data_signal_min: int = 4
     browser_preference_min_successes: int = 2
+    acquisition_artifact_ttl_seconds: int = 86400
+    acquisition_artifact_cleanup_interval_seconds: int = 300
 
     @model_validator(mode="after")
     def _apply_profile_defaults(self) -> CrawlerRuntimeSettings:
@@ -213,6 +215,12 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("url_process_timeout_seconds must be > 0")
         if self.max_url_process_timeout_seconds <= 0:
             raise ValueError("max_url_process_timeout_seconds must be > 0")
+        if self.acquisition_artifact_ttl_seconds < 0:
+            raise ValueError("acquisition_artifact_ttl_seconds must be >= 0")
+        if self.acquisition_artifact_cleanup_interval_seconds < 0:
+            raise ValueError(
+                "acquisition_artifact_cleanup_interval_seconds must be >= 0"
+            )
         return self
 
     def coerce_url_timeout_seconds(self, value: object) -> float:

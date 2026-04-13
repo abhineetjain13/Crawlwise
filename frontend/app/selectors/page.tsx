@@ -244,21 +244,21 @@ export default function SelectorsPage() {
         <SectionHeader title="Selector Inputs" description="Enter a page URL and expected column names, then let the LLM suggest selectors for each field." />
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)_auto] xl:items-end">
           <label className="grid gap-1.5">
-            <span className="label-caps">Page URL</span>
+            <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Page URL</span>
             <Input
               value={url}
               onChange={(event) => setUrl(event.target.value)}
               placeholder="https://example.com/products/oak-chair"
-              className="text-mono-body"
+              className="font-mono text-sm leading-[1.55]"
             />
           </label>
           <label className="grid gap-1.5">
-            <span className="label-caps">Expected Columns</span>
+            <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Expected Columns</span>
             <Textarea
               value={expectedColumns}
               onChange={(event) => setExpectedColumns(event.target.value)}
               placeholder="price, sku, availability, brand"
-              className="min-h-[80px] text-body-sm"
+              className="min-h-[80px] text-sm leading-[1.55]"
             />
           </label>
           <Button type="button" variant="accent" onClick={() => void loadPageAndSuggestions()} disabled={loadingSuggestions}>
@@ -272,7 +272,7 @@ export default function SelectorsPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)]">
         <Card className="space-y-4">
           <SectionHeader title="Page Preview" description={loadedUrl || "Load a page to preview its DOM context."} />
-          <div className="surface-panel overflow-hidden p-0">
+          <div className="bg-panel rounded-xl shadow-card backdrop-blur-md overflow-hidden p-0">
             {loadedUrl ? (
               <iframe
                 key={loadedUrl}
@@ -284,7 +284,7 @@ export default function SelectorsPage() {
                 sandbox=""
               />
             ) : (
-              <div className="grid h-[760px] place-items-center text-body-sm text-muted">
+              <div className="grid h-[760px] place-items-center text-sm leading-[1.55] text-muted">
                 No page loaded.
               </div>
             )}
@@ -313,7 +313,7 @@ export default function SelectorsPage() {
                     <div className="grid gap-3">
                       <div className="grid gap-3 xl:grid-cols-[150px_120px_minmax(0,1fr)_auto]">
                         <label className="grid gap-1">
-                          <span className="label-caps">Field Name</span>
+                          <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Field Name</span>
                           <Input
                             value={row.fieldName}
                             onChange={(event) => updateRow(row.key, { fieldName: event.target.value, state: nextEditedState(row.state) })}
@@ -322,7 +322,7 @@ export default function SelectorsPage() {
                         </label>
 
                         <label className="grid gap-1">
-                          <span className="label-caps">Type</span>
+                          <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Type</span>
                           <select
                             value={row.kind}
                             onChange={(event) => updateRow(row.key, { kind: event.target.value as SelectorKind, state: nextEditedState(row.state) })}
@@ -335,14 +335,14 @@ export default function SelectorsPage() {
                         </label>
 
                         <label className="grid gap-1" htmlFor={selectorInputId}>
-                          <span className="label-caps">XPath / CSS / Regex</span>
+                          <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">XPath / CSS / Regex</span>
                           <div className="relative">
                             <Input
                               id={selectorInputId}
                               value={row.selectorValue}
                               onChange={(event) => updateRow(row.key, { selectorValue: event.target.value, state: nextEditedState(row.state) })}
                               placeholder={selectorPlaceholder(row.kind)}
-                              className="pr-10 text-mono-body"
+                              className="pr-10 font-mono text-sm leading-[1.55]"
                             />
                             <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
                               {row.selectorValue.trim() ? <CheckCircle2 className="size-4 text-success" /> : <AlertCircle className="size-4 text-muted" />}
@@ -365,12 +365,12 @@ export default function SelectorsPage() {
                       </div>
 
                       <label className="grid gap-1">
-                        <span className="label-caps">Extracted Value Preview</span>
+                        <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Extracted Value Preview</span>
                         <Input
                           value={row.extractedValue}
                           onChange={(event) => updateRow(row.key, { extractedValue: event.target.value })}
                           placeholder="Extracted value"
-                          className="text-mono-body"
+                          className="font-mono text-sm leading-[1.55]"
                         />
                       </label>
 

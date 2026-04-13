@@ -214,6 +214,12 @@ def test_parse_page_sources_rejects_generic_config_data_attribute_blob():
     assert page_sources["embedded_json"] == []
 
 
+def test_find_matching_delimiter_supports_custom_pairs():
+    text = "{outer{inner}} tail"
+
+    assert source_parsers._find_matching_delimiter(text, 0, "{", "}") == 13
+
+
 def test_parse_page_sources_embedded_json_keeps_raw_product_script_with_family():
     html = """
     <html><body>
@@ -312,6 +318,27 @@ def test_parse_page_sources_react_create_element_props_handles_nested_template_e
         App,
         {"title": "Widget"},
         `price-${formatPrice({ amount: 10, currency: { code: "USD" } })}`,
+        document.body
+      ),
+      document.getElementById("root")
+    );
+    </script>
+    </body></html>
+    """
+    page_sources = parse_page_sources(html)
+    assert page_sources["hydrated_states"][0]["title"] == "Widget"
+
+
+def test_parse_page_sources_react_create_element_props_ignores_template_and_comment_commas():
+    html = """
+    <html><body>
+    <script>
+    ReactDOM.hydrate(
+      React.createElement(
+        App,
+        {"title": "Widget"},
+        `outer ${`inner ${formatPrice({ amount: 10, currency: { code: "USD" } })}`}`,
+        /* commas, braces, and parens inside comments should not split args: { }, ( ), , */
         document.body
       ),
       document.getElementById("root")

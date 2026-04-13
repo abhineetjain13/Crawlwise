@@ -69,7 +69,7 @@ def _build_salary_money_re() -> re.Pattern[str]:
 _SALARY_MONEY_RE = _build_salary_money_re()
 _COLOR_VARIANT_COUNT_RE = re.compile(CANDIDATE_COLOR_VARIANT_COUNT_PATTERN, re.IGNORECASE)
 _DYNAMIC_NUMERIC_FIELD_RE = re.compile(CANDIDATE_DYNAMIC_NUMERIC_FIELD_PATTERN)
-_UNRESOLVED_TEMPLATE_VALUE_RE = re.compile(r"\{[A-Za-z0-9_.-]+\}")
+_UNRESOLVED_TEMPLATE_VALUE_RE = re.compile(r"(\{\{.*?\}\}|\[\[.*?\]\]|<%.*?%>|\{%\s*.*?\s*%\}|\(\$[a-zA-Z0-9_]+\)|\$[a-zA-Z0-9_]+(?=/|$))")
 _VARIANT_SELECTOR_PROMPT_RE = re.compile(
     r"^(?:select|choose|pick)\s+(?:a|an|the|your)?\s*"
     r"(?:size|sizes|color|colors|colour|colours|option|options|variant|variants|"
@@ -85,7 +85,15 @@ _RISKY_DETAIL_FIELDS = frozenset(
     {"title", "brand", "category", "availability", "color", "size", "features", "care"}
 )
 _DETAIL_FIELD_SOURCE_RANK_OVERRIDES: dict[str, dict[str, int]] = {
-    "title": {"datalayer": 2, "embedded_json": 8, "adapter": 10},
+    "title": {
+        "datalayer": 2,
+        "microdata": 3,
+        "selector": 8,
+        "dom": 8,
+        "open_graph": 7,
+        "embedded_json": 8,
+        "adapter": 10,
+    },
     "brand": {"datalayer": 2, "hydrated_state": 8, "embedded_json": 8, "adapter": 10},
     "category": {
         "datalayer": 2,
@@ -170,6 +178,7 @@ def candidate_source_rank(field_name: str, source: object) -> int:
     overrides = _DETAIL_FIELD_SOURCE_RANK_OVERRIDES.get(field_name, {})
     source_ranking_overrides = {
         "adapter": 12,
+        "saashr_detail": 12,
         "dom_variant": 9,
         "shopify_content": 11,
         "structured_spec": 10,
@@ -177,14 +186,13 @@ def candidate_source_rank(field_name: str, source: object) -> int:
         "dom_gallery": 10,
         "shopify_variant": 10,
     }
-    return max(
-        int(
-            overrides.get(
-                part, source_ranking_overrides.get(part, SOURCE_RANKING.get(part, 0))
-            )
-        )
-        for part in source_parts
-    )
+    ranks = []
+    for part in source_parts:
+        rank = int(overrides.get(part, source_ranking_overrides.get(part, SOURCE_RANKING.get(part, 0))))
+        if rank == 0 and "adapter" in part:
+            rank = 12
+        ranks.append(rank)
+    return max(ranks) if ranks else 0
 
 
 # ---------------------------------------------------------------------------

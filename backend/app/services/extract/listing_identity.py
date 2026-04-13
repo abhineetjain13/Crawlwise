@@ -87,25 +87,49 @@ def merge_record_sets_on_identity(
     supplemental_sets: list[list[dict]],
 ) -> list[dict]:
     merged = [dict(record) for record in primary_records]
-    by_key = {
-        strong_identity_key(record): index
-        for index, record in enumerate(merged)
-        if strong_identity_key(record)
-    }
+    
+    def _build_by_key(records):
+        by_key = {}
+        for index, record in enumerate(records):
+            for field_name in _STRONG_IDENTITY_FIELDS:
+                value = str(record.get(field_name) or "").strip()
+                if not value:
+                    continue
+                if field_name in {"url", "apply_url"}:
+                    parsed = urlparse(value)
+                    normalized = parsed._replace(fragment="").geturl().lower()
+                    by_key[f"url:{normalized}"] = index
+                elif field_name in {"sku", "id"}:
+                    by_key[f"item:{value.lower()}"] = index
+                else:
+                    by_key[f"{field_name}:{value.lower()}"] = index
+        return by_key
+
+    by_key = _build_by_key(merged)
     if not by_key:
         return merged
     title_index = _build_title_index(merged)
 
     for records in supplemental_sets:
         for record in records:
-            key = strong_identity_key(record)
-            if not key:
-                index = _fallback_title_backfill_index(merged, title_index, record)
-                if index is None:
+            index = None
+            for field_name in _STRONG_IDENTITY_FIELDS:
+                value = str(record.get(field_name) or "").strip()
+                if not value:
                     continue
-                merged[index] = _backfill_link_fields(merged[index], record)
-                continue
-            index = by_key.get(key)
+                if field_name in {"url", "apply_url"}:
+                    parsed = urlparse(value)
+                    normalized = parsed._replace(fragment="").geturl().lower()
+                    key = f"url:{normalized}"
+                elif field_name in {"sku", "id"}:
+                    key = f"item:{value.lower()}"
+                else:
+                    key = f"{field_name}:{value.lower()}"
+                    
+                if key in by_key:
+                    index = by_key[key]
+                    break
+            
             if index is None:
                 fallback_index = _fallback_title_backfill_index(merged, title_index, record)
                 if fallback_index is None:
@@ -113,8 +137,30 @@ def merge_record_sets_on_identity(
                 merged[fallback_index] = _backfill_link_fields(
                     merged[fallback_index], record
                 )
+                for field_name in _STRONG_IDENTITY_FIELDS:
+                    val = str(merged[fallback_index].get(field_name) or "").strip()
+                    if val:
+                        if field_name in {"url", "apply_url"}:
+                            parsed = urlparse(val)
+                            norm = parsed._replace(fragment="").geturl().lower()
+                            by_key[f"url:{norm}"] = fallback_index
+                        elif field_name in {"sku", "id"}:
+                            by_key[f"item:{val.lower()}"] = fallback_index
+                        else:
+                            by_key[f"{field_name}:{val.lower()}"] = fallback_index
                 continue
             merged[index] = merge_listing_record(merged[index], record)
+            for field_name in _STRONG_IDENTITY_FIELDS:
+                val = str(merged[index].get(field_name) or "").strip()
+                if val:
+                    if field_name in {"url", "apply_url"}:
+                        parsed = urlparse(val)
+                        norm = parsed._replace(fragment="").geturl().lower()
+                        by_key[f"url:{norm}"] = index
+                    elif field_name in {"sku", "id"}:
+                        by_key[f"item:{val.lower()}"] = index
+                    else:
+                        by_key[f"{field_name}:{val.lower()}"] = index
     return merged
 
 

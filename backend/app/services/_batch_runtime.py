@@ -13,7 +13,7 @@ from app.core.telemetry import (
 )
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
-from app.services.acquisition import ProxyPoolExhausted
+from app.services._batch_run_store import BatchRunStore, retry_run_update
 from app.services._batch_progress import persist_batch_url_result
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
@@ -24,7 +24,7 @@ from app.services.crawl_state import (
     set_control_request,
     update_run_status,
 )
-from app.services.exceptions import RunControlError
+from app.services.exceptions import ProxyPoolExhaustedError, RunControlError
 from app.services.crawl_utils import (
     normalize_target_url,
     parse_csv_urls,
@@ -36,17 +36,11 @@ from app.services.pipeline.core import (
 )
 from app.services.pipeline.runtime_helpers import (
     STAGE_FETCH,
-    STAGE_SAVE,
     log_event,
     set_stage,
 )
 from app.services.pipeline.verdict import (
-    VERDICT_BLOCKED,
-    VERDICT_EMPTY,
-    VERDICT_LISTING_FAILED,
-    VERDICT_PARTIAL,
-    VERDICT_SCHEMA_MISS,
-    VERDICT_SUCCESS,
+    VERDICT_ERROR,
     _aggregate_verdict,
 )
 from app.services.llm_runtime import snapshot_active_configs
@@ -56,7 +50,6 @@ from app.services.config.crawl_runtime import (
     URL_PROCESS_TIMEOUT_SECONDS,
 )
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.resource_monitor import MemoryAdaptiveSemaphore
@@ -65,31 +58,7 @@ from app.services.url_concurrency import DistributedURLSlotGuard
 logger = logging.getLogger(__name__)
 _global_url_semaphore: MemoryAdaptiveSemaphore | None = None
 _global_url_semaphore_limit: int | None = None
-_RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS = (0.0, 0.05, 0.1, 0.2, 0.5)
-_LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
-_LOCK_NOT_AVAILABLE_ERROR_CODES = {"1205", "1222", "3572"}
-_LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS = (
-    "could not obtain lock",
-    "lock not available",
-    "could not acquire lock",
-    "database is locked",
-    "database table is locked",
-    "lock wait timeout exceeded",
-    "nowait is set",
-)
-_TRANSIENT_CONNECTION_ERROR_NAMES = {
-    "ConnectionDoesNotExistError",
-    "ConnectionFailureError",
-    "InterfaceError",
-    "InternalClientError",
-}
-_TRANSIENT_CONNECTION_MESSAGE_FRAGMENTS = (
-    "connection does not exist",
-    "connection is closed",
-    "server closed the connection unexpectedly",
-    "terminating connection due to administrator command",
-    "closed the connection unexpectedly",
-)
+ProxyPoolExhausted = ProxyPoolExhaustedError
 
 
 @dataclass(slots=True)
@@ -233,96 +202,7 @@ def _build_batch_run_context(
     )
 
 
-async def _retry_run_update(
-    session: AsyncSession,
-    run_id: int,
-    mutate,
-) -> None:
-    """Persist pending changes and update the run row in one retried transaction."""
-    await session.flush()
-    for attempt, delay_seconds in enumerate(
-        _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS,
-        start=1,
-    ):
-        if delay_seconds > 0:
-            await asyncio.sleep(delay_seconds)
-        try:
-            run_missing = False
-            async with session.begin_nested():
-                result = await session.execute(
-                    select(CrawlRun).where(CrawlRun.id == run_id).with_for_update(nowait=True)
-                )
-                run = result.scalar_one_or_none()
-                if run is None:
-                    run_missing = True
-                else:
-                    await mutate(session, run)
-            if run_missing:
-                await session.commit()
-                return
-            await session.commit()
-            return
-        except OperationalError as exc:
-            if _is_retryable_run_update_error(exc) and attempt < len(
-                _RUN_UPDATE_LOCK_RETRY_DELAYS_SECONDS
-            ):
-                logger.debug(
-                    "Retrying crawl run update after transient database error for run_id=%s (attempt=%s)",
-                    run_id,
-                    attempt,
-                )
-                await session.rollback()
-                continue
-            await session.rollback()
-            raise
-        except Exception:
-            await session.rollback()
-            raise
-
-
-def _is_lock_not_available_error(exc: OperationalError) -> bool:
-    orig = getattr(exc, "orig", None)
-    for attr_name in ("sqlstate", "pgcode"):
-        code = str(getattr(orig, attr_name, "") or "").strip()
-        if code == _LOCK_NOT_AVAILABLE_SQLSTATE:
-            return True
-    args = getattr(orig, "args", ())
-    if args:
-        code = str(args[0] or "").strip()
-        if code in _LOCK_NOT_AVAILABLE_ERROR_CODES:
-            return True
-    message = " ".join(
-        part
-        for part in (
-            str(orig or "").strip(),
-            str(exc or "").strip(),
-        )
-        if part
-    ).lower()
-    return any(fragment in message for fragment in _LOCK_NOT_AVAILABLE_MESSAGE_FRAGMENTS)
-
-
-def _is_transient_connection_error(exc: OperationalError) -> bool:
-    orig = getattr(exc, "orig", None)
-    candidates = [orig, exc]
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        if type(candidate).__name__ in _TRANSIENT_CONNECTION_ERROR_NAMES:
-            return True
-    message = " ".join(
-        part
-        for part in (
-            str(orig or "").strip(),
-            str(exc or "").strip(),
-        )
-        if part
-    ).lower()
-    return any(fragment in message for fragment in _TRANSIENT_CONNECTION_MESSAGE_FRAGMENTS)
-
-
-def _is_retryable_run_update_error(exc: OperationalError) -> bool:
-    return _is_lock_not_available_error(exc) or _is_transient_connection_error(exc)
+_retry_run_update = retry_run_update
 
 
 class RunControlSignal(RunControlError):
@@ -348,26 +228,7 @@ async def _run_control_checkpoint(session: AsyncSession, run: CrawlRun) -> None:
 
 
 async def _start_or_resume_run(session: AsyncSession, run: CrawlRun) -> None:
-    current_status = run.status_value
-    if current_status == CrawlStatus.PENDING:
-
-        async def _start_mutation(
-            retry_session: AsyncSession, retry_run: CrawlRun
-        ) -> None:
-            update_run_status(retry_run, CrawlStatus.RUNNING)
-
-        await _retry_run_update(session, run.id, _start_mutation)
-        await _log_with_retry(session, run.id, "info", "Pipeline started")
-    else:
-
-        async def _resume_mutation(
-            retry_session: AsyncSession, retry_run: CrawlRun
-        ) -> None:
-            return None
-
-        await _retry_run_update(session, run.id, _resume_mutation)
-        await _log_with_retry(session, run.id, "info", "Pipeline resumed")
-    await session.refresh(run)
+    await BatchRunStore(session).start_or_resume_run(run)
 
 
 async def _load_batch_run_context(
@@ -391,31 +252,16 @@ async def _load_batch_run_context(
         persisted_summary.get("resolved_url_list")
     )
 
+    store = BatchRunStore(session)
     if str(persisted_summary.get("correlation_id") or "").strip() != correlation_id:
-
-        async def _correlation_mutation(
-            retry_session: AsyncSession, retry_run: CrawlRun
-        ) -> None:
-            retry_run.update_summary(correlation_id=correlation_id)
-
-        await _retry_run_update(session, run.id, _correlation_mutation)
-        await session.refresh(run)
+        await store.ensure_correlation_id(run, correlation_id)
 
     settings_view = run.settings_view
     if settings_view.llm_enabled() and not settings_view.has_llm_config_snapshot():
         try:
             llm_snapshot = await snapshot_active_configs(session)
             if llm_snapshot:
-
-                async def _stamp_llm_snapshot(
-                    retry_session: AsyncSession, retry_run: CrawlRun
-                ) -> None:
-                    retry_run.settings = retry_run.settings_view.with_updates(
-                        llm_config_snapshot=llm_snapshot
-                    ).as_dict()
-
-                await _retry_run_update(session, run.id, _stamp_llm_snapshot)
-                await session.refresh(run)
+                await store.stamp_llm_snapshot(run, llm_snapshot)
                 settings_view = run.settings_view
         except Exception:
             logger.warning(
@@ -427,14 +273,7 @@ async def _load_batch_run_context(
         run_url_list = persisted_url_list
     else:
         run_url_list = resolved_url_list
-
-        async def _persist_url_list_snapshot(
-            retry_session: AsyncSession, retry_run: CrawlRun
-        ) -> None:
-            retry_run.update_summary(resolved_url_list=run_url_list)
-
-        await _retry_run_update(session, run.id, _persist_url_list_snapshot)
-        await session.refresh(run)
+        await store.persist_resolved_url_list(run, run_url_list)
 
     return _build_batch_run_context(
         run,
@@ -456,29 +295,11 @@ async def _finalize_batch_run(
         dict(acquisition_summary) if isinstance(acquisition_summary, dict) else {}
     )
 
-    async def _finalize_mutation(
-        retry_session: AsyncSession, retry_run: CrawlRun
-    ) -> None:
-        current_status = retry_run.status_value
-        if current_status == CrawlStatus.RUNNING:
-            if aggregate_verdict == VERDICT_SUCCESS:
-                update_run_status(retry_run, CrawlStatus.COMPLETED)
-            elif aggregate_verdict in {
-                VERDICT_PARTIAL,
-                VERDICT_EMPTY,
-                VERDICT_BLOCKED,
-                VERDICT_SCHEMA_MISS,
-                VERDICT_LISTING_FAILED,
-            }:
-                update_run_status(retry_run, CrawlStatus.FAILED)
-        retry_run.merge_summary_patch(
-            {
-                **summary_patch,
-                "current_stage": STAGE_SAVE,
-            }
-        )
-
-    await _retry_run_update(session, run_id, _finalize_mutation)
+    await BatchRunStore(session).finalize_run(
+        run_id,
+        summary_patch=summary_patch,
+        aggregate_verdict=aggregate_verdict,
+    )
     traversal_attempted = int(
         acquisition_summary_map.get("traversal_attempted", 0) or 0
     )
@@ -524,20 +345,7 @@ async def _handle_batch_run_exception(
         if run is None:
             return
         error_message = str(exc)
-
-        async def _proxy_exhausted_mutation(
-            retry_session: AsyncSession, retry_run: CrawlRun
-        ) -> None:
-            update_run_status(retry_run, CrawlStatus.PROXY_EXHAUSTED)
-            retry_run.merge_summary_patch(
-                {
-                    "error": error_message,
-                    "extraction_verdict": "proxy_exhausted",
-                }
-            )
-            await log_event(retry_session, retry_run.id, "error", error_message)
-
-        await _retry_run_update(session, run.id, _proxy_exhausted_mutation)
+        await BatchRunStore(session).mark_proxy_exhausted(run.id, error_message)
         return
 
     if isinstance(exc, TimeoutError):
@@ -550,6 +358,71 @@ async def _handle_batch_run_exception(
 
     error_msg = f"{type(exc).__name__}: {exc}"
     await _mark_run_failed(session, run_id, error_msg)
+
+
+async def _build_batch_url_error_result(
+    session: AsyncSession,
+    run_id: int,
+    url: str,
+    exc: Exception,
+) -> URLProcessingResult:
+    try:
+        await session.rollback()
+    except Exception:
+        logger.debug(
+            "Failed to rollback session after URL-level batch error for run_id=%s url=%s",
+            run_id,
+            url,
+            exc_info=True,
+        )
+    error_message = str(exc).strip()
+    logger.warning(
+        "Continuing batch run after URL-level failure for run_id=%s url=%s: %s: %s",
+        run_id,
+        url,
+        type(exc).__name__,
+        error_message,
+        exc_info=True,
+    )
+    return URLProcessingResult(
+        records=[],
+        verdict=VERDICT_ERROR,
+        url_metrics={
+            "pipeline_error": {
+                "type": type(exc).__name__,
+                "message": error_message,
+            }
+        },
+    )
+
+
+async def _process_batch_url(
+    session: AsyncSession,
+    run: CrawlRun,
+    *,
+    url: str,
+    url_config: URLProcessingConfig,
+    url_timeout_seconds: float,
+) -> URLProcessingResult:
+    try:
+        async with DistributedURLSlotGuard(settings.system_max_concurrent_urls):
+            async with _get_global_url_semaphore():
+                return _ensure_url_processing_result(
+                    await asyncio.wait_for(
+                        _process_single_url(
+                            session=session,
+                            run=run,
+                            url=url,
+                            config=url_config,
+                            checkpoint=lambda: _run_control_checkpoint(session, run),
+                        ),
+                        timeout=url_timeout_seconds,
+                    )
+                )
+    except (ProxyPoolExhausted, RunControlSignal):
+        raise
+    except (TimeoutError, RuntimeError, ValueError, TypeError, OSError) as exc:
+        return await _build_batch_url_error_result(session, run.id, url, exc)
 
 
 async def process_run(session: AsyncSession, run_id: int) -> None:
@@ -622,30 +495,21 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 total_urls=total_urls,
             )
 
-            async with DistributedURLSlotGuard(
-                settings.system_max_concurrent_urls
-            ):
-                async with _get_global_url_semaphore():
-                    url_config = URLProcessingConfig(
-                        proxy_list=proxy_list,
-                        traversal_mode=traversal_mode,
-                        max_pages=max_pages,
-                        max_scrolls=max_scrolls,
-                        max_records=remaining_records,
-                        sleep_ms=sleep_ms,
-                    )
-                    url_result = _ensure_url_processing_result(
-                        await asyncio.wait_for(
-                            _process_single_url(
-                                session=session,
-                                run=run,
-                                url=url,
-                                config=url_config,
-                                checkpoint=lambda: _run_control_checkpoint(session, run),
-                            ),
-                            timeout=url_timeout_seconds,
-                        )
-                    )
+            url_config = URLProcessingConfig(
+                proxy_list=proxy_list,
+                traversal_mode=traversal_mode,
+                max_pages=max_pages,
+                max_scrolls=max_scrolls,
+                max_records=remaining_records,
+                sleep_ms=sleep_ms,
+            )
+            url_result = await _process_batch_url(
+                session,
+                run,
+                url=url,
+                url_config=url_config,
+                url_timeout_seconds=url_timeout_seconds,
+            )
             pipeline_error = (
                 url_result.url_metrics.get("pipeline_error")
                 if isinstance(url_result.url_metrics, dict)

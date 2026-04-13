@@ -60,7 +60,7 @@ MIN_VIABLE_RECORDS = 2
 MAX_JSON_RECURSION_DEPTH = _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
 
 # Detail-only fields that should not be extracted on listing pages
-DETAIL_ONLY_FIELDS = {"brand", "gtin", "variants", "specifications", "description"}
+DETAIL_ONLY_FIELDS = {"gtin", "variants", "specifications", "description"}
 _LISTING_HOST_TOKEN_STOPWORDS = {
     "www",
     "m",
@@ -94,20 +94,8 @@ class ListingExtractionRequest:
     xhr_payloads: list[dict] | None = None
     adapter_records: list[dict] | None = None
     soup: BeautifulSoup | None = None
-# Listing extraction still enforces the field contract for DOM card records by
-# stripping detail-only fields before persistence.
 def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
-    """Filter listing page records to remove detail-only fields from DOM records.
-
-    If page_type is "listing":
-    - For DOM-extracted records (source="listing_card"), drop detail-only fields
-    - For structured data records (JSON-LD, __NEXT_DATA__, etc.), preserve all fields
-    - Log warning if detail fields were present in DOM records
-
-    Returns filtered records.
-
-    This helper remains part of the production listing extraction path.
-    """
+    """Filter DOM listing records by dropping detail-only fields on listing pages."""
     if page_type != "listing":
         return records
 
@@ -116,16 +104,6 @@ def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list
     drop_count = 0
 
     for record in records:
-        # Check if this is a DOM-extracted record
-        source = record.get("_source", "")
-        is_dom_record = "listing_card" in str(source)
-
-        if not is_dom_record:
-            # Preserve all fields for structured data records
-            filtered_records.append(record)
-            continue
-
-        # For DOM records, drop detail-only fields
         dropped_fields = {k for k in record.keys() if k in DETAIL_ONLY_FIELDS}
         filtered_record = {
             k: v for k, v in record.items() if k not in DETAIL_ONLY_FIELDS
@@ -138,7 +116,7 @@ def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list
 
     if drop_count:
         logger.warning(
-            "Listing page contract violation: dropped detail-only fields %s from %d DOM records",
+            "Listing page contract violation: dropped detail-only fields %s from %d DOM listing records",
             sorted(all_dropped_fields), drop_count,
         )
 

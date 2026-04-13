@@ -67,6 +67,7 @@ def _sync_selected_variant_root_fields(final_candidates: VariantCandidateRowMap)
         str(selected_row.get("source") or "selected_variant").strip()
         or "selected_variant"
     )
+    inferred_default = "inferred_default" in source
     for field_name in (
         "price",
         "original_price",
@@ -78,6 +79,8 @@ def _sync_selected_variant_root_fields(final_candidates: VariantCandidateRowMap)
     ):
         value = selected_variant.get(field_name)
         if value in (None, "", [], {}):
+            continue
+        if inferred_default and final_candidates.get(field_name):
             continue
         final_candidates[field_name] = [{"value": value, "source": source}]
 
@@ -155,6 +158,7 @@ def _reconcile_variant_bundle(
     )
 
     if variants:
+        inferred_default_selected = False
         matched_index = (
             _find_matching_variant_index(variants, selected_variant)
             if selected_variant
@@ -168,9 +172,17 @@ def _reconcile_variant_bundle(
             variants[matched_index] = merged_selected
             selected_variant = merged_selected
         elif selected_variant and _is_meaningful_variant_record(selected_variant):
-            variants.append(selected_variant)
+            strong_selected_identity = any(
+                selected_variant.get(key) not in (None, "", [], {})
+                for key in ("variant_id", "sku", "availability", "price", "original_price", "image_url")
+            )
+            if strong_selected_identity:
+                variants.append(selected_variant)
+            else:
+                selected_variant = None
         if selected_variant is None:
             selected_variant = _choose_default_variant(variants)
+            inferred_default_selected = selected_variant is not None
 
         raw_axis_values = _collect_variant_axis_values(variants)
         merged_axis_values = _merge_variant_axis_values(
@@ -205,6 +217,8 @@ def _reconcile_variant_bundle(
             selected_row or variants_row,
             fallback="selected_variant",
         )
+        if inferred_default_selected:
+            selected_source = "variants_inferred_default"
         if selected_variant:
             final_candidates["selected_variant"] = [
                 {
@@ -301,7 +315,7 @@ def _normalized_variant_rows_payload(
             continue
         if fingerprint:
             seen.add(fingerprint)
-        reconciled.append(dict(variant))
+        reconciled.append(_sanitize_variant_record(dict(variant)))
     return reconciled
 
 
@@ -313,7 +327,7 @@ def _normalized_selected_variant_payload(
     normalized = normalize_and_validate_value("selected_variant", value, base_url=base_url)
     if not isinstance(normalized, dict) or not _is_meaningful_variant_record(normalized):
         return None
-    return dict(normalized)
+    return _sanitize_variant_record(dict(normalized))
 
 
 def _normalized_variant_axes_payload(
@@ -404,7 +418,7 @@ def _merge_variant_records(
             **secondary["option_values"],
             **primary["option_values"],
         }
-    return merged
+    return _sanitize_variant_record(merged)
 
 
 def _choose_default_variant(
@@ -416,6 +430,44 @@ def _choose_default_variant(
         (variant for variant in variants if variant.get("availability") == "in_stock"),
         variants[0],
     )
+
+def _sanitize_option_values(option_values: object) -> dict[str, str] | None:
+    if not isinstance(option_values, dict):
+        return None
+    sanitized: dict[str, str] = {}
+    for raw_key, raw_value in option_values.items():
+        key_text = _normalized_candidate_text(raw_key)
+        if not key_text:
+            continue
+        if key_text.lower() == "pid":
+            continue
+        normalized_axis = _canonical_structured_key(key_text)
+        cleaned_value = _normalized_candidate_text(raw_value)
+        if (
+            not normalized_axis
+            or normalized_axis in {"id", "pid", "variant_id", "sku", "product_id"}
+            or not cleaned_value
+        ):
+            continue
+        sanitized.setdefault(normalized_axis, cleaned_value)
+    return sanitized or None
+
+
+def _sanitize_variant_record(variant: VariantRecord) -> VariantRecord:
+    sanitized = {
+        key: value
+        for key, value in dict(variant).items()
+        if not str(key or "").strip().lower().startswith("dwvar_")
+    }
+    option_values = _sanitize_option_values(sanitized.get("option_values"))
+    if option_values:
+        sanitized["option_values"] = option_values
+    else:
+        sanitized.pop("option_values", None)
+    for axis_name in ("color", "size", "fittype", "fit_type"):
+        if sanitized.get(axis_name) in (None, "", [], {}) and option_values and option_values.get(axis_name):
+            sanitized[axis_name] = option_values[axis_name]
+    return sanitized
 
 
 def _collect_variant_axis_values(

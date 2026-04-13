@@ -94,67 +94,141 @@ class _CardGroupSample:
     has_multi_elements: bool
 
 
+_PRIMARY_CARD_CONTAINER_SELECTOR = (
+    "ul, ol, div.grid, div.row, div[class*='results'], "
+    "div[class*='product'], div[class*='listing'], div[class*='search'], "
+    "div[class*='tile'], div[class*='card']"
+)
+_FALLBACK_CARD_CONTAINER_SELECTOR = "main, section"
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupedCardCandidates:
+    cards: list[Tag]
+    selector: str
+    score: tuple[float, int]
+
+
 def _auto_detect_cards(soup: BeautifulSoup, surface: str = "") -> tuple[list[Tag], str]:
-    repeated_link_cards, repeated_selector = _detect_repeated_link_card_roots(
-        soup,
+    cards, selector = _detect_repeated_link_card_roots(soup, surface=surface)
+    if cards:
+        return cards, selector
+
+    cleaned_soup = _prepare_card_detection_soup(soup)
+    cards, selector = _detect_cards_from_container_groups(
+        cleaned_soup,
         surface=surface,
     )
-    if repeated_link_cards:
-        return repeated_link_cards, repeated_selector
+    if cards:
+        return cards, selector
 
-    soup_copy = deepcopy(soup)
-    strip_noise_containers(soup_copy)
+    return _detect_cards_from_known_selectors(cleaned_soup, surface=surface)
 
-    best_cards: list[Tag] = []
-    best_selector = ""
-    best_score: tuple[float, int] = (LISTING_CARD_GROUP_MIN_SIGNAL_RATIO, 0)
-    score_group = _card_group_scorer(surface)
 
-    primary_container_selector = (
-        "ul, ol, div.grid, div.row, div[class*='results'], "
-        "div[class*='product'], div[class*='listing'], div[class*='search'], "
-        "div[class*='tile'], div[class*='card']"
-    )
-    fallback_container_selector = "main, section"
+def _prepare_card_detection_soup(soup: BeautifulSoup) -> BeautifulSoup:
+    cleaned_soup = deepcopy(soup)
+    strip_noise_containers(cleaned_soup)
+    return cleaned_soup
 
-    def _scan_containers(containers: list[Tag]) -> None:
-        nonlocal best_cards, best_selector, best_score
-        min_group_size = LISTING_CARD_GROUP_MIN_SIZE
-        for container in containers:
-            children = [c for c in container.children if isinstance(c, Tag)]
-            if len(children) < min_group_size:
-                continue
-            tag_classes: dict[tuple, list[Tag]] = {}
-            for child in children:
-                key = (child.name, tuple(sorted(child.get("class", []))))
-                tag_classes.setdefault(key, []).append(child)
-            for key, group in tag_classes.items():
-                if len(group) < min_group_size:
-                    continue
-                score = score_group(group)
-                if score > best_score:
-                    best_cards = group
-                    best_score = score
-                    classes = ".".join(key[1]) if key[1] else ""
-                    best_selector = f"{key[0]}.{classes}" if classes else key[0]
 
-    _scan_containers(soup_copy.select(primary_container_selector))
-    if not best_cards:
-        _scan_containers(soup_copy.select(fallback_container_selector))
-
-    if best_cards:
-        return best_cards, best_selector
-
+def _detect_cards_from_container_groups(
+    soup: BeautifulSoup,
+    *,
+    surface: str,
+) -> tuple[list[Tag], str]:
     selectors = (
-        CARD_SELECTORS_COMMERCE
-        if "commerce" in surface or "ecommerce" in surface
-        else CARD_SELECTORS_JOBS
+        _PRIMARY_CARD_CONTAINER_SELECTOR,
+        _FALLBACK_CARD_CONTAINER_SELECTOR,
+    )
+    best_match = _GroupedCardCandidates(
+        cards=[],
+        selector="",
+        score=(LISTING_CARD_GROUP_MIN_SIGNAL_RATIO, 0),
     )
     for selector in selectors:
-        found = soup_copy.select(selector)
+        best_match = _select_best_grouped_cards(
+            soup.select(selector),
+            score_group=_card_group_scorer(surface),
+            best_match=best_match,
+        )
+        if best_match.cards:
+            return best_match.cards, best_match.selector
+    return [], ""
+
+
+def _select_best_grouped_cards(
+    containers: list[Tag],
+    *,
+    score_group: Callable[[list[Tag]], tuple[float, int]],
+    best_match: _GroupedCardCandidates,
+) -> _GroupedCardCandidates:
+    current_best = best_match
+    for container in containers:
+        group = _best_container_child_group(container, score_group=score_group)
+        if group.score > current_best.score:
+            current_best = group
+    return current_best
+
+
+def _best_container_child_group(
+    container: Tag,
+    *,
+    score_group: Callable[[list[Tag]], tuple[float, int]],
+) -> _GroupedCardCandidates:
+    children = [child for child in container.children if isinstance(child, Tag)]
+    if len(children) < LISTING_CARD_GROUP_MIN_SIZE:
+        return _GroupedCardCandidates(cards=[], selector="", score=(0.0, 0))
+
+    best_match = _GroupedCardCandidates(cards=[], selector="", score=(0.0, 0))
+    for signature, group in _group_children_by_signature(children).items():
+        if len(group) < LISTING_CARD_GROUP_MIN_SIZE:
+            continue
+        score = score_group(group)
+        if score > best_match.score:
+            best_match = _GroupedCardCandidates(
+                cards=group,
+                selector=_card_group_selector(signature),
+                score=score,
+            )
+    return best_match
+
+
+def _group_children_by_signature(
+    children: list[Tag],
+) -> dict[tuple[str, tuple[str, ...]], list[Tag]]:
+    grouped_children: dict[tuple[str, tuple[str, ...]], list[Tag]] = {}
+    for child in children:
+        signature = (
+            child.name,
+            tuple(sorted(child.get("class", []))),
+        )
+        grouped_children.setdefault(signature, []).append(child)
+    return grouped_children
+
+
+def _card_group_selector(signature: tuple[str, tuple[str, ...]]) -> str:
+    tag_name, class_names = signature
+    class_selector = ".".join(class_names)
+    return f"{tag_name}.{class_selector}" if class_selector else tag_name
+
+
+def _detect_cards_from_known_selectors(
+    soup: BeautifulSoup,
+    *,
+    surface: str,
+) -> tuple[list[Tag], str]:
+    for selector in _surface_card_selectors(surface):
+        found = soup.select(selector)
         if len(found) >= LISTING_CARD_GROUP_MIN_SIZE:
             return found, selector
-    return best_cards, best_selector
+    return [], ""
+
+
+def _surface_card_selectors(surface: str) -> list[str]:
+    normalized_surface = str(surface or "").lower()
+    if "commerce" in normalized_surface or "ecommerce" in normalized_surface:
+        return CARD_SELECTORS_COMMERCE
+    return CARD_SELECTORS_JOBS
 
 
 def _card_group_score(group: list[Tag], surface: str = "") -> tuple[float, int]:
@@ -195,7 +269,7 @@ def _card_group_sample(el: Tag) -> _CardGroupSample:
         has_link=bool(el.select_one("a[href]")),
         has_image=bool(el.select_one("img, picture, [style*='background-image']")),
         has_price=bool(
-            el.select_one("[itemprop='price'], .price, [class*='price'], .amount")
+            el.select_one("[itemprop='price'], .price, .product-price, .a-price .a-offscreen, .s-item__price, .amount, [data-testid*='price']")
         ),
         has_heading=bool(el.select_one("h1, h2, h3, h4, h5, [class*='title' i]")),
         has_substantial_text=len(text) > LISTING_CARD_SUBSTANTIAL_TEXT_MIN_CHARS,
@@ -413,7 +487,7 @@ def _extract_card_common_metadata(card: Tag) -> dict[str, str]:
 
     review_count_text = _extract_card_text_value(
         card,
-        "[itemprop='reviewCount'], [aria-label*='review'], .review-count, .count",
+        "[itemprop='reviewCount'], [aria-label*='review'], .review-count, .reviewCount",
     )
     if review_count_text:
         record["review_count"] = review_count_text
@@ -456,22 +530,38 @@ def _extract_ecommerce_card_fields(
     record: dict[str, object],
 ) -> dict[str, str]:
     patch: dict[str, str] = {}
-    color_text = _extract_card_color(card, card_text_lines)
-    if color_text:
-        patch["color"] = color_text
-
-    size_text = _extract_card_size(card_text_lines)
-    if size_text:
-        patch["size"] = size_text
-
-    dimensions_text = _match_dimensions_line(card_text_lines)
-    if dimensions_text:
-        patch["dimensions"] = dimensions_text
-    if record.get("price") and not record.get("currency"):
-        inferred_currency = _infer_currency_from_page_url(page_url)
-        if inferred_currency:
-            patch["currency"] = inferred_currency
+    for field_name, value in _iter_ecommerce_card_field_values(
+        card,
+        card_text_lines,
+        page_url=page_url,
+        record=record,
+    ):
+        patch[field_name] = value
     return patch
+
+
+def _iter_ecommerce_card_field_values(
+    card: Tag,
+    card_text_lines: list[str],
+    *,
+    page_url: str,
+    record: dict[str, object],
+) -> list[tuple[str, str]]:
+    field_values = [
+        ("color", _extract_card_color(card, card_text_lines)),
+        ("size", _extract_card_size(card_text_lines)),
+        ("dimensions", _match_dimensions_line(card_text_lines)),
+    ]
+    inferred_currency = _extract_listing_currency(page_url=page_url, record=record)
+    if inferred_currency:
+        field_values.append(("currency", inferred_currency))
+    return [(field_name, value) for field_name, value in field_values if value]
+
+
+def _extract_listing_currency(*, page_url: str, record: dict[str, object]) -> str:
+    if not record.get("price") or record.get("currency"):
+        return ""
+    return _infer_currency_from_page_url(page_url)
 
 
 def _finalize_job_card_record(record: dict) -> dict:
@@ -485,27 +575,83 @@ def _finalize_job_card_record(record: dict) -> dict:
 
 def _extract_ecommerce_price_fields(card: Tag) -> dict[str, str]:
     record: dict[str, str] = {}
-    price_el = card.select_one(
-        "[itemprop='price'], .price, .product-price, .a-price .a-offscreen, "
-        ".s-item__price, span[data-price], .amount, [class*='price']"
-    )
-    if price_el:
-        raw_price = price_el.get("content") or price_el.get_text(" ", strip=True)
-        price = _clean_price_text(raw_price)
-        if price is not None:
-            record["price"] = price
-    original_price_el = card.select_one(
-        ".original-price, .compare-price, .was-price, .strike, s, del, [data-original-price]"
-    )
-    if original_price_el:
-        raw_op = original_price_el.get("content") or original_price_el.get_text(
-            " ",
-            strip=True,
-        )
-        original_price = _clean_price_text(raw_op)
-        if original_price is not None:
-            record["original_price"] = original_price
+    for selector in (
+        "[itemprop='price']",
+        "[data-testid*='current'][data-testid*='price'], [data-test*='current'][data-test*='price'], [data-qa*='current'][data-qa*='price']",
+        "[data-testid*='price']:not([data-testid*='was']):not([data-testid*='original']):not([data-testid*='old']):not([data-testid*='compare']), [data-test*='price']:not([data-test*='was']):not([data-test*='original']):not([data-test*='old']):not([data-test*='compare']), [data-qa*='price']:not([data-qa*='was']):not([data-qa*='original']):not([data-qa*='old']):not([data-qa*='compare'])",
+        ".price:not(.was-price):not(.original-price):not(.compare-price), .product-price, .a-price .a-offscreen, .s-item__price, span[data-price], .amount",
+    ):
+        for price_el in card.select(selector):
+            if _price_node_looks_non_current(price_el):
+                continue
+            raw_price = price_el.get("content") or price_el.get_text(" ", strip=True)
+            price = _clean_price_text(raw_price)
+            if price is not None:
+                record["price"] = price
+                break
+        if record.get("price"):
+            break
+    for selector in (
+        "[data-testid*='was'][data-testid*='price'], [data-testid*='original'][data-testid*='price'], [data-testid*='compare'][data-testid*='price'], [data-test*='was'][data-test*='price'], [data-test*='original'][data-test*='price'], [data-test*='compare'][data-test*='price'], [data-qa*='was'][data-qa*='price'], [data-qa*='original'][data-qa*='price'], [data-qa*='compare'][data-qa*='price']",
+        ".original-price, .compare-price, .was-price, [data-original-price]",
+        "s, del, .strike",
+    ):
+        for original_price_el in card.select(selector):
+            if selector == "s, del, .strike" and not _looks_like_original_price_node(
+                original_price_el
+            ):
+                continue
+            raw_op = original_price_el.get("content") or original_price_el.get_text(" ", strip=True)
+            original_price = _clean_price_text(raw_op)
+            if original_price is not None:
+                record["original_price"] = original_price
+                break
+        if record.get("original_price"):
+            break
     return record
+
+
+def _price_node_looks_non_current(node: Tag) -> bool:
+    if node.name in {"s", "del"}:
+        return True
+    for current in [node, *node.parents]:
+        if not isinstance(current, Tag):
+            continue
+        classes = " ".join(current.get("class", []))
+        attrs = " ".join(
+            str(value)
+            for key, value in current.attrs.items()
+            if key.startswith("data-") or key in {"class", "aria-label"}
+        )
+        lowered = f"{classes} {attrs}".lower()
+        if any(token in lowered for token in ("was-price", "original-price", "compare-price", "old-price")):
+            return True
+    return False
+
+
+def _looks_like_original_price_node(node: Tag) -> bool:
+    raw_text = node.get("content") or node.get_text(" ", strip=True)
+    if not _text_contains_price_token(raw_text):
+        return False
+    if _price_node_looks_non_current(node):
+        return True
+    context = " ".join(
+        str(value)
+        for current in [node, *node.parents]
+        if isinstance(current, Tag)
+        for value in (
+            " ".join(current.get("class", [])),
+            current.get("aria-label", ""),
+        )
+    ).lower()
+    return any(token in context for token in ("was", "original", "compare", "old"))
+
+
+def _text_contains_price_token(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(_PRICE_WITH_CURRENCY_RE.search(text) or _PRICE_EXTRACT_RE.search(text))
 
 
 def _extract_card_title(card: Tag) -> dict[str, str]:
@@ -700,11 +846,11 @@ def _clean_price_text(raw: str) -> str | None:
             len(raw),
         )
         return None
-    match = _PRICE_WITH_CURRENCY_RE.search(raw)
-    if match:
-        return match.group(0).strip()
-    match = _PRICE_EXTRACT_RE.search(raw)
-    return match.group(0).strip() if match else raw
+    matches = list(_PRICE_WITH_CURRENCY_RE.finditer(raw))
+    if matches:
+        return matches[-1].group(0).strip()
+    matches = list(_PRICE_EXTRACT_RE.finditer(raw))
+    return matches[-1].group(0).strip() if matches else raw
 
 
 def _card_text_lines(card: Tag) -> list[str]:

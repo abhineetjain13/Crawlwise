@@ -103,7 +103,7 @@ export default function AdminUsersPage() {
               <tbody>
                 {users.map((user) => (
                   <tr key={user.id}>
-                    <td className="text-data-strong">{user.email}</td>
+                    <td className="text-sm font-medium leading-[1.45] text-foreground">{user.email}</td>
                     <td>
                       <select
                         value={user.role}
@@ -125,13 +125,13 @@ export default function AdminUsersPage() {
                         {user.is_active ? "active" : "inactive"}
                       </Badge>
                     </td>
-                    <td className="text-body-sm text-muted">{formatDate(user.created_at)}</td>
+                    <td className="text-sm leading-[1.55] text-muted">{formatDate(user.created_at)}</td>
                     <td>
                       <button
                         type="button"
                         disabled={pendingUserId === user.id}
                         onClick={() => void updateUser(user.id, { is_active: !user.is_active })}
-                        className="focus-ring h-8 rounded-[var(--radius-md)] border border-border bg-transparent px-3 text-link-ui text-foreground transition hover:bg-background-elevated disabled:opacity-40"
+                        className="focus-ring h-8 rounded-[var(--radius-md)] border border-border bg-transparent px-3 text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-foreground transition hover:bg-background-elevated disabled:opacity-40"
                       >
                         {user.is_active ? "Deactivate" : "Reactivate"}
                       </button>
@@ -151,9 +151,9 @@ export default function AdminUsersPage() {
 
 function MetricCard({ label, value }: Readonly<{ label: string; value: number }>) {
   return (
-    <div className="surface-panel p-4">
-      <div className="label-caps">{label}</div>
-      <div className="mt-1 text-title-md text-primary">{value}</div>
+    <div className="bg-panel rounded-xl shadow-card backdrop-blur-md p-4">
+      <div className="text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</div>
+      <div className="mt-1 text-xl font-bold tracking-tighter text-primary">{value}</div>
     </div>
   );
 }

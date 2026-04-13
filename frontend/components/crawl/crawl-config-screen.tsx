@@ -328,7 +328,7 @@ export function CrawlConfigScreen({
 
             {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
               <label className="grid gap-1.5">
-                <span className="label-caps">URLs (one per line)</span>
+                <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">URLs (one per line)</span>
                 <div className="relative">
                   <Textarea
                     value={bulkUrls}
@@ -346,7 +346,7 @@ export function CrawlConfigScreen({
               </label>
             ) : crawlTab === "pdp" && pdpMode === "csv" ? (
               <label className="grid gap-1.5">
-                <span className="label-caps">CSV File</span>
+                <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">CSV File</span>
                 <Input
                   key="csv-file-input"
                   type="file"
@@ -358,7 +358,7 @@ export function CrawlConfigScreen({
               </label>
             ) : (
               <label className="grid gap-1.5">
-                <span className="label-caps">Target URL</span>
+                <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Target URL</span>
                 <Input
                   key="target-url-input"
                   value={targetUrl}
@@ -409,7 +409,7 @@ export function CrawlConfigScreen({
                   />
                 ))
               ) : (
-                <div className="subtle-panel border-dashed px-4 py-6 text-body-sm text-muted">
+                <div className="bg-background-alt rounded-lg shadow-card border-dashed px-4 py-6 text-sm leading-[1.55] text-muted">
                   No manual fields yet.
                 </div>
               )}
@@ -429,7 +429,7 @@ export function CrawlConfigScreen({
             <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
             <div className="flex-1 space-y-4">
               <div className="space-y-2 px-1">
-                <div className="label-caps">Domain</div>
+                <div className="text-[11px] font-semibold tracking-wide text-muted uppercase">Domain</div>
                 <TabBar
                   value={crawlDomain}
                   compact
@@ -461,7 +461,7 @@ export function CrawlConfigScreen({
                 >
                   <div className="space-y-4 px-1 py-3">
                     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
-                      <div className="text-data-strong text-secondary">Mode</div>
+                      <div className="text-sm font-medium leading-[1.45] text-foreground text-secondary">Mode</div>
                       <select
                         aria-label="Advanced crawl mode"
                         value={advancedMode}
@@ -537,12 +537,12 @@ export function CrawlConfigScreen({
                   onChange={setProxyEnabled}
                 >
                   <div className="space-y-3 px-1 py-3">
-                    <div className="label-caps">Proxy Pool</div>
+                    <div className="text-[11px] font-semibold tracking-wide text-muted uppercase">Proxy Pool</div>
                     <Textarea
                       value={proxyInput}
                       onChange={(event) => setProxyInput(event.target.value)}
                       placeholder={"host:port\nhost:port:user:pass"}
-                      className="min-h-[104px] text-mono-body"
+                      className="min-h-[104px] font-mono text-sm leading-[1.55]"
                       aria-label="Proxy pool input"
                     />
                   </div>

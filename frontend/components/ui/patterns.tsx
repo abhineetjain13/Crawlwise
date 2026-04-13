@@ -76,12 +76,12 @@ export function SectionHeader({
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-center gap-2">
           {Icon && <Icon className="size-3.5 shrink-0 text-muted" />}
-          <h2 className="text-section-title text-primary">
+          <h2 className="text-base font-semibold leading-snug tracking-normal text-primary">
             {title}
           </h2>
         </div>
         {description ? (
-          <div className="w-full text-caption text-muted">{description}</div>
+          <div className="w-full text-xs leading-[1.45] text-muted">{description}</div>
         ) : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
@@ -135,7 +135,7 @@ export function TabBar({
             aria-pressed={value === option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-link-ui font-bold transition-all",
+              "relative -mb-[2px] inline-flex shrink-0 items-center justify-center whitespace-nowrap text-xs leading-[1.4] font-bold transition-all",
               padX,
               value === option.value
                 ? "border-b-[3px] border-[var(--accent)] text-accent"
@@ -168,7 +168,7 @@ export function TabBar({
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "relative z-10 inline-flex min-w-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-meta font-bold transition-all duration-200",
+            "relative z-10 inline-flex min-w-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-[11px] leading-[1.45] font-bold transition-all duration-200",
             padX,
             value === option.value
               ? "text-white"
@@ -195,7 +195,7 @@ export function ProgressBar({ percent }: Readonly<{ percent: number }>) {
           style={{ width: `${Math.min(percent, 100)}%` }}
         />
       </div>
-      <div className="text-meta tabular-nums text-muted">{percent}%</div>
+      <div className="text-[11px] leading-[1.45] tabular-nums text-muted">{percent}%</div>
     </div>
   );
 }
@@ -215,10 +215,10 @@ export function EmptyPanel({
   description,
 }: Readonly<{ title: string; description: string }>) {
   return (
-    <div className="grid min-h-32 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--divider)] bg-[var(--subtle-panel-bg)] text-center px-6 py-8">
+    <div className="grid min-h-32 place-items-center rounded-[var(--radius-lg)] bg-[var(--subtle-panel-bg)] text-center px-6 py-8">
       <div className="space-y-1">
-        <p className="text-body-sm font-medium text-primary">{title}</p>
-        <p className="text-caption text-muted">{description}</p>
+        <p className="text-sm leading-[1.55] font-medium text-primary">{title}</p>
+        <p className="text-xs leading-[1.45] text-muted">{description}</p>
       </div>
     </div>
   );
@@ -261,7 +261,7 @@ export function SkeletonRows({
 /* ─── MetricSkeleton ─────────────────────────────────────────────────────── */
 export function MetricSkeleton() {
   return (
-    <div className="surface-panel stat-card space-y-2 p-4">
+    <div className="bg-panel rounded-xl shadow-card backdrop-blur-md stat-card space-y-2 p-4">
       <Skeleton className="h-3 w-20" />
       <Skeleton className="h-9 w-28" />
       <Skeleton className="h-3 w-16" />
@@ -277,7 +277,7 @@ export function Divider({ className }: Readonly<{ className?: string }>) {
 /* ─── InlineCode ─────────────────────────────────────────────────────────── */
 export function InlineCode({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <code className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-meta font-mono text-secondary">
+    <code className="rounded-[3px] bg-[var(--bg-elevated)] px-1.5 py-0.5 text-[11px] leading-[1.45] font-mono text-secondary">
       {children}
     </code>
   );
@@ -351,7 +351,7 @@ export function RunWorkspaceShell({
 }>) {
   return (
     <div className="space-y-4">
-      <div className="surface-elevated flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="bg-panel rounded-lg shadow-elevated backdrop-blur-md flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0 flex-1">{header}</div>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
@@ -386,11 +386,9 @@ export function RunSummaryChips({
       {chips.map((chip) => (
         <span
           key={chip.label}
-          className="inline-flex items-center gap-1.5 rounded-full border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-2.5 py-1 text-caption text-muted"
+          className="inline-flex items-center gap-1.5 rounded-full border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-2.5 py-1 text-xs leading-[1.45] text-muted"
         >
-          <span className="text-data-strong text-foreground">{chip.label}:</span>
-          <span>{chip.value}</span>
-        </span>
+          <span className="text-sm font-medium leading-[1.45] text-foreground">{chip.label}:</span>        </span>
       ))}
     </div>
   );

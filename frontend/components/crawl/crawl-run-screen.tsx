@@ -578,7 +578,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
         />
         <Card className="space-y-3 px-6 py-8">
           <SectionHeader title="Unable to Load Crawl" description="The run workspace could not be restored." />
-          <div className="text-body-sm text-danger">
+          <div className="text-sm leading-[1.55] text-danger">
             {runQuery.error instanceof Error ? runQuery.error.message : "Unknown crawl loading error."}
           </div>
         </Card>
@@ -591,7 +591,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       <PageHeader
         title={run?.url ? (
           <span className="flex items-center gap-1.5">
-            Run Details: <a href={run.url} target="_blank" rel="noreferrer" className="text-mono-data text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
+            Run Details: <a href={run.url} target="_blank" rel="noreferrer" className="font-mono text-xs leading-[1.5] text-accent underline-offset-2 hover:underline">{getDomain(run.url)}</a>
           </span>
         ) : "Crawl Results"}
         actions={
@@ -605,7 +605,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       {showRunLoadingState ? (
         <Card className="space-y-3 px-6 py-8">
           <SectionHeader title="Loading Crawl" description="Fetching run details and restoring the workspace." />
-          <div className="text-body-sm text-muted">Run #{runId} is loading.</div>
+          <div className="text-sm leading-[1.55] text-muted">Run #{runId} is loading.</div>
         </Card>
       ) : null}
 
@@ -693,7 +693,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         scrollViewportToBottom(logViewportRef);
                         setLiveJumpAvailable(false);
                       }}
-                      className="subtle-panel inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-caption"
+                      className="bg-background-alt rounded-lg shadow-card inline-flex items-center gap-1 px-2.5 py-1.5 text-xs leading-[1.45]"
                     >
                       <ChevronsDown className="size-3.5" aria-hidden="true" />
                       Jump to Latest
@@ -723,12 +723,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   href={run.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="block truncate text-link-ui text-accent underline-offset-2 hover:underline"
+                  className="block truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover underline-offset-2 hover:underline"
                 >
                   {run.url}
                 </a>
               ) : (
-                <p className="text-body-sm text-muted">Waiting for completed run data.</p>
+                <p className="text-sm leading-[1.55] text-muted">Waiting for completed run data.</p>
               )
             }
             actions={
@@ -794,7 +794,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           }
                         />
                         {hasMoreTableRecords ? (
-                          <div className="subtle-panel flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-caption text-muted">
+                          <div className="bg-background-alt rounded-lg shadow-card flex items-center justify-between px-3 py-2 text-xs leading-[1.45] text-muted">
                             <span>
                               Showing {tableRecords.length} of {tableTotal} records
                             </span>
@@ -815,7 +815,11 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         ) : null}
                       </div>
                     ) : (
-                      <DataRegionEmpty title="No records captured yet" description="Records will appear here once extraction returns rows." className="px-0" />
+                      <DataRegionEmpty
+                        title="No records captured yet"
+                        description="Records will appear here once extraction returns rows."
+                        className="px-0"
+                      />
                     )}
                   </div>
                 ) : null}
@@ -832,7 +836,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       {recordsJson}
                     </pre>
                     {hasMoreJsonRecords ? (
-                      <div className="subtle-panel mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-caption text-muted">
+                      <div className="bg-background-alt rounded-lg shadow-card mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-xs leading-[1.45] text-muted">
                         <span>
                           JSON previewing {jsonRecords.length} of {recordsTotal} records
                         </span>
@@ -868,13 +872,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       </Button>
                     </div>
                     {markdownQuery.isLoading && !markdown ? (
-                      <div className="subtle-panel space-y-2 px-3 pb-3 pt-12">
+                      <div className="bg-background-alt rounded-lg shadow-card space-y-2 px-3 pb-3 pt-12">
                         {Array.from({ length: 8 }, (_, index) => (
                           <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]" />
                         ))}
                       </div>
                     ) : markdown ? (
-                      <div className="subtle-panel min-h-[55vh] max-h-[72vh] overflow-y-auto px-3 pb-3 pt-12">
+                      <div className="bg-background-alt rounded-lg shadow-card min-h-[55vh] max-h-[72vh] overflow-y-auto px-3 pb-3 pt-12">
                         <article className="markdown-document max-w-none">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
@@ -892,7 +896,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         </article>
                       </div>
                     ) : (
-                      <div className="subtle-panel grid min-h-40 place-items-center border-dashed text-body-sm text-muted">
+                      <div className="bg-background-alt rounded-lg shadow-card grid min-h-40 place-items-center border-dashed text-sm leading-[1.55] text-muted">
                         No markdown is available for this run.
                       </div>
                     )}

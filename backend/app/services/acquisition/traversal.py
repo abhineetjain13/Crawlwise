@@ -86,9 +86,12 @@ _JS_EXTRACT_CARDS = """
         }
     }
     // Container signature for DOM-diff fallback when selectors match nothing.
-    const container = document.querySelector(
-        'main, [role="main"], [role="feed"], .products, .product-grid, .results, .search-results'
-    ) || document.body;
+    let container = document.querySelector(
+        '[data-testid*="grid"], [data-test-id*="grid"], [class*="product-list"], [class*="product-grid"], ul.products, .products, .product-grid, .results, .search-results'
+    );
+    if (!container) {
+        container = document.querySelector('main, [role="main"], [role="feed"]') || document.body;
+    }
     const childCount = container ? container.children.length : 0;
     const sig = container ? (container.tagName + ':' + childCount) : '';
     return {cards, container_signature: sig};
@@ -100,9 +103,12 @@ _JS_EXTRACT_CARDS = """
 # child signatures already seen (first 200 chars of outerHTML).
 _JS_CONTAINER_DIFF = """
 (knownSigs) => {
-    const container = document.querySelector(
-        'main, [role="main"], [role="feed"], .products, .product-grid, .results, .search-results'
-    ) || document.body;
+    let container = document.querySelector(
+        '[data-testid*="grid"], [data-test-id*="grid"], [class*="product-list"], [class*="product-grid"], ul.products, .products, .product-grid, .results, .search-results'
+    );
+    if (!container) {
+        container = document.querySelector('main, [role="main"], [role="feed"]') || document.body;
+    }
     if (!container) return [];
     const news = [];
     for (const child of container.children) {
@@ -630,6 +636,7 @@ class ScrollStrategy(_TraversalStrategyBase):
                 current_page, f"scroll-{index}"
             ),
             checkpoint=self.context.checkpoint,
+            progress_logger=self.context.progress_logger,
         )
         await self._fragments.capture_fragment(page, "scroll-final")
         summary["pages_collected"] = len(self._fragments.collected_fragments)
@@ -665,6 +672,7 @@ class LoadMoreStrategy(_TraversalStrategyBase):
                 current_page, f"load-more-{index}"
             ),
             checkpoint=self.context.checkpoint,
+            progress_logger=self.context.progress_logger,
         )
         await self._fragments.capture_fragment(page, "load-more-final")
         summary["pages_collected"] = len(self._fragments.collected_fragments)
@@ -747,7 +755,6 @@ class AutoTraversalStrategy(_TraversalStrategyBase):
         if next_page_signal:
             await _maybe_log_progress("auto:paginate_first next_page_signal_detected")
             await self._fragments.capture_initial_fragment(page, "auto-initial")
-            initial_auto_html = await self._fragments.render_html(page)
             infinite_scroll_signals = await _detect_infinite_scroll_signals(page)
             if infinite_scroll_signals.get("is_likely_infinite_scroll"):
                 logger.info(
@@ -756,29 +763,15 @@ class AutoTraversalStrategy(_TraversalStrategyBase):
                     "signals=%s",
                     infinite_scroll_signals,
                 )
+                # Fall through to scroll logic below
+            else:
                 return self._log_and_return(
-                    TraversalResult(
-                        html=initial_auto_html,
-                        summary={
-                            "mode": "auto",
-                            "attempted": True,
-                            "steps": [],
-                            "pages_collected": len(self._fragments.collected_fragments),
-                            "captured_fragment_bytes": self._fragments.captured_fragment_bytes,
-                            "decision": "hybrid_scroll_preferred",
-                            "stop_reason": "infinite_scroll_detected_over_seo_pagination",
-                            "infinite_scroll_signals": infinite_scroll_signals,
-                        },
+                    await _paginate_with_decision(
+                        decision="paginate_first",
+                        steps=[],
                     )
                 )
-            return self._log_and_return(
-                await _paginate_with_decision(
-                    decision="paginate_first",
-                    steps=[],
-                )
-            )
 
-        await self._fragments.capture_initial_fragment(page, "auto-initial")
         scroll_summary = await scroll_to_bottom(
             page,
             self.context.max_scrolls,
@@ -790,6 +783,7 @@ class AutoTraversalStrategy(_TraversalStrategyBase):
                 current_page, f"auto-scroll-{index}"
             ),
             checkpoint=self.context.checkpoint,
+            progress_logger=self.context.progress_logger,
         )
         progress_steps: list[dict[str, object]] = [scroll_summary]
         if await self.context.has_load_more_control(page, self.context.config):
@@ -804,6 +798,7 @@ class AutoTraversalStrategy(_TraversalStrategyBase):
                     current_page, f"auto-load-more-{index}"
                 ),
                 checkpoint=self.context.checkpoint,
+                progress_logger=self.context.progress_logger,
             )
             progress_steps.append(load_more_summary)
 
@@ -1468,6 +1463,7 @@ async def scroll_to_bottom(
     snapshot_listing_page_metrics: Callable[..., Awaitable[dict[str, object]]],
     capture_dom_fragment: Callable[..., Awaitable[None]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    progress_logger: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, object]:
     config = _resolved_config(config)
     prev_height = 0
@@ -1600,6 +1596,8 @@ async def scroll_to_bottom(
             next_height,
             not progressed,
         )
+        if progress_logger is not None:
+            await progress_logger(f"scroll:iteration index={index + 1} height_before={current_height} height_after={next_height} progressed={progressed}")
         steps.append(
             {
                 "action": "scroll",
@@ -1756,6 +1754,7 @@ async def click_load_more(
     snapshot_listing_page_metrics: Callable[..., Awaitable[dict[str, object]]],
     capture_dom_fragment: Callable[..., Awaitable[None]] | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
+    progress_logger: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, object]:
     config = _resolved_config(config)
     steps: list[dict[str, object]] = []
@@ -1869,6 +1868,8 @@ async def click_load_more(
                             "progressed": progressed,
                         }
                     )
+                    if progress_logger is not None:
+                        await progress_logger(f"load_more:click index={index + 1} selector={selector} progressed={progressed}")
                     clicked = True
                     if not progressed:
                         stop_reason = "no_progress_after_click"

@@ -54,7 +54,6 @@ from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.cookie_store import (
     load_cookies_for_context,
     load_session_cookies_for_context,
-    save_cookies_payload,
     save_session_cookies_payload,
 )
 from app.services.acquisition.traversal import (
@@ -1334,10 +1333,6 @@ async def _load_cookies(
             cookies = load_session_cookies_for_context(domain, session_context.identity_key)
             if cookies:
                 session_context.merge_playwright_cookies(cookies)
-        if not cookies:
-            cookies = load_cookies_for_context(domain)
-            if cookies:
-                session_context.merge_playwright_cookies(cookies)
     else:
         cookies = load_cookies_for_context(domain)
     if not cookies:
@@ -1375,7 +1370,10 @@ async def _save_cookies(
             session_identity=session_context.identity_key,
         )
         return
-    await asyncio.to_thread(save_cookies_payload, cookies, domain=domain)
+    logger.debug(
+        "Skipping cookie persistence for non-session browser context on %s",
+        domain,
+    )
 
 
 def _check_memory_available() -> None:

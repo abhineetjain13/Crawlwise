@@ -62,6 +62,15 @@ _LISTING_HOST_TOKEN_STOPWORDS = {
     "edge",
     "shop",
     "store",
+    "fashion",
+    "brand",
+    "retail",
+    "market",
+    "media",
+    "hub",
+    "assets",
+    "cloud",
+    "content",
     "merchant",
     "com",
     "net",
@@ -355,7 +364,7 @@ def filter_relevant_network_record_set(
     if is_social_url(payload_url):
         return []
     if _hosts_look_related(payload_url, page_url):
-        return records
+        return [r for r in records if is_meaningful_listing_record(r, surface=surface)]
 
     relevant_records = [
         record
@@ -647,7 +656,7 @@ def _hosts_look_related(left: str, right: str) -> bool:
         return True
     left_tokens = _listing_host_tokens(left_host)
     right_tokens = _listing_host_tokens(right_host)
-    return len(left_tokens & right_tokens) >= 2
+    return len(left_tokens & right_tokens) >= 1
 
 
 def _listing_host_tokens(host: str) -> set[str]:

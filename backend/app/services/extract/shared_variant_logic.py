@@ -1,34 +1,27 @@
 from __future__ import annotations
 
+import re
+
+from app.services.config.extraction_rules import VARIANT_AXIS_ALIASES
 from app.services.requested_field_policy import normalize_requested_field
 
 VARIANT_ALWAYS_SELECTABLE_AXES = frozenset(
     {"color", "size", "waist", "width", "length", "inseam"}
 )
 
-_VARIANT_AXIS_ALIASES = {
-    "สี": "color",
-    "สีสินค้า": "color",
-    "สีของสินค้า": "color",
-    "ขนาด": "size",
-    "ไซซ์": "size",
-    "ไซส์": "size",
-}
-
 
 def normalized_variant_axis_key(value: object) -> str:
     text = " ".join(str(value or "").split()).strip().lower()
     if not text:
         return ""
-    if text in _VARIANT_AXIS_ALIASES:
-        return _VARIANT_AXIS_ALIASES[text]
-    if text in {"color", "colour", "colors", "colours"}:
-        return "color"
-    if text in {"size", "sizes", "dimension", "dimensions"}:
-        return "size"
+    match = re.match(r"^dwvar_[a-z0-9-]+_(.+)$", text)
+    if match:
+        text = match.group(1).strip()
+    if text in VARIANT_AXIS_ALIASES:
+        return VARIANT_AXIS_ALIASES[text]
     normalized = normalize_requested_field(text)
-    if normalized in {"dimension", "dimensions"}:
-        return "size"
+    if normalized in VARIANT_AXIS_ALIASES:
+        return VARIANT_AXIS_ALIASES[normalized]
     return normalized or text
 
 

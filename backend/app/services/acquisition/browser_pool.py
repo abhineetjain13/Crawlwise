@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
+from uuid import uuid4
 
 import psutil
 from playwright.async_api import Error as PlaywrightError
@@ -15,13 +19,27 @@ _BROWSER_POOL_MAX_SIZE = 6
 _BROWSER_POOL_IDLE_TTL_SECONDS = 300
 _BROWSER_POOL_HEALTHCHECK_INTERVAL_SECONDS = 60
 _BROWSER_POOL_MAX_CONTEXTS_PER_BROWSER = 4
+_BROWSER_PROCESS_NAME_TOKENS = ("chrom", "firefox", "webkit")
+_BROWSER_PROCESS_REGISTRY_DIR = (
+    Path(tempfile.gettempdir()) / "pre-poc-ai-crawler-browser-processes"
+)
 
 
 @dataclass
 class _PooledBrowser:
     browser: object
     last_used_monotonic: float
+    process_records: tuple[str, ...] = ()
     active_contexts: int = 0
+
+
+@dataclass(frozen=True)
+class _BrowserProcessRecord:
+    record_id: str
+    owner_pid: int
+    owner_create_time: float
+    browser_pid: int
+    browser_create_time: float
 
 
 class BrowserPool:
@@ -128,6 +146,229 @@ async def _close_browser_safe(browser: object) -> None:
         logger.debug("Failed to close pooled browser", exc_info=True)
     except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
         logger.debug("Unexpected pooled browser close failure", exc_info=True)
+
+
+def _is_browser_process_name(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    return any(token in normalized for token in _BROWSER_PROCESS_NAME_TOKENS)
+
+
+def _safe_process_create_time(process: psutil.Process) -> float | None:
+    try:
+        return float(process.create_time())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        return None
+
+
+def _process_matches_create_time(
+    pid: int,
+    expected_create_time: float,
+) -> psutil.Process | None:
+    try:
+        process = psutil.Process(pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        return None
+    create_time = _safe_process_create_time(process)
+    if create_time is None:
+        return None
+    if abs(create_time - float(expected_create_time)) > 1e-6:
+        return None
+    return process
+
+
+def _browser_process_registry_dir() -> Path:
+    _BROWSER_PROCESS_REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+    return _BROWSER_PROCESS_REGISTRY_DIR
+
+
+def _browser_process_record_path(record_id: str) -> Path:
+    return _browser_process_registry_dir() / f"{record_id}.json"
+
+
+def _iter_browser_process_record_paths() -> list[Path]:
+    try:
+        return sorted(_browser_process_registry_dir().glob("*.json"))
+    except OSError:
+        return []
+
+
+def _read_browser_process_record(path: Path) -> _BrowserProcessRecord | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    try:
+        return _BrowserProcessRecord(
+            record_id=str(payload["record_id"]),
+            owner_pid=int(payload["owner_pid"]),
+            owner_create_time=float(payload["owner_create_time"]),
+            browser_pid=int(payload["browser_pid"]),
+            browser_create_time=float(payload["browser_create_time"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _write_browser_process_record(record: _BrowserProcessRecord) -> None:
+    path = _browser_process_record_path(record.record_id)
+    tmp_path = path.with_suffix(".tmp")
+    payload = {
+        "record_id": record.record_id,
+        "owner_pid": record.owner_pid,
+        "owner_create_time": record.owner_create_time,
+        "browser_pid": record.browser_pid,
+        "browser_create_time": record.browser_create_time,
+    }
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp_path.replace(path)
+    except OSError:
+        logger.debug(
+            "Failed to persist browser process record %s",
+            record.record_id,
+            exc_info=True,
+        )
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _delete_browser_process_record(record_id: str) -> None:
+    try:
+        _browser_process_record_path(record_id).unlink(missing_ok=True)
+    except OSError:
+        logger.debug(
+            "Failed to remove browser process record %s",
+            record_id,
+            exc_info=True,
+        )
+
+
+def _collect_browser_descendant_roots(
+    parent_pid: int,
+    *,
+    candidate_pids: set[int] | None = None,
+) -> dict[int, tuple[psutil.Process, float]]:
+    try:
+        current = psutil.Process(parent_pid)
+        descendants = current.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        return {}
+
+    browser_processes: dict[int, tuple[psutil.Process, float]] = {}
+    for process in descendants:
+        try:
+            if not _is_browser_process_name(process.name()):
+                continue
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            continue
+        create_time = _safe_process_create_time(process)
+        if create_time is None:
+            continue
+        if candidate_pids is not None and process.pid not in candidate_pids:
+            continue
+        browser_processes[process.pid] = (process, create_time)
+
+    roots: dict[int, tuple[psutil.Process, float]] = {}
+    for pid, (process, create_time) in browser_processes.items():
+        ancestor: psutil.Process | None
+        try:
+            ancestor = process.parent()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            ancestor = None
+        while ancestor is not None:
+            if ancestor.pid in browser_processes:
+                break
+            try:
+                ancestor = ancestor.parent()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+                ancestor = None
+        if ancestor is None:
+            roots[pid] = (process, create_time)
+    return roots
+
+
+def _browser_descendant_pids(parent_pid: int) -> set[int]:
+    return set(_collect_browser_descendant_roots(parent_pid))
+
+
+def _prune_browser_process_registry() -> None:
+    for path in _iter_browser_process_record_paths():
+        record = _read_browser_process_record(path)
+        if record is None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+        browser_process = _process_matches_create_time(
+            record.browser_pid,
+            record.browser_create_time,
+        )
+        if browser_process is None:
+            _delete_browser_process_record(record.record_id)
+            continue
+        try:
+            owner_process = _process_matches_create_time(
+                record.owner_pid,
+                record.owner_create_time,
+            )
+            if owner_process is None and not _is_browser_process_name(browser_process.name()):
+                _delete_browser_process_record(record.record_id)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            _delete_browser_process_record(record.record_id)
+
+
+def _register_browser_processes_for_worker(
+    owner_pid: int,
+    *,
+    candidate_pids: set[int] | None = None,
+) -> tuple[str, ...]:
+    try:
+        owner = psutil.Process(owner_pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        return ()
+    owner_create_time = _safe_process_create_time(owner)
+    if owner_create_time is None:
+        return ()
+
+    record_ids: list[str] = []
+    for process, browser_create_time in _collect_browser_descendant_roots(
+        owner_pid,
+        candidate_pids=candidate_pids,
+    ).values():
+        record = _BrowserProcessRecord(
+            record_id=f"{owner_pid}-{process.pid}-{uuid4().hex}",
+            owner_pid=owner_pid,
+            owner_create_time=owner_create_time,
+            browser_pid=process.pid,
+            browser_create_time=browser_create_time,
+        )
+        _write_browser_process_record(record)
+        record_ids.append(record.record_id)
+    _prune_browser_process_registry()
+    return tuple(record_ids)
+
+
+def _kill_browser_process_tree(process: psutil.Process) -> int:
+    killed = 0
+    try:
+        descendants = process.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        descendants = []
+    for child in reversed(descendants):
+        try:
+            child.kill()
+            killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            pass
+    try:
+        process.kill()
+        killed += 1
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        pass
+    return killed
 
 
 async def _evict_idle_or_dead_browsers() -> None:
@@ -272,6 +513,7 @@ async def _acquire_browser(
     to_close: list[object] = []
     browser = None
     now = time.monotonic()
+    known_browser_pids = _browser_descendant_pids(os.getpid())
     async with state.lock:
         if not force_new:
             pooled = state.pool.get(browser_pool_key)
@@ -282,6 +524,11 @@ async def _acquire_browser(
                 to_close.append(pooled.browser)
                 state.pool.pop(browser_pool_key, None)
     browser = await browser_type.launch(**launch_kwargs)
+    current_browser_pids = _browser_descendant_pids(os.getpid())
+    process_records = _register_browser_processes_for_worker(
+        os.getpid(),
+        candidate_pids=current_browser_pids - known_browser_pids,
+    )
     async with state.lock:
         now = time.monotonic()
         pooled = state.pool.get(browser_pool_key)
@@ -298,6 +545,7 @@ async def _acquire_browser(
             state.pool[browser_pool_key] = _PooledBrowser(
                 browser=browser,
                 last_used_monotonic=now,
+                process_records=process_records,
             )
             reused = False
             if len(state.pool) > _BROWSER_POOL_MAX_SIZE:
@@ -330,18 +578,39 @@ def browser_pool_snapshot() -> dict[str, object]:
 def _kill_orphaned_browser_processes() -> None:
     current_pid = os.getpid()
     killed = 0
-    try:
-        current = psutil.Process(current_pid)
-        for child in current.children(recursive=True):
+    for path in _iter_browser_process_record_paths():
+        record = _read_browser_process_record(path)
+        if record is None:
             try:
-                name = (child.name() or "").lower()
-                if any(tag in name for tag in ("chrom", "firefox", "webkit")):
-                    child.kill()
-                    killed += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                path.unlink(missing_ok=True)
+            except OSError:
                 pass
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        pass
+            continue
+        owner_process = _process_matches_create_time(
+            record.owner_pid,
+            record.owner_create_time,
+        )
+        if owner_process is not None and owner_process.pid == current_pid:
+            continue
+        if owner_process is not None:
+            continue
+        browser_process = _process_matches_create_time(
+            record.browser_pid,
+            record.browser_create_time,
+        )
+        if browser_process is None:
+            _delete_browser_process_record(record.record_id)
+            continue
+        try:
+            if not _is_browser_process_name(browser_process.name()):
+                _delete_browser_process_record(record.record_id)
+                continue
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            _delete_browser_process_record(record.record_id)
+            continue
+        killed += _kill_browser_process_tree(browser_process)
+        _delete_browser_process_record(record.record_id)
+    _prune_browser_process_registry()
     if killed:
         logger.info(
             "Killed %d orphaned browser process(es) for PID %d", killed, current_pid
@@ -354,6 +623,7 @@ async def shutdown_browser_pool() -> None:
 
 def prepare_browser_pool_for_worker_process() -> None:
     global _BROWSER_POOL_STATE
+    _prune_browser_process_registry()
     _kill_orphaned_browser_processes()
     _BROWSER_POOL_STATE = BrowserPool(pid=os.getpid())
 

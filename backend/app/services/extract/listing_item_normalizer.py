@@ -21,7 +21,7 @@ from app.services.extract.shared_logic import (
     coerce_nested_text as _coerce_nested_text,
     extract_image_candidates as _extract_image_candidates,
     find_alias_values as _find_alias_values,
-    resolve_slug_url as _resolve_slug_url,
+    resolve_slug_url,
 )
 
 _EMPTY_VALUES = (None, "", [], {})
@@ -76,8 +76,9 @@ def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | N
                 record.pop("additional_images", None)
 
     raw_slug = item.get("slug")
+    slug_url = ""
     if record.get("url") in _EMPTY_VALUES and raw_slug not in _EMPTY_VALUES:
-        slug_url = _resolve_slug_url(str(raw_slug), page_url=page_url)
+        slug_url = resolve_slug_url(str(raw_slug), page_url=page_url)
         if slug_url:
             record["url"] = slug_url
 
@@ -102,11 +103,11 @@ def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | N
         if inferred_currency:
             record["currency"] = inferred_currency
 
-    slug_url = _resolve_slug_url(str(raw_slug or ""), page_url=page_url)
+    # Reuses the earlier _resolve_slug_url result instead of resolving twice.
     if (
         "ecommerce" in str(surface or "").lower()
         and record.get("url") in _EMPTY_VALUES
-        and not slug_url
+        and raw_slug in _EMPTY_VALUES
         and record.get("price") in _EMPTY_VALUES
     ):
         return None
