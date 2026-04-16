@@ -7,6 +7,7 @@ from app.services.config.crawl_runtime import (
     MAX_CANDIDATES_PER_FIELD,
 )
 from app.services.config.platform_registry import known_ats_domains
+from app.services.config.selectors import DOM_PATTERNS
 
 __all__ = [
     "DYNAMIC_FIELD_NAME_MAX_TOKENS",
@@ -58,31 +59,7 @@ NEXT_FLIGHT_AVAILABILITY_PATTERN = (
 )
 
 EXTRACTION_RULES = {
-    "dom_patterns": {
-        "title": "h1, [itemprop='name'], meta[property='og:title'], title",
-        "price": "[itemprop='price'], .price, .product-price",
-        "sale_price": ".sale-price, .discount-price, [data-sale-price]",
-        "original_price": ".original-price, .compare-price, [data-original-price]",
-        "description": "[itemprop='description'], .product-description, [data-description], meta[name='description'], meta[property='og:description']",
-        "brand": "[itemprop='brand'], .brand, .product-brand",
-        "image_url": "[itemprop='image'], meta[property='og:image']",
-        "rating": "[itemprop='ratingValue']",
-        "review_count": "[itemprop='reviewCount']",
-        "sku": "[itemprop='sku']",
-        "availability": "[itemprop='availability'], .availability, [data-stock], [data-availability]",
-        "category": "[itemprop='category'], nav.breadcrumb li:last-child",
-        "company": ".company-name, [itemprop='hiringOrganization'] [itemprop='name']",
-        "location": ".job-location, [itemprop='jobLocation'] [itemprop='name']",
-        "salary": ".salary, [itemprop='baseSalary']",
-        "job_type": "[itemprop='employmentType']",
-        "apply_url": "a[data-apply-url], a.apply-button",
-        "responsibilities": "[data-section='responsibilities'], .responsibilities, #responsibilities",
-        "qualifications": "[data-section='qualifications'], .qualifications, #qualifications",
-        "benefits": "[data-section='benefits'], .benefits, #benefits",
-        "skills": "[data-section='skills'], .skills, #skills",
-        "specifications": "[data-section='specifications'], .specifications, .product-specifications, #specifications",
-        "features": "[data-section='features'], .features, .product-features, #features",
-    },
+    "dom_patterns": dict(DOM_PATTERNS),
     "candidate_cleanup": {
         "placeholder_values": [
             "-",

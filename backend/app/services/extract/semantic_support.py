@@ -88,7 +88,7 @@ def extract_semantic_detail_data(
             "semantic_rows": {},
         }
 
-    working_soup = deepcopy(soup) if soup is not None else BeautifulSoup(html, "html.parser")
+    working_soup = BeautifulSoup(html, "html.parser") if html else deepcopy(soup)
     _strip_non_content_nodes(working_soup)
     working_root = _semantic_content_root(working_soup)
     if working_root is not None and working_root is not working_soup:
