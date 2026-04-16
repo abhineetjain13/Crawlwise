@@ -64,6 +64,7 @@ class HttpFetchResult:
     attempt_log: list[dict[str, object]] = field(default_factory=list)
     retry_after_seconds: float | None = None
     _blocked_result: object | None = field(default=None, repr=False, compare=False)
+    acquirer_analysis: dict[str, object] | None = field(default=None, repr=False, compare=False)
 
     def blocked_result(self):
         if self._blocked_result is None:

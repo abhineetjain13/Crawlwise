@@ -1117,7 +1117,7 @@ async def _acquire_once(
             session_context=request.session_context,
         )
     analysis = (
-        getattr(http_result, "_acquirer_analysis", {})
+        http_result.acquirer_analysis or {}
         if http_result is not None
         else {}
     )
@@ -1204,7 +1204,7 @@ async def _acquire_once(
             )
             if http_result is None:
                 return None
-            analysis = getattr(http_result, "_acquirer_analysis", {})
+            analysis = http_result.acquirer_analysis or {}
             curl_result, curl_diagnostics = _extract_curl_analysis(analysis)
         if curl_result is not None:
             return ctx.update_result_diagnostics(curl_result)
@@ -1627,7 +1627,7 @@ async def _try_http(
             promoted_sources=[],
             diagnostics=diagnostics,
         )
-        normalized._acquirer_analysis = analysis
+        normalized.acquirer_analysis = analysis
         return normalized
     decision_started_at = time.perf_counter()
 
@@ -1746,7 +1746,7 @@ async def _try_http(
             else None,
         }
     )
-    normalized._acquirer_analysis = analysis
+    normalized.acquirer_analysis = analysis
     return normalized
 
 
@@ -1760,7 +1760,7 @@ def _browser_escalation_decision(
     del url, acquisition_profile
     if http_result is None:
         return _BrowserEscalationDecision(True, "http_failed")
-    analysis = getattr(http_result, "_acquirer_analysis", {})
+    analysis = http_result.acquirer_analysis or {}
     if http_result.content_type == "json":
         return _BrowserEscalationDecision(False, "json_response")
     blocked = analysis.get("blocked")
@@ -2573,8 +2573,7 @@ def _assess_extractable_html(
             return {"has_extractable_data": True, "reason": "detail_json_ld"}
 
         # (b) Count canonical field tokens in visible text
-        soup = BeautifulSoup(html, HTML_PARSER)
-        visible_text = soup.get_text(" ", strip=True).lower()
+        visible_text = soup_probe.get_text(" ", strip=True).lower()
         detail_tokens = ("title", "price", "brand", "description", "sku")
         field_hits = sum(1 for tok in detail_tokens if tok in visible_text)
         if field_hits >= DETAIL_FIELD_SIGNAL_MIN_COUNT:
