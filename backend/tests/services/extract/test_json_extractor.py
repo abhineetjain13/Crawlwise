@@ -1,3 +1,4 @@
+import math
 # Tests for JSON listing/detail extraction.
 from __future__ import annotations
 
@@ -182,7 +183,7 @@ def test_extract_json_listing_does_not_drop_fields_when_requested_fields_is_empt
 
     assert len(records) == 1
     assert records[0]["title"] == "Widget"
-    assert records[0]["price"] == 12.5
+    assert math.isclose(records[0]["price"], 12.5, rel_tol=1e-09, abs_tol=1e-09)
 
 
 def test_graphql_edges_pattern():

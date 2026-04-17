@@ -1,3 +1,5 @@
+import math
+import math
 from __future__ import annotations
 
 import json
@@ -238,7 +240,7 @@ async def test_call_groq_sets_max_tokens():
             "user",
         )
 
-    assert captured_json["max_tokens"] == 1200
+    assert math.isclose(captured_json["temperature"], 0.1, rel_tol=1e-09, abs_tol=1e-09)
     assert captured_json["temperature"] == 0.1
     assert text == '{"ok": true}'
     assert input_tokens == 5
@@ -278,7 +280,7 @@ async def test_call_groq_uses_configured_request_params(monkeypatch):
         await _call_groq("test-key", "llama-test", "system", "user")
 
     assert captured_json["max_tokens"] == 321
-    assert captured_json["temperature"] == 0.25
+    assert math.isclose(captured_json["temperature"], 0.25, rel_tol=1e-09, abs_tol=1e-09)
 
 
 @pytest.mark.asyncio

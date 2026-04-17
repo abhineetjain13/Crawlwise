@@ -1,3 +1,4 @@
+import math
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -80,7 +81,7 @@ def test_merge_run_acquisition_metrics_tolerates_invalid_float_values() -> None:
         {"host_wait_seconds": "still-bad"},
     )
 
-    assert summary["host_wait_seconds_total"] == 0.0
+    assert math.isclose(summary["host_wait_seconds_total"], 0.0, rel_tol=1e-09, abs_tol=1e-09)
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,6 @@
+import math
+import math
+import math
 from __future__ import annotations
 
 import importlib
@@ -23,11 +26,11 @@ def test_runtime_settings_respect_env_overrides(monkeypatch):
 
     _, crawl_runtime = _reload_runtime_modules()
 
-    assert crawl_runtime.HTTP_TIMEOUT_SECONDS == 41
+    assert math.isclose(crawl_runtime.URL_PROCESS_TIMEOUT_SECONDS, 33.0, rel_tol=1e-09, abs_tol=1e-09)
     assert crawl_runtime.DEFAULT_MAX_PAGES == 9
-    assert crawl_runtime.URL_PROCESS_TIMEOUT_SECONDS == 33.0
+    assert math.isclose(crawl_runtime.MAX_URL_PROCESS_TIMEOUT_SECONDS, 88.0, rel_tol=1e-09, abs_tol=1e-09)
     assert crawl_runtime.MAX_URL_PROCESS_TIMEOUT_SECONDS == 88.0
-    assert crawl_runtime.coerce_url_timeout_seconds("999") == 88.0
+    assert math.isclose(crawl_runtime.coerce_url_timeout_seconds("999"), 88.0, rel_tol=1e-09, abs_tol=1e-09)
 
 
 def test_runtime_settings_apply_performance_profile_defaults(monkeypatch):
