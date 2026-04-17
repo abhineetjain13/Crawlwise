@@ -220,6 +220,31 @@ def assess_listing_record_quality(record: dict, *, surface: str = "") -> Listing
     if (
         ("commerce" in normalized_surface or "ecommerce" in normalized_surface)
         and url_value
+        and _looks_like_informational_page_url(url_value)
+        and not {
+            "price",
+            "sale_price",
+            "original_price",
+            "image_url",
+            "additional_images",
+            "brand",
+            "availability",
+            "rating",
+            "review_count",
+        }
+        & set(public_fields)
+    ):
+        return _invalid_assessment(
+            normalized_surface,
+            public_fields,
+            product_signal_keys,
+            job_signal_keys,
+            "informational_page_url",
+        )
+
+    if (
+        ("commerce" in normalized_surface or "ecommerce" in normalized_surface)
+        and url_value
         and _looks_like_transactional_url_for_listing(url_value)
     ):
         return _invalid_assessment(
@@ -654,6 +679,8 @@ def _looks_like_detail_record_url_for_listing(url_value: str) -> bool:
     lowered = str(url_value or "").lower()
     if not lowered.startswith("http"):
         return False
+    if _looks_like_commerce_detail_path_for_listing(lowered):
+        return True
     if _looks_like_transactional_url_for_listing(lowered):
         return False
     if _looks_like_facet_or_filter_url_for_listing(lowered):
@@ -668,6 +695,8 @@ def _looks_like_transactional_url_for_listing(url_value: str) -> bool:
     if not parsed.scheme or not parsed.netloc:
         return False
     path = parsed.path.lower()
+    if _looks_like_commerce_detail_path_for_listing(path):
+        return False
     segments = [
         segment.lower()
         for segment in re.split(r"[^a-z0-9.]+", path)
@@ -691,6 +720,27 @@ def _looks_like_transactional_url_for_listing(url_value: str) -> bool:
     ):
         return True
     return False
+
+
+def _looks_like_informational_page_url(url_value: str) -> bool:
+    parsed = urlparse(str(url_value or "").strip())
+    path = parsed.path.lower()
+    if "/pages/" not in path:
+        return False
+    if any(token in path for token in ("/pages/informational/", "/pages/legal/", "/pages/privacy/", "/pages/terms/")):
+        return True
+    return any(token in path for token in ("download-the-app", "download_app", "/app", "/apps/"))
+
+
+def _looks_like_commerce_detail_path_for_listing(path_or_url: str) -> bool:
+    parsed = urlparse(str(path_or_url or "").strip())
+    path = (parsed.path or str(path_or_url or "")).strip().lower()
+    if any(marker in path for marker in LISTING_DETAIL_PATH_MARKERS):
+        return True
+    leaf = path.rstrip("/").split("/")[-1]
+    if leaf.endswith(".html") and re.search(r"[a-z0-9-]{6,}", leaf):
+        return True
+    return bool(re.search(r"[a-z0-9-]+-[a-z0-9]{4,}(?:\.html)?$", leaf))
 
 
 def _record_url_matches_listing_page(record: dict, *, page_url: str) -> bool:

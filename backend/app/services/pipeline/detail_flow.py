@@ -331,6 +331,7 @@ async def extract_detail(
         resolved_fields=resolved_schema.fields,
         adapter_records=adapter_records,
         soup=soup,
+        page_sources=page_sources,
     )
     persisted_field_names = set(resolved_schema.fields)
     candidate_values, reconciliation = reconcile_detail_candidate_values(

@@ -258,6 +258,7 @@ def extract_candidates(
     resolved_fields: list[str] | None = None,
     adapter_records: list[dict] | None = None,
     soup: "BeautifulSoup | None" = None,
+    page_sources: dict[str, Any] | None = None,
 ) -> tuple[dict, dict]:
     """Extract candidate values for each target field.
 
@@ -274,13 +275,17 @@ def extract_candidates(
     try:
         if soup is None:
             soup = BeautifulSoup(html, "html.parser")
-        page_sources = parse_page_sources(html, soup=soup)
+        resolved_page_sources = (
+            dict(page_sources) if isinstance(page_sources, dict) and page_sources else None
+        )
+        if resolved_page_sources is None:
+            resolved_page_sources = parse_page_sources(html, soup=soup)
         signal_inventory = build_signal_inventory(
             html,
             url,
             surface,
             soup=soup,
-            page_sources=page_sources,
+            page_sources=resolved_page_sources,
         )
         page_type = classify_page_type(signal_inventory)
 
@@ -322,12 +327,12 @@ def extract_candidates(
             soup=soup,
             adapter_records=adapter_records,
             network_payloads=network_payloads,
-            next_data=page_sources.get("next_data"),
-            hydrated_states=page_sources.get("hydrated_states") or [],
-            embedded_json=page_sources.get("embedded_json") or [],
-            open_graph=page_sources.get("open_graph") or {},
-            json_ld=page_sources.get("json_ld") or [],
-            microdata=page_sources.get("microdata") or [],
+            next_data=resolved_page_sources.get("next_data"),
+            hydrated_states=resolved_page_sources.get("hydrated_states") or [],
+            embedded_json=resolved_page_sources.get("embedded_json") or [],
+            open_graph=resolved_page_sources.get("open_graph") or {},
+            json_ld=resolved_page_sources.get("json_ld") or [],
+            microdata=resolved_page_sources.get("microdata") or [],
         )
 
         canonical_target_fields = set(get_canonical_fields(surface))
@@ -345,7 +350,7 @@ def extract_candidates(
         html=html,
         soup=soup,
         tree=tree,
-        page_sources=page_sources,
+        page_sources=resolved_page_sources,
         adapter_records=adapter_records,
         network_payloads=network_payloads,
         target_fields=target_fields,
@@ -367,9 +372,9 @@ def extract_candidates(
         semantic=semantic,
         target_fields=set(target_fields),
         canonical_target_fields=canonical_target_fields,
-        next_data=page_sources.get("next_data"),
-        hydrated_states=page_sources.get("hydrated_states") or [],
-        embedded_json=page_sources.get("embedded_json") or [],
+        next_data=resolved_page_sources.get("next_data"),
+        hydrated_states=resolved_page_sources.get("hydrated_states") or [],
+        embedded_json=resolved_page_sources.get("embedded_json") or [],
         network_payloads=network_payloads,
         soup=soup,
         adapter_records=adapter_records,

@@ -103,26 +103,6 @@ def load_cookies_for_http(domain: str) -> dict[str, str]:
     return http_cookies
 
 
-def save_cookies_payload(payload: object, *, domain: str) -> None:
-    """Legacy domain-scoped cookie persistence — deprecated.
-
-    BUG-04: This was a silent no-op. Now emits a DeprecationWarning
-    to surface callers that should migrate to session-scoped persistence.
-    """
-    import warnings
-
-    warnings.warn(
-        f"save_cookies_payload() is deprecated for domain {domain!r}; "
-        "use save_session_cookies_payload() with a session_identity instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    logger.debug(
-        "Skipping legacy domain-scoped cookie persistence for %s; use session-scoped persistence instead",
-        domain,
-    )
-
-
 def is_persistable_cookie(cookie: dict, *, domain: str) -> bool:
     policy = cookie_policy_for_domain(domain)
     name = str(cookie.get("name") or "").strip()

@@ -245,6 +245,16 @@ export function formatDuration(start?: string | null, end?: string | null) {
   return `${m}m ${s}s`;
 }
 
+export function formatDurationMs(durationMs?: number | null) {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) {
+    return null;
+  }
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}m ${s}s`;
+}
+
 export function progressPercent(run: CrawlRun | undefined) {
   const value = typeof run?.result_summary?.progress === "number" ? run.result_summary.progress : 0;
   return Math.min(100, Math.max(0, value));

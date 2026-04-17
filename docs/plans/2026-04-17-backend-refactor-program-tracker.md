@@ -200,15 +200,15 @@ Definition of done:
 
 ### Track D: External AI leverage
 
-- [ ] Standardize the evidence pack format for Gemini/Claude uploads
-- [ ] Create reusable prompts for module audit, stale-test review, and boundary review
+- [x] Standardize the evidence pack format for Gemini/Claude uploads
+- [x] Create reusable prompts for module audit, stale-test review, and boundary review
 - [x] Record accepted vs rejected external proposals with rationale
 
 ## Deferred Post-Stabilization Capabilities
 
 These items come from `EXTRACTION_ENHANCEMENT_SPEC.md` and are explicitly deferred until the refactor program closes. They are listed here so they are not lost, not so they are implemented now. The retired Invariant 28 previously forbade these; the current program treats them as a planned follow-on, not a forbidden reintroduction.
 
-- [ ] Extraction confidence scorer (spec §4.1) — used only as a fallback gate, not as a field-selection mechanism (preserves Invariant 6)
+- [ ] Extraction confidence scorer (spec §4.1) —
 - [ ] LLM-powered selector synthesizer for self-healing extraction (spec §4.2)
 - [ ] `domain_memory` table and cached synthesized selectors (spec §4.3)
 - [ ] Confidence-gated LLM fallback wiring in the extraction service (spec §4)
@@ -516,7 +516,14 @@ Slice 1 is now anchored to these Phase 2 decisions:
   - verification: `uv run pytest tests/services/pipeline/test_record_persistence.py tests/services/test_crawl_metrics.py tests/services/test_crawl_metadata.py tests/services/pipeline/test_runner.py tests/services/pipeline/test_pipeline_coupling.py tests/services/test_crawl_schema.py::test_normalize_record_fields_preserves_canonical_payload_values -q` → `14 passed`
   - verification: `python -m compileall backend/app/services/publish backend/app/services/pipeline/verdict.py backend/app/services/pipeline/record_persistence.py backend/app/services/pipeline/trace_builders.py backend/app/services/crawl_metrics.py backend/app/services/crawl_metadata.py backend/app/services/extract/__init__.py` → compile succeeded
   - note: `uv run pytest tests/services/test_crawl_service.py -q` still errors in fixture setup with duplicate `test@example.com` inserts against the test DB; not attributable to the publish slice
-- [ ] Prepare the reusable Gemini/Claude prompts from the evidence-pack template
+- [x] Prepare the reusable Gemini/Claude prompts from the evidence-pack template
+- [x] Standardize the reusable evidence-pack template for Gemini/Claude uploads
+  - result: added `docs/prompts/phase4_evidence_pack_template.md` so every bounded external review starts from the same target/constraints/evidence structure instead of ad hoc uploads
+- [x] Prepare the reusable Gemini prompt for simplification review
+  - result: added `docs/prompts/phase4_simplification_review.md` for post-boundary, intra-owner simplification audits that focus on branch count, helper churn, duplicated policy, and stale seams rather than architecture theater
+- [x] Prepare targeted Gemini simplification prompts for current hotspots
+  - result: added `docs/prompts/phase4_acquirer_simplification_review.md` for residual acquisition complexity in `backend/app/services/acquisition/acquirer.py`
+  - result: added `docs/prompts/phase4_review_shaping_simplification_review.md` for validating whether `backend/app/services/publish/review_shaping.py` is already lean enough or still hiding avoidable policy layering
 - [x] Prepare the reusable Gemini prompt for boundary review
   - result: added `docs/prompts/phase4_boundary_review.md` as the reusable Phase 4 boundary-review template for bounded stage-ownership audits
 - [x] Prepare the reusable Gemini prompt for adapter/platform duplication review

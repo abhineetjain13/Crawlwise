@@ -10,6 +10,7 @@ from app.services.config.extraction_rules import (
     DIMENSION_KEYWORDS,
     FEATURE_SECTION_ALIASES,
     JSONLD_TYPE_NOISE,
+    SEMANTIC_SECTION_NOISE,
     SECTION_ANCESTOR_STOP_TAGS,
     SECTION_ANCESTOR_STOP_TOKENS,
     SECTION_SKIP_PATTERNS,
@@ -26,9 +27,6 @@ from app.services.field_alias_policy import (
     get_surface_field_aliases,
 )
 from app.services.extract.noise_policy import (
-    SECTION_BODY_SKIP_PHRASES as _SECTION_BODY_SKIP_PHRASES,
-    SECTION_KEY_SKIP_PREFIXES as _SECTION_KEY_SKIP_PREFIXES,
-    SECTION_LABEL_SKIP_TOKENS as _SECTION_LABEL_SKIP_TOKENS,
     is_noisy_product_attribute_entry,
 )
 from app.services.extract.field_classifier import _dynamic_field_name_is_valid
@@ -69,6 +67,9 @@ _HEADING_LEVEL_RE = re.compile(r"h([1-6])", re.IGNORECASE)
 _PACK_KEY_RE = re.compile(r"pack[_-]?\d+", re.IGNORECASE)
 _NUMERIC_KEY_RE = re.compile(r"\d+(?:[_-]\d+)*")
 _HAS_ALPHA_RE = re.compile(r"[a-z]", re.IGNORECASE)
+_SECTION_LABEL_SKIP_TOKENS = tuple(SEMANTIC_SECTION_NOISE.get("label_skip_tokens", ()))
+_SECTION_KEY_SKIP_PREFIXES = tuple(SEMANTIC_SECTION_NOISE.get("key_skip_prefixes", ()))
+_SECTION_BODY_SKIP_PHRASES = tuple(SEMANTIC_SECTION_NOISE.get("body_skip_phrases", ()))
 
 
 def extract_semantic_detail_data(

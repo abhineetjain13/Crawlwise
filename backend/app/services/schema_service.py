@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 from app.services.config.field_mappings import (
     CANONICAL_SCHEMAS,
-    field_allowed_for_surface as _field_allowed_for_surface,
 )
 from app.services.domain_utils import normalize_domain
+from app.services.field_alias_policy import field_allowed_for_surface as _field_allowed_for_surface
 from app.services.pipeline.pipeline_config import SCHEMA_MAX_AGE_DAYS
 from sqlalchemy.ext.asyncio import AsyncSession
 

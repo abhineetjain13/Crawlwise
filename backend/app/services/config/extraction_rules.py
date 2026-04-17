@@ -1777,11 +1777,6 @@ SIZE_GUIDE_NOISE_VALUES = frozenset(
 )
 HTTP_URL_PREFIXES: tuple[str, str] = ("http://", "https://")
 
-VERDICT_RULES = {
-    "detail_core_fields": ["title", "price", "brand"],
-    "listing_core_fields": ["title"],
-}
-
 MAX_SELECTOR_ROWS_PER_FIELD = 100
 EMPTY_SENTINEL_VALUES: frozenset[str] = frozenset(
     {"-", "—", "--", "n/a", "na", "none", "null", "undefined"}
@@ -1794,6 +1789,7 @@ REQUIRED_FIELDS_BY_SURFACE: dict[str, frozenset[str]] = {
     "ecommerce_detail": frozenset({"title"}),
 }
 
+# TODO(simplification phase 2): revived by EXTRACTION_ENHANCEMENT_SPEC.md §1.1
 HYDRATED_STATE_PATTERNS = [
     "__INITIAL_STATE__",
     "__NUXT__",
@@ -1806,6 +1802,7 @@ HYDRATED_STATE_PATTERNS = [
     "__APP_STATE__",
 ]
 
+# TODO(simplification phase 2): revived by EXTRACTION_ENHANCEMENT_SPEC.md §2.1
 KNOWN_ATS_PLATFORMS = known_ats_domains()
 
 
@@ -1823,6 +1820,25 @@ def _compile_extraction_rule_patterns(
     return tuple(
         _compile_extraction_rule_pattern(pattern) for pattern in normalized_patterns
     )
+
+
+def _merge_rule_values(existing: object, defaults: object) -> tuple[str, ...]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in (existing, defaults):
+        if isinstance(group, str):
+            candidates = [group]
+        elif isinstance(group, (list, tuple, set, frozenset)):
+            candidates = list(group)
+        else:
+            candidates = []
+        for value in candidates:
+            cleaned = str(value or "").strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            merged.append(cleaned)
+    return tuple(merged)
 
 
 DYNAMIC_FIELD_NAME_DROP_TOKENS = set(
@@ -1847,7 +1863,168 @@ DYNAMIC_FIELD_NAME_TICKERLIKE_BLOCKLIST = frozenset(
     for x in _CANDIDATE_CLEANUP.get("dynamic_field_name_tickerlike_blocklist", [])
     if str(x).strip()
 )
-FIELD_POLLUTION_RULES = dict(EXTRACTION_RULES.get("field_pollution_rules", {}))
+_FIELD_POLLUTION_RULE_DEFAULTS = {
+    "__common__": (
+        "cookie",
+        "privacy",
+        "sign in",
+        "log in",
+        "my account",
+        "analytics",
+        "pageview",
+        "gtm",
+    ),
+    "title": ("add to cart", "shop now", "view cart", "menu"),
+    "brand": ("home >", "home /", "policy"),
+    "category": ("page type", "page category", "detail page"),
+    "availability": ("add to cart", "choose options", "select options", "view details"),
+    "color": ("add to cart", "choose options", "select options"),
+    "size": ("select size", "choose size"),
+    "features": ("livechat",),
+    "care": ("care instructions",),
+}
+_FIELD_POLLUTION_RULE_CONFIG = EXTRACTION_RULES.get("field_pollution_rules", {})
+FIELD_POLLUTION_RULES = {
+    key: {
+        "reject_phrases": _merge_rule_values(
+            (_FIELD_POLLUTION_RULE_CONFIG.get(key, {}) or {}).get("reject_phrases", ()),
+            defaults,
+        )
+    }
+    for key, defaults in _FIELD_POLLUTION_RULE_DEFAULTS.items()
+}
+TITLE_NOISE_WORDS = frozenset(
+    EXTRACTION_RULES.get(
+        "title_noise_words",
+        ["home", "cart", "sign in", "search results", "access denied", "loading..."],
+    )
+)
+LOW_QUALITY_MERGE_TOKENS = frozenset(
+    EXTRACTION_RULES.get(
+        "low_quality_merge_tokens",
+        ["cookie", "privacy", "sign in", "log in", "account", "home", "menu", "agree", "policy"],
+    )
+)
+FIELD_VALUE_NOISE_FRAGMENTS = {
+    key: frozenset(values)
+    for key, values in {
+        "brand": ("cookie", "privacy"),
+        "category": ("cookie", "sign in"),
+        "color": ("cookie", "select"),
+        "title": TITLE_NOISE_WORDS,
+    }.items()
+}
+NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
+    EXTRACTION_RULES.get(
+        "noisy_product_attribute_keys",
+        [
+            "about",
+            "about_us",
+            "accessibility_statement",
+            "contact",
+            "contact_us",
+            "customer_service",
+            "faq",
+            "faqs",
+            "policies",
+            "privacy",
+            "privacy_policy",
+            "return_policy",
+            "returns",
+            "shipping",
+            "shipping_policy",
+            "shopping_cart",
+            "store_locations",
+            "terms",
+            "terms_policies",
+        ],
+    )
+)
+NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES = tuple(
+    EXTRACTION_RULES.get(
+        "noisy_product_attribute_value_phrases",
+        [
+            "loading... read more",
+            "privacy policy",
+            "terms of service",
+            "shipping policy",
+            "return policy",
+            "select a size",
+            "size guide",
+            "join the waitlist",
+            "check availability in store",
+            "request a catalog",
+            "join our team",
+            "account login",
+            "store locations",
+            "accessibility statement",
+            "subscribe to our newsletter",
+            "sign up for",
+            "follow us on",
+            "download our app",
+            "manage preferences",
+            "cookie settings",
+            "do not sell my personal",
+        ],
+    )
+)
+NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS = tuple(
+    EXTRACTION_RULES.get(
+        "noisy_product_attribute_link_texts",
+        ["gift cards", "press inquiries", "the gazette", "your privacy choices"],
+    )
+)
+SIZE_CHART_REGION_KEYS = frozenset(
+    EXTRACTION_RULES.get(
+        "size_chart_region_keys",
+        ["eu", "eu_it", "uk", "us", "asia", "europe", "oceania", "africa", "south_america", "north_america"],
+    )
+)
+NETWORK_PAYLOAD_NOISE_URL_PATTERN = str(
+    EXTRACTION_RULES.get(
+        "network_payload_noise_url_pattern",
+        r"geolocation|geoip|geo/|/geo\b|"
+        r"\banalytics\b|tracking|telemetry|"
+        r"klarna\.com|affirm\.com|afterpay\.com|"
+        r"olapic-cdn\.com|"
+        r"livechat|zendesk\.com|intercom\.io|"
+        r"facebook\.com|google-analytics|googletagmanager|"
+        r"sentry\.io|datadome|px\.ads|"
+        r"cdn-cgi/|captcha",
+    )
+)
+CSS_NOISE_TOKENS = tuple(
+    dict.fromkeys(
+        [
+            *CANDIDATE_COLOR_CSS_NOISE_TOKENS,
+            *CANDIDATE_SIZE_CSS_NOISE_TOKENS,
+            "padding",
+            "margin",
+            "display",
+            "position",
+            "justify-content",
+            "align-items",
+            "font-size",
+            "font-weight",
+            "line-height",
+            "z-index",
+            "flex",
+            "flex-direction",
+            "background",
+            "border",
+            "width",
+            "height",
+            "min-width",
+            "max-width",
+        ]
+    )
+)
+CSS_NOISE_PATTERN = str(
+    EXTRACTION_RULES.get(
+        "css_noise_pattern",
+        CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN,
+    )
+)
 JSONLD_STRUCTURAL_KEYS = frozenset(
     EXTRACTION_RULES.get(
         "jsonld_structural_keys",
@@ -1916,31 +2093,121 @@ NESTED_NON_PRODUCT_KEYS = frozenset(
 SOURCE_RANKING = dict(EXTRACTION_RULES.get("source_ranking", {}))
 
 _SEMANTIC_DETAIL_RULES = EXTRACTION_RULES.get("semantic_detail", {})
+SEMANTIC_SECTION_NOISE = {
+    "label_skip_tokens": tuple(
+        EXTRACTION_RULES.get(
+            "semantic_section_noise", {}
+        ).get(
+            "label_skip_tokens",
+            (
+                "contact",
+                "share",
+                "top searches",
+                "you may also like",
+                "featured products",
+                "frequently bought together",
+                "similar",
+                "related",
+            ),
+        )
+    ),
+    "key_skip_prefixes": tuple(
+        EXTRACTION_RULES.get(
+            "semantic_section_noise", {}
+        ).get(
+            "key_skip_prefixes",
+            (
+                "contact_",
+                "share",
+                "top_searches",
+                "you_may_also_like",
+                "related",
+                "similar",
+                "ad_id_",
+                "images",
+            ),
+        )
+    ),
+    "body_skip_phrases": tuple(
+        EXTRACTION_RULES.get(
+            "semantic_section_noise", {}
+        ).get(
+            "body_skip_phrases",
+            (
+                "click to reveal phone number",
+                "dealer network partner",
+                "buy report now",
+                "share this ad",
+            ),
+        )
+    ),
+    "skip_patterns": tuple(
+        EXTRACTION_RULES.get("semantic_section_noise", {}).get(
+            "skip_patterns",
+            _SEMANTIC_DETAIL_RULES.get(
+                "section_skip_patterns",
+                [ACTION_ADD_TO_CART, ACTION_BUY_NOW, "checkout", "login", ACTION_SIGN_IN, "subscribe"],
+            ),
+        )
+    ),
+    "ancestor_stop_tags": tuple(
+        EXTRACTION_RULES.get("semantic_section_noise", {}).get(
+            "ancestor_stop_tags",
+            _SEMANTIC_DETAIL_RULES.get("section_ancestor_stop_tags", ["footer", "header", "nav", "aside", "form"]),
+        )
+    ),
+    "ancestor_stop_tokens": tuple(
+        EXTRACTION_RULES.get("semantic_section_noise", {}).get(
+            "ancestor_stop_tokens",
+            _SEMANTIC_DETAIL_RULES.get(
+                "section_ancestor_stop_tokens",
+                ["footer", "header", "nav", "menu", "newsletter", "breadcrumbs", "breadcrumb", "cookie", "consent"],
+            ),
+        )
+    ),
+}
 SECTION_SKIP_PATTERNS = tuple(
-    _SEMANTIC_DETAIL_RULES.get(
-        "section_skip_patterns",
-        [ACTION_ADD_TO_CART, ACTION_BUY_NOW, "checkout", "login", ACTION_SIGN_IN, "subscribe"],
-    )
+    SEMANTIC_SECTION_NOISE["skip_patterns"]
 )
 SECTION_ANCESTOR_STOP_TAGS = set(
-    _SEMANTIC_DETAIL_RULES.get(
-        "section_ancestor_stop_tags", ["footer", "header", "nav", "aside", "form"]
-    )
+    SEMANTIC_SECTION_NOISE["ancestor_stop_tags"]
 )
 SECTION_ANCESTOR_STOP_TOKENS = set(
-    _SEMANTIC_DETAIL_RULES.get(
-        "section_ancestor_stop_tokens",
+    SEMANTIC_SECTION_NOISE["ancestor_stop_tokens"]
+)
+NOISE_CONTAINER_TOKENS = tuple(
+    EXTRACTION_RULES.get(
+        "noise_container_tokens",
         [
             "footer",
-            "header",
-            "nav",
-            "menu",
-            "newsletter",
-            "breadcrumbs",
-            "breadcrumb",
+            "legal",
+            "privacy",
             "cookie",
             "consent",
+            "iubenda",
+            "menu",
+            "navigation",
+            "navbar",
+            "contact",
+            "share",
+            "app-store",
+            "app_store",
+            "newsletter",
         ],
+    )
+)
+SOCIAL_HOST_SUFFIXES = tuple(
+    EXTRACTION_RULES.get(
+        "social_host_suffixes",
+        ["facebook.com", "instagram.com", "tiktok.com", "pinterest.com", "x.com", "twitter.com", "youtube.com", "youtu.be"],
+    )
+)
+NOISE_CONTAINER_REMOVAL_SELECTOR = str(
+    EXTRACTION_RULES.get(
+        "noise_container_removal_selector",
+        "aside, nav, [class*='filter' i], [class*='facet' i], "
+        "[class*='sidebar' i], [class*='breadcrumb' i], "
+        "[class*='navigation' i], [class*='menu' i], footer, header",
     )
 )
 SPEC_LABEL_BLOCK_PATTERNS = tuple(

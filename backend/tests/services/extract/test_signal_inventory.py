@@ -6,7 +6,6 @@ Feature: extraction-pipeline-improvements
 from __future__ import annotations
 
 from app.services.extract.signal_inventory import (
-    SignalInventory,
     build_signal_inventory,
     classify_page_type,
 )
@@ -30,15 +29,15 @@ def _make_inventory(
     text_ratio: float = 0.5,
     domain: str = "example.com",
     surface: str = "",
-) -> SignalInventory:
-    return SignalInventory(
-        structured_data={
+) -> dict:
+    return {
+        "structured_data": {
             "json_ld": [] if json_ld is None else json_ld,
             "datalayer": {} if datalayer is None else datalayer,
             "next_data": next_data,
             "hydrated_states": [] if hydrated_states is None else hydrated_states,
         },
-        dom_patterns={
+        "dom_patterns": {
             "card_count": card_count,
             "detail_markers": {
                 "has_price": has_price,
@@ -50,19 +49,19 @@ def _make_inventory(
                 "is_detail_url": is_detail_url,
             },
         },
-        metadata={
+        "metadata": {
             "link_count": link_count,
             "text_ratio": text_ratio,
             "domain": domain,
             "surface": surface,
         },
-    )
+    }
 
 
-def _assert_inventory_is_populated(inventory: SignalInventory) -> None:
-    assert inventory.structured_data is not None
-    assert inventory.dom_patterns is not None
-    assert inventory.metadata is not None
+def _assert_inventory_is_populated(inventory: dict) -> None:
+    assert inventory.get("structured_data") is not None
+    assert inventory.get("dom_patterns") is not None
+    assert inventory.get("metadata") is not None
 
 
 # Property 1: Signal Inventory Completeness
@@ -83,7 +82,7 @@ def _assert_inventory_is_populated(inventory: SignalInventory) -> None:
 def test_signal_inventory_completeness(html: str, url: str, surface: str):
     """Feature: extraction-pipeline-improvements, Property 1: Signal Inventory Completeness.
 
-    For any valid HTML input, build_signal_inventory() SHALL produce a SignalInventory
+    For any valid HTML input, build_signal_inventory() SHALL produce an inventory mapping
     with non-null structured_data, dom_patterns, and metadata fields, even if those
     fields contain empty collections.
 
@@ -91,15 +90,14 @@ def test_signal_inventory_completeness(html: str, url: str, surface: str):
     """
     inventory = build_signal_inventory(html, url, surface)
 
-    # Verify SignalInventory is returned
-    assert isinstance(inventory, SignalInventory)
+    assert isinstance(inventory, dict)
 
     # Verify structured_data is non-null and is a dict
     _assert_inventory_is_populated(inventory)
-    assert isinstance(inventory.structured_data, dict)
-    assert inventory.dom_patterns is not None
-    assert isinstance(inventory.dom_patterns, dict)
-    assert isinstance(inventory.metadata, dict)
+    assert isinstance(inventory["structured_data"], dict)
+    assert inventory["dom_patterns"] is not None
+    assert isinstance(inventory["dom_patterns"], dict)
+    assert isinstance(inventory["metadata"], dict)
 
 
 # Property 2: Page Classification Validity
@@ -147,16 +145,16 @@ def test_page_classification_validity(
 ):
     """Feature: extraction-pipeline-improvements, Property 2: Page Classification Validity.
 
-    For any SignalInventory object, classify_page_type() SHALL return exactly one of
+    For any inventory mapping, classify_page_type() SHALL return exactly one of
     the values: "listing", "detail", or "unknown".
 
     Validates: Requirements 1.4, 1.5
     """
-    inventory = SignalInventory(
-        structured_data=structured_data,
-        dom_patterns=dom_patterns,
-        metadata=metadata,
-    )
+    inventory = {
+        "structured_data": structured_data,
+        "dom_patterns": dom_patterns,
+        "metadata": metadata,
+    }
 
     page_type = classify_page_type(inventory)
 
@@ -191,9 +189,9 @@ def test_signal_inventory_with_valid_html():
     """
     inventory = build_signal_inventory(html, "https://example.com/products", "product_listing")
 
-    assert len(inventory.structured_data["json_ld"]) > 0
-    assert inventory.dom_patterns["card_count"] >= 0
-    assert inventory.metadata["link_count"] >= 0
+    assert len(inventory["structured_data"]["json_ld"]) > 0
+    assert inventory["dom_patterns"]["card_count"] >= 0
+    assert inventory["metadata"]["link_count"] >= 0
 
 
 def test_classify_listing_page_with_json_ld():

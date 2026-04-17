@@ -29,9 +29,26 @@ export type CrawlSurface =
 export type CrawlMode = "single" | "sitemap" | "bulk" | "batch" | "csv";
 export type AdvancedCrawlMode = "auto" | "scroll" | "load_more" | "paginate" | "view_all";
 
+export type ResultSummaryQualityLevel = "high" | "medium" | "low" | "unknown";
+
+export type ResultSummaryQuality = {
+  level?: ResultSummaryQualityLevel;
+  score?: number;
+  scored_urls?: number;
+  level_counts?: Partial<Record<ResultSummaryQualityLevel, number>>;
+  listing_incomplete_urls?: number;
+  variant_incomplete_urls?: number;
+  requested_fields_total?: number;
+  requested_fields_found_best?: number;
+  [key: string]: unknown;
+};
+
 export type ResultSummary = {
   extraction_verdict?: string;
   record_count?: number;
+  quality_summary?: ResultSummaryQuality;
+  acquisition_summary?: Record<string, unknown>;
+  duration_ms?: number;
   domain?: string;
   error?: string;
   current_stage?: string;

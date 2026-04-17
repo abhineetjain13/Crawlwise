@@ -220,6 +220,7 @@ async def extract_listing(
         xhr_payloads=acq.network_payloads,
         adapter_records=adapter_records,
         soup=soup,
+        page_sources=page_sources,
     )
     source_label = "listing_extractor"
     if not extracted_records and adapter_records:

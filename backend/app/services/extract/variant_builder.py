@@ -284,7 +284,12 @@ def _find_variant_adapter_record(
     adapter_records: AdapterRecords,
 ) -> AdapterRecord | None:
     for record in adapter_records:
-        if isinstance(record, dict) and isinstance(record.get("variants"), list):
+        if not isinstance(record, dict):
+            continue
+        if any(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in ("variants", "variant_axes", "selected_variant")
+        ):
             return record
     return None
 
@@ -858,7 +863,7 @@ def _dom_variant_rows(
         return []
     rows: VariantRecords = []
     seen: set[str] = set()
-    for node in soup.find_all(["button", "label", "option", "a"]):
+    for node in _dom_variant_candidate_nodes(soup):
         if not isinstance(node, Tag):
             continue
         if _variant_axis_name(node) != "size":
@@ -1501,24 +1506,7 @@ def _extract_dom_variant_axes(
             if option.has_attr("selected"):
                 selected_values[axis_name] = label
 
-    candidate_nodes = soup.select(
-        ",".join(
-            (
-                "[data-size]",
-                "[data-color]",
-                "[data-colour]",
-                "[data-attr]",
-                "[data-value]",
-                "[role='radio']",
-                "[role='option']",
-                "button",
-                "label",
-                "li",
-                "div",
-            )
-        )
-    )
-    for node in candidate_nodes:
+    for node in _dom_variant_candidate_nodes(soup):
         if not isinstance(node, Tag) or is_inside_site_chrome(node):
             continue
         if not _looks_like_dom_variant_button(node):
@@ -1661,6 +1649,55 @@ def _dom_variant_value_is_valid(value: str, *, axis_name: str) -> bool:
     if axis_name == "size" and re.fullmatch(r"[A-Za-z0-9.+/-]{1,8}", text):
         return True
     return len(text.split()) <= 3
+
+
+def _dom_variant_candidate_nodes(soup: BeautifulSoup) -> list[Tag]:
+    explicit_selectors = (
+        "[data-size]",
+        "[data-color]",
+        "[data-colour]",
+        "[data-attr]",
+        "[data-value]",
+        "[data-variation-url]",
+        "[data-url]",
+        "[role='radio']",
+        "[role='option']",
+    )
+    nodes: list[Tag] = []
+    seen: set[int] = set()
+
+    def _append(node: Tag) -> None:
+        marker = id(node)
+        if marker in seen:
+            return
+        seen.add(marker)
+        nodes.append(node)
+
+    for selector in explicit_selectors:
+        for node in soup.select(selector):
+            if isinstance(node, Tag):
+                _append(node)
+
+    for container in soup.find_all(["fieldset", "div", "section", "ul", "ol"]):
+        if not isinstance(container, Tag):
+            continue
+        axis_name = _variant_axis_name_from_context(container)
+        if axis_name not in {"color", "size"}:
+            for heading in container.find_all(["legend", "label"], recursive=False):
+                if not isinstance(heading, Tag):
+                    continue
+                axis_name = _normalized_variant_axis_token(
+                    heading.get_text(" ", strip=True)
+                )
+                if axis_name in {"color", "size"}:
+                    break
+        if axis_name not in {"color", "size"}:
+            continue
+        for node in container.find_all(["button", "label", "a", "option"], recursive=True):
+            if isinstance(node, Tag):
+                _append(node)
+
+    return nodes
 
 
 # ---------------------------------------------------------------------------

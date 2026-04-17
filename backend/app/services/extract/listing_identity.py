@@ -7,6 +7,7 @@ from app.services.extract.field_decision import FieldDecisionEngine
 
 _EMPTY_VALUES = (None, "", [], {})
 _STRONG_IDENTITY_FIELDS = ("job_id", "sku", "part_number", "id", "url", "apply_url")
+_VARIANT_CONFLICT_FIELDS = ("price", "color", "size", "image_url", "brand")
 _WHITESPACE_RE = re.compile(r"\s+")
 _JOB_PRIMARY_SIGNAL_FIELDS = frozenset(
     {
@@ -22,6 +23,15 @@ _JOB_PRIMARY_SIGNAL_FIELDS = frozenset(
         "description",
     }
 )
+_SOURCE_PREFERENCE = {
+    "structured": 7,
+    "comparison_table": 6,
+    "next_flight": 5,
+    "inline_array": 4,
+    "json_ld": 3,
+    "adapter": 2,
+    "dom": 1,
+}
 _MERGE_ENGINE = FieldDecisionEngine()
 
 
@@ -47,25 +57,75 @@ def choose_primary_record_set(
 ) -> tuple[str, list[dict]]:
     best_label = ""
     best_records: list[dict] = []
-    best_score: tuple[int, int, int, int] = (0, 0, 0, 0)
-    is_job_surface = "job" in str(surface or "").lower()
+    normalized_surface = str(surface or "").lower()
+    is_job_surface = "job" in normalized_surface
+    is_ecommerce_surface = "commerce" in normalized_surface
+    best_score: tuple[int, ...] = (0, 0, 0, 0, 0)
 
     for label, records in record_sets.items():
         if not records:
             continue
         strong_count = sum(1 for record in records if strong_identity_key(record))
-        title_count = sum(1 for record in records if record.get("title") not in _EMPTY_VALUES)
-        link_count = sum(
+        title_count = sum(
+            1 for record in records if record.get("title") not in _EMPTY_VALUES
+        )
+        detail_anchor_count = sum(
             1
             for record in records
             if record.get("url") not in _EMPTY_VALUES
             or record.get("apply_url") not in _EMPTY_VALUES
         )
+        rich_count = sum(
+            1
+            for record in records
+            if record.get("title") not in _EMPTY_VALUES
+            and (
+                record.get("url") not in _EMPTY_VALUES
+                or record.get("apply_url") not in _EMPTY_VALUES
+                or record.get("price") not in _EMPTY_VALUES
+                or record.get("image_url") not in _EMPTY_VALUES
+            )
+        )
+        field_richness = sum(
+            len(
+                [
+                    key
+                    for key, value in record.items()
+                    if not str(key).startswith("_") and value not in _EMPTY_VALUES
+                ]
+            )
+            for record in records
+        )
+        source_preference = int(_SOURCE_PREFERENCE.get(label, 0))
         if is_job_surface:
             surface_count = sum(
                 1
                 for record in records
-                if any(record.get(field_name) not in _EMPTY_VALUES for field_name in _JOB_PRIMARY_SIGNAL_FIELDS)
+                if any(
+                    record.get(field_name) not in _EMPTY_VALUES
+                    for field_name in _JOB_PRIMARY_SIGNAL_FIELDS
+                )
+            )
+            score = (
+                detail_anchor_count,
+                surface_count,
+                field_richness,
+                rich_count,
+                source_preference,
+            )
+        elif is_ecommerce_surface:
+            surface_count = sum(
+                1
+                for record in records
+                if record.get("price") not in _EMPTY_VALUES
+                or record.get("image_url") not in _EMPTY_VALUES
+            )
+            score = (
+                detail_anchor_count,
+                rich_count,
+                field_richness,
+                surface_count,
+                source_preference,
             )
         else:
             surface_count = sum(
@@ -74,7 +134,13 @@ def choose_primary_record_set(
                 if record.get("price") not in _EMPTY_VALUES
                 or record.get("image_url") not in _EMPTY_VALUES
             )
-        score = (strong_count, surface_count, title_count, link_count)
+            score = (
+                detail_anchor_count or strong_count,
+                rich_count,
+                field_richness,
+                surface_count,
+                source_preference,
+            )
         if score > best_score:
             best_label = label
             best_records = records
@@ -258,7 +324,7 @@ def _has_strong_identity_conflict(base: dict, incoming: dict) -> bool:
             
     # FIX: Prevent merging distinct product variants (colors, sizes, prices) 
     # into a single record just because they share the same title.
-    for variant_field in ("price", "color", "size", "image_url", "brand"):
+    for variant_field in _VARIANT_CONFLICT_FIELDS:
         base_value = _normalized_identity_value(variant_field, base.get(variant_field))
         incoming_value = _normalized_identity_value(variant_field, incoming.get(variant_field))
         if base_value and incoming_value and base_value != incoming_value:

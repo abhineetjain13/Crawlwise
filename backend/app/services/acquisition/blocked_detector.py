@@ -9,6 +9,12 @@ import logging
 import re
 
 from app.services.config.block_signatures import BLOCK_SIGNATURES
+from app.services.pipeline.pipeline_config import (
+    BLOCKED_PAGE_FALLBACK_VISIBLE_LIMIT,
+    BLOCKED_PAGE_LARGE_HTML_THRESHOLD,
+    BLOCKED_PAGE_MIN_HTML_LENGTH,
+    BLOCKED_PAGE_VISIBLE_TEXT_CAP,
+)
 from app.services.runtime_metrics import incr
 
 BLOCK_PHRASES = tuple(BLOCK_SIGNATURES.get("phrases", []))
@@ -19,6 +25,62 @@ BLOCK_CDN_PROVIDER_MARKERS = tuple(BLOCK_SIGNATURES.get("cdn_provider_markers", 
 BLOCK_TITLE_REGEXES = tuple(BLOCK_SIGNATURES.get("title_regexes", []))
 _BLOCK_TITLE_PATTERNS = [re.compile(pattern, re.I) for pattern in BLOCK_TITLE_REGEXES]
 logger = logging.getLogger(__name__)
+_NON_VISIBLE_BLOCK_TAGS = {"script", "style", "noscript", "svg"}
+
+
+def _sample_large_html(html: str) -> str:
+    if len(html) <= BLOCKED_PAGE_VISIBLE_TEXT_CAP:
+        return html
+    half = max(1, BLOCKED_PAGE_VISIBLE_TEXT_CAP // 2)
+    return f"{html[:half]} {html[-half:]}"
+
+
+def _extract_large_html_visible_text(html: str) -> str:
+    sample = _sample_large_html(html)
+    lower = sample.lower()
+    visible_parts: list[str] = []
+    index = 0
+    skip_tag: str | None = None
+
+    while index < len(sample):
+        if skip_tag is not None:
+            close_start = lower.find(f"</{skip_tag}", index)
+            if close_start == -1:
+                break
+            close_end = lower.find(">", close_start)
+            if close_end == -1:
+                break
+            visible_parts.append(" ")
+            index = close_end + 1
+            skip_tag = None
+            continue
+
+        if sample[index] == "<":
+            search_end = min(len(sample), index + 2002)
+            tag_end = lower.find(">", index + 1, search_end)
+            if tag_end == -1:
+                index += 1
+                continue
+            tag_body = lower[index + 1 : tag_end].strip()
+            if tag_body:
+                closing = tag_body.startswith("/")
+                tag_name = (
+                    tag_body[1:] if closing else tag_body
+                ).split(None, 1)[0].rstrip("/")
+                if not closing and tag_name in _NON_VISIBLE_BLOCK_TAGS:
+                    skip_tag = tag_name
+                    index = tag_end + 1
+                    continue
+            visible_parts.append(" ")
+            index = tag_end + 1
+            continue
+
+        visible_parts.append(sample[index])
+        index += 1
+
+    return " ".join("".join(visible_parts).lower().split())[
+        :BLOCKED_PAGE_VISIBLE_TEXT_CAP
+    ]
 
 
 class BlockedPageResult:
@@ -46,21 +108,13 @@ class BlockedPageResult:
 
 def detect_blocked_page(html: str) -> BlockedPageResult:
     """Detect whether *html* is a blocked or challenge page safely without ReDoS."""
-    if not html or len(html.strip()) < 100:
+    if not html or len(html.strip()) < BLOCKED_PAGE_MIN_HTML_LENGTH:
         return BlockedPageResult(is_blocked=True, reason="empty_or_too_short")
 
     html_lower = html.lower()
     
-    # FIX: Optimized visible text extraction for large HTML
-    if len(html) > 100000:
-        # For very large HTML, use a faster regex-based approach to get some visible text
-        # rather than parsing the entire DOM with BeautifulSoup.
-        stripped = re.sub(r"<script.*?</script>", " ", html, flags=re.DOTALL | re.IGNORECASE)
-        stripped = re.sub(r"<style.*?</style>", " ", stripped, flags=re.DOTALL | re.IGNORECASE)
-        stripped = re.sub(r"<noscript.*?</noscript>", " ", stripped, flags=re.DOTALL | re.IGNORECASE)
-        stripped = re.sub(r"<svg.*?</svg>", " ", stripped, flags=re.DOTALL | re.IGNORECASE)
-        stripped = re.sub(r"<[^>]*?>", " ", stripped, flags=re.DOTALL)
-        visible = " ".join(stripped.lower().split())[:50000]
+    if len(html) > BLOCKED_PAGE_LARGE_HTML_THRESHOLD:
+        visible = _extract_large_html_visible_text(html)
     else:
         try:
             from bs4 import BeautifulSoup
@@ -75,7 +129,7 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
                 exc_info=True,
             )
             # Failsafe if BS4 hits a recursion limit on deeply nested malicious HTML
-            visible = html_lower[:20000]
+            visible = html_lower[:BLOCKED_PAGE_FALLBACK_VISIBLE_LIMIT]
 
     provider = ""
     title_reason = ""
@@ -117,6 +171,21 @@ def detect_blocked_page(html: str) -> BlockedPageResult:
 
     if "kpsdk" in html_lower and text_len < 200:
         return BlockedPageResult(is_blocked=True, reason="kasada_challenge_script", provider="kasada")
+
+    if provider == "datadome" and any(
+        marker in html_lower
+        for marker in (
+            "captcha-delivery.com",
+            "geo.captcha-delivery.com",
+            "datadome captcha",
+            "title=\"datadome captcha\"",
+        )
+    ):
+        return BlockedPageResult(
+            is_blocked=True,
+            reason="datadome_captcha_delivery",
+            provider="datadome",
+        )
 
     if "no treats beyond this point" in visible or ("page error: 403" in visible and "restricted access" in visible):
         chewy_provider = "akamai" if "akamai" in html_lower or "reference error number" in visible else provider

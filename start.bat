@@ -10,7 +10,7 @@ call :kill_window "CrawlerAI Frontend"
 call :kill_port 8000
 call :kill_port 3000
 
-start "CrawlerAI Backend" cmd /k "cd /d ""%ROOT%backend"" && python run_dev_server.py"
+start "CrawlerAI Backend" cmd /k "cd /d ""%ROOT%backend"" && .venv\Scripts\python.exe run_dev_server.py"
 start "CrawlerAI Frontend" cmd /k "cd /d ""%ROOT%frontend"" && npm run dev"
 
 endlocal

@@ -8,12 +8,14 @@ async def main():
     try:
         from app.database import AsyncSessionLocal
         # We need a run record. It's easier to just call acquire directly
-        from app.services.acquisition.acquirer import acquire
+        from app.services.acquisition.acquirer import AcquisitionRequest, acquire
         
         result = await acquire(
-            42,
-            "https://reverb.com/marketplace?product_type=electric-guitars",
-            surface="listing",
+            AcquisitionRequest(
+                run_id=42,
+                url="https://reverb.com/marketplace?product_type=electric-guitars",
+                surface="listing",
+            )
         )
         print("Acquisition result:", result.method)
         print("HTML length:", len(result.html))

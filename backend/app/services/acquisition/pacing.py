@@ -8,6 +8,7 @@ from math import ceil
 from uuid import uuid4
 
 from app.core.redis import get_redis, redis_fail_open, redis_failure_total, redis_is_enabled
+from app.services.acquisition.wait_utils import cooperative_sleep_seconds
 from app.services.config.crawl_runtime import (
     INTERRUPTIBLE_WAIT_POLL_MS,
     PACING_HOST_CACHE_TTL_SECONDS,
@@ -48,16 +49,7 @@ async def _cooperative_delay(
     delay_seconds: float,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    remaining = max(0.0, float(delay_seconds or 0.0))
-    poll_seconds = max(INTERRUPTIBLE_WAIT_POLL_MS, 50) / 1000.0
-    while remaining > 0:
-        if checkpoint is not None:
-            await checkpoint()
-        current_sleep = min(remaining, poll_seconds)
-        await asyncio.sleep(current_sleep)
-        remaining -= current_sleep
-    if checkpoint is not None:
-        await checkpoint()
+    await cooperative_sleep_seconds(delay_seconds, checkpoint=checkpoint)
 
 
 async def wait_for_host_slot(
@@ -77,7 +69,10 @@ async def wait_for_host_slot(
         await _cooperative_delay(interval_seconds, checkpoint=checkpoint)
         return interval_seconds
 
+    slept_seconds = 0.0
+
     async def _wait(redis) -> float:
+        nonlocal slept_seconds
         total_delay = 0.0
         while True:
             if checkpoint is not None:
@@ -91,10 +86,9 @@ async def wait_for_host_slot(
                 ex=lock_ttl_seconds,
             )
             if not acquired:
-                await _cooperative_delay(
-                    max(INTERRUPTIBLE_WAIT_POLL_MS, 50) / 1000.0,
-                    checkpoint=checkpoint,
-                )
+                retry_delay = max(INTERRUPTIBLE_WAIT_POLL_MS, 50) / 1000.0
+                await _cooperative_delay(retry_delay, checkpoint=checkpoint)
+                slept_seconds += retry_delay
                 continue
             try:
                 now = time.time()
@@ -109,6 +103,7 @@ async def wait_for_host_slot(
                     sleep_delay = min(delay, max_delay)
                     await _cooperative_delay(sleep_delay, checkpoint=checkpoint)
                     total_delay += sleep_delay
+                    slept_seconds += sleep_delay
                     if await redis.get(lock_key) != token:
                         continue
                     if delay > sleep_delay:
@@ -130,7 +125,9 @@ async def wait_for_host_slot(
         operation_name=f"wait_for_host_slot:{normalized_host}",
     )
     if redis_failure_total() != failure_count_before:
-        await _cooperative_delay(interval_seconds, checkpoint=checkpoint)
+        remaining_delay = max(0.0, interval_seconds - slept_seconds)
+        if remaining_delay > 0:
+            await _cooperative_delay(remaining_delay, checkpoint=checkpoint)
         return interval_seconds
     return result
 

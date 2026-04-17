@@ -151,6 +151,27 @@ def test_detect_blocked_page_blocks_active_marker_on_low_content_page():
     assert verdict.provider == "datadome"
 
 
+def test_detect_blocked_page_blocks_datadome_captcha_delivery_page():
+    html = """
+    <html>
+      <body>
+        <script src="https://ct.captcha-delivery.com/c.js"></script>
+        <iframe
+          src="https://geo.captcha-delivery.com/captcha/?initialCid=abc"
+          title="DataDome CAPTCHA"
+        ></iframe>
+        <div class="pcafooter">Powered by www.pcapredict.com</div>
+      </body>
+    </html>
+    """
+
+    verdict = detect_blocked_page(html)
+
+    assert verdict.is_blocked
+    assert verdict.provider == "datadome"
+    assert verdict.reason == "datadome_captcha_delivery"
+
+
 def test_detect_blocked_page_blocks_chewy_akamai_403_page():
     html = """
     <html>
@@ -232,6 +253,22 @@ def test_detect_blocked_page_large_html_ignores_noscript_and_svg_text():
       </body>
     </html>
     """.format(content="normal product content " * 6000)
+
+    verdict = detect_blocked_page(html)
+
+    assert not verdict.is_blocked
+
+
+def test_detect_blocked_page_large_html_with_unclosed_script_does_not_false_block():
+    html = (
+        "<html><body><script"
+        + ("x" * 1_000_000)
+        + "<main><h1>Widget Pro</h1><p>"
+        + ("normal product content " * 300)
+        + "</p><a href='/related'>Related</a><a href='/shipping'>Shipping</a>"
+        + "<a href='/support'>Support</a><a href='/faq'>FAQ</a><a href='/reviews'>Reviews</a>"
+        + "</main></body></html>"
+    )
 
     verdict = detect_blocked_page(html)
 

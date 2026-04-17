@@ -129,6 +129,33 @@ describe("CrawlRunScreen", () => {
     });
   });
 
+  it("renders completed summary chips from persisted backend values", async () => {
+    apiMock.getCrawl.mockResolvedValue({
+      ...terminalRun(101),
+      result_summary: {
+        extraction_verdict: "success",
+        record_count: 2,
+        duration_ms: 65_000,
+        quality_summary: {
+          level: "high",
+        },
+      },
+    });
+    apiMock.getRecords.mockResolvedValue({
+      items: [],
+      meta: { page: 1, limit: 100, total: 0 },
+    });
+
+    renderRunScreen();
+
+    expect(await screen.findByText("Time:")).toBeInTheDocument();
+    expect(screen.getByText("1m 5s")).toBeInTheDocument();
+    expect(screen.getByText("Verdict:")).toBeInTheDocument();
+    expect(screen.getByText("Success")).toBeInTheDocument();
+    expect(screen.getByText("Quality:")).toBeInTheDocument();
+    expect(screen.getByText("High")).toBeInTheDocument();
+  });
+
   it("supports progressive table loading for large result sets", async () => {
     apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
       const page = Math.max(1, params?.page ?? 1);

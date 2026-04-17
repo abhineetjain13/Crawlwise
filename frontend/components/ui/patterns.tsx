@@ -388,7 +388,9 @@ export function RunSummaryChips({
           key={chip.label}
           className="inline-flex items-center gap-1.5 rounded-full border border-[var(--subtle-panel-border)] bg-[var(--subtle-panel-bg)] px-2.5 py-1 text-xs leading-[1.45] text-muted"
         >
-          <span className="text-sm font-medium leading-[1.45] text-foreground">{chip.label}:</span>        </span>
+          <span className="text-sm font-medium leading-[1.45] text-foreground">{chip.label}:</span>
+          <span>{chip.value}</span>
+        </span>
       ))}
     </div>
   );

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from urllib.parse import urljoin, urlparse
 
 _EMPTY_VALUES = (None, "", [], {})
@@ -17,12 +16,6 @@ _DEFAULT_TEXT_KEYS = (
     "text",
     "description",
 )
-
-
-def normalized_field_token(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
-
-
 def find_alias_values(
     data: object,
     aliases: list[str],
@@ -31,9 +24,9 @@ def find_alias_values(
     list_limit: int = 30,
 ) -> list[object]:
     alias_tokens = {
-        normalized_field_token(alias)
+        "".join(ch for ch in str(alias or "").strip().lower() if ch.isalnum())
         for alias in aliases
-        if normalized_field_token(alias)
+        if "".join(ch for ch in str(alias or "").strip().lower() if ch.isalnum())
     }
     if not alias_tokens or max_depth <= 0:
         return []
@@ -45,7 +38,11 @@ def find_alias_values(
             return
         if isinstance(node, dict):
             for key, value in node.items():
-                if normalized_field_token(key) in alias_tokens and value not in _EMPTY_VALUES:
+                if (
+                    "".join(ch for ch in str(key or "").strip().lower() if ch.isalnum())
+                    in alias_tokens
+                    and value not in _EMPTY_VALUES
+                ):
                     values.append(value)
                 _visit(value, depth - 1)
             return
@@ -75,27 +72,6 @@ def coerce_scalar_text(
                 return text
         return ""
     return str(value).strip() if value not in _EMPTY_VALUES else ""
-
-
-def coerce_nested_text(
-    value: object,
-    *,
-    keys: tuple[str, ...],
-) -> object | None:
-    if not isinstance(value, dict):
-        return value
-    for key in keys:
-        nested = value.get(key)
-        if nested not in _EMPTY_VALUES:
-            return nested
-    for nested in value.values():
-        if isinstance(nested, dict):
-            resolved = coerce_nested_text(nested, keys=keys)
-            if resolved not in _EMPTY_VALUES:
-                return resolved
-    return None
-
-
 def resolve_slug_url(slug: str, *, page_url: str) -> str:
     text = str(slug or "").strip()
     if not text or not page_url:

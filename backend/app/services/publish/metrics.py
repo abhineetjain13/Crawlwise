@@ -8,6 +8,71 @@ if TYPE_CHECKING:
     from app.services.acquisition import AcquisitionResult
 
 
+def _clamp_quality_score(value: object) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(score, 1.0))
+
+
+def _quality_level_from_score(score: float) -> str:
+    if score >= 0.8:
+        return "high"
+    if score >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _quality_score(
+    url_metrics: dict[str, object],
+    *,
+    record_count: int,
+    requested_total: int,
+) -> float:
+    if record_count <= 0:
+        return 0.0
+
+    requested_found_best = int(url_metrics.get("requested_fields_found_best", 0) or 0)
+    requested_coverage = (
+        min(requested_found_best / requested_total, 1.0) if requested_total > 0 else 0.6
+    )
+    score = 0.45 + (requested_coverage * 0.4)
+
+    listing_quality = str(url_metrics.get("listing_quality") or "").strip().lower()
+    if listing_quality == "meaningful":
+        score = max(score, 0.85)
+    elif listing_quality == "extractable":
+        score = max(score, 0.65)
+    elif listing_quality == "link_only":
+        score = min(score, 0.45)
+    elif listing_quality == "invalid":
+        score = 0.0
+
+    listing_completeness = (
+        url_metrics.get("listing_completeness")
+        if isinstance(url_metrics.get("listing_completeness"), dict)
+        else {}
+    )
+    if listing_completeness.get("applicable"):
+        if listing_completeness.get("complete", True):
+            score = max(score, 0.8)
+        else:
+            score = min(score, 0.45)
+
+    variant_completeness = (
+        url_metrics.get("variant_completeness")
+        if isinstance(url_metrics.get("variant_completeness"), dict)
+        else {}
+    )
+    if variant_completeness.get("applicable") and not variant_completeness.get(
+        "complete", True
+    ):
+        score = min(score, 0.45)
+
+    return _clamp_quality_score(score)
+
+
 def build_acquisition_profile(
     run_settings: dict | CrawlRunSettings | None,
 ) -> dict[str, object]:
@@ -131,6 +196,11 @@ def finalize_url_metrics(
     if requested_total > 0:
         url_metrics["requested_fields_total"] = requested_total
         url_metrics["requested_fields_found_best"] = max(found_counts or [0])
+    quality_score = _quality_score(
+        url_metrics,
+        record_count=len(records),
+        requested_total=requested_total,
+    )
     quality_summary = {
         key: value
         for key, value in {
@@ -139,6 +209,10 @@ def finalize_url_metrics(
             "requested_fields_found_best": url_metrics.get(
                 "requested_fields_found_best"
             ),
+            "score": quality_score,
+            "level": _quality_level_from_score(quality_score)
+            if len(records) > 0
+            else "unknown",
             "acquisition_outcome": url_metrics.get("acquisition_outcome"),
             "listing_quality": url_metrics.get("listing_quality"),
             "listing_quality_flags": url_metrics.get("listing_quality_flags"),

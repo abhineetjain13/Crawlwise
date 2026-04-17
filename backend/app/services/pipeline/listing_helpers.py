@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 
 from app.services.acquisition import AcquisitionResult
 from app.services.acquisition import detect_blocked_page
-from app.services.config.field_mappings import excluded_fields_for_surface
+from app.services.field_alias_policy import excluded_fields_for_surface
 from app.services.extract.listing_quality import (
     looks_like_transactional_url_for_listing,
 )

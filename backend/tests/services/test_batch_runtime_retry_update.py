@@ -84,7 +84,7 @@ async def test_retry_run_update_retries_fast_on_lock_contention(
     assert run.updated is True
     session.flush.assert_awaited_once()
     assert session.execute.await_count == 2
-    session.rollback.assert_not_awaited()
+    assert session.rollback.await_count == 1
     assert session.commit.await_count == 1
     sleep.assert_awaited_once_with(0.05)
 

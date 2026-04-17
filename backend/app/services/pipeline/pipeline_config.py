@@ -2,6 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+BLOCKED_PAGE_MIN_HTML_LENGTH: int = 100
+"""Minimum stripped HTML length before blocked-page detection treats content as usable."""
+
+BLOCKED_PAGE_LARGE_HTML_THRESHOLD: int = 100000
+"""HTML size above which blocked-page detection uses the bounded large-document path."""
+
+BLOCKED_PAGE_VISIBLE_TEXT_CAP: int = 50000
+"""Maximum visible-text length retained during blocked-page analysis."""
+
+BLOCKED_PAGE_FALLBACK_VISIBLE_LIMIT: int = 20000
+"""Maximum raw-HTML prefix scanned when visible-text parsing falls back."""
+
 
 @dataclass(frozen=True, slots=True)
 class PipelineConfig:

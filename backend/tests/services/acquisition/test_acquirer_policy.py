@@ -30,7 +30,7 @@ def test_requires_browser_first_uses_config_driven_domain_policy(monkeypatch: py
 @pytest.mark.parametrize(
     ("traversal_mode", "expected"),
     [
-        ("auto", True),
+        ("auto", False),
         ("scroll", True),
         ("load_more", True),
         ("paginate", True),
@@ -41,6 +41,50 @@ def test_requires_browser_first_uses_config_driven_domain_policy(monkeypatch: py
 )
 def test_should_force_browser_for_traversal(traversal_mode: str | None, expected: bool) -> None:
     assert policy.should_force_browser_for_traversal(traversal_mode) is expected
+
+
+@pytest.mark.parametrize(
+    ("traversal_mode", "expected"),
+    [
+        ("auto", True),
+        ("scroll", True),
+        ("load_more", True),
+        ("paginate", True),
+        ("", False),
+        (None, False),
+        ("click", False),
+    ],
+)
+def test_has_requested_traversal_mode(traversal_mode: str | None, expected: bool) -> None:
+    assert policy.has_requested_traversal_mode(traversal_mode) is expected
+
+
+def test_normalize_surface_handles_blank_and_case() -> None:
+    assert policy.normalize_surface("  Job_Detail  ") == "job_detail"
+    assert policy.normalize_surface(None) == ""
+
+
+def test_acquisition_execution_decision_to_diagnostics() -> None:
+    decision = policy.AcquisitionExecutionDecision(
+        runtime="playwright_attempt_required",
+        reason="traversal_requested",
+        fallback_allowed=True,
+        expected_evidence=("dom_ready",),
+    )
+
+    assert decision.to_diagnostics() == {
+        "acquisition_runtime": "playwright_attempt_required",
+        "acquisition_runtime_reason": "traversal_requested",
+        "acquisition_runtime_fallback_allowed": True,
+        "expected_evidence": ["dom_ready"],
+    }
+
+
+def test_is_redirect_to_root_detects_same_host_root_redirect() -> None:
+    assert policy._is_redirect_to_root(
+        "https://example.com/products/widget",
+        "https://example.com/",
+    )
 
 
 def test_resolve_traversal_surface_policy_marks_detail_surfaces_non_traversable() -> None:

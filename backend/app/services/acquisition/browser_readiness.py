@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
+from app.services.acquisition.wait_utils import cooperative_sleep_ms
 from app.services.config.crawl_runtime import (
     INTERRUPTIBLE_WAIT_POLL_MS,
     LISTING_MIN_ITEMS,
@@ -30,19 +30,10 @@ async def _cooperative_sleep_ms(
     *,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    remaining_ms = max(0, int(delay_ms or 0))
-    poll_ms = max(INTERRUPTIBLE_WAIT_POLL_MS, 50)
-    while remaining_ms > 0:
-        if checkpoint is not None:
-            await checkpoint()
-        current_ms = min(remaining_ms, poll_ms)
-        await asyncio.sleep(current_ms / 1000.0)
-        remaining_ms -= current_ms
-    if checkpoint is not None:
-        await checkpoint()
+    await cooperative_sleep_ms(delay_ms, checkpoint=checkpoint)
 
 
-async def _cooperative_page_wait(
+async def cooperative_page_wait(
     page,
     delay_ms: int,
     *,
@@ -58,6 +49,15 @@ async def _cooperative_page_wait(
         remaining_ms -= current_ms
     if checkpoint is not None:
         await checkpoint()
+
+
+async def _cooperative_page_wait(
+    page,
+    delay_ms: int,
+    *,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    await cooperative_page_wait(page, delay_ms, checkpoint=checkpoint)
 
 
 async def _pause_after_navigation(
@@ -289,7 +289,7 @@ def _detail_readiness_selectors(surface: str | None) -> list[str]:
     return [selector for selector in selectors if str(selector).strip()]
 
 
-async def _wait_for_surface_readiness(
+async def wait_for_surface_readiness(
     page,
     *,
     surface: str | None,
@@ -356,3 +356,18 @@ async def _wait_for_surface_readiness(
         "selector": None,
         "waited_ms": elapsed,
     }
+
+
+async def _wait_for_surface_readiness(
+    page,
+    *,
+    surface: str | None,
+    max_wait_ms: int | None = None,
+    checkpoint: Callable[[], Awaitable[None]] | None = None,
+) -> dict[str, object] | None:
+    return await wait_for_surface_readiness(
+        page,
+        surface=surface,
+        max_wait_ms=max_wait_ms,
+        checkpoint=checkpoint,
+    )

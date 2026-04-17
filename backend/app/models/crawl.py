@@ -145,6 +145,7 @@ class BatchRunProgressState:
     url_verdicts: list[str] = field(default_factory=list)
     verdict_counts: dict[str, int] = field(default_factory=dict)
     acquisition_summary: dict[str, object] = field(default_factory=dict)
+    quality_summary: dict[str, object] = field(default_factory=dict)
     persisted_record_count: int = 0
     completed_count: int = 0
 
@@ -190,6 +191,7 @@ class BatchRunProgressState:
             url_verdicts=raw_verdicts,
             verdict_counts=dict(summary.get("verdict_counts") or {}),
             acquisition_summary=dict(summary.get("acquisition_summary") or {}),
+            quality_summary=dict(summary.get("quality_summary") or {}),
             persisted_record_count=max(0, as_int(persisted_record_count)),
             completed_count=completed_count,
         )
@@ -212,6 +214,10 @@ class BatchRunProgressState:
             self.acquisition_summary,
             url_metrics,
         )
+        self.quality_summary = _merge_run_quality_summary(
+            self.quality_summary,
+            url_metrics,
+        )
 
     def build_progress_patch(
         self,
@@ -231,6 +237,7 @@ class BatchRunProgressState:
             "url_verdicts": self.url_verdicts,
             "verdict_counts": self.verdict_counts,
             "acquisition_summary": self.acquisition_summary,
+            "quality_summary": self.quality_summary,
             "current_url": current_url,
             "current_url_index": current_url_index,
         }
@@ -250,6 +257,8 @@ class BatchRunProgressState:
             "completed_urls": self.completed_count,
             "remaining_urls": max(self.total_urls - self.completed_count, 0),
             "verdict_counts": self.verdict_counts,
+            "acquisition_summary": self.acquisition_summary,
+            "quality_summary": self.quality_summary,
         }
 
     def _progress_percent(self, *, final: bool = False) -> int:
@@ -366,6 +375,86 @@ def _merge_run_acquisition_metrics(
     elif current.get("traversal_modes_used"):
         summary["traversal_modes_used"] = dict(current.get("traversal_modes_used") or {})
 
+    return summary
+
+
+def _quality_level_from_score(score: float) -> str:
+    if score >= 0.8:
+        return "high"
+    if score >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _merge_run_quality_summary(
+    existing: object,
+    url_metrics: dict[str, object],
+) -> dict[str, object]:
+    current = dict(existing) if isinstance(existing, dict) else {}
+    url_quality = (
+        dict(url_metrics.get("quality_summary") or {})
+        if isinstance(url_metrics.get("quality_summary"), dict)
+        else {}
+    )
+    if not url_quality:
+        return current
+
+    level_counts = dict(current.get("level_counts") or {})
+    url_level = str(url_quality.get("level") or "").strip().lower()
+    if url_level in {"high", "medium", "low", "unknown"}:
+        level_counts[url_level] = int(level_counts.get(url_level, 0) or 0) + 1
+
+    current_scored_urls = int(current.get("scored_urls", 0) or 0)
+    current_score_total = _as_float(current.get("score", 0.0)) * current_scored_urls
+    next_scored_urls = current_scored_urls + 1
+    next_score_total = current_score_total + _as_float(url_quality.get("score", 0.0))
+    average_score = round(next_score_total / next_scored_urls, 4)
+
+    listing_incomplete = int(current.get("listing_incomplete_urls", 0) or 0)
+    listing_completeness = (
+        url_quality.get("listing_completeness")
+        if isinstance(url_quality.get("listing_completeness"), dict)
+        else {}
+    )
+    if listing_completeness.get("applicable") and not listing_completeness.get(
+        "complete", True
+    ):
+        listing_incomplete += 1
+
+    variant_incomplete = int(current.get("variant_incomplete_urls", 0) or 0)
+    variant_completeness = (
+        url_quality.get("variant_completeness")
+        if isinstance(url_quality.get("variant_completeness"), dict)
+        else {}
+    )
+    if variant_completeness.get("applicable") and not variant_completeness.get(
+        "complete", True
+    ):
+        variant_incomplete += 1
+
+    requested_total = max(
+        int(current.get("requested_fields_total", 0) or 0),
+        int(url_quality.get("requested_fields_total", 0) or 0),
+    )
+    requested_found_best = max(
+        int(current.get("requested_fields_found_best", 0) or 0),
+        int(url_quality.get("requested_fields_found_best", 0) or 0),
+    )
+
+    summary = {
+        "level": _quality_level_from_score(average_score)
+        if next_scored_urls > 0
+        else "unknown",
+        "score": average_score,
+        "scored_urls": next_scored_urls,
+        "level_counts": level_counts,
+        "listing_incomplete_urls": listing_incomplete,
+        "variant_incomplete_urls": variant_incomplete,
+    }
+    if requested_total > 0:
+        summary["requested_fields_total"] = requested_total
+    if requested_found_best > 0:
+        summary["requested_fields_found_best"] = requested_found_best
     return summary
 
 

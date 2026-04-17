@@ -17,6 +17,12 @@ def test_batch_run_progress_state_builds_progress_patch() -> None:
             "url_verdicts": ["success"],
             "verdict_counts": {"success": 1},
             "acquisition_summary": {"methods": {"curl_cffi": 1}},
+            "quality_summary": {
+                "level": "medium",
+                "score": 0.6,
+                "scored_urls": 1,
+                "level_counts": {"medium": 1},
+            },
         },
         total_urls=3,
         url_domain="example.com",
@@ -31,6 +37,11 @@ def test_batch_run_progress_state_builds_progress_patch() -> None:
             "method": "browser",
             "browser_used": True,
             "record_count": 2,
+            "quality_summary": {
+                "level": "high",
+                "score": 0.9,
+                "listing_completeness": {"applicable": True, "complete": False},
+            },
         },
     )
 
@@ -47,6 +58,9 @@ def test_batch_run_progress_state_builds_progress_patch() -> None:
     assert patch["url_verdicts"] == ["success", "partial"]
     assert patch["verdict_counts"] == {"success": 1, "partial": 1}
     assert patch["acquisition_summary"]["methods"] == {"curl_cffi": 1, "browser": 1}
+    assert patch["quality_summary"]["scored_urls"] == 2
+    assert patch["quality_summary"]["level"] == "medium"
+    assert patch["quality_summary"]["listing_incomplete_urls"] == 1
     assert patch["current_url"] == "https://example.com/items/2"
     assert patch["current_url_index"] == 2
 
@@ -86,6 +100,41 @@ def test_batch_run_progress_state_reconstructs_out_of_order_verdicts_without_tru
 
     assert state.completed_count == 1
     assert state.url_verdicts == ["success", "", "blocked"]
+
+
+def test_batch_run_progress_state_final_patch_includes_quality_and_acquisition_summary() -> None:
+    state = BatchRunProgressState.from_summary(
+        {
+            "completed_urls": 0,
+            "url_verdicts": [],
+            "verdict_counts": {},
+        },
+        total_urls=1,
+        url_domain="example.com",
+        persisted_record_count=0,
+    )
+
+    state.record_url_result(
+        idx=0,
+        records_count=3,
+        verdict="partial",
+        url_metrics={
+            "method": "curl_cffi",
+            "record_count": 3,
+            "quality_summary": {
+                "level": "low",
+                "score": 0.45,
+                "variant_completeness": {"applicable": True, "complete": False},
+            },
+        },
+    )
+
+    patch = state.build_final_patch("partial")
+
+    assert patch["extraction_verdict"] == "partial"
+    assert patch["acquisition_summary"]["methods"] == {"curl_cffi": 1}
+    assert patch["quality_summary"]["level"] == "low"
+    assert patch["quality_summary"]["variant_incomplete_urls"] == 1
 
 
 @pytest.mark.asyncio
@@ -130,6 +179,10 @@ async def test_batch_run_progress_state_persists_url_result() -> None:
             "method": "browser",
             "browser_used": True,
             "record_count": 1,
+            "quality_summary": {
+                "level": "high",
+                "score": 0.92,
+            },
         },
     )
 
@@ -143,3 +196,4 @@ async def test_batch_run_progress_state_persists_url_result() -> None:
     assert summary["url_verdicts"] == ["success"]
     assert summary["verdict_counts"] == {"success": 1}
     assert summary["acquisition_summary"]["methods"] == {"browser": 1}
+    assert summary["quality_summary"]["level"] == "high"

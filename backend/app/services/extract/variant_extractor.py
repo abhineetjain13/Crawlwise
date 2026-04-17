@@ -41,6 +41,19 @@ _STRUCTURED_CANONICAL_ATTRIBUTE_KEYS = {
     "variant_axes",
     "variants",
 }
+_VARIANT_AXIS_REJECT_TOKENS = frozenset(
+    {
+        "guide",
+        "size guide",
+        "size chart",
+        "share",
+        "see more",
+        "select",
+        "choose",
+        "notify",
+        "waitlist",
+    }
+)
 # ---------------------------------------------------------------------------
 # Inline helper (avoids circular import with service.py)
 # ---------------------------------------------------------------------------
@@ -54,6 +67,14 @@ def _normalized_candidate_text(value: object) -> str:
 # ---------------------------------------------------------------------------
 
 def _sync_selected_variant_root_fields(final_candidates: VariantCandidateRowMap) -> None:
+    variant_rows = final_candidates.get("variants")
+    if not isinstance(variant_rows, list) or not variant_rows:
+        return
+    variant_payload = (
+        variant_rows[0].get("value") if isinstance(variant_rows[0], dict) else None
+    )
+    if not isinstance(variant_payload, list) or not variant_payload:
+        return
     selected_rows = final_candidates.get("selected_variant")
     if not isinstance(selected_rows, list) or not selected_rows:
         return
@@ -180,6 +201,7 @@ def assess_variant_completeness(
         if isinstance(axes_row, dict) and isinstance(axes_row.get("value"), dict)
         else {}
     )
+    polluted_axis_values = _polluted_variant_axis_values(variant_axes)
     if variants and not selected_variant:
         return {
             "applicable": True,
@@ -189,14 +211,24 @@ def assess_variant_completeness(
             "variant_count": len(variants),
             "axis_count": len(variant_axes),
         }
-    if not variants and not selected_variant and not variant_axes:
+    if polluted_axis_values:
+        return {
+            "applicable": True,
+            "complete": False,
+            "reason": "polluted_variant_axes",
+            "raw_variant_signal_count": raw_variant_signal_count,
+            "variant_count": len(variants),
+            "axis_count": len(variant_axes),
+            "polluted_axis_values": polluted_axis_values,
+        }
+    if not variants:
         return {
             "applicable": True,
             "complete": False,
             "reason": "variant_signals_without_reconciled_bundle",
             "raw_variant_signal_count": raw_variant_signal_count,
-            "variant_count": 0,
-            "axis_count": 0,
+            "variant_count": len(variants),
+            "axis_count": len(variant_axes),
         }
     return {
         "applicable": True,
@@ -410,6 +442,22 @@ def _normalized_variant_axes_payload(
 ) -> VariantAxisValues:
     normalized = normalize_and_validate_value("variant_axes", value, base_url=base_url)
     return normalized if isinstance(normalized, dict) else {}
+
+
+def _polluted_variant_axis_values(variant_axes: VariantAxisValues) -> dict[str, list[str]]:
+    polluted: dict[str, list[str]] = {}
+    for axis_name, values in (variant_axes or {}).items():
+        if not isinstance(values, list):
+            continue
+        rejected = [
+            text
+            for value in values
+            if (text := _normalized_candidate_text(value))
+            and any(token in text.casefold() for token in _VARIANT_AXIS_REJECT_TOKENS)
+        ]
+        if rejected:
+            polluted[str(axis_name)] = rejected
+    return polluted
 
 
 def _is_meaningful_variant_record(value: object) -> bool:

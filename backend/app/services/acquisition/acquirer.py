@@ -20,11 +20,20 @@ from app.services.acquisition.artifact_store import (
 )
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import BrowserResult, fetch_rendered_html
+from app.services.acquisition.proxy_manager import (
+    ProxyRotator,
+    mark_proxy_failed,
+    mark_proxy_succeeded,
+)
+from app.services.acquisition.browser_readiness import _cooperative_sleep_ms
 from app.services.acquisition.policy import (
     browser_failure_log_message,
     classify_acquisition_outcome,
     decide_acquisition_execution,
+    normalize_traversal_summary,
+    has_requested_traversal_mode,
     is_invalid_surface_page,
+    normalize_surface,
     requires_browser_first,
     should_force_browser_for_traversal,
     surface_selection_warnings,
@@ -54,11 +63,6 @@ from app.services.config.crawl_runtime import (
     JS_SHELL_MIN_CONTENT_LEN,
     JS_SHELL_MIN_SCRIPT_COUNT,
     JS_SHELL_VISIBLE_RATIO_MAX,
-    PROXY_FAILURE_BACKOFF_MAX_EXPONENT,
-    PROXY_FAILURE_COOLDOWN_BASE_MS,
-    PROXY_FAILURE_COOLDOWN_MAX_MS,
-    PROXY_FAILURE_STATE_MAX_ENTRIES,
-    PROXY_FAILURE_STATE_TTL_SECONDS,
 )
 from app.services.platform_policy import detect_platform_family as detect_platform_family_from_registry
 from app.services.discover.signal_inventory import (
@@ -76,8 +80,6 @@ from playwright.async_api import Error as PlaywrightError
 
 logger = logging.getLogger(__name__)
 _REDACTED = "[REDACTED]"
-_PROXY_FAILURE_STATE: dict[str, tuple[int, float, float]] = {}
-_PROXY_FAILURE_STATE_LOCK = asyncio.Lock()
 _SENSITIVE_KEY_TOKENS = (
     "authorization",
     "api_key",
@@ -119,105 +121,6 @@ class ProxyPoolExhausted(ProxyPoolExhaustedError):  # noqa: N818 - compatibility
     pass
 
 
-class ProxyRotator:
-    """Round-robin proxy rotator."""
-
-    def __init__(self, proxies: list[str] | None = None):
-        self._proxies = [
-            proxy.strip() for proxy in (proxies or []) if proxy and proxy.strip()
-        ]
-        self._index = 0
-
-    def next(self) -> str | None:
-        if not self._proxies:
-            return None
-        proxy = self._proxies[self._index % len(self._proxies)]
-        self._index += 1
-        return proxy
-
-    async def cycle_once(self, *, use_cooldown: bool = True) -> list[str]:
-        if not self._proxies:
-            return []
-        candidates = list(self._proxies)
-        if not use_cooldown:
-            return [proxy for proxy in candidates if proxy]
-        available: list[str] = []
-        for proxy in candidates:
-            if proxy and await _is_proxy_available(proxy):
-                available.append(proxy)
-        return available
-
-
-def _proxy_backoff_seconds(failure_count: int) -> float:
-    if failure_count <= 0:
-        return 0.0
-    exponent = min(failure_count - 1, PROXY_FAILURE_BACKOFF_MAX_EXPONENT)
-    delay_ms = PROXY_FAILURE_COOLDOWN_BASE_MS * (2**exponent)
-    bounded_ms = min(delay_ms, PROXY_FAILURE_COOLDOWN_MAX_MS)
-    return max(0.0, bounded_ms / 1000)
-
-
-def _evict_stale_proxy_entries(now: float) -> None:
-    stale_cutoff = now - PROXY_FAILURE_STATE_TTL_SECONDS
-    stale_keys = [
-        key
-        for key, (
-            _failures,
-            last_failure_time,
-            _cooldown_until,
-        ) in _PROXY_FAILURE_STATE.items()
-        if last_failure_time <= stale_cutoff
-    ]
-    for key in stale_keys:
-        _PROXY_FAILURE_STATE.pop(key, None)
-
-    if len(_PROXY_FAILURE_STATE) <= PROXY_FAILURE_STATE_MAX_ENTRIES:
-        return
-    overflow = len(_PROXY_FAILURE_STATE) - PROXY_FAILURE_STATE_MAX_ENTRIES
-    for key, _state in sorted(
-        _PROXY_FAILURE_STATE.items(), key=lambda item: item[1][1]
-    )[:overflow]:
-        _PROXY_FAILURE_STATE.pop(key, None)
-
-
-async def _is_proxy_available(proxy: str) -> bool:
-    key = str(proxy or "").strip()
-    if not key:
-        return True
-    async with _PROXY_FAILURE_STATE_LOCK:
-        now = time.monotonic()
-        _evict_stale_proxy_entries(now)
-        state = _PROXY_FAILURE_STATE.get(key)
-        if state is None:
-            return True
-        _, _, cooldown_until = state
-        return now >= cooldown_until
-
-
-async def _mark_proxy_failed(proxy: str) -> None:
-    key = str(proxy or "").strip()
-    if not key:
-        return
-    async with _PROXY_FAILURE_STATE_LOCK:
-        now = time.monotonic()
-        _evict_stale_proxy_entries(now)
-        previous_failures = int((_PROXY_FAILURE_STATE.get(key) or (0, 0.0, 0.0))[0])
-        failures = max(1, previous_failures + 1)
-        cooldown_until = now + _proxy_backoff_seconds(failures)
-        _PROXY_FAILURE_STATE[key] = (failures, now, cooldown_until)
-        _evict_stale_proxy_entries(now)
-
-
-async def _mark_proxy_succeeded(proxy: str) -> None:
-    key = str(proxy or "").strip()
-    if not key:
-        return
-    async with _PROXY_FAILURE_STATE_LOCK:
-        now = time.monotonic()
-        _PROXY_FAILURE_STATE.pop(key, None)
-        _evict_stale_proxy_entries(now)
-
-
 @dataclass
 class AcquisitionResult:
     """Typed acquisition result with content-type routing."""
@@ -252,38 +155,6 @@ class AcquisitionRequest:
     requested_field_selectors: dict[str, list[dict]] = field(default_factory=dict)
     acquisition_profile: dict[str, object] = field(default_factory=dict)
     checkpoint: Callable[[], Awaitable[None]] | None = None
-
-    @classmethod
-    def from_legacy(
-        cls,
-        *,
-        run_id: int,
-        url: str,
-        proxy_list: list[str] | None = None,
-        surface: str | None = None,
-        traversal_mode: str | None = None,
-        max_pages: int = 5,
-        max_scrolls: int = DEFAULT_MAX_SCROLLS,
-        sleep_ms: int = 0,
-        requested_fields: list[str] | None = None,
-        requested_field_selectors: dict[str, list[dict]] | None = None,
-        acquisition_profile: dict[str, object] | None = None,
-        checkpoint: Callable[[], Awaitable[None]] | None = None,
-    ) -> "AcquisitionRequest":
-        return cls(
-            run_id=run_id,
-            url=url,
-            proxy_list=list(proxy_list or []),
-            surface=surface,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
-            sleep_ms=sleep_ms,
-            requested_fields=list(requested_fields or []),
-            requested_field_selectors=dict(requested_field_selectors or {}),
-            acquisition_profile=dict(acquisition_profile or {}),
-            checkpoint=checkpoint,
-        )
 
     def with_profile_updates(self, **updates: object) -> "AcquisitionRequest":
         profile = dict(self.acquisition_profile)
@@ -373,43 +244,6 @@ class _AcquireAttemptContext:
         result.diagnostics = self.finalize_diagnostics_payload(diagnostics)
         return result
 
-
-def _coerce_acquisition_request(
-    *,
-    request: AcquisitionRequest | None,
-    run_id: int | None,
-    url: str | None,
-    proxy_list: list[str] | None,
-    surface: str | None,
-    traversal_mode: str | None,
-    max_pages: int,
-    max_scrolls: int,
-    sleep_ms: int,
-    requested_fields: list[str] | None,
-    requested_field_selectors: dict[str, list[dict]] | None,
-    acquisition_profile: dict[str, object] | None,
-    checkpoint: Callable[[], Awaitable[None]] | None,
-) -> AcquisitionRequest:
-    if request is not None:
-        return request
-    if run_id is None or url is None:
-        raise TypeError("run_id and url are required when request is not provided")
-    return AcquisitionRequest.from_legacy(
-        run_id=run_id,
-        url=url,
-        proxy_list=proxy_list,
-        surface=surface,
-        traversal_mode=traversal_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        sleep_ms=sleep_ms,
-        requested_fields=requested_fields,
-        requested_field_selectors=requested_field_selectors,
-        acquisition_profile=acquisition_profile,
-        checkpoint=checkpoint,
-    )
-
-
 def _content_html_length(html: str) -> int:
     """Return HTML length with non-content tag bodies removed for shell detection."""
     stripped = _re.sub(
@@ -421,74 +255,9 @@ def _content_html_length(html: str) -> int:
     return max(len(stripped), 1)
 
 
-async def acquire_html(
-    run_id: int | None = None,
-    url: str | None = None,
-    proxy_list: list[str] | None = None,
-    surface: str | None = None,
-    traversal_mode: str | None = None,
-    max_pages: int = 5,
-    max_scrolls: int = DEFAULT_MAX_SCROLLS,
-    sleep_ms: int = 0,
-    requested_fields: list[str] | None = None,
-    requested_field_selectors: dict[str, list[dict]] | None = None,
-    acquisition_profile: dict[str, object] | None = None,
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-    request: AcquisitionRequest | None = None,
-) -> tuple[str, str, str, list[dict]]:
-    """Acquire HTML for a URL using the waterfall strategy."""
-    acquisition_request = _coerce_acquisition_request(
-        request=request,
-        run_id=run_id,
-        url=url,
-        proxy_list=proxy_list,
-        surface=surface,
-        traversal_mode=traversal_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        sleep_ms=sleep_ms,
-        requested_fields=requested_fields,
-        requested_field_selectors=requested_field_selectors,
-        acquisition_profile=acquisition_profile,
-        checkpoint=checkpoint,
-    )
-    result = await acquire(
-        request=acquisition_request,
-    )
-    return result.html, result.method, result.artifact_path, result.network_payloads
-
-
-async def acquire(
-    run_id: int | None = None,
-    url: str | None = None,
-    proxy_list: list[str] | None = None,
-    surface: str | None = None,
-    traversal_mode: str | None = None,
-    max_pages: int = 5,
-    max_scrolls: int = DEFAULT_MAX_SCROLLS,
-    sleep_ms: int = 0,
-    requested_fields: list[str] | None = None,
-    requested_field_selectors: dict[str, list[dict]] | None = None,
-    acquisition_profile: dict[str, object] | None = None,
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-    request: AcquisitionRequest | None = None,
-) -> AcquisitionResult:
+async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     """Acquire content for a URL using the waterfall strategy."""
-    acquisition_request = _coerce_acquisition_request(
-        request=request,
-        run_id=run_id,
-        url=url,
-        proxy_list=proxy_list,
-        surface=surface,
-        traversal_mode=traversal_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        sleep_ms=sleep_ms,
-        requested_fields=requested_fields,
-        requested_field_selectors=requested_field_selectors,
-        acquisition_profile=acquisition_profile,
-        checkpoint=checkpoint,
-    )
+    acquisition_request = request
     run_id = acquisition_request.run_id
     url = acquisition_request.url
     proxy_list = acquisition_request.proxy_list
@@ -568,7 +337,7 @@ async def acquire(
             for domain in set(session_ctx.persisted_domains) or {target_domain}:
                 discard_session_cookies(domain, session_ctx.identity_key)
             if proxy:
-                await _mark_proxy_failed(proxy)
+                await mark_proxy_failed(proxy)
             result = None
         else:
             if result is None:
@@ -577,9 +346,9 @@ async def acquire(
                     discard_session_cookies(domain, session_ctx.identity_key)
             if proxy:
                 if result is None:
-                    await _mark_proxy_failed(proxy)
+                    await mark_proxy_failed(proxy)
                 else:
-                    await _mark_proxy_succeeded(proxy)
+                    await mark_proxy_succeeded(proxy)
         if result is not None:
             # Stamp session diagnostics into the acquisition result.
             if isinstance(result.diagnostics, dict):
@@ -601,9 +370,9 @@ async def acquire(
         run_id,
         url,
         result,
-        scrub_payload=_scrub_payload_for_artifact,
-        scrub_html=_scrub_html_for_artifact,
-        scrub_text=_scrub_sensitive_text,
+        scrub_payload=lambda value: value,
+        scrub_html=lambda html: str(html or ""),
+        scrub_text=lambda text: str(text or ""),
     )
 
     result.artifact_path = artifact_path
@@ -642,24 +411,6 @@ def _extract_curl_analysis(
         else {}
     )
     return curl_result, curl_diagnostics
-
-
-def _execution_decision_diagnostics(
-    decision,
-) -> dict[str, object]:
-    if decision is None:
-        return {}
-    return {
-        "acquisition_runtime": str(getattr(decision, "runtime", "") or "").strip()
-        or None,
-        "acquisition_runtime_reason": str(getattr(decision, "reason", "") or "").strip()
-        or None,
-        "acquisition_runtime_fallback_allowed": bool(
-            getattr(decision, "fallback_allowed", False)
-        ),
-        "expected_evidence": list(getattr(decision, "expected_evidence", ()) or ())
-        or None,
-    }
 
 
 def _build_curl_result(
@@ -712,7 +463,7 @@ def _try_browser_first_success_result(
     )
     browser_first_is_usable = bool(
         first_extractability.get("has_extractable_data", False)
-    ) or not str(ctx.surface or "").strip().lower().endswith("listing")
+    ) or not normalize_surface(ctx.surface).endswith("listing")
     if (
         first_data.get("blocked")
         or is_invalid_surface_page(
@@ -840,7 +591,7 @@ async def _finalize_browser_result(
                 "soft_404_page": browser_warning_summary["soft_404_page"],
                 "transactional_page": browser_warning_summary["transactional_page"],
                 "timings_ms": merged_timings,
-                **_execution_decision_diagnostics(execution_decision),
+                **execution_decision.to_diagnostics(),
             }
         )
         for key in (
@@ -879,14 +630,14 @@ async def _finalize_browser_result(
             browser_fallback_used=True,
             browser_fallback_reason="browser_result_not_usable",
             traversal_fallback_used=(
-                True if should_force_browser_for_traversal(ctx.request.traversal_mode) else None
+                True if has_requested_traversal_mode(ctx.request.traversal_mode) else None
             ),
             traversal_fallback_reason=(
                 "browser_result_not_usable"
-                if should_force_browser_for_traversal(ctx.request.traversal_mode)
+                if has_requested_traversal_mode(ctx.request.traversal_mode)
                 else None
             ),
-            **_execution_decision_diagnostics(execution_decision),
+            **execution_decision.to_diagnostics(),
         )
         logger.info(
             "Playwright returned blocked/empty for %s — using curl_cffi fallback",
@@ -911,7 +662,7 @@ async def _finalize_browser_result(
                 "soft_404_page": browser_warning_summary["soft_404_page"],
                 "transactional_page": browser_warning_summary["transactional_page"],
                 "timings_ms": merged_timings,
-                **_execution_decision_diagnostics(execution_decision),
+                **execution_decision.to_diagnostics(),
             }
         )
         return AcquisitionResult(
@@ -986,7 +737,6 @@ async def _acquire_once(
 
     if should_force_browser_for_traversal(request.traversal_mode):
         http_result = None
-        analysis = {}
     else:
         http_result = await _try_http(
             request.url,
@@ -1060,12 +810,12 @@ async def _acquire_once(
             diagnostics=ctx.finalize_diagnostics_payload(diagnostics),
         )
     promoted_source_result = await _try_promoted_source_acquire(
+        ctx=ctx,
         url=request.url,
         proxy=request.proxy,
         surface=request.surface,
         run_id=request.run_id,
         analysis=analysis,
-        started=started,
         prefer_stealth=request.prefer_stealth,
         runtime_options=request.runtime_options,
         host_wait_seconds=host_wait,
@@ -1073,9 +823,6 @@ async def _acquire_once(
         session_context=request.session_context,
     )
     if promoted_source_result is not None:
-        promoted_source_result.diagnostics = ctx.finalize_diagnostics_payload(
-            promoted_source_result.diagnostics
-        )
         return promoted_source_result
 
     curl_result, curl_diagnostics = _extract_curl_analysis(analysis)
@@ -1092,12 +839,12 @@ async def _acquire_once(
             curl_diagnostics.get("timings_ms"),
             {"acquisition_total_ms": _elapsed_ms(started)},
         )
-        curl_diagnostics.update(_execution_decision_diagnostics(execution_decision))
+        curl_diagnostics.update(execution_decision.to_diagnostics())
         if curl_result is not None:
             return ctx.update_result_diagnostics(
                 curl_result,
                 timings_ms=curl_diagnostics.get("timings_ms"),
-                **_execution_decision_diagnostics(execution_decision),
+                **execution_decision.to_diagnostics(),
             )
         return _build_curl_result(
             ctx,
@@ -1127,7 +874,7 @@ async def _acquire_once(
             "browser_attempted": True,
             "browser_fallback_used": True,
         }
-        if should_force_browser_for_traversal(request.traversal_mode):
+        if has_requested_traversal_mode(request.traversal_mode):
             browser_fallback_updates.update(
                 {
                     "traversal_fallback_used": True,
@@ -1170,12 +917,12 @@ async def _acquire_once(
         if curl_result is not None:
             fallback_updates = dict(browser_failure_diagnostics)
             fallback_updates.update(browser_fallback_updates)
-            fallback_updates.update(_execution_decision_diagnostics(execution_decision))
+            fallback_updates.update(execution_decision.to_diagnostics())
             return ctx.update_result_diagnostics(
                 curl_result,
                 **fallback_updates,
             )
-        curl_diagnostics.update(_execution_decision_diagnostics(execution_decision))
+        curl_diagnostics.update(execution_decision.to_diagnostics())
         return _build_curl_result(
             ctx,
             http_result=http_result,
@@ -1194,12 +941,12 @@ async def _acquire_once(
 
 async def _try_promoted_source_acquire(
     *,
+    ctx: _AcquireAttemptContext,
     url: str,
     proxy: str | None,
     surface: str | None,
     run_id: int,
     analysis: dict[str, object],
-    started: float,
     prefer_stealth: bool,
     runtime_options,
     host_wait_seconds: float,
@@ -1364,24 +1111,13 @@ async def _try_promoted_source_acquire(
                     diagnostics.get("timings_ms"),
                     promoted_timings,
                     browser_timing_map,
-                    {"acquisition_total_ms": _elapsed_ms(started)},
+                    {"acquisition_total_ms": _elapsed_ms(ctx.started_at)},
                 ),
             }
         )
         if promoted_browser_used:
             diagnostics["browser_attempted"] = True
             diagnostics["browser_diagnostics"] = browser_data.get("diagnostics")
-        timings = _merge_timing_maps(diagnostics.get("timings_ms"))
-        phase_sum_ms = sum(
-            int(value)
-            for key, value in timings.items()
-            if key != "acquisition_total_ms" and isinstance(value, int)
-        )
-        timings["phases_total_ms"] = phase_sum_ms
-        timings["unattributed_ms"] = max(
-            0, int(timings.get("acquisition_total_ms", 0)) - phase_sum_ms
-        )
-        diagnostics["timings_ms"] = timings
         acquisition_method = "playwright" if promoted_browser_used else "curl_cffi"
         network_payloads = (
             list(browser_data.get("network_payloads") or [])
@@ -1395,7 +1131,7 @@ async def _try_promoted_source_acquire(
             artifact_path=str(_artifact_path(run_id, url)),
             promoted_sources=promoted_sources,
             network_payloads=network_payloads,
-            diagnostics=diagnostics,
+            diagnostics=ctx.finalize_diagnostics_payload(diagnostics),
         )
     return None
 
@@ -1525,12 +1261,14 @@ async def _try_http(
         final_url=str(normalized.final_url or url).strip() or url,
         html=html,
         surface=surface,
+        soup=soup,
     )
     page_surface_warnings = surface_selection_warnings(
         requested_url=url,
         final_url=str(normalized.final_url or url).strip() or url,
         html=html,
         surface=surface,
+        soup=soup,
     )
     warnings_summary = surface_warning_summary(page_surface_warnings)
     diagnostics.update(
@@ -1709,7 +1447,26 @@ async def _record_browser_failure(
             f"{failure_class}:{failure_origin}"
         )
         diagnostics_sink["retry_count"] = int(diagnostics_sink.get("retry_count", 0) or 0) + 1
-        if should_force_browser_for_traversal(traversal_mode):
+        if has_requested_traversal_mode(traversal_mode):
+            existing_summary = (
+                dict(diagnostics_sink.get("traversal_summary") or {})
+                if isinstance(diagnostics_sink.get("traversal_summary"), dict)
+                else {}
+            )
+            existing_summary.update(
+                {
+                    "attempted": True,
+                    "fallback_used": True,
+                    "failure_stage": "browser_render",
+                    "stop_reason": existing_summary.get("stop_reason")
+                    or f"browser_failure:{failure_class}",
+                }
+            )
+            diagnostics_sink["traversal_summary"] = normalize_traversal_summary(
+                existing_summary,
+                traversal_mode=traversal_mode,
+                combined_html=None,
+            )
             diagnostics_sink["traversal_fallback_used"] = True
             diagnostics_sink["traversal_fallback_reason"] = (
                 f"browser_failure:{failure_class}"
@@ -1790,14 +1547,6 @@ def _build_browser_attempt_metadata(
         "browser_total_ms": _elapsed_ms(browser_started_at),
     }
 
-
-# DEBT-01: Canonical implementation lives in browser_readiness.
-# Re-export for callers that import from acquirer.
-from app.services.acquisition.browser_readiness import (  # noqa: E402
-    _cooperative_sleep_ms as _cooperative_sleep_ms,
-)
-
-
 async def _fetch_with_content_type(
     url: str,
     proxy: str | None,
@@ -1834,29 +1583,9 @@ def _artifact_path(run_id: int, url: str) -> Path:
     return artifact_paths(run_id, url).artifact_path
 
 
-def _network_payload_path(run_id: int, url: str) -> Path:
-    return artifact_paths(run_id, url).network_payload_path
-
-
-def _diagnostics_path(run_id: int, url: str) -> Path:
-    return artifact_paths(run_id, url).diagnostics_path
-
-
-def _scrub_payload_for_artifact(value: object) -> object:
-    return value
-
-
-def _scrub_html_for_artifact(html: str) -> str:
-    return str(html or "")
-
-
 def _looks_sensitive_key(key: str) -> bool:
     normalized = str(key or "").strip().lower()
     return any(token in normalized for token in _SENSITIVE_KEY_TOKENS)
-
-
-def _scrub_sensitive_text(text: str) -> str:
-    return str(text or "")
 
 
 def scrub_network_payloads_for_storage(payloads: list[dict]) -> list[dict]:
@@ -1971,14 +1700,6 @@ def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bo
 
 # DEBT-06: Dead code removed - _artifact_basename and _slugify were never
 # called; all artifact path resolution uses artifact_store.artifact_paths().
-
-
-def _normalize_patterns(values: object) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    return [
-        str(value or "").strip().lower() for value in values if str(value or "").strip()
-    ]
 
 
 def _detect_platform_family(url: str, html: str = "") -> str | None:

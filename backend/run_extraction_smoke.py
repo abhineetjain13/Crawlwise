@@ -6,7 +6,7 @@ Tests the full acquisition -> discovery -> extraction path without a database.
 Usage:
     cd backend
     set PYTHONPATH=.
-    python run_extraction_smoke.py
+    .venv\Scripts\python.exe run_extraction_smoke.py
 """
 from __future__ import annotations
 
@@ -18,11 +18,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.services.acquisition.acquirer import acquire
+from app.services.acquisition.acquirer import AcquisitionRequest, acquire
 from app.services.extract.listing_extractor import extract_listing_records
+from app.services.extract.semantic_support import extract_semantic_detail_data
 from app.services.extract.service import extract_candidates
 from app.services.discover import parse_page_sources
-from app.services.semantic_detail_extractor import extract_semantic_detail_data
 
 TEST_SITES: list[dict] = [
     # --- Client demo URLs ---
@@ -123,7 +123,16 @@ async def _run_one(site: dict, run_id: int) -> dict:
         if page_type == "category":
             # Category runs exercise explicit traversal mode wiring in acquisition.
             acquire_kwargs["traversal_mode"] = "scroll"
-        acq = await asyncio.wait_for(acquire(run_id=run_id, url=url, **acquire_kwargs), timeout=45)
+        acq = await asyncio.wait_for(
+            acquire(
+                AcquisitionRequest(
+                    run_id=run_id,
+                    url=url,
+                    **acquire_kwargs,
+                )
+            ),
+            timeout=45,
+        )
         result_entry["method"] = acq.method
         result_entry["html_len"] = len(acq.html or "")
         result_entry["content_type"] = acq.content_type

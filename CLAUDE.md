@@ -23,10 +23,10 @@ CrawlerAI — deterministic web crawling pipeline for ecommerce and job board da
 ```powershell
 cd backend
 $env:PYTHONPATH='.'
-pytest tests -q                              # full suite
-pytest tests/services/extract/ -q            # extraction only
-python run_acquire_smoke.py commerce         # acquisition smoke (api|commerce|jobs|hard|ats|specialist)
-python run_extraction_smoke.py               # full extraction pipeline smoke
+.\.venv\Scripts\python.exe -m pytest tests -q   # full suite
+.\.venv\Scripts\python.exe -m pytest tests/services/extract/ -q
+.\.venv\Scripts\python.exe run_acquire_smoke.py commerce
+.\.venv\Scripts\python.exe run_extraction_smoke.py
 ```
 
 ## Development Auth (POC)

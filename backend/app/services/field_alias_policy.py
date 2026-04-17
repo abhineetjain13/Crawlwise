@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 from app.services.config.field_mappings import (
-    ECOMMERCE_ONLY_FIELDS,
+    CANONICAL_SCHEMAS,
     FIELD_ALIASES,
     INTERNAL_ONLY_FIELDS,
-    JOB_ONLY_FIELDS,
+)
+
+_ALL_CANONICAL_FIELDS = frozenset(
+    field_name
+    for fields in CANONICAL_SCHEMAS.values()
+    for field_name in fields
 )
 
 
 def excluded_fields_for_surface(surface: str) -> frozenset[str]:
     normalized = (surface or "").strip().lower()
-    excluded: frozenset[str] = INTERNAL_ONLY_FIELDS
-    if normalized in {"job_listing", "job_detail"}:
-        return excluded | ECOMMERCE_ONLY_FIELDS
-    if normalized in {"ecommerce_listing", "ecommerce_detail"}:
-        return excluded | JOB_ONLY_FIELDS
-    if normalized in {"automobile_listing", "automobile_detail"}:
-        return excluded | JOB_ONLY_FIELDS | ECOMMERCE_ONLY_FIELDS
-    return excluded
+    allowed = frozenset(CANONICAL_SCHEMAS.get(normalized, _ALL_CANONICAL_FIELDS))
+    return (_ALL_CANONICAL_FIELDS - allowed) | INTERNAL_ONLY_FIELDS
 
 
 def field_allowed_for_surface(surface: str, field_name: str) -> bool:
@@ -29,12 +28,12 @@ def field_allowed_for_surface(surface: str, field_name: str) -> bool:
 
 def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
     normalized = (surface or "").strip().lower()
-    excluded = excluded_fields_for_surface(normalized)
+    allowed = frozenset(CANONICAL_SCHEMAS.get(normalized, _ALL_CANONICAL_FIELDS))
 
     aliases = {
         canonical: list(aliases)
         for canonical, aliases in FIELD_ALIASES.items()
-        if canonical not in excluded
+        if canonical in allowed
     }
     if normalized in {"automobile_listing", "automobile_detail"}:
         automobile_aliases = {

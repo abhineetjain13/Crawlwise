@@ -4,7 +4,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from app.services.acquisition.browser_challenge import _retryable_browser_error_reason
-from app.services.acquisition.browser_readiness import _cooperative_page_wait
+from app.services.acquisition.browser_readiness import cooperative_page_wait
 from app.services.config.crawl_runtime import (
     BROWSER_ERROR_RETRY_ATTEMPTS,
     BROWSER_ERROR_RETRY_DELAY_MS,
@@ -143,7 +143,7 @@ async def _goto_with_fallback(
                     url,
                     browser_error_reason,
                 )
-                await _cooperative_page_wait(
+                await cooperative_page_wait(
                     page,
                     BROWSER_ERROR_RETRY_DELAY_MS,
                     checkpoint=checkpoint,
@@ -178,7 +178,7 @@ async def _warm_origin(
             wait_until="domcontentloaded",
             timeout=BROWSER_NAVIGATION_DOMCONTENTLOADED_TIMEOUT_MS,
         )
-        await _cooperative_page_wait(page, ORIGIN_WARM_PAUSE_MS, checkpoint=checkpoint)
+        await cooperative_page_wait(page, ORIGIN_WARM_PAUSE_MS, checkpoint=checkpoint)
         try:
             await page.mouse.move(240, 180)
             await page.evaluate("window.scrollBy(0, 120)")

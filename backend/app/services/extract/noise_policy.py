@@ -4,95 +4,29 @@ import re
 
 from app.services.config.extraction_rules import (
     CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS,
+    CSS_NOISE_PATTERN,
     CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN,
     CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN,
+    FIELD_POLLUTION_RULES,
+    FIELD_VALUE_NOISE_FRAGMENTS,
+    LOW_QUALITY_MERGE_TOKENS,
+    NETWORK_PAYLOAD_NOISE_URL_PATTERN,
+    NOISE_CONTAINER_REMOVAL_SELECTOR,
+    NOISE_CONTAINER_TOKENS,
+    NOISY_PRODUCT_ATTRIBUTE_KEYS,
+    NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS,
+    NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES,
+    SIZE_CHART_REGION_KEYS,
+    SOCIAL_HOST_SUFFIXES,
+    TITLE_NOISE_WORDS,
 )
 from app.services.requested_field_policy import normalize_requested_field
 from app.services.text_sanitization import strip_ui_noise
 from app.services.text_utils import normalized_text
 from bs4 import Tag
 
-LOW_QUALITY_MERGE_TOKENS = frozenset(
-    {"cookie", "privacy", "sign in", "log in", "account", "home", "menu", "agree", "policy"}
-)
-TITLE_NOISE_WORDS = frozenset(
-    {"home", "cart", "sign in", "search results", "access denied", "loading..."}
-)
-_COMMON_DETAIL_REJECT_PHRASES = (
-    "cookie",
-    "privacy",
-    "sign in",
-    "log in",
-    "my account",
-    "analytics",
-    "pageview",
-    "gtm",
-)
-_DETAIL_FIELD_REJECT_PHRASES: dict[str, tuple[str, ...]] = {
-    "title": ("add to cart", "shop now", "view cart", "menu"),
-    "brand": ("home >", "home /", "policy"),
-    "category": ("page type", "page category", "detail page"),
-    "availability": ("add to cart", "choose options", "select options", "view details"),
-    "color": ("add to cart", "choose options", "select options"),
-    "size": ("select size", "choose size"),
-    "features": ("livechat",),
-    "care": ("care instructions",),
-}
 _BREADCRUMB_STYLE_BRAND_RE = re.compile(r"\s(?:>|/)\s")
-
-_NOISY_PRODUCT_ATTRIBUTE_KEYS = frozenset(
-    {
-        "about",
-        "about_us",
-        "accessibility_statement",
-        "contact",
-        "contact_us",
-        "customer_service",
-        "faq",
-        "faqs",
-        "policies",
-        "privacy",
-        "privacy_policy",
-        "return_policy",
-        "returns",
-        "shipping",
-        "shipping_policy",
-        "shopping_cart",
-        "store_locations",
-        "terms",
-        "terms_policies",
-    }
-)
-_NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES = (
-    "loading... read more",
-    "privacy policy",
-    "terms of service",
-    "shipping policy",
-    "return policy",
-    "select a size",
-    "size guide",
-    "join the waitlist",
-    "check availability in store",
-    "request a catalog",
-    "join our team",
-    "account login",
-    "store locations",
-    "accessibility statement",
-    "subscribe to our newsletter",
-    "sign up for",
-    "follow us on",
-    "download our app",
-    "manage preferences",
-    "cookie settings",
-    "do not sell my personal",
-)
-_NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS = (
-    "gift cards",
-    "press inquiries",
-    "the gazette",
-    "your privacy choices",
-)
-_CSS_NOISE_VALUE_RE = re.compile(CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN)
+_CSS_NOISE_VALUE_RE = re.compile(CSS_NOISE_PATTERN or CANDIDATE_PRODUCT_ATTRIBUTE_CSS_NOISE_PATTERN)
 _PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_RE = re.compile(
     CANDIDATE_PRODUCT_ATTRIBUTE_DIGIT_ONLY_KEY_PATTERN
 )
@@ -100,88 +34,9 @@ _SIZE_CHART_PRODUCT_ATTRIBUTE_KEY_RE = re.compile(
     r"^(?:xxs|xs|s|m|l|xl|xxl|xxxl)(?:_\d+(?:_\d+)*)+$",
     re.IGNORECASE,
 )
-_SIZE_CHART_REGION_KEYS = frozenset(
-    {
-        "eu",
-        "eu_it",
-        "uk",
-        "us",
-        "asia",
-        "europe",
-        "oceania",
-        "africa",
-        "south_america",
-        "north_america",
-    }
-)
 _NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
-    r"geolocation|geoip|geo/|/geo\b|"
-    r"\banalytics\b|tracking|telemetry|"
-    r"klarna\.com|affirm\.com|afterpay\.com|"
-    r"olapic-cdn\.com|"
-    r"livechat|zendesk\.com|intercom\.io|"
-    r"facebook\.com|google-analytics|googletagmanager|"
-    r"sentry\.io|datadome|px\.ads|"
-    r"cdn-cgi/|captcha",
+    NETWORK_PAYLOAD_NOISE_URL_PATTERN,
     re.IGNORECASE,
-)
-
-SECTION_LABEL_SKIP_TOKENS = (
-    "contact",
-    "share",
-    "top searches",
-    "you may also like",
-    "featured products",
-    "frequently bought together",
-    "similar",
-    "related",
-)
-SECTION_KEY_SKIP_PREFIXES = (
-    "contact_",
-    "share",
-    "top_searches",
-    "you_may_also_like",
-    "related",
-    "similar",
-    "ad_id_",
-    "images",
-)
-SECTION_BODY_SKIP_PHRASES = (
-    "click to reveal phone number",
-    "dealer network partner",
-    "buy report now",
-    "share this ad",
-)
-_NOISE_CONTAINER_TOKENS = (
-    "footer",
-    "legal",
-    "privacy",
-    "cookie",
-    "consent",
-    "iubenda",
-    "menu",
-    "navigation",
-    "navbar",
-    "contact",
-    "share",
-    "app-store",
-    "app_store",
-    "newsletter",
-)
-_SOCIAL_HOST_SUFFIXES = (
-    "facebook.com",
-    "instagram.com",
-    "tiktok.com",
-    "pinterest.com",
-    "x.com",
-    "twitter.com",
-    "youtube.com",
-    "youtu.be",
-)
-_NOISE_CONTAINER_REMOVAL_SELECTOR = (
-    "aside, nav, [class*='filter' i], [class*='facet' i], "
-    "[class*='sidebar' i], [class*='breadcrumb' i], "
-    "[class*='navigation' i], [class*='menu' i], footer, header"
 )
 
 
@@ -198,14 +53,8 @@ def field_value_contains_noise(field_name: str, value: object) -> bool:
     text = normalized_noise_text(value).casefold()
     if not text:
         return False
-    fragments_by_field: dict[str, frozenset[str]] = {
-        "brand": frozenset({"cookie", "privacy"}),
-        "category": frozenset({"cookie", "sign in"}),
-        "color": frozenset({"cookie", "select"}),
-        "title": TITLE_NOISE_WORDS,
-    }
     return any(
-        fragment in text for fragment in fragments_by_field.get(field_name, frozenset())
+        fragment in text for fragment in FIELD_VALUE_NOISE_FRAGMENTS.get(field_name, frozenset())
     )
 
 
@@ -227,8 +76,8 @@ def sanitize_detail_field_value(
 
     lowered = text.casefold()
     reject_phrases = (
-        *_COMMON_DETAIL_REJECT_PHRASES,
-        *(_DETAIL_FIELD_REJECT_PHRASES.get(field_name) or ()),
+        *((FIELD_POLLUTION_RULES.get("__common__") or {}).get("reject_phrases", ())),
+        *((FIELD_POLLUTION_RULES.get(field_name) or {}).get("reject_phrases", ())),
     )
     if any(phrase in lowered for phrase in reject_phrases):
         return None, "detail_field_noise"
@@ -260,9 +109,9 @@ def is_noisy_product_attribute_entry(key: object, value: object) -> bool:
     text_value_slug = re.sub(r"[^a-z0-9]+", "_", text_value).strip("_")
     if len(normalized_key) > 15 and (normalized_key in text_value_slug or text_value_slug in normalized_key):
         return True
-    if normalized_key in _NOISY_PRODUCT_ATTRIBUTE_KEYS:
+    if normalized_key in NOISY_PRODUCT_ATTRIBUTE_KEYS:
         return True
-    if normalized_key in _SIZE_CHART_REGION_KEYS:
+    if normalized_key in SIZE_CHART_REGION_KEYS:
         return True
     if _SIZE_CHART_PRODUCT_ATTRIBUTE_KEY_RE.fullmatch(normalized_key):
         return True
@@ -281,9 +130,9 @@ def is_noisy_product_attribute_entry(key: object, value: object) -> bool:
         for token in CANDIDATE_NOISY_PRODUCT_ATTRIBUTE_KEY_TOKENS
     ):
         return True
-    if any(phrase in text_value for phrase in _NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES):
+    if any(phrase in text_value for phrase in NOISY_PRODUCT_ATTRIBUTE_VALUE_PHRASES):
         return True
-    if any(token in text_value for token in _NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS):
+    if any(token in text_value for token in NOISY_PRODUCT_ATTRIBUTE_LINK_TEXTS):
         return True
     if _CSS_NOISE_VALUE_RE.search(text_value):
         return True
@@ -361,7 +210,7 @@ def is_noise_container(
     max_depth: int = 6,
     extra_tokens: tuple[str, ...] = (),
 ) -> bool:
-    tokens = _NOISE_CONTAINER_TOKENS + tuple(extra_tokens)
+    tokens = NOISE_CONTAINER_TOKENS + tuple(extra_tokens)
     current = node
     steps = 0
     while isinstance(current, Tag) and steps <= max_depth:
@@ -403,12 +252,12 @@ def is_social_url(value: object) -> bool:
         return False
     return any(
         host == suffix or host.endswith(f".{suffix}")
-        for suffix in _SOCIAL_HOST_SUFFIXES
+        for suffix in SOCIAL_HOST_SUFFIXES
     )
 
 
 def strip_noise_containers(soup: Tag) -> None:
-    for noise_el in soup.select(_NOISE_CONTAINER_REMOVAL_SELECTOR):
+    for noise_el in soup.select(NOISE_CONTAINER_REMOVAL_SELECTOR):
         noise_el.decompose()
 
 

@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass, replace
 from json import loads as parse_json
+from urllib.parse import urljoin
 
 from app.services.extract import listing_structured_extractor as _listing_structured_extractor
 from app.services.extract.listing_identity import (
@@ -94,6 +95,7 @@ class ListingExtractionRequest:
     xhr_payloads: list[dict] | None = None
     adapter_records: list[dict] | None = None
     soup: BeautifulSoup | None = None
+    page_sources: dict[str, object] | None = None
 
 
 def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
@@ -134,6 +136,7 @@ def extract_listing_records(
     xhr_payloads: list[dict] | None = None,
     adapter_records: list[dict] | None = None,
     soup: BeautifulSoup | None = None,
+    page_sources: dict[str, object] | None = None,
 ) -> list[dict]:
     request = ListingExtractionRequest(
         html=html,
@@ -144,6 +147,7 @@ def extract_listing_records(
         xhr_payloads=xhr_payloads,
         adapter_records=adapter_records,
         soup=soup,
+        page_sources=page_sources,
     )
     page_fragments = _split_paginated_html_fragments(request.html)
     if len(page_fragments) > 1:
@@ -192,7 +196,11 @@ def _collect_raw_listing_record_sets(
     *,
     soup: BeautifulSoup,
 ) -> dict[str, list[dict]]:
-    page_sources = parse_page_sources(request.html, soup=soup)
+    page_sources = (
+        dict(request.page_sources) if isinstance(request.page_sources, dict) else {}
+    )
+    if not page_sources:
+        page_sources = parse_page_sources(request.html, soup=soup)
     adapter_records = request.adapter_records or []
     xhr_payloads = request.xhr_payloads or []
     json_ld_records = _extract_from_json_ld(soup, request.surface, request.page_url)
@@ -440,6 +448,22 @@ def _estimate_visible_item_count(soup: BeautifulSoup) -> int:
     return max(card_count, price_count // 2 if price_count > 0 else 0)
 
 
+def _detail_url_lower_bound(soup: BeautifulSoup, *, page_url: str) -> int:
+    detail_urls: set[str] = set()
+    for anchor in soup.select("a[href]"):
+        href = str(anchor.get("href") or "").strip()
+        if not href or href.startswith("#"):
+            continue
+        resolved = urljoin(page_url, href) if page_url else href
+        lowered = resolved.lower()
+        if any(
+            marker in lowered
+            for marker in ("/p/", "/product/", "/products/", "/dp/", "/item/")
+        ):
+            detail_urls.add(lowered)
+    return len(detail_urls)
+
+
 def assess_listing_completeness(
     *,
     html: str,
@@ -459,6 +483,8 @@ def assess_listing_completeness(
     soup = soup or BeautifulSoup(html or "", "html.parser")
     record_count = len(records or [])
     estimated_visible_items = _estimate_visible_item_count(soup)
+    distinct_detail_url_count = _detail_url_lower_bound(soup, page_url=page_url)
+    lower_bound_item_count = max(estimated_visible_items, distinct_detail_url_count)
     unique_urls = {
         str(record.get("url") or "").strip().lower()
         for record in (records or [])
@@ -476,10 +502,14 @@ def assess_listing_completeness(
             "[data-test-id*='skeleton'], [class*='skeleton'], [data-testid*='skeleton']"
         )
     )
-    card_density_without_records = estimated_visible_items >= MIN_VIABLE_RECORDS and record_count == 0
+    card_density_without_records = lower_bound_item_count >= MIN_VIABLE_RECORDS and record_count == 0
     partial_listing_capture = (
         estimated_visible_items >= 8
         and 0 < record_count < min(estimated_visible_items, 4)
+    )
+    lower_bound_sparse_capture = (
+        lower_bound_item_count >= 12
+        and record_count < max(1, int(lower_bound_item_count * 0.5))
     )
     duplicate_heavy_capture = record_count >= MIN_VIABLE_RECORDS and duplicate_url_ratio >= 0.5
 
@@ -488,6 +518,8 @@ def assess_listing_completeness(
         reason = "visible_listing_density_without_records"
     elif skeleton_count >= 3 and record_count == 0:
         reason = "listing_shell_without_materialized_records"
+    elif lower_bound_sparse_capture:
+        reason = "record_count_far_below_lower_bound_item_estimate"
     elif partial_listing_capture:
         reason = "record_count_far_below_visible_listing_density"
     elif duplicate_heavy_capture:
@@ -500,6 +532,12 @@ def assess_listing_completeness(
         "reason": reason,
         "record_count": record_count,
         "estimated_visible_items": estimated_visible_items,
+        "distinct_detail_url_count": distinct_detail_url_count,
+        "lower_bound_item_count": lower_bound_item_count,
+        "coverage_ratio": round(
+            (record_count / lower_bound_item_count) if lower_bound_item_count > 0 else 1.0,
+            3,
+        ),
         "duplicate_url_ratio": round(duplicate_url_ratio, 3),
         "page_url": page_url or None,
         "skeleton_count": skeleton_count or 0,

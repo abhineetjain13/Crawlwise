@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from unittest.mock import patch
 
 import pytest
@@ -24,11 +23,8 @@ class _FakeResponse:
 
 
 @pytest.mark.asyncio
-async def test_request_json_with_curl_logs_decode_failure(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_request_json_with_curl_returns_none_on_decode_failure() -> None:
     adapter = _TestAdapter()
-    caplog.set_level(logging.DEBUG, logger="app.services.adapters.base")
 
     with patch(
         "app.services.adapters.base.wait_for_host_slot",
@@ -40,7 +36,6 @@ async def test_request_json_with_curl_logs_decode_failure(
         )
 
     assert result is None
-    assert "Failed to decode adapter JSON response" in caplog.text
 
 
 class _FamilyAdapter(BaseAdapter):

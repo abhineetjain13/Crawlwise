@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.services.extract.listing_identity import merge_record_sets_on_identity
+from app.services.extract.listing_identity import (
+    choose_primary_record_set,
+    merge_record_sets_on_identity,
+)
 
 
 def test_merge_uses_strong_identity_key_match() -> None:
@@ -52,3 +55,63 @@ def test_merge_rejects_noisy_brand_candidates_via_field_decision_engine() -> Non
     merged = merge_record_sets_on_identity(primary, supplemental)
 
     assert merged[0]["brand"] == ""
+
+
+def test_choose_primary_record_set_prefers_link_bearing_commerce_records() -> None:
+    record_sets = {
+        "inline_array": [
+            {"title": "Product A - Size 8", "price": "42.00", "sku": "SKU-1"},
+            {"title": "Product B - Size 8", "price": "55.00", "sku": "SKU-2"},
+        ],
+        "dom": [
+            {
+                "title": "Product A",
+                "url": "https://example.com/products/a",
+                "image_url": "https://cdn.example.com/a.jpg",
+            },
+            {
+                "title": "Product B",
+                "url": "https://example.com/products/b",
+                "image_url": "https://cdn.example.com/b.jpg",
+            },
+        ],
+    }
+
+    label, records = choose_primary_record_set(
+        record_sets,
+        surface="ecommerce_listing",
+    )
+
+    assert label == "dom"
+    assert len(records) == 2
+
+
+def test_choose_primary_record_set_prefers_richer_records_when_identity_coverage_matches() -> None:
+    record_sets = {
+        "dom": [
+            {"title": "Product A", "url": "https://example.com/products/a"},
+            {"title": "Product B", "url": "https://example.com/products/b"},
+        ],
+        "structured": [
+            {
+                "title": "Product A",
+                "url": "https://example.com/products/a",
+                "price": "42.00",
+                "image_url": "https://cdn.example.com/a.jpg",
+            },
+            {
+                "title": "Product B",
+                "url": "https://example.com/products/b",
+                "price": "55.00",
+                "image_url": "https://cdn.example.com/b.jpg",
+            },
+        ],
+    }
+
+    label, records = choose_primary_record_set(
+        record_sets,
+        surface="ecommerce_listing",
+    )
+
+    assert label == "structured"
+    assert len(records) == 2

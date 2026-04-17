@@ -46,9 +46,10 @@ from app.services.config.extraction_rules import (
     SALARY_RANGE_REGEX,
     SIZE_GUIDE_NOISE_VALUES,
     SIZE_NOISE_TOKENS,
+    TITLE_NOISE_WORDS,
     VARIANT_AXIS_ALIASES,
 )
-from app.services.extract.noise_policy import TITLE_NOISE_WORDS, field_value_contains_noise
+from app.services.extract.noise_policy import field_value_contains_noise
 from app.services.text_sanitization import strip_ui_noise as strip_ui_noise_policy
 from app.services.text_utils import normalized_text as normalized_text_policy
 from bs4 import BeautifulSoup

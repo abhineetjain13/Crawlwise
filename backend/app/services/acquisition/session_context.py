@@ -168,8 +168,11 @@ class SessionContext:
     # In-memory isolated cookie jar for this session. Dict of {name: value}
     # suitable for curl_cffi ``cookies=`` kwarg.
     cookies: dict[str, str] = field(default_factory=dict)
-    # Playwright cookie list (list[dict]) for ``context.add_cookies()``.
-    playwright_cookies: list[dict[str, Any]] = field(default_factory=list)
+    # Playwright cookies keyed by (name, domain) for efficient merges.
+    _playwright_cookies: dict[tuple[str, str], dict[str, Any]] = field(
+        default_factory=dict,
+        repr=False,
+    )
     # Bound curl_cffi impersonation profile for TLS fingerprint consistency.
     impersonate_profile: str = ""
     # Creation timestamp for diagnostics.
@@ -199,7 +202,7 @@ class SessionContext:
         """Mark this session as dead.  Cookies become unusable."""
         self.invalidated = True
         self.cookies.clear()
-        self.playwright_cookies.clear()
+        self._playwright_cookies.clear()
         logger.debug(
             "SessionContext invalidated: proxy=%s profile=%s",
             self.proxy or "direct",
@@ -211,6 +214,10 @@ class SessionContext:
         if normalized:
             self.persisted_domains.add(normalized)
 
+    @property
+    def playwright_cookies(self) -> list[dict[str, Any]]:
+        return list(self._playwright_cookies.values())
+
     def merge_http_cookies(self, domain_cookies: dict[str, str]) -> None:
         """Merge domain-scoped cookies into the session-isolated jar."""
         self.cookies.update(domain_cookies)
@@ -218,19 +225,14 @@ class SessionContext:
     def merge_playwright_cookies(self, browser_cookies: list[dict]) -> None:
         """Merge Playwright-format cookies into the session-isolated jar."""
         for cookie in browser_cookies:
-            key = (cookie.get("name"), cookie.get("domain"))
-            for index, existing_cookie in enumerate(self.playwright_cookies):
-                existing_key = (
-                    existing_cookie.get("name"),
-                    existing_cookie.get("domain"),
-                )
-                if existing_key == key:
-                    updated_cookie = dict(existing_cookie)
-                    updated_cookie.update(cookie)
-                    self.playwright_cookies[index] = updated_cookie
-                    break
-            else:
-                self.playwright_cookies.append(cookie)
+            key = (
+                str(cookie.get("name") or "").strip(),
+                str(cookie.get("domain") or "").strip(),
+            )
+            existing_cookie = self._playwright_cookies.get(key, {})
+            updated_cookie = dict(existing_cookie)
+            updated_cookie.update(cookie)
+            self._playwright_cookies[key] = updated_cookie
 
     def to_diagnostics(self) -> dict[str, object]:
         """Return a diagnostics-safe snapshot (no cookie values)."""
@@ -241,7 +243,7 @@ class SessionContext:
             "viewport": f"{self.fingerprint.viewport_width}x{self.fingerprint.viewport_height}",
             "device_scale_factor": self.fingerprint.device_scale_factor,
             "locale": self.fingerprint.locale,
-            "cookie_count": len(self.cookies) + len(self.playwright_cookies),
+            "cookie_count": len(self.cookies) + len(self._playwright_cookies),
             "invalidated": self.invalidated,
             "age_seconds": round(time.monotonic() - self.created_at, 1),
         }

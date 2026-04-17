@@ -4,7 +4,7 @@ Ad-hoc extraction smoke for plan audit URLs.
 Usage:
     cd backend
     set PYTHONPATH=.
-    python run_audit_smoke.py
+    .venv\Scripts\python.exe run_audit_smoke.py
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.services.acquisition.acquirer import acquire
+from app.services.acquisition.acquirer import AcquisitionRequest, acquire
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.discover import parse_page_sources
@@ -83,8 +83,18 @@ async def _run_one(site: dict, run_id: int) -> dict:
 
     try:
         acq = await asyncio.wait_for(
-            acquire(run_id=run_id, url=url, surface=surface, traversal_mode=None,
-                    max_pages=5, max_scrolls=5, sleep_ms=0, requested_fields=[]),
+            acquire(
+                AcquisitionRequest(
+                    run_id=run_id,
+                    url=url,
+                    surface=surface,
+                    traversal_mode=None,
+                    max_pages=5,
+                    max_scrolls=5,
+                    sleep_ms=0,
+                    requested_fields=[],
+                )
+            ),
             timeout=90,
         )
         diag = acq.diagnostics or {}

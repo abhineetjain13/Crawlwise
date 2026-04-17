@@ -38,3 +38,40 @@ def test_normalize_listing_record_interprets_shopify_integer_money_under_normali
     assert normalized["price"] == "129.99"
     assert normalized["original_price"] == "159.99"
 
+
+def test_normalize_listing_record_keeps_detail_like_html_product_urls() -> None:
+    normalized = normalize_listing_record(
+        {
+            "title": "Mini Hobo Bag Studs in Black, Black",
+            "url": "https://www.ganni.com/en-gb/mini-hobo-bag-studs-in-black-B2070100.html",
+            "price": 530,
+            "image_url": "https://cdn.example.com/model.jpg",
+        },
+        surface="ecommerce_listing",
+        page_url="https://www.ganni.com/en-gb/bags/",
+        target_fields=set(),
+    )
+
+    assert normalized["url"] == "https://www.ganni.com/en-gb/mini-hobo-bag-studs-in-black-B2070100.html"
+
+
+def test_normalize_listing_record_strips_tracking_query_params_from_product_urls() -> None:
+    normalized = normalize_listing_record(
+        {
+            "title": "Men's Dasher NZ",
+            "url": (
+                "https://www.allbirds.com/products/mens-dasher-nz-anthracite"
+                "?a_ajs_event=Product+Clicked&utm_source=test&keep=1"
+            ),
+            "image_url": "https://cdn.example.com/dasher.png",
+        },
+        surface="ecommerce_listing",
+        page_url="https://www.allbirds.com/collections/mens",
+        target_fields=set(),
+    )
+
+    assert (
+        normalized["url"]
+        == "https://www.allbirds.com/products/mens-dasher-nz-anthracite?keep=1"
+    )
+

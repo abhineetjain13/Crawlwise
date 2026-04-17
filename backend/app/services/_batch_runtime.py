@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from app.core.config import settings
 from app.core.telemetry import (
@@ -294,10 +295,22 @@ async def _finalize_batch_run(
     acquisition_summary_map = (
         dict(acquisition_summary) if isinstance(acquisition_summary, dict) else {}
     )
+    summary = dict(summary_patch)
+    if acquisition_summary_map:
+        summary["acquisition_summary"] = acquisition_summary_map
+
+    run = await session.get(CrawlRun, run_id)
+    created_at = getattr(run, "created_at", None) if run is not None else None
+    if isinstance(created_at, datetime):
+        duration_ms = max(
+            0,
+            int((datetime.now(UTC) - created_at).total_seconds() * 1000),
+        )
+        summary["duration_ms"] = duration_ms
 
     await BatchRunStore(session).finalize_run(
         run_id,
-        summary_patch=summary_patch,
+        summary_patch=summary,
         aggregate_verdict=aggregate_verdict,
     )
     traversal_attempted = int(

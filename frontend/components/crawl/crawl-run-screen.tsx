@@ -22,7 +22,7 @@ import {
 import { Badge, Button, Card, Input, Tooltip } from "../ui/primitives";
 import { api } from "../../lib/api";
 import { getApiWebSocketBaseUrl } from "../../lib/api/client";
-import type { CrawlLog, CrawlRecord, CrawlRun } from "../../lib/api/types";
+import type { CrawlLog, CrawlRecord, CrawlRun, ResultSummaryQualityLevel } from "../../lib/api/types";
 import { CRAWL_DEFAULTS } from "../../lib/constants/crawl-defaults";
 import { ACTIVE_STATUSES } from "../../lib/constants/crawl-statuses";
 import { STORAGE_KEYS } from "../../lib/constants/storage-keys";
@@ -40,6 +40,7 @@ import {
   extractionVerdict,
   extractionVerdictTone,
   formatDuration,
+  formatDurationMs,
   estimateDataQuality,
   humanizeVerdict,
   humanizeQuality,
@@ -450,10 +451,18 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   const verdict = extractionVerdict(run);
   const runErrorMessage =
     typeof run?.result_summary?.error === "string" ? run.result_summary.error : "";
+  const persistedQualityLevel = useMemo(() => {
+    const level = String(run?.result_summary?.quality_summary?.level ?? "").trim().toLowerCase();
+    if (level === "high" || level === "medium" || level === "low" || level === "unknown") {
+      return level as ResultSummaryQualityLevel;
+    }
+    return null;
+  }, [run?.result_summary?.quality_summary?.level]);
   const quality = useMemo(
     () => estimateDataQuality(recordsForAnalysis, visibleColumns),
     [recordsForAnalysis, visibleColumns],
   );
+  const completedQualityLevel = terminal ? (persistedQualityLevel ?? quality.level) : quality.level;
   const batchFromResultsUrls = selectedResultUrls.length ? selectedResultUrls : resultUrls;
   const batchFromResultsLabel = selectedResultUrls.length
     ? `Batch Crawl Selected (${selectedResultUrls.length})`
@@ -469,10 +478,12 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       Number(run?.result_summary?.progress ?? 0) > 0 ? 1 : 0,
     ),
     fields: visibleColumns.length,
-    duration: formatDuration(
-      new Date(effectiveStartMs).toISOString(),
-      terminal ? run?.completed_at : new Date(localNow).toISOString(),
-    ),
+    duration:
+      (terminal ? formatDurationMs(run?.result_summary?.duration_ms) : null) ??
+      formatDuration(
+        new Date(effectiveStartMs).toISOString(),
+        terminal ? run?.completed_at : new Date(localNow).toISOString(),
+      ),
   };
 
   const missingRecentTerminalRecords =
@@ -665,8 +676,8 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               label="Data Quality"
               value={
                 <span className="inline-flex items-center gap-2">
-                  <Badge tone={qualityTone(quality.level)}>
-                    {humanizeQuality(quality.level)} ({Math.round(quality.score * 100)}%)
+                  <Badge tone={qualityTone(completedQualityLevel)}>
+                    {humanizeQuality(completedQualityLevel)} ({Math.round(quality.score * 100)}%)
                   </Badge>
                   <Tooltip content="Quality reflects how complete and useful the extracted rows are. High means rows are consistently rich. Low can still be usable, but it is sparser.">
                     <button type="button" aria-label="Explain data quality" className="text-muted transition-colors hover:text-foreground">
@@ -770,7 +781,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
               <RunSummaryChips
                 duration={summary.duration}
                 verdict={humanizeVerdict(verdict)}
-                quality={humanizeQuality(quality.level)}
+                quality={humanizeQuality(completedQualityLevel)}
               />
             }
             content={

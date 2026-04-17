@@ -116,6 +116,14 @@ class AcquisitionExecutionDecision:
     fallback_allowed: bool
     expected_evidence: tuple[str, ...] = ()
 
+    def to_diagnostics(self) -> dict[str, object]:
+        return {
+            "acquisition_runtime": str(self.runtime or "").strip() or None,
+            "acquisition_runtime_reason": str(self.reason or "").strip() or None,
+            "acquisition_runtime_fallback_allowed": bool(self.fallback_allowed),
+            "expected_evidence": list(self.expected_evidence or ()) or None,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class TraversalSurfacePolicy:
@@ -133,6 +141,10 @@ class AutoTraversalDecision:
     should_paginate_now: bool
 
 
+def normalize_surface(surface: str | None) -> str:
+    return str(surface or "").strip().lower()
+
+
 def classify_acquisition_outcome(result) -> str:
     diag = result.diagnostics if isinstance(result.diagnostics, dict) else {}
     if result.content_type == "json":
@@ -143,8 +155,6 @@ def classify_acquisition_outcome(result) -> str:
         return AcquisitionOutcome.blocked
     blocked = diag.get("blocked")
     if isinstance(blocked, dict) and blocked.get("is_blocked"):
-        return AcquisitionOutcome.blocked
-    if getattr(blocked, "is_blocked", False):
         return AcquisitionOutcome.blocked
     if diag.get("promoted_browser_used"):
         return AcquisitionOutcome.promoted_source_browser
@@ -169,7 +179,7 @@ def requires_browser_first(url: str, platform_family: str | None) -> bool:
     domain = urlparse(url).netloc.lower().replace("www.", "")
     if matches_domain_policy(domain, browser_first_domains()):
         return True
-    normalized_platform = str(platform_family or "").strip().lower()
+    normalized_platform = normalize_surface(platform_family)
     if normalized_platform in JOB_PLATFORM_FAMILIES:
         return True
     policy = resolve_platform_runtime_policy(url)
@@ -312,7 +322,7 @@ def decide_acquisition_execution(
     traversal_mode: str | None,
     requested_fields: list[str] | None,
 ) -> AcquisitionExecutionDecision:
-    normalized_surface = str(surface or "").strip().lower()
+    normalized_surface = normalize_surface(surface)
     if should_force_browser_for_traversal(traversal_mode):
         return AcquisitionExecutionDecision(
             runtime="playwright_attempt_required",
@@ -347,15 +357,20 @@ def decide_acquisition_execution(
     )
 
 
-def should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
-    normalized_mode = str(traversal_mode or "").strip().lower()
+def has_requested_traversal_mode(traversal_mode: str | None) -> bool:
+    normalized_mode = normalize_surface(traversal_mode)
     return normalized_mode in {"auto", "scroll", "load_more", "paginate"}
+
+
+def should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
+    normalized_mode = normalize_surface(traversal_mode)
+    return normalized_mode in {"scroll", "load_more", "paginate"}
 
 
 def resolve_traversal_surface_policy(
     surface: str | None,
 ) -> TraversalSurfacePolicy:
-    normalized_surface = str(surface or "").strip().lower()
+    normalized_surface = normalize_surface(surface)
     is_detail_surface = normalized_surface.endswith("_detail")
     return TraversalSurfacePolicy(
         surface=surface,
@@ -445,7 +460,7 @@ def browser_failure_log_message(
 ) -> str:
     prefix = (
         "[traversal] Browser acquisition failed, falling back to curl"
-        if should_force_browser_for_traversal(traversal_mode)
+        if has_requested_traversal_mode(traversal_mode)
         else "Browser acquisition failed"
     )
     return (
@@ -468,7 +483,7 @@ def should_retry_browser_launch_profile(
     )
     if detect_blocked_page(result_html).is_blocked:
         return True
-    normalized_surface = str(surface or "").strip().lower()
+    normalized_surface = normalize_surface(surface)
     if not normalized_surface.endswith("_listing"):
         return False
     readiness = diagnostics.get("listing_readiness")
@@ -485,19 +500,24 @@ def is_invalid_surface_page(
     final_url: str,
     html: str,
     surface: str | None,
+    soup: BeautifulSoup | None = None,
 ) -> bool:
     commerce_warning = diagnose_commerce_surface_page(
         requested_url=requested_url,
         final_url=final_url,
         surface=surface,
         html=html,
+        soup=soup,
     )
-    if _is_invalid_commerce_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        surface=surface,
-        html=html,
-        commerce_warning=commerce_warning,
+    if commerce_warning is not None and bool(
+        set((commerce_warning or {}).get("signals") or [])
+        & {
+            "redirected_to_root",
+            "redirect_shell_title",
+            "transactional_url",
+            "transactional_page_title",
+            "noindex_transactional_page",
+        }
     ):
         return True
     job_warning = diagnose_job_surface_page(
@@ -505,6 +525,7 @@ def is_invalid_surface_page(
         final_url=final_url,
         html=html,
         surface=surface,
+        soup=soup,
     )
     if job_warning is not None:
         signals = set(job_warning.get("signals") or [])
@@ -524,6 +545,7 @@ def surface_selection_warnings(
     final_url: str,
     html: str,
     surface: str | None,
+    soup: BeautifulSoup | None = None,
 ) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
     commerce_warning = diagnose_commerce_surface_page(
@@ -531,6 +553,7 @@ def surface_selection_warnings(
         final_url=final_url,
         html=html,
         surface=surface,
+        soup=soup,
     )
     if commerce_warning is not None:
         warnings.append(commerce_warning)
@@ -539,10 +562,22 @@ def surface_selection_warnings(
         final_url=final_url,
         html=html,
         surface=surface,
+        soup=soup,
     )
     if job_warning is not None:
         warnings.append(job_warning)
     return warnings
+
+
+def _is_redirect_to_root(requested_url: str, final_url: str) -> bool:
+    requested = urlparse(requested_url)
+    final = urlparse(final_url or requested_url)
+    return (
+        bool(final_url)
+        and requested.netloc.lower() == final.netloc.lower()
+        and requested.path.rstrip("/") != final.path.rstrip("/")
+        and final.path.rstrip("/") == ""
+    )
 
 
 def surface_warning_summary(
@@ -576,18 +611,12 @@ def diagnose_commerce_surface_page(
     final_url: str,
     html: str,
     surface: str | None,
+    soup: BeautifulSoup | None = None,
 ) -> dict[str, object] | None:
-    normalized_surface = str(surface or "").strip().lower()
+    normalized_surface = normalize_surface(surface)
     if normalized_surface not in {"ecommerce_listing", "ecommerce_detail"}:
         return None
-    requested = urlparse(requested_url)
-    final = urlparse(final_url or requested_url)
-    redirected_to_root = (
-        bool(final_url)
-        and requested.netloc.lower() == final.netloc.lower()
-        and requested.path.rstrip("/") != final.path.rstrip("/")
-        and final.path.rstrip("/") == ""
-    )
+    redirected_to_root = _is_redirect_to_root(requested_url, final_url)
     if not html and not redirected_to_root:
         return None
     warning_signals: list[str] = []
@@ -604,7 +633,7 @@ def diagnose_commerce_surface_page(
             "final_url": final_url or requested_url,
         } if warning_signals else None
 
-    soup = BeautifulSoup(html, HTML_PARSER)
+    soup = soup or BeautifulSoup(html, HTML_PARSER)
     title_text = " ".join(
         (soup.title.get_text(" ", strip=True) if soup.title else "").lower().split()
     )
@@ -653,18 +682,12 @@ def diagnose_job_surface_page(
     final_url: str,
     html: str,
     surface: str | None,
+    soup: BeautifulSoup | None = None,
 ) -> dict[str, object] | None:
-    normalized_surface = str(surface or "").strip().lower()
+    normalized_surface = normalize_surface(surface)
     if normalized_surface not in {"job_listing", "job_detail"}:
         return None
-    requested = urlparse(requested_url)
-    final = urlparse(final_url or requested_url)
-    redirected_to_root = (
-        bool(final_url)
-        and requested.netloc.lower() == final.netloc.lower()
-        and requested.path.rstrip("/") != final.path.rstrip("/")
-        and final.path.rstrip("/") == ""
-    )
+    redirected_to_root = _is_redirect_to_root(requested_url, final_url)
     if not html and not redirected_to_root:
         return None
     warning_signals: list[str] = []
@@ -679,7 +702,7 @@ def diagnose_job_surface_page(
             "final_url": final_url or requested_url,
         } if warning_signals else None
 
-    soup = BeautifulSoup(html, HTML_PARSER)
+    soup = soup or BeautifulSoup(html, HTML_PARSER)
     title_text = " ".join(
         (soup.title.get_text(" ", strip=True) if soup.title else "").lower().split()
     )
@@ -712,34 +735,6 @@ def diagnose_job_surface_page(
         "title": title_text or None,
         "canonical_url": canonical_url or None,
     }
-
-
-def _is_invalid_commerce_surface_page(
-    *,
-    requested_url: str,
-    final_url: str,
-    html: str,
-    surface: str | None,
-    commerce_warning: dict[str, object] | None = None,
-) -> bool:
-    warning = commerce_warning
-    if warning is None:
-        warning = diagnose_commerce_surface_page(
-            requested_url=requested_url,
-            final_url=final_url,
-            html=html,
-            surface=surface,
-        )
-    return warning is not None and bool(
-        set((warning or {}).get("signals") or [])
-        & {
-            "redirected_to_root",
-            "redirect_shell_title",
-            "transactional_url",
-            "transactional_page_title",
-            "noindex_transactional_page",
-        }
-    )
 
 
 def _looks_like_commerce_transaction_url(url: str) -> bool:

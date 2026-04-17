@@ -41,6 +41,9 @@ def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | N
             record[canonical] = normalized
             break
 
+    if _has_ambiguous_url_alias_values(item):
+        record.pop("url", None)
+
     if record.get("image_url") in _EMPTY_VALUES and record.get("additional_images") not in _EMPTY_VALUES:
         image_candidates = [
             part.strip()
@@ -85,6 +88,23 @@ def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | N
     if record:
         record["_raw_item"] = item
     return record if record else None
+
+
+def _has_ambiguous_url_alias_values(item: dict) -> bool:
+    candidate_urls: set[str] = set()
+    for alias_key in ("url", "href", "link", "detailUrl", "detail_url", "apply_url", "applyUrl"):
+        raw_value = item.get(alias_key)
+        if isinstance(raw_value, list):
+            for element in raw_value:
+                if isinstance(element, dict):
+                    for nested_key in ("href", "url", "path", "pathname", "link"):
+                        nested_value = element.get(nested_key)
+                        text = str(nested_value or "").strip()
+                        if text:
+                            candidate_urls.add(text)
+                elif isinstance(element, str) and element.strip():
+                    candidate_urls.add(element.strip())
+    return len(candidate_urls) > 1
 
 
 def _preferred_generic_item_values(

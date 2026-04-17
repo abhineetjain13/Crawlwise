@@ -334,3 +334,50 @@ async def test_probe_browser_automation_surfaces_returns_page_evaluation() -> No
 
     assert result is expected
     page.evaluate.assert_awaited_once()
+
+
+def test_record_partial_traversal_progress_tracks_captured_pages() -> None:
+    diagnostics: dict[str, object] = {}
+
+    browser_client._record_partial_traversal_progress(
+        diagnostics,
+        traversal_mode="auto",
+        message="paginate:capture page=2 mode=full_page html_length=12345",
+    )
+
+    traversal_summary = diagnostics["traversal_summary"]
+    assert traversal_summary["attempted"] is True
+    assert traversal_summary["mode_used"] == "paginate"
+    assert traversal_summary["pages_collected"] == 2
+    assert traversal_summary["fallback_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_populate_result_records_blocked_diagnostics_as_dict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = browser_client.BrowserResult()
+    page = SimpleNamespace(url="https://example.com/item")
+
+    async def _fake_collect_frame_sources(_page):
+        return (
+            "<html><title>Access denied</title><body>"
+            + ("captcha gate " * 20)
+            + "</body></html>",
+            [],
+            [],
+        )
+
+    monkeypatch.setattr(
+        browser_client,
+        "_collect_frame_sources",
+        _fake_collect_frame_sources,
+    )
+
+    await browser_client._populate_result(result, page, [])
+
+    assert result.diagnostics["blocked"] == {
+        "is_blocked": True,
+        "reason": "blocked_phrase:403_forbidden",
+        "provider": "origin",
+    }

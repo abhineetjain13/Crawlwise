@@ -45,6 +45,12 @@ from app.services.config.extraction_audit_settings import (
 )
 from app.services.config.nested_field_rules import PAGE_URL_CURRENCY_HINTS
 from app.services.config.selectors import CARD_SELECTORS as _CARD_SELECTORS
+from app.services.extract.listing_card_context import (
+    backfill_card_record as _backfill_card_record,
+    candidate_card_contexts as _candidate_card_contexts,
+    extract_embedded_card_metadata as _extract_embedded_card_metadata,
+    looks_like_commerce_detail_path as _looks_like_commerce_detail_path,
+)
 from app.services.extract.listing_quality import (
     looks_like_category_url_for_listing as _looks_like_category_url,
     looks_like_detail_record_url_for_listing as _looks_like_detail_record_url,
@@ -373,12 +379,16 @@ def _looks_like_card_link_href(href: str) -> bool:
     if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
         return False
     lowered = href.lower()
+    if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
+        return True
+    if _looks_like_commerce_detail_path(lowered):
+        return True
+    if _looks_like_detail_record_url(href):
+        return True
     if _looks_like_transactional_url(lowered):
         return False
     if _looks_like_facet_or_filter_url(lowered):
         return False
-    if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
-        return True
     parsed = urlparse(lowered)
     path = parsed.path.strip("/")
     if not path:
@@ -401,11 +411,15 @@ def _best_card_link(card: Tag, page_url: str) -> str:
             continue
             
         resolved = urljoin(page_url, href) if page_url else href
-        if _looks_like_transactional_url(resolved):
-            continue
         parsed_path = urlparse(resolved).path.lower()
         if any(marker in parsed_path for marker in LISTING_DETAIL_PATH_MARKERS):
             return resolved
+        if _looks_like_commerce_detail_path(parsed_path):
+            return resolved
+        if _looks_like_detail_record_url(resolved):
+            return resolved
+        if _looks_like_transactional_url(resolved):
+            continue
             
         segments = [s for s in parsed_path.strip("/").split("/") if s]
         max_digits = max((len(m) for m in re.findall(r"\d+", parsed_path)), default=0)
@@ -424,6 +438,22 @@ def _best_card_link(card: Tag, page_url: str) -> str:
 def _extract_from_card(
     card: Tag,
     _target_fields: set[str],
+    surface: str,
+    page_url: str,
+) -> dict:
+    record = _extract_from_card_node(card, surface=surface, page_url=page_url)
+    if "ecommerce" in str(surface or "").lower():
+        record = _enrich_ecommerce_card_record_from_context(
+            record,
+            card=card,
+            page_url=page_url,
+        )
+    return record
+
+
+def _extract_from_card_node(
+    card: Tag,
+    *,
     surface: str,
     page_url: str,
 ) -> dict:
@@ -464,6 +494,32 @@ def _extract_from_card(
         record = _finalize_job_card_record(record)
 
     return record
+
+
+def _enrich_ecommerce_card_record_from_context(
+    record: dict[str, object],
+    *,
+    card: Tag,
+    page_url: str,
+) -> dict[str, object]:
+    enriched = dict(record)
+    for context in _candidate_card_contexts(card):
+        context_record = _extract_from_card_node(
+            context,
+            surface="ecommerce_listing",
+            page_url=page_url,
+        )
+        context_record |= _extract_embedded_card_metadata(
+            context,
+            page_url=page_url,
+            normalize_title=_normalize_listing_title_text,
+            coerce_product_url=_coerce_listing_product_url_candidate,
+        )
+        context_record.pop("additional_images", None)
+        if enriched.get("image_url") not in (None, "", [], {}):
+            context_record.pop("image_url", None)
+        enriched = _backfill_card_record(enriched, context_record)
+    return enriched
 
 
 def _extract_card_link_and_title(

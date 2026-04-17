@@ -71,6 +71,36 @@ def test_extract_product_cards():
     assert "price" in records[0]
 
 
+def test_extract_listing_records_reuses_provided_page_sources():
+    html = """
+    <html><body>
+    <div class="product-card">
+        <h3><a href="/product/1">Widget A</a></h3>
+        <span class="price">$10.00</span>
+    </div>
+    <div class="product-card">
+        <h3><a href="/product/2">Widget B</a></h3>
+        <span class="price">$20.00</span>
+    </div>
+    </body></html>
+    """
+
+    with patch(
+        "app.services.extract.listing_extractor.parse_page_sources",
+        side_effect=AssertionError("parse_page_sources should not run"),
+    ):
+        records = _extract_listing_records_impl(
+            html,
+            "ecommerce_listing",
+            set(),
+            page_url="https://example.com/listing",
+            max_records=10,
+            page_sources={"embedded_json": []},
+        )
+
+    assert [record["title"] for record in records] == ["Widget A", "Widget B"]
+
+
 def test_extract_product_cards_falls_back_to_image_alt_for_title():
     html = """
     <html><body>
@@ -2277,6 +2307,52 @@ def test_extract_listing_records_reads_titles_from_pro_title_text():
     assert record["url"] == "https://www.shop.ving.run/product/nirun-นิรัน/1"
 
 
+def test_extract_from_card_backfills_identity_from_ancestor_product_context():
+    html = """
+    <html><body>
+      <article class="product js-tile" data-pid="B207010009900">
+        <div
+          class="product-tile"
+          data-analytics='{"item_id":"B2070100","item_name":"Mini Hobo Bag Studs in Black","variant_id":"B207010009900","price":530,"currency":"GBP"}'
+        >
+          <div
+            class="b-tile__picture js-tile-picture"
+            data-images-switcher-list-desktop='[{"url":"https://cdn.example.com/packshot.jpg","title":"Mini Hobo Bag Studs in Black, Black"},{"url":"https://cdn.example.com/model.jpg","title":"Mini Hobo Bag Studs in Black, Black"}]'
+          >
+            <a
+              class="b-tile__media"
+              href="/en-gb/mini-hobo-bag-studs-in-black-B2070100.html"
+              aria-label="Open Mini Hobo Bag Studs in Black product page"
+            >
+              <img src="https://cdn.example.com/model.jpg" alt="Mini Hobo Bag Studs in Black, Black" />
+            </a>
+          </div>
+        </div>
+      </article>
+    </body></html>
+    """
+    soup = listing_extractor.BeautifulSoup(html, "html.parser")
+    card = soup.select_one(".b-tile__picture")
+    assert card is not None
+
+    record = listing_extractor._extract_from_card(
+        card,
+        set(),
+        "ecommerce_listing",
+        "https://www.ganni.com/en-gb/bags/",
+    )
+
+    assert record["title"] == "Mini Hobo Bag Studs in Black, Black"
+    assert (
+        record["url"]
+        == "https://www.ganni.com/en-gb/mini-hobo-bag-studs-in-black-B2070100.html"
+    )
+    assert record["price"] == 530
+    assert record["currency"] == "GBP"
+    assert record["id"] == "B2070100"
+    assert record["sku"] == "B207010009900"
+
+
 # -----------------------------------------------------------------------
 # Price text cleanup
 # -----------------------------------------------------------------------
@@ -2403,6 +2479,45 @@ def test_assess_listing_completeness_flags_empty_skeleton_listing_shell():
     assert completeness["applicable"] is True
     assert completeness["complete"] is False
     assert completeness["reason"] == "listing_shell_without_materialized_records"
+
+
+def test_assess_listing_completeness_uses_detail_url_lower_bound():
+    html = """
+    <html><body>
+      <div class="results-grid">
+        <a href="/products/1">One</a>
+        <a href="/products/2">Two</a>
+        <a href="/products/3">Three</a>
+        <a href="/products/4">Four</a>
+        <a href="/products/5">Five</a>
+        <a href="/products/6">Six</a>
+        <a href="/products/7">Seven</a>
+        <a href="/products/8">Eight</a>
+        <a href="/products/9">Nine</a>
+        <a href="/products/10">Ten</a>
+        <a href="/products/11">Eleven</a>
+        <a href="/products/12">Twelve</a>
+      </div>
+    </body></html>
+    """
+
+    completeness = listing_extractor.assess_listing_completeness(
+        html=html,
+        records=[
+            {"title": "One", "url": "https://example.com/products/1"},
+            {"title": "Two", "url": "https://example.com/products/2"},
+            {"title": "Three", "url": "https://example.com/products/3"},
+            {"title": "Four", "url": "https://example.com/products/4"},
+            {"title": "Five", "url": "https://example.com/products/5"},
+        ],
+        surface="ecommerce_listing",
+        page_url="https://example.com/collection",
+    )
+
+    assert completeness["complete"] is False
+    assert completeness["reason"] == "record_count_far_below_lower_bound_item_estimate"
+    assert completeness["distinct_detail_url_count"] == 12
+    assert completeness["lower_bound_item_count"] == 12
 
 
 # -----------------------------------------------------------------------

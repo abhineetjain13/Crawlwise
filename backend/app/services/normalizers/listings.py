@@ -4,7 +4,6 @@ import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.config.extraction_rules import EMPTY_SENTINEL_VALUES
-from app.services.config.field_mappings import field_allowed_for_surface
 from app.services.config.nested_field_rules import (
     NESTED_CATEGORY_KEYS,
     NESTED_CURRENCY_KEYS,
@@ -14,6 +13,7 @@ from app.services.config.nested_field_rules import (
     NESTED_URL_KEYS,
     PAGE_URL_CURRENCY_HINTS,
 )
+from app.services.field_alias_policy import field_allowed_for_surface
 
 from . import (
     _extract_image_urls,
@@ -287,9 +287,11 @@ def normalize_listing_field_value(
             origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else page_url
             if "/" not in text or _looks_like_product_short_path(text):
                 resolved_url = urljoin(origin, text)
-                return None if looks_like_transactional_url_for_listing(resolved_url) else resolved_url
+                cleaned_url = _strip_tracking_query_params(str(resolved_url or ""))
+                return None if looks_like_transactional_url_for_listing(cleaned_url) else cleaned_url
         resolved_url = urljoin(page_url, text) if text and page_url else text or None
-        return None if looks_like_transactional_url_for_listing(str(resolved_url or "")) else resolved_url
+        cleaned_url = _strip_tracking_query_params(str(resolved_url or ""))
+        return None if looks_like_transactional_url_for_listing(cleaned_url) else cleaned_url
     if canonical == "image_url":
         images = _extract_image_urls(value, base_url=page_url)
         return images[0] if images else None
@@ -327,6 +329,21 @@ def normalize_listing_field_value(
             return None
         return str(nested).strip()
     return str(value).strip() if isinstance(value, str) else value
+
+
+def _strip_tracking_query_params(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if not parsed.query:
+        return parsed.geturl()
+    kept_items = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        lowered = str(key or "").strip().lower()
+        if lowered.startswith("utm_") or lowered.startswith("a_ajs_"):
+            continue
+        if lowered in {"fbclid", "gclid", "msclkid", "mc_cid", "mc_eid"}:
+            continue
+        kept_items.append((key, value))
+    return parsed._replace(query=urlencode(kept_items, doseq=True)).geturl()
 
 
 def normalize_ld_item(item: dict, surface: str, page_url: str) -> dict | None:

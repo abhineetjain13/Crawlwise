@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from app.services.discover import (
@@ -13,17 +12,6 @@ from app.services.discover import (
 )
 from bs4 import BeautifulSoup
 
-
-@dataclass
-class SignalInventory:
-    """Complete signal collection for page classification."""
-
-    structured_data: dict[str, Any]
-    dom_patterns: dict[str, Any]
-    metadata: dict[str, Any]
-    page_type: str | None = None
-
-
 def build_signal_inventory(
     html: str,
     url: str,
@@ -31,10 +19,10 @@ def build_signal_inventory(
     *,
     soup: BeautifulSoup | None = None,
     page_sources: dict[str, Any] | None = None,
-) -> SignalInventory:
+) -> dict[str, Any]:
     """Collect all signals before classification.
 
-    Returns SignalInventory with:
+    Returns a signal inventory mapping with:
     - structured_data: {json_ld, datalayer, next_data, hydrated_states}
     - dom_patterns: {card_count, detail_markers, url_patterns}
     - metadata: {link_count, text_ratio, domain}
@@ -84,14 +72,14 @@ def build_signal_inventory(
         "surface": surface,
     }
 
-    return SignalInventory(
-        structured_data=structured_data,
-        dom_patterns=dom_patterns,
-        metadata=metadata,
-    )
+    return {
+        "structured_data": structured_data,
+        "dom_patterns": dom_patterns,
+        "metadata": metadata,
+    }
 
 
-def classify_page_type(inventory: SignalInventory) -> str:
+def classify_page_type(inventory: dict[str, Any]) -> str:
     """Derive page_type from collected signals.
 
     Classification logic:
@@ -103,7 +91,10 @@ def classify_page_type(inventory: SignalInventory) -> str:
     - Otherwise → "unknown"
     """
     # Check JSON-LD signals
-    json_ld = inventory.structured_data.get("json_ld", [])
+    structured_data = inventory.get("structured_data", {})
+    dom_patterns = inventory.get("dom_patterns", {})
+
+    json_ld = structured_data.get("json_ld", [])
     for item in json_ld:
         if not isinstance(item, dict):
             continue
@@ -118,7 +109,7 @@ def classify_page_type(inventory: SignalInventory) -> str:
             return "detail"
 
     # Check dataLayer signals
-    datalayer = inventory.structured_data.get("datalayer", {})
+    datalayer = structured_data.get("datalayer", {})
     if isinstance(datalayer, dict):
         event_name = str(datalayer.get("event", "")).lower()
         ecommerce = datalayer.get("ecommerce", {})
@@ -143,16 +134,16 @@ def classify_page_type(inventory: SignalInventory) -> str:
                 return "detail"
 
     # Check DOM pattern signals
-    card_count = inventory.dom_patterns.get("card_count", 0)
+    card_count = dom_patterns.get("card_count", 0)
     if card_count >= 5:
         return "listing"
 
-    detail_markers = inventory.dom_patterns.get("detail_markers", {})
+    detail_markers = dom_patterns.get("detail_markers", {})
     if detail_markers.get("has_price") and detail_markers.get("has_description"):
         return "detail"
 
     # Check URL patterns
-    url_patterns = inventory.dom_patterns.get("url_patterns", {})
+    url_patterns = dom_patterns.get("url_patterns", {})
     if url_patterns.get("is_listing_url"):
         return "listing"
     if url_patterns.get("is_detail_url"):

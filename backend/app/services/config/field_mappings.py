@@ -437,40 +437,6 @@ INTERNAL_ONLY_FIELDS: frozenset[str] = frozenset(
         "_score",
     }
 )
-
-
-def excluded_fields_for_surface(surface: str) -> frozenset[str]:
-    from app.services.field_alias_policy import (
-        excluded_fields_for_surface as _excluded_fields_for_surface,
-    )
-
-    return _excluded_fields_for_surface(surface)
-
-
-def field_allowed_for_surface(surface: str, field_name: str) -> bool:
-    from app.services.field_alias_policy import (
-        field_allowed_for_surface as _field_allowed_for_surface,
-    )
-
-    return _field_allowed_for_surface(surface, field_name)
-
-
-def get_surface_field_aliases(surface: str) -> dict[str, list[str]]:
-    from app.services.field_alias_policy import (
-        get_surface_field_aliases as _get_surface_field_aliases,
-    )
-
-    return _get_surface_field_aliases(surface)
-
-
-def __getattr__(name: str):
-    if name == "REQUESTED_FIELD_ALIASES":
-        from app.services.field_alias_policy import REQUESTED_FIELD_ALIASES
-
-        return REQUESTED_FIELD_ALIASES
-    raise AttributeError(name)
-
-
 COLLECTION_KEYS = [
     "products",
     "items",

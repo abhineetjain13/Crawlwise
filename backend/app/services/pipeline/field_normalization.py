@@ -1,7 +1,7 @@
 """Field normalization and validation functions."""
 from __future__ import annotations
 
-from app.services.config.field_mappings import field_allowed_for_surface
+from app.services.field_alias_policy import field_allowed_for_surface
 from app.services.normalizers import (
     normalize_record_fields as _normalize_record_fields,
     normalize_review_value as _normalize_review_value,

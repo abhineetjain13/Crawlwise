@@ -60,23 +60,3 @@ def expand_requested_fields(values: list[str] | None) -> list[str]:
         if normalized and normalized not in expanded:
             expanded.append(normalized)
     return expanded
-
-
-def requested_field_alias_map() -> dict[str, str]:
-    return dict(_ALIAS_TO_CANONICAL)
-
-
-def requested_field_terms(value: str | None) -> list[str]:
-    normalized = normalize_requested_field(value)
-    if not normalized:
-        return []
-    raw_terms = [normalized, *NORMALIZED_REQUESTED_FIELD_ALIASES.get(normalized, [])]
-    terms: list[str] = []
-    seen: set[str] = set()
-    for term in raw_terms:
-        cleaned = " ".join(str(term or "").replace("_", " ").split()).strip().lower()
-        if not cleaned or cleaned in seen:
-            continue
-        seen.add(cleaned)
-        terms.append(cleaned)
-    return sorted(terms, key=len, reverse=True)

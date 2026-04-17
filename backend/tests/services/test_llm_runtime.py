@@ -58,6 +58,21 @@ class _FakeRedis:
         self._strings.pop(key, None)
         return 1 if existed else 0
 
+    async def eval(self, script: str, numkeys: int, *args):
+        _ = (script, numkeys)
+        stats_key, open_key, category, ttl_seconds, threshold, cooldown_seconds, opened_at = args
+        bucket = self._hashes.setdefault(str(stats_key), {})
+        total_failures = int(bucket.get("total_failures", "0")) + 1
+        consecutive_failures = int(bucket.get("consecutive_failures", "0")) + 1
+        bucket["total_failures"] = str(total_failures)
+        bucket["consecutive_failures"] = str(consecutive_failures)
+        bucket["last_error_category"] = str(category)
+        bucket["opened_at_epoch"] = str(opened_at)
+        await self.expire(str(stats_key), int(ttl_seconds))
+        if consecutive_failures >= int(threshold):
+            await self.set(str(open_key), "1", nx=True, ex=int(cooldown_seconds))
+        return [total_failures, consecutive_failures]
+
 
 def _seed_xpath_discovery_config(db_session: AsyncSession) -> None:
     db_session.add(

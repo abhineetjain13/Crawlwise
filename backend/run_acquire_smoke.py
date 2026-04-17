@@ -4,8 +4,8 @@ Small acquire-only smoke runner for representative TEST_SITES batches.
 Usage:
     cd backend
     set PYTHONPATH=.
-    python run_acquire_smoke.py
-    python run_acquire_smoke.py api commerce jobs
+    .venv\Scripts\python.exe run_acquire_smoke.py
+    .venv\Scripts\python.exe run_acquire_smoke.py api commerce jobs
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.config import settings
-from app.services.acquisition.acquirer import acquire
+from app.services.acquisition.acquirer import AcquisitionRequest, acquire
 from app.services.acquisition.blocked_detector import detect_blocked_page
 
 BATCHES: dict[str, list[tuple[str, str]]] = {
@@ -67,7 +67,15 @@ BATCHES: dict[str, list[tuple[str, str]]] = {
 async def _run_one(run_id: int, name: str, url: str, timeout_seconds: int) -> dict:
     started = time.perf_counter()
     try:
-        result = await asyncio.wait_for(acquire(run_id, url), timeout=timeout_seconds)
+        result = await asyncio.wait_for(
+            acquire(
+                AcquisitionRequest(
+                    run_id=run_id,
+                    url=url,
+                )
+            ),
+            timeout=timeout_seconds,
+        )
         blocked = detect_blocked_page(result.html or "").as_dict() if result.content_type == "html" else None
         return {
             "name": name,

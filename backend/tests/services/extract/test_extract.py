@@ -75,6 +75,30 @@ def test_extract_candidates_raises_typed_parse_error_with_cause():
     assert exc_info.value.__cause__ is parse_exc
 
 
+def test_extract_candidates_reuses_provided_page_sources():
+    html = "<html><body><h1>Fallback Title</h1></body></html>"
+    page_sources = {"json_ld": [{"@type": "Product", "name": "Provided Product Title"}]}
+
+    with (
+        patch(
+            "app.services.extract.service.parse_page_sources",
+            side_effect=AssertionError("parse_page_sources should not run"),
+        ),
+        patch("app.services.extract.service.get_selector_defaults", return_value=[]),
+    ):
+        candidates, _ = _extract_candidates_impl(
+            "https://example.com/product",
+            "ecommerce_detail",
+            html,
+            [],
+            [],
+            soup=None,
+            page_sources=page_sources,
+        )
+
+    assert candidates["title"][0]["value"] == "Provided Product Title"
+
+
 def test_parse_page_sources_raises_typed_parse_error_with_cause():
     parse_exc = ValueError("broken embedded JSON payload")
 
@@ -1714,6 +1738,35 @@ def test_extract_variant_completeness_flags_unreconciled_variant_signals():
         source_trace["variant_completeness"]["reason"]
         == "variant_signals_without_reconciled_bundle"
     )
+
+
+def test_extract_does_not_promote_selected_variant_fields_without_variant_bundle():
+    html = "<html><body><h1>Variant Shell</h1></body></html>"
+    manifest = _manifest(
+        adapter_data=[
+            {
+                "_source": "adapter",
+                "title": "Variant Shell",
+                "selected_variant": {
+                    "size": "Guide",
+                    "price": "12.00",
+                },
+            }
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, source_trace = extract_candidates(
+            "https://example.com/products/variant-shell",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
+    assert "size" not in candidates
+    assert "price" not in candidates
+    assert source_trace["variant_completeness"]["applicable"] is True
+    assert source_trace["variant_completeness"]["complete"] is False
 
 
 def test_extract_structured_specifications_normalize_html_content():

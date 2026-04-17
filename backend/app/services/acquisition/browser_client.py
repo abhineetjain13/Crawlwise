@@ -46,13 +46,13 @@ from app.services.acquisition.browser_pool import (
     shutdown_browser_pool_sync as _shutdown_browser_pool_sync_export,
 )
 from app.services.acquisition.browser_readiness import (
-    _cooperative_page_wait,
     _cooperative_sleep_ms,
     _is_listing_surface,
     _pause_after_navigation,
     _snapshot_listing_page_metrics,
     _wait_for_listing_readiness,
-    _wait_for_surface_readiness,
+    cooperative_page_wait,
+    wait_for_surface_readiness,
 )
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.policy import (
@@ -126,6 +126,7 @@ _RETRYABLE_PAGE_CONTENT_ERROR_RE = re.compile(
     r"(page is navigating|changing the content)",
     re.IGNORECASE,
 )
+_TRAVERSAL_PAGE_RE = re.compile(r"\bpage=(\d+)\b")
 _MIN_TRAVERSAL_MEMORY_BYTES = 500 * 1024 * 1024
 
 # Resource types blocked in degraded (memory-pressure) mode to reduce
@@ -179,10 +180,18 @@ class BrowserRenderRequest:
     prefer_stealth: bool
     request_delay_ms: int
     runtime_options: BrowserRuntimeOptions
+    requested_fields: list[str] = field(default_factory=list)
+    requested_field_selectors: dict[str, list[dict]] = field(default_factory=dict)
+    checkpoint: Callable[[], Awaitable[None]] | None = None
+    run_id: int | None = None
+    session_context: SessionContext | None = None
 
 
 def _traversal_progress_logger(
     run_id: int | None,
+    *,
+    traversal_mode: str | None,
+    diagnostics: dict[str, object] | None,
 ) -> Callable[[str], Awaitable[None]] | None:
     if run_id is None:
         return None
@@ -190,6 +199,11 @@ def _traversal_progress_logger(
     async def _progress_logger(message: str) -> None:
         from app.services.crawl_events import append_log_event
 
+        _record_partial_traversal_progress(
+            diagnostics,
+            traversal_mode=traversal_mode,
+            message=message,
+        )
         await append_log_event(
             run_id=run_id,
             level="info",
@@ -199,14 +213,52 @@ def _traversal_progress_logger(
     return _progress_logger
 
 
+def _record_partial_traversal_progress(
+    diagnostics: dict[str, object] | None,
+    *,
+    traversal_mode: str | None,
+    message: str,
+) -> None:
+    if diagnostics is None:
+        return
+    traversal_summary = (
+        dict(diagnostics.get("traversal_summary") or {})
+        if isinstance(diagnostics.get("traversal_summary"), dict)
+        else {}
+    )
+    traversal_summary["attempted"] = True
+
+    prefix = str(message or "").split(":", 1)[0].strip().lower()
+    if prefix and prefix != "auto":
+        traversal_summary["mode_used"] = prefix
+    elif not traversal_summary.get("mode_used"):
+        traversal_summary["mode_used"] = str(traversal_mode or "").strip().lower() or None
+
+    page_match = _TRAVERSAL_PAGE_RE.search(str(message or ""))
+    if page_match and any(
+        token in str(message or "") for token in ("capture", "advance_goto", "advance_click")
+    ):
+        traversal_summary["pages_collected"] = max(
+            int(traversal_summary.get("pages_collected", 0) or 0),
+            int(page_match.group(1)),
+        )
+    diagnostics["traversal_summary"] = normalize_traversal_summary(
+        traversal_summary,
+        traversal_mode=traversal_mode,
+        combined_html=None,
+    )
+
+
 def _build_traversal_runtime(
     *,
     run_id: int | None,
     checkpoint,
+    traversal_mode: str | None,
+    diagnostics: dict[str, object],
 ) -> TraversalRuntime:
     return TraversalRuntime(
         page_content_with_retry=_page_content_with_retry,
-        wait_for_surface_readiness=_wait_for_surface_readiness,
+        wait_for_surface_readiness=wait_for_surface_readiness,
         wait_for_listing_readiness=_wait_for_listing_readiness,
         peek_next_page_signal=_peek_next_page_signal,
         click_and_observe_next_page=_click_and_observe_next_page,
@@ -222,7 +274,11 @@ def _build_traversal_runtime(
         run_id=run_id,
         traversal_artifact_dir=_traversal_artifact_dir(run_id),
         checkpoint=checkpoint,
-        progress_logger=_traversal_progress_logger(run_id),
+        progress_logger=_traversal_progress_logger(
+            run_id,
+            traversal_mode=traversal_mode,
+            diagnostics=diagnostics,
+        ),
         goto_page=lambda pg, next_url, *, surface=None, checkpoint=None: _goto_with_fallback(
             pg,
             next_url,
@@ -261,6 +317,8 @@ async def _run_browser_traversal(
                     runtime=_build_traversal_runtime(
                         run_id=run_id,
                         checkpoint=checkpoint,
+                        traversal_mode=traversal_mode,
+                        diagnostics=diagnostics,
                     ),
                     config=_traversal_config(),
                 )
@@ -411,11 +469,6 @@ async def _finalize_browser_traversal(
         result.diagnostics["traversal_mode"] = traversal_mode
         result.diagnostics["max_pages"] = max_pages
     return combined_html, traversal_summary, reused_initial_page
-    requested_fields: list[str] = field(default_factory=list)
-    requested_field_selectors: dict[str, list[dict]] = field(default_factory=dict)
-    checkpoint: Callable[[], Awaitable[None]] | None = None
-    run_id: int | None = None
-    session_context: SessionContext | None = None
 
 
 @dataclass(slots=True)
@@ -764,7 +817,7 @@ async def _fetch_rendered_html_attempt(
             await _populate_result(result, page, intercepted, checkpoint=checkpoint)
             result.diagnostics["final_url"] = page.url or url
             result.diagnostics["html_length"] = len(result.html or "")
-            result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
+            result.diagnostics["blocked"] = detect_blocked_page(result.html).as_dict()
             timings_ms["browser_total_ms"] = _elapsed_ms(browser_started_at)
             result.diagnostics["timings_ms"] = timings_ms
             await _persist_context_cookies(
@@ -805,7 +858,7 @@ async def _fetch_rendered_html_attempt(
                 return result
         elif runtime_options.wait_for_readiness:
             readiness_started_at = time.perf_counter()
-            surface_readiness = await _wait_for_surface_readiness(
+            surface_readiness = await wait_for_surface_readiness(
                 page,
                 surface=surface,
                 checkpoint=checkpoint,
@@ -1305,7 +1358,7 @@ async def _populate_result(
     result.diagnostics["promoted_sources"] = len(result.promoted_sources)
     if result.html:
         result.diagnostics["html_length"] = len(result.html)
-        result.diagnostics["blocked"] = detect_blocked_page(result.html).is_blocked
+        result.diagnostics["blocked"] = detect_blocked_page(result.html).as_dict()
 
 
 async def _page_content_with_retry(
@@ -1335,7 +1388,7 @@ async def _page_content_with_retry(
                 )
             if attempt + 1 >= max(1, attempts):
                 break
-            await _cooperative_page_wait(page, wait_ms, checkpoint=checkpoint)
+            await cooperative_page_wait(page, wait_ms, checkpoint=checkpoint)
     assert last_error is not None
     raise last_error
 
@@ -1413,7 +1466,7 @@ async def _dismiss_cookie_consent(
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     try:
-        await _cooperative_page_wait(
+        await cooperative_page_wait(
             page, COOKIE_CONSENT_PREWAIT_MS, checkpoint=checkpoint
         )
     except PlaywrightError:
@@ -1424,7 +1477,7 @@ async def _dismiss_cookie_consent(
             button = page.locator(selector).first
             if await button.is_visible():
                 await button.click()
-                await _cooperative_page_wait(
+                await cooperative_page_wait(
                     page,
                     COOKIE_CONSENT_POSTCLICK_WAIT_MS,
                     checkpoint=checkpoint,

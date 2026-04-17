@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_readiness import (
-    _cooperative_page_wait,
-    _wait_for_surface_readiness,
+    cooperative_page_wait,
+    wait_for_surface_readiness,
 )
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.crawl_runtime import (
@@ -117,7 +117,7 @@ async def _wait_for_challenge_resolution(
 
     elapsed = 0
     while elapsed < max_wait_ms:
-        await _cooperative_page_wait(page, poll_interval_ms, checkpoint=checkpoint)
+        await cooperative_page_wait(page, poll_interval_ms, checkpoint=checkpoint)
         elapsed += poll_interval_ms
         try:
             html = await page.content()
@@ -130,7 +130,7 @@ async def _wait_for_challenge_resolution(
         if assessment.state == "blocked_signal":
             return False, "blocked", assessment.reasons
         if not assessment.should_wait:
-            readiness = await _wait_for_surface_readiness(
+            readiness = await wait_for_surface_readiness(
                 page,
                 surface=surface,
                 max_wait_ms=0,
