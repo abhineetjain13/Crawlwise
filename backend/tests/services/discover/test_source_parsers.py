@@ -1,6 +1,7 @@
 # Tests for HTML source parsing helpers.
 from __future__ import annotations
 
+from bs4 import BeautifulSoup
 import pytest
 
 from app.services.extract import source_parsers
@@ -394,6 +395,7 @@ async def test_parse_page_sources_async_offloads_sync_parser(
     """
     captured: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
     real_parse_page_sources = source_parsers.parse_page_sources
+    sentinel_soup = BeautifulSoup(html, "html.parser")
 
     async def _fake_to_thread(func, *args, **kwargs):
         captured.append((func, args, kwargs))
@@ -401,8 +403,9 @@ async def test_parse_page_sources_async_offloads_sync_parser(
 
     monkeypatch.setattr(source_parsers.asyncio, "to_thread", _fake_to_thread)
 
-    page_sources = await source_parsers.parse_page_sources_async(html)
+    page_sources = await source_parsers.parse_page_sources_async(html, soup=sentinel_soup)
 
     assert captured
     assert captured[0][0] is real_parse_page_sources
+    assert captured[0][2]["soup"] is sentinel_soup
     assert page_sources["json_ld"][0]["name"] == "Async Widget"

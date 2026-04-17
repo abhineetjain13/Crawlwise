@@ -17,8 +17,8 @@ def test_requires_browser_first_has_no_hardcoded_tenant_or_platform_host_literal
 def test_requires_browser_first_uses_config_driven_domain_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         acquirer,
-        "BROWSER_FIRST_DOMAINS",
-        ["careers.clarkassociatesinc.biz"],
+        "browser_first_domains",
+        lambda: ["careers.clarkassociatesinc.biz"],
     )
     assert acquirer._requires_browser_first(
         "https://careers.clarkassociatesinc.biz/open-roles",

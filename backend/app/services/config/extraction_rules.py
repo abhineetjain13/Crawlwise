@@ -30,7 +30,6 @@ VARIANT_AXIS_ALIASES = {
     "ไซส์": "size",
 }
 
-SITE_POLICY_REGISTRY = {}
 ACTION_ADD_TO_CART = "add to cart"
 ACTION_BUY_NOW = "buy now"
 ACTION_SIGN_IN = "sign in"

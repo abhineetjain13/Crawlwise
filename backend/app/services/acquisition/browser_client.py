@@ -250,9 +250,11 @@ async def _fetch_rendered_html_with_fallback(
     first_profile_failure_reason: str | None = None
     options = request.runtime_options or BrowserRuntimeOptions()
     profiles = _browser_launch_profiles(options, target=request.target)
+    attempted_profiles: list[str] = []
     if not options.retry_launch_profiles:
         profiles = profiles[:1]
     for index, profile in enumerate(profiles):
+        attempted_profiles.append(str(profile["label"]))
         navigation_strategies = (
             _shortened_navigation_strategies()
             if _should_shorten_navigation_after_profile_failure(
@@ -272,10 +274,14 @@ async def _fetch_rendered_html_with_fallback(
                 ),
             )
             result.diagnostics["browser_launch_profile"] = profile["label"]
+            result.diagnostics["attempted_browser_profiles"] = attempted_profiles[:]
+            result.diagnostics["system_chrome_attempted"] = "system_chrome" in attempted_profiles
+            result.diagnostics["bundled_chromium_attempted"] = "bundled_chromium" in attempted_profiles
             if index < len(profiles) - 1 and _should_retry_launch_profile(
                 result, surface=request.surface
             ):
                 first_profile_failure_reason = "low_value_result"
+                result.diagnostics["fallback_profile_used"] = str(profiles[index + 1]["label"])
                 logger.info(
                     "Playwright %s produced a low-value result for %s; trying next launch profile",
                     profile["label"],
@@ -289,6 +295,7 @@ async def _fetch_rendered_html_with_fallback(
             PlaywrightError,
             RuntimeError,
             OSError,
+            NotImplementedError,
         ) as exc:
             last_error = exc
             first_profile_failure_reason = _classify_profile_failure_reason(exc)
@@ -872,7 +879,7 @@ async def _new_context_with_recovery(
             browser.new_context(**ctx_kwargs),
             timeout=BROWSER_CONTEXT_TIMEOUT_MS / 1000,
         )
-    except (TimeoutError, PlaywrightError):
+    except (TimeoutError, PlaywrightError, NotImplementedError):
         await _evict_browser(_browser_pool_key(launch_profile, proxy), browser)
         browser, _ = await _acquire_browser(
             browser_type=browser_type,

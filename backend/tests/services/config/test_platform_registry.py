@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from app.services.config.platform_registry import (
     PlatformConfig,
+    browser_first_domains,
+    configured_adapter_names,
     detect_platform_family,
     listing_readiness_domains,
 )
@@ -48,4 +50,34 @@ def test_detect_platform_family_ignores_external_oracle_hcm_footer_link() -> Non
             html,
         )
         == "generic_commerce"
+    )
+
+
+def test_platform_registry_exposes_browser_first_domains_and_adapter_names(monkeypatch) -> None:
+    configs = [
+        PlatformConfig(
+            family="example_browser",
+            domain_patterns=["www.example.com", "careers.example.com"],
+            adapter_names=["greenhouse"],
+            requires_browser=True,
+        ),
+        PlatformConfig(
+            family="example_data",
+            adapter_names=["oracle_hcm"],
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "app.services.config.platform_registry.platform_configs",
+        lambda: configs,
+    )
+
+    assert browser_first_domains() == ["careers.example.com", "example.com"]
+    assert configured_adapter_names() == (
+        "greenhouse",
+        "oracle_hcm",
+        "amazon",
+        "walmart",
+        "ebay",
+        "shopify",
     )

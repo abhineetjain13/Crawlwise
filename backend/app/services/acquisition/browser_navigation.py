@@ -45,6 +45,8 @@ def _shortened_navigation_strategies() -> list[tuple[str, int]]:
 
 def _classify_profile_failure_reason(exc: Exception) -> str:
     text = str(exc).lower()
+    if isinstance(exc, NotImplementedError):
+        return "system_chrome_unsupported"
     if isinstance(exc, PlaywrightTimeoutError) or "timeout" in text:
         return "timeout"
     if "browser_navigation_error:" in text:

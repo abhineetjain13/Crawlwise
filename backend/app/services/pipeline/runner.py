@@ -134,12 +134,11 @@ class PipelineRunner:
 def build_default_stages(*, prefetch_only: bool = False) -> list[PipelineStage]:
     """Build the default stage chain matching the legacy ``_process_single_url`` behaviour.
 
-    Order: Acquire → BlockedDetection → Parse → Adapter → Extract → ListingBrowserRetry
+    Order: Acquire → Parse → Adapter → Extract → ListingBrowserRetry
     """
     from .stages import (
         AcquireStage,
         AdapterStage,
-        BlockedDetectionStage,
         ExtractStage,
         ListingBrowserRetryStage,
         ParseStage,
@@ -147,7 +146,6 @@ def build_default_stages(*, prefetch_only: bool = False) -> list[PipelineStage]:
 
     stages: list[PipelineStage] = [
         AcquireStage(),
-        BlockedDetectionStage(),
         ParseStage(),
     ]
     if prefetch_only:

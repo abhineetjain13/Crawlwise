@@ -53,6 +53,9 @@ def _make_acq(html: str = "", **kwargs) -> AcquisitionResult:
         method=kwargs.get("method", "curl_cffi"),
         artifact_path=kwargs.get("artifact_path", "/tmp/artifact.html"),
         network_payloads=kwargs.get("network_payloads", []),
+        adapter_records=kwargs.get("adapter_records", []),
+        adapter_name=kwargs.get("adapter_name", ""),
+        adapter_source_type=kwargs.get("adapter_source_type", ""),
         diagnostics=kwargs.get("diagnostics", {}),
     )
 
@@ -948,13 +951,6 @@ async def test_process_run_challenge_page(db_session: AsyncSession, test_user):
 
 @pytest.mark.asyncio
 async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(db_session: AsyncSession, test_user):
-    challenge_html = """
-    <html><head><title>Just a moment...</title></head>
-    <body>
-    <div>Checking your browser before accessing the site</div>
-    <div class="cf-challenge"></div>
-    </body></html>
-    """
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://store.com/collections/maternity-dresses",
@@ -976,9 +972,14 @@ async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(
 
     with (
         patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
-              return_value=_make_acq(challenge_html)),
-        patch("app.services.pipeline.core.try_blocked_adapter_recovery", new_callable=AsyncMock,
-              return_value=recovered),
+              return_value=_make_acq(
+                  "",
+                  method="adapter_recovery",
+                  adapter_records=recovered.records,
+                  adapter_name=recovered.adapter_name,
+                  adapter_source_type=recovered.source_type,
+                  diagnostics={"blocked_adapter_recovery": True},
+              )),
     ):
         await process_run(db_session, run.id)
 
@@ -995,10 +996,6 @@ async def test_process_run_blocked_shopify_listing_recovers_via_public_endpoint(
 
 @pytest.mark.asyncio
 async def test_process_run_blocked_jibe_listing_recovers_via_public_endpoint(db_session: AsyncSession, test_user):
-    challenge_html = """
-    <html><head><title>403 Forbidden</title></head>
-    <body><h1>403 Forbidden</h1></body></html>
-    """
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://www.foxrccareers.com/foxrc-careers-home/jobs?keywords=Dough%20Bird",
@@ -1021,9 +1018,14 @@ async def test_process_run_blocked_jibe_listing_recovers_via_public_endpoint(db_
 
     with (
         patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
-              return_value=_make_acq(challenge_html)),
-        patch("app.services.pipeline.core.try_blocked_adapter_recovery", new_callable=AsyncMock,
-              return_value=recovered),
+              return_value=_make_acq(
+                  "",
+                  method="adapter_recovery",
+                  adapter_records=recovered.records,
+                  adapter_name=recovered.adapter_name,
+                  adapter_source_type=recovered.source_type,
+                  diagnostics={"blocked_adapter_recovery": True},
+              )),
     ):
         await process_run(db_session, run.id)
 
@@ -1040,10 +1042,6 @@ async def test_process_run_blocked_jibe_listing_recovers_via_public_endpoint(db_
 
 @pytest.mark.asyncio
 async def test_process_run_blocked_oracle_hcm_listing_recovers_via_public_endpoint(db_session: AsyncSession, test_user):
-    challenge_html = """
-    <html><head><title>403 Forbidden</title></head>
-    <body><h1>403 Forbidden</h1></body></html>
-    """
     run = await create_crawl_run(db_session, test_user.id, {
         "run_type": "crawl",
         "url": "https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location",
@@ -1066,9 +1064,14 @@ async def test_process_run_blocked_oracle_hcm_listing_recovers_via_public_endpoi
 
     with (
         patch("app.services.pipeline.core.acquire", new_callable=AsyncMock,
-              return_value=_make_acq(challenge_html)),
-        patch("app.services.pipeline.core.try_blocked_adapter_recovery", new_callable=AsyncMock,
-              return_value=recovered),
+              return_value=_make_acq(
+                  "",
+                  method="adapter_recovery",
+                  adapter_records=recovered.records,
+                  adapter_name=recovered.adapter_name,
+                  adapter_source_type=recovered.source_type,
+                  diagnostics={"blocked_adapter_recovery": True},
+              )),
     ):
         await process_run(db_session, run.id)
 
@@ -1085,10 +1088,6 @@ async def test_process_run_blocked_oracle_hcm_listing_recovers_via_public_endpoi
 
 @pytest.mark.asyncio
 async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_session: AsyncSession, test_user):
-    curl_shell_html = """
-    <html><head><title>Gear | Reverb</title></head>
-    <body><div>Marketplace shell</div></body></html>
-    """
     blocked_browser_html = """
     <html><head><title>Just a moment...</title></head>
     <body><div class="cf-browser-verification">Checking your browser before accessing the site</div></body></html>
@@ -1103,18 +1102,15 @@ async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_se
         patch(
             "app.services.pipeline.core.acquire",
             new_callable=AsyncMock,
-            side_effect=[
-                _make_acq(curl_shell_html, method="curl_cffi"),
-                _make_acq(
-                    blocked_browser_html,
-                    method="playwright",
-                    diagnostics={
-                        "browser_attempted": True,
-                        "browser_blocked": True,
-                        "browser_diagnostics": {"blocked": True},
-                    },
-                ),
-            ],
+            return_value=_make_acq(
+                blocked_browser_html,
+                method="playwright",
+                diagnostics={
+                    "browser_attempted": True,
+                    "browser_blocked": True,
+                    "browser_diagnostics": {"blocked": True},
+                },
+            ),
         ),
         patch("app.services.pipeline.core.run_adapter", new_callable=AsyncMock, return_value=None),
     ):
@@ -1126,13 +1122,9 @@ async def test_process_run_listing_browser_retry_blocked_marks_run_blocked(db_se
 
 
 @pytest.mark.asyncio
-async def test_process_run_listing_blocked_curl_recovers_with_browser_first_retry(
+async def test_process_run_listing_recovered_result_from_acquisition_completes_without_pipeline_retry(
     db_session: AsyncSession, test_user
 ):
-    blocked_curl_html = """
-    <html><head><title>Just a moment...</title></head>
-    <body><div class="cf-browser-verification">Checking your browser before accessing the site</div></body></html>
-    """
     browser_listing_html = html_page(
         product_card(href="/p/1", title="Product A", price="$10"),
         product_card(href="/p/2", title="Product B", price="$20"),
@@ -1143,10 +1135,9 @@ async def test_process_run_listing_blocked_curl_recovers_with_browser_first_retr
         "surface": "ecommerce_listing",
     })
 
-    acquire_mock = AsyncMock(side_effect=[
-        _make_acq(blocked_curl_html, method="curl_cffi"),
-        _make_acq(browser_listing_html, method="playwright"),
-    ])
+    acquire_mock = AsyncMock(
+        return_value=_make_acq(browser_listing_html, method="playwright")
+    )
 
     with (
         patch("app.services.pipeline.core.acquire", acquire_mock),
@@ -1157,7 +1148,7 @@ async def test_process_run_listing_blocked_curl_recovers_with_browser_first_retr
     await db_session.refresh(run)
     assert run.status == "completed"
     assert run.result_summary.get("record_count") == 2
-    assert acquire_mock.await_count == 2
+    assert acquire_mock.await_count == 1
 
 
 @pytest.mark.asyncio

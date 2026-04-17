@@ -1,6 +1,7 @@
 # Adapter registry — resolves URL/HTML to the right platform adapter.
 from __future__ import annotations
 
+from functools import lru_cache
 import logging
 
 from app.services.adapters.adp import ADPAdapter
@@ -19,32 +20,49 @@ from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.walmart import WalmartAdapter
-
-# Order matters: domain-matched adapters first, signal-based (Shopify) last.
-_ADAPTERS: list[BaseAdapter] = [
-    AmazonAdapter(),
-    WalmartAdapter(),
-    EbayAdapter(),
-    ADPAdapter(),
-    ICIMSAdapter(),
-    OracleHCMAdapter(),
-    PaycomAdapter(),
-    SaaSHRAdapter(),
-    JibeAdapter(),
-    IndeedAdapter(),
-    LinkedInAdapter(),
-    GreenhouseAdapter(),
-    RemotiveAdapter(),
-    RemoteOkAdapter(),
-    ShopifyAdapter(),  # last — uses HTML signals, not domain matching
-]
+from app.services.config.platform_registry import configured_adapter_names
 
 logger = logging.getLogger(__name__)
+
+_ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
+    "amazon": AmazonAdapter,
+    "walmart": WalmartAdapter,
+    "ebay": EbayAdapter,
+    "adp": ADPAdapter,
+    "icims": ICIMSAdapter,
+    "oracle_hcm": OracleHCMAdapter,
+    "paycom": PaycomAdapter,
+    "saashr": SaaSHRAdapter,
+    "jibe": JibeAdapter,
+    "indeed": IndeedAdapter,
+    "linkedin": LinkedInAdapter,
+    "greenhouse": GreenhouseAdapter,
+    "remotive": RemotiveAdapter,
+    "remoteok": RemoteOkAdapter,
+    "shopify": ShopifyAdapter,
+}
+@lru_cache(maxsize=1)
+def registered_adapters() -> tuple[BaseAdapter, ...]:
+    adapters: list[BaseAdapter] = []
+    unknown: list[str] = []
+    for adapter_name in configured_adapter_names():
+        factory = _ADAPTER_FACTORIES.get(adapter_name)
+        if factory is None:
+            unknown.append(adapter_name)
+            continue
+        adapters.append(factory())
+
+    if unknown:
+        logger.warning("Skipping unknown adapter names from registry config: %s", sorted(unknown))
+
+    # Signal-based Shopify should remain last even if config order drifts.
+    adapters.sort(key=lambda adapter: adapter.name == "shopify")
+    return tuple(adapters)
 
 
 async def resolve_adapter(url: str, html: str) -> BaseAdapter | None:
     """Return the first adapter that can handle this URL/HTML, or None."""
-    for adapter in _ADAPTERS:
+    for adapter in registered_adapters():
         if await adapter.can_handle(url, html):
             return adapter
     return None
@@ -73,43 +91,33 @@ async def try_blocked_adapter_recovery(
     if surface not in {"ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail"}:
         return None
 
-    shopify = ShopifyAdapter()
-    jibe = JibeAdapter()
-    oracle_hcm = OracleHCMAdapter()
+    recovery_adapters = [
+        adapter
+        for adapter in registered_adapters()
+        if hasattr(adapter, "try_public_endpoint")
+    ]
     proxies = [proxy.strip() for proxy in (proxy_list or []) if proxy and proxy.strip()] or [None]
     for proxy in proxies:
-        try:
-            records = await oracle_hcm.try_public_endpoint(url, "", surface, proxy=proxy)
-        except (RuntimeError, OSError, ValueError, TypeError) as exc:
-            logger.debug("Oracle HCM recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
-            records = []
-        if records:
+        for adapter in recovery_adapters:
+            try:
+                if adapter.name == "shopify":
+                    records = await adapter.try_public_endpoint(url, surface, proxy=proxy)
+                else:
+                    records = await adapter.try_public_endpoint(url, "", surface, proxy=proxy)
+            except (RuntimeError, OSError, ValueError, TypeError) as exc:
+                logger.debug(
+                    "%s recovery proxy failed for %s via %s: %s",
+                    adapter.name,
+                    url,
+                    proxy or "direct",
+                    exc,
+                )
+                continue
+            if not records:
+                continue
             return AdapterResult(
                 records=records,
-                source_type="oracle_hcm_adapter_recovery",
-                adapter_name=oracle_hcm.name,
+                source_type=f"{adapter.name}_adapter_recovery",
+                adapter_name=adapter.name,
             )
-        try:
-            records = await jibe.try_public_endpoint(url, "", surface, proxy=proxy)
-        except (RuntimeError, OSError, ValueError, TypeError) as exc:
-            logger.debug("Jibe recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
-            records = []
-        if records:
-            return AdapterResult(
-                records=records,
-                source_type="jibe_adapter_recovery",
-                adapter_name=jibe.name,
-            )
-        try:
-            records = await shopify.try_public_endpoint(url, surface, proxy=proxy)
-        except (RuntimeError, OSError, ValueError, TypeError) as exc:
-            logger.debug("Shopify recovery proxy failed for %s via %s: %s", url, proxy or "direct", exc)
-            continue
-        if not records:
-            continue
-        return AdapterResult(
-            records=records,
-            source_type="shopify_adapter_recovery",
-            adapter_name=shopify.name,
-        )
     return None

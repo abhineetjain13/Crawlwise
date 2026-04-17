@@ -8,21 +8,15 @@ from app.services.acquisition import (
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.extract import parse_page_sources
-from bs4 import BeautifulSoup
 
 from .field_normalization import _normalize_review_value
 from .rendering import (
-    _render_fallback_card_group,
-    _render_fallback_node_markdown,
     _render_manifest_tables_markdown,
-    _should_skip_fallback_node,
 )
 from .review_helpers import _should_surface_discovered_field
 from .utils import (
     _clean_candidate_text,
-    _clean_page_text,
     _compact_dict,
-    _first_non_empty_text,
 )
 
 from .verdict import _review_bucket_fingerprint
@@ -187,6 +181,7 @@ def _build_manifest_trace(
     adapter_records: list[dict],
     semantic: dict | None = None,
     extra: dict[str, object] | None = None,
+    page_sources: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build manifest trace from page sources."""
     reserved_keys = {"next_data", "tables", "semantic"}
@@ -197,7 +192,11 @@ def _build_manifest_trace(
     scrubbed_payloads = scrub_network_payloads_for_storage(
         [row for row in xhr_payloads if isinstance(row, dict)]
     )
-    page_sources = parse_page_sources(html)
+    page_sources = (
+        page_sources
+        if isinstance(page_sources, dict) and page_sources
+        else parse_page_sources(html)
+    )
     payload = _compact_dict(
         {
             "adapter_data": _snapshot_manifest_value(adapter_records),
@@ -357,112 +356,3 @@ def _build_field_discovery_summary(
     source_trace["field_discovery_missing"] = missing
     return source_trace
 
-
-def _build_legible_listing_fallback_record(
-    *,
-    url: str,
-    html: str,
-    xhr_payloads: list[dict],
-    adapter_records: list[dict],
-) -> dict[str, dict[str, object] | dict[str, int | bool | str]] | None:
-    """Build a human-readable fallback record for listing pages."""
-    page_sources = parse_page_sources(html)
-    tables = list(page_sources.get("tables") or [])
-    soup = BeautifulSoup(html or "", "html.parser")
-    for selector in (
-        "script",
-        "style",
-        "noscript",
-        "svg",
-        "iframe",
-        "header",
-        "footer",
-        "nav",
-        "aside",
-    ):
-        for node in soup.select(selector):
-            node.decompose()
-
-    title = _first_non_empty_text(
-        soup.select_one("main h1"),
-        soup.select_one("article h1"),
-        soup.select_one("h1"),
-    )
-    if not title:
-        title = _clean_page_text(
-            soup.title.string if soup.title and soup.title.string else ""
-        )
-    description_meta = soup.select_one("meta[name='description']")
-    description = _clean_page_text(
-        description_meta.get("content", "") if description_meta else ""
-    )
-
-    content_root = (
-        soup.select_one("main") or soup.select_one("article") or soup.body or soup
-    )
-    markdown_lines: list[str] = []
-    fallback_table_rows: list[dict[str, object]] = []
-    total_chars = 0
-    card_lines, card_chars, fallback_table_rows = _render_fallback_card_group(
-        content_root, page_url=url
-    )
-    if card_lines:
-        markdown_lines.extend(card_lines)
-        total_chars += card_chars
-    else:
-        seen_text: set[str] = set()
-        for node in content_root.select("h2, h3, h4, p, li"):
-            if _should_skip_fallback_node(node, page_url=url):
-                continue
-            text = _render_fallback_node_markdown(node, page_url=url)
-            if not text or text in seen_text:
-                continue
-            seen_text.add(text)
-            plain_text = _clean_page_text(node.get_text(" ", strip=True))
-            if node.name in {"h2", "h3", "h4"} and len(plain_text) <= 140:
-                line = f"## {text}"
-            elif node.name == "li":
-                line = f"- {text}"
-            else:
-                line = text
-            markdown_lines.append(line)
-            total_chars += len(plain_text)
-            if total_chars >= 2400 or len(markdown_lines) >= 24:
-                break
-
-    table_markdown = _render_manifest_tables_markdown(tables)
-    if table_markdown:
-        markdown_lines.extend(["## Tables", table_markdown])
-    enough_text = total_chars >= 180 and len(markdown_lines) >= 3
-    has_tables = bool(table_markdown)
-    if not enough_text and not has_tables:
-        return None
-
-    page_markdown_lines: list[str] = []
-    if title:
-        page_markdown_lines.append(f"# {title}")
-    if description:
-        page_markdown_lines.extend(["", description])
-    if markdown_lines:
-        page_markdown_lines.extend(
-            ["", *markdown_lines] if page_markdown_lines else markdown_lines
-        )
-    page_markdown = "\n".join(page_markdown_lines).strip()
-
-    return _compact_dict(
-        {
-            "fallback_listing": _compact_dict(
-                {
-                    "page_markdown": page_markdown or None,
-                    "records": fallback_table_rows or None,
-                }
-            ),
-            "diagnostics": _compact_dict(
-                {
-                    "total_chars": total_chars,
-                    "line_count": len(markdown_lines),
-                    "has_tables": has_tables,
-                }
-            ),
-        }
-    )

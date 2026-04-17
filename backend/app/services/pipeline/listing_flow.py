@@ -201,6 +201,7 @@ async def extract_listing(
     max_records: int,
     url_metrics: dict,
     soup=None,
+    page_sources: dict[str, object] | None = None,
     update_run_state: bool = True,
     persist_logs: bool = True,
     record_writer=None,
@@ -271,6 +272,7 @@ async def extract_listing(
         html=html,
         xhr_payloads=acq.network_payloads,
         adapter_records=adapter_records,
+        page_sources=page_sources,
     )
     saved, save_stats = await save_listing_records(
         session=session,
@@ -345,6 +347,7 @@ async def extract_listing_from_context(ctx: "PipelineContext") -> URLProcessingR
         ctx.config.max_records,
         ctx.url_metrics,
         soup=ctx.soup,
+        page_sources=ctx.page_sources,
         update_run_state=ctx.update_run_state,
         persist_logs=ctx.persist_logs,
         record_writer=ctx.record_writer,

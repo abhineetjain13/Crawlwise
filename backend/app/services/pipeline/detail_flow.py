@@ -286,6 +286,7 @@ async def extract_detail(
     surface: str,
     url_metrics: dict,
     soup=None,
+    page_sources: dict[str, object] | None = None,
     update_run_state: bool = True,
     persist_logs: bool = True,
     record_writer=None,
@@ -346,6 +347,7 @@ async def extract_detail(
         xhr_payloads=acq.network_payloads,
         adapter_records=adapter_records,
         semantic=semantic,
+        page_sources=page_sources,
     )
     source_trace = _build_field_discovery_summary(
         source_trace,
@@ -370,6 +372,7 @@ async def extract_detail(
             candidate_values=candidate_values,
             source_trace=source_trace,
             resolved_schema=resolved_schema,
+            page_sources=page_sources,
         )
         candidate_values, llm_promoted_fields = _apply_llm_suggestions_to_candidate_values(
             candidate_values,
@@ -539,6 +542,7 @@ async def extract_detail_from_context(ctx: "PipelineContext") -> URLProcessingRe
         ctx.surface,
         ctx.url_metrics,
         soup=ctx.soup,
+        page_sources=ctx.page_sources,
         update_run_state=ctx.update_run_state,
         persist_logs=ctx.persist_logs,
         record_writer=ctx.record_writer,
@@ -627,6 +631,7 @@ async def collect_detail_llm_suggestions(
     candidate_values: dict,
     source_trace: dict,
     resolved_schema: ResolvedSchema,
+    page_sources: dict[str, object] | None = None,
 ) -> tuple[dict, list[dict[str, object]]]:
     from . import core as pipeline_core
 
@@ -754,6 +759,7 @@ async def collect_detail_llm_suggestions(
         html=html,
         xhr_payloads=xhr_payloads,
         target_fields=list(review_candidate_evidence.keys()),
+        page_sources=page_sources,
     )
     if not candidate_evidence and not discovered_sources and not preview_record:
         source_trace["llm_cleanup_status"] = {

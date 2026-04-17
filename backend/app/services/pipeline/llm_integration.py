@@ -160,9 +160,14 @@ def _build_llm_discovered_sources(
     html: str,
     xhr_payloads: list[dict],
     target_fields: list[str] | None = None,
+    page_sources: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build discovered sources snapshot for LLM."""
-    page_sources = parse_page_sources(html)
+    page_sources = (
+        page_sources
+        if isinstance(page_sources, dict) and page_sources
+        else parse_page_sources(html)
+    )
     semantic = (
         source_trace.get("semantic")
         if isinstance(source_trace.get("semantic"), dict)

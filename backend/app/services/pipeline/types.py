@@ -138,6 +138,7 @@ class PipelineContext:
     acquisition_result: "AcquisitionResult | None" = None
     acquisition_ms: int = 0
     soup: "BeautifulSoup | None" = None
+    page_sources: dict[str, Any] = field(default_factory=dict)
     adapter_result: Any = None
     adapter_records: list[dict] = field(default_factory=list)
     url_metrics: dict[str, Any] = field(default_factory=dict)

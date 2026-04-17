@@ -14,7 +14,7 @@ from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.paycom import PaycomAdapter
-from app.services.adapters.registry import resolve_adapter
+from app.services.adapters.registry import registered_adapters, resolve_adapter
 from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.shopify import ShopifyAdapter
@@ -71,6 +71,16 @@ def _paycom_html() -> str:
       </script>
     </body></html>
     """
+
+
+def test_registered_adapters_uses_config_driven_names_and_keeps_shopify_last():
+    adapters = registered_adapters()
+    names = [adapter.name for adapter in adapters]
+
+    assert "icims" in names
+    assert "greenhouse" in names
+    assert "shopify" in names
+    assert names[-1] == "shopify"
 
 
 # --- Shopify ---

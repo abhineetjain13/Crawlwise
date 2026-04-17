@@ -613,6 +613,34 @@ async def test_acquire_html_traversal_mode_falls_back_to_curl_on_playwright_fail
 
 
 @pytest.mark.asyncio
+async def test_acquire_records_failure_class_for_not_implemented_browser_error(tmp_path):
+    curl_html = "<html><body><h1>Product</h1>" + ("x" * 600) + "</body></html>"
+
+    from app.services.acquisition.http_client import HttpFetchResult
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(text=curl_html, status_code=200, content_type="html"),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            side_effect=NotImplementedError(),
+        ),
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(1, "https://example.com/spa", surface="ecommerce_detail")
+
+    assert result.method == "curl_cffi"
+    assert result.diagnostics["browser_exception"] == "NotImplementedError: "
+    assert result.diagnostics["browser_failure_class"] == "system_chrome_unsupported"
+    assert result.diagnostics["browser_failure_origin"] == "context"
+
+
+@pytest.mark.asyncio
 async def test_acquire_listing_page_does_not_escalate_from_text_only_card_count_heuristics(tmp_path):
     html = """
     <html><body>

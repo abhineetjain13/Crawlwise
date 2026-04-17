@@ -13,10 +13,10 @@ from __future__ import annotations
 import logging
 import re
 import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
-from app.services.acquisition import detect_blocked_page
 from app.services.crawl_metrics import (
     build_url_metrics as _build_url_metrics,
 )
@@ -27,7 +27,8 @@ from .pipeline_config import PIPELINE_CONFIG
 from .runtime_helpers import STAGE_ANALYZE, STAGE_FETCH, log_event, set_stage
 from .types import PipelineContext
 from .utils import _elapsed_ms, parse_html
-from .verdict import VERDICT_BLOCKED, VERDICT_LISTING_FAILED
+from app.services.extract.source_parsers import parse_page_sources_async
+from .verdict import VERDICT_LISTING_FAILED
 
 if TYPE_CHECKING:
     pass
@@ -64,6 +65,14 @@ def _discover_child_listing_candidate(html: str, *, page_url: str) -> str | None
     if not html:
         return None
     soup = BeautifulSoup(html, "html.parser")
+    return _discover_child_listing_candidate_from_soup(soup, page_url=page_url)
+
+
+def _discover_child_listing_candidate_from_soup(
+    soup: BeautifulSoup,
+    *,
+    page_url: str,
+) -> str | None:
     page = urlparse(page_url)
     page_host = str(page.netloc or "").strip().lower()
     if not page_host:
@@ -232,119 +241,6 @@ class AcquireStage:
 
 
 # ---------------------------------------------------------------------------
-# Stage 1.5: Blocked Page Detection
-# ---------------------------------------------------------------------------
-
-
-class BlockedDetectionStage:
-    """Detect anti-bot challenge pages and attempt recovery."""
-
-    async def execute(self, ctx: PipelineContext) -> None:
-        from app.models.crawl import CrawlRecord
-
-        from . import core as pipeline_core
-        from .trace_builders import _build_acquisition_trace
-
-        acq = ctx.acquisition_result
-        assert acq is not None
-        if acq.content_type == "json":
-            return  # APIs don't serve challenge pages
-
-        blocked = detect_blocked_page(acq.html)
-
-        # Listing + curl blocked → one browser-first retry
-        if blocked.is_blocked and ctx.is_listing and acq.method != "playwright":
-            if ctx.persist_logs:
-                await log_event(
-                    ctx.session,
-                    ctx.run.id,
-                    "info",
-                    "[BLOCKED] Listing page matched blocked signals on initial acquire; retrying once with browser-first recovery",
-                )
-            browser_retry_started = time.perf_counter()
-            browser_acq = await pipeline_core.acquire(
-                request=ctx.acquisition_request.with_profile_updates(
-                    prefer_browser=True,
-                ),
-            )
-            browser_retry_ms = _elapsed_ms(browser_retry_started)
-            browser_blocked = (
-                detect_blocked_page(browser_acq.html)
-                if browser_acq.content_type != "json"
-                else None
-            )
-            if not (browser_blocked and browser_blocked.is_blocked):
-                ctx.acquisition_result = browser_acq
-                acq = browser_acq
-                ctx.acquisition_ms += browser_retry_ms
-                ctx.url_metrics = _build_url_metrics(
-                    acq, requested_fields=ctx.additional_fields
-                )
-                ctx.url_metrics["acquisition_ms"] = ctx.acquisition_ms
-                if ctx.persist_logs:
-                    await log_event(
-                        ctx.session,
-                        ctx.run.id,
-                        "info",
-                        "[BLOCKED] Browser-first recovery succeeded; continuing listing extraction",
-                    )
-                blocked = (
-                    detect_blocked_page(acq.html)
-                    if acq.content_type != "json"
-                    else blocked
-                )
-
-        if not blocked.is_blocked:
-            return
-
-        # Adapter recovery attempt
-        recovered = (
-            None
-            if ctx.config.proxy_list or not ctx.is_listing
-            else await pipeline_core.try_blocked_adapter_recovery(ctx.url, ctx.surface)
-        )
-        if recovered and recovered.records:
-            if ctx.persist_logs:
-                await log_event(
-                    ctx.session,
-                    ctx.run.id,
-                    "info",
-                    f"[BLOCKED] {ctx.url} matched blocked-page signals, recovered {len(recovered.records)} "
-                    f"{recovered.adapter_name or 'adapter'} records from public endpoint",
-                )
-            ctx.adapter_result = recovered
-            ctx.adapter_records = recovered.records
-            # Let extraction stages handle the recovered records
-            return
-
-        # Irrecoverably blocked
-        if ctx.persist_logs:
-            await log_event(
-                ctx.session,
-                ctx.run.id,
-                "warning",
-                f"[BLOCKED] {ctx.url} — {blocked.reason}",
-            )
-        record = CrawlRecord(
-            run_id=ctx.run.id,
-            source_url=ctx.url,
-            data={
-                "_status": "blocked",
-                "_message": blocked.reason,
-                "_provider": blocked.provider,
-            },
-            raw_data={},
-            discovered_data=blocked.as_dict(),
-            source_trace={**_build_acquisition_trace(acq), "blocked": True},
-            raw_html_path=acq.artifact_path,
-        )
-        ctx.session.add(record)
-        await ctx.session.flush()
-        ctx.verdict = VERDICT_BLOCKED
-        ctx.records = []
-
-
-# ---------------------------------------------------------------------------
 # Stage 2a: HTML Parse (single parse, shared soup)
 # ---------------------------------------------------------------------------
 
@@ -358,6 +254,7 @@ class ParseStage:
         html = acq.html
         if html and acq.content_type != "json":
             ctx.soup = await parse_html(html)
+            ctx.page_sources = await parse_page_sources_async(html, soup=ctx.soup)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +273,14 @@ class AdapterStage:
         if acq.content_type == "json":
             return
         if ctx.adapter_result is not None or ctx.adapter_records:
+            return
+        if acq.adapter_records:
+            ctx.adapter_records = list(acq.adapter_records)
+            ctx.adapter_result = SimpleNamespace(
+                records=ctx.adapter_records,
+                adapter_name=acq.adapter_name,
+                source_type=acq.adapter_source_type,
+            )
             return
         html = acq.html
         ctx.adapter_result = await pipeline_core.run_adapter(ctx.url, html, ctx.surface)
@@ -472,9 +377,10 @@ class ListingBrowserRetryStage:
             return
         if acq.method != "curl_cffi":
             return
-        child_listing_url = _discover_child_listing_candidate(
-            acq.html or "",
-            page_url=ctx.url,
+        child_listing_url = (
+            _discover_child_listing_candidate_from_soup(ctx.soup, page_url=ctx.url)
+            if ctx.soup is not None
+            else _discover_child_listing_candidate(acq.html or "", page_url=ctx.url)
         )
         category_tile_listing = _looks_like_category_tile_listing(ctx.records)
         promote_child_listing = bool(child_listing_url) and (

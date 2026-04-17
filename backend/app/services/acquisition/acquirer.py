@@ -66,9 +66,9 @@ from app.services.config.crawl_runtime import (
     PROXY_FAILURE_STATE_MAX_ENTRIES,
     PROXY_FAILURE_STATE_TTL_SECONDS,
 )
-from app.services.config.extraction_rules import SITE_POLICY_REGISTRY
 from app.services.config.platform_registry import (
     acquisition_hint_tokens,
+    browser_first_domains,
     job_platform_families,
     is_job_platform_signal,
     resolve_platform_runtime_policy,
@@ -190,11 +190,6 @@ _SENSITIVE_HTML_FIELD_TOKENS = (
     "token",
 )
 JOB_PLATFORM_FAMILIES = frozenset({*job_platform_families(), "generic_jobs"})
-BROWSER_FIRST_DOMAINS = sorted(
-    domain
-    for domain, policy in SITE_POLICY_REGISTRY.items()
-    if isinstance(policy, dict) and bool(policy.get("browser_first"))
-)
 
 
 class ProxyPoolExhausted(ProxyPoolExhaustedError):  # noqa: N818 - compatibility alias kept for existing imports.
@@ -313,6 +308,9 @@ class AcquisitionResult:
     network_payloads: list[dict] = field(default_factory=list)
     frame_sources: list[dict] = field(default_factory=list)
     promoted_sources: list[dict] = field(default_factory=list)
+    adapter_records: list[dict] = field(default_factory=list)
+    adapter_name: str = ""
+    adapter_source_type: str = ""
     diagnostics: dict[str, object] = field(default_factory=dict)
     outcome: str = ""  # AcquisitionOutcome value; empty means unclassified
 
@@ -621,7 +619,7 @@ async def acquire(
     # hardened browser runtime, not the minimal default browser settings.
     domain = urlparse(url).netloc.lower().replace("www.", "")
     browser_first = (
-        _matches_domain_policy(domain, BROWSER_FIRST_DOMAINS)
+        _matches_domain_policy(domain, browser_first_domains())
         or _memory_prefers_browser(profile)
         or _requires_browser_first(url, platform_family)
     )
@@ -1116,11 +1114,15 @@ async def _acquire_once(
             checkpoint=request.checkpoint,
             session_context=request.session_context,
         )
-    analysis = (
-        getattr(http_result, "_acquirer_analysis", {})
-        if http_result is not None
-        else {}
+    analysis = http_result.acquirer_analysis or {} if http_result is not None else {}
+    blocked_recovery = await _recover_blocked_listing_acquisition(
+        ctx,
+        request=request,
+        http_result=http_result,
+        analysis=analysis,
     )
+    if blocked_recovery is not None:
+        return blocked_recovery
     promoted_source_result = await _try_promoted_source_acquire(
         url=request.url,
         proxy=request.proxy,
@@ -1204,7 +1206,7 @@ async def _acquire_once(
             )
             if http_result is None:
                 return None
-            analysis = getattr(http_result, "_acquirer_analysis", {})
+            analysis = http_result.acquirer_analysis or {}
             curl_result, curl_diagnostics = _extract_curl_analysis(analysis)
         if curl_result is not None:
             return ctx.update_result_diagnostics(curl_result)
@@ -1627,7 +1629,7 @@ async def _try_http(
             promoted_sources=[],
             diagnostics=diagnostics,
         )
-        normalized._acquirer_analysis = analysis
+        normalized.acquirer_analysis = analysis
         return normalized
     decision_started_at = time.perf_counter()
 
@@ -1746,7 +1748,7 @@ async def _try_http(
             else None,
         }
     )
-    normalized._acquirer_analysis = analysis
+    normalized.acquirer_analysis = analysis
     return normalized
 
 
@@ -1760,7 +1762,7 @@ def _browser_escalation_decision(
     del url, acquisition_profile
     if http_result is None:
         return _BrowserEscalationDecision(True, "http_failed")
-    analysis = getattr(http_result, "_acquirer_analysis", {})
+    analysis = http_result.acquirer_analysis or {}
     if http_result.content_type == "json":
         return _BrowserEscalationDecision(False, "json_response")
     blocked = analysis.get("blocked")
@@ -1936,6 +1938,7 @@ async def _try_browser(
         RuntimeError,
         ValueError,
         TypeError,
+        NotImplementedError,
     ) as exc:
         await _record_browser_failure(
             exc,
@@ -1961,13 +1964,29 @@ async def _record_browser_failure(
     run_id: int | None,
     diagnostics_sink: dict[str, object] | None,
 ) -> None:
-    logger.warning("[browser] FAILED type=%s msg=%s", type(exc).__name__, exc)
+    failure_class, failure_origin = _classify_browser_failure(exc)
+    logger.warning(
+        "[browser] FAILED class=%s origin=%s type=%s msg=%s",
+        failure_class,
+        failure_origin,
+        type(exc).__name__,
+        exc,
+    )
     incr("browser_launch_failures_total")
-    await _append_browser_failure_log(run_id, traversal_mode=traversal_mode, exc=exc, url=url)
+    await _append_browser_failure_log(
+        run_id,
+        traversal_mode=traversal_mode,
+        exc=exc,
+        url=url,
+        failure_class=failure_class,
+        failure_origin=failure_origin,
+    )
     if diagnostics_sink is not None:
         diagnostics_sink["browser_exception"] = f"{type(exc).__name__}: {exc}"
         diagnostics_sink["browser_attempted"] = True
         diagnostics_sink["failure_stage"] = "browser_render"
+        diagnostics_sink["browser_failure_class"] = failure_class
+        diagnostics_sink["browser_failure_origin"] = failure_origin
         diagnostics_sink["retry_count"] = int(diagnostics_sink.get("retry_count", 0) or 0) + 1
         if isinstance(exc, TimeoutError):
             diagnostics_sink["budget_exhausted"] = "browser_render"
@@ -1979,6 +1998,8 @@ async def _append_browser_failure_log(
     traversal_mode: str | None,
     exc: Exception,
     url: str,
+    failure_class: str,
+    failure_origin: str,
 ) -> None:
     if run_id is None:
         return
@@ -1988,7 +2009,12 @@ async def _append_browser_failure_log(
         await append_log_event(
             run_id=run_id,
             level="warning",
-            message=_browser_failure_log_message(traversal_mode, exc),
+            message=_browser_failure_log_message(
+                traversal_mode,
+                exc,
+                failure_class=failure_class,
+                failure_origin=failure_origin,
+            ),
         )
     except Exception:
         incr("acquisition_log_event_failures_total")
@@ -2002,13 +2028,36 @@ async def _append_browser_failure_log(
 def _browser_failure_log_message(
     traversal_mode: str | None,
     exc: Exception,
+    *,
+    failure_class: str,
+    failure_origin: str,
 ) -> str:
     prefix = (
         "[traversal] Browser acquisition failed, falling back to curl"
         if _should_force_browser_for_traversal(traversal_mode)
         else "Browser acquisition failed"
     )
-    return f"{prefix}: {type(exc).__name__}: {exc}"
+    return (
+        f"{prefix} [{failure_class}/{failure_origin}]: "
+        f"{type(exc).__name__}: {exc}"
+    )
+
+
+def _classify_browser_failure(exc: Exception) -> tuple[str, str]:
+    text = str(exc or "").strip().lower()
+    if isinstance(exc, NotImplementedError):
+        return "system_chrome_unsupported", "context"
+    if isinstance(exc, TimeoutError) or "timeout" in text:
+        return "timeout", "navigation"
+    if "target page, context or browser has been closed" in text:
+        return "closed_target", "page"
+    if "browser_navigation_error" in text:
+        return "navigation_failure", "navigation"
+    if isinstance(exc, OSError):
+        return "launch_failure", "launch"
+    if isinstance(exc, (RuntimeError, ValueError, TypeError)):
+        return "context_failure", "context"
+    return "generic_browser_failure", "launch"
 
 
 def _build_browser_attempt_metadata(
@@ -2756,7 +2805,7 @@ def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bo
 
 def _requires_browser_first(url: str, platform_family: str | None) -> bool:
     domain = urlparse(url).netloc.lower().replace("www.", "")
-    configured_domain_match = _matches_domain_policy(domain, BROWSER_FIRST_DOMAINS)
+    configured_domain_match = _matches_domain_policy(domain, browser_first_domains())
     if configured_domain_match:
         return True
     normalized_platform = str(platform_family or "").strip().lower()
@@ -2776,6 +2825,80 @@ def _matches_domain_policy(domain: str, candidates: list[str]) -> bool:
         ):
             return True
     return False
+
+
+async def _recover_blocked_listing_acquisition(
+    ctx: _AcquireAttemptContext,
+    *,
+    request: _AcquireExecutionRequest,
+    http_result: HttpFetchResult | None,
+    analysis: dict[str, object],
+) -> AcquisitionResult | None:
+    from app.services.adapters.registry import try_blocked_adapter_recovery
+
+    blocked = analysis.get("blocked")
+    if blocked is None or not getattr(blocked, "is_blocked", False):
+        return None
+    if request.surface not in {"ecommerce_listing", "job_listing"}:
+        return None
+    if request.browser_first:
+        return None
+
+    browser_result = await _try_browser(
+        request.url,
+        request.proxy,
+        request.surface,
+        traversal_mode=request.traversal_mode,
+        max_pages=request.max_pages,
+        max_scrolls=request.max_scrolls,
+        prefer_stealth=request.prefer_stealth,
+        sleep_ms=request.sleep_ms,
+        runtime_options=request.runtime_options,
+        requested_fields=request.requested_fields,
+        requested_field_selectors=request.requested_field_selectors,
+        checkpoint=request.checkpoint,
+        run_id=request.run_id,
+        session_context=request.session_context,
+    )
+    if browser_result is None:
+        if request.proxy is None:
+            recovered = await try_blocked_adapter_recovery(
+                request.url,
+                request.surface or "",
+                proxy_list=None,
+            )
+            if recovered is not None and recovered.records:
+                diagnostics = dict(http_result.diagnostics if http_result is not None else {})
+                diagnostics.update(
+                    {
+                        "blocked_adapter_recovery": True,
+                        "adapter_name": recovered.adapter_name or "",
+                        "adapter_record_count": len(recovered.records),
+                    }
+                )
+                return AcquisitionResult(
+                    html=http_result.text if http_result is not None else "",
+                    content_type="html",
+                    method="adapter_recovery",
+                    artifact_path=ctx.artifact_path,
+                    network_payloads=[],
+                    adapter_records=list(recovered.records),
+                    adapter_name=recovered.adapter_name or "",
+                    adapter_source_type=recovered.source_type or "",
+                    diagnostics=ctx.finalize_diagnostics_payload(diagnostics),
+                )
+        return None
+    browser_blocked = detect_blocked_page(browser_result.html or "")
+    if browser_blocked.is_blocked:
+        return None
+    return await _finalize_browser_result(
+        ctx,
+        browser_result=browser_result,
+        http_result=http_result,
+        analysis=analysis,
+        curl_result=None,
+        curl_diagnostics={},
+    )
 
 
 # DEBT-06: Dead code removed - _artifact_basename and _slugify were never

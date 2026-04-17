@@ -29,6 +29,12 @@ _GENERIC_COMMERCE_TOKENS = (
     "/shop/",
     "/collections/",
 )
+_DEFAULT_ADAPTER_ORDER = (
+    "amazon",
+    "walmart",
+    "ebay",
+    "shopify",
+)
 
 
 class PlatformConfig(BaseModel):
@@ -124,6 +130,30 @@ def browser_first_platform_families() -> set[str]:
         for config in platform_configs()
         if config.family and bool(config.requires_browser)
     }
+
+
+def browser_first_domains() -> list[str]:
+    values = {
+        _normalize_domain(pattern)
+        for config in platform_configs()
+        if bool(config.requires_browser)
+        for pattern in config.domain_patterns
+        if _normalize_domain(pattern)
+    }
+    return sorted(values)
+
+
+def configured_adapter_names() -> tuple[str, ...]:
+    ordered_names: list[str] = []
+    for config in platform_configs():
+        for adapter_name in config.adapter_names:
+            normalized = str(adapter_name or "").strip().lower()
+            if normalized and normalized not in ordered_names:
+                ordered_names.append(normalized)
+    for adapter_name in _DEFAULT_ADAPTER_ORDER:
+        if adapter_name not in ordered_names:
+            ordered_names.append(adapter_name)
+    return tuple(ordered_names)
 
 
 def acquisition_hint_tokens() -> tuple[str, ...]:

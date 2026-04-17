@@ -316,6 +316,61 @@ async def test_fetch_rendered_html_retries_profile_after_playwright_timeout(
     )
 
     assert output is result
+    assert output.diagnostics["attempted_browser_profiles"] == ["p1", "p2"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_rendered_html_falls_back_after_not_implemented_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = browser_client.BrowserResult(html="<html><body>ok</body></html>")
+    attempts = iter(
+        [
+            NotImplementedError(),
+            result,
+        ]
+    )
+
+    async def _fake_attempt(_pw, _attempt):
+        current = next(attempts)
+        if isinstance(current, Exception):
+            raise current
+        return current
+
+    monkeypatch.setattr(
+        browser_client,
+        "_browser_launch_profiles",
+        lambda *_args, **_kwargs: [
+            {"label": "system_chrome", "channel": "chrome"},
+            {"label": "bundled_chromium", "channel": None},
+        ],
+    )
+    monkeypatch.setattr(browser_client, "_fetch_rendered_html_attempt", _fake_attempt)
+
+    output = await browser_client._fetch_rendered_html_with_fallback(
+        SimpleNamespace(),
+        browser_client.BrowserRenderRequest(
+            target=SimpleNamespace(),
+            url="https://example.com",
+            proxy=None,
+            surface="ecommerce_detail",
+            traversal_mode=None,
+            max_pages=1,
+            max_scrolls=1,
+            prefer_stealth=False,
+            request_delay_ms=0,
+            runtime_options=BrowserRuntimeOptions(retry_launch_profiles=True),
+        ),
+    )
+
+    assert output is result
+    assert output.diagnostics["browser_launch_profile"] == "bundled_chromium"
+    assert output.diagnostics["attempted_browser_profiles"] == [
+        "system_chrome",
+        "bundled_chromium",
+    ]
+    assert output.diagnostics["system_chrome_attempted"] is True
+    assert output.diagnostics["bundled_chromium_attempted"] is True
 
 
 @pytest.mark.asyncio
