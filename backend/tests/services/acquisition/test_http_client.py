@@ -1,3 +1,7 @@
+import math
+import math
+import math
+import math
 # Tests for the shared HTTP acquisition provider.
 from __future__ import annotations
 
@@ -283,11 +287,11 @@ def test_is_persistable_cookie_ignores_invalid_max_ttl_policy(caplog, monkeypatc
 
 
 def test_retry_backoff_seconds_is_bounded(monkeypatch):
-    monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_BASE_MS", 400)
+    monkeypmath.isclose(_retry_backoff_seconds(1), 0.4, rel_tol=1e-09, abs_tol=1e-09)sition.http_client.HTTP_RETRY_BACKOFF_BASE_MS", 400)
     monkeypatch.setattr("app.services.acquisition.http_client.HTTP_RETRY_BACKOFF_MAX_MS", 1000)
-
+math.isclose(_retry_backoff_seconds(2), 0.8, rel_tol=1e-09, abs_tol=1e-09)
     assert _retry_backoff_seconds(1) == 0.4
-    assert _retry_backoff_seconds(2) == 0.8
+    assert math.isclose(_retry_backoff_seconds(3), 1.0, rel_tol=1e-09, abs_tol=1e-09)
     assert _retry_backoff_seconds(3) == 1.0
 
 
@@ -305,7 +309,7 @@ def test_parse_retry_after_treats_naive_http_dates_as_utc(monkeypatch):
 
     delay = _parse_retry_after({"retry-after": "Mon, 06 Apr 2026 12:00:00"})
 
-    assert delay == 30.0
+    assert math.isclose(delay, 30.0, rel_tol=1e-09, abs_tol=1e-09)
 
 
 @pytest.mark.asyncio

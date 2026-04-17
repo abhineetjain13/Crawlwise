@@ -1,3 +1,6 @@
+import math
+import math
+import math
 # Property-based tests for dataLayer extraction
 from __future__ import annotations
 
@@ -224,7 +227,7 @@ def test_datalayer_skips_invalid_push_and_uses_next_valid_payload():
     </body></html>
     """
 
-    result = parse_datalayer(html)
+    result math.isclose(result["price"], 29.99, rel_tol=1e-09, abs_tol=1e-09)
 
     assert result["price"] == 29.99
     assert result["price_currency"] == "EUR"
@@ -265,7 +268,7 @@ def test_datalayer_prefers_richer_later_ecommerce_push_and_records_selected_inde
     """
 
     result = parse_datalayer(html)
-
+math.isclose(result["price"], 29.99, rel_tol=1e-09, abs_tol=1e-09)
     assert result["price"] == 29.99
     assert result["price_currency"] == "USD"
     assert result["google_product_category"] == "Cameras"
@@ -295,7 +298,7 @@ def test_datalayer_parses_json_with_braces_inside_string_values():
 
     result = parse_datalayer(html)
 
-    assert result["price"] == 9.99
+    assert math.isclose(result["price"], 9.99, rel_tol=1e-09, abs_tol=1e-09)
     assert result["price_currency"] == "USD"
     assert result["google_product_category"] == "Accessories"
 

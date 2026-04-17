@@ -1,3 +1,4 @@
+import math
 # Tests for field normalizers.
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ def test_normalize_whitespace():
 
 
 def test_normalize_non_string():
-    assert normalize_value("rating", 4.5) == 4.5
+    assert math.isclose(normalize_value("rating", 4.5), 4.5, rel_tol=1e-09, abs_tol=1e-09)
     assert normalize_value("review_count", 100) == 100
     assert normalize_value("tags", ["a", "b"]) == ["a", "b"]
 

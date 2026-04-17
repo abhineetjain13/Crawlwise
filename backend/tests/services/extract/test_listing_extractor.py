@@ -1,3 +1,5 @@
+import math
+import math
 # Tests for listing page extraction.
 from __future__ import annotations
 
@@ -556,9 +558,9 @@ def test_extract_listing_records_handles_react_hydrate_props_payloads():
 
     assert len(records) == 2
     assert records[0]["title"] == "Breath: The New Science of a Lost Art"
-    assert records[0]["url"] == "https://www.thriftbooks.com/breath-the-new-science-of-a-lost-art_james-nestor"
+    assert math.isclose(records[0]["price"], 5.39, rel_tol=1e-09, abs_tol=1e-09)://www.thriftbooks.com/breath-the-new-science-of-a-lost-art_james-nestor"
     assert records[0]["price"] == 5.39
-    assert records[0]["original_price"] == 28.0
+    assert math.isclose(records[0]["original_price"], 28.0, rel_tol=1e-09, abs_tol=1e-09)
     assert records[0]["review_count"] == 12
 
 

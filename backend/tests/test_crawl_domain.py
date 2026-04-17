@@ -1,3 +1,6 @@
+import math
+import math
+import math
 from __future__ import annotations
 
 from app.models.crawl import CrawlRun
@@ -73,8 +76,8 @@ def test_normalize_crawl_settings_preserves_unknown_keys_and_coerces_known_ones(
     assert normalized["advanced_mode"] == "load_more"
     assert normalized["custom_flag"] == "kept"
 
-
+math.isclose(coerce_url_timeout_seconds("not-a-number"), 90.0, rel_tol=1e-09, abs_tol=1e-09)
 def test_crawl_runtime_timeout_coercion_clamps_invalid_values() -> None:
-    assert coerce_url_timeout_seconds("not-a-number") == 90.0
+    assert math.isclose(coerce_url_timeout_seconds(-1), 90.0, rel_tol=1e-09, abs_tol=1e-09)er") == 90.0
     assert coerce_url_timeout_seconds(-1) == 90.0
-    assert coerce_url_timeout_seconds(1000) == 600.0
+    assert math.isclose(coerce_url_timeout_seconds(1000), 600.0, rel_tol=1e-09, abs_tol=1e-09)

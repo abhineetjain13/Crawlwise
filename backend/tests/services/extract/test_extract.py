@@ -1,3 +1,4 @@
+import math
 # Tests for the extraction service.
 from __future__ import annotations
 
@@ -204,7 +205,7 @@ def test_extract_recovers_nested_offer_fields_from_json_ld_with_trailing_semicol
             [],
         )
     assert candidates["brand"][0]["value"] == "Lib Tech"
-    assert candidates["price"][0]["value"] == 405.99
+    assert math.isclose(candidates["price"][0]["value"], 405.99, rel_tol=1e-09, abs_tol=1e-09)
     assert candidates["currency"][0]["value"] == "USD"
     assert candidates["sku"][0]["value"] == "EB-268000-1001"
     assert candidates["availability"][0]["value"] == "InStock"
