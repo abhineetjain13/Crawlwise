@@ -15,17 +15,10 @@ _JOB_ID_RE = re.compile(r"/jobs/(\d+)", re.IGNORECASE)
 
 class PaycomAdapter(BaseAdapter):
     name = "paycom"
-    domains = ["paycomonline.net"]
+    platform_family = "paycom"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        lowered_url = str(url or "").lower()
-        lowered_html = str(html or "").lower()
-        return (
-            "paycomonline.net" in lowered_url
-            or "configsfromhost" in lowered_html
-            or "portal-applicant-tracking" in lowered_html
-            or "/career-page" in lowered_url
-        )
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records = await self.try_public_endpoint(url, html, surface)
@@ -208,7 +201,7 @@ class PaycomAdapter(BaseAdapter):
             return {}
         lib_config_raw = payload.get("libConfig")
         try:
-            lib_config = json.loads(lib_config_raw) if isinstance(lib_config_raw, str) else {}
+            lib_config = json.loads(lib_config_raw) if isinstance(lib_config_raw, str) else (lib_config_raw if isinstance(lib_config_raw, dict) else {})
         except json.JSONDecodeError:
             lib_config = {}
         return {

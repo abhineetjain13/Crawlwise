@@ -4,7 +4,7 @@ import json
 
 
 def normalize_json_candidate(value: object) -> str | None:
-    candidate = str(value or "").strip()
+    candidate = "" if value is None else str(value).strip()
     if not candidate:
         return None
     if candidate.endswith(";"):

@@ -44,18 +44,10 @@ HTML_PARSER = "html.parser"
 
 class ICIMSAdapter(BaseAdapter):
     name = "icims"
-    domains = ["icims.com"]
+    platform_family = "icims"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        lowered_url = str(url or "").lower()
-        lowered_html = str(html or "").lower()
-        return (
-            any(domain in lowered_url for domain in self.domains)
-            or "/ajax/joblisting/" in lowered_url
-            or "icims_jobstable" in lowered_html
-            or "icims_mainwrapper" in lowered_html
-            or "/ajax/joblisting/" in lowered_html
-        )
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         if "detail" in str(surface or "").lower() or self._looks_like_detail_url(url):

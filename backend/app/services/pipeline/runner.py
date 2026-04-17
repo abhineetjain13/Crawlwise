@@ -12,9 +12,10 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 
+from app.services.publish.verdict import VERDICT_ERROR
+
 from .types import PipelineContext, PipelineStage
 from .utils import _elapsed_ms
-from .verdict import VERDICT_ERROR
 
 logger = logging.getLogger(__name__)
 

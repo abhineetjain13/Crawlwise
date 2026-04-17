@@ -17,10 +17,13 @@ from app.services.config.extraction_rules import (
     SPEC_DROP_LABELS,
     SPEC_LABEL_BLOCK_PATTERNS,
 )
-from app.services.config.field_mappings import REQUESTED_FIELD_ALIASES, get_surface_field_aliases
 from app.services.extract.candidate_processing import (
     _DYNAMIC_NUMERIC_FIELD_RE,
     _coerce_scalar_for_dynamic_row,
+)
+from app.services.field_alias_policy import (
+    REQUESTED_FIELD_ALIASES,
+    get_surface_field_aliases,
 )
 from app.services.extract.noise_policy import (
     SECTION_BODY_SKIP_PHRASES as _SECTION_BODY_SKIP_PHRASES,

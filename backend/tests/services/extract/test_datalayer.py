@@ -1,7 +1,7 @@
 # Property-based tests for dataLayer extraction
 from __future__ import annotations
 
-from app.services.extract.source_parsers import parse_datalayer
+from app.services.discover import parse_datalayer
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 

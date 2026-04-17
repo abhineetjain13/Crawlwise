@@ -13,11 +13,9 @@ from app.services.extract.candidate_processing import (
     sanitize_field_value,
     sanitize_field_value_with_reason,
 )
+from app.services.extract.noise_policy import contains_low_quality_merge_token
 
 logger = logging.getLogger(__name__)
-_LOW_QUALITY_MERGE_TOKENS = frozenset(
-    {"cookie", "privacy", "sign in", "log in", "account", "home", "menu", "agree", "policy"}
-)
 _LONG_FORM_MERGE_FIELDS = frozenset(
     {
         "description",
@@ -258,12 +256,8 @@ class FieldDecisionEngine:
         if field_name in _SHORT_FORM_MERGE_FIELDS:
             if len(candidate_text) > 40 or len(candidate_text.split()) > 5:
                 return False, "candidate_too_long"
-            existing_is_noisy = any(
-                token in existing_text for token in _LOW_QUALITY_MERGE_TOKENS
-            )
-            candidate_is_noisy = any(
-                token in candidate_text for token in _LOW_QUALITY_MERGE_TOKENS
-            )
+            existing_is_noisy = contains_low_quality_merge_token(existing_text)
+            candidate_is_noisy = contains_low_quality_merge_token(candidate_text)
             if existing_is_noisy and not candidate_is_noisy:
                 return True, None
             if not existing_is_noisy and candidate_is_noisy:

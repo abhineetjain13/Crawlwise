@@ -48,6 +48,7 @@ from app.services.config.extraction_rules import (
     SIZE_NOISE_TOKENS,
     VARIANT_AXIS_ALIASES,
 )
+from app.services.extract.noise_policy import TITLE_NOISE_WORDS, field_value_contains_noise
 from app.services.text_sanitization import strip_ui_noise as strip_ui_noise_policy
 from app.services.text_utils import normalized_text as normalized_text_policy
 from bs4 import BeautifulSoup
@@ -74,7 +75,6 @@ _CROSSFIELD_VARIANT_VALUE_RE = re.compile(
     r"[A-Za-z0-9.+/-]{1,8}(?:\s*,\s*\.?)?$",
     re.IGNORECASE,
 )
-_TITLE_NOISE_WORDS = {"home", "cart", "sign in", "search results", "access denied", "loading..."}
 _SALARY_NOISE_PATTERN = re.compile(
     r"\b(?:competitive|depends on experience|doe)\b", re.IGNORECASE
 )
@@ -274,7 +274,7 @@ def _normalize_rich_candidate_text(value: str) -> str:
 
 
 def _parse_json_like_value(value: str) -> dict | list | None:
-    from app.services.extract.shared_json_helpers import parse_json_fragment
+    from app.services.discover.json_helpers import parse_json_fragment
 
     return parse_json_fragment(value)
 
@@ -326,7 +326,7 @@ def _coerce_color_field(value: str) -> str | None:
         return None
     if re.search(r"!\d", cleaned) or re.search(r"(?<![A-Za-z ])\s*:\s*!", cleaned):
         return None
-    if "#" in cleaned:
+    if "#" in cleaned and re.match(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", cleaned) is None:
         return None
     if _COLOR_NOISE_RE.search(lowered):
         return None
@@ -996,7 +996,7 @@ def validate_value(field_name: str, value: object) -> object | None:
             return None
         if _BREADCRUMB_SEPARATOR_RE.search(text):
             return None
-        if "cookie" in lowered or "privacy" in lowered:
+        if field_value_contains_noise("brand", lowered):
             return None
     elif _is_color_field(field_name):
         if not isinstance(value, str):
@@ -1007,9 +1007,9 @@ def validate_value(field_name: str, value: object) -> object | None:
             return None
         if re.search(r"[{};]|rgb\(|rgba\(", lowered):
             return None
-        if "#" in lowered:
+        if "#" in lowered and not _HEX_COLOR_RE.fullmatch(text):
             return None
-        if "cookie" in lowered or "select" in lowered:
+        if field_value_contains_noise("color", lowered):
             return None
     elif _is_availability_field(field_name):
         if not isinstance(value, str):
@@ -1023,7 +1023,7 @@ def validate_value(field_name: str, value: object) -> object | None:
             return value
         if len(text) > 150:
             return None
-        if "cookie" in lowered or "sign in" in lowered:
+        if field_value_contains_noise("category", lowered):
             return None
         if lowered in {"detail-page", "product", "category", "page", "object"}:
             return None
@@ -1041,7 +1041,7 @@ def validate_value(field_name: str, value: object) -> object | None:
             return None
         if _is_title_field(field_name) and _looks_like_variant_selector_text(text):
             return None
-        if lowered in _TITLE_NOISE_WORDS or _NUMERIC_ONLY_RE.fullmatch(text):
+        if lowered in TITLE_NOISE_WORDS or _NUMERIC_ONLY_RE.fullmatch(text):
             return None
         return text
     if _is_numeric_field(field_name):
@@ -1338,3 +1338,16 @@ def _is_salary_field(field_name: str) -> bool:
 
 def _is_structured_detail_field(field_name: str) -> bool:
     return str(field_name or "").strip().lower() in _STRUCTURED_DETAIL_FIELDS
+
+
+from .listings import (
+    apply_surface_record_contract,
+    canonical_listing_fields,
+    normalize_ld_item,
+    normalize_listing_field_value,
+    normalize_listing_record,
+    normalize_record_fields,
+    normalize_review_value,
+    passes_detail_quality_gate,
+    review_values_equal,
+)

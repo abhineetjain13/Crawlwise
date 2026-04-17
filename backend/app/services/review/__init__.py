@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
-from app.services.crawl_metadata import refresh_record_commit_metadata
+from app.services.publish import refresh_record_commit_metadata
 from app.services.crawl_utils import normalize_committed_field_name
 from app.services.domain_utils import normalize_domain
 from app.services.normalizers import normalize_value

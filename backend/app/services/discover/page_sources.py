@@ -1,3 +1,12 @@
+"""Page-source discovery — discover-stage owner.
+
+Parses a rendered HTML document into an inventory of structured sources
+(JSON-LD, hydrated state, embedded JSON blobs, Apollo state, Next.js
+bootstrap data, Open Graph, microdata, tables, GTM dataLayer). Consumers
+in `extract` and `pipeline` read from the returned inventory — they do
+not rediscover sources themselves.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +25,7 @@ from app.services.config.extraction_audit_settings import (
     SOURCE_PARSER_PREVIOUS_HEADING_LIMIT,
 )
 from app.services.config.extraction_rules import HYDRATED_STATE_PATTERNS
-from app.services.extract.shared_json_helpers import (
+from app.services.discover.json_helpers import (
     extract_balanced_json_fragment,
     parse_json_fragment,
 )
@@ -109,7 +118,6 @@ def parse_page_sources(
     try:
         soup = soup if soup is not None else BeautifulSoup(html or "", "html.parser")
         hydrated_states, hydrated_script_ids = extract_hydrated_states(soup)
-        # Extract Apollo state from meta tags used by GraphQL-driven apps
         apollo_state = extract_apollo_state_from_meta(soup)
         if apollo_state:
             hydrated_states.append(apollo_state)
@@ -146,12 +154,12 @@ async def parse_page_sources_async(
 def extract_json_ld(soup: BeautifulSoup) -> list[dict]:
     results = []
     for node in soup.select("script[type='application/ld+json']"):
-        # FIX: Do not use get_text() as it strips HTML tags inside valid JSON strings,
-        # corrupting the payload. Use the raw inner strings.
+        # get_text() strips HTML tags inside valid JSON strings, corrupting
+        # the payload. Use raw inner strings instead.
         raw_text = node.string
         if not raw_text:
             raw_text = "".join(node.strings)
-            
+
         data = parse_json_fragment(raw_text.strip())
         results.extend(_flatten_json_ld_payloads(data))
     return results
@@ -159,29 +167,21 @@ def extract_json_ld(soup: BeautifulSoup) -> list[dict]:
 
 def parse_datalayer(html: str) -> dict[str, object]:
     """Extract Google Tag Manager dataLayer from page HTML.
-    
-    Supports:
-    - GA4 schema: dataLayer.push({ecommerce: {items: [...]}})
-    - UA schema: dataLayer.push({ecommerce: {detail: {...}}})
-    
-    Returns dict with extracted fields:
-    - price, sale_price, discount_amount, availability, price_currency, category
-    
-    Returns empty dict if dataLayer absent or malformed.
+
+    Supports GA4 (`ecommerce.items[]`) and UA (`ecommerce.detail.products[]`).
+    Returns first dataLayer push that yields a non-empty ecommerce payload.
     """
-    # Preserve first-match semantics across dataLayer pushes.
     for push_index, match in enumerate(_DATALAYER_PUSH_RE.finditer(html)):
         start_pos = match.end()
-        # Extract balanced JSON fragment starting from the opening brace
         json_fragment = extract_balanced_json_fragment(html[start_pos:])
-        
+
         if not json_fragment:
             continue
-        
+
         parsed = parse_json_fragment(json_fragment)
         if not isinstance(parsed, dict):
             continue
-        
+
         ecommerce = parsed.get("ecommerce")
         if not isinstance(ecommerce, dict):
             continue
@@ -191,11 +191,6 @@ def parse_datalayer(html: str) -> dict[str, object]:
         return {**result, "_selected_push_index": push_index}
 
     return {}
-
-
-async def parse_datalayer_async(html: str) -> dict[str, object]:
-    """Async wrapper for CPU-bound dataLayer parsing."""
-    return await asyncio.to_thread(parse_datalayer, html)
 
 
 def _extract_datalayer_ecommerce_payload(ecommerce: dict[str, object]) -> dict[str, object]:
@@ -290,12 +285,12 @@ def _datalayer_discount_looks_like_percentage(
     currency = str(price_currency or "").strip().upper()
     if currency in {"JPY", "KRW"}:
         return False
-    # If discount exceeds price, it's almost certainly a percentage.
     if discount_value_numeric > price_value:
         return True
     if discount_value_numeric < price_value * 0.5:
         return True
     return False
+
 
 def _score_datalayer_payload(
     result: dict[str, object], *, push_index: int
@@ -463,10 +458,8 @@ def extract_microdata(soup: BeautifulSoup) -> list[dict]:
         item_type = node.get("itemtype")
         if item_type:
             item["@type"] = item_type
-        # Find direct properties - exclude those inside nested itemscopes
         nested_scopes = {nested for nested in node.select("[itemscope]")}
         for prop in node.select("[itemprop]"):
-            # Skip if this prop is inside a nested itemscope
             if any(prop in scope.descendants for scope in nested_scopes if scope != node):
                 continue
             prop_name = str(prop.get("itemprop") or "").strip()

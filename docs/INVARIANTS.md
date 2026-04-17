@@ -53,5 +53,4 @@
 
 ## Deletion Policy
 
-28. **Deleted subsystems stay deleted.** Do not reintroduce site memory, selector CRUD, discovery manifests, evidence buckets, or runtime-editable per-domain extraction logic under new names.
 29. **Generic crawler paths stay generic.** No tenant/site hardcodes; platform behavior is family-based and minimized to the required families.

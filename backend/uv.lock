@@ -109,6 +109,15 @@ wheels = [
 ]
 
 [[package]]
+name = "attrs"
+version = "26.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c03148528be8cac2408564a6c9a0cc7e9171802bc1d26985/attrs-26.1.0.tar.gz", hash = "sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32", size = 952055, upload-time = "2026-03-19T14:22:25.026Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309", size = 67548, upload-time = "2026-03-19T14:22:23.645Z" },
+]
+
+[[package]]
 name = "bcrypt"
 version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -194,6 +203,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/58/23/b12ac0bcdfb7360d664f40a00b1bda139cbbbced012c34e375506dbd0143/billiard-4.2.4.tar.gz", hash = "sha256:55f542c371209e03cd5862299b74e52e4fbcba8250ba611ad94276b369b6a85f", size = 156537, upload-time = "2025-11-30T13:28:48.52Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/87/8bab77b323f16d67be364031220069f79159117dd5e43eeb4be2fef1ac9b/billiard-4.2.4-py3-none-any.whl", hash = "sha256:525b42bdec68d2b983347ac312f892db930858495db601b5836ac24e6477cde5", size = 87070, upload-time = "2025-11-30T13:28:47.016Z" },
+]
+
+[[package]]
+name = "boltons"
+version = "25.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/54/71a94d8e02da9a865587fb3fff100cb0fc7aa9f4d5ed9ed3a591216ddcc7/boltons-25.0.0.tar.gz", hash = "sha256:e110fbdc30b7b9868cb604e3f71d4722dd8f4dcb4a5ddd06028ba8f1ab0b5ace", size = 246294, upload-time = "2025-02-03T05:57:59.129Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/7f/0e961cf3908bc4c1c3e027de2794f867c6c89fb4916fc7dba295a0e80a2d/boltons-25.0.0-py3-none-any.whl", hash = "sha256:dc9fb38bf28985715497d1b54d00b62ea866eca3938938ea9043e254a3a6ca62", size = 194210, upload-time = "2025-02-03T05:57:56.705Z" },
 ]
 
 [[package]]
@@ -382,7 +400,9 @@ dependencies = [
     { name = "curl-cffi" },
     { name = "email-validator" },
     { name = "fastapi" },
+    { name = "glom" },
     { name = "httpx" },
+    { name = "jmespath" },
     { name = "lxml" },
     { name = "passlib", extra = ["bcrypt"] },
     { name = "playwright" },
@@ -423,8 +443,10 @@ requires-dist = [
     { name = "curl-cffi", specifier = ">=0.14.0" },
     { name = "email-validator", specifier = ">=2.3.0" },
     { name = "fastapi", specifier = ">=0.116.0" },
+    { name = "glom", specifier = ">=24.11.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0.0" },
+    { name = "jmespath", specifier = ">=1.0.1" },
     { name = "lxml", specifier = ">=6.0.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
     { name = "playwright", specifier = ">=1.54.0" },
@@ -568,6 +590,18 @@ wheels = [
 ]
 
 [[package]]
+name = "face"
+version = "26.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boltons" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/4e/0e106b0ba486cc38c858fb5efe899002f2ec4765e0808b298d8e19a16efb/face-26.0.0.tar.gz", hash = "sha256:ae12136ff0052f124811f5319670a8d9d29b7d2caaaabe542813690967cc6bca", size = 49862, upload-time = "2026-02-14T00:17:12.576Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/1d/c2f7a4334f7501a3474766b5bc0948e8e0b0916217a54d092dd700a5ed3c/face-26.0.0-py3-none-any.whl", hash = "sha256:6ec9cf271d8ee2447f04b14264209a09ec9cbe8252255e61fb7ab6b154e300f9", size = 54825, upload-time = "2026-02-14T00:17:11.519Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.135.3"
 source = { registry = "https://pypi.org/simple" }
@@ -581,6 +615,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f7/e6/7adb4c5fa231e82c35b8f5741a9f2d055f520c29af5546fd70d3e8e1cd2e/fastapi-0.135.3.tar.gz", hash = "sha256:bd6d7caf1a2bdd8d676843cdcd2287729572a1ef524fc4d65c17ae002a1be654", size = 396524, upload-time = "2026-04-01T16:23:58.188Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/84/a4/5caa2de7f917a04ada20018eccf60d6cc6145b0199d55ca3711b0fc08312/fastapi-0.135.3-py3-none-any.whl", hash = "sha256:9b0f590c813acd13d0ab43dd8494138eb58e484bfac405db1f3187cfc5810d98", size = 117734, upload-time = "2026-04-01T16:23:59.328Z" },
+]
+
+[[package]]
+name = "glom"
+version = "25.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "boltons" },
+    { name = "face" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/74/8387f95565ba7c30cd152a585b275ebb9a834d1d32782425c5d2fe0a102c/glom-25.12.0.tar.gz", hash = "sha256:1ae7da88be3693df40ad27bdf57a765a55c075c86c971bcddd67927403eb0069", size = 196128, upload-time = "2025-12-29T06:29:07.274Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/e6/4129d9a3baa72d747533bb33376543ccadd9a7f9944e5a6e3ae2e245f5d6/glom-25.12.0-py3-none-any.whl", hash = "sha256:b9f21e77f71a6576a43864e85066b8cc3f0f778d0d50961563f8981377a6dcb1", size = 103295, upload-time = "2025-12-29T06:29:06.074Z" },
 ]
 
 [[package]]
@@ -724,6 +772,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc35312d08ba8bf51fdd999c576889fc2c24cb97f4f10/iniconfig-2.3.0.tar.gz", hash = "sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730", size = 20503, upload-time = "2025-10-18T21:55:43.219Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
+]
+
+[[package]]
+name = "jmespath"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
 ]
 
 [[package]]

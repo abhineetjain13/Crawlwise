@@ -20,7 +20,7 @@ from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.walmart import WalmartAdapter
-from app.services.config.platform_registry import configured_adapter_names
+from app.services.platform_policy import configured_adapter_names
 
 logger = logging.getLogger(__name__)
 

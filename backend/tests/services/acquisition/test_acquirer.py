@@ -16,7 +16,6 @@ from app.services.acquisition.acquirer import (
     AcquisitionRequest,
     AcquisitionResult,
     ProxyRotator,
-    _classify_outcome,
     _try_browser_first_success_result,
     _scrub_html_for_artifact,
     _scrub_payload_for_artifact,
@@ -24,6 +23,7 @@ from app.services.acquisition.acquirer import (
     acquire,
     acquire_html,
 )
+from app.services.acquisition.policy import classify_acquisition_outcome
 from app.services.acquisition.artifact_store import _write_artifact_file
 from app.services.acquisition.http_client import HttpFetchResult
 from app.services.acquisition.pacing import reset_pacing_state
@@ -284,7 +284,7 @@ def test_classify_outcome_uses_live_blocked_keys():
         diagnostics={"curl_blocked": True},
     )
 
-    assert _classify_outcome(result) == "blocked"
+    assert classify_acquisition_outcome(result) == "blocked"
 
 
 def test_scrub_payload_for_artifact_preserves_values():
@@ -610,6 +610,44 @@ async def test_acquire_html_traversal_mode_falls_back_to_curl_on_playwright_fail
         )
     assert method == "curl_cffi"
     assert "Product" in result_html
+
+
+@pytest.mark.asyncio
+async def test_acquire_traversal_fallback_records_explicit_browser_attempt_diagnostics(tmp_path):
+    curl_html = "<html><body><h1>Product</h1>" + "x" * 600 + "</body></html>"
+
+    with (
+        patch(
+            "app.services.acquisition.acquirer._fetch_with_content_type",
+            new_callable=AsyncMock,
+            return_value=HttpFetchResult(
+                text=curl_html,
+                status_code=200,
+                content_type="html",
+            ),
+        ),
+        patch(
+            "app.services.acquisition.acquirer.fetch_rendered_html",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("ERR_HTTP2_PROTOCOL_ERROR"),
+        ),
+        patch("app.services.acquisition.acquirer.settings") as mock_settings,
+    ):
+        mock_settings.artifacts_dir = tmp_path
+        result = await acquire(
+            1,
+            "https://example.com/spa",
+            surface="ecommerce_listing",
+            traversal_mode="auto",
+        )
+
+    assert result.method == "curl_cffi"
+    assert result.diagnostics["browser_attempted"] is True
+    assert result.diagnostics["browser_fallback_used"] is True
+    assert result.diagnostics["traversal_fallback_used"] is True
+    assert result.diagnostics["traversal_fallback_reason"] == "browser_failure:context_failure"
+    assert result.diagnostics["acquisition_runtime"] == "playwright_attempt_required"
+    assert result.diagnostics["acquisition_runtime_reason"] == "traversal_requested"
 
 
 @pytest.mark.asyncio

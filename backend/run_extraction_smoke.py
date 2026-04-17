@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from app.services.acquisition.acquirer import acquire
 from app.services.extract.listing_extractor import extract_listing_records
 from app.services.extract.service import extract_candidates
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.discover import parse_page_sources
 from app.services.semantic_detail_extractor import extract_semantic_detail_data
 
 TEST_SITES: list[dict] = [

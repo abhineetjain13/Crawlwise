@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
+from contextlib import suppress
 import logging
 import re as _re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from json import loads as parse_json
 from pathlib import Path
-from urllib.parse import parse_qsl, urljoin, urlparse
+from urllib.parse import urlparse
 
-from app.core.config import settings
+from app.core.config import settings  # noqa: F401 - imported for module-level patching in tests
 from app.core.metrics import observe_acquisition_duration
 from app.services.acquisition.artifact_store import (
     artifact_paths,
@@ -22,6 +20,17 @@ from app.services.acquisition.artifact_store import (
 )
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import BrowserResult, fetch_rendered_html
+from app.services.acquisition.policy import (
+    browser_failure_log_message,
+    classify_acquisition_outcome,
+    decide_acquisition_execution,
+    is_invalid_surface_page,
+    requires_browser_first,
+    should_force_browser_for_traversal,
+    surface_selection_warnings,
+    surface_warning_summary,
+)
+from app.services.acquisition.recovery import recover_blocked_listing_acquisition
 from app.services.acquisition.browser_runtime import resolve_browser_runtime_options
 from app.services.acquisition.cookie_store import (
     discard_session_cookies,
@@ -33,53 +42,29 @@ from app.services.acquisition.session_context import (
     create_session_context,
 )
 from app.services.adapters.registry import resolve_adapter
-from app.services.config.acquisition_guards import (
-    JOB_ERROR_PAGE_HEADINGS,
-    JOB_ERROR_PAGE_TITLES,
-    JOB_REDIRECT_SHELL_CANONICAL_URLS,
-    JOB_REDIRECT_SHELL_HEADINGS,
-    JOB_REDIRECT_SHELL_TITLES,
-)
 from app.services.config.crawl_runtime import (
     ACQUIRE_HOST_MIN_INTERVAL_MS,
     ACQUISITION_ATTEMPT_TIMEOUT_SECONDS,
     BROWSER_FALLBACK_VISIBLE_TEXT_MIN,
     BROWSER_PREFERENCE_MIN_SUCCESSES,
     BROWSER_RENDER_TIMEOUT_SECONDS,
-    COOPERATIVE_SLEEP_POLL_MS,
     DEFAULT_MAX_SCROLLS,
-    DETAIL_FIELD_SIGNAL_MIN_COUNT,
-    EXTRACTABILITY_JSON_LD_MIN_TYPE_SIGNALS,
-    EXTRACTABILITY_NEXT_DATA_SIGNAL_MIN,
-    EXTRACTABILITY_NEXT_DATA_SIGNAL_TRIGGER,
-    EXTRACTABILITY_NON_PRODUCT_TYPE_RATIO_MAX,
     HTTP_TIMEOUT_SECONDS,
     IFRAME_PROMOTION_MAX_CANDIDATES,
-    JS_GATE_PHRASES,
     JS_SHELL_MIN_CONTENT_LEN,
     JS_SHELL_MIN_SCRIPT_COUNT,
     JS_SHELL_VISIBLE_RATIO_MAX,
-    LISTING_MIN_ITEMS,
     PROXY_FAILURE_BACKOFF_MAX_EXPONENT,
     PROXY_FAILURE_COOLDOWN_BASE_MS,
     PROXY_FAILURE_COOLDOWN_MAX_MS,
     PROXY_FAILURE_STATE_MAX_ENTRIES,
     PROXY_FAILURE_STATE_TTL_SECONDS,
 )
-from app.services.config.platform_registry import (
-    acquisition_hint_tokens,
-    browser_first_domains,
-    job_platform_families,
-    is_job_platform_signal,
-    resolve_platform_runtime_policy,
-)
-from app.services.config.platform_registry import (
-    detect_platform_family as detect_platform_family_from_registry,
-)
-from app.services.extractability import (
-    NEXT_DATA_PRODUCT_SIGNALS,
-    html_has_extractable_listings_from_soup,
-    json_ld_listing_count,
+from app.services.platform_policy import detect_platform_family as detect_platform_family_from_registry
+from app.services.discover.signal_inventory import (
+    analyze_html_signals,
+    assess_extractable_html,
+    html_has_min_listing_link_signals,
 )
 from app.services.exceptions import (
     AcquisitionFailureError,
@@ -87,68 +72,8 @@ from app.services.exceptions import (
 )
 from app.services.runtime_metrics import incr
 from app.services.url_safety import validate_proxy_endpoint, validate_public_target
-from bs4 import BeautifulSoup
 from playwright.async_api import Error as PlaywrightError
 
-_COMMERCE_REDIRECT_TITLE_FRAGMENTS: frozenset[str] = frozenset(
-    {
-        "sign in",
-        "log in",
-        "login",
-        "access denied",
-        "403 forbidden",
-        "404 not found",
-        "page not found",
-        "session expired",
-        "account required",
-    }
-)
-_COMMERCE_SOFT_404_TITLES: frozenset[str] = frozenset(
-    {
-        "404 not found",
-        "page not found",
-        "sorry, this page isn't available.",
-        "sorry, this page isn't available",
-        "this page isn't available",
-        "this page is not available",
-    }
-)
-_COMMERCE_SOFT_404_HEADINGS: frozenset[str] = frozenset(
-    {
-        "404 not found",
-        "page not found",
-        "sorry, this page isn't available.",
-        "sorry, this page isn't available",
-        "this page isn't available",
-        "this page is not available",
-    }
-)
-_COMMERCE_TRANSACTIONAL_PATH_TOKENS: frozenset[str] = frozenset(
-    {
-        "cart",
-        "cartupdate",
-        "cartupdate.aspx",
-        "checkout",
-        "basket",
-        "bag",
-        "addtocart",
-        "add-to-cart",
-    }
-)
-_COMMERCE_TRANSACTIONAL_ACTION_VALUES: frozenset[str] = frozenset(
-    {"add", "addtocart", "add-to-cart", "buy", "buy-now", "buynow", "checkout"}
-)
-_COMMERCE_TRANSACTIONAL_TITLE_FRAGMENTS: frozenset[str] = frozenset(
-    {
-        "shopping cart",
-        "your cart",
-        "my cart",
-        "your bag",
-        "my bag",
-        "checkout",
-    }
-)
-HTML_PARSER = "html.parser"
 logger = logging.getLogger(__name__)
 _REDACTED = "[REDACTED]"
 _PROXY_FAILURE_STATE: dict[str, tuple[int, float, float]] = {}
@@ -189,8 +114,6 @@ _SENSITIVE_HTML_FIELD_TOKENS = (
     "session",
     "token",
 )
-JOB_PLATFORM_FAMILIES = frozenset({*job_platform_families(), "generic_jobs"})
-
 
 class ProxyPoolExhausted(ProxyPoolExhaustedError):  # noqa: N818 - compatibility alias kept for existing imports.
     pass
@@ -451,41 +374,6 @@ class _AcquireAttemptContext:
         return result
 
 
-@dataclass(slots=True)
-class _ListingSignalSummary:
-    strong: bool
-    score: int
-    candidate_count: int
-    priced_count: int
-    imaged_count: int
-    titled_count: int
-    card_like_count: int
-    pagination_hint_count: int
-    same_host_count: int
-    path_diversity: int
-
-    def as_dict(self) -> dict[str, int | bool]:
-        return {
-            "strong": self.strong,
-            "score": self.score,
-            "candidate_count": self.candidate_count,
-            "priced_count": self.priced_count,
-            "imaged_count": self.imaged_count,
-            "titled_count": self.titled_count,
-            "card_like_count": self.card_like_count,
-            "pagination_hint_count": self.pagination_hint_count,
-            "same_host_count": self.same_host_count,
-            "path_diversity": self.path_diversity,
-        }
-
-
-@dataclass(slots=True)
-class _BrowserEscalationDecision:
-    needs_browser: bool
-    reason: str
-    structured_override: bool = False
-
-
 def _coerce_acquisition_request(
     *,
     request: AcquisitionRequest | None,
@@ -615,13 +503,9 @@ async def acquire(
     profile = dict(acquisition_request.acquisition_profile)
     platform_family = _detect_platform_family(url)
 
-    # Domain-based fast track: known problematic domains should use the
-    # hardened browser runtime, not the minimal default browser settings.
-    domain = urlparse(url).netloc.lower().replace("www.", "")
     browser_first = (
-        _matches_domain_policy(domain, browser_first_domains())
-        or _memory_prefers_browser(profile)
-        or _requires_browser_first(url, platform_family)
+        _memory_prefers_browser(profile)
+        or requires_browser_first(url, platform_family)
     )
     runtime_options = resolve_browser_runtime_options(
         profile,
@@ -738,37 +622,10 @@ async def acquire(
     if acquisition_total_ms > 0:
         observe_acquisition_duration(acquisition_total_ms / 1000)
     # Classify the acquisition outcome from diagnostics.
-    result.outcome = _classify_outcome(result)
+    result.outcome = classify_acquisition_outcome(result)
     if isinstance(result.diagnostics, dict):
         result.diagnostics["acquisition_outcome"] = result.outcome
     return result
-
-
-def _classify_outcome(result: AcquisitionResult) -> str:
-    """Derive a typed :class:`AcquisitionOutcome` value from the result."""
-    from app.services.pipeline.types import AcquisitionOutcome
-
-    diag = result.diagnostics if isinstance(result.diagnostics, dict) else {}
-    if result.content_type == "json":
-        return AcquisitionOutcome.json_response
-    if not result.html and result.json_data is None:
-        return AcquisitionOutcome.empty
-    if bool(diag.get("curl_blocked")) or bool(diag.get("browser_blocked")):
-        return AcquisitionOutcome.blocked
-    blocked = diag.get("blocked")
-    if isinstance(blocked, dict) and blocked.get("is_blocked"):
-        return AcquisitionOutcome.blocked
-    if getattr(blocked, "is_blocked", False):
-        return AcquisitionOutcome.blocked
-    if diag.get("promoted_browser_used"):
-        return AcquisitionOutcome.promoted_source_browser
-    if diag.get("promoted_source_used"):
-        return AcquisitionOutcome.promoted_source
-    if result.method == "playwright":
-        return AcquisitionOutcome.browser_rendered
-    if result.method == "curl_cffi":
-        return AcquisitionOutcome.direct_html
-    return AcquisitionOutcome.direct_html
 
 
 def _extract_curl_analysis(
@@ -785,6 +642,24 @@ def _extract_curl_analysis(
         else {}
     )
     return curl_result, curl_diagnostics
+
+
+def _execution_decision_diagnostics(
+    decision,
+) -> dict[str, object]:
+    if decision is None:
+        return {}
+    return {
+        "acquisition_runtime": str(getattr(decision, "runtime", "") or "").strip()
+        or None,
+        "acquisition_runtime_reason": str(getattr(decision, "reason", "") or "").strip()
+        or None,
+        "acquisition_runtime_fallback_allowed": bool(
+            getattr(decision, "fallback_allowed", False)
+        ),
+        "expected_evidence": list(getattr(decision, "expected_evidence", ()) or ())
+        or None,
+    }
 
 
 def _build_curl_result(
@@ -820,16 +695,16 @@ def _try_browser_first_success_result(
     first_html = str(first_data.get("html") or "")
     if not first_html:
         return None
-    browser_first_surface_warnings = _surface_selection_warnings(
+    browser_first_surface_warnings = surface_selection_warnings(
         requested_url=ctx.request.url,
         final_url=str(first_data.get("final_url") or ctx.request.url),
         html=first_html,
         surface=ctx.surface,
     )
-    browser_first_warning_summary = _surface_warning_summary(
+    browser_first_warning_summary = surface_warning_summary(
         browser_first_surface_warnings
     )
-    first_extractability = _assess_extractable_html(
+    first_extractability = assess_extractable_html(
         first_html,
         url=ctx.request.url,
         surface=ctx.surface,
@@ -840,7 +715,7 @@ def _try_browser_first_success_result(
     ) or not str(ctx.surface or "").strip().lower().endswith("listing")
     if (
         first_data.get("blocked")
-        or _is_invalid_surface_page(
+        or is_invalid_surface_page(
             requested_url=ctx.request.url,
             final_url=str(first_data.get("final_url") or ctx.request.url),
             html=first_html,
@@ -906,6 +781,7 @@ async def _finalize_browser_result(
     curl_result: AcquisitionResult | None,
     curl_diagnostics: dict[str, object],
 ) -> AcquisitionResult | None:
+    execution_decision = analysis.get("execution_decision")
     browser_data = getattr(browser_result, "_acquirer_browser", {})
     browser_html = str(browser_data.get("html") or "")
     browser_final_url = (
@@ -927,19 +803,19 @@ async def _finalize_browser_result(
         else {}
     )
     browser_payloads = list(browser_data.get("network_payloads") or [])
-    browser_redirect_shell = _is_invalid_surface_page(
+    browser_redirect_shell = is_invalid_surface_page(
         requested_url=ctx.request.url,
         final_url=browser_final_url,
         html=browser_html,
         surface=ctx.surface,
     )
-    browser_surface_warnings = _surface_selection_warnings(
+    browser_surface_warnings = surface_selection_warnings(
         requested_url=ctx.request.url,
         final_url=browser_final_url,
         html=browser_html,
         surface=ctx.surface,
     )
-    browser_warning_summary = _surface_warning_summary(browser_surface_warnings)
+    browser_warning_summary = surface_warning_summary(browser_surface_warnings)
     merged_timings = _merge_timing_maps(
         curl_diagnostics.get("timings_ms"),
         {"browser_total_ms": browser_data.get("browser_total_ms")},
@@ -964,6 +840,7 @@ async def _finalize_browser_result(
                 "soft_404_page": browser_warning_summary["soft_404_page"],
                 "transactional_page": browser_warning_summary["transactional_page"],
                 "timings_ms": merged_timings,
+                **_execution_decision_diagnostics(execution_decision),
             }
         )
         for key in (
@@ -999,6 +876,17 @@ async def _finalize_browser_result(
             soft_404_page=browser_warning_summary["soft_404_page"],
             transactional_page=browser_warning_summary["transactional_page"],
             timings_ms=merged_timings,
+            browser_fallback_used=True,
+            browser_fallback_reason="browser_result_not_usable",
+            traversal_fallback_used=(
+                True if should_force_browser_for_traversal(ctx.request.traversal_mode) else None
+            ),
+            traversal_fallback_reason=(
+                "browser_result_not_usable"
+                if should_force_browser_for_traversal(ctx.request.traversal_mode)
+                else None
+            ),
+            **_execution_decision_diagnostics(execution_decision),
         )
         logger.info(
             "Playwright returned blocked/empty for %s — using curl_cffi fallback",
@@ -1023,6 +911,7 @@ async def _finalize_browser_result(
                 "soft_404_page": browser_warning_summary["soft_404_page"],
                 "transactional_page": browser_warning_summary["transactional_page"],
                 "timings_ms": merged_timings,
+                **_execution_decision_diagnostics(execution_decision),
             }
         )
         return AcquisitionResult(
@@ -1095,7 +984,7 @@ async def _acquire_once(
     if browser_first_success is not None:
         return browser_first_success
 
-    if _should_force_browser_for_traversal(request.traversal_mode):
+    if should_force_browser_for_traversal(request.traversal_mode):
         http_result = None
         analysis = {}
     else:
@@ -1115,14 +1004,61 @@ async def _acquire_once(
             session_context=request.session_context,
         )
     analysis = http_result.acquirer_analysis or {} if http_result is not None else {}
-    blocked_recovery = await _recover_blocked_listing_acquisition(
-        ctx,
-        request=request,
-        http_result=http_result,
+    execution_decision = decide_acquisition_execution(
+        http_result,
+        surface=request.surface,
+        traversal_mode=request.traversal_mode,
+        requested_fields=request.requested_fields,
+    )
+    analysis["execution_decision"] = execution_decision
+    blocked_recovery = await recover_blocked_listing_acquisition(
+        url=request.url,
+        proxy=request.proxy,
+        surface=request.surface,
+        traversal_mode=request.traversal_mode,
+        max_pages=request.max_pages,
+        max_scrolls=request.max_scrolls,
+        prefer_stealth=request.prefer_stealth,
+        sleep_ms=request.sleep_ms,
+        runtime_options=request.runtime_options,
+        requested_fields=request.requested_fields,
+        requested_field_selectors=request.requested_field_selectors,
+        checkpoint=request.checkpoint,
+        run_id=request.run_id,
+        session_context=request.session_context,
+        browser_first=request.browser_first,
         analysis=analysis,
+        try_browser=_try_browser,
     )
     if blocked_recovery is not None:
-        return blocked_recovery
+        if blocked_recovery.browser_result is not None:
+            return await _finalize_browser_result(
+                ctx,
+                browser_result=blocked_recovery.browser_result,
+                http_result=http_result,
+                analysis=analysis,
+                curl_result=None,
+                curl_diagnostics={},
+            )
+        diagnostics = dict(analysis.get("curl_diagnostics", {}))
+        diagnostics.update(
+            {
+                "blocked_adapter_recovery": True,
+                "adapter_name": blocked_recovery.adapter_name,
+                "adapter_record_count": len(blocked_recovery.adapter_records),
+            }
+        )
+        return AcquisitionResult(
+            html=http_result.text if http_result is not None else "",
+            content_type="html",
+            method="adapter_recovery",
+            artifact_path=ctx.artifact_path,
+            network_payloads=[],
+            adapter_records=list(blocked_recovery.adapter_records),
+            adapter_name=blocked_recovery.adapter_name,
+            adapter_source_type=blocked_recovery.adapter_source_type,
+            diagnostics=ctx.finalize_diagnostics_payload(diagnostics),
+        )
     promoted_source_result = await _try_promoted_source_acquire(
         url=request.url,
         proxy=request.proxy,
@@ -1142,27 +1078,26 @@ async def _acquire_once(
         )
         return promoted_source_result
 
-    should_escalate, _ = _needs_browser(
-        http_result,
-        request.url,
-        request.surface,
-        request.requested_fields,
-        request.acquisition_profile,
-    )
     curl_result, curl_diagnostics = _extract_curl_analysis(analysis)
+    browser_failure_diagnostics = (
+        curl_result.diagnostics
+        if curl_result is not None and isinstance(curl_result.diagnostics, dict)
+        else {}
+    )
     if (
         http_result is not None
-        and not should_escalate
-        and not _should_force_browser_for_traversal(request.traversal_mode)
+        and execution_decision.runtime == "curl"
     ):
         curl_diagnostics["timings_ms"] = _merge_timing_maps(
             curl_diagnostics.get("timings_ms"),
             {"acquisition_total_ms": _elapsed_ms(started)},
         )
+        curl_diagnostics.update(_execution_decision_diagnostics(execution_decision))
         if curl_result is not None:
             return ctx.update_result_diagnostics(
                 curl_result,
                 timings_ms=curl_diagnostics.get("timings_ms"),
+                **_execution_decision_diagnostics(execution_decision),
             )
         return _build_curl_result(
             ctx,
@@ -1184,10 +1119,25 @@ async def _acquire_once(
         requested_field_selectors=request.requested_field_selectors,
         checkpoint=request.checkpoint,
         run_id=request.run_id,
-        diagnostics_sink=curl_result.diagnostics if curl_result is not None else None,
+        diagnostics_sink=browser_failure_diagnostics,
         session_context=request.session_context,
     )
     if browser_result is None:
+        browser_fallback_updates = {
+            "browser_attempted": True,
+            "browser_fallback_used": True,
+        }
+        if should_force_browser_for_traversal(request.traversal_mode):
+            browser_fallback_updates.update(
+                {
+                    "traversal_fallback_used": True,
+                    "traversal_fallback_reason": (
+                        f"browser_failure:{browser_failure_diagnostics.get('browser_failure_class')}"
+                        if browser_failure_diagnostics.get("browser_failure_class")
+                        else "browser_failure:attempt_required"
+                    ),
+                }
+            )
         if http_result is None:
             http_result = await _try_http(
                 request.url,
@@ -1207,9 +1157,25 @@ async def _acquire_once(
             if http_result is None:
                 return None
             analysis = http_result.acquirer_analysis or {}
+            execution_decision = decide_acquisition_execution(
+                http_result,
+                surface=request.surface,
+                traversal_mode=request.traversal_mode,
+                requested_fields=request.requested_fields,
+            )
+            analysis["execution_decision"] = execution_decision
             curl_result, curl_diagnostics = _extract_curl_analysis(analysis)
+            curl_diagnostics.update(browser_failure_diagnostics)
+        curl_diagnostics.update(browser_fallback_updates)
         if curl_result is not None:
-            return ctx.update_result_diagnostics(curl_result)
+            fallback_updates = dict(browser_failure_diagnostics)
+            fallback_updates.update(browser_fallback_updates)
+            fallback_updates.update(_execution_decision_diagnostics(execution_decision))
+            return ctx.update_result_diagnostics(
+                curl_result,
+                **fallback_updates,
+            )
+        curl_diagnostics.update(_execution_decision_diagnostics(execution_decision))
         return _build_curl_result(
             ctx,
             http_result=http_result,
@@ -1282,14 +1248,14 @@ async def _try_promoted_source_acquire(
         if not promoted_html:
             continue
         promoted_adapter_hint = await _resolve_adapter_hint(promoted_url, promoted_html)
-        promoted_extractability = _assess_extractable_html(
+        promoted_extractability = assess_extractable_html(
             promoted_html,
             url=promoted_url,
             surface=surface,
             adapter_hint=promoted_adapter_hint,
         )
         promoted_has_data = bool(promoted_extractability.get("has_extractable_data"))
-        if not promoted_has_data and _html_has_min_listing_link_signals(
+        if not promoted_has_data and html_has_min_listing_link_signals(
             promoted_html,
             surface=surface,
             url=promoted_url,
@@ -1311,11 +1277,11 @@ async def _try_promoted_source_acquire(
         # an adapter hint claiming extractability), the curl fetch returned a
         # wrapper that needs browser rendering.  Escalate to Playwright for
         # the promoted URL so the real content gets hydrated.
-        promoted_visible_text = " ".join(
-            BeautifulSoup(promoted_html, HTML_PARSER)
-            .get_text(" ", strip=True)
-            .split()
-        )
+        promoted_visible_text = analyze_html_signals(
+            promoted_html,
+            url=promoted_url,
+            surface=surface,
+        ).visible_text
         promoted_is_shell = (
             len(promoted_visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
             and str(promoted_extractability.get("reason") or "") == "adapter_hint"
@@ -1434,130 +1400,6 @@ async def _try_promoted_source_acquire(
     return None
 
 
-def _collect_listing_signal_summary(
-    soup: BeautifulSoup,
-    *,
-    url: str,
-    surface: str | None,
-) -> _ListingSignalSummary:
-    normalized_surface = str(surface or "").strip().lower()
-    if not normalized_surface.endswith("listing"):
-        return _ListingSignalSummary(False, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-    page_host = str(urlparse(url).netloc or "").strip().lower()
-    candidate_count = 0
-    priced_count = 0
-    imaged_count = 0
-    titled_count = 0
-    card_like_count = 0
-    pagination_hint_count = 0
-    same_host_count = 0
-    unique_paths: set[str] = set()
-    seen_candidates: set[str] = set()
-    price_re = _re.compile(r"(?:[$€£]\s?\d|\d[\d,]*(?:\.\d{2})?)")
-
-    for anchor in soup.select("a[href]"):
-        raw_href = str(anchor.get("href") or "").strip()
-        if not raw_href or raw_href.startswith(("#", "javascript:", "mailto:", "tel:")):
-            continue
-        absolute_href = urljoin(url, raw_href)
-        parsed = urlparse(absolute_href)
-        if parsed.scheme and parsed.scheme not in {"http", "https"}:
-            continue
-        normalized_href = parsed._replace(fragment="", query="").geturl().rstrip("/")
-        if not normalized_href or normalized_href in seen_candidates:
-            continue
-        text = " ".join(anchor.get_text(" ", strip=True).split())
-        if len(text) < 3:
-            continue
-        seen_candidates.add(normalized_href)
-        candidate_count += 1
-        if parsed.netloc.lower() == page_host:
-            same_host_count += 1
-            unique_paths.add(parsed.path.rstrip("/"))
-        if anchor.find("img") is not None:
-            imaged_count += 1
-        if price_re.search(anchor.get_text(" ", strip=True)):
-            priced_count += 1
-        if len(text.split()) >= 2:
-            titled_count += 1
-        parent = anchor.parent
-        parent_text = " ".join(parent.get_text(" ", strip=True).split()) if parent else text
-        if (
-            parent is not None
-            and parent.name in {"li", "article", "div"}
-            and len(parent_text) >= len(text)
-            and (anchor.find("img") is not None or price_re.search(parent_text))
-        ):
-            card_like_count += 1
-
-    pagination_hint_count += len(
-        soup.select(
-            "a[rel='next'], link[rel='next'], a[href*='page='], a[aria-label*='next' i], button[aria-label*='next' i]"
-        )
-    )
-
-    score = 0
-    if candidate_count >= 2:
-        score += 2
-    if normalized_surface.startswith("job_") and candidate_count >= 2 and titled_count >= 2:
-        score += 2
-    if same_host_count >= 2:
-        score += 1
-    if len(unique_paths) >= 2:
-        score += 2
-    if card_like_count >= 2:
-        score += 2
-    if priced_count >= 2:
-        score += 1
-    if imaged_count >= 2 and titled_count >= 2:
-        score += 1
-    if pagination_hint_count > 0:
-        score += 1
-    strong = score >= 4 and candidate_count >= 2 and titled_count >= 2
-    return _ListingSignalSummary(
-        strong=strong,
-        score=score,
-        candidate_count=candidate_count,
-        priced_count=priced_count,
-        imaged_count=imaged_count,
-        titled_count=titled_count,
-        card_like_count=card_like_count,
-        pagination_hint_count=pagination_hint_count,
-        same_host_count=same_host_count,
-        path_diversity=len(unique_paths),
-    )
-
-
-def _html_has_min_listing_link_signals(
-    html: str,
-    *,
-    surface: str | None,
-    url: str = "",
-    soup: BeautifulSoup | None = None,
-) -> bool:
-    soup = soup or BeautifulSoup(html, HTML_PARSER)
-    return _collect_listing_signal_summary(
-        soup,
-        url=url,
-        surface=surface,
-    ).strong
-
-
-def _analyze_html_sync(
-    html: str,
-    *,
-    url: str,
-    surface: str | None,
-) -> tuple[BeautifulSoup, str, bool, _ListingSignalSummary]:
-    """Runs heavy CPU-bound HTML analysis synchronously once per document."""
-    soup = BeautifulSoup(html, HTML_PARSER)
-    visible_text = " ".join(soup.get_text(" ", strip=True).lower().split())
-    gate_phrases = any(phrase in visible_text for phrase in JS_GATE_PHRASES)
-    listing_signals = _collect_listing_signal_summary(soup, url=url, surface=surface)
-    return soup, visible_text, gate_phrases, listing_signals
-
-
 async def _try_http(
     url: str,
     proxy: str | None,
@@ -1635,12 +1477,16 @@ async def _try_http(
 
     # FIX: Offload CPU-bound HTML parsing to prevent Event Loop Starvation
     blocked = normalized.blocked_result()
-    soup, visible_text, gate_phrases, listing_signals = await asyncio.to_thread(
-        _analyze_html_sync,
+    html_signal_analysis = await asyncio.to_thread(
+        analyze_html_signals,
         html,
         url=url,
         surface=surface,
     )
+    soup = html_signal_analysis.soup
+    visible_text = html_signal_analysis.visible_text
+    gate_phrases = html_signal_analysis.gate_phrases
+    listing_signals = html_signal_analysis.listing_signals
     content_len = _content_html_length(html)
 
     visible_len = len(visible_text)
@@ -1665,7 +1511,7 @@ async def _try_http(
 
     # FIX: Offload extractability check
     extractability = await asyncio.to_thread(
-        _assess_extractable_html,
+        assess_extractable_html,
         html,
         url=url,
         surface=surface,
@@ -1674,19 +1520,19 @@ async def _try_http(
         listing_signals=listing_signals,
     )
 
-    invalid_surface_page = _is_invalid_surface_page(
+    invalid_surface_page = is_invalid_surface_page(
         requested_url=url,
         final_url=str(normalized.final_url or url).strip() or url,
         html=html,
         surface=surface,
     )
-    surface_selection_warnings = _surface_selection_warnings(
+    page_surface_warnings = surface_selection_warnings(
         requested_url=url,
         final_url=str(normalized.final_url or url).strip() or url,
         html=html,
         surface=surface,
     )
-    surface_warning_summary = _surface_warning_summary(surface_selection_warnings)
+    warnings_summary = surface_warning_summary(page_surface_warnings)
     diagnostics.update(
         {
             "curl_visible_text_length": len(visible_text),
@@ -1697,9 +1543,9 @@ async def _try_http(
             "curl_adapter_hint": adapter_hint,
             "curl_platform_family": platform_family,
             "invalid_surface_page": invalid_surface_page or None,
-            "surface_selection_warnings": surface_selection_warnings or None,
-            "soft_404_page": surface_warning_summary["soft_404_page"],
-            "transactional_page": surface_warning_summary["transactional_page"],
+            "surface_selection_warnings": page_surface_warnings or None,
+            "soft_404_page": warnings_summary["soft_404_page"],
+            "transactional_page": warnings_summary["transactional_page"],
             "extractability": extractability,
             "promoted_sources": extractability.get("promoted_sources"),
             "listing_signals": listing_signals.as_dict(),
@@ -1752,143 +1598,6 @@ async def _try_http(
     return normalized
 
 
-def _browser_escalation_decision(
-    http_result: HttpFetchResult | None,
-    url: str,
-    surface: str | None,
-    requested_fields: list[str] | None,
-    acquisition_profile: dict[str, object] | None,
-) -> _BrowserEscalationDecision:
-    del url, acquisition_profile
-    if http_result is None:
-        return _BrowserEscalationDecision(True, "http_failed")
-    analysis = http_result.acquirer_analysis or {}
-    if http_result.content_type == "json":
-        return _BrowserEscalationDecision(False, "json_response")
-    blocked = analysis.get("blocked")
-    visible_text = str(analysis.get("visible_text") or "")
-    content_len = int(analysis.get("content_len") or 0)
-    gate_phrases = bool(analysis.get("gate_phrases"))
-    listing_signals = analysis.get("listing_signals")
-    extractability = (
-        analysis.get("extractability")
-        if isinstance(analysis.get("extractability"), dict)
-        else {}
-    )
-    invalid_surface_page = bool(analysis.get("invalid_surface_page"))
-    js_shell_detected = bool(analysis.get("js_shell_detected"))
-    normalized_surface = str(surface or "").strip().lower()
-    supported_surfaces = {
-        "ecommerce_listing",
-        "job_listing",
-        "ecommerce_detail",
-        "job_detail",
-    }
-    supported_surface = normalized_surface in supported_surfaces
-    requested_field_names = [
-        str(field or "").strip()
-        for field in (requested_fields or [])
-        if str(field or "").strip()
-    ]
-    missing_data_requires_browser = (
-        supported_surface
-        and not extractability.get("has_extractable_data")
-        and str(extractability.get("reason") or "")
-        in {
-            "listing_search_shell_without_records",
-            "iframe_shell",
-            "frameset_shell",
-            "insufficient_detail_signals",
-            "no_listing_signals",
-            "empty_html",
-        }
-    )
-    if (
-        missing_data_requires_browser
-        and normalized_surface.endswith("listing")
-        and getattr(listing_signals, "strong", False)
-    ):
-        missing_data_requires_browser = False
-    needs_browser, reason = False, "extractable_data_found"
-    if getattr(blocked, "is_blocked", False):
-        needs_browser, reason = True, "blocked_page"
-    elif http_result.status_code in {403, 429, 503}:
-        needs_browser, reason = True, f"http_status_{http_result.status_code}"
-    elif missing_data_requires_browser:
-        needs_browser, reason = (
-            True,
-            str(extractability.get("reason") or "missing_extractable_data"),
-        )
-    elif (
-        normalized_surface.endswith("detail")
-        and requested_field_names
-        and js_shell_detected
-        and len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
-    ):
-        needs_browser, reason = True, "requested_fields_require_browser"
-    elif (
-        len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
-        and content_len < JS_SHELL_MIN_CONTENT_LEN
-    ):
-        needs_browser, reason = True, "low_visible_text"
-    elif gate_phrases:
-        needs_browser, reason = True, "js_gate_phrases"
-    elif js_shell_detected and len(visible_text) < 1000:
-        needs_browser, reason = True, "js_shell"
-    elif http_result.error:
-        needs_browser, reason = True, "http_error"
-    extractability_reason = str(extractability.get("reason") or "")
-    # Do NOT cancel browser escalation for JS shells when the only evidence
-    # of extractable data is an adapter hint — the adapter needs rendered HTML.
-    structured_override = (
-        needs_browser
-        and reason != "js_shell"
-        and not getattr(blocked, "is_blocked", False)
-        and not str(surface or "").strip().lower().endswith("detail")
-        and bool(extractability.get("has_extractable_data"))
-        and extractability_reason not in {"surface_unspecified", "adapter_hint"}
-    )
-    if structured_override:
-        needs_browser, reason = False, "structured_data_found"
-    if invalid_surface_page:
-        needs_browser, reason = True, "invalid_surface_page"
-    diagnostics = (
-        analysis.get("curl_diagnostics")
-        if isinstance(analysis.get("curl_diagnostics"), dict)
-        else {}
-    )
-    diagnostics["curl_needs_browser"] = needs_browser
-    diagnostics["browser_retry_reason"] = (
-        str(extractability.get("reason") or reason) if needs_browser else None
-    )
-    diagnostics["escalation_reason"] = reason if needs_browser else None
-    if structured_override:
-        override_reason = str(extractability.get("reason") or "extractable_data_found")
-        diagnostics["js_shell_overridden"] = (
-            "structured_data_found"
-            if override_reason in {"structured_listing_markup", "next_data_signals"}
-            else override_reason
-        )
-    return _BrowserEscalationDecision(needs_browser, reason, structured_override)
-
-
-def _needs_browser(
-    http_result: HttpFetchResult | None,
-    url: str,
-    surface: str | None,
-    requested_fields: list[str] | None,
-    acquisition_profile: dict[str, object] | None,
-) -> tuple[bool, str]:
-    decision = _browser_escalation_decision(
-        http_result,
-        url,
-        surface,
-        requested_fields,
-        acquisition_profile,
-    )
-    return decision.needs_browser, decision.reason
-
-
 async def _try_browser(
     url: str,
     proxy: str | None,
@@ -1910,9 +1619,10 @@ async def _try_browser(
 ) -> BrowserResult | None:
     logger.info("[browser] attempting url=%s traversal_mode=%s", url, traversal_mode)
     browser_started_at = time.perf_counter()
+    render_task: asyncio.Task[BrowserResult] | None = None
     try:
         await _cooperative_sleep_ms(sleep_ms, checkpoint=checkpoint)
-        result = await asyncio.wait_for(
+        render_task = asyncio.create_task(
             fetch_rendered_html(
                 url,
                 proxy=proxy,
@@ -1928,7 +1638,10 @@ async def _try_browser(
                 checkpoint=checkpoint,
                 run_id=run_id,
                 session_context=session_context,
-            ),
+            )
+        )
+        result = await asyncio.wait_for(
+            render_task,
             timeout=float(BROWSER_RENDER_TIMEOUT_SECONDS),
         )
     except (
@@ -1940,6 +1653,10 @@ async def _try_browser(
         TypeError,
         NotImplementedError,
     ) as exc:
+        if render_task is not None and not render_task.done():
+            render_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await render_task
         await _record_browser_failure(
             exc,
             url=url,
@@ -1987,7 +1704,16 @@ async def _record_browser_failure(
         diagnostics_sink["failure_stage"] = "browser_render"
         diagnostics_sink["browser_failure_class"] = failure_class
         diagnostics_sink["browser_failure_origin"] = failure_origin
+        diagnostics_sink["browser_fallback_used"] = True
+        diagnostics_sink["browser_fallback_reason"] = (
+            f"{failure_class}:{failure_origin}"
+        )
         diagnostics_sink["retry_count"] = int(diagnostics_sink.get("retry_count", 0) or 0) + 1
+        if should_force_browser_for_traversal(traversal_mode):
+            diagnostics_sink["traversal_fallback_used"] = True
+            diagnostics_sink["traversal_fallback_reason"] = (
+                f"browser_failure:{failure_class}"
+            )
         if isinstance(exc, TimeoutError):
             diagnostics_sink["budget_exhausted"] = "browser_render"
 
@@ -2009,7 +1735,7 @@ async def _append_browser_failure_log(
         await append_log_event(
             run_id=run_id,
             level="warning",
-            message=_browser_failure_log_message(
+            message=browser_failure_log_message(
                 traversal_mode,
                 exc,
                 failure_class=failure_class,
@@ -2023,24 +1749,6 @@ async def _append_browser_failure_log(
             url,
             exc_info=True,
         )
-
-
-def _browser_failure_log_message(
-    traversal_mode: str | None,
-    exc: Exception,
-    *,
-    failure_class: str,
-    failure_origin: str,
-) -> str:
-    prefix = (
-        "[traversal] Browser acquisition failed, falling back to curl"
-        if _should_force_browser_for_traversal(traversal_mode)
-        else "Browser acquisition failed"
-    )
-    return (
-        f"{prefix} [{failure_class}/{failure_origin}]: "
-        f"{type(exc).__name__}: {exc}"
-    )
 
 
 def _classify_browser_failure(exc: Exception) -> tuple[str, str]:
@@ -2083,341 +1791,11 @@ def _build_browser_attempt_metadata(
     }
 
 
-def _should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
-    normalized_mode = str(traversal_mode or "").strip().lower()
-    return normalized_mode in {"auto", "scroll", "load_more", "paginate"}
-
-
 # DEBT-01: Canonical implementation lives in browser_readiness.
 # Re-export for callers that import from acquirer.
 from app.services.acquisition.browser_readiness import (  # noqa: E402
     _cooperative_sleep_ms as _cooperative_sleep_ms,
 )
-
-
-def _is_invalid_surface_page(
-    *,
-    requested_url: str,
-    final_url: str,
-    html: str,
-    surface: str | None,
-) -> bool:
-    # COV-01: Check commerce surfaces first.
-    commerce_warning = _diagnose_commerce_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        surface=surface,
-        html=html,
-    )
-    if commerce_warning is not None:
-        invalid_signals = {
-            "redirected_to_root",
-            "redirect_shell_title",
-            "transactional_url",
-            "transactional_page_title",
-            "noindex_transactional_page",
-        }
-        if set(commerce_warning.get("signals") or []) & invalid_signals:
-            return True
-    if _is_invalid_commerce_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        surface=surface,
-        html=html,
-    ):
-        return True
-    # COV-01: Also check job surfaces — redirect shells and auth walls
-    # previously only produced warnings but never triggered browser escalation.
-    job_warning = _diagnose_job_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        html=html,
-        surface=surface,
-    )
-    if job_warning is not None:
-        _JOB_ESCALATION_SIGNALS = {
-            "redirect_shell_title",
-            "redirect_shell_canonical",
-            "auth_wall_heading",
-            "redirected_to_root",
-        }
-        signals = set(job_warning.get("signals") or [])
-        if signals & _JOB_ESCALATION_SIGNALS:
-            return True
-    return False
-
-
-def _surface_selection_warnings(
-    *,
-    requested_url: str,
-    final_url: str,
-    html: str,
-    surface: str | None,
-) -> list[dict[str, object]]:
-    warnings: list[dict[str, object]] = []
-    commerce_warning = _diagnose_commerce_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        html=html,
-        surface=surface,
-    )
-    if commerce_warning is not None:
-        warnings.append(commerce_warning)
-    job_warning = _diagnose_job_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        html=html,
-        surface=surface,
-    )
-    if job_warning is not None:
-        warnings.append(job_warning)
-    return warnings
-
-
-def _surface_warning_signal_set(
-    warnings: list[dict[str, object]] | None,
-) -> set[str]:
-    if not isinstance(warnings, list):
-        return set()
-    return {
-        str(signal).strip()
-        for warning in warnings
-        if isinstance(warning, dict)
-        for signal in (warning.get("signals") or [])
-        if str(signal).strip()
-    }
-
-
-def _surface_warning_summary(
-    warnings: list[dict[str, object]] | None,
-) -> dict[str, bool | None]:
-    signals = _surface_warning_signal_set(warnings)
-    return {
-        "soft_404_page": True
-        if signals & {"soft_404_title", "soft_404_heading"}
-        else None,
-        "transactional_page": True
-        if signals
-        & {
-            "transactional_url",
-            "transactional_page_title",
-            "noindex_transactional_page",
-        }
-        else None,
-    }
-
-
-def _diagnose_commerce_surface_page(
-    *,
-    requested_url: str,
-    final_url: str,
-    html: str,
-    surface: str | None,
-) -> dict[str, object] | None:
-    normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface not in {"ecommerce_listing", "ecommerce_detail"}:
-        return None
-    requested = urlparse(requested_url)
-    final = urlparse(final_url or requested_url)
-    redirected_to_root = (
-        bool(final_url)
-        and requested.netloc.lower() == final.netloc.lower()
-        and requested.path.rstrip("/") != final.path.rstrip("/")
-        and final.path.rstrip("/") == ""
-    )
-    if not html and not redirected_to_root:
-        return None
-
-    warning_signals: list[str] = []
-    if redirected_to_root:
-        warning_signals.append("redirected_to_root")
-    if _looks_like_commerce_transaction_url(final_url or requested_url):
-        warning_signals.append("transactional_url")
-    if not html:
-        return (
-            {
-                "surface_requested": normalized_surface,
-                "warning": "surface_selection_may_be_low_confidence",
-                "signals": warning_signals,
-                "requested_url": requested_url,
-                "final_url": final_url or requested_url,
-            }
-            if warning_signals
-            else None
-        )
-
-    soup = BeautifulSoup(html, HTML_PARSER)
-    title_text = " ".join(
-        (soup.title.get_text(" ", strip=True) if soup.title else "").lower().split()
-    )
-    canonical_url = str(
-        (soup.select_one("link[rel='canonical']") or {}).get("href", "")
-    ).strip()
-    headings = {
-        " ".join(node.get_text(" ", strip=True).lower().split())
-        for node in soup.select("h1, [role='heading']")
-        if node.get_text(" ", strip=True)
-    }
-    robots_values = {
-        " ".join(str(node.get("content") or "").lower().split())
-        for node in soup.select("meta[name='robots'], meta[name='googlebot']")
-        if str(node.get("content") or "").strip()
-    }
-
-    if any(fragment in title_text for fragment in _COMMERCE_REDIRECT_TITLE_FRAGMENTS):
-        warning_signals.append("redirect_shell_title")
-    if title_text in _COMMERCE_SOFT_404_TITLES:
-        warning_signals.append("soft_404_title")
-    if any(heading in _COMMERCE_SOFT_404_HEADINGS for heading in headings):
-        warning_signals.append("soft_404_heading")
-    if any(fragment in title_text for fragment in _COMMERCE_TRANSACTIONAL_TITLE_FRAGMENTS):
-        warning_signals.append("transactional_page_title")
-    if (
-        "transactional_url" in warning_signals
-        and any("noindex" in value and "nofollow" in value for value in robots_values)
-    ):
-        warning_signals.append("noindex_transactional_page")
-    if not warning_signals:
-        return None
-    return {
-        "surface_requested": normalized_surface,
-        "warning": "surface_selection_may_be_low_confidence",
-        "signals": warning_signals,
-        "requested_url": requested_url,
-        "final_url": final_url or requested_url,
-        "title": title_text or None,
-        "canonical_url": canonical_url or None,
-    }
-
-
-def _diagnose_job_surface_page(
-    *,
-    requested_url: str,
-    final_url: str,
-    html: str,
-    surface: str | None,
-) -> dict[str, object] | None:
-    normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface not in {"job_listing", "job_detail"}:
-        return None
-    requested = urlparse(requested_url)
-    final = urlparse(final_url or requested_url)
-    redirected_to_root = (
-        bool(final_url)
-        and requested.netloc.lower() == final.netloc.lower()
-        and requested.path.rstrip("/") != final.path.rstrip("/")
-        and final.path.rstrip("/") == ""
-    )
-    if not html and not redirected_to_root:
-        return None
-    warning_signals: list[str] = []
-    if redirected_to_root:
-        warning_signals.append("redirected_to_root")
-    if not html:
-        return {
-            "surface_requested": normalized_surface,
-            "warning": "surface_selection_may_be_low_confidence",
-            "signals": warning_signals,
-            "requested_url": requested_url,
-            "final_url": final_url or requested_url,
-        }
-    soup = BeautifulSoup(html, HTML_PARSER)
-    title_text = " ".join(
-        (soup.title.get_text(" ", strip=True) if soup.title else "").split()
-    )
-    canonical_url = str(
-        (soup.select_one("link[rel='canonical']") or {}).get("href", "")
-    ).strip()
-    headings = {
-        " ".join(node.get_text(" ", strip=True).split()).lower()
-        for node in soup.select("h1, [role='heading']")
-        if node.get_text(" ", strip=True)
-    }
-    title_match = title_text in JOB_REDIRECT_SHELL_TITLES
-    canonical_match = canonical_url in JOB_REDIRECT_SHELL_CANONICAL_URLS
-    heading_match = any(heading in JOB_REDIRECT_SHELL_HEADINGS for heading in headings)
-    error_title_match = title_text in JOB_ERROR_PAGE_TITLES
-    error_heading_match = any(
-        heading in JOB_ERROR_PAGE_HEADINGS for heading in headings
-    )
-    if title_match:
-        warning_signals.append("redirect_shell_title")
-    if canonical_match:
-        warning_signals.append("redirect_shell_canonical")
-    if heading_match:
-        warning_signals.append("auth_wall_heading")
-    if error_title_match:
-        warning_signals.append("soft_404_title")
-    if error_heading_match:
-        warning_signals.append("soft_404_heading")
-    if not warning_signals:
-        return None
-    return {
-        "surface_requested": normalized_surface,
-        "warning": "surface_selection_may_be_low_confidence",
-        "signals": warning_signals,
-        "requested_url": requested_url,
-        "final_url": final_url or requested_url,
-        "title": title_text or None,
-        "canonical_url": canonical_url or None,
-    }
-
-
-def _is_invalid_commerce_surface_page(
-    *,
-    requested_url: str,
-    final_url: str,
-    surface: str | None,
-    html: str = "",
-) -> bool:
-    normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface not in {"ecommerce_detail", "ecommerce_listing"}:
-        return False
-    requested = urlparse(requested_url)
-    final = urlparse(final_url or requested_url)
-    redirected_to_root = bool(
-        final_url
-        and requested.netloc.lower() == final.netloc.lower()
-        and requested.path.rstrip("/") != final.path.rstrip("/")
-        and final.path.rstrip("/") == ""
-    )
-    if redirected_to_root:
-        return True
-    if html:
-        soup = BeautifulSoup(html, HTML_PARSER)
-        title_text = " ".join(
-            (soup.title.get_text(" ", strip=True) if soup.title else "").lower().split()
-        )
-        if any(
-            fragment in title_text for fragment in _COMMERCE_REDIRECT_TITLE_FRAGMENTS
-        ):
-            return True
-    return False
-
-
-def _looks_like_commerce_transaction_url(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
-    path = parsed.path.lower()
-    segments = [
-        segment.lower()
-        for segment in _re.split(r"[^a-z0-9.]+", path)
-        if segment.strip(".")
-    ]
-    if any(
-        segment in _COMMERCE_TRANSACTIONAL_PATH_TOKENS or "cartupdate" in segment
-        for segment in segments
-    ):
-        return True
-    query = {
-        str(key or "").strip().lower(): str(value or "").strip().lower()
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-    }
-    if any(key in {"addtocart", "add-to-cart"} for key in query):
-        return True
-    return (
-        query.get("action", "") in _COMMERCE_TRANSACTIONAL_ACTION_VALUES
-        and any(token in path for token in ("/checkout", "/cart", "/basket", "/bag"))
-    )
 
 
 async def _fetch_with_content_type(
@@ -2435,217 +1813,6 @@ async def _resolve_adapter_hint(url: str, html: str) -> str | None:
         return None
     adapter = await resolve_adapter(url, html)
     return adapter.name if adapter is not None else None
-
-
-def _html_has_extractable_listings_from_soup(soup: BeautifulSoup) -> bool:
-    return html_has_extractable_listings_from_soup(soup, json_loader=parse_json)
-
-
-def _find_promotable_iframe_sources(html: str, *, surface: str | None) -> list[dict]:
-    normalized_surface = str(surface or "").strip().lower()
-    if "job" not in normalized_surface:
-        return []
-    soup = BeautifulSoup(html, HTML_PARSER)
-    promoted: list[dict] = []
-    promotable_tokens = _promotable_job_iframe_tokens()
-    for tag in soup.select("iframe[src], frame[src]"):
-        src = str(tag.get("src") or "").strip()
-        if not src:
-            continue
-        lowered = src.lower()
-        if any(token in lowered for token in promotable_tokens):
-            kind = "frame" if tag.name and tag.name.lower() == "frame" else "iframe"
-            promoted.append({"kind": kind, "url": src, "same_origin": False})
-    return promoted
-
-
-def _promotable_job_iframe_tokens() -> tuple[str, ...]:
-    base_tokens = {"job", "jobs", "career", "careers"}
-    merged = {
-        token
-        for token in (base_tokens | set(acquisition_hint_tokens()))
-        if len(token) >= 3
-    }
-    return tuple(sorted(merged))
-
-
-def _count_json_ld_type_signals(html: str) -> int:
-    """Count Product/JobPosting @type occurrences via raw string matching."""
-    count = 0
-    search_start = 0
-    html_lower = html.lower()
-    while True:
-        pos = html_lower.find('"@type"', search_start)
-        if pos == -1:
-            break
-        window = html_lower[pos : pos + 200]
-        if '"product"' in window or '"jobposting"' in window:
-            count += 1
-        search_start = pos + 7
-    return count
-
-
-def _count_json_ld_non_product_types(html: str) -> int:
-    """Count non-product @type occurrences to filter shell pages."""
-    count = 0
-    search_start = 0
-    html_lower = html.lower()
-    while True:
-        pos = html_lower.find('"@type"', search_start)
-        if pos == -1:
-            break
-        window = html_lower[pos : pos + 200]
-        if '"product"' not in window and '"jobposting"' not in window:
-            count += 1
-        search_start = pos + 7
-    return count
-
-
-def _assess_extractable_html(
-    html: str,
-    *,
-    url: str,
-    surface: str | None,
-    adapter_hint: str | None,
-    soup: BeautifulSoup | None = None,
-    listing_signals: _ListingSignalSummary | None = None,
-) -> dict[str, object]:
-    """Lightweight signal check — no extraction-layer imports."""
-    normalized_surface = str(surface or "").strip().lower()
-    if not html:
-        return {"has_extractable_data": False, "reason": "empty_html"}
-
-    soup_probe = soup or BeautifulSoup(html, HTML_PARSER)
-    if soup_probe.find("frameset") is not None or "<frameset" in html.lower():
-        promoted_iframes = _find_promotable_iframe_sources(html, surface=surface)
-        return {
-            "has_extractable_data": False,
-            "reason": "frameset_shell",
-            "promoted_sources": promoted_iframes or None,
-        }
-
-    if normalized_surface.endswith("listing") or not normalized_surface:
-        promoted_iframes = _find_promotable_iframe_sources(html, surface=surface)
-
-        # (a) JSON-LD: count "@type" paired with Product/JobPosting
-        json_ld_count = _count_json_ld_type_signals(html)
-        non_product_types = _count_json_ld_non_product_types(html)
-        total_types = json_ld_count + non_product_types
-        is_mostly_non_product = (
-            total_types > 0
-            and (non_product_types / total_types)
-            > EXTRACTABILITY_NON_PRODUCT_TYPE_RATIO_MAX
-        )
-        if (
-            json_ld_count >= EXTRACTABILITY_JSON_LD_MIN_TYPE_SIGNALS
-            and not is_mostly_non_product
-        ):
-            return {
-                "has_extractable_data": True,
-                "reason": "structured_listing_markup",
-                "json_ld_count": json_ld_count,
-                "promoted_sources": promoted_iframes or None,
-            }
-
-        # (b) __NEXT_DATA__ signal density OR general product signals in HTML
-        signal_hits = sum(html.count(sig) for sig in NEXT_DATA_PRODUCT_SIGNALS)
-        has_next_data = "__NEXT_DATA__" in html
-        if (
-            has_next_data
-            or signal_hits >= EXTRACTABILITY_NEXT_DATA_SIGNAL_TRIGGER
-        ) and signal_hits >= EXTRACTABILITY_NEXT_DATA_SIGNAL_MIN:
-            return {
-                "has_extractable_data": True,
-                "reason": "next_data_signals"
-                if has_next_data
-                else "product_signals_in_html",
-                "signal_hits": signal_hits,
-                "promoted_sources": promoted_iframes or None,
-            }
-
-        # (c) Iframe shell detection (BeautifulSoup only, no extractor imports)
-        if promoted_iframes:
-            return {
-                "has_extractable_data": False,
-                "reason": "iframe_shell",
-                "promoted_sources": promoted_iframes,
-            }
-
-        listing_summary = listing_signals or _collect_listing_signal_summary(
-            soup_probe,
-            url=url,
-            surface=surface,
-        )
-        if listing_summary.strong:
-            return {
-                "has_extractable_data": True,
-                "reason": "listing_link_signals",
-                "listing_signals": listing_summary.as_dict(),
-                "promoted_sources": promoted_iframes or None,
-            }
-
-        if adapter_hint:
-            return {
-                "has_extractable_data": True,
-                "reason": "adapter_hint",
-                "adapter_hint": adapter_hint,
-            }
-
-        # (d) Search shell detection
-        html_lower = html.lower()
-        if (
-            "window.searchconfig" in html_lower
-            or "data-jibe-search-version" in html_lower
-            or "window._jibe" in html_lower
-        ):
-            return {
-                "has_extractable_data": False,
-                "reason": "listing_search_shell_without_records",
-            }
-
-        return {"has_extractable_data": False, "reason": "no_listing_signals"}
-
-    if normalized_surface.endswith("detail"):
-        if adapter_hint:
-            return {
-                "has_extractable_data": True,
-                "reason": "adapter_hint",
-                "adapter_hint": adapter_hint,
-            }
-        # (a) JSON-LD presence for detail types
-        html_lower = html.lower()
-        has_json_ld = '"@type"' in html and any(
-            t in html_lower
-            for t in ('"product"', '"jobposting"', '"offer"', '"service"')
-        )
-        if has_json_ld:
-            return {"has_extractable_data": True, "reason": "detail_json_ld"}
-
-        # (b) Count canonical field tokens in visible text
-        soup = BeautifulSoup(html, HTML_PARSER)
-        visible_text = soup.get_text(" ", strip=True).lower()
-        detail_tokens = ("title", "price", "brand", "description", "sku")
-        field_hits = sum(1 for tok in detail_tokens if tok in visible_text)
-        if field_hits >= DETAIL_FIELD_SIGNAL_MIN_COUNT:
-            return {
-                "has_extractable_data": True,
-                "reason": "detail_field_signals",
-                "field_signal_count": field_hits,
-            }
-
-        return {
-            "has_extractable_data": False,
-            "reason": "insufficient_detail_signals",
-            "field_signal_count": field_hits,
-        }
-
-    return {"has_extractable_data": True, "reason": "surface_unspecified"}
-
-
-def _json_ld_listing_count(
-    payload: object, *, _depth: int = 0, _max_depth: int = 3
-) -> int:
-    return json_ld_listing_count(payload, _depth=_depth, max_depth=_max_depth)
 
 
 def _normalize_fetch_result(
@@ -2801,105 +1968,6 @@ def _memory_prefers_browser(acquisition_profile: dict[str, object] | None) -> bo
         browser_successes >= BROWSER_PREFERENCE_MIN_SUCCESSES
         and curl_successes == 0
     )
-
-
-def _requires_browser_first(url: str, platform_family: str | None) -> bool:
-    domain = urlparse(url).netloc.lower().replace("www.", "")
-    configured_domain_match = _matches_domain_policy(domain, browser_first_domains())
-    if configured_domain_match:
-        return True
-    normalized_platform = str(platform_family or "").strip().lower()
-    if normalized_platform in JOB_PLATFORM_FAMILIES:
-        return True
-    policy = resolve_platform_runtime_policy(url)
-    return bool(policy.get("requires_browser"))
-
-
-def _matches_domain_policy(domain: str, candidates: list[str]) -> bool:
-    normalized_domain = str(domain or "").strip().lower()
-    for candidate in (
-        str(candidate or "").strip().lower() for candidate in candidates if candidate
-    ):
-        if normalized_domain == candidate or normalized_domain.endswith(
-            f".{candidate}"
-        ):
-            return True
-    return False
-
-
-async def _recover_blocked_listing_acquisition(
-    ctx: _AcquireAttemptContext,
-    *,
-    request: _AcquireExecutionRequest,
-    http_result: HttpFetchResult | None,
-    analysis: dict[str, object],
-) -> AcquisitionResult | None:
-    from app.services.adapters.registry import try_blocked_adapter_recovery
-
-    blocked = analysis.get("blocked")
-    if blocked is None or not getattr(blocked, "is_blocked", False):
-        return None
-    if request.surface not in {"ecommerce_listing", "job_listing"}:
-        return None
-    if request.browser_first:
-        return None
-
-    browser_result = await _try_browser(
-        request.url,
-        request.proxy,
-        request.surface,
-        traversal_mode=request.traversal_mode,
-        max_pages=request.max_pages,
-        max_scrolls=request.max_scrolls,
-        prefer_stealth=request.prefer_stealth,
-        sleep_ms=request.sleep_ms,
-        runtime_options=request.runtime_options,
-        requested_fields=request.requested_fields,
-        requested_field_selectors=request.requested_field_selectors,
-        checkpoint=request.checkpoint,
-        run_id=request.run_id,
-        session_context=request.session_context,
-    )
-    if browser_result is None:
-        if request.proxy is None:
-            recovered = await try_blocked_adapter_recovery(
-                request.url,
-                request.surface or "",
-                proxy_list=None,
-            )
-            if recovered is not None and recovered.records:
-                diagnostics = dict(http_result.diagnostics if http_result is not None else {})
-                diagnostics.update(
-                    {
-                        "blocked_adapter_recovery": True,
-                        "adapter_name": recovered.adapter_name or "",
-                        "adapter_record_count": len(recovered.records),
-                    }
-                )
-                return AcquisitionResult(
-                    html=http_result.text if http_result is not None else "",
-                    content_type="html",
-                    method="adapter_recovery",
-                    artifact_path=ctx.artifact_path,
-                    network_payloads=[],
-                    adapter_records=list(recovered.records),
-                    adapter_name=recovered.adapter_name or "",
-                    adapter_source_type=recovered.source_type or "",
-                    diagnostics=ctx.finalize_diagnostics_payload(diagnostics),
-                )
-        return None
-    browser_blocked = detect_blocked_page(browser_result.html or "")
-    if browser_blocked.is_blocked:
-        return None
-    return await _finalize_browser_result(
-        ctx,
-        browser_result=browser_result,
-        http_result=http_result,
-        analysis=analysis,
-        curl_result=None,
-        curl_diagnostics={},
-    )
-
 
 # DEBT-06: Dead code removed - _artifact_basename and _slugify were never
 # called; all artifact path resolution uses artifact_store.artifact_paths().

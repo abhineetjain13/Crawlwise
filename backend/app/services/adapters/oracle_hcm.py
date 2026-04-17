@@ -22,17 +22,10 @@ _LOCATION_LIST_KEYS = ("workLocation", "otherWorkLocations", "secondaryLocations
 
 class OracleHCMAdapter(BaseAdapter):
     name = "oracle_hcm"
-    domains = ["fa.ocs.oraclecloud.com"]
+    platform_family = "oracle_hcm"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        lowered_url = str(url or "").lower()
-        lowered_html = str(html or "").lower()
-        return any((
-            any(domain in lowered_url for domain in self.domains),
-            "/hcmui/candidateexperience/" in lowered_url,
-            "var cx_config" in lowered_html,
-            "recruitingcejobrequisitions" in lowered_html,
-        ))
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records = await self.try_public_endpoint(url, html, surface)

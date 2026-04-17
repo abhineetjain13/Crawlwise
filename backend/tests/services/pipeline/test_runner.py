@@ -8,7 +8,7 @@ from app.services.pipeline.runner import PipelineRunner
 from app.services.pipeline.runner import build_default_stages
 from app.services.pipeline.stages import ParseStage
 from app.services.pipeline.types import PipelineContext, URLProcessingConfig
-from app.services.pipeline.verdict import VERDICT_ERROR, _aggregate_verdict
+from app.services.publish import VERDICT_ERROR, _aggregate_verdict
 
 
 class _ExplodingStage:

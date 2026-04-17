@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.services.acquisition.acquirer import AcquisitionResult
-from app.services.crawl_metrics import build_url_metrics
+from app.services.publish import build_url_metrics
 
 
 def test_build_url_metrics_surfaces_surface_warning_signals() -> None:

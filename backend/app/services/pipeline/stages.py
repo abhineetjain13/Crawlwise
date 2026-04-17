@@ -17,9 +17,10 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
-from app.services.crawl_metrics import (
+from app.services.publish import (
     build_url_metrics as _build_url_metrics,
 )
+from app.services.publish.verdict import VERDICT_LISTING_FAILED
 from bs4 import BeautifulSoup
 from sqlalchemy import delete
 
@@ -27,9 +28,7 @@ from .pipeline_config import PIPELINE_CONFIG
 from .runtime_helpers import STAGE_ANALYZE, STAGE_FETCH, log_event, set_stage
 from .types import PipelineContext
 from .utils import _elapsed_ms, parse_html
-from app.services.extract.source_parsers import parse_page_sources_async
-from .verdict import VERDICT_LISTING_FAILED
-
+from app.services.discover import parse_page_sources_async
 if TYPE_CHECKING:
     pass
 

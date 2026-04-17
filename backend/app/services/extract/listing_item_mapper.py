@@ -1,47 +1,23 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
-from app.services.config.field_mappings import get_surface_field_aliases
-from app.services.config.nested_field_rules import (
-    NESTED_CATEGORY_KEYS,
-    NESTED_CURRENCY_KEYS,
-    NESTED_ORIGINAL_PRICE_KEYS,
-    NESTED_PRICE_KEYS,
-    NESTED_TEXT_KEYS,
-    NESTED_URL_KEYS,
-)
+from app.services.field_alias_policy import get_surface_field_aliases
 from app.services.extract.listing_card_extractor import (
     _harvest_product_url_from_item,
-    _infer_currency_from_page_url,
-    _normalize_listing_title_text,
-)
-from app.services.extract.listing_quality import (
-    looks_like_transactional_url_for_listing,
 )
 from app.services.extract.shared_logic import (
-    coerce_nested_text as _coerce_nested_text,
     extract_image_candidates as _extract_image_candidates,
     find_alias_values as _find_alias_values,
     resolve_slug_url,
 )
+from app.services.normalizers import (
+    apply_surface_record_contract as _apply_surface_record_contract,
+    normalize_listing_field_value as _normalize_listing_value,
+)
 
 _EMPTY_VALUES = (None, "", [], {})
-_JOB_SURFACE_COMMERCE_FIELDS = (
-    "price",
-    "sale_price",
-    "original_price",
-    "currency",
-    "image_url",
-    "additional_images",
-    "sku",
-    "part_number",
-    "brand",
-    "availability",
-    "rating",
-    "review_count",
-)
 
 
 def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | None:
@@ -97,15 +73,6 @@ def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | N
         page_url=page_url,
     )
 
-    if (
-        "job" not in str(surface or "").lower()
-        and record.get("price") not in _EMPTY_VALUES
-        and record.get("currency") in _EMPTY_VALUES
-    ):
-        inferred_currency = _infer_currency_from_page_url(page_url)
-        if inferred_currency:
-            record["currency"] = inferred_currency
-
     # Reuses the earlier _resolve_slug_url result instead of resolving twice.
     if (
         "ecommerce" in str(surface or "").lower()
@@ -118,59 +85,6 @@ def _normalize_generic_item(item: dict, surface: str, page_url: str) -> dict | N
     if record:
         record["_raw_item"] = item
     return record if record else None
-
-
-def _apply_surface_record_contract(
-    record: dict,
-    *,
-    surface: str,
-    raw_item: dict | None = None,
-    page_url: str = "",
-) -> dict:
-    if not record or "job" not in str(surface or "").lower():
-        return record
-
-    _promote_job_salary(record)
-    _normalize_job_title(record)
-    _fill_missing_job_identifier(record, raw_item or {})
-    _fill_missing_job_urls(record, raw_item or {}, page_url=page_url)
-    _strip_job_commerce_fields(record)
-    return record
-
-
-def _promote_job_salary(record: dict) -> None:
-    if record.get("price") not in _EMPTY_VALUES and record.get("salary") in _EMPTY_VALUES:
-        record["salary"] = record.pop("price")
-
-
-def _normalize_job_title(record: dict) -> None:
-    if not record.get("title"):
-        return
-    normalized_title = _normalize_listing_title_text(record.get("title"))
-    if normalized_title:
-        record["title"] = normalized_title
-
-
-def _fill_missing_job_identifier(record: dict, raw_item: dict) -> None:
-    if record.get("job_id") not in _EMPTY_VALUES:
-        return
-    inferred_job_id = _extract_generic_job_identifier(raw_item)
-    if inferred_job_id:
-        record["job_id"] = inferred_job_id
-
-
-def _fill_missing_job_urls(record: dict, raw_item: dict, *, page_url: str) -> None:
-    if record.get("url") not in _EMPTY_VALUES:
-        return
-    synthesized_url = _synthesize_job_detail_url(raw_item, page_url=page_url)
-    if synthesized_url:
-        record["url"] = synthesized_url
-        record.setdefault("apply_url", synthesized_url)
-
-
-def _strip_job_commerce_fields(record: dict) -> None:
-    for commerce_field in _JOB_SURFACE_COMMERCE_FIELDS:
-        record.pop(commerce_field, None)
 
 
 def _preferred_generic_item_values(
@@ -252,63 +166,6 @@ def _preferred_generic_item_values(
         preferred_keys = ("briefDescription", "BriefDescription", "description", "summary")
         return [item[key] for key in preferred_keys if key in item and item[key] not in _EMPTY_VALUES]
     return []
-
-
-def _extract_generic_job_identifier(item: dict) -> str:
-    if not isinstance(item, dict):
-        return ""
-    for key in (
-        "Id",
-        "jobId",
-        "job_id",
-        "jobID",
-        "OpportunityId",
-        "opportunityId",
-        "requisitionId",
-        "requisition_id",
-        "RequisitionNumber",
-        "reqId",
-        "req_id",
-        "postingId",
-        "posting_id",
-        "openingId",
-        "opening_id",
-        "id",
-    ):
-        value = item.get(key)
-        if value not in _EMPTY_VALUES:
-            return " ".join(str(value).split()).strip()
-    return ""
-
-
-def _synthesize_job_detail_url(item: dict, *, page_url: str) -> str:
-    if not isinstance(item, dict):
-        return ""
-    return _default_job_detail_url_synthesis(item, page_url=page_url)
-
-
-def _clean_identifier(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _default_job_detail_url_synthesis(item: dict, *, page_url: str) -> str:
-    job_id = _extract_generic_job_identifier(item)
-    if not job_id:
-        return ""
-    parsed = urlparse(str(page_url or "").strip())
-    hostname = str(parsed.hostname or "").lower()
-    if "saashr.com" in hostname:
-        params = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        path = parsed.path or ""
-        if "/ta/rest/ui/recruitment/companies/" in path and "/job-requisitions" in path:
-            company_code = path.split("/ta/rest/ui/recruitment/companies/", 1)[1].split("/", 1)[0]
-            if company_code.startswith("%7C"):
-                company_code = company_code[3:]
-            path = f"/ta/{company_code}.careers" if company_code else path
-        if ".careers" in path and {"ein_id", "career_portal_id"} <= set(params):
-            params["ShowJob"] = job_id
-            return parsed._replace(path=path, query=urlencode(params)).geturl()
-    return ""
 
 
 def _looks_like_listing_variant_option(item: dict, *, surface: str) -> bool:
@@ -493,88 +350,6 @@ def _product_search_dimensions(attributes: list[object]) -> str:
         if normalized_values:
             dimension_rows.append(f"{label}: {' | '.join(normalized_values)}")
     return " | ".join(dimension_rows)
-
-
-def _normalize_listing_value(canonical: str, value: object, *, page_url: str) -> object | None:
-    if value in _EMPTY_VALUES:
-        return None
-    if canonical == "url":
-        if isinstance(value, list):
-            valid_urls: list[str] = []
-            for item in value:
-                normalized_item = _normalize_listing_value(canonical, item, page_url=page_url)
-                text = str(normalized_item or "").strip()
-                if text and not any(token in text for token in ("[{", "{", "[")):
-                    valid_urls.append(text)
-            deduped_urls = list(dict.fromkeys(valid_urls))
-            return deduped_urls[0] if len(deduped_urls) == 1 else None
-        resolved = _coerce_nested_text(value, keys=NESTED_URL_KEYS) if isinstance(value, dict) else value
-        text = str(resolved or "").strip()
-        if not text or any(token in text for token in ("[{", "{", "[")):
-            return None
-        if text and page_url and not text.startswith(("http://", "https://", "/")):
-            parsed = urlparse(page_url)
-            origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else page_url
-            if "/" not in text or _looks_like_product_short_path(text):
-                resolved_url = urljoin(origin, text)
-                return None if looks_like_transactional_url_for_listing(resolved_url) else resolved_url
-        resolved_url = urljoin(page_url, text) if text and page_url else text or None
-        return None if looks_like_transactional_url_for_listing(str(resolved_url or "")) else resolved_url
-    if canonical == "image_url":
-        images = _extract_image_candidates(value, page_url=page_url)
-        return images[0] if images else None
-    if canonical == "additional_images":
-        images = _extract_image_candidates(value, page_url=page_url)
-        if not images:
-            return None
-        return ", ".join(images[1:] if len(images) > 1 else images)
-    if canonical in {"price", "sale_price"} and isinstance(value, dict):
-        nested = _coerce_nested_text(value, keys=NESTED_PRICE_KEYS)
-        return str(nested).strip() if nested not in _EMPTY_VALUES else None
-    if canonical == "original_price" and isinstance(value, dict):
-        nested = _coerce_nested_text(value, keys=NESTED_ORIGINAL_PRICE_KEYS)
-        return str(nested).strip() if nested not in _EMPTY_VALUES else None
-    if canonical == "currency" and isinstance(value, dict):
-        nested = _coerce_nested_text(value, keys=NESTED_CURRENCY_KEYS)
-        return str(nested).strip() if nested not in _EMPTY_VALUES else None
-    if canonical in {"title", "brand"} and isinstance(value, dict):
-        nested = _coerce_nested_text(value, keys=NESTED_TEXT_KEYS)
-        return str(nested).strip() if nested not in _EMPTY_VALUES else None
-    if canonical == "category" and isinstance(value, dict):
-        nested = _coerce_nested_category(value)
-        return nested or None
-    if isinstance(value, list):
-        scalar_values = []
-        for item in value:
-            normalized = _normalize_listing_value(canonical, item, page_url=page_url)
-            if normalized in _EMPTY_VALUES:
-                continue
-            scalar_values.append(str(normalized).strip())
-        return ", ".join(scalar_values) if scalar_values else None
-    if isinstance(value, dict):
-        nested = _coerce_nested_text(value, keys=NESTED_TEXT_KEYS)
-        if nested in _EMPTY_VALUES:
-            return None
-        return str(nested).strip()
-    return str(value).strip() if isinstance(value, str) else value
-
-
-def _looks_like_product_short_path(value: str) -> bool:
-    return bool(
-        re.match(r"^p(?:/|[.-])[A-Za-z0-9][A-Za-z0-9._/-]*$", str(value or "").strip(), re.I)
-    )
-
-
-def _coerce_nested_category(value: dict) -> str:
-    for key in NESTED_CATEGORY_KEYS:
-        nested = value.get(key)
-        if isinstance(nested, list):
-            parts = [str(part).strip() for part in nested if str(part).strip()]
-            if parts:
-                return " | ".join(parts)
-        if nested not in _EMPTY_VALUES:
-            return str(nested).strip()
-    return ""
 
 
 def _nested_name(obj: object) -> str:

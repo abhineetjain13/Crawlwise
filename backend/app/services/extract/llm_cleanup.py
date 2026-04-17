@@ -1,17 +1,14 @@
-"""LLM integration functions for field extraction and review."""
+"""Extract-owned LLM cleanup helpers for candidate arbitration and context."""
 
 from __future__ import annotations
 
-from app.services.extract import coerce_field_candidate_value, parse_page_sources
-
-from .field_normalization import (
-    _normalize_review_value,
-    _passes_detail_quality_gate,
-    _review_values_equal,
+from app.services.discover import parse_page_sources
+from app.services.extract.candidate_processing import coerce_field_candidate_value
+from app.services.normalizers import (
+    passes_detail_quality_gate as _passes_detail_quality_gate,
 )
-from .review_helpers import _merge_review_bucket_entries
-from .utils import _clean_candidate_text, _compact_dict
-from .verdict import _review_bucket_fingerprint
+from app.services.publish.verdict import _review_bucket_fingerprint
+from app.services.pipeline.utils import _clean_candidate_text, _compact_dict
 
 LLM_CLEAN_CANDIDATE_TEXT_LIMIT = 2000
 
@@ -305,94 +302,6 @@ def _snapshot_for_llm(
                 rows.append(nested)
         return rows or None
     return _clean_candidate_text(value, limit=text_limit)
-
-
-def _normalize_llm_cleanup_review(
-    field_name: object, raw_review: object, *, current_value: object
-) -> dict | None:
-    """Normalize an LLM cleanup review item."""
-    normalized_field = str(field_name or "").strip()
-    if not normalized_field or normalized_field.startswith("_"):
-        return None
-    if isinstance(raw_review, dict):
-        suggested_value = _normalize_review_value(
-            raw_review.get("suggested_value")
-            if raw_review.get("suggested_value") not in (None, "", [], {})
-            else raw_review.get("value"),
-        )
-        source = str(raw_review.get("source") or "llm_cleanup").strip() or "llm_cleanup"
-        note = _clean_candidate_text(
-            raw_review.get("note") or raw_review.get("reason"), limit=280
-        )
-        supporting_sources = [
-            str(item).strip()
-            for item in (raw_review.get("supporting_sources") or [])
-            if str(item).strip()
-        ]
-    else:
-        suggested_value = _normalize_review_value(raw_review)
-        source = "llm_cleanup"
-        note = ""
-        supporting_sources = []
-    if not suggested_value:
-        return None
-    if _review_values_equal(current_value, suggested_value):
-        return None
-    return _compact_dict(
-        {
-            "field_name": normalized_field,
-            "suggested_value": suggested_value,
-            "source": source,
-            "supporting_sources": supporting_sources or None,
-            "note": note or None,
-            "status": "pending_review",
-        }
-    )
-
-
-def _split_llm_cleanup_payload(
-    payload: object,
-) -> tuple[dict[str, object], list[dict[str, object]]]:
-    """Split LLM cleanup payload into canonical and review bucket."""
-    if not isinstance(payload, dict):
-        return {}, []
-    if "canonical" not in payload and "review_bucket" not in payload:
-        canonical = {
-            str(key).strip(): value
-            for key, value in payload.items()
-            if str(key).strip()
-        }
-        return canonical, []
-    raw_canonical = payload.get("canonical")
-    canonical = raw_canonical if isinstance(raw_canonical, dict) else {}
-    raw_review_bucket = payload.get("review_bucket")
-    review_bucket: list[dict[str, object]] = []
-    if isinstance(raw_review_bucket, list):
-        for row in raw_review_bucket:
-            normalized = _normalize_llm_review_bucket_item(row)
-            if normalized is not None:
-                review_bucket.append(normalized)
-    return canonical, _merge_review_bucket_entries(review_bucket)
-
-
-def _normalize_llm_review_bucket_item(value: object) -> dict[str, object] | None:
-    """Normalize a single LLM review bucket item."""
-    if not isinstance(value, dict):
-        return None
-    key = str(value.get("key") or "").strip()
-    if not key or key.startswith("_"):
-        return None
-    normalized_value = _normalize_review_value(value.get("value"))
-    if normalized_value is None:
-        return None
-    return _compact_dict(
-        {
-            "key": key,
-            "value": normalized_value,
-            "source": str(value.get("source") or "llm_cleanup").strip()
-            or "llm_cleanup",
-        }
-    )
 
 
 def _select_llm_review_candidates(

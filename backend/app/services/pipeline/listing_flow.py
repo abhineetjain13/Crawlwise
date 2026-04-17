@@ -6,14 +6,28 @@ from typing import TYPE_CHECKING
 
 from app.models.crawl import CrawlRun
 from app.services.acquisition import AcquisitionResult
-from app.services.crawl_metrics import finalize_url_metrics as _finalize_url_metrics
 from app.services.exceptions import PipelineWriteError
 from app.services.extract import extract_listing_records, listing_set_quality, strong_identity_key
+from app.services.extract.listing_extractor import assess_listing_completeness
+from app.services.normalizers import normalize_record_fields as _normalize_record_fields
+from app.services.publish import (
+    VERDICT_BLOCKED,
+    VERDICT_LISTING_FAILED,
+    VERDICT_PARTIAL,
+    VERDICT_SUCCESS,
+    ListingPersistenceCandidate,
+    _build_acquisition_trace,
+    _build_manifest_trace,
+    compute_verdict,
+    dedupe_listing_persistence_candidates,
+    finalize_url_metrics as _finalize_url_metrics,
+    listing_fallback_identity_key,
+    resolve_record_writer,
+)
 from app.services.runtime_metrics import incr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .field_normalization import (
-    _normalize_record_fields,
     _surface_public_record_fields,
     _surface_raw_record_payload,
 )
@@ -21,12 +35,6 @@ from .listing_helpers import (
     _listing_acquisition_blocked,
     _looks_like_loading_listing_shell,
     _sanitize_listing_record_fields,
-)
-from .record_persistence import (
-    ListingPersistenceCandidate,
-    dedupe_listing_persistence_candidates,
-    listing_fallback_identity_key,
-    resolve_record_writer,
 )
 from .runtime_helpers import (
     STAGE_ANALYZE,
@@ -36,16 +44,8 @@ from .runtime_helpers import (
     log_for_pytest,
     set_stage,
 )
-from .trace_builders import _build_acquisition_trace, _build_manifest_trace
 from .types import URLProcessingResult
 from .utils import _compact_dict
-from .verdict import (
-    VERDICT_BLOCKED,
-    VERDICT_LISTING_FAILED,
-    VERDICT_PARTIAL,
-    VERDICT_SUCCESS,
-    compute_verdict,
-)
 
 if TYPE_CHECKING:
     from .types import PipelineContext
@@ -227,6 +227,16 @@ async def extract_listing(
         source_label = "adapter"
 
     if not extracted_records:
+        listing_completeness = await asyncio.to_thread(
+            assess_listing_completeness,
+            html=html,
+            records=[],
+            surface=surface,
+            page_url=url,
+            soup=soup,
+        )
+        if listing_completeness.get("applicable"):
+            url_metrics["listing_completeness"] = listing_completeness
         if _listing_acquisition_blocked(acq, html):
             if persist_logs:
                 await log_event(
@@ -302,6 +312,18 @@ async def extract_listing(
         surface=surface,
         network_payload_count=len(acq.network_payloads or []),
     )
+    listing_completeness = await asyncio.to_thread(
+        assess_listing_completeness,
+        html=html,
+        records=saved,
+        surface=surface,
+        page_url=url,
+        soup=soup,
+    )
+    if listing_completeness.get("applicable"):
+        url_metrics["listing_completeness"] = listing_completeness
+        if not listing_completeness.get("complete", True):
+            quality_flags.add("commerce_listing_incomplete")
     if quality_flags:
         url_metrics["listing_quality_flags"] = sorted(quality_flags)
     if verdict == VERDICT_SUCCESS and quality_flags:

@@ -222,6 +222,8 @@ def _detect_cards_from_known_selectors(
         found = soup.select(selector)
         if len(found) >= LISTING_CARD_GROUP_MIN_SIZE:
             return found, selector
+        if len(found) == 1 and _card_group_score(found, surface=surface)[0] > 0:
+            return found, selector
     return [], ""
 
 

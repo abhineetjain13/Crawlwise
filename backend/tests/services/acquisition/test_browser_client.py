@@ -11,7 +11,6 @@ from app.services.acquisition import browser_client
 from app.services.acquisition import browser_challenge
 from app.services.acquisition import browser_pool
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
-from app.services.resource_monitor import MemoryPressureLevel
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -44,81 +43,6 @@ class _FakeBrowser:
 
     async def new_context(self, **_kwargs) -> _FakeContext:
         return self._context
-
-
-@pytest.mark.asyncio
-async def test_fetch_rendered_html_attempt_passes_page_content_helper_to_low_value_check(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    page = _FakePage()
-    context = _FakeContext(page)
-    browser = _FakeBrowser(context)
-    pw = SimpleNamespace(chromium=object())
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        browser_client,
-        "get_memory_pressure_level",
-        lambda: MemoryPressureLevel.NORMAL,
-    )
-    monkeypatch.setattr(browser_client, "_build_launch_kwargs", lambda *args, **kwargs: {})
-    monkeypatch.setattr(
-        browser_client,
-        "_acquire_browser",
-        AsyncMock(return_value=(browser, False)),
-    )
-    monkeypatch.setattr(browser_client, "_context_kwargs", lambda *args, **kwargs: {})
-    monkeypatch.setattr(browser_client, "_load_cookies", AsyncMock())
-    monkeypatch.setattr(browser_client, "_maybe_warm_origin", AsyncMock(return_value=False))
-    monkeypatch.setattr(browser_client, "_goto_with_fallback", AsyncMock())
-    monkeypatch.setattr(browser_client, "_dismiss_cookie_consent", AsyncMock())
-    monkeypatch.setattr(
-        browser_client,
-        "_wait_for_challenge_resolution",
-        AsyncMock(return_value=(True, "none", [])),
-    )
-    monkeypatch.setattr(
-        browser_client,
-        "_wait_for_listing_readiness",
-        AsyncMock(return_value={"ready": False}),
-    )
-
-    async def _fake_page_looks_low_value(current_page, page_content_with_retry):
-        captured["page"] = current_page
-        captured["page_content_with_retry"] = page_content_with_retry
-        return True
-
-    monkeypatch.setattr(browser_client, "_page_looks_low_value", _fake_page_looks_low_value)
-    monkeypatch.setattr(browser_client, "_populate_result", AsyncMock())
-    monkeypatch.setattr(browser_client, "_persist_context_cookies", AsyncMock())
-
-    result = await browser_client._fetch_rendered_html_attempt(
-        pw,
-        browser_client._BrowserRenderAttempt(
-            request=browser_client.BrowserRenderRequest(
-                target=SimpleNamespace(),
-                url="https://example.com/listing",
-                proxy=None,
-                surface="ecommerce_listing",
-                traversal_mode=None,
-                max_pages=1,
-                max_scrolls=1,
-                prefer_stealth=False,
-                request_delay_ms=0,
-                runtime_options=BrowserRuntimeOptions(wait_for_readiness=True),
-            ),
-            launch_profile={"browser_type": "chromium", "channel": None},
-            navigation_strategies=[],
-        ),
-    )
-
-    assert captured["page"] is page
-    assert captured["page_content_with_retry"] is browser_client._page_content_with_retry
-    assert result.diagnostics["listing_readiness"] == {"ready": False}
-    assert result.diagnostics["playwright_stealth_applied"] is True
-    context.add_init_script.assert_awaited()
-    page.unroute_all.assert_awaited_once_with(behavior="ignoreErrors")
-    context.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

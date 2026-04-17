@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import app.services.extract.listing_card_extractor as listing_card_extractor
 import app.services.extract.listing_extractor as listing_extractor
-import app.services.extract.listing_normalize as listing_normalize
+from app.services.normalizers import normalize_listing_record
 from bs4 import BeautifulSoup
 from app.services.extract.listing_extractor import (
     extract_listing_records as _extract_listing_records_impl,
@@ -2330,7 +2330,7 @@ def test_normalize_generic_item_keeps_slugged_record_when_slug_url_cannot_be_res
 
 
 def test_normalize_listing_record_drops_dimensions_when_it_duplicates_size_choices():
-    normalized = listing_normalize.normalize_listing_record(
+    normalized = normalize_listing_record(
         {
             "title": "NIRUN (นิรัน)",
             "url": "https://www.shop.ving.run/product/nirun/11000742818002390",
@@ -2343,6 +2343,66 @@ def test_normalize_listing_record_drops_dimensions_when_it_duplicates_size_choic
     )
 
     assert "dimensions" not in normalized
+
+
+def test_assess_listing_completeness_flags_sparse_capture_on_dense_commerce_page():
+    soup = BeautifulSoup(
+        """
+        <html><body>
+          <div class="results-grid">
+            <article class="product-card"><a href="/products/1"><img src="/1.jpg" />One</a><span class="price">$10</span></article>
+            <article class="product-card"><a href="/products/2"><img src="/2.jpg" />Two</a><span class="price">$20</span></article>
+            <article class="product-card"><a href="/products/3"><img src="/3.jpg" />Three</a><span class="price">$30</span></article>
+            <article class="product-card"><a href="/products/4"><img src="/4.jpg" />Four</a><span class="price">$40</span></article>
+            <article class="product-card"><a href="/products/5"><img src="/5.jpg" />Five</a><span class="price">$50</span></article>
+            <article class="product-card"><a href="/products/6"><img src="/6.jpg" />Six</a><span class="price">$60</span></article>
+            <article class="product-card"><a href="/products/7"><img src="/7.jpg" />Seven</a><span class="price">$70</span></article>
+            <article class="product-card"><a href="/products/8"><img src="/8.jpg" />Eight</a><span class="price">$80</span></article>
+          </div>
+        </body></html>
+        """,
+        "html.parser",
+    )
+
+    completeness = listing_extractor.assess_listing_completeness(
+        html=str(soup),
+        records=[
+            {"title": "One", "url": "https://example.com/products/1"},
+            {"title": "Two", "url": "https://example.com/products/2"},
+            {"title": "Three", "url": "https://example.com/products/3"},
+        ],
+        surface="ecommerce_listing",
+        page_url="https://example.com/collection",
+        soup=soup,
+    )
+
+    assert completeness["applicable"] is True
+    assert completeness["complete"] is False
+    assert completeness["reason"] == "record_count_far_below_visible_listing_density"
+
+
+def test_assess_listing_completeness_flags_empty_skeleton_listing_shell():
+    html = """
+    <html><body>
+      <section data-test-id="content-grid">
+        <div data-test-id="product-card-skeleton"></div>
+        <div data-test-id="product-card-skeleton"></div>
+        <div data-test-id="product-card-skeleton"></div>
+        <div data-test-id="product-card-skeleton"></div>
+      </section>
+    </body></html>
+    """
+
+    completeness = listing_extractor.assess_listing_completeness(
+        html=html,
+        records=[],
+        surface="ecommerce_listing",
+        page_url="https://www.karenmillen.com/categories/womens-coats-jackets",
+    )
+
+    assert completeness["applicable"] is True
+    assert completeness["complete"] is False
+    assert completeness["reason"] == "listing_shell_without_materialized_records"
 
 
 # -----------------------------------------------------------------------

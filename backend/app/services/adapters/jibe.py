@@ -16,19 +16,10 @@ _SEARCH_CONFIG_RE = re.compile(r"window\.searchConfig\s*=\s*(\{.*?\});", re.DOTA
 
 class JibeAdapter(BaseAdapter):
     name = "jibe"
-    domains = ["jibeapply.com"]
+    platform_family = "jibe"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        lowered_url = str(url or "").lower()
-        lowered_html = str(html or "").lower()
-        return any((
-            "data-jibe-search-version" in lowered_html,
-            "window._jibe" in lowered_html,
-            "window.searchconfig" in lowered_html,
-            "/dist/js/search.common.js" in lowered_html,
-            "/api/jobs" in lowered_html,
-            any(domain in lowered_url for domain in self.domains),
-        ))
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records = await self.try_public_endpoint(url, html, surface)

@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
     from app.models.crawl import CrawlRun
     from app.services.acquisition import AcquisitionRequest, AcquisitionResult
-    from .record_persistence import ExtractionRecordWriter
+    from app.services.publish.record_persistence import ExtractionRecordWriter
 
 
 # ---------------------------------------------------------------------------

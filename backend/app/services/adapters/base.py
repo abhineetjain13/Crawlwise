@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from app.services.acquisition import HttpFetchResult, request_result, wait_for_host_slot
 from app.services.config.crawl_runtime import ACQUIRE_HOST_MIN_INTERVAL_MS
+from app.services.platform_policy import detect_platform_family
 
 from .types import AdapterRecords
 
@@ -35,9 +36,7 @@ class BaseAdapter(ABC):
     """
 
     name: str = "base"
-
-    # Domains this adapter handles.  Checked by the registry.
-    domains: list[str] = []
+    platform_family: str | None = None
 
     @abstractmethod
     async def can_handle(self, url: str, html: str) -> bool:
@@ -52,6 +51,13 @@ class BaseAdapter(ABC):
         tailor its output (e.g. listing vs detail fields).
         """
         ...
+
+    def _matches_platform_family(self, url: str, html: str) -> bool:
+        expected_family = str(self.platform_family or "").strip().lower()
+        if not expected_family:
+            return False
+        detected_family = str(detect_platform_family(url, html) or "").strip().lower()
+        return detected_family == expected_family
 
     async def _request_result(
         self,

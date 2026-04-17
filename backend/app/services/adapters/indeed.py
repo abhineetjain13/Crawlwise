@@ -7,10 +7,10 @@ from bs4 import BeautifulSoup
 
 class IndeedAdapter(BaseAdapter):
     name = "indeed"
-    domains = ["indeed.com", "indeed.co.uk", "indeed.ca", "indeed.com.au", "indeed.co.in"]
+    platform_family = "indeed"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        return any(d in url for d in self.domains)
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         soup = BeautifulSoup(html, "html.parser")

@@ -10,17 +10,10 @@ from bs4 import BeautifulSoup
 
 class ADPAdapter(BaseAdapter):
     name = "adp"
-    domains = ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com"]
+    platform_family = "adp"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        lowered_url = str(url or "").lower()
-        lowered_html = str(html or "").lower()
-        return (
-            any(domain in lowered_url for domain in self.domains)
-            or "recruitment_root" in lowered_html
-            or "current-openings-item" in lowered_html
-            or "current-opening-post-date" in lowered_html
-        )
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         if self._looks_like_detail(url, html, surface):

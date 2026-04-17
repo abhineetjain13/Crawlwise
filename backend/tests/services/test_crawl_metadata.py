@@ -1,4 +1,4 @@
-from app.services.crawl_metadata import refresh_record_commit_metadata
+from app.services.publish import refresh_record_commit_metadata
 
 
 class _DummyRecord:

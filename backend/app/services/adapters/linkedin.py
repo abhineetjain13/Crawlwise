@@ -7,10 +7,13 @@ from bs4 import BeautifulSoup
 
 class LinkedInAdapter(BaseAdapter):
     name = "linkedin"
-    domains = ["linkedin.com"]
+    platform_family = "linkedin"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        return "linkedin.com" in url and ("/jobs/" in url or "/job/" in url)
+        lowered_url = str(url or "").lower()
+        return self._matches_platform_family(url, html) and (
+            "/jobs/" in lowered_url or "/job/" in lowered_url
+        )
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         soup = BeautifulSoup(html, "html.parser")

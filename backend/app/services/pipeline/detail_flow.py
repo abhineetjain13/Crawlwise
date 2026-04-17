@@ -8,35 +8,46 @@ from app.models.crawl import CrawlRun
 from app.services.acquisition import AcquisitionResult
 from app.services.adapters.base import AdapterResult
 from app.services.adapters.types import AdapterRecords, AdapterRecord
-from app.services.crawl_metrics import finalize_url_metrics as _finalize_url_metrics
 from app.services.domain_utils import normalize_domain
 from app.services.extract import (
-    FieldDecisionEngine,
     coerce_field_candidate_value,
     extract_candidates,
+    merge_detail_reconciliation,
+    merge_record_fields,
+    reconcile_detail_candidate_values,
+)
+from app.services.normalizers import normalize_record_fields as _normalize_record_fields
+from app.services.publish import (
+    VERDICT_SCHEMA_MISS,
+    VERDICT_SUCCESS,
+    _build_acquisition_trace,
+    _build_field_discovery_summary,
+    _build_manifest_trace,
+    _build_review_bucket,
+    collect_winning_sources,
+    compute_verdict,
+    finalize_url_metrics as _finalize_url_metrics,
+    resolve_record_writer,
 )
 from app.services.schema_service import ResolvedSchema, resolve_schema, schema_trace_payload
 from app.services.xpath_service import validate_xpath_candidate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .field_normalization import (
-    _merge_record_fields,
-    _normalize_record_fields,
     _public_record_fields,
     _raw_record_payload,
     _requested_field_coverage,
 )
-from .llm_integration import (
+from app.services.extract.llm_cleanup import (
     _apply_llm_suggestions_to_candidate_values,
     _build_llm_candidate_evidence,
     _build_llm_discovered_sources,
-    _normalize_llm_cleanup_review,
     _select_llm_review_candidates,
-    _split_llm_cleanup_payload,
 )
-from .record_persistence import (
-    collect_winning_sources,
-    resolve_record_writer,
+from app.services.publish.review_shaping import (
+    _normalize_llm_cleanup_review,
+    _merge_review_bucket_entries,
+    _split_llm_cleanup_payload,
 )
 from .runtime_helpers import (
     STAGE_ANALYZE,
@@ -46,16 +57,8 @@ from .runtime_helpers import (
     log_event,
     set_stage,
 )
-from .review_helpers import _merge_review_bucket_entries
-from .trace_builders import (
-    _build_acquisition_trace,
-    _build_field_discovery_summary,
-    _build_manifest_trace,
-    _build_review_bucket,
-)
 from .types import URLProcessingResult
 from .utils import _compact_dict, parse_html
-from .verdict import VERDICT_SCHEMA_MISS, VERDICT_SUCCESS, compute_verdict
 
 if TYPE_CHECKING:
     from .types import PipelineContext
@@ -340,6 +343,11 @@ async def extract_detail(
         if isinstance(source_trace.get("semantic"), dict)
         else {}
     )
+    variant_completeness = (
+        source_trace.get("variant_completeness")
+        if isinstance(source_trace.get("variant_completeness"), dict)
+        else {}
+    )
     source_trace = {**_build_acquisition_trace(acq), **source_trace}
     detail_manifest_trace = await asyncio.to_thread(
         _build_manifest_trace,
@@ -400,7 +408,7 @@ async def extract_detail(
 
     if extracted_records:
         for raw_record in extracted_records[:1]:
-            merged_record, merge_reconciliation = _merge_record_fields(
+            merged_record, merge_reconciliation = merge_record_fields(
                 raw_record,
                 candidate_values,
                 return_reconciliation=True,
@@ -509,6 +517,8 @@ async def extract_detail(
     winning_sources = collect_winning_sources(source_trace, saved[0] if saved else None)
     if winning_sources:
         url_metrics["winning_sources"] = winning_sources[:5]
+    if variant_completeness.get("applicable"):
+        url_metrics["variant_completeness"] = variant_completeness
     if persist_logs:
         source_summary = ", ".join(winning_sources[:5]) + ("..." if len(winning_sources) > 5 else "")
         await log_event(
@@ -549,59 +559,6 @@ async def extract_detail_from_context(ctx: "PipelineContext") -> URLProcessingRe
     )
 
 
-def reconcile_detail_candidate_values(
-    candidates: dict[str, list[dict]],
-    *,
-    allowed_fields: set[str],
-    url: str,
-) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
-    engine = FieldDecisionEngine(base_url=url)
-    reconciled: dict[str, object] = {}
-    reconciliation: dict[str, dict[str, object]] = {}
-
-    for field_name in sorted(allowed_fields):
-        rows = list(candidates.get(field_name) or [])
-        if not rows:
-            continue
-
-        decision = engine.decide_from_rows(field_name, rows)
-        if not decision.accepted:
-            if decision.rejected_rows:
-                reconciliation[field_name] = {
-                    "status": "rejected",
-                    "rejected": decision.rejected_rows[:6],
-                }
-            continue
-
-        reconciled[field_name] = decision.value
-        if decision.rejected_rows:
-            reconciliation[field_name] = _compact_dict(
-                {
-                    "status": "accepted_with_rejections",
-                    "accepted_source": decision.source,
-                    "rejected": decision.rejected_rows[:6],
-                }
-            )
-
-    return reconciled, reconciliation
-
-
-def merge_detail_reconciliation(
-    base: dict[str, dict[str, object]],
-    merge: dict[str, dict[str, object]],
-) -> dict[str, dict[str, object]]:
-    if not merge:
-        return dict(base)
-    combined = dict(base)
-    for field_name, merge_entry in merge.items():
-        existing_entry = combined.get(field_name)
-        if not isinstance(existing_entry, dict):
-            combined[field_name] = {"merge": merge_entry}
-            continue
-        combined[field_name] = {**existing_entry, "merge": merge_entry}
-    return combined
-
-
 def split_detail_output_fields(
     record: dict[str, object],
     *,
@@ -640,7 +597,7 @@ async def collect_detail_llm_suggestions(
     llm_cleanup_status: dict[str, object] = dict(source_trace.get("llm_cleanup_status") or {})
     llm_review_bucket: list[dict[str, object]] = []
     preview_record = (
-        _merge_record_fields(adapter_records[0], candidate_values)
+        merge_record_fields(adapter_records[0], candidate_values)
         if adapter_records
         else dict(candidate_values)
     )
@@ -851,37 +808,3 @@ async def collect_detail_llm_suggestions(
         "llm_assisted_fields": sorted(llm_cleanup_suggestions.keys()),
     }
     return source_trace, llm_review_bucket
-
-
-def normalize_detail_candidate_values(
-    candidate_values: dict[str, object], *, url: str
-) -> dict[str, object]:
-    normalized: dict[str, object] = {}
-    for field_name, value in candidate_values.items():
-        coerced = coerce_field_candidate_value(field_name, value, base_url=url)
-        if coerced in (None, "", [], {}):
-            continue
-        normalized[field_name] = coerced
-
-    primary_image = str(normalized.get("image_url") or "").strip()
-    additional_images = str(normalized.get("additional_images") or "").strip()
-    if additional_images:
-        image_parts = [part.strip() for part in additional_images.split(",") if part.strip()]
-        deduped_parts: list[str] = []
-        from urllib.parse import urlparse
-        
-        primary_path = urlparse(primary_image).path if primary_image else ""
-        seen_paths: set[str] = {primary_path} if primary_path else set()
-        
-        for part in image_parts:
-            part_path = urlparse(part).path
-            if not part_path or part_path in seen_paths:
-                continue
-            seen_paths.add(part_path)
-            deduped_parts.append(part)
-        if deduped_parts:
-            normalized["additional_images"] = ", ".join(deduped_parts)
-        else:
-            normalized.pop("additional_images", None)
-
-    return normalized

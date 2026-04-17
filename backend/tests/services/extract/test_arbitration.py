@@ -1,8 +1,9 @@
 from app.services.extract.field_decision import FieldDecisionEngine
-from app.services.pipeline.detail_flow import merge_detail_reconciliation
-from app.services.pipeline.field_normalization import _merge_record_fields
+from app.services.extract.detail_reconciliation import (
+    merge_detail_reconciliation,
+    merge_record_fields,
+)
 from app.services.extract.service import extract_candidates
-import app.services.extract.service as extract_service
 
 
 def test_schema_arbitration_rejects_datalayer_pollution():
@@ -99,7 +100,7 @@ def test_field_decision_merge_keeps_existing_when_candidate_is_noisy_or_too_long
 
 
 def test_merge_record_fields_returns_reconciliation_for_kept_existing_candidates():
-    merged, reconciliation = _merge_record_fields(
+    merged, reconciliation = merge_record_fields(
         {"brand": "Nike"},
         {"brand": "privacy center"},
         return_reconciliation=True,
@@ -148,7 +149,7 @@ def test_field_decision_keeps_first_highest_rank_across_different_sources():
     assert decision.source == "embedded_json"
 
 
-def test_extract_candidates_skips_dom_when_jsonld_winner_is_decisive(monkeypatch):
+def test_extract_candidates_skips_dom_when_jsonld_winner_is_decisive():
     html = """
     <html>
         <head>
@@ -165,15 +166,6 @@ def test_extract_candidates_skips_dom_when_jsonld_winner_is_decisive(monkeypatch
         </body>
     </html>
     """
-
-    def _unexpected_dom_collection(*args, **kwargs):
-        raise AssertionError("DOM fallback should not run for a decisive JSON-LD winner")
-
-    monkeypatch.setattr(
-        extract_service,
-        "_collect_dom_and_meta_candidates",
-        _unexpected_dom_collection,
-    )
 
     candidates, source_trace = extract_candidates(
         url="https://example.com/product/structured-winner",

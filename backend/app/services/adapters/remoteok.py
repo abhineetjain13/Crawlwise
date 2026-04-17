@@ -9,10 +9,10 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 
 class RemoteOkAdapter(BaseAdapter):
     name = "remoteok"
-    domains = ["remoteok.com"]
+    platform_family = "remoteok"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        return any(domain in str(url or "").lower() for domain in self.domains)
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         return AdapterResult(

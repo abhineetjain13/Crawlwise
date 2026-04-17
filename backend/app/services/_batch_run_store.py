@@ -198,7 +198,7 @@ class BatchRunStore:
         aggregate_verdict: str,
     ) -> None:
         from app.services.pipeline.runtime_helpers import STAGE_SAVE
-        from app.services.pipeline.verdict import (
+        from app.services.publish import (
             VERDICT_BLOCKED,
             VERDICT_EMPTY,
             VERDICT_ERROR,

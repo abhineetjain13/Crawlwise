@@ -11,9 +11,8 @@ from __future__ import annotations
 from urllib.parse import urljoin, urlparse
 
 from app.services.config.field_mappings import (
-    INTERNAL_ONLY_FIELDS,
     COLLECTION_KEYS,
-    get_surface_field_aliases,
+    INTERNAL_ONLY_FIELDS,
 )
 from app.services.config.extraction_audit_settings import (
     JSON_ALIAS_VISIT_LIST_LIMIT,
@@ -33,6 +32,7 @@ from app.services.extract.shared_logic import (
     find_alias_values,
     resolve_slug_url,
 )
+from app.services.field_alias_policy import get_surface_field_aliases
 from app.services.normalizers import validate_value
 
 

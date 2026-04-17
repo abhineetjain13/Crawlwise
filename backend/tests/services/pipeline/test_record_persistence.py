@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRecord, CrawlRun
-from app.services.pipeline.record_persistence import (
+from app.services.publish import (
     ListingPersistenceCandidate,
     build_listing_record,
     persist_crawl_record,

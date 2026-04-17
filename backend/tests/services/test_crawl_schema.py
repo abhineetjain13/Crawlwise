@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.schemas.crawl import CrawlRecordResponse
+from app.services.normalizers import normalize_record_fields as _normalize_record_fields
 from app.services.pipeline.field_normalization import (
-    _normalize_record_fields,
     _sanitize_persisted_record_payload,
     _surface_public_record_fields,
     _surface_raw_record_payload,

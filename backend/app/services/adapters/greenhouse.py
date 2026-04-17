@@ -10,17 +10,16 @@ import re
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.config.platform_registry import detect_platform_family
 from bs4 import BeautifulSoup
 
 
 class GreenhouseAdapter(BaseAdapter):
     name = "greenhouse"
+    platform_family = "greenhouse"
     greenhouse_board_host = "boards.greenhouse.io"
-    domains = [greenhouse_board_host, "boards-api.greenhouse.io"]
 
     async def can_handle(self, url: str, html: str) -> bool:
-        return detect_platform_family(url, html) == self.name
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records: list[dict] = []

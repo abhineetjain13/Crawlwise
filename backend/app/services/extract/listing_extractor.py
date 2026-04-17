@@ -27,11 +27,10 @@ from app.services.extract.listing_card_extractor import (  # noqa: F401
     _match_dimensions_line,
     _normalize_listing_title_text,
 )
-from app.services.extract.listing_item_normalizer import (  # noqa: F401
+from app.services.extract.listing_item_mapper import (  # noqa: F401
     _normalize_generic_item,
     _normalize_listing_value,
 )
-from app.services.extract.listing_normalize import normalize_listing_record
 from app.services.extract.listing_structured_extractor import (
     _adapter_candidate_records,
     _extract_items_from_json as _extract_items_from_json_impl,
@@ -50,7 +49,8 @@ from app.services.extract.listing_quality import (
 from app.services.extract.listing_quality import (
     is_meaningful_structured_listing_record as _assess_meaningful_structured_listing_record,
 )
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.discover import parse_page_sources
+from app.services.normalizers import normalize_listing_record
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ MIN_VIABLE_RECORDS = 2
 MAX_JSON_RECURSION_DEPTH = _listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
 
 # Detail-only fields that should not be extracted on listing pages
-DETAIL_ONLY_FIELDS = {"gtin", "variants", "specifications", "description"}
+DETAIL_ONLY_FIELDS = {"brand", "gtin", "variants", "specifications", "description"}
 _LISTING_HOST_TOKEN_STOPWORDS = {
     "www",
     "m",
@@ -94,6 +94,8 @@ class ListingExtractionRequest:
     xhr_payloads: list[dict] | None = None
     adapter_records: list[dict] | None = None
     soup: BeautifulSoup | None = None
+
+
 def _enforce_listing_field_contract(records: list[dict], page_type: str) -> list[dict]:
     """Filter DOM listing records by dropping detail-only fields on listing pages."""
     if page_type != "listing":
@@ -436,6 +438,72 @@ def _estimate_visible_item_count(soup: BeautifulSoup) -> int:
     price_count = len(soup.select("[class*='price'], [id*='price'], .amount"))
 
     return max(card_count, price_count // 2 if price_count > 0 else 0)
+
+
+def assess_listing_completeness(
+    *,
+    html: str,
+    records: list[dict],
+    surface: str,
+    page_url: str = "",
+    soup: BeautifulSoup | None = None,
+) -> dict[str, object]:
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface != "ecommerce_listing":
+        return {
+            "applicable": False,
+            "complete": True,
+            "reason": "non_commerce_listing_surface",
+        }
+
+    soup = soup or BeautifulSoup(html or "", "html.parser")
+    record_count = len(records or [])
+    estimated_visible_items = _estimate_visible_item_count(soup)
+    unique_urls = {
+        str(record.get("url") or "").strip().lower()
+        for record in (records or [])
+        if str(record.get("url") or "").strip()
+    }
+    duplicate_url_ratio = 0.0
+    if record_count > 0:
+        duplicate_url_ratio = max(
+            0.0,
+            1.0 - (len(unique_urls) / max(record_count, 1)),
+        )
+
+    skeleton_count = len(
+        soup.select(
+            "[data-test-id*='skeleton'], [class*='skeleton'], [data-testid*='skeleton']"
+        )
+    )
+    card_density_without_records = estimated_visible_items >= MIN_VIABLE_RECORDS and record_count == 0
+    partial_listing_capture = (
+        estimated_visible_items >= 8
+        and 0 < record_count < min(estimated_visible_items, 4)
+    )
+    duplicate_heavy_capture = record_count >= MIN_VIABLE_RECORDS and duplicate_url_ratio >= 0.5
+
+    reason = "listing_complete"
+    if card_density_without_records:
+        reason = "visible_listing_density_without_records"
+    elif skeleton_count >= 3 and record_count == 0:
+        reason = "listing_shell_without_materialized_records"
+    elif partial_listing_capture:
+        reason = "record_count_far_below_visible_listing_density"
+    elif duplicate_heavy_capture:
+        reason = "duplicate_url_heavy_capture"
+
+    complete = reason == "listing_complete"
+    return {
+        "applicable": True,
+        "complete": complete,
+        "reason": reason,
+        "record_count": record_count,
+        "estimated_visible_items": estimated_visible_items,
+        "duplicate_url_ratio": round(duplicate_url_ratio, 3),
+        "page_url": page_url or None,
+        "skeleton_count": skeleton_count or 0,
+    }
 
 
 def _parse_json_script(value: str) -> dict | list | None:

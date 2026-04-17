@@ -1,7 +1,10 @@
 {
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true,
   "python.testing.pytestArgs": [
-    "backend/tests"
+    "tests"
   ],
+  "python.testing.cwd": "${workspaceFolder}/backend",
   "python.testing.unittestEnabled": false,
   "python.testing.pytestEnabled": true,
   "python.analysis.extraPaths": [
@@ -19,5 +22,6 @@
   },
   "cursorpyright.analysis.extraPaths": [
     "./backend"
-  ]
+  ],
+  "kiroAgent.configureMCP": "Disabled"
 }

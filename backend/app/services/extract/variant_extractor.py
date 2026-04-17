@@ -135,6 +135,79 @@ def _sanitize_product_attributes(final_candidates: VariantCandidateRowMap) -> No
         final_candidates.pop("product_attributes", None)
 
 
+def assess_variant_completeness(
+    *,
+    variant_rows: VariantCandidateRowMap,
+    final_candidates: VariantCandidateRowMap,
+    surface: str,
+) -> dict[str, object]:
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface != "ecommerce_detail":
+        return {
+            "applicable": False,
+            "complete": True,
+            "reason": "non_commerce_detail_surface",
+        }
+
+    raw_variant_signal_count = sum(
+        len(rows)
+        for field_name, rows in (variant_rows or {}).items()
+        if field_name in {"variants", "variant_axes", "selected_variant"}
+        and isinstance(rows, list)
+    )
+    if raw_variant_signal_count <= 0:
+        return {
+            "applicable": False,
+            "complete": True,
+            "reason": "no_variant_signals_detected",
+        }
+
+    variants_row = _first_candidate_row(final_candidates.get("variants"))
+    selected_row = _first_candidate_row(final_candidates.get("selected_variant"))
+    axes_row = _first_candidate_row(final_candidates.get("variant_axes"))
+    variants = (
+        variants_row.get("value")
+        if isinstance(variants_row, dict) and isinstance(variants_row.get("value"), list)
+        else []
+    )
+    selected_variant = (
+        selected_row.get("value")
+        if isinstance(selected_row, dict) and isinstance(selected_row.get("value"), dict)
+        else None
+    )
+    variant_axes = (
+        axes_row.get("value")
+        if isinstance(axes_row, dict) and isinstance(axes_row.get("value"), dict)
+        else {}
+    )
+    if variants and not selected_variant:
+        return {
+            "applicable": True,
+            "complete": False,
+            "reason": "variant_rows_missing_selected_variant",
+            "raw_variant_signal_count": raw_variant_signal_count,
+            "variant_count": len(variants),
+            "axis_count": len(variant_axes),
+        }
+    if not variants and not selected_variant and not variant_axes:
+        return {
+            "applicable": True,
+            "complete": False,
+            "reason": "variant_signals_without_reconciled_bundle",
+            "raw_variant_signal_count": raw_variant_signal_count,
+            "variant_count": 0,
+            "axis_count": 0,
+        }
+    return {
+        "applicable": True,
+        "complete": True,
+        "reason": "variant_bundle_reconciled",
+        "raw_variant_signal_count": raw_variant_signal_count,
+        "variant_count": len(variants),
+        "axis_count": len(variant_axes),
+    }
+
+
 def _reconcile_variant_bundle(
     final_candidates: VariantCandidateRowMap,
     *,

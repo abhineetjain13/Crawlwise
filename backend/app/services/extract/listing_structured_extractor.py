@@ -18,6 +18,7 @@ from app.services.config.extraction_rules import (
     NEXT_FLIGHT_RATING_PATTERN,
     NEXT_FLIGHT_SALE_PRICE_PATTERN,
 )
+from app.services.discover import discover_listing_items
 from app.services.extract.listing_identity import (
     choose_primary_record_set,
     merge_record_sets_on_identity,
@@ -28,6 +29,7 @@ from app.services.extract.listing_quality import (
     is_meaningful_listing_record,
     is_meaningful_structured_listing_record,
 )
+from app.services.normalizers import normalize_ld_item as _normalize_ld_item
 
 import logging
 
@@ -118,6 +120,7 @@ def _extract_from_structured_sources(
         if net_records:
             for r in net_records:
                 r["_source"] = "network_payload"
+                r["_payload_url"] = payload_url
             filtered_net_records = [
                 record
                 for record in net_records
@@ -398,142 +401,16 @@ def _extract_ld_records_from_payload(
 
     return records
 
-
-def _extract_next_data_payload(soup) -> dict | None:
-    node = soup.select_one("script#__NEXT_DATA__")
-    if node is None:
-        return None
-    payload = _parse_json_script(node.string or node.get_text(" ", strip=True) or "")
-    return payload if isinstance(payload, dict) else None
-
-
-def _normalize_ld_item(item: dict, surface: str, page_url: str) -> dict | None:
-    """Normalize a JSON-LD Product or JobPosting into a flat record."""
-    from app.services.extract.listing_card_extractor import (
-        _extract_image_candidates,
-        _infer_currency_from_page_url,
-    )
-
-    record: dict = {}
-    record["title"] = _normalize_listing_title_text(item.get("name") or "")
-
-    url = item.get("url") or ""
-    if url and page_url:
-        url = urljoin(page_url, url)
-    record["url"] = url
-
-    # Images
-    images = _extract_image_candidates(item.get("image"))
-    if images:
-        record["image_url"] = images[0]
-        if len(images) > 1:
-            record["additional_images"] = ", ".join(images[1:])
-
-    if "ecommerce" in surface:
-        offers = item.get("offers", {})
-        if isinstance(offers, list) and offers:
-            offers = offers[0]
-        if isinstance(offers, dict):
-            record["price"] = _first_present(
-                offers.get("price"), offers.get("lowPrice"), ""
-            )
-            record["currency"] = offers.get("priceCurrency") or ""
-            record["availability"] = offers.get("availability") or ""
-        record["brand"] = _nested_name(item.get("brand"))
-        record["sku"] = item.get("sku") or ""
-        record["part_number"] = item.get("mpn") or item.get("partNumber") or ""
-        record["description"] = item.get("description") or ""
-        record["rating"] = _nested_value(item.get("aggregateRating"), "ratingValue")
-
-    if "job" in surface:
-        record["company"] = _nested_name(item.get("hiringOrganization"))
-        location = item.get("jobLocation")
-        if isinstance(location, dict):
-            address = location.get("address", {})
-            if isinstance(address, dict):
-                record["location"] = (
-                    address.get("addressLocality") or address.get("name") or ""
-                )
-            else:
-                record["location"] = str(address)
-        elif isinstance(location, str):
-            record["location"] = location
-        salary = item.get("baseSalary")
-        if isinstance(salary, dict):
-            val = salary.get("value", {})
-            if isinstance(val, dict):
-                min_val = val.get("minValue")
-                max_val = val.get("maxValue")
-                if min_val not in (None, "") and max_val not in (None, ""):
-                    record["salary"] = f"{min_val}-{max_val}"
-                elif min_val not in (None, ""):
-                    record["salary"] = str(min_val)
-                elif max_val not in (None, ""):
-                    record["salary"] = str(max_val)
-                else:
-                    record["salary"] = ""
-            else:
-                record["salary"] = str(val)
-        elif salary:
-            record["salary"] = str(salary)
-        record["description"] = item.get("description") or ""
-        record["category"] = item.get("employmentType") or ""
-
-    # Remove empty values
-    if "job" in surface:
-        # On job surfaces, price is actually salary — migrate it
-        if record.get("price") and not record.get("salary"):
-            record["salary"] = record.pop("price")
-        for commerce_field in (
-            "price",
-            "sale_price",
-            "original_price",
-            "currency",
-            "image_url",
-            "additional_images",
-        ):
-            record.pop(commerce_field, None)
-    elif record.get("price") and not record.get("currency"):
-        record["currency"] = _infer_currency_from_page_url(page_url)
-    record = {k: v for k, v in record.items() if v not in _EMPTY_VALUES}
-    if record:
-        record["_raw_item"] = item
-    return record if record else None
-
-
-def _first_present(*values):
-    for value in values:
-        if value not in _EMPTY_VALUES:
-            return value
-    return ""
-
-
-def _nested_name(obj: object) -> str:
-    """Extract name from a nested object like {"name": "Acme"} or a plain string."""
-    if isinstance(obj, str):
-        return obj
-    if isinstance(obj, dict):
-        return obj.get("name") or ""
-    return ""
-
-
-def _nested_value(obj: object, key: str) -> str:
-    """Extract a value from a nested object."""
-    if isinstance(obj, dict):
-        return str(obj.get(key, ""))
-    return ""
-
-
 def _extract_from_next_data(next_data: dict, surface: str, page_url: str) -> list[dict]:
-    records = _collect_candidate_record_sets(
-        next_data,
-        surface,
-        page_url,
-        depth=0,
-        max_depth=max(MAX_JSON_RECURSION_DEPTH + 4, 8),
+    records = _normalize_listing_items(
+        discover_listing_items(
+            next_data,
+            surface=surface,
+            max_depth=max(MAX_JSON_RECURSION_DEPTH + 4, 8),
+        ),
+        surface=surface,
+        page_url=page_url,
     )
-    if not records:
-        return []
     for record in records:
         record["_source"] = "next_data"
     return records
@@ -550,117 +427,24 @@ def _extract_items_from_json(
     if _depth > max_depth:
         return []
 
-    records = _collect_candidate_record_sets(
-        data,
-        surface,
-        page_url,
-        depth=_depth,
-        max_depth=max_depth,
+    return _normalize_listing_items(
+        discover_listing_items(
+            data,
+            surface=surface,
+            max_depth=max_depth,
+        ),
+        surface=surface,
+        page_url=page_url,
     )
-    if not records:
-        return []
-    return records
 
 
-def _collect_candidate_record_sets(
-    data: object,
+def _normalize_listing_items(
+    items: list[dict],
+    *,
     surface: str,
     page_url: str,
-    *,
-    depth: int,
-    max_depth: int,
 ) -> list[dict]:
-    if depth > max_depth or data in (None, "", [], {}):
-        return []
-
-    if isinstance(data, list):
-        objects = [item for item in data if isinstance(item, dict)]
-        if len(objects) >= 2:
-            normalized = _try_normalize_array(objects, surface, page_url)
-            if normalized:
-                return normalized
-            for item in objects[:40]:
-                state_data = _query_state_data(item)
-                if state_data not in (None, "", [], {}):
-                    state_records = _collect_candidate_record_sets(
-                        state_data,
-                        surface,
-                        page_url,
-                        depth=depth + 1,
-                        max_depth=max_depth,
-                    )
-                    if state_records:
-                        return state_records
-        for item in data[:40]:
-            if isinstance(item, (dict, list)):
-                nested_records = _collect_candidate_record_sets(
-                    item,
-                    surface,
-                    page_url,
-                    depth=depth + 1,
-                    max_depth=max_depth,
-                )
-                if nested_records:
-                    return nested_records
-        return []
-
-    if not isinstance(data, dict):
-        return []
-
-    for key in COLLECTION_KEYS:
-        value = data.get(key)
-        if isinstance(value, list):
-            objects = [item for item in value if isinstance(item, dict)]
-            if len(objects) >= 2:
-                normalized = _try_normalize_array(objects, surface, page_url)
-                if normalized:
-                    return normalized
-
-    state_data = _query_state_data(data)
-    if state_data not in (None, "", [], {}):
-        state_records = _collect_candidate_record_sets(
-            state_data,
-            surface,
-            page_url,
-            depth=depth + 1,
-            max_depth=max_depth,
-        )
-        if state_records:
-            return state_records
-
-    for value in data.values():
-        if isinstance(value, list):
-            objects = [item for item in value if isinstance(item, dict)]
-            if len(objects) >= 2:
-                normalized = _try_normalize_array(objects, surface, page_url)
-                if normalized:
-                    return normalized
-        if isinstance(value, (dict, list)):
-            nested_records = _collect_candidate_record_sets(
-                value,
-                surface,
-                page_url,
-                depth=depth + 1,
-                max_depth=max_depth,
-            )
-            if nested_records:
-                return nested_records
-
-    return []
-
-
-def _query_state_data(node: object) -> object | None:
-    if not isinstance(node, dict):
-        return None
-    state = node.get("state")
-    if not isinstance(state, dict):
-        return None
-    return state.get("data")
-
-
-def _try_normalize_array(items: list[dict], surface: str, page_url: str) -> list[dict]:
-    """Try to normalize an array of objects into records."""
-    from app.services.extract.listing_item_normalizer import _normalize_generic_item
+    from app.services.extract.listing_item_mapper import _normalize_generic_item
 
     records = []
     for item in items:
@@ -817,7 +601,11 @@ def _extract_from_inline_object_arrays(
         objects = [item for item in parsed if isinstance(item, dict)]
         if len(objects) < 2:
             continue
-        normalized = _try_normalize_array(objects, surface, page_url)
+        normalized = _normalize_listing_items(
+            objects,
+            surface=surface,
+            page_url=page_url,
+        )
         if normalized:
             for record in normalized:
                 record["_source"] = "inline_object_array"

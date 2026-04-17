@@ -15,16 +15,10 @@ SECURE7_SAASHR_DOMAIN = f"secure7.{SAASHR_DOMAIN}"
 
 class SaaSHRAdapter(BaseAdapter):
     name = "saashr"
-    domains = [SAASHR_DOMAIN]
+    platform_family = "saashr"
 
     async def can_handle(self, url: str, html: str) -> bool:
-        lowered_url = str(url or "").lower()
-        lowered_html = str(html or "").lower()
-        return (
-            SAASHR_DOMAIN in lowered_url
-            or SECURE7_SAASHR_DOMAIN in lowered_html
-            or "inframeset=1" in lowered_html and ".careers" in lowered_html
-        )
+        return self._matches_platform_family(url, html)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         records = await self.try_public_endpoint(url, html, surface)

@@ -9,11 +9,7 @@ from bs4 import BeautifulSoup
 from app.services.config.extraction_rules import (
     CANDIDATE_PLACEHOLDER_VALUES,
 )
-from app.services.config.field_mappings import (
-    CANONICAL_SCHEMAS,
-    REQUESTED_FIELD_ALIASES,
-    excluded_fields_for_surface,
-)
+from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.exceptions import ExtractionError, ExtractionParseError
 from app.services.extract.candidate_processing import (
     _embedded_blob_metadata,
@@ -51,6 +47,8 @@ from app.services.extract.field_classifier import (
     _dynamic_value_is_bare_ticker_symbol,
     _should_skip_jsonld_block,
 )
+from app.services.field_alias_policy import REQUESTED_FIELD_ALIASES
+from app.services.field_alias_policy import excluded_fields_for_surface
 from app.services.extract.field_type_classifier import (
     _field_is_type,  # noqa: F401 — re-exported for dom_extraction deferred import
 )
@@ -65,7 +63,11 @@ from app.services.extract.signal_inventory import (
     build_signal_inventory,
     classify_page_type,
 )
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.discover import (
+    collect_network_payload_candidates,
+    map_state_fields,
+    parse_page_sources,
+)
 from app.services.extract.variant_builder import (
     _build_variant_rows,
     _payload_matches_page_scope,
@@ -73,6 +75,7 @@ from app.services.extract.variant_builder import (
     _structured_source_payloads,
 )
 from app.services.extract.variant_extractor import (
+    assess_variant_completeness,
     _reconcile_variant_bundle,
     _sanitize_product_attributes,
     _sync_selected_variant_root_fields,
@@ -891,6 +894,15 @@ def _collect_network_payload_candidates(
         payload_url = str(payload.get("url") or "").lower()
         if is_network_payload_noise_url(payload_url):
             continue
+        mapped_rows = collect_network_payload_candidates(
+            field_name,
+            payloads=[payload],
+            surface=surface,
+            page_url=base_url,
+        )
+        rows.extend(mapped_rows)
+        if mapped_rows:
+            continue
         body = payload.get("body", {})
         if isinstance(body, (dict, list)):
             _append_source_candidates(
@@ -943,6 +955,16 @@ def _collect_structured_state_candidates(
     for payload in embedded_json:
         if not _payload_matches_page_scope(payload, base_url=base_url):
             continue
+        mapped_payload = payload.get("_blob_payload", payload) if isinstance(payload, dict) else payload
+        mapped_field_value = map_state_fields(mapped_payload, surface=surface).get(field_name)
+        if mapped_field_value not in (None, "", [], {}):
+            rows.append(
+                {
+                    "value": mapped_field_value,
+                    "source": "embedded_json",
+                    **_embedded_blob_metadata(payload),
+                }
+            )
         _append_source_candidates(
             rows,
             field_name,
@@ -954,6 +976,9 @@ def _collect_structured_state_candidates(
         )
     if next_data:
         if _payload_matches_page_scope(next_data, base_url=base_url):
+            mapped_field_value = map_state_fields(next_data, surface=surface).get(field_name)
+            if mapped_field_value not in (None, "", [], {}):
+                rows.append({"value": mapped_field_value, "source": "next_data"})
             _append_source_candidates(
                 rows,
                 field_name,
@@ -964,6 +989,9 @@ def _collect_structured_state_candidates(
             )
     for state in hydrated_states:
         if _payload_matches_page_scope(state, base_url=base_url):
+            mapped_field_value = map_state_fields(state, surface=surface).get(field_name)
+            if mapped_field_value not in (None, "", [], {}):
+                rows.append({"value": mapped_field_value, "source": "hydrated_state"})
             _append_source_candidates(
                 rows,
                 field_name,
@@ -1285,6 +1313,15 @@ def _finalize_candidates(
     _reconcile_variant_bundle(final_candidates, base_url=url)
     _sync_selected_variant_root_fields(final_candidates)
     _sanitize_product_attributes(final_candidates)
+    variant_completeness = assess_variant_completeness(
+        variant_rows=variant_rows,
+        final_candidates=final_candidates,
+        surface=surface,
+    )
+    if variant_completeness.get("applicable"):
+        extraction_audit.setdefault("variant_bundle", {})["completeness"] = (
+            variant_completeness
+        )
     _record_final_output_audit(extraction_audit, final_candidates)
 
     return final_candidates, {
@@ -1295,6 +1332,7 @@ def _finalize_candidates(
         },
         "mapping_hint": mappings,
         "semantic": semantic,
+        "variant_completeness": variant_completeness,
     }
 
 

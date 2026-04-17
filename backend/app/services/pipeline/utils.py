@@ -9,6 +9,8 @@ import time
 from html import unescape
 from typing import TYPE_CHECKING
 
+from app.services.normalizers import normalize_review_value as _normalize_review_value
+
 if TYPE_CHECKING:
     from bs4 import BeautifulSoup
 
@@ -61,8 +63,6 @@ def _normalize_committed_field_name(value: object) -> str:
 
 def _review_bucket_fingerprint(value: object) -> str:
     """Generate a fingerprint for review bucket deduplication."""
-    from .field_normalization import _normalize_review_value
-
     normalized_value = _normalize_review_value(value)
     try:
         return json.dumps(normalized_value, sort_keys=True, default=str)

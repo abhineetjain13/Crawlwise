@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from app.services.extract.source_parsers import (
+from app.services.discover import (
     extract_hydrated_states,
     extract_json_ld,
     extract_next_data,

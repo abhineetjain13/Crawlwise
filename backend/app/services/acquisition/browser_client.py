@@ -55,6 +55,11 @@ from app.services.acquisition.browser_readiness import (
     _wait_for_surface_readiness,
 )
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
+from app.services.acquisition.policy import (
+    normalize_traversal_summary,
+    resolve_traversal_surface_policy,
+    should_retry_browser_launch_profile,
+)
 from app.services.acquisition.cookie_store import (
     load_cookies_for_context,
     load_session_cookies_for_context,
@@ -174,6 +179,238 @@ class BrowserRenderRequest:
     prefer_stealth: bool
     request_delay_ms: int
     runtime_options: BrowserRuntimeOptions
+
+
+def _traversal_progress_logger(
+    run_id: int | None,
+) -> Callable[[str], Awaitable[None]] | None:
+    if run_id is None:
+        return None
+
+    async def _progress_logger(message: str) -> None:
+        from app.services.crawl_events import append_log_event
+
+        await append_log_event(
+            run_id=run_id,
+            level="info",
+            message=f"[TRAVERSAL] {message}",
+        )
+
+    return _progress_logger
+
+
+def _build_traversal_runtime(
+    *,
+    run_id: int | None,
+    checkpoint,
+) -> TraversalRuntime:
+    return TraversalRuntime(
+        page_content_with_retry=_page_content_with_retry,
+        wait_for_surface_readiness=_wait_for_surface_readiness,
+        wait_for_listing_readiness=_wait_for_listing_readiness,
+        peek_next_page_signal=_peek_next_page_signal,
+        click_and_observe_next_page=_click_and_observe_next_page,
+        advance_next_page_fn=_advance_next_page,
+        has_load_more_control=lambda p, _cfg: _has_load_more_control(p),
+        dismiss_cookie_consent=_dismiss_cookie_consent,
+        pause_after_navigation=_pause_after_navigation,
+        expand_all_interactive_elements=expand_all_interactive_elements,
+        flatten_shadow_dom=_flatten_shadow_dom,
+        cooperative_sleep_ms=_cooperative_sleep_ms,
+        snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
+        ensure_memory_available=_check_memory_available,
+        run_id=run_id,
+        traversal_artifact_dir=_traversal_artifact_dir(run_id),
+        checkpoint=checkpoint,
+        progress_logger=_traversal_progress_logger(run_id),
+        goto_page=lambda pg, next_url, *, surface=None, checkpoint=None: _goto_with_fallback(
+            pg,
+            next_url,
+            surface=surface,
+            checkpoint=checkpoint,
+        ),
+    )
+
+
+async def _run_browser_traversal(
+    *,
+    page,
+    surface: str | None,
+    traversal_mode: str | None,
+    max_scrolls: int,
+    max_pages: int,
+    request_delay_ms: int,
+    run_id: int | None,
+    checkpoint,
+    diagnostics: dict[str, object],
+) -> tuple[TraversalResult, bool]:
+    if not traversal_mode:
+        return TraversalResult(), False
+
+    try:
+        return (
+            await apply_traversal_mode(
+                TraversalRequest(
+                    page=page,
+                    surface=surface,
+                    surface_policy=resolve_traversal_surface_policy(surface),
+                    traversal_mode=traversal_mode,
+                    max_scrolls=max_scrolls,
+                    max_pages=max_pages,
+                    request_delay_ms=request_delay_ms,
+                    runtime=_build_traversal_runtime(
+                        run_id=run_id,
+                        checkpoint=checkpoint,
+                    ),
+                    config=_traversal_config(),
+                )
+            ),
+            False,
+        )
+    except (
+        asyncio.TimeoutError,
+        PlaywrightTimeoutError,
+        PlaywrightError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        OSError,
+    ) as exc:
+        stop_reason = f"exception:{type(exc).__name__}"
+        logger.warning(
+            "[traversal] fallback to single-page, reason=%s, url=%s",
+            stop_reason,
+            getattr(page, "url", None) or "",
+        )
+        diagnostics["traversal_exception"] = {
+            "type": type(exc).__name__,
+            "message": str(exc or "").strip()[:300],
+        }
+        diagnostics["traversal_fallback_used"] = True
+        diagnostics["traversal_fallback_reason"] = stop_reason
+        return (
+            TraversalResult(
+                html=None,
+                summary={
+                    "mode": traversal_mode,
+                    "attempted": True,
+                    "fallback_used": True,
+                    "stop_reason": stop_reason,
+                },
+            ),
+            True,
+        )
+
+
+def _record_traversal_summary_metrics(traversal_summary: dict[str, object]) -> None:
+    if not traversal_summary.get("attempted"):
+        return
+    incr("traversal_attempt_total")
+    if int(traversal_summary.get("pages_collected", 0) or 0) > 0:
+        incr("traversal_success_total")
+    if traversal_summary.get("fallback_used"):
+        incr("traversal_fallback_total")
+
+
+async def _emit_traversal_summary_event(
+    *,
+    run_id: int | None,
+    traversal_summary: dict[str, object],
+    traversal_mode: str | None,
+    browser_traversal_ms: int,
+    url: str,
+) -> None:
+    if run_id is None or not traversal_summary.get("attempted"):
+        return
+    try:
+        from app.services.crawl_events import append_log_event
+
+        mode_used = traversal_summary.get("mode_used") or traversal_mode or "?"
+        pages_collected = traversal_summary.get("pages_collected", 0)
+        stop_reason = traversal_summary.get("stop_reason") or "unknown"
+        scroll_iterations = traversal_summary.get("scroll_iterations", 0)
+        parts = [f"mode={mode_used}"]
+        if scroll_iterations:
+            parts.append(f"scroll_iterations={scroll_iterations}")
+        parts.extend(
+            [
+                f"pages_collected={pages_collected}",
+                f"stop_reason={stop_reason}",
+                f"time={browser_traversal_ms}ms",
+            ]
+        )
+        await append_log_event(
+            run_id=run_id,
+            level="info",
+            message=f"[TRAVERSAL] {', '.join(parts)}",
+        )
+    except Exception:
+        incr("acquisition_log_event_failures_total")
+        logger.debug(
+            "Failed to append traversal crawl event for %s",
+            url,
+            exc_info=True,
+        )
+
+
+async def _finalize_browser_traversal(
+    *,
+    result: BrowserResult,
+    traversal_result: TraversalResult,
+    traversal_mode: str | None,
+    max_pages: int,
+    run_id: int | None,
+    browser_traversal_ms: int,
+    url: str,
+) -> tuple[str | None, dict[str, object], bool]:
+    combined_html = traversal_result.html
+    traversal_summary = (
+        normalize_traversal_summary(
+            traversal_result.summary
+            if isinstance(traversal_result.summary, dict)
+            else {},
+            traversal_mode=traversal_mode,
+            combined_html=combined_html,
+        )
+        if traversal_mode
+        or bool(getattr(traversal_result, "summary", None))
+        or combined_html is not None
+        else {}
+    )
+    if traversal_summary:
+        result.diagnostics["traversal_summary"] = traversal_summary
+        _record_traversal_summary_metrics(traversal_summary)
+    await _emit_traversal_summary_event(
+        run_id=run_id,
+        traversal_summary=traversal_summary,
+        traversal_mode=traversal_mode,
+        browser_traversal_ms=browser_traversal_ms,
+        url=url,
+    )
+
+    reused_initial_page = False
+    if (
+        traversal_mode in {"paginate", "auto"}
+        and traversal_summary.get("attempted")
+        and int(traversal_summary.get("pages_collected", 0) or 0) <= 0
+        and combined_html is None
+    ):
+        fallback_reason = str(
+            traversal_summary.get("stop_reason") or "no_pages_collected"
+        )
+        logger.warning(
+            "[traversal] fallback to single-page, reason=%s, url=%s",
+            fallback_reason,
+            url,
+        )
+        result.diagnostics["traversal_fallback_used"] = True
+        result.diagnostics["traversal_fallback_reason"] = fallback_reason
+        reused_initial_page = True
+
+    if traversal_mode:
+        result.diagnostics["traversal_mode"] = traversal_mode
+        result.diagnostics["max_pages"] = max_pages
+    return combined_html, traversal_summary, reused_initial_page
     requested_fields: list[str] = field(default_factory=list)
     requested_field_selectors: dict[str, list[dict]] = field(default_factory=dict)
     checkpoint: Callable[[], Awaitable[None]] | None = None
@@ -277,8 +514,10 @@ async def _fetch_rendered_html_with_fallback(
             result.diagnostics["attempted_browser_profiles"] = attempted_profiles[:]
             result.diagnostics["system_chrome_attempted"] = "system_chrome" in attempted_profiles
             result.diagnostics["bundled_chromium_attempted"] = "bundled_chromium" in attempted_profiles
-            if index < len(profiles) - 1 and _should_retry_launch_profile(
-                result, surface=request.surface
+            if index < len(profiles) - 1 and should_retry_browser_launch_profile(
+                result,
+                surface=request.surface,
+                html_looks_low_value=_html_looks_low_value,
             ):
                 first_profile_failure_reason = "low_value_result"
                 result.diagnostics["fallback_profile_used"] = str(profiles[index + 1]["label"])
@@ -586,177 +825,34 @@ async def _fetch_rendered_html_attempt(
         if shadow_dom_flatten:
             result.diagnostics["shadow_dom_flatten"] = shadow_dom_flatten
 
-        traversal_result = TraversalResult()
-        traversal_fallback_reused_initial_page = False
         traversal_started_at = time.perf_counter()
-        if traversal_mode:
-            try:
-                progress_logger = None
-                if run_id is not None:
-                    async def _progress_logger(message: str) -> None:
-                        from app.services.crawl_events import append_log_event
-
-                        await append_log_event(
-                            run_id=run_id,
-                            level="info",
-                            message=f"[TRAVERSAL] {message}",
-                        )
-
-                    progress_logger = _progress_logger
-                traversal_runtime = TraversalRuntime(
-                    page_content_with_retry=_page_content_with_retry,
-                    wait_for_surface_readiness=_wait_for_surface_readiness,
-                    wait_for_listing_readiness=_wait_for_listing_readiness,
-                    peek_next_page_signal=_peek_next_page_signal,
-                    click_and_observe_next_page=_click_and_observe_next_page,
-                    advance_next_page_fn=_advance_next_page,
-                    has_load_more_control=lambda p, _cfg: _has_load_more_control(p),
-                    dismiss_cookie_consent=_dismiss_cookie_consent,
-                    pause_after_navigation=_pause_after_navigation,
-                    expand_all_interactive_elements=expand_all_interactive_elements,
-                    flatten_shadow_dom=_flatten_shadow_dom,
-                    cooperative_sleep_ms=_cooperative_sleep_ms,
-                    snapshot_listing_page_metrics=_snapshot_listing_page_metrics,
-                    ensure_memory_available=_check_memory_available,
-                    run_id=run_id,
-                    traversal_artifact_dir=_traversal_artifact_dir(run_id),
-                    checkpoint=checkpoint,
-                    progress_logger=progress_logger,
-                    goto_page=lambda pg, next_url, *, surface=None, checkpoint=None: _goto_with_fallback(
-                        pg,
-                        next_url,
-                        surface=surface,
-                        checkpoint=checkpoint,
-                    ),
-                )
-                traversal_result = await apply_traversal_mode(
-                    TraversalRequest(
-                        page=page,
-                        surface=surface,
-                        traversal_mode=traversal_mode,
-                        max_scrolls=max_scrolls,
-                        max_pages=max_pages,
-                        request_delay_ms=request_delay_ms,
-                        runtime=traversal_runtime,
-                        config=_traversal_config(),
-                    )
-                )
-            except (
-                asyncio.TimeoutError,
-                PlaywrightTimeoutError,
-                PlaywrightError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-                OSError,
-            ) as exc:
-                logger.warning(
-                    "[traversal] fallback to single-page, reason=exception:%s, url=%s",
-                    type(exc).__name__,
-                    url,
-                )
-                traversal_fallback_reused_initial_page = True
-                result.diagnostics["traversal_exception"] = {
-                    "type": type(exc).__name__,
-                    "message": str(exc or "").strip()[:300],
-                }
-                result.diagnostics["traversal_fallback_used"] = True
-                result.diagnostics["traversal_fallback_reason"] = (
-                    f"exception:{type(exc).__name__}"
-                )
-                traversal_result = TraversalResult(
-                    html=None,
-                    summary={
-                        "mode": traversal_mode,
-                        "attempted": True,
-                        "fallback_used": True,
-                        "stop_reason": f"exception:{type(exc).__name__}",
-                    },
-                )
-        timings_ms["browser_traversal_ms"] = _elapsed_ms(traversal_started_at)
-        combined_html = traversal_result.html
-        traversal_summary = (
-            _normalize_traversal_summary(
-                traversal_result.summary
-                if isinstance(traversal_result.summary, dict)
-                else {},
+        traversal_result, traversal_fallback_reused_initial_page = (
+            await _run_browser_traversal(
+                page=page,
+                surface=surface,
                 traversal_mode=traversal_mode,
-                combined_html=combined_html,
+                max_scrolls=max_scrolls,
+                max_pages=max_pages,
+                request_delay_ms=request_delay_ms,
+                run_id=run_id,
+                checkpoint=checkpoint,
+                diagnostics=result.diagnostics,
             )
-            if traversal_mode
-            or bool(getattr(traversal_result, "summary", None))
-            or combined_html is not None
-            else {}
         )
-        if traversal_summary:
-            result.diagnostics["traversal_summary"] = traversal_summary
-            if traversal_summary.get("attempted"):
-                incr("traversal_attempt_total")
-                if int(traversal_summary.get("pages_collected", 0) or 0) > 0:
-                    incr("traversal_success_total")
-                if traversal_summary.get("fallback_used"):
-                    incr("traversal_fallback_total")
-
-        # Emit traversal progress as a crawl event (visible in UI)
-        if run_id is not None and traversal_summary.get("attempted"):
-            try:
-                from app.services.crawl_events import append_log_event
-
-                _ts_mode = traversal_summary.get("mode_used") or traversal_mode or "?"
-                _ts_pages = traversal_summary.get("pages_collected", 0)
-                _ts_stop = traversal_summary.get("stop_reason") or "unknown"
-                _ts_ms = timings_ms.get("browser_traversal_ms", 0)
-                _ts_iters = traversal_summary.get("scroll_iterations", 0)
-                _ts_parts = [f"mode={_ts_mode}"]
-                if _ts_iters:
-                    _ts_parts.append(f"scroll_iterations={_ts_iters}")
-                _ts_parts.extend(
-                    [
-                        f"pages_collected={_ts_pages}",
-                        f"stop_reason={_ts_stop}",
-                        f"time={_ts_ms}ms",
-                    ]
-                )
-                await append_log_event(
-                    run_id=run_id,
-                    level="info",
-                    message=f"[TRAVERSAL] {', '.join(_ts_parts)}",
-                )
-            except Exception:
-                incr("acquisition_log_event_failures_total")
-                logger.debug(
-                    "Failed to append traversal crawl event for %s",
-                    url,
-                    exc_info=True,
-                )
-
-        # Only apply fallback detection for paginated modes (auto, paginate)
-        # scroll/load_more mutate the page in-place and don't collect separate pages
-        _paginated_modes = {"paginate", "auto"}
-        if (
-            traversal_mode in _paginated_modes
-            and traversal_summary.get("attempted")
-            and int(traversal_summary.get("pages_collected", 0) or 0) <= 0
-            and combined_html is None
-        ):
-            fallback_reason = str(
-                traversal_summary.get("stop_reason") or "no_pages_collected"
+        timings_ms["browser_traversal_ms"] = _elapsed_ms(traversal_started_at)
+        combined_html, traversal_summary, traversal_reused_initial_page = (
+            await _finalize_browser_traversal(
+                result=result,
+                traversal_result=traversal_result,
+                traversal_mode=traversal_mode,
+                max_pages=max_pages,
+                run_id=run_id,
+                browser_traversal_ms=timings_ms["browser_traversal_ms"],
+                url=url,
             )
-            logger.warning(
-                "[traversal] fallback to single-page, reason=%s, url=%s",
-                fallback_reason,
-                url,
-            )
-            traversal_fallback_reused_initial_page = True
-            result.diagnostics["traversal_fallback_used"] = True
-            result.diagnostics["traversal_fallback_reason"] = fallback_reason
-        if traversal_fallback_reused_initial_page:
+        )
+        if traversal_fallback_reused_initial_page or traversal_reused_initial_page:
             result.diagnostics["traversal_reused_initial_page"] = True
-
-        # Always record traversal context when traversal was attempted
-        if traversal_mode:
-            result.diagnostics["traversal_mode"] = traversal_mode
-            result.diagnostics["max_pages"] = max_pages
 
         if combined_html is not None:
             result.html = combined_html
@@ -950,26 +1046,6 @@ def _browser_launch_profiles(
 
     # Always return both to ensure maximum resilience
     return profiles
-
-
-def _should_retry_launch_profile(result: BrowserResult, *, surface: str | None) -> bool:
-    result_html = str(getattr(result, "html", "") or "")
-    diagnostics = (
-        result.diagnostics
-        if isinstance(getattr(result, "diagnostics", None), dict)
-        else {}
-    )
-    if detect_blocked_page(result_html).is_blocked:
-        return True
-    if _is_listing_surface(surface):
-        readiness = diagnostics.get("listing_readiness")
-        if (
-            isinstance(readiness, dict)
-            and (not bool(readiness.get("ready")) or bool(readiness.get("shell_like")))
-            and _html_looks_low_value(result_html)
-        ):
-            return True
-    return False
 
 
 async def _collect_frame_sources(page) -> tuple[str, list[dict], list[dict]]:
@@ -1266,39 +1342,6 @@ async def _page_content_with_retry(
 
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int(round((time.perf_counter() - started_at) * 1000)))
-
-
-def _normalize_traversal_summary(
-    summary: dict[str, object],
-    *,
-    traversal_mode: str | None,
-    combined_html: str | None,
-) -> dict[str, object]:
-    normalized = dict(summary or {})
-    mode_used = (
-        str(
-            normalized.get("mode_used")
-            or normalized.get("mode")
-            or traversal_mode
-            or ""
-        ).strip()
-        or None
-    )
-    pages_collected = int(
-        normalized.get("pages_collected", 0)
-        or (str(combined_html or "").count("<!-- PAGE BREAK:") if combined_html else 0)
-    )
-    stop_reason = str(normalized.get("stop_reason") or "").strip() or None
-    fallback_used = bool(normalized.get("fallback_used"))
-    scroll_iterations = int(
-        normalized.get("scroll_iterations") or normalized.get("attempt_count") or 0
-    )
-    normalized["mode_used"] = mode_used
-    normalized["pages_collected"] = pages_collected
-    normalized["scroll_iterations"] = scroll_iterations
-    normalized["stop_reason"] = stop_reason
-    normalized["fallback_used"] = fallback_used
-    return {key: value for key, value in normalized.items() if value is not None}
 
 
 async def _persist_context_cookies(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app.services.acquisition.cookie_policy import COOKIE_POLICY
 from app.services.config.crawl_runtime import (
     DYNAMIC_FIELD_NAME_MAX_TOKENS,
     MAX_CANDIDATES_PER_FIELD,
@@ -1804,38 +1805,6 @@ HYDRATED_STATE_PATTERNS = [
     "__STORE__",
     "__APP_STATE__",
 ]
-
-COOKIE_POLICY = {
-    "persist_session_cookies": False,
-    "max_persisted_ttl_seconds": 2592000,
-    "blocked_name_prefixes": [
-        "cf_",
-        "__cf",
-        "ak_",
-        "bm_",
-        "dd_",
-        "datadome",
-        "px",
-        "_px",
-        "kpsdk",
-        "captcha",
-    ],
-    "blocked_name_contains": [
-        "challenge",
-        "captcha",
-        "datadome",
-        "perimeterx",
-        "incap",
-        "kasada",
-        "bot",
-    ],
-    "harvest_cookie_names": [],
-    "harvest_name_prefixes": [],
-    "harvest_name_contains": [],
-    "blocked_rules_precede_harvest": True,
-    "reuse_in_http_client": True,
-    "domain_overrides": {},
-}
 
 KNOWN_ATS_PLATFORMS = known_ats_domains()
 

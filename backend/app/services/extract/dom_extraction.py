@@ -11,11 +11,10 @@ from app.services.config.extraction_rules import (
     CANDIDATE_DEEP_ALIAS_LIST_SCAN_LIMIT,
     CANDIDATE_DESCRIPTION_FALLBACK_CONTENT_SELECTORS,
     CANDIDATE_DESCRIPTION_META_SELECTORS,
+    LISTING_DESCRIPTION_CANDIDATE_FIELDS,
     JSONLD_STRUCTURAL_KEYS,
     NESTED_NON_PRODUCT_KEYS,
 )
-from app.services.config.field_mappings import REQUESTED_FIELD_ALIASES, get_surface_field_aliases
-from app.services.config.extraction_rules import LISTING_DESCRIPTION_CANDIDATE_FIELDS
 from app.services.config.selectors import DOM_PATTERNS
 from app.services.extract.candidate_processing import (
     _embedded_blob_payload,
@@ -23,6 +22,10 @@ from app.services.extract.candidate_processing import (
     _normalized_candidate_text,
     coerce_field_candidate_value,
     normalize_html_rich_text,
+)
+from app.services.field_alias_policy import (
+    REQUESTED_FIELD_ALIASES,
+    get_surface_field_aliases,
 )
 from app.services.extract.field_classifier import _field_alias_tokens, _normalized_field_token
 from app.services.xpath_service import build_absolute_xpath

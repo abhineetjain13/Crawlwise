@@ -12,6 +12,12 @@ from app.services.text_sanitization import strip_ui_noise
 from app.services.text_utils import normalized_text
 from bs4 import Tag
 
+LOW_QUALITY_MERGE_TOKENS = frozenset(
+    {"cookie", "privacy", "sign in", "log in", "account", "home", "menu", "agree", "policy"}
+)
+TITLE_NOISE_WORDS = frozenset(
+    {"home", "cart", "sign in", "search results", "access denied", "loading..."}
+)
 _COMMON_DETAIL_REJECT_PHRASES = (
     "cookie",
     "privacy",
@@ -181,6 +187,26 @@ _NOISE_CONTAINER_REMOVAL_SELECTOR = (
 
 def normalized_noise_text(value: object) -> str:
     return normalized_text(value)
+
+
+def contains_low_quality_merge_token(value: object) -> bool:
+    text = normalized_noise_text(value).casefold()
+    return bool(text) and any(token in text for token in LOW_QUALITY_MERGE_TOKENS)
+
+
+def field_value_contains_noise(field_name: str, value: object) -> bool:
+    text = normalized_noise_text(value).casefold()
+    if not text:
+        return False
+    fragments_by_field: dict[str, frozenset[str]] = {
+        "brand": frozenset({"cookie", "privacy"}),
+        "category": frozenset({"cookie", "sign in"}),
+        "color": frozenset({"cookie", "select"}),
+        "title": TITLE_NOISE_WORDS,
+    }
+    return any(
+        fragment in text for fragment in fragments_by_field.get(field_name, frozenset())
+    )
 
 
 def is_network_payload_noise_url(value: object) -> bool:

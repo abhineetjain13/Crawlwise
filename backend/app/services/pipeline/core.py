@@ -11,7 +11,7 @@ from app.services.adapters.registry import (
     try_blocked_adapter_recovery as _try_blocked_adapter_recovery,
 )
 from app.services.config.field_mappings import CANONICAL_SCHEMAS
-from app.services.crawl_metrics import (
+from app.services.publish import (
     build_acquisition_profile as _build_acquisition_profile,
 )
 from app.services.crawl_state import (
@@ -41,7 +41,7 @@ from .runner import PipelineRunner, build_default_stages
 
 # Import from sibling modules in pipeline package
 from .types import PipelineContext, URLProcessingConfig, URLProcessingResult
-from .verdict import (
+from app.services.publish.verdict import (
     VERDICT_EMPTY,
     VERDICT_ERROR,
     VERDICT_SUCCESS,

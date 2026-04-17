@@ -13,7 +13,7 @@ from app.services.config.extraction_rules import (
     JSONLD_TYPE_NOISE,
     PRODUCT_IDENTITY_FIELDS,
 )
-from app.services.config.field_mappings import get_surface_field_aliases
+from app.services.field_alias_policy import get_surface_field_aliases
 
 # ---------------------------------------------------------------------------
 # Module-level constants (only used by functions in this module)

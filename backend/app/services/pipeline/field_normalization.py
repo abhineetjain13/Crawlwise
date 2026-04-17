@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from app.services.config.field_mappings import field_allowed_for_surface
-from app.services.config.extraction_rules import EMPTY_SENTINEL_VALUES
-from app.services.normalizers import extract_currency_hint, normalize_value, validate_value
-
-from .utils import _clean_page_text, _compact_dict, _normalize_committed_field_name
+from app.services.normalizers import (
+    normalize_record_fields as _normalize_record_fields,
+    normalize_review_value as _normalize_review_value,
+    passes_detail_quality_gate as _passes_detail_quality_gate,
+    review_values_equal as _review_values_equal,
+)
 
 _PERSISTENCE_DISALLOWED_DISCOVERED_KEYS = frozenset(
     {
@@ -19,81 +21,6 @@ _PERSISTENCE_DISALLOWED_DISCOVERED_KEYS = frozenset(
         "@type",
     }
 )
-
-
-def _normalize_review_value(value: object) -> object | None:
-    """Normalize a value for review bucket."""
-    if value in (None, "", [], {}):
-        return None
-    if isinstance(value, (list, dict)):
-        return value
-    text = _clean_page_text(value)
-    if not text or text.lower() in EMPTY_SENTINEL_VALUES:
-        return None
-    return text
-
-
-def _review_values_equal(left: object, right: object) -> bool:
-    """Check if two review values are equal."""
-    normalized_left = _normalize_review_value(left)
-    normalized_right = _normalize_review_value(right)
-    if normalized_left is None and normalized_right is None:
-        return True
-    if normalized_left is None or normalized_right is None:
-        return False
-    return normalized_left == normalized_right
-
-
-def _normalize_record_fields(
-    record: dict[str, object], *, surface: str = ""
-) -> dict[str, object]:
-    """Normalize all fields in a record."""
-    normalized: dict[str, object] = {}
-    normalized_surface = str(surface or "").strip().lower()
-    
-    for key, value in record.items():
-        normalized_key = _normalize_committed_field_name(key)
-        if not normalized_key:
-            continue
-        normalized_value = normalize_value(normalized_key, value)
-        validated_value = validate_value(normalized_key, normalized_value)
-        if validated_value in (None, "", [], {}):
-            continue
-        normalized[normalized_key] = validated_value
-    
-    normalized = _compact_dict(normalized)
-
-    # Extract currency hint for non-job listings
-    if (
-        normalized_surface != "job"
-        and not normalized_surface.startswith("job_")
-        and not str(normalized.get("currency") or "").strip()
-    ):
-        for field_name in ("price", "sale_price", "original_price", "salary"):
-            currency_hint = extract_currency_hint(normalized.get(field_name))
-            if currency_hint:
-                normalized["currency"] = currency_hint
-                break
-    
-    return normalized
-
-
-def _passes_detail_quality_gate(field_name: str, value: object) -> bool:
-    """Check if a field value passes quality gate."""
-    if value in (None, "", [], {}):
-        return False
-    validated = validate_value(field_name, value)
-    if validated in (None, "", [], {}):
-        return False
-    if isinstance(validated, str):
-        text = " ".join(validated.split()).strip()
-        return bool(
-            text
-            and text.lower() not in EMPTY_SENTINEL_VALUES
-        )
-    return True
-
-
 def _raw_record_payload(record: dict) -> dict:
     """Extract raw record payload."""
     raw_item = record.get("_raw_item")
@@ -150,29 +77,6 @@ def _sanitize_persisted_record_payload(
         if key not in _PERSISTENCE_DISALLOWED_DISCOVERED_KEYS
     }
     return sanitized_record, sanitized_discovered
-
-
-def _merge_record_fields(
-    primary: dict,
-    secondary: dict,
-    *,
-    return_reconciliation: bool = False,
-) -> dict | tuple[dict, dict[str, dict[str, object]]]:
-    """Merge two records through the field arbitration engine."""
-    from app.services.extract import FieldDecisionEngine
-
-    engine = FieldDecisionEngine()
-    merged = engine.merge_record_fields(
-        primary,
-        secondary,
-        return_reconciliation=return_reconciliation,
-    )
-    if return_reconciliation:
-        merged_record, reconciliation = merged
-        return merged_record, {
-            key: _compact_dict(value) for key, value in reconciliation.items()
-        }
-    return merged
 
 
 def _requested_field_coverage(record: dict, requested_fields: list[str]) -> dict:

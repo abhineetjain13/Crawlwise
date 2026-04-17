@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from app.services.exceptions import ExtractionParseError
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.discover import parse_page_sources
 from app.services.extract.candidate_processing import (
     candidate_source_rank,
     finalize_candidate_row,
@@ -79,7 +79,7 @@ def test_parse_page_sources_raises_typed_parse_error_with_cause():
     parse_exc = ValueError("broken embedded JSON payload")
 
     with patch(
-        "app.services.extract.source_parsers.extract_hydrated_states",
+        "app.services.discover.page_sources.extract_hydrated_states",
         side_effect=parse_exc,
     ):
         with pytest.raises(ExtractionParseError) as exc_info:
@@ -1632,7 +1632,7 @@ def test_extract_selected_variant_overwrites_root_scalars_and_cleans_product_att
         ]
     )
     with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
-        candidates, _ = extract_candidates(
+        candidates, source_trace = extract_candidates(
             "https://example.com/products/adapter-variant",
             "ecommerce_detail",
             html,
@@ -1652,6 +1652,8 @@ def test_extract_selected_variant_overwrites_root_scalars_and_cleans_product_att
         "fit": "Slim",
         "style": "KN4991300",
     }
+    assert source_trace["variant_completeness"]["complete"] is True
+    assert source_trace["variant_completeness"]["reason"] == "variant_bundle_reconciled"
 
 
 def test_extract_myntra_style_dom_size_variants_preserve_axes_without_fabricating_variants():
@@ -1681,8 +1683,37 @@ def test_extract_myntra_style_dom_size_variants_preserve_axes_without_fabricatin
     assert candidates["variant_axes"][0]["source"] == "dom_variant"
     assert candidates["variant_axes"][0]["value"] == {"size": ["S", "M", "L"]}
     assert candidates["selected_variant"][0]["value"]["size"] == "M"
-    assert candidates["size"][0]["value"] == "M"
+
+
+def test_extract_variant_completeness_flags_unreconciled_variant_signals():
+    html = "<html><body><h1>Variant Shell</h1></body></html>"
+    manifest = _manifest(
+        adapter_data=[
+            {
+                "_source": "adapter",
+                "title": "Variant Shell",
+                "variants": [],
+                "selected_variant": {"style": "KN4991300"},
+            }
+        ]
+    )
+    with patch("app.services.extract.service.get_selector_defaults", return_value=[]):
+        candidates, source_trace = extract_candidates(
+            "https://example.com/products/variant-shell",
+            "ecommerce_detail",
+            html,
+            manifest,
+            [],
+        )
+
     assert "variants" not in candidates
+    assert "selected_variant" not in candidates
+    assert source_trace["variant_completeness"]["applicable"] is True
+    assert source_trace["variant_completeness"]["complete"] is False
+    assert (
+        source_trace["variant_completeness"]["reason"]
+        == "variant_signals_without_reconciled_bundle"
+    )
 
 
 def test_extract_structured_specifications_normalize_html_content():

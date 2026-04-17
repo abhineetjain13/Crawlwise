@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from app.services.config.platform_registry import (
+from app.services.platform_policy import (
     listing_readiness_domains,
     resolve_listing_readiness_platform,
 )

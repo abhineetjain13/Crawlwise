@@ -4,8 +4,8 @@ from __future__ import annotations
 from bs4 import BeautifulSoup
 import pytest
 
-from app.services.extract import source_parsers
-from app.services.extract.source_parsers import parse_page_sources
+from app.services.discover import page_sources as source_parsers
+from app.services.discover import parse_page_sources
 
 
 def test_parse_page_sources_json_ld():
