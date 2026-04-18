@@ -163,6 +163,44 @@ async def test_auto_traversal_prefers_paginate_and_collects_multiple_pages() -> 
 
 
 @pytest.mark.asyncio
+async def test_paginate_traversal_does_not_append_duplicate_html_without_progress() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1200,
+            controls={"next_page"},
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=1200,
+                controls={"next_page"},
+            ),
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=1200,
+                controls=set(),
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=2,
+        max_scrolls=1,
+    )
+
+    assert result.stop_reason == "paginate_no_progress"
+    assert result.html_fragments == ["<div>page-1</div>"]
+
+
+@pytest.mark.asyncio
 async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
@@ -190,6 +228,7 @@ async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
     assert result.load_more_clicks == 1
     assert result.progress_events == 1
     assert result.card_count == 5
+    assert result.html_fragments == ["<div>before</div>", "<div>after</div>"]
 
 
 @pytest.mark.asyncio
@@ -222,3 +261,4 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     assert result.scroll_iterations >= 1
     assert result.progress_events >= 1
     assert result.card_count == 6
+    assert result.html_fragments == ["<div>jobs</div>", "<div>jobs more</div>"]

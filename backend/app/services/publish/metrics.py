@@ -17,6 +17,23 @@ def build_url_metrics(
         if isinstance(acquisition_result.browser_diagnostics, dict)
         else {}
     )
+    selected_traversal_mode = str(
+        browser_diagnostics.get("selected_traversal_mode")
+        or browser_diagnostics.get("requested_traversal_mode")
+        or ""
+    ).strip()
+    requested_traversal_mode = str(
+        browser_diagnostics.get("requested_traversal_mode") or ""
+    ).strip()
+    traversal_activated = bool(browser_diagnostics.get("traversal_activated"))
+    progress_events = int(browser_diagnostics.get("traversal_progress_events", 0) or 0)
+    pages_advanced = int(browser_diagnostics.get("pages_advanced", 0) or 0)
+    collected_pages = 1
+    if traversal_activated:
+        if selected_traversal_mode == "paginate":
+            collected_pages = max(1, pages_advanced + 1)
+        else:
+            collected_pages = max(1, progress_events + 1)
     return {
         "method": acquisition_result.method,
         "status_code": acquisition_result.status_code,
@@ -29,6 +46,25 @@ def build_url_metrics(
         "adapter_name": acquisition_result.adapter_name,
         "platform_family": acquisition_result.adapter_name,
         "browser_navigation_strategy": browser_diagnostics.get("navigation_strategy"),
+        "network_payload_count": int(
+            browser_diagnostics.get("network_payload_count", 0) or 0
+        ),
+        "malformed_network_payloads": int(
+            browser_diagnostics.get("malformed_network_payloads", 0) or 0
+        ),
+        "requested_traversal_mode": requested_traversal_mode or None,
+        "traversal_mode_used": selected_traversal_mode or None,
+        "traversal_stop_reason": browser_diagnostics.get("traversal_stop_reason"),
+        "traversal_attempted": bool(requested_traversal_mode),
+        "traversal_succeeded": progress_events > 0,
+        "traversal_fell_back": bool(requested_traversal_mode) and not traversal_activated,
+        "pages_collected": collected_pages,
+        "pages_scrolled": pages_advanced,
+        "scroll_iterations": int(browser_diagnostics.get("scroll_iterations", 0) or 0),
+        "load_more_clicks": int(browser_diagnostics.get("load_more_clicks", 0) or 0),
+        "traversal_iterations": int(
+            browser_diagnostics.get("traversal_iterations", 0) or 0
+        ),
     }
 
 

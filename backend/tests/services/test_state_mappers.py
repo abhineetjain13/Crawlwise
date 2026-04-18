@@ -70,7 +70,7 @@ def test_map_js_state_to_fields_recovers_next_data_shopify_product_fields() -> N
     assert mapped["handle"] == "trail-runner"
     assert mapped["description"] == "<p>Stable all-terrain shoe.</p>"
     assert mapped["product_id"] == 9001
-    assert mapped["category"] == "Shoes"
+    assert "category" not in mapped
     assert mapped["product_type"] == "Shoes"
     assert mapped["price"] == "109"
     assert mapped["original_price"] == "139"
@@ -137,7 +137,8 @@ def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None
     assert mapped["handle"] == "commuter-backpack"
     assert mapped["description"] == "Weather resistant pack"
     assert mapped["product_id"] == "sku-123"
-    assert mapped["category"] == "Bags"
+    assert "category" not in mapped
+    assert mapped["product_type"] == "Bags"
     assert mapped["price"] == "89.50"
     assert mapped["sku"] == "CB-001"
     assert mapped["availability"] == "in_stock"

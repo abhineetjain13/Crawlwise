@@ -127,6 +127,7 @@ async def _run_scroll_traversal(
         int(crawler_runtime_settings.traversal_max_iterations_cap),
     )
     weak_progress_streak = 0
+    result.html_fragments = [await page.content()]
     previous = await _page_snapshot(page, surface=surface)
     for _ in range(max_iterations):
         result.iterations += 1
@@ -144,6 +145,7 @@ async def _run_scroll_traversal(
         current = await _page_snapshot(page, surface=surface)
         if _snapshot_progressed(previous, current):
             result.progress_events += 1
+            await _append_html_fragment(page, result)
             weak_progress_streak = 0
         else:
             weak_progress_streak += 1
@@ -167,6 +169,7 @@ async def _run_load_more_traversal(
         max(1, int(max_clicks)),
         int(crawler_runtime_settings.traversal_max_iterations_cap),
     )
+    result.html_fragments = [await page.content()]
     previous = await _page_snapshot(page, surface=surface)
     for _ in range(max_iterations):
         locator = await _find_actionable_locator(page, "load_more")
@@ -181,6 +184,7 @@ async def _run_load_more_traversal(
         current = await _page_snapshot(page, surface=surface)
         if _snapshot_progressed(previous, current):
             result.progress_events += 1
+            await _append_html_fragment(page, result)
             previous = current
             continue
         result.stop_reason = "load_more_no_progress"
@@ -220,14 +224,13 @@ async def _run_paginate_traversal(
             await locator.click(timeout=1000)
         await _settle_after_action(page)
         current = await _page_snapshot(page, surface=surface)
-        html_fragments.append(await page.content())
         if page.url != current_url or _snapshot_progressed(previous, current):
+            html_fragments.append(await page.content())
             result.progress_events += 1
             result.pages_advanced += 1
             previous = current
             continue
         result.stop_reason = "paginate_no_progress"
-        previous = current
         break
     else:
         result.stop_reason = "paginate_limit_reached"
@@ -250,6 +253,15 @@ async def _find_actionable_locator(page, selector_group: str):
         except Exception:
             continue
     return None
+
+
+async def _append_html_fragment(page, result: TraversalResult) -> None:
+    html = await page.content()
+    if not html:
+        return
+    if result.html_fragments and result.html_fragments[-1] == html:
+        return
+    result.html_fragments.append(html)
 
 
 async def _page_snapshot(page, *, surface: str) -> dict[str, int]:

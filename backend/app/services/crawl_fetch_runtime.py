@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
+import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -23,6 +25,15 @@ from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 
 logger = logging.getLogger(__name__)
+_MAX_CAPTURED_NETWORK_PAYLOADS = 25
+_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES = 500_000
+_NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
+    r"geolocation|geoip|geo/|/geo\b|\banalytics\b|tracking|telemetry|"
+    r"klarna\.com|affirm\.com|afterpay\.com|olapic-cdn\.com|livechat|"
+    r"zendesk\.com|intercom\.io|facebook\.com|google-analytics|"
+    r"googletagmanager|sentry\.io|datadome|px\.ads|cdn-cgi/|captcha",
+    re.I,
+)
 
 BLOCKED_TERMS = (
     "access denied",
@@ -355,12 +366,26 @@ async def _browser_fetch(
 
         async def _capture_response(response) -> None:
             content_type = str(response.headers.get("content-type", "") or "").lower()
-            if "json" not in content_type and not response.url.lower().endswith(".json"):
-                return
-            if len(network_payloads) >= 25:
+            if not _should_capture_network_payload(
+                url=response.url,
+                content_type=content_type,
+                headers=response.headers,
+                captured_count=len(network_payloads),
+            ):
                 return
             try:
-                payload = await response.json()
+                body_bytes = await _read_network_payload_body(response)
+            except Exception:
+                logger.debug(
+                    "Failed to read intercepted response body from %s",
+                    response.url,
+                    exc_info=True,
+                )
+                return
+            if body_bytes is None:
+                return
+            try:
+                payload = json.loads(body_bytes.decode("utf-8", errors="replace"))
             except Exception:
                 nonlocal malformed_payloads
                 malformed_payloads += 1
@@ -369,8 +394,6 @@ async def _browser_fetch(
                     response.url,
                     exc_info=True,
                 )
-                return
-            if len(repr(payload)) > 500_000:
                 return
             network_payloads.append(
                 {
@@ -463,7 +486,7 @@ async def _browser_fetch(
                 else "text/html"
             ),
             blocked=is_blocked_html(html, status_code),
-            network_payloads=network_payloads[:25],
+            network_payloads=network_payloads[:_MAX_CAPTURED_NETWORK_PAYLOADS],
             browser_diagnostics=diagnostics,
         )
 
@@ -488,9 +511,70 @@ async def _call_browser_fetch(
         )
     except TypeError as exc:
         message = str(exc)
-        if "unexpected keyword argument" not in message:
+        if (
+            "unexpected keyword argument" not in message
+            or not _is_browser_fetch_signature_error(exc)
+        ):
             raise
+        logger.info(
+            "Falling back to legacy _browser_fetch signature without traversal parameters for %s; dropped surface=%r traversal_mode=%r max_pages=%r max_scrolls=%r; error=%s",
+            url,
+            surface,
+            traversal_mode,
+            max_pages,
+            max_scrolls,
+            message,
+        )
         return await _browser_fetch(url, timeout_seconds)
+
+
+def _is_browser_fetch_signature_error(exc: TypeError) -> bool:
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return False
+    last_frame = frames[-1]
+    return last_frame.name == "_call_browser_fetch"
+
+
+def _should_capture_network_payload(
+    *,
+    url: str,
+    content_type: str,
+    headers: dict[str, object] | Any,
+    captured_count: int,
+) -> bool:
+    lowered_url = str(url or "").lower()
+    if "json" not in content_type and not lowered_url.endswith(".json"):
+        return False
+    if captured_count >= _MAX_CAPTURED_NETWORK_PAYLOADS:
+        return False
+    if _NETWORK_PAYLOAD_NOISE_URL_RE.search(lowered_url):
+        return False
+    content_length = _coerce_content_length(headers)
+    if (
+        content_length is not None
+        and content_length > _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES
+    ):
+        return False
+    return True
+
+
+def _coerce_content_length(headers: dict[str, object] | Any) -> int | None:
+    if not headers:
+        return None
+    raw_value = headers.get("content-length")
+    try:
+        parsed = int(str(raw_value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return max(0, parsed)
+
+
+async def _read_network_payload_body(response) -> bytes | None:
+    body_bytes = await response.body()
+    if len(body_bytes) > _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES:
+        return None
+    return body_bytes
 
 
 async def fetch_page(
