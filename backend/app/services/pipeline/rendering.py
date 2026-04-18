@@ -5,8 +5,9 @@ from html import unescape
 from urllib.parse import urljoin, urlparse
 
 from bs4 import NavigableString, Tag
+from app.services.extract.candidate_processing import clean_page_text
 
-from .utils import _clean_page_text, _compact_dict
+from .utils import _compact_dict
 
 TITLE_SELECTOR = "h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5"
 ANCHOR_SELECTOR = "a[href]"
@@ -17,15 +18,15 @@ def _render_fallback_node_markdown(node: Tag, *, page_url: str) -> str:
     parts: list[str] = []
     for child in node.children:
         if isinstance(child, NavigableString):
-            text = _clean_page_text(str(child))
+            text = clean_page_text(str(child))
             if text:
                 parts.append(text)
             continue
         if not isinstance(child, Tag):
             continue
         if child.name == "a":
-            text = _clean_page_text(child.get_text(" ", strip=True))
-            href = _clean_page_text(child.get("href", ""))
+            text = clean_page_text(child.get_text(" ", strip=True))
+            href = str(child.get("href", "") or "").strip()
             resolved_href = urljoin(page_url, href) if href else ""
             if text and resolved_href:
                 parts.append(f"[{text}]({resolved_href})")
@@ -36,9 +37,9 @@ def _render_fallback_node_markdown(node: Tag, *, page_url: str) -> str:
         if nested:
             parts.append(nested)
     return (
-        _clean_page_text(" ".join(parts))
+        clean_page_text(" ".join(parts))
         if parts
-        else _clean_page_text(node.get_text(" ", strip=True))
+        else clean_page_text(node.get_text(" ", strip=True))
     )
 
 
@@ -58,7 +59,7 @@ def _render_fallback_card_group(
     for card in cards[:12]:
         title_node = card.select_one(TITLE_SELECTOR)
         title_text = (
-            _clean_page_text(title_node.get_text(" ", strip=True)) if title_node else ""
+            clean_page_text(title_node.get_text(" ", strip=True)) if title_node else ""
         )
         if not title_text or title_text.lower() in seen_titles:
             continue
@@ -70,7 +71,7 @@ def _render_fallback_card_group(
             else card.select_one(ANCHOR_SELECTOR)
         )
         href = (
-            _clean_page_text(link_node.get("href", ""))
+            str(link_node.get("href", "") or "").strip()
             if isinstance(link_node, Tag)
             else ""
         )
@@ -91,7 +92,7 @@ def _render_fallback_card_group(
             "p, [class*='description' i], [class*='summary' i], [class*='excerpt' i]"
         )
         if description_node:
-            description_text = _clean_page_text(
+            description_text = clean_page_text(
                 description_node.get_text(" ", strip=True)
             )
             if description_text and description_text.lower() != title_text.lower():
@@ -137,7 +138,7 @@ def _find_fallback_card_group(root: Tag) -> list[Tag]:
                 )
                 if (
                     desc_node
-                    and len(_clean_page_text(desc_node.get_text(" ", strip=True))) >= 40
+                    and len(clean_page_text(desc_node.get_text(" ", strip=True))) >= 40
                 ):
                     descriptive_cards += 1
             
@@ -151,7 +152,7 @@ def _find_fallback_card_group(root: Tag) -> list[Tag]:
 
 def _should_skip_fallback_node(node: Tag, *, page_url: str) -> bool:
     """Check if a node should be skipped in fallback rendering."""
-    text = _clean_page_text(node.get_text(" ", strip=True))
+    text = clean_page_text(node.get_text(" ", strip=True))
     if not text:
         return True
     
@@ -162,7 +163,7 @@ def _should_skip_fallback_node(node: Tag, *, page_url: str) -> bool:
         if len(text) <= 30:
             anchor = node.select_one(ANCHOR_SELECTOR)
             href = (
-                _clean_page_text(anchor.get("href", ""))
+                str(anchor.get("href", "") or "").strip()
                 if isinstance(anchor, Tag)
                 else ""
             )
@@ -210,9 +211,9 @@ def _render_manifest_tables_markdown(tables: list[dict] | None) -> str:
             if not isinstance(cells, list):
                 continue
             values = [
-                _clean_page_text(cell.get("text", ""))
+                clean_page_text(cell.get("text", ""))
                 for cell in cells
-                if isinstance(cell, dict) and _clean_page_text(cell.get("text", ""))
+                if isinstance(cell, dict) and clean_page_text(cell.get("text", ""))
             ]
             if values:
                 table_lines.append("| " + " | ".join(values) + " |")

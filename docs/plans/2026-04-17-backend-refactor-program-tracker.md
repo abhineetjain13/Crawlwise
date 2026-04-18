@@ -498,12 +498,30 @@ Slice 1 is now anchored to these Phase 2 decisions:
 - [x] Continue Slice 1 by reviewing `blocked_detector.py`, `browser_client.py`, and `traversal.py` for remaining acquisition-policy leakage now that the `acquirer.py` seams are split
   - result: traversal surface classification, auto traversal decisions, and traversal summary normalization moved out of `browser_client.py` / `traversal.py` into `backend/app/services/acquisition/policy.py`
   - note: `blocked_detector.py` remains the owned policy home for blocked-page rules; no higher-leverage boundary move there beat the traversal policy seam in this pass
+- [x] Slice 3 — acquisition strategy consolidation
+  - result: added `AcquisitionPlan` plus `plan_acquisition()` in `backend/app/services/acquisition/policy.py` so surface/page-type strategy is decided once and then consumed by acquisition runtime modules
+  - result: retargeted `acquirer.py`, `browser_client.py`, `browser_readiness.py`, `traversal.py`, `recovery.py`, and `adapters/registry.py` onto the shared plan contract; consumer-owned raw `surface`/`page_type` strategy branches were removed
+  - result: collapsed the accidental listing-suffix/readiness guards, unified diagnostic payload selection behind `plan.diagnostic_payload_kind`, and removed the registry-side recovery bounds check
+  - result: added `backend/tests/services/acquisition/test_plan_acquisition.py` and `scratch/slice-3-decision-snapshot.md` as the contract and traceability artifacts for the consolidated decision tree
+  - verification: `backend\.venv\Scripts\python.exe -m pytest backend/tests/services/acquisition -q` → `152 passed`
+  - verification: `backend\.venv\Scripts\python.exe backend/run_acquire_smoke.py jobs` → `5/5 ok`
+  - verification note: `backend\.venv\Scripts\python.exe backend/run_acquire_smoke.py commerce` finished `5/6 ok`; the remaining failure was the external `www.converse.com` host-resolution failure, not an acquisition-policy regression
 - [ ] Re-check whether any worthwhile `blocked_detector.py` simplification remains after Slice 1 closes, but do not reopen the seam unless it deletes substantial rule branching
 - [x] Slice 4 kickoff — normalize now owns listing/detail record shaping, pipeline quality-gate normalization, and Shopify cent-format money coercion
   - result: created `backend/app/services/normalizers/listings.py` as the canonical owner for record shaping and moved callers in extract/pipeline onto it
   - result: deleted `backend/app/services/extract/listing_normalize.py`, renamed the stale extract helper to `listing_item_mapper.py`, and removed duplicate record/value normalizers from extract/pipeline call sites
   - result: `FIELD_ALIASES` surface partitioning now happens through `get_surface_field_aliases()`, so candidate generation no longer mixes ecommerce/job-only alias vocabularies before shaping
   - result: audited `extract/service.py` and `extract/candidate_processing.py`; no remaining canonical output policy was left there beyond candidate-stage sanitization/ranking
+- [x] Slice 4 — invariant 12 repair and unify-leak repatriation
+  - result: moved text-cleaning ownership into `backend/app/services/extract/candidate_processing.py`, added `backend/app/services/extract/review_bucket.py`, and removed the leaked helper seam from `pipeline/` and `publish/`
+  - result: moved child-listing/category-tile discovery out of `backend/app/services/pipeline/stages.py` into `backend/app/services/discover/listing_candidates.py`, with anchor selection now honoring the extract noise-container filter so nav/footer links do not leak into listing promotion
+  - result: added explicit page-native-label escape hatches for `availability`, `select size` / `choose size`, and `select color` / `select colour` / `choose color` so those labels no longer die at the noise boundary before extract can surface them
+  - result: added `scratch/slice-4-invariant-12-noise-audit.md`, `backend/tests/services/extract/test_noise_policy_invariant_12.py`, `backend/tests/services/pipeline/test_child_listing_discovery.py`, and `backend/tests/services/publish/test_helper_repatriation.py`
+  - verification: `backend\.venv\Scripts\python.exe -m pytest tests/services/extract -q` → `279 passed`
+  - verification: `backend\.venv\Scripts\python.exe -m pytest tests/services/pipeline -q` → `13 passed`
+  - verification: `backend\.venv\Scripts\python.exe -m pytest tests/services/publish -q` → `2 passed`
+  - verification: `backend\.venv\Scripts\python.exe backend/run_acquire_smoke.py commerce` → `6/6 ok`
+  - verification note: `backend\.venv\Scripts\python.exe backend/run_extraction_smoke.py` no longer fails on the phantom `semantic_detail_extractor` import, but still returns `9/10 passed` because the existing AutoZone oil-filters listing smoke produced `0` records
 - [x] Slice 3 kickoff — detail-field arbitration is now extract-owned instead of pipeline-owned
   - result: created `backend/app/services/extract/detail_reconciliation.py` and moved detail candidate arbitration, reconciliation merge logic, and record-merge arbitration into it
   - result: deleted duplicate arbitration helpers from `backend/app/services/pipeline/detail_flow.py` and removed `_merge_record_fields()` from `backend/app/services/pipeline/field_normalization.py`

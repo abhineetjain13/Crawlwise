@@ -7,6 +7,18 @@ import pytest
 from app.services.acquisition import policy
 
 
+def _plan(
+    surface: str,
+    *,
+    url: str = "https://example.com",
+    platform_family: str | None = None,
+):
+    return policy.plan_acquisition(
+        SimpleNamespace(url=url, surface=surface),
+        platform_family=platform_family,
+    )
+
+
 def test_requires_browser_first_has_no_hardcoded_tenant_or_platform_host_literals() -> None:
     source = inspect.getsource(policy.requires_browser_first)
     assert "workforcenow.adp.com" not in source
@@ -88,7 +100,7 @@ def test_is_redirect_to_root_detects_same_host_root_redirect() -> None:
 
 
 def test_resolve_traversal_surface_policy_marks_detail_surfaces_non_traversable() -> None:
-    resolved = policy.resolve_traversal_surface_policy("job_detail")
+    resolved = _plan("job_detail")
 
     assert resolved.is_detail_surface is True
     assert resolved.is_listing_surface is False
@@ -97,7 +109,7 @@ def test_resolve_traversal_surface_policy_marks_detail_surfaces_non_traversable(
 
 
 def test_resolve_traversal_surface_policy_uses_job_card_selectors_for_listing() -> None:
-    resolved = policy.resolve_traversal_surface_policy("job_listing")
+    resolved = _plan("job_listing")
 
     assert resolved.is_listing_surface is True
     assert resolved.is_detail_surface is False
@@ -135,7 +147,7 @@ def test_should_retry_browser_launch_profile_on_blocked_html() -> None:
 
     assert policy.should_retry_browser_launch_profile(
         result,
-        surface="ecommerce_detail",
+        plan=_plan("ecommerce_detail"),
         html_looks_low_value=lambda _html: False,
     )
 
@@ -148,7 +160,7 @@ def test_should_retry_browser_launch_profile_on_listing_shell_like_low_value_res
 
     assert policy.should_retry_browser_launch_profile(
         result,
-        surface="job_listing",
+        plan=_plan("job_listing"),
         html_looks_low_value=lambda _html: True,
     )
 
@@ -161,7 +173,7 @@ def test_should_not_retry_browser_launch_profile_for_non_listing_low_value_resul
 
     assert not policy.should_retry_browser_launch_profile(
         result,
-        surface="job_detail",
+        plan=_plan("job_detail"),
         html_looks_low_value=lambda _html: True,
     )
 

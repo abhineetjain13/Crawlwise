@@ -1,24 +1,15 @@
 # Tests for listing page extraction.
 from __future__ import annotations
 
-import time
-from unittest.mock import patch
-
-import app.services.extract.listing_card_extractor as listing_card_extractor
 import app.services.extract.listing_extractor as listing_extractor
-from app.services.normalizers import normalize_listing_record
-from bs4 import BeautifulSoup
 from app.services.extract.listing_extractor import (
     extract_listing_records as _extract_listing_records_impl,
 )
-from hypothesis import given, settings
-from hypothesis import strategies as st
 from tests.support import manifest as _sources
 from tests.support import run_extract_listing_records
 from tests.services._duplication_helpers import (
     adapter_manifest,
     html_page,
-    item_list_manifest,
     job_card,
     query_state_manifest,
     next_data_manifest,
@@ -71,36 +62,6 @@ def test_extract_product_cards():
     assert "price" in records[0]
 
 
-def test_extract_listing_records_reuses_provided_page_sources():
-    html = """
-    <html><body>
-    <div class="product-card">
-        <h3><a href="/product/1">Widget A</a></h3>
-        <span class="price">$10.00</span>
-    </div>
-    <div class="product-card">
-        <h3><a href="/product/2">Widget B</a></h3>
-        <span class="price">$20.00</span>
-    </div>
-    </body></html>
-    """
-
-    with patch(
-        "app.services.extract.listing_extractor.parse_page_sources",
-        side_effect=AssertionError("parse_page_sources should not run"),
-    ):
-        records = _extract_listing_records_impl(
-            html,
-            "ecommerce_listing",
-            set(),
-            page_url="https://example.com/listing",
-            max_records=10,
-            page_sources={"embedded_json": []},
-        )
-
-    assert [record["title"] for record in records] == ["Widget A", "Widget B"]
-
-
 def test_extract_product_cards_falls_back_to_image_alt_for_title():
     html = """
     <html><body>
@@ -124,37 +85,6 @@ def test_extract_product_cards_falls_back_to_image_alt_for_title():
     assert len(records) == 2
     assert records[0]["title"] == "Widget Alt Title"
     assert records[0]["url"] == "https://example.com/product/1"
-
-
-def test_extract_listing_records_reuses_provided_soup(monkeypatch):
-    html = """
-    <html><body>
-    <div class="product-card">
-        <h3><a href="/product/1">Widget A</a></h3>
-        <span class="price">$10.00</span>
-    </div>
-    <div class="product-card">
-        <h3><a href="/product/2">Widget B</a></h3>
-        <span class="price">$20.00</span>
-    </div>
-    </body></html>
-    """
-    soup = BeautifulSoup(html, "html.parser")
-
-    def _unexpected_reparse(*args, **kwargs):
-        raise AssertionError("BeautifulSoup should not be called when soup is provided")
-
-    monkeypatch.setattr(listing_extractor, "BeautifulSoup", _unexpected_reparse)
-
-    records = _extract_listing_records_impl(
-        html,
-        "ecommerce_listing",
-        set(),
-        page_url="https://example.com/category",
-        soup=soup,
-    )
-
-    assert len(records) == 2
 
 
 def test_extract_listing_records_ignores_third_party_social_network_payload_records():
@@ -204,57 +134,6 @@ def test_extract_listing_records_ignores_third_party_social_network_payload_reco
     assert len(records) == 2
     assert records[0]["title"] == "Widget A"
     assert records[0]["url"] == "https://example.com/product/1"
-
-
-def test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_item():
-    html = html_page(
-        product_card(
-            href="/product/1",
-            title="Widget A",
-            price="$10.00",
-            image_src="https://img.example.com/a.jpg",
-        ),
-        product_card(
-            href="/product/2",
-            title="Widget B",
-            price="$20.00",
-            image_src="https://img.example.com/b.jpg",
-        ),
-    )
-    manifest = item_list_manifest(
-        [
-            {
-                "@type": "Product",
-                "name": "Widget A",
-                "url": "https://example.com/product/1",
-                "brand": {"name": "Acme"},
-                "description": "A richer structured description for widget A.",
-            },
-            {
-                "@type": "Product",
-                "name": "Widget B",
-                "url": "https://example.com/product/2",
-                "brand": {"name": "Acme"},
-                "description": "A richer structured description for widget B.",
-            },
-        ]
-    )
-
-    records = extract_listing_records(
-        html,
-        "ecommerce_listing",
-        set(),
-        page_url="https://example.com/products",
-        max_records=10,
-        manifest=manifest,
-    )
-    filtered_records = listing_extractor._enforce_listing_field_contract(records, "listing")
-
-    assert len(records) == 2
-    assert records[0]["price"] == "$10.00"
-    assert filtered_records[0]["price"] == "$10.00"
-    assert "brand" not in filtered_records[0]
-    assert "description" not in filtered_records[0]
 
 
 def test_extract_listing_records_merges_adapter_rows_with_dom_job_cards():
@@ -580,17 +459,6 @@ def test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by
     assert records[1]["title"] == "Philips lumea prestige"
 
 
-def test_extract_balanced_literal_rejects_oversized_unterminated_inline_array():
-    html = "<script>window.__STATE__ = {\"listListingDetails\": [" + ("{" * 300_000)
-
-    result = listing_extractor._listing_structured_extractor._extract_balanced_literal(
-        html,
-        html.index("["),
-    )
-
-    assert result is None
-
-
 def test_extract_listing_records_handles_react_hydrate_props_payloads():
     html = """
     <html><body>
@@ -776,23 +644,6 @@ def test_extract_hydrated_state_listing_records():
     assert records[1]["url"] == "https://example.com/p/b"
 
 
-def test_extract_items_from_json_uses_configured_max_depth():
-    payload = {"level1": {"level2": {"level3": {"level4": {"products": [
-        {"title": "Deep A", "url": "/product/a", "price": "19.99"},
-        {"title": "Deep B", "url": "/product/b", "price": "29.99"},
-    ]}}}}}
-
-    records = listing_extractor._extract_items_from_json(
-        payload,
-        "ecommerce_listing",
-        "https://example.com",
-        max_depth=5,
-    )
-
-    assert len(records) == 2
-    assert records[0]["title"] == "Deep A"
-
-
 def test_extract_product_cards_captures_listing_metadata():
     html = """
     <html><body>
@@ -905,36 +756,6 @@ def test_extract_product_cards_infers_currency_from_locale_and_reads_swatch_colo
     assert records[0]["currency"] == "USD"
     assert records[1]["color"] == "Midnight Navy"
     assert records[1]["currency"] == "USD"
-
-
-def test_infer_currency_from_page_url_ignores_false_positive_path_substrings():
-    assert (
-        listing_extractor._infer_currency_from_page_url(
-            "https://example.com/contact-us/"
-        )
-        == ""
-    )
-    assert (
-        listing_extractor._infer_currency_from_page_url(
-            "https://example.com/user-settings/"
-        )
-        == ""
-    )
-
-
-def test_infer_currency_from_page_url_matches_bounded_locale_segments():
-    assert (
-        listing_extractor._infer_currency_from_page_url(
-            "https://example.com/us/products/"
-        )
-        == "USD"
-    )
-    assert (
-        listing_extractor._infer_currency_from_page_url(
-            "https://example.com/gb/checkout/"
-        )
-        == "GBP"
-    )
 
 
 def test_extract_listing_prefers_next_flight_records_over_breadcrumb_json_ld():
@@ -1102,49 +923,6 @@ def test_extract_listing_prefers_rich_product_array_over_category_links():
     assert records[0]["url"] == "https://www.nykaa.com/nykaa-cosmetics-x-naagin-hot-sauce-plumping-lip-gloss/p/22062112"
     assert records[0]["price"] == 509
     assert records[0]["brand"] == "Nykaa Cosmetics"
-
-
-def test_match_dimensions_line_does_not_treat_random_d_suffix_as_dimension_signal():
-    lines = ["Handcrafted", "Solid wood finish", "12 in wide"]
-
-    assert listing_extractor._match_dimensions_line(lines) == "12 in wide"
-
-
-def test_match_line_uses_cached_case_insensitive_regex_compilation():
-    listing_extractor._compile_case_insensitive_regex.cache_clear()
-    lines = ["Color: Black", "SIZE: M"]
-
-    assert listing_extractor._match_line(lines, r"\bsizes?\b") == "SIZE: M"
-    assert listing_extractor._match_line(lines, r"\bsizes?\b") == "SIZE: M"
-
-    cache_info = listing_extractor._compile_case_insensitive_regex.cache_info()
-    assert cache_info.hits >= 1
-    assert cache_info.misses == 1
-
-
-def test_match_dimensions_line_detects_case_insensitive_dimension_token():
-    lines = ["ships fast", "HEIGHT x width: 10 x 5", "other"]
-
-    assert listing_extractor._match_dimensions_line(lines) == "HEIGHT x width: 10 x 5"
-
-
-def test_normalize_listing_value_only_promotes_true_product_short_paths():
-    assert (
-        listing_extractor._normalize_listing_value(
-            "url",
-            "p/22062112",
-            page_url="https://www.nykaa.com/makeup/c/12",
-        )
-        == "https://www.nykaa.com/p/22062112"
-    )
-    assert (
-        listing_extractor._normalize_listing_value(
-            "url",
-            "page/item",
-            page_url="https://example.com/category/list",
-        )
-        == "https://example.com/category/page/item"
-    )
 
 
 def test_extract_listing_from_query_state_product_cards_and_drops_content_cards():
@@ -1323,85 +1101,6 @@ def test_extract_listing_prefers_sigma_product_search_results_over_nav_links():
     assert "O.D. × H: 18 mm × 11 mm" in records[0]["dimensions"]
 
 
-def test_is_meaningful_listing_record_keeps_priced_record_without_url():
-    record = {
-        "title": "Trail Runner",
-        "image_url": "https://cdn.example.com/shoe.jpg",
-        "price": "$89.99",
-    }
-
-    assert listing_extractor._is_meaningful_listing_record(record) is True
-
-
-def test_is_meaningful_listing_record_drops_title_and_image_only_record_without_url():
-    record = {
-        "title": "Promo banner",
-        "image_url": "https://cdn.example.com/promo.jpg",
-    }
-
-    assert listing_extractor._is_meaningful_listing_record(record) is False
-
-
-def test_is_meaningful_listing_record_drops_job_like_nav_link_without_title_or_salary():
-    record = {
-        "url": "https://www.higheredjobs.com/search/",
-        "company": "Job Seekers",
-    }
-
-    assert listing_extractor._is_meaningful_listing_record(record) is False
-
-
-def test_extract_card_images_skips_swatch_and_icon_images():
-    html = """
-    <div class="product-card">
-        <div class="swatch-list">
-            <button aria-label="Color Blue">
-                <img src="/images/swatch-blue.jpg" />
-            </button>
-        </div>
-        <img src="/images/logo-badge.png" />
-        <img src="/images/product-main.jpg" />
-        <img src="/images/product-alt.jpg" />
-    </div>
-    """
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-
-    images = listing_extractor._extract_card_images(
-        soup.select_one(".product-card"),
-        "https://example.com/category",
-    )
-
-    assert images == [
-        "https://example.com/images/product-main.jpg",
-        "https://example.com/images/product-alt.jpg",
-    ]
-
-
-def test_extract_color_label_from_node_skips_action_buttons():
-    html = '<button aria-label="Add to cart"></button>'
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-
-    assert listing_extractor._extract_color_label_from_node(soup.button) == ""
-
-
-def test_extract_color_label_from_node_skips_fitment_copy():
-    html = '<button><span>Check</span> if this fits your vehicle.</button>'
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-
-    assert listing_extractor._extract_color_label_from_node(soup.button) == ""
-
-
-def test_extract_card_size_rejects_generic_multiple_sizes():
-    assert (
-        listing_extractor._extract_card_size(["Color: Black", "Sizes: multiple sizes"])
-        == ""
-    )
-
-
-def test_extract_card_size_extracts_measurement_values():
-    assert listing_extractor._extract_card_size(["Size 13 in"]) == "13 in"
-
-
 def test_extract_product_cards_read_identifiers_and_skip_fitment_icons():
     html = """
     <html><body>
@@ -1500,93 +1199,6 @@ def test_extract_listing_records_ignores_filter_option_inline_arrays():
     )
 
     assert records == []
-
-
-def test_is_meaningful_listing_record_rejects_numeric_titles_and_filter_counts():
-    assert listing_extractor._is_meaningful_listing_record({"title": 1, "price": 0}) is False
-    assert listing_extractor._is_meaningful_listing_record({"title": "(1353)", "url": ""}) is False
-
-
-def test_is_meaningful_listing_record_keeps_numeric_title_with_price_or_image():
-    assert listing_extractor._is_meaningful_listing_record({"title": "2024", "price": "$199"}) is True
-    assert (
-        listing_extractor._is_meaningful_listing_record(
-            {
-                "title": "911",
-                "image_url": "https://cdn.example.com/911.jpg",
-                "url": "https://example.com/product/911",
-            }
-        )
-        is True
-    )
-
-
-def test_is_meaningful_listing_record_rejects_title_only_job_fragment():
-    assert (
-        listing_extractor._is_meaningful_listing_record(
-            {
-                "title": "FeaturedOpportunities",
-            }
-        )
-        is False
-    )
-
-
-def test_is_meaningful_listing_record_rejects_category_hub_url_with_only_visual_fields():
-    record = {
-        "title": "Air Filters",
-        "image_url": "https://cdn.example.com/filter.jpg",
-        "url": "https://example.com/collections/air-filters",
-    }
-
-    assert listing_extractor._is_meaningful_listing_record(record) is False
-
-
-def test_is_meaningful_listing_record_rejects_weak_hub_row_with_publication_date_only():
-    record = {
-        "title": "Default PLP",
-        "url": "https://example.com/deals/",
-        "publication_date": "2024-07-10T15:43:06.029Z",
-    }
-
-    assert listing_extractor._is_meaningful_listing_record(record) is False
-
-
-def test_is_meaningful_listing_record_keeps_detail_like_url_with_only_visual_fields():
-    record = {
-        "title": "Cabin Air Filter",
-        "image_url": "https://cdn.example.com/filter.jpg",
-        "url": "https://example.com/product/cabin-air-filter-123",
-    }
-
-    assert listing_extractor._is_meaningful_listing_record(record) is True
-
-
-def test_is_merchandising_record_only_rejects_pure_editorial_sale_titles():
-    assert (
-        listing_extractor._is_merchandising_record(
-            {"title": "Winter Sale Running Shoes", "url": "https://example.com/p/1"}
-        )
-        is False
-    )
-    assert (
-        listing_extractor._is_merchandising_record(
-            {"title": "Holiday Sale Jacket Size M", "url": "https://example.com/p/2"}
-        )
-        is False
-    )
-    assert (
-        listing_extractor._is_merchandising_record(
-            {"title": "SALE", "url": "https://example.com/promo"}
-        )
-        is True
-    )
-    assert (
-        listing_extractor._is_merchandising_record(
-            {"title": "UP TO 50% SALE", "url": "https://example.com/promo"}
-        )
-        is True
-    )
 
 
 def test_extract_listing_records_handles_article_cards_inside_testid_grid():
@@ -1713,86 +1325,6 @@ def test_extract_listing_records_synthesizes_saashr_urls_from_network_payloads()
         == "https://secure7.saashr.com/ta/6208610.careers?offset=1&size=20&sort=desc&ein_id=118959061&lang=en-US&career_portal_id=6062087&ShowJob=587696937"
     )
     assert records[0]["apply_url"] == records[0]["url"]
-
-
-def test_extract_from_card_infers_dice_job_fields():
-    html = """
-    <div data-testid="job-card">
-      <a data-testid="job-search-job-card-link" href="https://www.dice.com/job-detail/abc123"></a>
-      <div class="header">
-        <span class="logo">
-          <a href="/company-profile/example-company"><p>Example Company</p></a>
-        </span>
-      </div>
-      <div class="content" aria-label="Details for Data Engineer position" role="main">
-        <div class="self-stretch">
-          <a data-testid="job-search-job-detail-link" aria-label="Data Engineer" href="https://www.dice.com/job-detail/abc123">Data Engineer</a>
-          <span>
-            <div>
-              <p>Des Moines, Iowa</p>
-            </div>
-            <div><p>Yesterday</p></div>
-          </span>
-          <p>USD 80,001.00 - 120,000.00 per year</p>
-          <div><p>Full-Time</p></div>
-        </div>
-      </div>
-    </div>
-    """
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-
-    record = listing_extractor._extract_from_card(
-        soup.select_one("[data-testid='job-card']"),
-        set(),
-        "job_listing",
-        "https://www.dice.com/jobs",
-    )
-
-    assert record["title"] == "Data Engineer"
-    assert record["company"] == "Example Company"
-    assert record["location"] == "Des Moines, Iowa"
-    assert record["salary"] == "USD 80,001.00 - 120,000.00 per year"
-    assert record["job_type"] == "Full-Time"
-    assert record["posted_date"] == "Yesterday"
-    assert record["apply_url"] == "https://www.dice.com/job-detail/abc123"
-
-
-def test_extract_from_card_handles_idealist_job_card():
-    html = """
-    <div data-qa-id="search-result">
-      <div>
-        <a href="/en/nonprofit-job/123-example-role">
-          <div>
-            <h3><span data-qa-id="search-result-link">Executive Operations</span></h3>
-            <h4><div>Ground Zero</div></h4>
-          </div>
-          <div>
-            <span><span>On-site</span></span>
-            <span><span>Rajasthan, India</span></span>
-            <span><span>Full Time</span></span>
-            <span><span>INR 500,000 - 600,000 / year</span></span>
-          </div>
-          <div><span>Posted 16 days ago</span></div>
-        </a>
-      </div>
-    </div>
-    """
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-
-    record = listing_extractor._extract_from_card(
-        soup.select_one("[data-qa-id='search-result']"),
-        set(),
-        "job_listing",
-        "https://www.idealist.org/en/jobs",
-    )
-
-    assert record["title"] == "Executive Operations"
-    assert record["company"] == "Ground Zero"
-    assert record["location"] == "On-site"
-    assert record["job_type"] == "Full Time"
-    assert record["salary"] == "INR 500,000 - 600,000 / year"
-    assert record["posted_date"] == "Posted 16 days ago"
-    assert record["url"] == "https://www.idealist.org/en/nonprofit-job/123-example-role"
 
 
 def test_extract_listing_records_ignores_informational_inline_arrays_on_loading_shell_pages():
@@ -1923,18 +1455,6 @@ def test_extract_from_card_handles_atlas_job_card_metadata_rows():
     assert "additional_images" not in records[0]
 
 
-def test_lookup_next_flight_window_index_returns_none_when_url_cannot_be_found():
-    combined = '"displayName":"Ghost Product","listingUrl":"https://cdn.example.com/other-item"'
-
-    lookup_index = listing_extractor._lookup_next_flight_window_index(
-        combined,
-        "/products/missing-item",
-        "https://shop.example.com/category",
-    )
-
-    assert lookup_index is None
-
-
 def test_extract_structured_sources_merges_records_from_multiple_sources():
     html = "<html><body></body></html>"
     manifest = _sources(
@@ -1973,198 +1493,6 @@ def test_extract_structured_sources_merges_records_from_multiple_sources():
     assert "next_data" in mirror["_source"]
 
 
-def test_extract_structured_sources_reads_deep_hydrated_state_records(monkeypatch):
-    monkeypatch.setattr(listing_extractor, "MAX_JSON_RECURSION_DEPTH", 1)
-    manifest = _sources(
-        _hydrated_states=[
-            {
-                "props": {
-                    "pageProps": {
-                        "initialState": {
-                            "search": {
-                                "results": {
-                                    "products": [
-                                        {"title": "Deep Product A", "url": "/p/a", "price": "10.00"},
-                                        {"title": "Deep Product B", "url": "/p/b", "price": "20.00"},
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        ]
-    )
-
-    records = extract_listing_records(
-        "<html><body></body></html>",
-        "ecommerce_listing",
-        set(),
-        page_url="https://example.com/category",
-        max_records=10,
-        manifest=manifest,
-    )
-
-    assert [record["title"] for record in records] == ["Deep Product A", "Deep Product B"]
-
-
-def test_extract_structured_sources_does_not_mutate_structured_extractor_depth(monkeypatch):
-    monkeypatch.setattr(listing_extractor, "MAX_JSON_RECURSION_DEPTH", 1)
-    original_structured_depth = listing_extractor._listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
-    monkeypatch.setattr(
-        listing_extractor._listing_structured_extractor,
-        "MAX_JSON_RECURSION_DEPTH",
-        original_structured_depth + 7,
-    )
-    manifest = _sources(
-        _hydrated_states=[
-            {
-                "props": {
-                    "pageProps": {
-                        "initialState": {
-                            "search": {
-                                "results": {
-                                    "products": [
-                                        {"title": "Deep Product A", "url": "/p/a", "price": "10.00"},
-                                        {"title": "Deep Product B", "url": "/p/b", "price": "20.00"},
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        ]
-    )
-
-    records = extract_listing_records(
-        "<html><body></body></html>",
-        "ecommerce_listing",
-        set(),
-        page_url="https://example.com/category",
-        max_records=10,
-        manifest=manifest,
-    )
-
-    assert [record["title"] for record in records] == ["Deep Product A", "Deep Product B"]
-    assert (
-        listing_extractor._listing_structured_extractor.MAX_JSON_RECURSION_DEPTH
-        == original_structured_depth + 7
-    )
-
-
-def test_normalize_ld_item_preserves_zero_price():
-    record = listing_extractor._normalize_ld_item(
-        {
-            "@type": "Product",
-            "name": "Free Sample",
-            "offers": {"price": 0},
-        },
-        "ecommerce_listing",
-        "https://example.com/category",
-    )
-
-    assert record is not None
-    assert record["price"] == 0
-
-
-def test_auto_detect_cards_ignores_sidebar_filter_groups_for_commerce():
-    html = """
-    <html><body>
-      <aside class="filters">
-        <ul>
-          <li class="choice"><a href="/filters?brand=a">Brand A (1353)</a></li>
-          <li class="choice"><a href="/filters?brand=b">Brand B (42)</a></li>
-          <li class="choice"><a href="/filters?brand=c">Brand C (8)</a></li>
-        </ul>
-      </aside>
-      <section class="results-grid">
-        <div class="entry"><a href="/p/1"><img src="/1.jpg" /></a><h3>Widget A</h3><span class="price">$10</span></div>
-        <div class="entry"><a href="/p/2"><img src="/2.jpg" /></a><h3>Widget B</h3><span class="price">$20</span></div>
-        <div class="entry"><a href="/p/3"><img src="/3.jpg" /></a><h3>Widget C</h3><span class="price">$30</span></div>
-      </section>
-    </body></html>
-    """
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-
-    cards, _selector = listing_extractor._auto_detect_cards(soup, surface="ecommerce_listing")
-
-    assert [card.get_text(" ", strip=True) for card in cards] == [
-        "Widget A $10",
-        "Widget B $20",
-        "Widget C $30",
-    ]
-
-
-def test_card_group_score_prefers_job_signals_on_job_cards():
-    html = """
-    <html><body>
-      <section class="job-results">
-        <div class="job-card">
-          <h3><a href="/jobs/1">Senior Data Engineer</a></h3>
-          <div class="meta"><span>Remote</span><span>Full Time</span></div>
-        </div>
-        <div class="job-card">
-          <h3><a href="/jobs/2">Staff Platform Engineer</a></h3>
-          <div class="meta"><span>Austin, TX</span><span>Hybrid</span></div>
-        </div>
-      </section>
-    </body></html>
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    group = soup.select(".job-card")
-
-    job_score = listing_card_extractor._card_group_score(
-        group, surface="job_listing"
-    )
-    commerce_score = listing_card_extractor._card_group_score(
-        group, surface="ecommerce_listing"
-    )
-
-    assert job_score > commerce_score
-
-
-def test_auto_detect_cards_prefers_job_groups_for_job_surface():
-    html = """
-    <html><body>
-      <aside class="filters">
-        <ul>
-          <li class="choice"><a href="/jobs?location=remote">Remote</a></li>
-          <li class="choice"><a href="/jobs?location=austin">Austin</a></li>
-          <li class="choice"><a href="/jobs?location=hybrid">Hybrid</a></li>
-        </ul>
-      </aside>
-      <section class="job-results">
-        <div class="job-card">
-          <h3><a href="/jobs/1">Senior Data Engineer</a></h3>
-          <div class="meta"><span>Remote</span><span>Full Time</span></div>
-        </div>
-        <div class="job-card">
-          <h3><a href="/jobs/2">Staff Platform Engineer</a></h3>
-          <div class="meta"><span>Austin, TX</span><span>Hybrid</span></div>
-        </div>
-        <div class="job-card">
-          <h3><a href="/jobs/3">Analytics Engineer</a></h3>
-          <div class="meta"><span>New York, NY</span><span>Contract</span></div>
-        </div>
-      </section>
-    </body></html>
-    """
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-
-    cards, _selector = listing_extractor._auto_detect_cards(soup, surface="job_listing")
-
-    assert [card.get_text(" ", strip=True) for card in cards] == [
-        "Senior Data Engineer Remote Full Time",
-        "Staff Platform Engineer Austin, TX Hybrid",
-        "Analytics Engineer New York, NY Contract",
-    ]
-
-
-# -----------------------------------------------------------------------
-# Card title extraction: skip price-like headings
-# -----------------------------------------------------------------------
-
 def test_card_title_skips_price_heading():
     """When the first heading contains a price, title should come from the next heading."""
     html = """
@@ -2186,23 +1514,6 @@ def test_card_title_skips_price_heading():
     assert records[0]["title"] == "Asus VivoBook 15"
     assert records[1]["title"] == "Lenovo IdeaPad"
     assert records[0]["price"] == "$295.99"
-
-
-def test_infer_listing_title_min_chars_is_configurable(monkeypatch):
-    html = """
-    <html><body>
-      <div class="product-card">
-        <a href="/p/tv">TV</a>
-      </div>
-    </body></html>
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    card = soup.select_one(".product-card")
-    assert card is not None
-
-    monkeypatch.setattr(listing_card_extractor, "LISTING_CARD_LISTING_TITLE_MIN_CHARS", 2)
-
-    assert listing_card_extractor._infer_listing_title_from_links(card) == "TV"
 
 
 def test_card_title_uses_itemprop_name():
@@ -2250,18 +1561,6 @@ def test_card_itemprop_image():
     assert records[0]["image_url"] == "https://example.com/img/product.jpg"
 
 
-def test_coerce_listing_product_url_candidate_preserves_canonical_percent_encoded_url():
-    encoded = "https://www.shop.ving.run/product/%E0%B8%AA%E0%B8%B5%E0%B8%94%E0%B8%B3"
-
-    assert (
-        listing_card_extractor._coerce_listing_product_url_candidate(
-            encoded,
-            "https://www.shop.ving.run/search",
-        )
-        == encoded
-    )
-
-
 def test_extract_listing_records_reads_titles_from_pro_title_text():
     html = """
     <html><body>
@@ -2295,234 +1594,20 @@ def test_extract_listing_records_reads_titles_from_pro_title_text():
     </div>
     </body></html>
     """
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-    card = soup.select_one(".productBox")
-    assert card is not None
-
-    record = listing_extractor._extract_from_card(
-        card, set(), "ecommerce_listing", "https://www.shop.ving.run/search"
-    )
-    assert record["title"] == "NIRUN (นิรัน)"
-    assert record["price"] == "2,500"
-    assert record["url"] == "https://www.shop.ving.run/product/nirun-นิรัน/1"
-
-
-def test_extract_from_card_backfills_identity_from_ancestor_product_context():
-    html = """
-    <html><body>
-      <article class="product js-tile" data-pid="B207010009900">
-        <div
-          class="product-tile"
-          data-analytics='{"item_id":"B2070100","item_name":"Mini Hobo Bag Studs in Black","variant_id":"B207010009900","price":530,"currency":"GBP"}'
-        >
-          <div
-            class="b-tile__picture js-tile-picture"
-            data-images-switcher-list-desktop='[{"url":"https://cdn.example.com/packshot.jpg","title":"Mini Hobo Bag Studs in Black, Black"},{"url":"https://cdn.example.com/model.jpg","title":"Mini Hobo Bag Studs in Black, Black"}]'
-          >
-            <a
-              class="b-tile__media"
-              href="/en-gb/mini-hobo-bag-studs-in-black-B2070100.html"
-              aria-label="Open Mini Hobo Bag Studs in Black product page"
-            >
-              <img src="https://cdn.example.com/model.jpg" alt="Mini Hobo Bag Studs in Black, Black" />
-            </a>
-          </div>
-        </div>
-      </article>
-    </body></html>
-    """
-    soup = listing_extractor.BeautifulSoup(html, "html.parser")
-    card = soup.select_one(".b-tile__picture")
-    assert card is not None
-
-    record = listing_extractor._extract_from_card(
-        card,
+    records = extract_listing_records(
+        html,
+        "ecommerce_listing",
         set(),
-        "ecommerce_listing",
-        "https://www.ganni.com/en-gb/bags/",
-    )
-
-    assert record["title"] == "Mini Hobo Bag Studs in Black, Black"
-    assert (
-        record["url"]
-        == "https://www.ganni.com/en-gb/mini-hobo-bag-studs-in-black-B2070100.html"
-    )
-    assert record["price"] == 530
-    assert record["currency"] == "GBP"
-    assert record["id"] == "B2070100"
-    assert record["sku"] == "B207010009900"
-
-
-# -----------------------------------------------------------------------
-# Price text cleanup
-# -----------------------------------------------------------------------
-
-def test_clean_price_text_strips_surrounding_text():
-    """Price extraction should strip non-price text like 'In stock Add to basket'."""
-    assert listing_extractor._clean_price_text("$51.77 In stock Add to basket") == "$51.77"
-    assert listing_extractor._clean_price_text("£29.99") == "£29.99"
-    assert listing_extractor._clean_price_text("€1,299.00 Free shipping") == "€1,299.00"
-    assert listing_extractor._clean_price_text("$0.99") == "$0.99"
-
-
-def test_clean_price_text_returns_none_for_overlong_input_without_regex_backtracking():
-    raw = "$" + ("9" * 9999)
-    started_at = time.perf_counter_ns()
-    assert listing_extractor._clean_price_text(raw) is None
-    elapsed_ns = time.perf_counter_ns() - started_at
-    assert elapsed_ns < 50_000_000
-
-
-def test_normalize_generic_item_prefers_product_full_url_over_nested_shop_url():
-    record = listing_extractor._normalize_generic_item(
-        {
-            "product_name": "NIRUN (นิรัน)",
-            "product_full_url": "https://www.shop.ving.run/product/nirun/11000742818002390",
-            "product_short_url": "https://www.shop.ving.run/product/11000742818002390",
-            "product_images": "https://cdn.example.com/nirun.jpg",
-            "shop": {"url": "https://www.shop.ving.run/nirun"},
-        },
-        "ecommerce_listing",
-        "https://www.shop.ving.run/search",
-    )
-
-    assert record is not None
-    assert record["url"] == "https://www.shop.ving.run/product/nirun/11000742818002390"
-
-
-def test_normalize_generic_item_keeps_slugged_record_when_slug_url_cannot_be_resolved():
-    record = listing_extractor._normalize_generic_item(
-        {
-            "product_name": "Widget",
-            "slug": "widget",
-            "product_images": "https://cdn.example.com/widget.jpg",
-        },
-        "ecommerce_listing",
-        "",
-    )
-
-    assert record is not None
-    assert record["title"] == "Widget"
-
-
-def test_normalize_listing_record_drops_dimensions_when_it_duplicates_size_choices():
-    normalized = normalize_listing_record(
-        {
-            "title": "NIRUN (นิรัน)",
-            "url": "https://www.shop.ving.run/product/nirun/11000742818002390",
-            "size": "EU-36, EU-37, EU-38, EU-39, EU-40, EU-41, EU-42, EU-43",
-            "dimensions": "EU-36, EU-37, EU-38, EU-39, EU-40, EU-41/42, EU-43",
-        },
-        surface="ecommerce_listing",
         page_url="https://www.shop.ving.run/search",
-        target_fields=set(),
+        max_records=10,
     )
 
-    assert "dimensions" not in normalized
+    assert len(records) == 2
+    assert records[0]["title"] == "NIRUN (นิรัน)"
+    assert records[0]["price"] == "2,500"
+    assert records[0]["url"] == "https://www.shop.ving.run/product/nirun-นิรัน/1"
+    assert records[1]["title"] == "JARIX 1.0 (จาริกซ์)"
 
-
-def test_assess_listing_completeness_flags_sparse_capture_on_dense_commerce_page():
-    soup = BeautifulSoup(
-        """
-        <html><body>
-          <div class="results-grid">
-            <article class="product-card"><a href="/products/1"><img src="/1.jpg" />One</a><span class="price">$10</span></article>
-            <article class="product-card"><a href="/products/2"><img src="/2.jpg" />Two</a><span class="price">$20</span></article>
-            <article class="product-card"><a href="/products/3"><img src="/3.jpg" />Three</a><span class="price">$30</span></article>
-            <article class="product-card"><a href="/products/4"><img src="/4.jpg" />Four</a><span class="price">$40</span></article>
-            <article class="product-card"><a href="/products/5"><img src="/5.jpg" />Five</a><span class="price">$50</span></article>
-            <article class="product-card"><a href="/products/6"><img src="/6.jpg" />Six</a><span class="price">$60</span></article>
-            <article class="product-card"><a href="/products/7"><img src="/7.jpg" />Seven</a><span class="price">$70</span></article>
-            <article class="product-card"><a href="/products/8"><img src="/8.jpg" />Eight</a><span class="price">$80</span></article>
-          </div>
-        </body></html>
-        """,
-        "html.parser",
-    )
-
-    completeness = listing_extractor.assess_listing_completeness(
-        html=str(soup),
-        records=[
-            {"title": "One", "url": "https://example.com/products/1"},
-            {"title": "Two", "url": "https://example.com/products/2"},
-            {"title": "Three", "url": "https://example.com/products/3"},
-        ],
-        surface="ecommerce_listing",
-        page_url="https://example.com/collection",
-        soup=soup,
-    )
-
-    assert completeness["applicable"] is True
-    assert completeness["complete"] is False
-    assert completeness["reason"] == "record_count_far_below_visible_listing_density"
-
-
-def test_assess_listing_completeness_flags_empty_skeleton_listing_shell():
-    html = """
-    <html><body>
-      <section data-test-id="content-grid">
-        <div data-test-id="product-card-skeleton"></div>
-        <div data-test-id="product-card-skeleton"></div>
-        <div data-test-id="product-card-skeleton"></div>
-        <div data-test-id="product-card-skeleton"></div>
-      </section>
-    </body></html>
-    """
-
-    completeness = listing_extractor.assess_listing_completeness(
-        html=html,
-        records=[],
-        surface="ecommerce_listing",
-        page_url="https://www.karenmillen.com/categories/womens-coats-jackets",
-    )
-
-    assert completeness["applicable"] is True
-    assert completeness["complete"] is False
-    assert completeness["reason"] == "listing_shell_without_materialized_records"
-
-
-def test_assess_listing_completeness_uses_detail_url_lower_bound():
-    html = """
-    <html><body>
-      <div class="results-grid">
-        <a href="/products/1">One</a>
-        <a href="/products/2">Two</a>
-        <a href="/products/3">Three</a>
-        <a href="/products/4">Four</a>
-        <a href="/products/5">Five</a>
-        <a href="/products/6">Six</a>
-        <a href="/products/7">Seven</a>
-        <a href="/products/8">Eight</a>
-        <a href="/products/9">Nine</a>
-        <a href="/products/10">Ten</a>
-        <a href="/products/11">Eleven</a>
-        <a href="/products/12">Twelve</a>
-      </div>
-    </body></html>
-    """
-
-    completeness = listing_extractor.assess_listing_completeness(
-        html=html,
-        records=[
-            {"title": "One", "url": "https://example.com/products/1"},
-            {"title": "Two", "url": "https://example.com/products/2"},
-            {"title": "Three", "url": "https://example.com/products/3"},
-            {"title": "Four", "url": "https://example.com/products/4"},
-            {"title": "Five", "url": "https://example.com/products/5"},
-        ],
-        surface="ecommerce_listing",
-        page_url="https://example.com/collection",
-    )
-
-    assert completeness["complete"] is False
-    assert completeness["reason"] == "record_count_far_below_lower_bound_item_estimate"
-    assert completeness["distinct_detail_url_count"] == 12
-    assert completeness["lower_bound_item_count"] == 12
-
-
-# -----------------------------------------------------------------------
-# Auto-detect cards: product signals over nav links
-# -----------------------------------------------------------------------
 
 def test_auto_detect_prefers_product_cards_over_nav_links():
     """Auto-detect should prefer elements with links+images over plain nav lists."""
@@ -2576,92 +1661,3 @@ def test_itemscope_product_selector():
     assert len(records) == 2
     assert records[0]["title"] == "Microdata Widget"
     assert records[0]["price"] == "$15.00"
-
-# ---------------------------------------------------------------------------
-# Property-Based Tests for Task 4: Listing Field Contract Enforcement
-# ---------------------------------------------------------------------------
-
-@given(
-    records=st.lists(
-        st.fixed_dictionaries(
-            {
-                "url": st.just("https://example.com/product/1"),
-                "title": st.just("Product Title"),
-                "price": st.just("$10.00"),
-                "image_url": st.just("https://example.com/image.jpg"),
-                "brand": st.just("Acme"),
-                "gtin": st.just("123456789"),
-                "description": st.just("Product description"),
-                "_source": st.just("listing_card"),  # Mark as DOM record
-            }
-        ),
-        min_size=0,
-        max_size=10,
-    )
-)
-@settings(max_examples=100)
-def test_property_listing_field_contract_enforcement(records):
-    """Feature: extraction-pipeline-improvements, Property 6: Listing Field Contract Enforcement
-    
-    **Validates: Requirements 3.2, 3.3**
-    
-    For any listing page DOM extraction result, the output SHALL NOT contain
-    detail-only fields {"brand", "gtin", "variants", "specifications", "description"}.
-    """
-    # Apply contract enforcement for listing pages
-    filtered_records = listing_extractor._enforce_listing_field_contract(records, "listing")
-    
-    # Verify all records do not contain detail-only fields
-    detail_only_fields = listing_extractor.DETAIL_ONLY_FIELDS
-    
-    for record in filtered_records:
-        for field in record.keys():
-            # Field must not be a detail-only field
-            assert field not in detail_only_fields, f"Detail-only field {field} found in listing record"
-
-
-@given(
-    records=st.lists(
-        st.fixed_dictionaries(
-            {
-                "url": st.just("https://example.com/product/1"),
-                "title": st.just("Product Title"),
-                "brand": st.just("Acme"),
-                "description": st.just("Product description"),
-                "_source": st.just("listing_card"),  # Mark as DOM record
-            }
-        ),
-        min_size=1,
-        max_size=5,
-    )
-)
-@settings(max_examples=100)
-def test_property_listing_contract_warning_logging(records):
-    """Feature: extraction-pipeline-improvements, Property 7: Listing Contract Warning Logging
-    
-    **Validates: Requirement 3.6**
-    
-    For any listing page extraction that initially produces detail-only fields,
-    _enforce_listing_field_contract() SHALL drop those fields from the output AND log a
-    warning message containing the dropped field names.
-    """
-    from unittest.mock import patch
-    
-    # Mock the logger to capture warnings
-    with patch.object(listing_extractor.logger, 'warning') as mock_warning:
-        # Apply contract enforcement for listing pages
-        filtered_records = listing_extractor._enforce_listing_field_contract(records, "listing")
-        
-        # Verify that detail-only fields were dropped
-        detail_only_fields = listing_extractor.DETAIL_ONLY_FIELDS
-        for record in filtered_records:
-            for field in record.keys():
-                assert field not in detail_only_fields, f"Detail-only field {field} should have been dropped"
-        
-        # Verify that a warning was logged (since we provided records with detail-only fields)
-        assert mock_warning.called, "Expected warning to be logged about listing page contract violation"
-        
-        # Verify that the warning mentions dropped fields
-        warning_calls = [str(call) for call in mock_warning.call_args_list]
-        assert any("contract violation" in str(call).lower() for call in warning_calls), \
-            "Expected warning about listing page contract violation"

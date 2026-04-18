@@ -247,7 +247,7 @@ async def extract_listing(
                     "[ANALYZE] Listing extraction found 0 records because the acquired page was blocked",
                 )
             return URLProcessingResult([], VERDICT_BLOCKED, url_metrics)
-        if _looks_like_loading_listing_shell(html, surface=surface):
+        if _looks_like_loading_listing_shell(html):
             if persist_logs:
                 await log_event(
                     session,

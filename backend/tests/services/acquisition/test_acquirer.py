@@ -19,6 +19,7 @@ from app.services.acquisition.acquirer import (
     _try_browser_first_success_result,
     acquire,
 )
+from app.services.acquisition import policy
 from app.services.acquisition.policy import classify_acquisition_outcome
 from app.services.acquisition.artifact_store import _write_artifact_file
 from app.services.acquisition.http_client import HttpFetchResult
@@ -1037,6 +1038,12 @@ def test_browser_first_accepts_non_blocked_rendered_page_without_extractability_
             acquisition_profile={},
             prefer_stealth=False,
             proxy=None,
+        ),
+        plan=policy.plan_acquisition(
+            SimpleNamespace(
+                url="https://example.com/products/widget",
+                surface="ecommerce_detail",
+            )
         ),
         surface="ecommerce_detail",
         artifact_path="artifact.html",

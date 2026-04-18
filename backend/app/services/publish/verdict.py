@@ -1,11 +1,8 @@
 """Verdict computation for extraction quality assessment."""
 from __future__ import annotations
 
-import json
-
 from app.services.config.extraction_rules import REQUIRED_FIELDS_BY_SURFACE
 from app.services.extract import assess_listing_record_quality
-from app.services.normalizers import normalize_review_value as _normalize_review_value
 
 VERDICT_SUCCESS = "success"
 VERDICT_PARTIAL = "partial"
@@ -103,12 +100,3 @@ def _aggregate_verdict(verdicts: list[str]) -> str:
         if verdict in verdicts:
             return verdict
     return VERDICT_PARTIAL
-
-
-def _review_bucket_fingerprint(value: object) -> str:
-    """Generate a fingerprint for a review bucket value."""
-    normalized_value = _normalize_review_value(value)
-    try:
-        return json.dumps(normalized_value, sort_keys=True, default=str)
-    except TypeError:
-        return str(normalized_value)

@@ -6,9 +6,11 @@ card selectors match nothing.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from app.services.acquisition import policy
 from app.services.acquisition.traversal import (
     TraversalRuntime,
     apply_traversal_mode,
@@ -118,6 +120,9 @@ async def _run_fragment_capture_case(
         return await apply_traversal_mode(
             traversal_mod.TraversalRequest(
                 page=page,
+                plan=policy.plan_acquisition(
+                    SimpleNamespace(url="https://example.com", surface="ecommerce_listing")
+                ),
                 surface="ecommerce_listing",
                 traversal_mode=traversal_mode,
                 max_scrolls=traversal_count,

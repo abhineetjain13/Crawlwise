@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from app.services.discover import parse_page_sources
-from app.services.extract.candidate_processing import coerce_field_candidate_value
+from app.services.extract.candidate_processing import (
+    clean_candidate_text,
+    coerce_field_candidate_value,
+)
+from app.services.extract.review_bucket import review_bucket_fingerprint
 from app.services.normalizers import (
     passes_detail_quality_gate as _passes_detail_quality_gate,
 )
-from app.services.publish.verdict import _review_bucket_fingerprint
-from app.services.pipeline.utils import _clean_candidate_text, _compact_dict
+from app.services.pipeline.utils import _compact_dict
 
 LLM_CLEAN_CANDIDATE_TEXT_LIMIT = 2000
 
@@ -48,7 +51,7 @@ def _apply_llm_suggestions_to_candidate_values(
         source = (
             str(raw_suggestion.get("source") or "llm_cleanup").strip() or "llm_cleanup"
         )
-        note = _clean_candidate_text(
+        note = clean_candidate_text(
             raw_suggestion.get("note") or raw_suggestion.get("reason"), limit=280
         )
         candidate_values[normalized_field] = normalized_value
@@ -61,11 +64,11 @@ def _apply_llm_suggestions_to_candidate_values(
         )
 
         existing_rows = trace_candidates.setdefault(normalized_field, [])
-        normalized_fingerprint = _review_bucket_fingerprint(normalized_value)
+        normalized_fingerprint = review_bucket_fingerprint(normalized_value)
         if not any(
             isinstance(row, dict)
             and str(row.get("source") or "").strip() == source
-            and _review_bucket_fingerprint(row.get("value")) == normalized_fingerprint
+            and review_bucket_fingerprint(row.get("value")) == normalized_fingerprint
             for row in existing_rows
         ):
             existing_rows.insert(
@@ -106,7 +109,7 @@ def _build_llm_candidate_evidence(
     for field_name in field_names:
         rows: list[dict] = []
         seen: set[tuple[str, str]] = set()
-        current_value = _clean_candidate_text(preview_record.get(field_name))
+        current_value = clean_candidate_text(preview_record.get(field_name))
         if current_value:
             rows.append(
                 {
@@ -118,7 +121,7 @@ def _build_llm_candidate_evidence(
         for row in trace_candidates.get(field_name, []):
             if not isinstance(row, dict):
                 continue
-            value = _clean_candidate_text(
+            value = clean_candidate_text(
                 row.get("value")
                 if row.get("value") not in (None, "", [], {})
                 else row.get("sample_value")
@@ -269,7 +272,7 @@ def _snapshot_for_llm(
     if value in (None, "", [], {}):
         return None
     if depth >= max_depth:
-        return _clean_candidate_text(value, limit=text_limit)
+        return clean_candidate_text(value, limit=text_limit)
     if isinstance(value, dict):
         snapshot: dict[str, object] = {}
         for index, (key, item) in enumerate(value.items()):
@@ -301,7 +304,7 @@ def _snapshot_for_llm(
             if nested not in (None, "", [], {}):
                 rows.append(nested)
         return rows or None
-    return _clean_candidate_text(value, limit=text_limit)
+    return clean_candidate_text(value, limit=text_limit)
 
 
 def _select_llm_review_candidates(
@@ -315,11 +318,11 @@ def _select_llm_review_candidates(
         rows = candidate_evidence.get(field_name) or []
         if not rows:
             continue
-        current_value = _clean_candidate_text(preview_record.get(field_name))
+        current_value = clean_candidate_text(preview_record.get(field_name))
         distinct_values = {
-            _clean_candidate_text(row.get("value"))
+            clean_candidate_text(row.get("value"))
             for row in rows
-            if _clean_candidate_text(row.get("value"))
+            if clean_candidate_text(row.get("value"))
         }
         source_labels = {str(row.get("source") or "").strip() for row in rows}
         if (

@@ -31,8 +31,8 @@ class PaycomAdapter(BaseAdapter):
     async def try_public_endpoint(
         self,
         url: str,
-        html: str,
-        surface: str,
+        html: str = "",
+        surface: str = "",
         *,
         proxy: str | None = None,
     ) -> list[dict]:

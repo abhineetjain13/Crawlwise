@@ -38,6 +38,13 @@ _NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
     NETWORK_PAYLOAD_NOISE_URL_PATTERN,
     re.IGNORECASE,
 )
+_PAGE_NATIVE_FIELD_LABEL_ALLOWLIST: dict[str, frozenset[str]] = {
+    "availability": frozenset({"availability"}),
+    "color": frozenset(
+        {"select color", "select colour", "choose color", "choose colour"}
+    ),
+    "size": frozenset({"select size", "choose size"}),
+}
 
 
 def normalized_noise_text(value: object) -> str:
@@ -75,6 +82,8 @@ def sanitize_detail_field_value(
         return None, "empty_after_sanitization"
 
     lowered = text.casefold()
+    if lowered in _PAGE_NATIVE_FIELD_LABEL_ALLOWLIST.get(field_name, frozenset()):
+        return text, None
     reject_phrases = (
         *((FIELD_POLLUTION_RULES.get("__common__") or {}).get("reject_phrases", ())),
         *((FIELD_POLLUTION_RULES.get(field_name) or {}).get("reject_phrases", ())),
@@ -83,13 +92,6 @@ def sanitize_detail_field_value(
         return None, "detail_field_noise"
     if field_name == "brand" and _BREADCRUMB_STYLE_BRAND_RE.search(text):
         return None, "breadcrumb_like_brand"
-    if field_name == "availability" and lowered in {
-        "availability",
-        "select size",
-        "select color",
-        "select colour",
-    }:
-        return None, "availability_shell_text"
     if field_name == "color" and len(text.split()) > 4:
         return None, "improbable_color_label"
     return text, None

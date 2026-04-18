@@ -7,24 +7,23 @@ from app.services.config.extraction_rules import (
     DISCOVERED_SOURCE_NOISE_TOKENS,
     DISCOVERED_VALUE_NOISE_PHRASES,
 )
+from app.services.extract.candidate_processing import (
+    clean_candidate_text,
+    normalize_committed_field_name,
+)
+from app.services.extract.review_bucket import review_bucket_fingerprint
 from app.services.normalizers import (
     normalize_review_value as _normalize_review_value,
     passes_detail_quality_gate as _passes_detail_quality_gate,
     review_values_equal as _review_values_equal,
 )
-from app.services.pipeline.utils import (
-    _clean_candidate_text,
-    _compact_dict,
-    _normalize_committed_field_name,
-)
-
-from .verdict import _review_bucket_fingerprint
+from app.services.pipeline.utils import _compact_dict
 
 
 def _should_surface_discovered_field(
     field_name: object, value: object, *, source: str = ""
 ) -> bool:
-    normalized_field = _normalize_committed_field_name(field_name)
+    normalized_field = normalize_committed_field_name(field_name)
     if not normalized_field or normalized_field.startswith("_"):
         return False
     tokens = {token for token in normalized_field.split("_") if token}
@@ -34,7 +33,7 @@ def _should_surface_discovered_field(
     normalized_value = _normalize_review_value(value)
     if normalized_value is None:
         return False
-    cleaned_text = _clean_candidate_text(normalized_value, limit=None)
+    cleaned_text = clean_candidate_text(normalized_value, limit=None)
     if isinstance(normalized_value, str):
         lowered_text = cleaned_text.lower()
         if len(cleaned_text) < 3:
@@ -68,7 +67,7 @@ def _merge_review_bucket_entries(
                 key, normalized_value, source=source
             ):
                 continue
-            fingerprint = (key, _review_bucket_fingerprint(normalized_value))
+            fingerprint = (key, review_bucket_fingerprint(normalized_value))
             candidate = _compact_dict(
                 {
                     "key": key,
@@ -101,7 +100,7 @@ def _normalize_llm_cleanup_review(
             else raw_review.get("value"),
         )
         source = str(raw_review.get("source") or "llm_cleanup").strip() or "llm_cleanup"
-        note = _clean_candidate_text(
+        note = clean_candidate_text(
             raw_review.get("note") or raw_review.get("reason"), limit=280
         )
         supporting_sources = [

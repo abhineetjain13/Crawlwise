@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable
+from types import SimpleNamespace
+from typing import Callable, Literal
 from urllib.parse import parse_qsl, urlparse
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
@@ -22,7 +23,7 @@ from app.services.platform_policy import (
     job_platform_families,
     resolve_platform_runtime_policy,
 )
-from app.services.config.selectors import CARD_SELECTORS
+from app.services.config.selectors import CARD_SELECTORS, DOM_PATTERNS
 from bs4 import BeautifulSoup
 
 HTML_PARSER = "html.parser"
@@ -126,13 +127,54 @@ class AcquisitionExecutionDecision:
 
 
 @dataclass(frozen=True, slots=True)
-class TraversalSurfacePolicy:
-    surface: str | None
-    normalized_surface: str
-    is_listing_surface: bool
-    is_detail_surface: bool
-    card_selectors: tuple[str, ...]
-    traversal_disabled_reason: str | None = None
+class AcquisitionPlan:
+    surface: str
+    page_type: Literal["category", "pdp"]
+    platform_family: str
+    require_browser_first: bool
+    allow_browser_escalation: bool
+    browser_escalation_reasons: frozenset[str]
+    readiness_profile: Literal["listing", "detail"]
+    readiness_selectors: tuple[str, ...]
+    traversal_enabled: bool
+    traversal_card_selectors: tuple[str, ...]
+    retry_profile: Literal["standard", "listing_low_value"]
+    adapter_recovery_enabled: bool
+    diagnostic_payload_kind: Literal[
+        "listing_completeness",
+        "variant_completeness",
+        "none",
+    ]
+
+    @property
+    def is_listing_surface(self) -> bool:
+        return self.surface.endswith("_listing")
+
+    @property
+    def is_detail_surface(self) -> bool:
+        return self.surface.endswith("_detail")
+
+    @property
+    def normalized_surface(self) -> str:
+        return self.surface
+
+    @property
+    def surface_family(self) -> str:
+        if self.surface.startswith("job_"):
+            return "job"
+        if self.surface.startswith("ecommerce_"):
+            return "ecommerce"
+        if self.platform_family in JOB_PLATFORM_FAMILIES:
+            return "job"
+        return "ecommerce"
+
+    @property
+    def card_selectors(self) -> tuple[str, ...]:
+        return self.traversal_card_selectors
+
+    @property
+    def traversal_disabled_reason(self) -> str | None:
+        return None if self.traversal_enabled else "detail_surface"
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +185,128 @@ class AutoTraversalDecision:
 
 def normalize_surface(surface: str | None) -> str:
     return str(surface or "").strip().lower()
+
+
+def _detail_readiness_selectors(surface: str) -> tuple[str, ...]:
+    if surface == "job_detail":
+        selectors = (
+            DOM_PATTERNS.get("title", ""),
+            DOM_PATTERNS.get("company", ""),
+            DOM_PATTERNS.get("salary", ""),
+        )
+    elif surface == "ecommerce_detail":
+        selectors = (
+            DOM_PATTERNS.get("title", ""),
+            DOM_PATTERNS.get("price", ""),
+            DOM_PATTERNS.get("sku", ""),
+        )
+    else:
+        selectors = (DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("price", ""))
+    return tuple(selector for selector in selectors if str(selector).strip())
+
+
+def _coerce_acquisition_request(
+    request,
+    *,
+    platform_family: str | None = None,
+):
+    return SimpleNamespace(
+        url=str(getattr(request, "url", "") or ""),
+        surface=normalize_surface(getattr(request, "surface", None)),
+        traversal_mode=normalize_surface(getattr(request, "traversal_mode", None)),
+        requested_fields=[
+            str(field or "").strip()
+            for field in (getattr(request, "requested_fields", None) or [])
+            if str(field or "").strip()
+        ],
+        platform_family=normalize_surface(
+            platform_family or getattr(request, "platform_family", None)
+        ),
+    )
+
+
+def plan_acquisition(
+    request,
+    *,
+    platform_family: str | None = None,
+) -> AcquisitionPlan:
+    coerced = _coerce_acquisition_request(request, platform_family=platform_family)
+    surface = coerced.surface
+    supported_surface = surface in {
+        "ecommerce_listing",
+        "ecommerce_detail",
+        "job_listing",
+        "job_detail",
+    }
+    is_detail_surface = surface.endswith("_detail")
+    is_listing_surface = surface.endswith("_listing")
+    page_type: Literal["category", "pdp"] = (
+        "pdp" if is_detail_surface else "category"
+    )
+    surface_family = (
+        "job"
+        if surface.startswith("job_") or coerced.platform_family in JOB_PLATFORM_FAMILIES
+        else "ecommerce"
+    )
+    readiness_profile: Literal["listing", "detail"] = (
+        "listing" if is_listing_surface else "detail"
+    )
+    readiness_selectors = (
+        CARD_SELECTORS_JOBS
+        if readiness_profile == "listing" and surface_family == "job"
+        else CARD_SELECTORS_COMMERCE
+        if readiness_profile == "listing"
+        else _detail_readiness_selectors(surface)
+    )
+    browser_escalation_reasons = frozenset(
+        {
+            "iframe_shell",
+            "frameset_shell",
+            "empty_html",
+            "listing_search_shell_without_records",
+            "no_listing_signals",
+        }
+        if page_type == "category"
+        else {
+            "iframe_shell",
+            "frameset_shell",
+            "empty_html",
+            "insufficient_detail_signals",
+        }
+    )
+    diagnostic_payload_kind: Literal[
+        "listing_completeness",
+        "variant_completeness",
+        "none",
+    ] = "none"
+    if surface == "ecommerce_listing":
+        diagnostic_payload_kind = "listing_completeness"
+    elif surface == "ecommerce_detail":
+        diagnostic_payload_kind = "variant_completeness"
+    return AcquisitionPlan(
+        surface=surface,
+        page_type=page_type,
+        platform_family=coerced.platform_family,
+        # Inv. 29: browser-first escalation stays family-based, not site-hardcoded.
+        require_browser_first=requires_browser_first(
+            coerced.url,
+            coerced.platform_family,
+        ),
+        allow_browser_escalation=supported_surface,
+        browser_escalation_reasons=browser_escalation_reasons,
+        readiness_profile=readiness_profile,
+        readiness_selectors=readiness_selectors,
+        # Inv. 18: detail surfaces are never traversed.
+        traversal_enabled=not is_detail_surface,
+        traversal_card_selectors=(
+            CARD_SELECTORS_JOBS
+            if surface_family == "job"
+            else CARD_SELECTORS_COMMERCE
+        ),
+        retry_profile="listing_low_value" if is_listing_surface else "standard",
+        adapter_recovery_enabled=is_listing_surface,
+        diagnostic_payload_kind=diagnostic_payload_kind,
+    )
 
 
 def classify_acquisition_outcome(result) -> str:
@@ -189,7 +353,7 @@ def requires_browser_first(url: str, platform_family: str | None) -> bool:
 def browser_escalation_decision(
     http_result,
     *,
-    surface: str | None,
+    plan: AcquisitionPlan,
     requested_fields: list[str] | None,
 ) -> BrowserEscalationDecision:
     if http_result is None:
@@ -209,34 +373,19 @@ def browser_escalation_decision(
     )
     invalid_surface_page = bool(analysis.get("invalid_surface_page"))
     js_shell_detected = bool(analysis.get("js_shell_detected"))
-    normalized_surface = str(surface or "").strip().lower()
-    supported_surface = normalized_surface in {
-        "ecommerce_listing",
-        "job_listing",
-        "ecommerce_detail",
-        "job_detail",
-    }
     requested_field_names = [
         str(field or "").strip()
         for field in (requested_fields or [])
         if str(field or "").strip()
     ]
     missing_data_requires_browser = (
-        supported_surface
+        plan.allow_browser_escalation
         and not extractability.get("has_extractable_data")
-        and str(extractability.get("reason") or "")
-        in {
-            "listing_search_shell_without_records",
-            "iframe_shell",
-            "frameset_shell",
-            "insufficient_detail_signals",
-            "no_listing_signals",
-            "empty_html",
-        }
+        and str(extractability.get("reason") or "") in plan.browser_escalation_reasons
     )
     if (
         missing_data_requires_browser
-        and normalized_surface.endswith("listing")
+        and plan.is_listing_surface
         and getattr(listing_signals, "strong", False)
     ):
         missing_data_requires_browser = False
@@ -251,7 +400,8 @@ def browser_escalation_decision(
             str(extractability.get("reason") or "missing_extractable_data"),
         )
     elif (
-        normalized_surface.endswith("detail")
+        # Inv. 16: detail-page shells with requested fields may escalate to browser.
+        plan.is_detail_surface
         and requested_field_names
         and js_shell_detected
         and len(visible_text) < BROWSER_FALLBACK_VISIBLE_TEXT_MIN
@@ -273,7 +423,7 @@ def browser_escalation_decision(
         needs_browser
         and reason != "js_shell"
         and not getattr(blocked, "is_blocked", False)
-        and not normalized_surface.endswith("detail")
+        and not plan.is_detail_surface
         and bool(extractability.get("has_extractable_data"))
         and extractability_reason not in {"surface_unspecified", "adapter_hint"}
     )
@@ -301,28 +451,13 @@ def browser_escalation_decision(
     return BrowserEscalationDecision(needs_browser, reason, structured_override)
 
 
-def needs_browser(
-    http_result,
-    *,
-    surface: str | None,
-    requested_fields: list[str] | None,
-) -> tuple[bool, str]:
-    decision = browser_escalation_decision(
-        http_result,
-        surface=surface,
-        requested_fields=requested_fields,
-    )
-    return decision.needs_browser, decision.reason
-
-
 def decide_acquisition_execution(
     http_result,
     *,
-    surface: str | None,
+    plan: AcquisitionPlan,
     traversal_mode: str | None,
     requested_fields: list[str] | None,
 ) -> AcquisitionExecutionDecision:
-    normalized_surface = normalize_surface(surface)
     if should_force_browser_for_traversal(traversal_mode):
         return AcquisitionExecutionDecision(
             runtime="playwright_attempt_required",
@@ -333,15 +468,15 @@ def decide_acquisition_execution(
 
     escalation = browser_escalation_decision(
         http_result,
-        surface=surface,
+        plan=plan,
         requested_fields=requested_fields,
     )
     if escalation.needs_browser:
-        expected_evidence: tuple[str, ...] = ()
-        if normalized_surface == "ecommerce_listing":
-            expected_evidence = ("listing_completeness",)
-        elif normalized_surface == "ecommerce_detail":
-            expected_evidence = ("variant_completeness",)
+        expected_evidence = (
+            (plan.diagnostic_payload_kind,)
+            if plan.diagnostic_payload_kind != "none"
+            else ()
+        )
         return AcquisitionExecutionDecision(
             runtime="playwright_attempt_required",
             reason=escalation.reason,
@@ -365,25 +500,6 @@ def has_requested_traversal_mode(traversal_mode: str | None) -> bool:
 def should_force_browser_for_traversal(traversal_mode: str | None) -> bool:
     normalized_mode = normalize_surface(traversal_mode)
     return normalized_mode in {"scroll", "load_more", "paginate"}
-
-
-def resolve_traversal_surface_policy(
-    surface: str | None,
-) -> TraversalSurfacePolicy:
-    normalized_surface = normalize_surface(surface)
-    is_detail_surface = normalized_surface.endswith("_detail")
-    return TraversalSurfacePolicy(
-        surface=surface,
-        normalized_surface=normalized_surface,
-        is_listing_surface=normalized_surface.endswith("_listing"),
-        is_detail_surface=is_detail_surface,
-        card_selectors=(
-            CARD_SELECTORS_JOBS
-            if "job" in normalized_surface
-            else CARD_SELECTORS_COMMERCE
-        ),
-        traversal_disabled_reason="detail_surface" if is_detail_surface else None,
-    )
 
 
 def decide_initial_auto_traversal(
@@ -472,7 +588,7 @@ def browser_failure_log_message(
 def should_retry_browser_launch_profile(
     result,
     *,
-    surface: str | None,
+    plan: AcquisitionPlan,
     html_looks_low_value: Callable[[str], bool],
 ) -> bool:
     result_html = str(getattr(result, "html", "") or "")
@@ -483,8 +599,7 @@ def should_retry_browser_launch_profile(
     )
     if detect_blocked_page(result_html).is_blocked:
         return True
-    normalized_surface = normalize_surface(surface)
-    if not normalized_surface.endswith("_listing"):
+    if plan.retry_profile != "listing_low_value":
         return False
     readiness = diagnostics.get("listing_readiness")
     return bool(
@@ -502,34 +617,24 @@ def is_invalid_surface_page(
     surface: str | None,
     soup: BeautifulSoup | None = None,
 ) -> bool:
-    commerce_warning = diagnose_commerce_surface_page(
+    for warning in surface_selection_warnings(
         requested_url=requested_url,
         final_url=final_url,
-        surface=surface,
         html=html,
+        surface=surface,
         soup=soup,
-    )
-    if commerce_warning is not None and bool(
-        set((commerce_warning or {}).get("signals") or [])
-        & {
+    ):
+        signals = set(warning.get("signals") or [])
+        profile = str(warning.get("profile") or "").strip().lower()
+        if profile == "ecommerce" and signals & {
             "redirected_to_root",
             "redirect_shell_title",
             "transactional_url",
             "transactional_page_title",
             "noindex_transactional_page",
-        }
-    ):
-        return True
-    job_warning = diagnose_job_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        html=html,
-        surface=surface,
-        soup=soup,
-    )
-    if job_warning is not None:
-        signals = set(job_warning.get("signals") or [])
-        if signals & {
+        }:
+            return True
+        if profile == "job" and signals & {
             "redirect_shell_title",
             "redirect_shell_canonical",
             "auth_wall_heading",
@@ -548,24 +653,20 @@ def surface_selection_warnings(
     soup: BeautifulSoup | None = None,
 ) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
-    commerce_warning = diagnose_commerce_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        html=html,
-        surface=surface,
-        soup=soup,
+    plan = plan_acquisition(
+        SimpleNamespace(url=requested_url, surface=surface),
     )
-    if commerce_warning is not None:
-        warnings.append(commerce_warning)
-    job_warning = diagnose_job_surface_page(
-        requested_url=requested_url,
-        final_url=final_url,
-        html=html,
-        surface=surface,
-        soup=soup,
-    )
-    if job_warning is not None:
-        warnings.append(job_warning)
+    for profile in _diagnostic_profiles_for_plan(plan):
+        warning = _diagnose_surface_page(
+            profile=profile,
+            requested_url=requested_url,
+            final_url=final_url,
+            html=html,
+            surface=surface,
+            soup=soup,
+        )
+        if warning is not None:
+            warnings.append(warning)
     return warnings
 
 
@@ -605,7 +706,34 @@ def surface_warning_summary(
     }
 
 
-def diagnose_commerce_surface_page(
+def _diagnostic_profiles_for_plan(plan: AcquisitionPlan) -> tuple[str, ...]:
+    if plan.surface_family == "job":
+        return ("job",)
+    return ("ecommerce",)
+
+
+def _base_surface_warning_payload(
+    *,
+    profile: str,
+    requested_url: str,
+    final_url: str,
+    html: str,
+    surface: str | None,
+    warning_signals: list[str],
+) -> dict[str, object] | None:
+    if not warning_signals:
+        return None
+    return {
+        "profile": profile,
+        "surface_requested": normalize_surface(surface),
+        "warning": "surface_selection_may_be_low_confidence",
+        "signals": warning_signals,
+        "requested_url": requested_url,
+        "final_url": final_url or requested_url,
+    }
+
+
+def _diagnose_commerce_surface_page(
     *,
     requested_url: str,
     final_url: str,
@@ -613,9 +741,6 @@ def diagnose_commerce_surface_page(
     surface: str | None,
     soup: BeautifulSoup | None = None,
 ) -> dict[str, object] | None:
-    normalized_surface = normalize_surface(surface)
-    if normalized_surface not in {"ecommerce_listing", "ecommerce_detail"}:
-        return None
     redirected_to_root = _is_redirect_to_root(requested_url, final_url)
     if not html and not redirected_to_root:
         return None
@@ -625,13 +750,14 @@ def diagnose_commerce_surface_page(
     if _looks_like_commerce_transaction_url(final_url or requested_url):
         warning_signals.append("transactional_url")
     if not html:
-        return {
-            "surface_requested": normalized_surface,
-            "warning": "surface_selection_may_be_low_confidence",
-            "signals": warning_signals,
-            "requested_url": requested_url,
-            "final_url": final_url or requested_url,
-        } if warning_signals else None
+        return _base_surface_warning_payload(
+            profile="ecommerce",
+            requested_url=requested_url,
+            final_url=final_url,
+            html=html,
+            surface=surface,
+            warning_signals=warning_signals,
+        )
 
     soup = soup or BeautifulSoup(html, HTML_PARSER)
     title_text = " ".join(
@@ -663,20 +789,22 @@ def diagnose_commerce_surface_page(
         and any("noindex" in value and "nofollow" in value for value in robots_values)
     ):
         warning_signals.append("noindex_transactional_page")
-    if not warning_signals:
+    payload = _base_surface_warning_payload(
+        profile="ecommerce",
+        requested_url=requested_url,
+        final_url=final_url,
+        html=html,
+        surface=surface,
+        warning_signals=warning_signals,
+    )
+    if payload is None:
         return None
-    return {
-        "surface_requested": normalized_surface,
-        "warning": "surface_selection_may_be_low_confidence",
-        "signals": warning_signals,
-        "requested_url": requested_url,
-        "final_url": final_url or requested_url,
-        "title": title_text or None,
-        "canonical_url": canonical_url or None,
-    }
+    payload["title"] = title_text or None
+    payload["canonical_url"] = canonical_url or None
+    return payload
 
 
-def diagnose_job_surface_page(
+def _diagnose_job_surface_page(
     *,
     requested_url: str,
     final_url: str,
@@ -684,9 +812,6 @@ def diagnose_job_surface_page(
     surface: str | None,
     soup: BeautifulSoup | None = None,
 ) -> dict[str, object] | None:
-    normalized_surface = normalize_surface(surface)
-    if normalized_surface not in {"job_listing", "job_detail"}:
-        return None
     redirected_to_root = _is_redirect_to_root(requested_url, final_url)
     if not html and not redirected_to_root:
         return None
@@ -694,13 +819,14 @@ def diagnose_job_surface_page(
     if redirected_to_root:
         warning_signals.append("redirected_to_root")
     if not html:
-        return {
-            "surface_requested": normalized_surface,
-            "warning": "surface_selection_may_be_low_confidence",
-            "signals": warning_signals,
-            "requested_url": requested_url,
-            "final_url": final_url or requested_url,
-        } if warning_signals else None
+        return _base_surface_warning_payload(
+            profile="job",
+            requested_url=requested_url,
+            final_url=final_url,
+            html=html,
+            surface=surface,
+            warning_signals=warning_signals,
+        )
 
     soup = soup or BeautifulSoup(html, HTML_PARSER)
     title_text = " ".join(
@@ -724,17 +850,45 @@ def diagnose_job_surface_page(
         warning_signals.append("redirect_shell_heading")
     if headings & JOB_ERROR_PAGE_HEADINGS:
         warning_signals.append("auth_wall_heading")
-    if not warning_signals:
+    payload = _base_surface_warning_payload(
+        profile="job",
+        requested_url=requested_url,
+        final_url=final_url,
+        html=html,
+        surface=surface,
+        warning_signals=warning_signals,
+    )
+    if payload is None:
         return None
-    return {
-        "surface_requested": normalized_surface,
-        "warning": "surface_selection_may_be_low_confidence",
-        "signals": warning_signals,
-        "requested_url": requested_url,
-        "final_url": final_url or requested_url,
-        "title": title_text or None,
-        "canonical_url": canonical_url or None,
-    }
+    payload["title"] = title_text or None
+    payload["canonical_url"] = canonical_url or None
+    return payload
+
+
+def _diagnose_surface_page(
+    *,
+    profile: str,
+    requested_url: str,
+    final_url: str,
+    html: str,
+    surface: str | None,
+    soup: BeautifulSoup | None = None,
+) -> dict[str, object] | None:
+    if profile == "job":
+        return _diagnose_job_surface_page(
+            requested_url=requested_url,
+            final_url=final_url,
+            html=html,
+            surface=surface,
+            soup=soup,
+        )
+    return _diagnose_commerce_surface_page(
+        requested_url=requested_url,
+        final_url=final_url,
+        html=html,
+        surface=surface,
+        soup=soup,
+    )
 
 
 def _looks_like_commerce_transaction_url(url: str) -> bool:

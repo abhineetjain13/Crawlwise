@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 from app.services.acquisition import scrub_network_payloads_for_storage
 from app.services.config.field_mappings import CANONICAL_SCHEMAS
 from app.services.discover import parse_page_sources
+from app.services.extract.candidate_processing import clean_candidate_text
+from app.services.extract.review_bucket import review_bucket_fingerprint
 from app.services.normalizers import normalize_review_value as _normalize_review_value
 from app.services.publish.review_shaping import _should_surface_discovered_field
-from app.services.pipeline.utils import _clean_candidate_text, _compact_dict
-
-from .verdict import _review_bucket_fingerprint
+from app.services.pipeline.utils import _compact_dict
 
 if TYPE_CHECKING:
     from app.services.acquisition import AcquisitionResult
@@ -39,7 +39,7 @@ def _snapshot_manifest_value(
     if value in (None, "", [], {}):
         return None
     if depth >= max_depth:
-        return _clean_candidate_text(value, limit=text_limit)
+        return clean_candidate_text(value, limit=text_limit)
     if isinstance(value, dict):
         snapshot: dict[str, object] = {}
         for index, (key, item) in enumerate(value.items()):
@@ -71,7 +71,7 @@ def _snapshot_manifest_value(
             if nested not in (None, "", [], {}):
                 rows.append(nested)
         return rows or None
-    return _clean_candidate_text(value, limit=text_limit)
+    return clean_candidate_text(value, limit=text_limit)
 
 
 def _snapshot_manifest_tables(tables: object) -> list[dict[str, object]] | None:
@@ -91,9 +91,9 @@ def _snapshot_manifest_tables(tables: object) -> list[dict[str, object]] | None:
                     continue
                 summarized_cell = _compact_dict(
                     {
-                        "text": _clean_candidate_text(cell.get("text"), limit=160),
-                        "href": _clean_candidate_text(cell.get("href"), limit=160),
-                        "tag": _clean_candidate_text(cell.get("tag"), limit=32),
+                        "text": clean_candidate_text(cell.get("text"), limit=160),
+                        "href": clean_candidate_text(cell.get("href"), limit=160),
+                        "tag": clean_candidate_text(cell.get("tag"), limit=32),
                     }
                 )
                 if summarized_cell:
@@ -110,8 +110,8 @@ def _snapshot_manifest_tables(tables: object) -> list[dict[str, object]] | None:
         summarized_table = _compact_dict(
             {
                 "table_index": table.get("table_index"),
-                "caption": _clean_candidate_text(table.get("caption"), limit=120),
-                "section_title": _clean_candidate_text(
+                "caption": clean_candidate_text(table.get("caption"), limit=120),
+                "section_title": clean_candidate_text(
                     table.get("section_title"), limit=120
                 ),
                 "headers": _snapshot_manifest_value(
@@ -195,7 +195,7 @@ def _build_manifest_trace(
             "network_payloads": [
                 _compact_dict(
                     {
-                        "url": _clean_candidate_text(row.get("url"), limit=240),
+                        "url": clean_candidate_text(row.get("url"), limit=240),
                         "status": row.get("status"),
                         "headers": _snapshot_manifest_value(
                             row.get("headers"), max_items=20, text_limit=160
@@ -252,7 +252,7 @@ def _build_review_bucket(
                 "source": source,
             }
         )
-        fingerprint = (str(entry["key"]), _review_bucket_fingerprint(entry["value"]))
+        fingerprint = (str(entry["key"]), review_bucket_fingerprint(entry["value"]))
         if fingerprint in seen:
             continue
         seen.add(fingerprint)
@@ -323,7 +323,7 @@ def _build_field_discovery_summary(
         discovery[field_name] = _compact_dict(
             {
                 "status": "found",
-                "value": _clean_candidate_text(chosen)
+                "value": clean_candidate_text(chosen)
                 if chosen not in (None, "", [], {})
                 else None,
                 "sources": sources or None,

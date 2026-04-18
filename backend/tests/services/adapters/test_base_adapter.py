@@ -1,41 +1,8 @@
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from app.services.adapters.base import BaseAdapter
-
-
-class _TestAdapter(BaseAdapter):
-    async def can_handle(self, url: str, html: str) -> bool:
-        return True
-
-    async def extract(self, url: str, html: str, surface: str):
-        return None
-
-
-class _FakeResponse:
-    status_code = 200
-
-    def json(self):
-        raise ValueError("bad json")
-
-
-@pytest.mark.asyncio
-async def test_request_json_with_curl_returns_none_on_decode_failure() -> None:
-    adapter = _TestAdapter()
-
-    with patch(
-        "app.services.adapters.base.wait_for_host_slot",
-        return_value=None,
-    ):
-        result = await adapter._request_json_with_curl(
-            lambda *_args, **_kwargs: _FakeResponse(),
-            "https://example.com/api",
-        )
-
-    assert result is None
 
 
 class _FamilyAdapter(BaseAdapter):
@@ -51,20 +18,31 @@ class _FamilyAdapter(BaseAdapter):
 @pytest.mark.asyncio
 async def test_matches_platform_family_uses_shared_detector() -> None:
     adapter = _FamilyAdapter()
+    html = """
+    <html><body>
+    <script>var CX_CONFIG = {"site": "jobs"};</script>
+    </body></html>
+    """
 
-    with patch(
-        "app.services.adapters.base.detect_platform_family",
-        return_value="oracle_hcm",
-    ):
-        assert await adapter.can_handle("https://example.com/jobs", "<html></html>")
+    assert await adapter.can_handle(
+        "https://jobs.example.com/openings",
+        html,
+    )
 
 
 @pytest.mark.asyncio
 async def test_matches_platform_family_rejects_other_families() -> None:
     adapter = _FamilyAdapter()
+    html = """
+    <html><body>
+    <div class="results-grid">
+      <a href="/product/widget-1">Widget 1</a>
+      <a href="/product/widget-2">Widget 2</a>
+    </div>
+    </body></html>
+    """
 
-    with patch(
-        "app.services.adapters.base.detect_platform_family",
-        return_value="generic_commerce",
-    ):
-        assert not await adapter.can_handle("https://example.com/jobs", "<html></html>")
+    assert not await adapter.can_handle(
+        "https://example.com/products",
+        html,
+    )

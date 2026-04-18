@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from app.services.acquisition import policy
 from app.services.acquisition.traversal import (
     AdvanceResult,
     PaginationTraversalRequest,
@@ -15,6 +17,12 @@ from app.services.acquisition.traversal import (
     scroll_to_bottom,
 )
 from app.services.crawl_utils import resolve_traversal_mode
+
+
+def _plan(surface: str):
+    return policy.plan_acquisition(
+        SimpleNamespace(url="https://example.com", surface=surface)
+    )
 
 
 @pytest.mark.parametrize(
@@ -241,6 +249,7 @@ async def test_paginate_mode_collects_three_button_only_pages_without_duplicates
     result = await collect_paginated_html(
         PaginationTraversalRequest(
             page=page,
+            plan=_plan("ecommerce_listing"),
             surface="ecommerce_listing",
             max_pages=5,
             request_delay_ms=0,
@@ -289,6 +298,7 @@ async def test_paginate_mode_uses_targeted_fragments_for_listing_pages():
     result = await collect_paginated_html(
         PaginationTraversalRequest(
             page=page,
+            plan=_plan("ecommerce_listing"),
             surface="ecommerce_listing",
             max_pages=2,
             request_delay_ms=0,
@@ -336,6 +346,7 @@ async def test_collect_paginated_html_emits_progress_logs():
     await collect_paginated_html(
         PaginationTraversalRequest(
             page=page,
+            plan=_plan("ecommerce_listing"),
             surface="ecommerce_listing",
             max_pages=2,
             request_delay_ms=0,
@@ -374,6 +385,7 @@ async def test_collect_paginated_html_requires_pagination_callback():
         await collect_paginated_html(
             PaginationTraversalRequest(
                 page=page,
+                plan=_plan("ecommerce_listing"),
                 surface="ecommerce_listing",
                 max_pages=2,
                 request_delay_ms=0,
@@ -402,6 +414,7 @@ async def test_scroll_mode_preserves_all_cards_from_virtualized_infinite_scroll(
     result = await apply_traversal_mode(
         TraversalRequest(
             page=page,
+            plan=_plan("ecommerce_listing"),
             surface="ecommerce_listing",
             traversal_mode="scroll",
             max_scrolls=5,

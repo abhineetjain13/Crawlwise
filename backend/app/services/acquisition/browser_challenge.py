@@ -5,6 +5,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from app.services.acquisition.policy import AcquisitionPlan
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_readiness import (
     cooperative_page_wait,
@@ -98,7 +99,7 @@ async def _wait_for_challenge_resolution(
     page,
     max_wait_ms: int = CHALLENGE_WAIT_MAX_SECONDS * 1000,
     poll_interval_ms: int = CHALLENGE_POLL_INTERVAL_MS,
-    surface: str | None = None,
+    plan: AcquisitionPlan | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[bool, str, list[str]]:
     try:
@@ -130,12 +131,14 @@ async def _wait_for_challenge_resolution(
         if assessment.state == "blocked_signal":
             return False, "blocked", assessment.reasons
         if not assessment.should_wait:
-            readiness = await wait_for_surface_readiness(
-                page,
-                surface=surface,
-                max_wait_ms=0,
-                checkpoint=checkpoint,
-            )
+            readiness = None
+            if plan is not None:
+                readiness = await wait_for_surface_readiness(
+                    page,
+                    plan=plan,
+                    max_wait_ms=0,
+                    checkpoint=checkpoint,
+                )
             if readiness and not bool(readiness.get("ready")):
                 continue
             state = "waiting_resolved" if elapsed > 0 else "none"

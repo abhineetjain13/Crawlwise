@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.acquisition.browser_client import BrowserResult
+from app.services.acquisition.policy import AcquisitionPlan
 
 
 @dataclass(slots=True)
@@ -18,7 +19,7 @@ async def recover_blocked_listing_acquisition(
     *,
     url: str,
     proxy: str | None,
-    surface: str | None,
+    plan: AcquisitionPlan,
     traversal_mode: str | None,
     max_pages: int,
     max_scrolls: int,
@@ -39,15 +40,16 @@ async def recover_blocked_listing_acquisition(
     blocked = analysis.get("blocked")
     if blocked is None or not getattr(blocked, "is_blocked", False):
         return None
-    if surface not in {"ecommerce_listing", "job_listing"}:
+    if not plan.adapter_recovery_enabled:
         return None
     if browser_first:
         return None
 
     browser_result = await try_browser(
         url,
+        plan,
         proxy,
-        surface,
+        plan.surface,
         traversal_mode=traversal_mode,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
@@ -65,7 +67,7 @@ async def recover_blocked_listing_acquisition(
             return None
         recovered = await try_blocked_adapter_recovery(
             url,
-            surface or "",
+            plan=plan,
             proxy_list=None,
         )
         if recovered is None or not recovered.records:

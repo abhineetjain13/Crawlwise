@@ -58,6 +58,11 @@ def test_normalize_availability_schema_url():
     assert normalize_value("availability", "https://schema.org/InStock") == "in_stock"
 
 
+def test_normalize_availability_field_label_returns_empty_string():
+    assert normalize_value("availability", "Availability") == ""
+    assert normalize_and_validate_value("availability", "Availability") is None
+
+
 def test_normalize_placeholder_and_generic_noise_values():
     assert normalize_value("features", "-") == ""
     assert normalize_value("category", "detail-page") == ""

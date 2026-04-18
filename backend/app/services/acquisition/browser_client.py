@@ -47,7 +47,6 @@ from app.services.acquisition.browser_pool import (
 )
 from app.services.acquisition.browser_readiness import (
     _cooperative_sleep_ms,
-    _is_listing_surface,
     _pause_after_navigation,
     _snapshot_listing_page_metrics,
     _wait_for_listing_readiness,
@@ -56,8 +55,8 @@ from app.services.acquisition.browser_readiness import (
 )
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from app.services.acquisition.policy import (
+    AcquisitionPlan,
     normalize_traversal_summary,
-    resolve_traversal_surface_policy,
     should_retry_browser_launch_profile,
 )
 from app.services.acquisition.cookie_store import (
@@ -172,6 +171,7 @@ class BrowserResult:
 class BrowserRenderRequest:
     target: object
     url: str
+    plan: AcquisitionPlan
     proxy: str | None
     surface: str | None
     traversal_mode: str | None
@@ -291,6 +291,7 @@ def _build_traversal_runtime(
 async def _run_browser_traversal(
     *,
     page,
+    plan: AcquisitionPlan,
     surface: str | None,
     traversal_mode: str | None,
     max_scrolls: int,
@@ -308,8 +309,8 @@ async def _run_browser_traversal(
             await apply_traversal_mode(
                 TraversalRequest(
                     page=page,
+                    plan=plan,
                     surface=surface,
-                    surface_policy=resolve_traversal_surface_policy(surface),
                     traversal_mode=traversal_mode,
                     max_scrolls=max_scrolls,
                     max_pages=max_pages,
@@ -487,6 +488,7 @@ _STEALTH_USER_AGENT = (
 
 async def fetch_rendered_html(
     url: str,
+    plan: AcquisitionPlan,
     proxy: str | None = None,
     surface: str | None = None,
     traversal_mode: str | None = None,
@@ -513,6 +515,7 @@ async def fetch_rendered_html(
     request = BrowserRenderRequest(
         target=target,
         url=url,
+        plan=plan,
         proxy=proxy,
         surface=surface,
         traversal_mode=traversal_mode,
@@ -569,7 +572,7 @@ async def _fetch_rendered_html_with_fallback(
             result.diagnostics["bundled_chromium_attempted"] = "bundled_chromium" in attempted_profiles
             if index < len(profiles) - 1 and should_retry_browser_launch_profile(
                 result,
-                surface=request.surface,
+                plan=request.plan,
                 html_looks_low_value=_html_looks_low_value,
             ):
                 first_profile_failure_reason = "low_value_result"
@@ -798,7 +801,7 @@ async def _fetch_rendered_html_attempt(
                 reasons,
             ) = await _wait_for_challenge_resolution(
                 page,
-                surface=surface,
+                plan=request.plan,
                 checkpoint=checkpoint,
             )
             timings_ms["browser_challenge_wait_ms"] = _elapsed_ms(challenge_started_at)
@@ -827,10 +830,12 @@ async def _fetch_rendered_html_attempt(
                 session_context=session_context,
             )
             return result
-        if runtime_options.wait_for_readiness and _is_listing_surface(surface):
+        if runtime_options.wait_for_readiness and request.plan.readiness_profile == "listing":
             readiness_started_at = time.perf_counter()
             listing_readiness = await _wait_for_listing_readiness(
-                page, surface, checkpoint=checkpoint
+                page,
+                plan=request.plan,
+                checkpoint=checkpoint,
             )
             timings_ms["browser_listing_readiness_wait_ms"] = _elapsed_ms(
                 readiness_started_at
@@ -860,7 +865,7 @@ async def _fetch_rendered_html_attempt(
             readiness_started_at = time.perf_counter()
             surface_readiness = await wait_for_surface_readiness(
                 page,
-                surface=surface,
+                plan=request.plan,
                 checkpoint=checkpoint,
             )
             timings_ms["browser_surface_readiness_wait_ms"] = _elapsed_ms(
@@ -882,6 +887,7 @@ async def _fetch_rendered_html_attempt(
         traversal_result, traversal_fallback_reused_initial_page = (
             await _run_browser_traversal(
                 page=page,
+                plan=request.plan,
                 surface=surface,
                 traversal_mode=traversal_mode,
                 max_scrolls=max_scrolls,

@@ -153,6 +153,13 @@ def _compile_noise_token_pattern(tokens: tuple[str, ...]) -> re.Pattern[str]:
 
 _COLOR_NOISE_RE = _compile_noise_token_pattern(COLOR_NOISE_TOKENS)
 _SIZE_NOISE_RE = _compile_noise_token_pattern(SIZE_NOISE_TOKENS)
+_PAGE_NATIVE_FIELD_LABELS = {
+    "availability": frozenset({"availability"}),
+    "color": frozenset(
+        {"select color", "select colour", "choose color", "choose colour"}
+    ),
+    "size": frozenset({"select size", "choose size"}),
+}
 
 
 def _strip_choose_an_option_prefix(value: str) -> str:
@@ -191,7 +198,7 @@ def normalize_value(field_name: str, value: object, *, base_url: str = "") -> ob
         return _strip_ui_noise(_strip_html(text, preserve_paragraphs=True), preserve_newlines=True)
     if _is_availability_field(field_name):
         coerced = _coerce_availability_field(text)
-        return coerced if coerced is not None else text
+        return coerced or ""
     if _is_category_field(field_name) and lowered in {
         item.lower() for item in CANDIDATE_GENERIC_CATEGORY_VALUES
     }:
@@ -312,7 +319,13 @@ def _coerce_currency_field(value: str) -> str | None:
 
 def _coerce_color_field(value: str) -> str | None:
     cleaned = _strip_ui_noise(value)
-    if not cleaned or _looks_like_variant_selector_text(cleaned):
+    if not cleaned:
+        return None
+    lowered_cleaned = cleaned.lower()
+    if (
+        _looks_like_variant_selector_text(cleaned)
+        and lowered_cleaned not in _PAGE_NATIVE_FIELD_LABELS["color"]
+    ):
         return None
     cleaned = re.sub(r"(?i)^(?:color|colour)\s+", "", cleaned).strip(" ,:-")
     cleaned = cleaned.strip("'\"\\ ")
@@ -514,7 +527,7 @@ _SCHEMA_ORG_AVAILABILITY_MAP: dict[str, str] = {
 def _coerce_availability_field(value: str) -> str | None:
     text = unescape(value).strip()
     lowered = text.lower()
-    if lowered == "availability":
+    if lowered in _PAGE_NATIVE_FIELD_LABELS["availability"]:
         return None
     # Normalize schema.org URIs (e.g. "http://schema.org/InStock" → "in_stock").
     if "schema.org/" in lowered:
@@ -678,7 +691,7 @@ def _normalize_structured_scalar(
     if field_name in {"price", "original_price"}:
         return _coerce_price_field(cleaned) or cleaned
     if field_name == "availability":
-        return _coerce_availability_field(cleaned) or cleaned
+        return _coerce_availability_field(cleaned)
     return cleaned
 
 
@@ -1004,7 +1017,10 @@ def validate_value(field_name: str, value: object) -> object | None:
             return value
         if len(text) > 40:
             return None
-        if _looks_like_variant_selector_text(text):
+        if (
+            _looks_like_variant_selector_text(text)
+            and lowered not in _PAGE_NATIVE_FIELD_LABELS["color"]
+        ):
             return None
         if re.search(r"[{};]|rgb\(|rgba\(", lowered):
             return None

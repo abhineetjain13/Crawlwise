@@ -10,10 +10,9 @@ from urllib.parse import urljoin
 from typing import Protocol
 
 from app.services.acquisition.policy import (
+    AcquisitionPlan,
     decide_initial_auto_traversal,
     decide_post_progress_auto_traversal,
-    resolve_traversal_surface_policy,
-    TraversalSurfacePolicy,
 )
 from app.services.config.crawl_runtime import (
     BROWSER_NAVIGATION_OPTIMISTIC_WAIT_MS,
@@ -377,6 +376,7 @@ class TraversalRuntime:
 @dataclass(slots=True)
 class TraversalRequest:
     page: object
+    plan: AcquisitionPlan
     surface: str | None
     traversal_mode: str | None
     max_scrolls: int
@@ -384,25 +384,24 @@ class TraversalRequest:
     request_delay_ms: int
     runtime: TraversalRuntime
     config: TraversalConfig | None = None
-    surface_policy: TraversalSurfacePolicy | None = None
 
 
 @dataclass(slots=True)
 class PaginationTraversalRequest:
     page: object
+    plan: AcquisitionPlan
     surface: str | None
     max_pages: int
     request_delay_ms: int
     runtime: TraversalRuntime
     config: TraversalConfig | None = None
-    surface_policy: TraversalSurfacePolicy | None = None
 
 
 @dataclass
 class _TraversalContext:
     page: object
     surface: str | None
-    surface_policy: TraversalSurfacePolicy
+    plan: AcquisitionPlan
     traversal_mode: str | None
     config: TraversalConfig
     max_scrolls: int
@@ -610,7 +609,7 @@ def _new_fragment_capture_state(
     return _FragmentCaptureState(
         page_content_with_retry=context.page_content_with_retry,
         checkpoint=context.checkpoint,
-        card_selectors=list(context.surface_policy.card_selectors),
+        card_selectors=list(context.plan.traversal_card_selectors),
     )
 
 
@@ -722,9 +721,9 @@ class PaginationStrategy(_TraversalStrategyBase):
         result = await collect_paginated_html(
             PaginationTraversalRequest(
                 page=self.context.page,
+                plan=self.context.plan,
                 config=self.context.config,
                 surface=self.context.surface,
-                surface_policy=self.context.surface_policy,
                 max_pages=self.context.max_pages,
                 request_delay_ms=self.context.request_delay_ms,
                 runtime=self.context.runtime,
@@ -754,9 +753,9 @@ class AutoTraversalStrategy(_TraversalStrategyBase):
             paginated = await collect_paginated_html(
                 PaginationTraversalRequest(
                     page=page,
+                    plan=self.context.plan,
                     config=self.context.config,
                     surface=self.context.surface,
-                    surface_policy=self.context.surface_policy,
                     max_pages=self.context.max_pages,
                     request_delay_ms=self.context.request_delay_ms,
                     runtime=self.context.runtime,
@@ -896,23 +895,20 @@ def _traversal_strategy_for_mode(context: _TraversalContext) -> TraversalStrateg
 
 async def apply_traversal_mode(request: TraversalRequest) -> TraversalResult:
     config = _resolved_config(request.config)
-    surface_policy = request.surface_policy or resolve_traversal_surface_policy(
-        request.surface
-    )
     logger.info(
         "[traversal] starting mode=%s surface=%s",
         request.traversal_mode,
         request.surface,
     )
 
-    if surface_policy.traversal_disabled_reason:
+    if not request.plan.traversal_enabled:
         return _log_traversal_result(
             request.traversal_mode,
             TraversalResult(
                 summary={
                     "mode": request.traversal_mode,
                     "attempted": False,
-                    "stop_reason": surface_policy.traversal_disabled_reason,
+                    "stop_reason": "detail_surface",
                 }
             ),
         )
@@ -920,7 +916,7 @@ async def apply_traversal_mode(request: TraversalRequest) -> TraversalResult:
     context = _TraversalContext(
         page=request.page,
         surface=request.surface,
-        surface_policy=surface_policy,
+        plan=request.plan,
         traversal_mode=request.traversal_mode,
         config=config,
         max_scrolls=request.max_scrolls,
@@ -941,9 +937,6 @@ async def collect_paginated_html(
     request: PaginationTraversalRequest,
 ) -> TraversalResult:
     config = _resolved_config(request.config)
-    surface_policy = request.surface_policy or resolve_traversal_surface_policy(
-        request.surface
-    )
     runtime = request.runtime
     if runtime.advance_next_page_fn is None and runtime.click_and_observe_next_page is None:
         raise ValueError("no pagination callback provided")
@@ -961,7 +954,7 @@ async def collect_paginated_html(
     if current_url:
         visited_urls.add(current_url)
     seen_card_identities: set[str] = set()
-    card_selectors = list(surface_policy.card_selectors)
+    card_selectors = list(request.plan.traversal_card_selectors)
 
     async def _capture_page_html(
         current_page,
@@ -974,7 +967,7 @@ async def collect_paginated_html(
         )
         capture_html = full_html
         capture_mode = "full_page"
-        if surface_policy.is_listing_surface:
+        if request.plan.is_listing_surface:
             fragment_parts: list[str] = []
             try:
                 result = await current_page.evaluate(_JS_EXTRACT_CARDS, card_selectors)
@@ -1140,7 +1133,7 @@ async def collect_paginated_html(
                     pass
             await runtime.wait_for_surface_readiness(
                 page,
-                surface=request.surface,
+                plan=request.plan,
                 checkpoint=runtime.checkpoint,
             )
             steps.append(
@@ -1180,7 +1173,7 @@ async def collect_paginated_html(
         await runtime.flatten_shadow_dom(page)
         await runtime.wait_for_listing_readiness(
             page,
-            request.surface,
+            plan=request.plan,
             checkpoint=runtime.checkpoint,
         )
     if page_files:

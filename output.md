@@ -1,0 +1,258 @@
+
+═══════════════════════════════════════════════════════════════════
+DELIVERABLE 1 — Per-test classification table
+═══════════════════════════════════════════════════════════════════
+File:line	Function name	Classification	Reason
+test_listing_extractor.py:L43	test_extract_product_cards	BEHAVIORAL	Evaluates public extraction wrapper with raw HTML outputting records.
+test_listing_extractor.py:L63	test_extract_listing_records_reuses_provided_page_sources	IMPLEMENTATION-LOCKING	Patches parse_page_sources to assert inner helper short-circuiting.
+test_listing_extractor.py:L86	test_extract_product_cards_falls_back_to_image_alt_for_title	BEHAVIORAL	Validates DOM fallback behavior via standard input/output.
+test_listing_extractor.py:L108	test_extract_listing_records_reuses_provided_soup	IMPLEMENTATION-LOCKING	Monkeypatches BeautifulSoup to ensure it is not instantiated twice.
+test_listing_extractor.py:L131	test_extract_listing_records_ignores_third_party_social_network_payload_records	BEHAVIORAL	Evaluates extraction filtering purely through manifest and HTML inputs.
+test_listing_extractor.py:L176	test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_item	IMPLEMENTATION-LOCKING	Validates behavior by directly invoking private _enforce_listing_field_contract.
+test_listing_extractor.py:L226	test_extract_listing_records_merges_adapter_rows_with_dom_job_cards	BEHAVIORAL	Standard input/output test across merged JSON and DOM payloads.
+test_listing_extractor.py:L274	test_extract_listing_records_maps_generic_job_ids_without_emitting_sku	BEHAVIORAL	Verifies job-specific field mapping via public extraction.
+test_listing_extractor.py:L308	test_extract_listing_records_citybeach_artifact_stays_onsite_and_keeps_titles	BEHAVIORAL	Evaluates target URLs and filtering using generic inputs.
+test_listing_extractor.py:L354	test_extract_listing_records_myntra_artifact_preserves_primary_results	BEHAVIORAL	Tests record creation from next_data payload.
+test_listing_extractor.py:L383	test_extract_listing_records_handles_dyson_style_comparison_tables	BEHAVIORAL	Validates comparison table extraction over raw HTML.
+test_listing_extractor.py:L423	test_extract_listing_records_handles_main_entity_itemlist_manifest	BEHAVIORAL	Validates json_ld manifest parsing without internal mocks.
+test_listing_extractor.py:L449	test_extract_listing_records_handles_graph_wrapped_json_ld_without_manifest	BEHAVIORAL	Extracts correctly from inline embedded JSON-LD graphs.
+test_listing_extractor.py:L475	test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by_position	BEHAVIORAL	Validates complex merging behavior via raw HTML strings.
+test_listing_extractor.py:L509	test_extract_balanced_literal_rejects_oversized_unterminated_inline_array	IMPLEMENTATION-LOCKING	Directly executes the private _extract_balanced_literal parser helper.
+test_listing_extractor.py:L520	test_extract_listing_records_handles_react_hydrate_props_payloads	BEHAVIORAL	Validates embedded JS parsing via standard extraction pipeline.
+test_listing_extractor.py:L562	test_extract_listing_records_splits_paginated_html_and_dedupes_urls	BEHAVIORAL	Tests page break comments and url deduplication organically.
+test_listing_extractor.py:L599	test_extract_job_cards	BEHAVIORAL	Extracts standard job fields from raw DOM strings.
+test_listing_extractor.py:L618	test_auto_detect_repeating_cards	BEHAVIORAL	Relies on auto-detection logic strictly through public boundary.
+test_listing_extractor.py:L636	test_max_records_limit	BEHAVIORAL	Ensures the pipeline respects the max_records boundary.
+test_listing_extractor.py:L645	test_empty_page	BEHAVIORAL	Tests empty extraction behavior organically.
+test_listing_extractor.py:L651	test_amazon_style_listing	BEHAVIORAL	Tests standard extraction using data-component-type signals.
+test_listing_extractor.py:L667	test_extract_hydrated_state_listing_records	BEHAVIORAL	Uses pre-built manifest and tests JSON parsing output.
+test_listing_extractor.py:L686	test_extract_items_from_json_uses_configured_max_depth	IMPLEMENTATION-LOCKING	Directly invokes private _extract_items_from_json instead of pipeline.
+test_listing_extractor.py:L703	test_extract_product_cards_captures_listing_metadata	BEHAVIORAL	Tests secondary metadata extraction (reviews, original price) from DOM.
+test_listing_extractor.py:L734	test_extract_product_cards_skips_old_price_nodes_for_current_price	BEHAVIORAL	Verifies cross-field price normalization logic without mocking.
+test_listing_extractor.py:L757	test_extract_product_cards_requires_context_for_generic_strikethrough_original_price	BEHAVIORAL	Verifies original price heuristics organically.
+test_listing_extractor.py:L779	test_extract_product_cards_infers_currency_from_locale_and_reads_swatch_color	BEHAVIORAL	Tests currency inference purely via inputs/outputs.
+test_listing_extractor.py:L805	test_infer_currency_from_page_url_ignores_false_positive_path_substrings	IMPLEMENTATION-LOCKING	Specifically tests private _infer_currency_from_page_url helper.
+test_listing_extractor.py:L820	test_infer_currency_from_page_url_matches_bounded_locale_segments	IMPLEMENTATION-LOCKING	Tests private _infer_currency_from_page_url helper directly.
+test_listing_extractor.py:L835	test_extract_listing_prefers_next_flight_records_over_breadcrumb_json_ld	BEHAVIORAL	Resolves extraction arbitration organically through standard entrypoints.
+test_listing_extractor.py:L856	test_extract_listing_next_flight_uses_generic_brand_fallback	BEHAVIORAL	Parses embedded string chunks successfully.
+test_listing_extractor.py:L876	test_extract_listing_prefers_detail_link_over_transactional_cart_action	BEHAVIORAL	Ensures correct URL selection given competing valid links in HTML.
+test_listing_extractor.py:L898	test_extract_listing_rejects_weak_collection_json_ld_without_item_fields	BEHAVIORAL	Validates JSON-LD exclusion policies organically.
+test_listing_extractor.py:L928	test_extract_listing_prefers_rich_product_array_over_category_links	BEHAVIORAL	Tests complex arbitration rules via manifest.
+test_listing_extractor.py:L977	test_match_dimensions_line_does_not_treat_random_d_suffix_as_dimension_signal	IMPLEMENTATION-LOCKING	Calls private _match_dimensions_line explicitly.
+test_listing_extractor.py:L983	test_match_line_uses_cached_case_insensitive_regex_compilation	IMPLEMENTATION-LOCKING	Asserts against Python cache_info() hits and misses.
+test_listing_extractor.py:L994	test_match_dimensions_line_detects_case_insensitive_dimension_token	IMPLEMENTATION-LOCKING	Calls private _match_dimensions_line.
+test_listing_extractor.py:L1000	test_normalize_listing_value_only_promotes_true_product_short_paths	IMPLEMENTATION-LOCKING	Tests private _normalize_listing_value directly.
+test_listing_extractor.py:L1021	test_extract_listing_from_query_state_product_cards_and_drops_content_cards	BEHAVIORAL	Filters non-product cards out of a query manifest appropriately.
+test_listing_extractor.py:L1057	test_extract_listing_ignores_kitchenaid_style_variant_option_rows	BEHAVIORAL	Organically drops sub-variants mimicking product cards.
+test_listing_extractor.py:L1105	test_extract_listing_prefers_sigma_product_search_results_over_nav_links	BEHAVIORAL	Correctly prioritizes structured Apollo state over DOM navs.
+test_listing_extractor.py:L1155	test_is_meaningful_listing_record_keeps_priced_record_without_url	IMPLEMENTATION-LOCKING	Tests private evaluation helper _is_meaningful_listing_record.
+test_listing_extractor.py:L1165	test_is_meaningful_listing_record_drops_title_and_image_only_record_without_url	IMPLEMENTATION-LOCKING	Tests private evaluation helper _is_meaningful_listing_record.
+test_listing_extractor.py:L1174	test_is_meaningful_listing_record_drops_job_like_nav_link_without_title_or_salary	IMPLEMENTATION-LOCKING	Tests private evaluation helper _is_meaningful_listing_record.
+test_listing_extractor.py:L1183	test_extract_card_images_skips_swatch_and_icon_images	IMPLEMENTATION-LOCKING	Creates custom BeautifulSoup node to test private _extract_card_images.
+test_listing_extractor.py:L1203	test_extract_color_label_from_node_skips_action_buttons	IMPLEMENTATION-LOCKING	Custom BS node used to test _extract_color_label_from_node.
+test_listing_extractor.py:L1210	test_extract_color_label_from_node_skips_fitment_copy	IMPLEMENTATION-LOCKING	Custom BS node used to test _extract_color_label_from_node.
+test_listing_extractor.py:L1217	test_extract_card_size_rejects_generic_multiple_sizes	IMPLEMENTATION-LOCKING	Executes private _extract_card_size against string list.
+test_listing_extractor.py:L1224	test_extract_card_size_extracts_measurement_values	IMPLEMENTATION-LOCKING	Executes private _extract_card_size against string list.
+test_listing_extractor.py:L1228	test_extract_product_cards_read_identifiers_and_skip_fitment_icons	BEHAVIORAL	Verifies SKU/Part extraction successfully skips generic UI icons.
+test_listing_extractor.py:L1262	test_extract_listing_ignores_stringified_url_lists_from_inline_arrays	BEHAVIORAL	Correctly filters nested generic URL arrays in raw HTML.
+test_listing_extractor.py:L1295	test_extract_listing_records_ignores_filter_option_inline_arrays	BEHAVIORAL	Excludes UI state arrays masquerading as items from extraction.
+test_listing_extractor.py:L1318	test_is_meaningful_listing_record_rejects_numeric_titles_and_filter_counts	IMPLEMENTATION-LOCKING	Invokes _is_meaningful_listing_record directly.
+test_listing_extractor.py:L1323	test_is_meaningful_listing_record_keeps_numeric_title_with_price_or_image	IMPLEMENTATION-LOCKING	Invokes _is_meaningful_listing_record directly.
+test_listing_extractor.py:L1336	test_is_meaningful_listing_record_rejects_title_only_job_fragment	IMPLEMENTATION-LOCKING	Invokes _is_meaningful_listing_record directly.
+test_listing_extractor.py:L1347	test_is_meaningful_listing_record_rejects_category_hub_url_with_only_visual_fields	IMPLEMENTATION-LOCKING	Invokes _is_meaningful_listing_record directly.
+test_listing_extractor.py:L1357	test_is_meaningful_listing_record_rejects_weak_hub_row_with_publication_date_only	IMPLEMENTATION-LOCKING	Invokes _is_meaningful_listing_record directly.
+test_listing_extractor.py:L1367	test_is_meaningful_listing_record_keeps_detail_like_url_with_only_visual_fields	IMPLEMENTATION-LOCKING	Invokes _is_meaningful_listing_record directly.
+test_listing_extractor.py:L1377	test_is_merchandising_record_only_rejects_pure_editorial_sale_titles	IMPLEMENTATION-LOCKING	Invokes _is_merchandising_record_impl directly.
+test_listing_extractor.py:L1401	test_extract_listing_records_handles_article_cards_inside_testid_grid	BEHAVIORAL	Correctly locates DOM articles inside modern grids.
+test_listing_extractor.py:L1430	test_extract_listing_records_uses_usajobs_network_payload_aliases	BEHAVIORAL	Organically pulls data from USAJobs specific API payloads.
+test_listing_extractor.py:L1467	test_extract_listing_records_synthesizes_saashr_urls_from_network_payloads	BEHAVIORAL	Integrates SaaSHR XHR structures properly.
+test_listing_extractor.py:L1508	test_extract_from_card_infers_dice_job_fields	IMPLEMENTATION-LOCKING	Mocks a BeautifulSoup node and passes it to _extract_from_card.
+test_listing_extractor.py:L1542	test_extract_from_card_handles_idealist_job_card	IMPLEMENTATION-LOCKING	Mocks a BeautifulSoup node and passes it to _extract_from_card.
+test_listing_extractor.py:L1573	test_extract_listing_records_ignores_informational_inline_arrays_on_loading_shell_pages	BEHAVIORAL	Safely drops skeleton UI components and irrelevant scripts.
+test_listing_extractor.py:L1605	test_extract_from_card_handles_clark_job_card_metadata_selectors	BEHAVIORAL	Ensures correct company logic via extract_listing_records.
+test_listing_extractor.py:L1634	test_extract_from_card_handles_atlas_job_card_metadata_rows	BEHAVIORAL	Correctly maps specific custom listing schemas.
+test_listing_extractor.py:L1673	test_lookup_next_flight_window_index_returns_none_when_url_cannot_be_found	IMPLEMENTATION-LOCKING	Calls private _lookup_next_flight_window_index directly.
+test_listing_extractor.py:L1683	test_extract_structured_sources_merges_records_from_multiple_sources	BEHAVIORAL	Validates arbitration logic (merging) safely from top-level.
+test_listing_extractor.py:L1722	test_extract_structured_sources_reads_deep_hydrated_state_records	IMPLEMENTATION-LOCKING	Alters module constants (MAX_JSON_RECURSION_DEPTH) with monkeypatch.
+test_listing_extractor.py:L1757	test_extract_structured_sources_does_not_mutate_structured_extractor_depth	IMPLEMENTATION-LOCKING	Hacks constants and private instances (_listing_structured_extractor) to verify state.
+test_listing_extractor.py:L1796	test_normalize_ld_item_preserves_zero_price	IMPLEMENTATION-LOCKING	Injects dict directly to _normalize_ld_item.
+test_listing_extractor.py:L1810	test_auto_detect_cards_ignores_sidebar_filter_groups_for_commerce	IMPLEMENTATION-LOCKING	Directly tests private _auto_detect_cards and verifies tuple output.
+test_listing_extractor.py:L1831	test_card_group_score_prefers_job_signals_on_job_cards	IMPLEMENTATION-LOCKING	Tests specific floats coming back from _card_group_score.
+test_listing_extractor.py:L1855	test_auto_detect_cards_prefers_job_groups_for_job_surface	IMPLEMENTATION-LOCKING	Directly executes private _auto_detect_cards.
+test_listing_extractor.py:L1886	test_card_title_skips_price_heading	BEHAVIORAL	Organic validation that the extraction bypasses price-like headers.
+test_listing_extractor.py:L1906	test_infer_listing_title_min_chars_is_configurable	IMPLEMENTATION-LOCKING	Monkeypatches specific MIN_CHARS config, tests private function.
+test_listing_extractor.py:L1919	test_card_title_uses_itemprop_name	BEHAVIORAL	Safely checks correct selector priority.
+test_listing_extractor.py:L1939	test_card_itemprop_image	BEHAVIORAL	Ensures correct mapping from itemprop='image'.
+test_listing_extractor.py:L1959	test_coerce_listing_product_url_candidate_preserves_canonical_percent_encoded_url	IMPLEMENTATION-LOCKING	Asserts against private _coerce_listing_product_url_candidate.
+test_listing_extractor.py:L1970	test_extract_listing_records_reads_titles_from_pro_title_text	IMPLEMENTATION-LOCKING	Manual DOM parsing, passes sub-nodes directly to _extract_from_card.
+test_listing_extractor.py:L2006	test_extract_from_card_backfills_identity_from_ancestor_product_context	IMPLEMENTATION-LOCKING	Tests extraction using specific private _extract_from_card execution.
+test_listing_extractor.py:L2047	test_clean_price_text_strips_surrounding_text	IMPLEMENTATION-LOCKING	Invokes _clean_price_text private helper.
+test_listing_extractor.py:L2055	test_clean_price_text_returns_none_for_overlong_input_without_regex_backtracking	IMPLEMENTATION-LOCKING	Times the execution speed of the private regex parser.
+test_listing_extractor.py:L2063	test_normalize_generic_item_prefers_product_full_url_over_nested_shop_url	IMPLEMENTATION-LOCKING	Executes private _normalize_generic_item on dict directly.
+test_listing_extractor.py:L2081	test_normalize_generic_item_keeps_slugged_record_when_slug_url_cannot_be_resolved	IMPLEMENTATION-LOCKING	Executes private _normalize_generic_item on dict directly.
+test_listing_extractor.py:L2096	test_normalize_listing_record_drops_dimensions_when_it_duplicates_size_choices	IMPLEMENTATION-LOCKING	Asserts behavior of a specific normalization pipeline component directly.
+test_listing_extractor.py:L2114	test_assess_listing_completeness_flags_sparse_capture_on_dense_commerce_page	IMPLEMENTATION-LOCKING	Invokes internal completeness analyzer function manually.
+test_listing_extractor.py:L2140	test_assess_listing_completeness_flags_empty_skeleton_listing_shell	IMPLEMENTATION-LOCKING	Invokes internal completeness analyzer function manually.
+test_listing_extractor.py:L2158	test_assess_listing_completeness_uses_detail_url_lower_bound	IMPLEMENTATION-LOCKING	Invokes internal completeness analyzer function manually.
+test_listing_extractor.py:L2188	test_auto_detect_prefers_product_cards_over_nav_links	BEHAVIORAL	The orchestration loop cleanly picks product grids over nav links.
+test_listing_extractor.py:L2210	test_itemscope_product_selector	BEHAVIORAL	Captures Schema.org Product DOM correctly using generic interface.
+test_listing_extractor.py:L2232	test_property_listing_field_contract_enforcement	IMPLEMENTATION-LOCKING	Tests private _enforce_listing_field_contract over generated inputs.
+test_listing_extractor.py:L2265	test_property_listing_contract_warning_logging	IMPLEMENTATION-LOCKING	Replaces standard logger via patch to trace contract rejections inside private helper.
+test_llm_runtime.py:L63	test_resolve_active_config_prefers_task_specific	CONTRACT	Ensures LLM selection obeys task priority cleanly through standard SQL inserts.
+test_llm_runtime.py:L91	test_run_prompt_task_logs_cost_usage	IMPLEMENTATION-LOCKING	Uses AsyncMock to completely fake the provider interface layer _call_provider.
+test_llm_runtime.py:L123	test_run_prompt_task_reuses_cached_prompt_result	IMPLEMENTATION-LOCKING	Asserts internal mock call counts (call_mock.await_count) to verify cache.
+test_llm_runtime.py:L167	test_snapshot_active_configs_includes_page_classification	CONTRACT	Validates proper configuration serialization without internal manipulation.
+test_llm_runtime.py:L195	test_run_prompt_task_gracefully_returns_provider_connection_error	IMPLEMENTATION-LOCKING	Heavy mock setup modifying get_prompt_task, load_prompt_file, _call_provider.
+test_llm_runtime.py:L223	test_run_prompt_task_rejects_invalid_xpath_selector_schema	IMPLEMENTATION-LOCKING	Returns raw mocked JSON responses from the provider interface to check validation.
+test_llm_runtime.py:L243	test_run_prompt_task_rejects_invalid_field_cleanup_review_schema	IMPLEMENTATION-LOCKING	Returns raw mocked JSON responses from the provider interface to check validation.
+test_llm_runtime.py:L266	test_run_prompt_task_rejects_invalid_page_classification_schema	IMPLEMENTATION-LOCKING	Returns raw mocked JSON responses from the provider interface to check validation.
+test_llm_runtime.py:L289	test_load_prompt_file_rejects_parent_path_traversal	CONTRACT	Clean check ensuring security rules on file loaders function properly.
+test_llm_runtime.py:L293	test_run_prompt_task_rejects_invalid_schema_inference_payload	IMPLEMENTATION-LOCKING	Returns raw mocked JSON responses from the provider interface to check validation.
+test_llm_runtime.py:L316	test_run_prompt_task_exports_prometheus_outcome_metrics	IMPLEMENTATION-LOCKING	Asserts against prometheus registry using patched underlying network provider.
+test_llm_runtime.py:L363	test_call_provider_with_retry_uses_shared_circuit_state_across_workers	IMPLEMENTATION-LOCKING	Directly mutates global dicts _provider_circuits.clear() and stubs Redis interactions.
+test_batch_runtime_retry_update.py:L43	test_retry_run_update_retries_fast_on_lock_contention	IMPLEMENTATION-LOCKING	Asserts against await_count utilizing fake classes like _FakeNestedTransaction.
+test_batch_runtime_retry_update.py:L73	test_retry_run_update_does_not_retry_non_lock_operational_errors	IMPLEMENTATION-LOCKING	Highly coupled fake ORM objects verifying execution step-by-step.
+test_batch_runtime_retry_update.py:L100	test_retry_run_update_retries_transient_connection_loss	IMPLEMENTATION-LOCKING	Fakes the DB driver entirely to test procedural error catching.
+test_batch_runtime_retry_update.py:L131	test_start_or_resume_run_uses_locked_status_for_transition	IMPLEMENTATION-LOCKING	Asserts on mock callbacks inside BatchRunStore.apply and internal logic states.
+test_batch_runtime_retry_update.py:L169	test_start_or_resume_run_starts_when_locked_status_is_pending	REDUNDANT	Mirrors exact implementation-locking pattern as the previous test but with slightly different faked data.
+test_base_adapter.py:L22	test_request_json_with_curl_returns_none_on_decode_failure	IMPLEMENTATION-LOCKING	Runs private network wrapper instead of actual adapter class behavior.
+test_base_adapter.py:L42	test_matches_platform_family_uses_shared_detector	IMPLEMENTATION-LOCKING	Directly mocks detect_platform_family rather than passing matching data.
+test_base_adapter.py:L54	test_matches_platform_family_rejects_other_families	IMPLEMENTATION-LOCKING	Directly mocks detect_platform_family rather than passing mismatched data.
+test_field_mappings_collisions.py:L8	test_field_aliases_only_share_intentionally_duplicated_aliases	CONTRACT	Safe check over static map variables to ensure uniqueness constraints.
+test_field_mappings_collisions.py:L23	test_color_variants_aliases_stay_color_specific	CONTRACT	Simple static check for specific array membership values.
+═══════════════════════════════════════════════════════════════════
+DELIVERABLE 2 — Rollup counts per file
+═══════════════════════════════════════════════════════════════════
+File	BEHAVIORAL	IMPL-LOCKING	REDUNDANT	CONTRACT	Total
+test_listing_extractor.py	29	36	0	0	65
+test_llm_runtime.py	0	9	0	3	12
+test_batch_runtime_retry_update.py	0	4	1	0	5
+test_base_adapter.py	0	3	0	0	3
+test_field_mappings_collisions.py	0	0	0	2	2
+═══════════════════════════════════════════════════════════════════
+DELIVERABLE 3 — Rewrite targets
+═══════════════════════════════════════════════════════════════════
+File:line	Function name	Rewrite strategy (≤15 words)
+test_listing_extractor.py:L1970	test_extract_listing_records_reads_titles_from_pro_title_text	Provide string HTML to extract_listing_records and verify outcome directly.
+test_base_adapter.py:L42	test_matches_platform_family_uses_shared_detector	Pass an actual HTML string configured to trigger detection algorithm naturally.
+test_base_adapter.py:L54	test_matches_platform_family_rejects_other_families	Pass an actual HTML string configured to fail detection algorithm naturally.
+═══════════════════════════════════════════════════════════════════
+DELIVERABLE 4 — Delete targets
+═══════════════════════════════════════════════════════════════════
+test_listing_extractor.py::test_extract_listing_records_reuses_provided_page_sources — Asserts optimization (no parse), locks internal helper signature.
+test_listing_extractor.py::test_extract_listing_records_reuses_provided_soup — Asserts optimization (no parse), blocks BS4 adjustments.
+test_listing_extractor.py::test_extract_listing_records_merges_structured_and_dom_card_fields_for_same_item — Directly passes mock data to private filtering routine.
+test_listing_extractor.py::test_extract_balanced_literal_rejects_oversized_unterminated_inline_array — Pings internal string tokenizer directly.
+test_listing_extractor.py::test_extract_items_from_json_uses_configured_max_depth — Directly invokes private helper _extract_items_from_json.
+test_listing_extractor.py::test_infer_currency_from_page_url_ignores_false_positive_path_substrings — Asserts private fallback strings.
+test_listing_extractor.py::test_infer_currency_from_page_url_matches_bounded_locale_segments — Asserts private fallback strings.
+test_listing_extractor.py::test_match_dimensions_line_does_not_treat_random_d_suffix_as_dimension_signal — Calls private _match_dimensions_line.
+test_listing_extractor.py::test_match_line_uses_cached_case_insensitive_regex_compilation — Checks python caching internals (cache_info).
+test_listing_extractor.py::test_match_dimensions_line_detects_case_insensitive_dimension_token — Checks private _match_dimensions_line.
+test_listing_extractor.py::test_normalize_listing_value_only_promotes_true_product_short_paths — Directly checks private mapping logic.
+test_listing_extractor.py::test_is_meaningful_listing_record_keeps_priced_record_without_url — Checks private validity filter directly.
+test_listing_extractor.py::test_is_meaningful_listing_record_drops_title_and_image_only_record_without_url — Checks private validity filter directly.
+test_listing_extractor.py::test_is_meaningful_listing_record_drops_job_like_nav_link_without_title_or_salary — Checks private validity filter directly.
+test_listing_extractor.py::test_extract_card_images_skips_swatch_and_icon_images — Over-specific BS4 partial DOM traversal test.
+test_listing_extractor.py::test_extract_color_label_from_node_skips_action_buttons — Specific BS4 partial DOM traversal test.
+test_listing_extractor.py::test_extract_color_label_from_node_skips_fitment_copy — Specific BS4 partial DOM traversal test.
+test_listing_extractor.py::test_extract_card_size_rejects_generic_multiple_sizes — Specific string mapping test.
+test_listing_extractor.py::test_extract_card_size_extracts_measurement_values — Specific string mapping test.
+test_listing_extractor.py::test_is_meaningful_listing_record_rejects_numeric_titles_and_filter_counts — Validation logic tied to private helper.
+test_listing_extractor.py::test_is_meaningful_listing_record_keeps_numeric_title_with_price_or_image — Validation logic tied to private helper.
+test_listing_extractor.py::test_is_meaningful_listing_record_rejects_title_only_job_fragment — Validation logic tied to private helper.
+test_listing_extractor.py::test_is_meaningful_listing_record_rejects_category_hub_url_with_only_visual_fields — Validation logic tied to private helper.
+test_listing_extractor.py::test_is_meaningful_listing_record_rejects_weak_hub_row_with_publication_date_only — Validation logic tied to private helper.
+test_listing_extractor.py::test_is_meaningful_listing_record_keeps_detail_like_url_with_only_visual_fields — Validation logic tied to private helper.
+test_listing_extractor.py::test_is_merchandising_record_only_rejects_pure_editorial_sale_titles — Testing private filter explicitly.
+test_listing_extractor.py::test_extract_from_card_infers_dice_job_fields — Checks manual sub-parsing without the pipeline scope.
+test_listing_extractor.py::test_extract_from_card_handles_idealist_job_card — Checks manual sub-parsing without the pipeline scope.
+test_listing_extractor.py::test_lookup_next_flight_window_index_returns_none_when_url_cannot_be_found — Specifically hits a private helper string offset search.
+test_listing_extractor.py::test_extract_structured_sources_reads_deep_hydrated_state_records — Overrides module level limit variables for depth tracing.
+test_listing_extractor.py::test_extract_structured_sources_does_not_mutate_structured_extractor_depth — State checking internal implementation instances.
+test_listing_extractor.py::test_normalize_ld_item_preserves_zero_price — Feeds raw dict into private normalizer helper.
+test_listing_extractor.py::test_auto_detect_cards_ignores_sidebar_filter_groups_for_commerce — Mocks out card logic arrays directly.
+test_listing_extractor.py::test_card_group_score_prefers_job_signals_on_job_cards — Checks output floats on a private scorer function.
+test_listing_extractor.py::test_auto_detect_cards_prefers_job_groups_for_job_surface — Direct execution of auto detection rules.
+test_listing_extractor.py::test_infer_listing_title_min_chars_is_configurable — Depends on monkeypatching module constants internally.
+test_listing_extractor.py::test_coerce_listing_product_url_candidate_preserves_canonical_percent_encoded_url — Mocks URL helper strings.
+test_listing_extractor.py::test_extract_from_card_backfills_identity_from_ancestor_product_context — Injects BS4 nodes into private _extract_from_card.
+test_listing_extractor.py::test_clean_price_text_strips_surrounding_text — Reaches straight into private string formatter.
+test_listing_extractor.py::test_clean_price_text_returns_none_for_overlong_input_without_regex_backtracking — Asserts performance of internal regex engine.
+test_listing_extractor.py::test_normalize_generic_item_prefers_product_full_url_over_nested_shop_url — Bypasses pipeline to hit mapper helper.
+test_listing_extractor.py::test_normalize_generic_item_keeps_slugged_record_when_slug_url_cannot_be_resolved — Hits internal mapper bypass directly.
+test_listing_extractor.py::test_normalize_listing_record_drops_dimensions_when_it_duplicates_size_choices — Hits normalization layer without pipeline.
+test_listing_extractor.py::test_assess_listing_completeness_flags_sparse_capture_on_dense_commerce_page — Invokes specific validation module component.
+test_listing_extractor.py::test_assess_listing_completeness_flags_empty_skeleton_listing_shell — Invokes specific validation module component.
+test_listing_extractor.py::test_assess_listing_completeness_uses_detail_url_lower_bound — Invokes specific validation module component.
+test_listing_extractor.py::test_property_listing_field_contract_enforcement — Hypothesis test on private output shapes.
+test_listing_extractor.py::test_property_listing_contract_warning_logging — Logger mocking attached to private output shaping.
+test_llm_runtime.py::test_run_prompt_task_logs_cost_usage — Mocked provider interactions to check internal execution flow.
+test_llm_runtime.py::test_run_prompt_task_reuses_cached_prompt_result — Inspects await_count instead of standard inputs/outputs.
+test_llm_runtime.py::test_run_prompt_task_gracefully_returns_provider_connection_error — Modifies file loading and API layers simultaneously.
+test_llm_runtime.py::test_run_prompt_task_rejects_invalid_xpath_selector_schema — Supplies raw mocked payloads bypassing integration boundaries.
+test_llm_runtime.py::test_run_prompt_task_rejects_invalid_field_cleanup_review_schema — Supplies raw mocked payloads bypassing integration boundaries.
+test_llm_runtime.py::test_run_prompt_task_rejects_invalid_page_classification_schema — Supplies raw mocked payloads bypassing integration boundaries.
+test_llm_runtime.py::test_run_prompt_task_rejects_invalid_schema_inference_payload — Supplies raw mocked payloads bypassing integration boundaries.
+test_llm_runtime.py::test_run_prompt_task_exports_prometheus_outcome_metrics — Reaches into metrics reporting structures for logic verification.
+test_llm_runtime.py::test_call_provider_with_retry_uses_shared_circuit_state_across_workers — Overrides circuit breakers and Redis connectivity internally.
+test_batch_runtime_retry_update.py::test_retry_run_update_retries_fast_on_lock_contention — Deep ORM mocking preventing database interface improvements.
+test_batch_runtime_retry_update.py::test_retry_run_update_does_not_retry_non_lock_operational_errors — Same heavy ORM mock.
+test_batch_runtime_retry_update.py::test_retry_run_update_retries_transient_connection_loss — Same heavy ORM mock.
+test_batch_runtime_retry_update.py::test_start_or_resume_run_uses_locked_status_for_transition — Modifies loggers and internals arbitrarily.
+test_batch_runtime_retry_update.py::test_start_or_resume_run_starts_when_locked_status_is_pending — REDUNDANT to the previous test.
+test_base_adapter.py::test_request_json_with_curl_returns_none_on_decode_failure — Tests the exact behavior of a completely private fallback helper explicitly.
+═══════════════════════════════════════════════════════════════════
+DELIVERABLE 5 — Keep targets
+═══════════════════════════════════════════════════════════════════
+test_listing_extractor.py::test_extract_product_cards
+test_listing_extractor.py::test_extract_product_cards_falls_back_to_image_alt_for_title
+test_listing_extractor.py::test_extract_listing_records_ignores_third_party_social_network_payload_records
+test_listing_extractor.py::test_extract_listing_records_merges_adapter_rows_with_dom_job_cards
+test_listing_extractor.py::test_extract_listing_records_maps_generic_job_ids_without_emitting_sku
+test_listing_extractor.py::test_extract_listing_records_citybeach_artifact_stays_onsite_and_keeps_titles
+test_listing_extractor.py::test_extract_listing_records_myntra_artifact_preserves_primary_results
+test_listing_extractor.py::test_extract_listing_records_handles_dyson_style_comparison_tables
+test_listing_extractor.py::test_extract_listing_records_handles_main_entity_itemlist_manifest
+test_listing_extractor.py::test_extract_listing_records_handles_graph_wrapped_json_ld_without_manifest
+test_listing_extractor.py::test_extract_listing_records_merges_inline_object_arrays_with_dom_records_by_position
+test_listing_extractor.py::test_extract_listing_records_handles_react_hydrate_props_payloads
+test_listing_extractor.py::test_extract_listing_records_splits_paginated_html_and_dedupes_urls
+test_listing_extractor.py::test_extract_job_cards
+test_listing_extractor.py::test_auto_detect_repeating_cards
+test_listing_extractor.py::test_max_records_limit
+test_listing_extractor.py::test_empty_page
+test_listing_extractor.py::test_amazon_style_listing
+test_listing_extractor.py::test_extract_hydrated_state_listing_records
+test_listing_extractor.py::test_extract_product_cards_captures_listing_metadata
+test_listing_extractor.py::test_extract_product_cards_skips_old_price_nodes_for_current_price
+test_listing_extractor.py::test_extract_product_cards_requires_context_for_generic_strikethrough_original_price
+test_listing_extractor.py::test_extract_product_cards_infers_currency_from_locale_and_reads_swatch_color
+test_listing_extractor.py::test_extract_listing_prefers_next_flight_records_over_breadcrumb_json_ld
+test_listing_extractor.py::test_extract_listing_next_flight_uses_generic_brand_fallback
+test_listing_extractor.py::test_extract_listing_prefers_detail_link_over_transactional_cart_action
+test_listing_extractor.py::test_extract_listing_rejects_weak_collection_json_ld_without_item_fields
+test_listing_extractor.py::test_extract_listing_prefers_rich_product_array_over_category_links
+test_listing_extractor.py::test_extract_listing_from_query_state_product_cards_and_drops_content_cards
+test_listing_extractor.py::test_extract_listing_ignores_kitchenaid_style_variant_option_rows
+test_listing_extractor.py::test_extract_listing_prefers_sigma_product_search_results_over_nav_links
+test_listing_extractor.py::test_extract_product_cards_read_identifiers_and_skip_fitment_icons
+test_listing_extractor.py::test_extract_listing_ignores_stringified_url_lists_from_inline_arrays
+test_listing_extractor.py::test_extract_listing_records_ignores_filter_option_inline_arrays
+test_listing_extractor.py::test_extract_listing_records_handles_article_cards_inside_testid_grid
+test_listing_extractor.py::test_extract_listing_records_uses_usajobs_network_payload_aliases
+test_listing_extractor.py::test_extract_listing_records_synthesizes_saashr_urls_from_network_payloads
+test_listing_extractor.py::test_extract_listing_records_ignores_informational_inline_arrays_on_loading_shell_pages
+test_listing_extractor.py::test_extract_from_card_handles_clark_job_card_metadata_selectors
+test_listing_extractor.py::test_extract_from_card_handles_atlas_job_card_metadata_rows
+test_listing_extractor.py::test_extract_structured_sources_merges_records_from_multiple_sources
+test_listing_extractor.py::test_card_title_skips_price_heading
+test_listing_extractor.py::test_card_title_uses_itemprop_name
+test_listing_extractor.py::test_card_itemprop_image
+test_listing_extractor.py::test_auto_detect_prefers_product_cards_over_nav_links
+test_listing_extractor.py::test_itemscope_product_selector
+test_llm_runtime.py::test_resolve_active_config_prefers_task_specific
+test_llm_runtime.py::test_snapshot_active_configs_includes_page_classification
+test_llm_runtime.py::test_load_prompt_file_rejects_parent_path_traversal
+test_field_mappings_collisions.py::test_field_aliases_only_share_intentionally_duplicated_aliases
+test_field_mappings_collisions.py::test_color_variants_aliases_stay_color_specific

@@ -20,6 +20,7 @@ from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.walmart import WalmartAdapter
+from app.services.acquisition.policy import AcquisitionPlan
 from app.services.platform_policy import configured_adapter_names
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ async def run_adapter(url: str, html: str, surface: str) -> AdapterResult | None
 
 async def try_blocked_adapter_recovery(
     url: str,
-    surface: str,
+    plan: AcquisitionPlan,
     *,
     proxy_list: list[str] | None = None,
 ) -> AdapterResult | None:
@@ -88,7 +89,7 @@ async def try_blocked_adapter_recovery(
     general; it only uses known public data endpoints when a platform supports
     them directly.
     """
-    if surface not in {"ecommerce_listing", "ecommerce_detail", "job_listing", "job_detail"}:
+    if not plan.adapter_recovery_enabled:
         return None
 
     recovery_adapters = [
@@ -100,10 +101,12 @@ async def try_blocked_adapter_recovery(
     for proxy in proxies:
         for adapter in recovery_adapters:
             try:
-                if adapter.name == "shopify":
-                    records = await adapter.try_public_endpoint(url, surface, proxy=proxy)
-                else:
-                    records = await adapter.try_public_endpoint(url, "", surface, proxy=proxy)
+                records = await adapter.try_public_endpoint(
+                    url,
+                    html="",
+                    surface=plan.surface,
+                    proxy=proxy,
+                )
             except (RuntimeError, OSError, ValueError, TypeError) as exc:
                 logger.debug(
                     "%s recovery proxy failed for %s via %s: %s",

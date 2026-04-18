@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 
+from app.services.acquisition.policy import AcquisitionPlan
 from app.services.acquisition.wait_utils import cooperative_sleep_ms
 from app.services.config.crawl_runtime import (
     INTERRUPTIBLE_WAIT_POLL_MS,
@@ -12,17 +13,9 @@ from app.services.config.crawl_runtime import (
     SURFACE_READINESS_MAX_WAIT_MS,
     SURFACE_READINESS_POLL_MS,
 )
-from app.services.config.selectors import CARD_SELECTORS, DOM_PATTERNS
 from playwright.async_api import Error as PlaywrightError
 
 logger = logging.getLogger(__name__)
-
-CARD_SELECTORS_COMMERCE = list(CARD_SELECTORS.get("ecommerce", []))
-CARD_SELECTORS_JOBS = list(CARD_SELECTORS.get("jobs", []))
-
-
-def _is_listing_surface(surface: str | None) -> bool:
-    return str(surface or "").strip().lower().endswith("listing")
 
 
 async def _cooperative_sleep_ms(
@@ -71,22 +64,17 @@ async def _pause_after_navigation(
 
 async def _wait_for_listing_readiness(
     page,
-    surface: str | None,
     *,
+    plan: AcquisitionPlan,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object] | None:
     from app.services.config.platform_readiness import (
         resolve_listing_readiness_override,
     )
 
-    normalized_surface = str(surface or "").strip().lower()
-    if not normalized_surface.endswith("listing"):
+    if plan.readiness_profile != "listing":
         return None
-    selectors = (
-        CARD_SELECTORS_JOBS
-        if normalized_surface == "job_listing"
-        else CARD_SELECTORS_COMMERCE
-    )
+    selectors = list(plan.readiness_selectors)
     page_url = str(getattr(page, "url", "") or "").lower()
     override = resolve_listing_readiness_override(page_url)
     if override is not None:
@@ -270,43 +258,18 @@ def _listing_metrics_look_shell_like(metrics: dict[str, object] | None) -> bool:
     return link_count < LISTING_MIN_ITEMS and text_length < 300
 
 
-def _detail_readiness_selectors(surface: str | None) -> list[str]:
-    normalized_surface = str(surface or "").strip().lower()
-    if normalized_surface == "job_detail":
-        selectors = [
-            DOM_PATTERNS.get("title", ""),
-            DOM_PATTERNS.get("company", ""),
-            DOM_PATTERNS.get("salary", ""),
-        ]
-    elif normalized_surface == "ecommerce_detail":
-        selectors = [
-            DOM_PATTERNS.get("title", ""),
-            DOM_PATTERNS.get("price", ""),
-            DOM_PATTERNS.get("sku", ""),
-        ]
-    else:
-        selectors = [DOM_PATTERNS.get("title", ""), DOM_PATTERNS.get("price", "")]
-    return [selector for selector in selectors if str(selector).strip()]
-
-
 async def wait_for_surface_readiness(
     page,
     *,
-    surface: str | None,
+    plan: AcquisitionPlan,
     max_wait_ms: int | None = None,
     checkpoint: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, object] | None:
-    normalized_surface = str(surface or "").strip().lower()
-    if not normalized_surface:
+    if not plan.readiness_selectors:
         return None
-    if normalized_surface.endswith("listing"):
+    if plan.readiness_profile == "listing":
         if max_wait_ms == 0:
-            selectors = (
-                CARD_SELECTORS_JOBS
-                if normalized_surface == "job_listing"
-                else CARD_SELECTORS_COMMERCE
-            )
-            for selector in selectors:
+            for selector in plan.readiness_selectors:
                 try:
                     count = await page.locator(selector).count()
                 except PlaywrightError:
@@ -320,11 +283,11 @@ async def wait_for_surface_readiness(
                     }
             return {"ready": False, "selector": None, "count": 0, "waited_ms": 0}
         return await _wait_for_listing_readiness(
-            page, surface, checkpoint=checkpoint
+            page,
+            plan=plan,
+            checkpoint=checkpoint,
         )
-    selectors = _detail_readiness_selectors(surface)
-    if not selectors:
-        return None
+    selectors = plan.readiness_selectors
     elapsed = 0
     poll_ms = max(100, SURFACE_READINESS_POLL_MS)
     max_wait_ms = max(
@@ -357,17 +320,3 @@ async def wait_for_surface_readiness(
         "waited_ms": elapsed,
     }
 
-
-async def _wait_for_surface_readiness(
-    page,
-    *,
-    surface: str | None,
-    max_wait_ms: int | None = None,
-    checkpoint: Callable[[], Awaitable[None]] | None = None,
-) -> dict[str, object] | None:
-    return await wait_for_surface_readiness(
-        page,
-        surface=surface,
-        max_wait_ms=max_wait_ms,
-        checkpoint=checkpoint,
-    )

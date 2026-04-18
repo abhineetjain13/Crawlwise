@@ -43,7 +43,11 @@ class ShopifyAdapter(BaseAdapter):
         # Listing pages are usually best served by the public collection endpoint.
         # Detail pages can often be satisfied from embedded Shopify JSON without a network round-trip.
         if surface in ("ecommerce_listing", "ecommerce_detail") and (surface == "ecommerce_listing" or not records):
-            api_records = await self.try_public_endpoint(url, surface)
+            api_records = await self.try_public_endpoint(
+                url,
+                html=html,
+                surface=surface,
+            )
             if api_records:
                 records.extend(api_records)
         return AdapterResult(
@@ -55,7 +59,8 @@ class ShopifyAdapter(BaseAdapter):
     async def try_public_endpoint(
         self,
         url: str,
-        surface: str,
+        html: str = "",
+        surface: str = "",
         *,
         proxy: str | None = None,
     ) -> list[dict]:

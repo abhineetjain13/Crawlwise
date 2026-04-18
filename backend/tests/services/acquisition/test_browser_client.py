@@ -10,6 +10,7 @@ import pytest
 from app.services.acquisition import browser_client
 from app.services.acquisition import browser_challenge
 from app.services.acquisition import browser_pool
+from app.services.acquisition import policy
 from app.services.acquisition.browser_runtime import BrowserRuntimeOptions
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -228,6 +229,9 @@ async def test_fetch_rendered_html_retries_profile_after_playwright_timeout(
         browser_client.BrowserRenderRequest(
             target=SimpleNamespace(),
             url="https://example.com",
+            plan=policy.plan_acquisition(
+                SimpleNamespace(url="https://example.com", surface="ecommerce_detail")
+            ),
             proxy=None,
             surface="ecommerce_detail",
             traversal_mode=None,
@@ -276,6 +280,9 @@ async def test_fetch_rendered_html_falls_back_after_not_implemented_error(
         browser_client.BrowserRenderRequest(
             target=SimpleNamespace(),
             url="https://example.com",
+            plan=policy.plan_acquisition(
+                SimpleNamespace(url="https://example.com", surface="ecommerce_detail")
+            ),
             proxy=None,
             surface="ecommerce_detail",
             traversal_mode=None,

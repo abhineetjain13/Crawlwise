@@ -10,7 +10,6 @@ from app.services.publish.verdict import (
     VERDICT_SUCCESS,
     _aggregate_verdict,
     _passes_core_verdict,
-    _review_bucket_fingerprint,
     compute_verdict,
 )
 

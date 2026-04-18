@@ -9,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from app.core.config import settings  # noqa: F401 - imported for module-level patching in tests
@@ -27,14 +28,14 @@ from app.services.acquisition.proxy_manager import (
 )
 from app.services.acquisition.browser_readiness import _cooperative_sleep_ms
 from app.services.acquisition.policy import (
+    AcquisitionPlan,
     browser_failure_log_message,
     classify_acquisition_outcome,
     decide_acquisition_execution,
     normalize_traversal_summary,
     has_requested_traversal_mode,
     is_invalid_surface_page,
-    normalize_surface,
-    requires_browser_first,
+    plan_acquisition,
     should_force_browser_for_traversal,
     surface_selection_warnings,
     surface_warning_summary,
@@ -179,6 +180,7 @@ class AcquisitionRequest:
 class _AcquireExecutionRequest:
     run_id: int
     url: str
+    plan: AcquisitionPlan
     proxy: str | None
     surface: str | None
     traversal_mode: str | None
@@ -205,6 +207,10 @@ class _AcquireAttemptContext:
     @property
     def surface(self) -> str | None:
         return self.request.surface
+
+    @property
+    def plan(self) -> AcquisitionPlan:
+        return self.request.plan
 
     @property
     def runtime_options(self):
@@ -271,10 +277,14 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     checkpoint = acquisition_request.checkpoint
     profile = dict(acquisition_request.acquisition_profile)
     platform_family = _detect_platform_family(url)
+    acquisition_plan = plan_acquisition(
+        acquisition_request,
+        platform_family=platform_family,
+    )
 
     browser_first = (
         _memory_prefers_browser(profile)
-        or requires_browser_first(url, platform_family)
+        or acquisition_plan.require_browser_first
     )
     runtime_options = resolve_browser_runtime_options(
         profile,
@@ -310,6 +320,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
                 _AcquireExecutionRequest(
                     run_id=run_id,
                     url=url,
+                    plan=acquisition_plan,
                     proxy=proxy,
                     surface=surface,
                     traversal_mode=traversal_mode,
@@ -463,7 +474,7 @@ def _try_browser_first_success_result(
     )
     browser_first_is_usable = bool(
         first_extractability.get("has_extractable_data", False)
-    ) or not normalize_surface(ctx.surface).endswith("listing")
+    ) or not ctx.plan.is_listing_surface
     if (
         first_data.get("blocked")
         or is_invalid_surface_page(
@@ -710,6 +721,7 @@ async def _acquire_once(
     browser_first_result = (
         await _try_browser(
             request.url,
+            request.plan,
             request.proxy,
             request.surface,
             traversal_mode=request.traversal_mode,
@@ -756,7 +768,7 @@ async def _acquire_once(
     analysis = http_result.acquirer_analysis or {} if http_result is not None else {}
     execution_decision = decide_acquisition_execution(
         http_result,
-        surface=request.surface,
+        plan=request.plan,
         traversal_mode=request.traversal_mode,
         requested_fields=request.requested_fields,
     )
@@ -764,7 +776,7 @@ async def _acquire_once(
     blocked_recovery = await recover_blocked_listing_acquisition(
         url=request.url,
         proxy=request.proxy,
-        surface=request.surface,
+        plan=request.plan,
         traversal_mode=request.traversal_mode,
         max_pages=request.max_pages,
         max_scrolls=request.max_scrolls,
@@ -854,6 +866,7 @@ async def _acquire_once(
         )
     browser_result = await _try_browser(
         request.url,
+        request.plan,
         request.proxy,
         request.surface,
         traversal_mode=request.traversal_mode,
@@ -906,7 +919,7 @@ async def _acquire_once(
             analysis = http_result.acquirer_analysis or {}
             execution_decision = decide_acquisition_execution(
                 http_result,
-                surface=request.surface,
+                plan=request.plan,
                 traversal_mode=request.traversal_mode,
                 requested_fields=request.requested_fields,
             )
@@ -1043,6 +1056,10 @@ async def _try_promoted_source_acquire(
             )
             browser_result = await _try_browser(
                 promoted_url,
+                plan_acquisition(
+                    SimpleNamespace(url=promoted_url, surface=surface),
+                    platform_family=_detect_platform_family(promoted_url),
+                ),
                 proxy,
                 surface,
                 traversal_mode=None,
@@ -1338,6 +1355,7 @@ async def _try_http(
 
 async def _try_browser(
     url: str,
+    plan: AcquisitionPlan,
     proxy: str | None,
     surface: str | None,
     *,
@@ -1363,6 +1381,7 @@ async def _try_browser(
         render_task = asyncio.create_task(
             fetch_rendered_html(
                 url,
+                plan=plan,
                 proxy=proxy,
                 surface=surface,
                 prefer_stealth=prefer_stealth,

@@ -30,6 +30,11 @@ from app.services.discover.signal_inventory import (
     html_has_min_listing_link_signals,
 )
 from app.services.discover.network_inventory import collect_network_payload_candidates
+from app.services.discover.listing_candidates import (
+    discover_child_listing_candidate,
+    discover_child_listing_candidate_from_soup,
+    looks_like_category_tile_listing,
+)
 from app.services.discover.state_inventory import (
     discover_listing_items,
     map_state_fields,
@@ -49,10 +54,13 @@ __all__ = [
     "analyze_html_signals",
     "assess_extractable_html",
     "collect_network_payload_candidates",
+    "discover_child_listing_candidate",
+    "discover_child_listing_candidate_from_soup",
     "discover_listing_items",
     "find_promotable_iframe_sources",
     "html_has_extractable_listings",
     "html_has_min_listing_link_signals",
+    "looks_like_category_tile_listing",
     "map_state_fields",
     "parse_datalayer",
     "parse_page_sources",

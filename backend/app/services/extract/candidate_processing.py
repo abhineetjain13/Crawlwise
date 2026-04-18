@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from html import unescape
 from json import loads as parse_json
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
@@ -128,8 +129,34 @@ _EMBEDDED_BLOB_ORIGIN_KEY = "_blob_origin"
 # ---------------------------------------------------------------------------
 
 
+def clean_page_text(value: object) -> str:
+    """Decode HTML entities and normalize whitespace for page-derived text."""
+    text = unescape(str(value or "")).replace("\u00a0", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def clean_candidate_text(value: object, *, limit: int | None = None) -> str:
+    """Normalize candidate text with an optional truncation boundary."""
+    text = clean_page_text(value)
+    if limit is not None and len(text) > limit:
+        return text[:limit].strip()
+    return text
+
+
+def normalize_committed_field_name(value: object) -> str:
+    """Normalize field names to snake_case."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    normalized = re.sub(r"\s+", "_", text.lower())
+    normalized = re.sub(r"[^a-z0-9_]+", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized)
+    return normalized.strip("_")
+
+
 def _normalized_candidate_text(value: object) -> str:
-    return " ".join(str(value or "").split()).strip()
+    return clean_page_text(value)
 
 
 # ---------------------------------------------------------------------------

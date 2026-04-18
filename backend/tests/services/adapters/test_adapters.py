@@ -1,7 +1,7 @@
 # Tests for platform adapters.
 from __future__ import annotations
 
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from app.services.adapters.adp import ADPAdapter
@@ -14,10 +14,15 @@ from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.paycom import PaycomAdapter
-from app.services.adapters.registry import registered_adapters, resolve_adapter
+from app.services.adapters.registry import (
+    registered_adapters,
+    resolve_adapter,
+    try_blocked_adapter_recovery,
+)
 from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.shopify import ShopifyAdapter
+from app.services.acquisition.policy import AcquisitionPlan
 
 
 def _mock_json_response(payload: object, status_code: int = 200) -> Mock:
@@ -341,11 +346,50 @@ async def test_shopify_public_endpoint_recovery_works_without_html_signals():
     with patch("app.services.adapters.shopify.curl_requests.get", return_value=response) as mock_get:
         records = await adapter.try_public_endpoint(
             "https://store.com/collections/maternity-dresses",
-            "ecommerce_listing",
+            surface="ecommerce_listing",
         )
     assert len(records) == 1
     assert records[0]["title"] == "Recovered Collection Item"
     assert mock_get.call_args.args[0] == "https://store.com/collections/maternity-dresses/products.json?limit=250"
+
+
+@pytest.mark.asyncio
+async def test_blocked_adapter_recovery_uses_named_try_public_endpoint_arguments():
+    plan = AcquisitionPlan(
+        surface="ecommerce_listing",
+        page_type="category",
+        platform_family="shopify",
+        require_browser_first=False,
+        allow_browser_escalation=True,
+        browser_escalation_reasons=frozenset(),
+        readiness_profile="listing",
+        readiness_selectors=(),
+        traversal_enabled=True,
+        traversal_card_selectors=(),
+        retry_profile="listing_low_value",
+        adapter_recovery_enabled=True,
+        diagnostic_payload_kind="listing_completeness",
+    )
+    adapter = ShopifyAdapter()
+    with patch(
+        "app.services.adapters.registry.registered_adapters",
+        return_value=(adapter,),
+    ), patch.object(
+        adapter,
+        "try_public_endpoint",
+        new_callable=AsyncMock,
+        return_value=[{"title": "Recovered"}],
+    ) as mock_try_public_endpoint:
+        result = await try_blocked_adapter_recovery("https://store.com/collections/all", plan)
+
+    assert result is not None
+    assert result.records == [{"title": "Recovered"}]
+    mock_try_public_endpoint.assert_awaited_once_with(
+        "https://store.com/collections/all",
+        html="",
+        surface="ecommerce_listing",
+        proxy=None,
+    )
 
 
 @pytest.mark.asyncio

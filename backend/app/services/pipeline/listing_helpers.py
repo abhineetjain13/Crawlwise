@@ -6,12 +6,11 @@ from urllib.parse import urljoin
 
 from app.services.acquisition import AcquisitionResult
 from app.services.acquisition import detect_blocked_page
+from app.services.extract.candidate_processing import clean_candidate_text
 from app.services.field_alias_policy import excluded_fields_for_surface
 from app.services.extract.listing_quality import (
     looks_like_transactional_url_for_listing,
 )
-
-from .utils import _clean_candidate_text
 
 HTTP_URL_PREFIXES = ("http://", "https://")
 
@@ -31,13 +30,11 @@ def _listing_acquisition_blocked(acq: AcquisitionResult, html: str) -> bool:
     return False
 
 
-def _looks_like_loading_listing_shell(html: str, *, surface: str) -> bool:
+def _looks_like_loading_listing_shell(html: str) -> bool:
     """Detect if page is a loading skeleton/shell."""
-    if not html or "listing" not in str(surface or "").lower():
+    if not html:
         return False
     lowered = html.lower()
-    if "job" in str(surface or "").lower():
-        return False
     if lowered.count("product-card-skeleton") >= 4:
         return True
     if 'data-test-id="content-grid"' in lowered and lowered.count("animate-pulse") >= 8:
@@ -107,7 +104,7 @@ def _sanitize_listing_record_fields(
 
 def _summarize_job_listing_description(value: object) -> str:
     """Summarize job listing description to ~180 chars."""
-    text = _clean_candidate_text(value, limit=None)
+    text = clean_candidate_text(value, limit=None)
     if not text:
         return ""
     text = " ".join(str(text).split()).strip()
