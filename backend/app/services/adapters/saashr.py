@@ -126,15 +126,17 @@ class SaaSHRAdapter(BaseAdapter):
                 return ""
         except (OSError, RuntimeError, ValueError, TypeError):
             return ""
-        return self._clean_text(payload.get("comp_name")) if isinstance(payload, dict) else ""
+        return (
+            self._clean_text(payload.get("comp_name"))
+            if isinstance(payload, dict)
+            else ""
+        )
 
     def _discover_board_url(self, url: str, html: str) -> str:
         if SAASHR_DOMAIN in str(url or "").lower():
             return url
         soup = BeautifulSoup(str(html or ""), "html.parser")
-        iframe = soup.select_one(
-            f"iframe[src*='{SAASHR_DOMAIN}/ta/'][src*='.careers']"
-        )
+        iframe = soup.select_one(f"iframe[src*='{SAASHR_DOMAIN}/ta/'][src*='.careers']")
         if iframe is None:
             return ""
         src = str(iframe.get("src") or "").strip()
@@ -144,14 +146,18 @@ class SaaSHRAdapter(BaseAdapter):
         match = _COMPANY_RE.search(urlparse(str(board_url or "")).path)
         return self._clean_text(match.group(1)) if match else ""
 
-    def _normalize_row(self, row: object, *, board_url: str, company_name: str) -> dict | None:
+    def _normalize_row(
+        self, row: object, *, board_url: str, company_name: str
+    ) -> dict | None:
         if not isinstance(row, dict):
             return None
         title = self._clean_text(row.get("job_title"))
         job_id = self._clean_text(row.get("id"))
         if not title or not job_id:
             return None
-        location_payload = row.get("location") if isinstance(row.get("location"), dict) else {}
+        location_payload = (
+            row.get("location") if isinstance(row.get("location"), dict) else {}
+        )
         location = ", ".join(
             part
             for part in [
@@ -170,7 +176,11 @@ class SaaSHRAdapter(BaseAdapter):
             "company": company_name or None,
             "description": self._clean_text(row.get("job_description")),
         }
-        return {key: value for key, value in record.items() if value not in (None, "", [], {})}
+        return {
+            key: value
+            for key, value in record.items()
+            if value not in (None, "", [], {})
+        }
 
     def _build_detail_url(self, board_url: str, job_id: str) -> str:
         parsed = urlparse(board_url)

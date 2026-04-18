@@ -19,7 +19,9 @@ async def list_users(
     if search:
         pattern = f"%{escape_like_pattern(search.lower())}%"
         query = query.where(func.lower(User.email).like(pattern, escape="\\"))
-        count_query = count_query.where(func.lower(User.email).like(pattern, escape="\\"))
+        count_query = count_query.where(
+            func.lower(User.email).like(pattern, escape="\\")
+        )
     if is_active is not None:
         query = query.where(User.is_active == is_active)
         count_query = count_query.where(User.is_active == is_active)

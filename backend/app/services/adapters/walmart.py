@@ -41,7 +41,9 @@ class WalmartAdapter(BaseAdapter):
                 pass
         return {}
 
-    def _extract_detail(self, soup: BeautifulSoup, next_data: dict, url: str) -> dict | None:
+    def _extract_detail(
+        self, soup: BeautifulSoup, next_data: dict, url: str
+    ) -> dict | None:
         # Try __NEXT_DATA__ first
         props = next_data.get("props", {}).get("pageProps", {})
         initial_data = props.get("initialData", {}).get("data", {})
@@ -51,18 +53,28 @@ class WalmartAdapter(BaseAdapter):
             return {
                 "title": product.get("name"),
                 "brand": product.get("brand"),
-                "price": str(price_info.get("price", "")) if price_info.get("price") else None,
+                "price": str(price_info.get("price", ""))
+                if price_info.get("price")
+                else None,
                 "image_url": product.get("imageInfo", {}).get("thumbnailUrl"),
                 "description": product.get("shortDescription"),
                 "rating": product.get("averageRating"),
                 "review_count": product.get("numberOfReviews"),
-                "availability": "in_stock" if product.get("availabilityStatus") == "IN_STOCK" else product.get("availabilityStatus"),
-                "category": product.get("category", {}).get("path", [{}])[-1].get("name") if product.get("category") else None,
+                "availability": "in_stock"
+                if product.get("availabilityStatus") == "IN_STOCK"
+                else product.get("availabilityStatus"),
+                "category": product.get("category", {})
+                .get("path", [{}])[-1]
+                .get("name")
+                if product.get("category")
+                else None,
                 "url": url,
             }
         # Fallback to DOM
         title_el = soup.select_one("[itemprop='name'], h1")
-        price_el = soup.select_one("[itemprop='price'], [data-automation-id='product-price'] span")
+        price_el = soup.select_one(
+            "[itemprop='price'], [data-automation-id='product-price'] span"
+        )
         if title_el:
             return {
                 "title": title_el.get_text(strip=True),
@@ -71,7 +83,9 @@ class WalmartAdapter(BaseAdapter):
             }
         return None
 
-    def _extract_listing(self, soup: BeautifulSoup, next_data: dict, url: str) -> list[dict]:
+    def _extract_listing(
+        self, soup: BeautifulSoup, next_data: dict, url: str
+    ) -> list[dict]:
         records = []
         # Try __NEXT_DATA__ search results
         props = next_data.get("props", {}).get("pageProps", {})
@@ -82,12 +96,16 @@ class WalmartAdapter(BaseAdapter):
                 if item.get("__typename") != "Product":
                     continue
                 price_info = item.get("priceInfo", {}).get("currentPrice", {})
-                records.append({
-                    "title": item.get("name"),
-                    "price": str(price_info.get("price", "")) if price_info.get("price") else None,
-                    "image_url": item.get("imageInfo", {}).get("thumbnailUrl"),
-                    "url": f"https://www.walmart.com{item.get('canonicalUrl', '')}",
-                    "rating": item.get("averageRating"),
-                    "review_count": item.get("numberOfReviews"),
-                })
+                records.append(
+                    {
+                        "title": item.get("name"),
+                        "price": str(price_info.get("price", ""))
+                        if price_info.get("price")
+                        else None,
+                        "image_url": item.get("imageInfo", {}).get("thumbnailUrl"),
+                        "url": f"https://www.walmart.com{item.get('canonicalUrl', '')}",
+                        "rating": item.get("averageRating"),
+                        "review_count": item.get("numberOfReviews"),
+                    }
+                )
         return records

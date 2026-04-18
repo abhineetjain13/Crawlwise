@@ -70,10 +70,15 @@ def extract_selector_value(
         try:
             match = regex_lib.search(regex, html_text, regex_lib.DOTALL, timeout=0.05)
         except TimeoutError:
-            logger.warning("Timed out while evaluating selector regex", extra={"pattern": regex[:200]})
+            logger.warning(
+                "Timed out while evaluating selector regex",
+                extra={"pattern": regex[:200]},
+            )
             match = None
         except regex_lib.error:
-            logger.warning("Failed to evaluate selector regex", extra={"pattern": regex[:200]})
+            logger.warning(
+                "Failed to evaluate selector regex", extra={"pattern": regex[:200]}
+            )
             match = None
         if match:
             if match.groups():
@@ -208,7 +213,9 @@ def _normalize_css_selector(selector: str) -> str:
     return normalized
 
 
-def _unique_anchor_xpath(node: Tag, root: BeautifulSoup | Tag, *, allow_class: bool = True) -> str | None:
+def _unique_anchor_xpath(
+    node: Tag, root: BeautifulSoup | Tag, *, allow_class: bool = True
+) -> str | None:
     attr_candidates = [
         "id",
         "data-testid",
@@ -242,10 +249,11 @@ def _relative_segment(node: Tag) -> str:
         class_literal = _xpath_literal(f" {class_value} ")
         selector = f"{node.name}[contains(concat(' ', normalize-space(@class), ' '), {class_literal})]"
         return selector
-    siblings = [
-        sibling
-        for sibling in node.parent.find_all(node.name, recursive=False)
-    ] if isinstance(node.parent, Tag) else [node]
+    siblings = (
+        [sibling for sibling in node.parent.find_all(node.name, recursive=False)]
+        if isinstance(node.parent, Tag)
+        else [node]
+    )
     index = siblings.index(node) + 1 if len(siblings) > 1 else 1
     return f"{node.name}[{index}]"
 
@@ -273,7 +281,11 @@ def _is_unique_class_among_siblings(node: Tag, class_value: str) -> bool:
         return True
     sibling_matches = 0
     for sibling in node.parent.find_all(node.name, recursive=False):
-        classes = {str(value).strip() for value in (sibling.get("class") or []) if str(value).strip()}
+        classes = {
+            str(value).strip()
+            for value in (sibling.get("class") or [])
+            if str(value).strip()
+        }
         if class_value in classes:
             sibling_matches += 1
     return sibling_matches == 1
@@ -311,7 +323,7 @@ def _xpath_literal(value: str) -> str:
         if part:
             pieces.append(f"'{part}'")
         if index < len(parts) - 1:
-            pieces.append("\"'\"")
+            pieces.append('"\'"')
     return f"concat({', '.join(pieces)})"
 
 
@@ -324,5 +336,9 @@ def _loose_text_match(actual: str, expected: str) -> bool:
     return bool(
         actual_text
         and expected_text
-        and (actual_text == expected_text or actual_text in expected_text or expected_text in actual_text)
+        and (
+            actual_text == expected_text
+            or actual_text in expected_text
+            or expected_text in actual_text
+        )
     )

@@ -17,8 +17,8 @@ from app.services.crawl_utils import (
     validate_extraction_contract,
 )
 from app.services.db_utils import escape_like_pattern
+from app.services.field_policy import expand_requested_fields
 from app.services.normalizers import normalize_value
-from app.services.requested_field_policy import expand_requested_fields
 from app.services.url_safety import ensure_public_crawl_targets
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession

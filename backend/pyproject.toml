@@ -14,6 +14,7 @@ dependencies = [
   "cachetools>=5.5.2",
   "celery[redis]>=5.4.0",
   "curl-cffi>=0.14.0",
+  "dateparser>=1.2.2",
   "cryptography>=46.0.7",
   "fastapi>=0.116.0",
   "email-validator>=2.3.0",
@@ -24,6 +25,7 @@ dependencies = [
   "passlib[bcrypt]>=1.7.4",
   "playwright>=1.54.0",
   "playwright-stealth>=2.0.0",
+  "price-parser>=0.5.0",
   "prometheus-client>=0.23.1",
   "psutil>=7.1.0",
   "pydantic-settings>=2.10.0",
@@ -35,6 +37,7 @@ dependencies = [
   "structlog>=25.4.0",
   "uvicorn[standard]>=0.35.0",
   "browserforge>=1.2.0",
+  "extruct>=0.18.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +49,14 @@ dev = [
   "pytest-asyncio>=1.1.0",
   "psycopg2-binary>=2.9.10",
   "ruff>=0.1.0",
+  "mypy>=1.20.1",
+  "flake8>=7.3.0",
+  "pylint>=4.0.5",
+  "pyright>=1.1.408",
+  "basedpyright>=1.39.2",
+  "bandit>=1.9.4",
+  "vulture>=2.16",
+  "radon>=6.0.1",
 ]
 prod = [
   "psycopg2>=2.9.10",
@@ -59,3 +70,28 @@ include = ["app*"]
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.pylint.main]
+ignore-paths = [
+  "^tests/.*$",
+  "^alembic/.*$",
+]
+
+[tool.pylint.messages_control]
+disable = [
+  "C",
+  "R",
+  "import-error",
+  "no-name-in-module",
+  "too-many-lines",
+  "too-many-arguments",
+  "too-many-branches",
+  "too-many-locals",
+  "too-many-return-statements",
+  "too-many-statements",
+  "duplicate-code",
+  "fixme",
+]
+
+[tool.vulture]
+min_confidence = 100

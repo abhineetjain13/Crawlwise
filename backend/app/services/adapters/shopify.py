@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 import re
 from json import loads as parse_json
+import math
 from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.acquisition.http_client import requests as curl_requests
 from app.services.config.adapter_runtime_settings import (
     SHOPIFY_CATALOG_LIMIT,
+    SHOPIFY_MAX_PRODUCTS,
     SHOPIFY_MAX_OPTION_AXIS_COUNT,
     SHOPIFY_REQUEST_TIMEOUT_SECONDS,
 )
@@ -40,16 +41,20 @@ class ShopifyAdapter(BaseAdapter):
         embedded = self._extract_embedded_product(html, url)
         if embedded:
             records.extend(embedded)
-        # Listing pages are usually best served by the public collection endpoint.
-        # Detail pages can often be satisfied from embedded Shopify JSON without a network round-trip.
-        if surface in ("ecommerce_listing", "ecommerce_detail") and (surface == "ecommerce_listing" or not records):
+        # Listing pages are best served by the public collection endpoint.
+        # Detail pages still probe the public endpoint to enrich the embedded
+        # payload with the fuller Shopify product object.
+        if surface in ("ecommerce_listing", "ecommerce_detail"):
             api_records = await self.try_public_endpoint(
                 url,
                 html=html,
                 surface=surface,
             )
             if api_records:
-                records.extend(api_records)
+                if surface == "ecommerce_detail" and records:
+                    records = [self._merge_product_records(records[0], api_records[0])]
+                else:
+                    records = api_records
         return AdapterResult(
             records=records,
             source_type="shopify_adapter",
@@ -76,84 +81,53 @@ class ShopifyAdapter(BaseAdapter):
             if not handle:
                 return []
             api_url = f"{parsed.scheme}://{parsed.netloc}/products/{handle}.js"
+            try:
+                data = await self._request_json(
+                    api_url,
+                    proxy=proxy,
+                    timeout_seconds=SHOPIFY_REQUEST_TIMEOUT_SECONDS,
+                )
+            except _FETCH_ERRORS:
+                return []
+            if not isinstance(data, dict):
+                return []
+            products = [data]
         else:
             collection_handle = self._extract_collection_handle(parsed.path)
-            if collection_handle:
-                api_url = (
-                    f"{parsed.scheme}://{parsed.netloc}/collections/"
-                    f"{collection_handle}/products.json?limit={SHOPIFY_CATALOG_LIMIT}"
-                )
-            else:
-                api_url = (
-                    f"{parsed.scheme}://{parsed.netloc}/products.json"
-                    f"?limit={SHOPIFY_CATALOG_LIMIT}"
-                )
-        try:
-            data = await self._request_json_with_curl(
-                curl_requests.get,
-                api_url,
-                proxy=proxy,
-                timeout_seconds=SHOPIFY_REQUEST_TIMEOUT_SECONDS,
+            api_path = (
+                f"/collections/{collection_handle}/products.json"
+                if collection_handle
+                else "/products.json"
             )
-            if data is None:
-                return []
-        except _FETCH_ERRORS:
-            return []
+            products: list[dict] = []
+            max_pages = max(1, math.ceil(SHOPIFY_MAX_PRODUCTS / SHOPIFY_CATALOG_LIMIT))
+            for page in range(1, max_pages + 1):
+                api_url = (
+                    f"{parsed.scheme}://{parsed.netloc}{api_path}"
+                    f"?limit={SHOPIFY_CATALOG_LIMIT}&page={page}"
+                )
+                try:
+                    data = await self._request_json(
+                        api_url,
+                        proxy=proxy,
+                        timeout_seconds=SHOPIFY_REQUEST_TIMEOUT_SECONDS,
+                    )
+                except _FETCH_ERRORS:
+                    break
+                if not isinstance(data, dict):
+                    break
+                batch = data.get("products", [])
+                if not isinstance(batch, list) or not batch:
+                    break
+                products.extend(product for product in batch if isinstance(product, dict))
+                if len(products) >= SHOPIFY_MAX_PRODUCTS or len(batch) < SHOPIFY_CATALOG_LIMIT:
+                    break
 
-        products = [data] if surface == "ecommerce_detail" else data.get("products", [])
-        records = []
-        for p in products:
-            variants = p.get("variants", []) if isinstance(p.get("variants"), list) else []
-            option_names = self._option_names(p.get("options"))
-            normalized_variants = [
-                normalized
-                for variant in variants
-                if isinstance(variant, dict)
-                if (normalized := self._normalize_variant(
-                    variant,
-                    option_names=option_names,
-                    scheme=parsed.scheme,
-                    base_url=urljoin(url, f"/products/{p.get('handle', '')}"),
-                ))
-            ]
-            normalized_variants = self._dedupe_variants(normalized_variants)
-            selected_variant = self._select_shopify_variant(
-                normalized_variants,
-                base_url=url,
-            )
-            axes = self._variant_axes(normalized_variants)
-            selectable_axes, single_value_attributes = self._split_selectable_axes(
-                axes
-            )
-            images = [
-                image_url
-                for img in p.get("images", [])
-                if (image_url := self._normalize_url(self._image_src(img), parsed.scheme))
-            ]
-            record = {
-                "title": p.get("title"),
-                "brand": p.get("vendor"),
-                "description": p.get("body_html", ""),
-                "url": urljoin(url, f"/products/{p.get('handle', '')}"),
-                "image_url": images[0] if images else None,
-                "additional_images": ", ".join(images[1:]) if len(images) > 1 else None,
-                "price": selected_variant.get("price") if isinstance(selected_variant, dict) else None,
-                "original_price": selected_variant.get("original_price") if isinstance(selected_variant, dict) else None,
-                "sku": selected_variant.get("sku") if isinstance(selected_variant, dict) else None,
-                "availability": selected_variant.get("availability") if isinstance(selected_variant, dict) else None,
-                "category": p.get("product_type"),
-                "tags": p.get("tags", "").split(", ") if isinstance(p.get("tags"), str) else p.get("tags", []),
-                "variants": normalized_variants,
-                "variant_axes": selectable_axes,
-                "selected_variant": selected_variant,
-                "product_attributes": single_value_attributes or None,
-            }
-            if isinstance(selected_variant, dict):
-                for field_name in ("color", "size"):
-                    if selected_variant.get(field_name):
-                        record[field_name] = selected_variant[field_name]
-            records.append(record)
-        return records
+        return [
+            self._build_product_record(product, page_url=url, surface=surface)
+            for product in products[:SHOPIFY_MAX_PRODUCTS]
+            if isinstance(product, dict)
+        ]
 
     def _extract_product_handle(self, path: str) -> str | None:
         match = re.search(r"/products/([^/?#]+)", path)
@@ -167,7 +141,7 @@ class ShopifyAdapter(BaseAdapter):
         """Extract product data from Shopify's embedded JSON in <script> tags."""
         records = []
         # Look for ShopifyAnalytics.meta or similar
-        pattern = r'var\s+meta\s*=\s*(\{.*?\});'
+        pattern = r"var\s+meta\s*=\s*(\{.*?\});"
         match = re.search(pattern, html, re.DOTALL)
         if match:
             try:
@@ -179,12 +153,14 @@ class ShopifyAdapter(BaseAdapter):
                         normalized
                         for variant in (product.get("variants") or [])
                         if isinstance(variant, dict)
-                        if (normalized := self._normalize_variant(
-                            variant,
-                            option_names=option_names,
-                            scheme=urlparse(url).scheme or "https",
-                            base_url=url,
-                        ))
+                        if (
+                            normalized := self._normalize_variant(
+                                variant,
+                                option_names=option_names,
+                                scheme=urlparse(url).scheme or "https",
+                                base_url=url,
+                            )
+                        )
                     ]
                     normalized_variants = self._dedupe_variants(normalized_variants)
                     selected_variant = self._select_shopify_variant(
@@ -200,19 +176,26 @@ class ShopifyAdapter(BaseAdapter):
                         if isinstance(selected_variant, dict)
                         else product.get("price")
                     )
-                    records.append({
-                        "title": product.get("title"),
-                        "brand": product.get("vendor"),
-                        "price": normalize_decimal_price(
-                            selected_price,
-                            interpret_integral_as_cents=True,
-                        ),
-                        "category": product.get("type"),
-                        "variants": normalized_variants,
-                        "variant_axes": selectable_axes,
-                        "selected_variant": selected_variant,
-                        "product_attributes": single_value_attributes or None,
-                    })
+                    records.append(
+                        {
+                            "title": product.get("title"),
+                            "brand": product.get("vendor"),
+                            "vendor": product.get("vendor"),
+                            "price": normalize_decimal_price(
+                                selected_price,
+                                interpret_integral_as_cents=True,
+                            ),
+                            "category": product.get("type"),
+                            "product_type": product.get("type"),
+                            "product_id": str(product.get("id"))
+                            if product.get("id") not in (None, "", [], {})
+                            else None,
+                            "variants": normalized_variants,
+                            "variant_axes": selectable_axes,
+                            "selected_variant": selected_variant,
+                            "product_attributes": single_value_attributes or None,
+                        }
+                    )
             except (json.JSONDecodeError, TypeError):
                 pass
         return records
@@ -254,9 +237,13 @@ class ShopifyAdapter(BaseAdapter):
         row: dict[str, object] = {}
         if variant.get("id") not in (None, "", [], {}):
             row["variant_id"] = str(variant.get("id"))
-            row["url"] = f"{base_url}{'&' if '?' in base_url else '?'}variant={row['variant_id']}"
+            row["url"] = (
+                f"{base_url}{'&' if '?' in base_url else '?'}variant={row['variant_id']}"
+            )
         if variant.get("sku"):
             row["sku"] = variant.get("sku")
+        if variant.get("barcode"):
+            row["barcode"] = variant.get("barcode")
         price = normalize_decimal_price(
             variant.get("price"),
             interpret_integral_as_cents=True,
@@ -281,14 +268,24 @@ class ShopifyAdapter(BaseAdapter):
                 available = False
             row["available"] = available
             row["availability"] = "in_stock" if available else "out_of_stock"
-        featured = self._normalize_url(self._image_src(variant.get("featured_image")), scheme)
+        featured = self._normalize_url(
+            self._image_src(variant.get("featured_image")), scheme
+        )
         if featured:
             row["image_url"] = featured
         option_values: dict[str, str] = {}
-        raw_options = variant.get("options") if isinstance(variant.get("options"), list) else []
+        raw_options = (
+            variant.get("options") if isinstance(variant.get("options"), list) else []
+        )
         for index in range(1, SHOPIFY_MAX_OPTION_AXIS_COUNT + 1):
-            axis_name = option_names[index - 1] if index - 1 < len(option_names) else f"option_{index}"
-            axis_key = normalized_variant_axis_key(axis_name) or self._normalize_axis(axis_name)
+            axis_name = (
+                option_names[index - 1]
+                if index - 1 < len(option_names)
+                else f"option_{index}"
+            )
+            axis_key = normalized_variant_axis_key(axis_name) or self._normalize_axis(
+                axis_name
+            )
             value = variant.get(f"option{index}")
             if value in (None, "", [], {}) and index - 1 < len(raw_options):
                 value = raw_options[index - 1]
@@ -300,6 +297,143 @@ class ShopifyAdapter(BaseAdapter):
         if option_values:
             row["option_values"] = option_values
         return row or None
+
+    def _build_product_record(
+        self,
+        product: dict,
+        *,
+        page_url: str,
+        surface: str,
+    ) -> dict:
+        parsed = urlparse(page_url)
+        variants = (
+            product.get("variants", []) if isinstance(product.get("variants"), list) else []
+        )
+        option_names = self._option_names(product.get("options"))
+        product_url = urljoin(page_url, f"/products/{product.get('handle', '')}")
+        normalized_variants = [
+            normalized
+            for variant in variants
+            if isinstance(variant, dict)
+            if (
+                normalized := self._normalize_variant(
+                    variant,
+                    option_names=option_names,
+                    scheme=parsed.scheme,
+                    base_url=product_url,
+                )
+            )
+        ]
+        normalized_variants = self._dedupe_variants(normalized_variants)
+        selected_variant = self._select_shopify_variant(
+            normalized_variants,
+            base_url=page_url,
+        )
+        axes = self._variant_axes(normalized_variants)
+        selectable_axes, single_value_attributes = self._split_selectable_axes(axes)
+        images = [
+            image_url
+            for img in product.get("images", [])
+            if (
+                image_url := self._normalize_url(self._image_src(img), parsed.scheme)
+            )
+        ]
+        tags = (
+            product.get("tags", "").split(", ")
+            if isinstance(product.get("tags"), str)
+            else product.get("tags", [])
+        )
+        record = {
+            "title": product.get("title"),
+            "brand": product.get("vendor"),
+            "description": product.get("body_html", ""),
+            "url": product_url,
+            "image_url": images[0] if images else None,
+            "additional_images": ", ".join(images[1:]) if len(images) > 1 else None,
+            "price": selected_variant.get("price")
+            if isinstance(selected_variant, dict)
+            else None,
+            "original_price": selected_variant.get("original_price")
+            if isinstance(selected_variant, dict)
+            else None,
+            "sku": selected_variant.get("sku")
+            if isinstance(selected_variant, dict)
+            else None,
+            "availability": selected_variant.get("availability")
+            if isinstance(selected_variant, dict)
+            else None,
+            "category": product.get("product_type"),
+            "tags": tags,
+            "variants": normalized_variants,
+            "variant_axes": selectable_axes,
+            "selected_variant": selected_variant,
+            "product_attributes": single_value_attributes or None,
+        }
+        if isinstance(selected_variant, dict):
+            for field_name in ("color", "size", "barcode"):
+                if selected_variant.get(field_name):
+                    record[field_name] = selected_variant[field_name]
+        if surface == "ecommerce_detail":
+            size_values = selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
+            ordered_axes: list[tuple[str, list[str]]] = []
+            seen_axis_names: set[str] = set()
+            for option_name in option_names:
+                axis_key = normalized_variant_axis_key(option_name) or self._normalize_axis(
+                    option_name
+                )
+                axis_values = selectable_axes.get(axis_key)
+                if axis_key and isinstance(axis_values, list) and axis_values:
+                    ordered_axes.append((axis_key, axis_values))
+                    seen_axis_names.add(axis_key)
+            for axis_name, axis_values in selectable_axes.items():
+                if axis_name in seen_axis_names or not axis_values:
+                    continue
+                ordered_axes.append((axis_name, axis_values))
+            record.update(
+                {
+                    "vendor": product.get("vendor"),
+                    "product_type": product.get("product_type"),
+                    "product_id": str(product.get("id"))
+                    if product.get("id") not in (None, "", [], {})
+                    else None,
+                    "handle": product.get("handle"),
+                    "variant_count": len(normalized_variants) or len(variants) or None,
+                    "created_at": product.get("created_at"),
+                    "updated_at": product.get("updated_at"),
+                    "published_at": product.get("published_at"),
+                    "image_count": len(images) or None,
+                    "available_sizes": ", ".join(size_values[:20]) if size_values else None,
+                }
+            )
+            if len(ordered_axes) > 0:
+                record["option1_name"] = ordered_axes[0][0]
+                record["option1_values"] = ", ".join(ordered_axes[0][1])
+            if len(ordered_axes) > 1:
+                record["option2_name"] = ordered_axes[1][0]
+                record["option2_values"] = ", ".join(ordered_axes[1][1])
+        return record
+
+    def _merge_product_records(self, primary: dict, fallback: dict) -> dict:
+        merged = dict(primary)
+        for key, value in fallback.items():
+            if key not in merged or merged.get(key) in (None, "", [], {}):
+                merged[key] = value
+                continue
+            if (
+                isinstance(merged.get(key), dict)
+                and isinstance(value, dict)
+                and value
+            ):
+                nested = dict(value)
+                nested.update(
+                    {
+                        nested_key: nested_value
+                        for nested_key, nested_value in merged[key].items()
+                        if nested_value not in (None, "", [], {})
+                    }
+                )
+                merged[key] = nested
+        return merged
 
     def _variant_axes(self, variants: list[dict]) -> dict[str, list[str]]:
         axes: dict[str, list[str]] = {}
@@ -335,12 +469,22 @@ class ShopifyAdapter(BaseAdapter):
             if len(variant.keys()) > len(current.keys()):
                 merged = dict(variant)
                 for key, value in current.items():
-                    if merged.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                    if merged.get(key) in (None, "", [], {}) and value not in (
+                        None,
+                        "",
+                        [],
+                        {},
+                    ):
                         merged[key] = value
                 deduped[existing_index] = merged
                 continue
             for key, value in variant.items():
-                if current.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                if current.get(key) in (None, "", [], {}) and value not in (
+                    None,
+                    "",
+                    [],
+                    {},
+                ):
                     current[key] = value
         return deduped
 
@@ -351,7 +495,9 @@ class ShopifyAdapter(BaseAdapter):
         sku = str(variant.get("sku") or "").strip()
         option_values = variant.get("option_values")
         if sku and isinstance(option_values, dict) and option_values:
-            return json.dumps({"sku": sku, "option_values": option_values}, sort_keys=True)
+            return json.dumps(
+                {"sku": sku, "option_values": option_values}, sort_keys=True
+            )
         if sku:
             return f"sku:{sku}"
         if isinstance(option_values, dict) and option_values:
@@ -394,7 +540,10 @@ class ShopifyAdapter(BaseAdapter):
             )
             if matched_variant is not None:
                 return matched_variant
-        return next((row for row in variants if row.get("available") is True), None) or variants[0]
+        return (
+            next((row for row in variants if row.get("available") is True), None)
+            or variants[0]
+        )
 
     def _normalize_axis(self, value: object) -> str:
         normalized = normalized_variant_axis_key(value)

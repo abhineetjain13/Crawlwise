@@ -95,6 +95,7 @@ export type ReviewSelection = {
 export type SelectorRuleInput = {
   id?: number | null;
   field_name: string;
+  surface?: string | null;
   css_selector?: string | null;
   xpath?: string | null;
   regex?: string | null;
@@ -169,6 +170,7 @@ export type ReviewPayload = {
 export type SelectorRecord = {
   id: number;
   domain: string;
+  surface: string;
   field_name: string;
   css_selector?: string | null;
   xpath?: string | null;
@@ -200,6 +202,7 @@ export type FieldCommitResponse = {
 
 export type SelectorCreatePayload = {
   domain: string;
+  surface?: string | null;
   field_name: string;
   css_selector?: string | null;
   xpath?: string | null;
@@ -229,7 +232,10 @@ export type SelectorSuggestion = {
 };
 
 export type SelectorSuggestResponse = {
+  surface: string;
   suggestions: Record<string, SelectorSuggestion[]>;
+  preview_url?: string | null;
+  iframe_promoted?: boolean;
 };
 
 export type LlmConfigRecord = {
@@ -244,6 +250,18 @@ export type LlmConfigRecord = {
   is_active: boolean;
   created_at: string;
 };
+
+export type LlmConfigCreatePayload = {
+  provider: string;
+  model: string;
+  task_type: string;
+  api_key?: string | null;
+  per_domain_daily_budget_usd?: string;
+  global_session_budget_usd?: string;
+  is_active?: boolean;
+};
+
+export type LlmConfigUpdatePayload = Partial<LlmConfigCreatePayload>;
 
 export type LlmProviderCatalogItem = {
   provider: string;

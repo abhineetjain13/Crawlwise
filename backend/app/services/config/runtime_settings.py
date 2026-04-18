@@ -40,6 +40,12 @@ PERFORMANCE_PROFILES: dict[str, dict[str, int]] = {
         "surface_readiness_max_wait_ms": 15000,
     },
 }
+_PROFILE_CONTROLLED_FIELDS = (
+    "browser_fallback_visible_text_min",
+    "challenge_wait_max_seconds",
+    "origin_warm_pause_ms",
+    "surface_readiness_max_wait_ms",
+)
 
 
 class CrawlerRuntimeSettings(BaseSettings):
@@ -91,7 +97,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     js_shell_visible_ratio_max: float = 0.15
     js_shell_min_script_count: int = 2
     detail_field_signal_min_count: int = 2
-    http_retry_status_codes: list[int] = Field(default_factory=lambda: [403, 429, 503])
+    http_retry_status_codes: list[int] = Field(
+        default_factory=lambda: [403, 429, 502, 503, 504]
+    )
     http_max_retries: int = 2
     http_retry_backoff_base_ms: int = 400
     http_retry_backoff_max_ms: int = 3000
@@ -157,6 +165,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_preference_min_successes: int = 2
     acquisition_artifact_ttl_seconds: int = 86400
     acquisition_artifact_cleanup_interval_seconds: int = 300
+    selector_self_heal_enabled: bool = False
+    selector_self_heal_min_confidence: float = 0.55
+    selector_self_heal_cache_enabled: bool = False
 
     @model_validator(mode="after")
     def _apply_profile_defaults(self) -> CrawlerRuntimeSettings:
@@ -164,30 +175,12 @@ class CrawlerRuntimeSettings(BaseSettings):
         profile = PERFORMANCE_PROFILES.get(
             self.performance_profile, PERFORMANCE_PROFILES["BALANCED"]
         )
-        if (
-            self.performance_profile != "BALANCED"
-            and "browser_fallback_visible_text_min" not in explicitly_set
-        ) or self.browser_fallback_visible_text_min is None:
-            self.browser_fallback_visible_text_min = profile[
-                "browser_fallback_visible_text_min"
-            ]
-        if (
-            self.performance_profile != "BALANCED"
-            and "challenge_wait_max_seconds" not in explicitly_set
-        ) or self.challenge_wait_max_seconds is None:
-            self.challenge_wait_max_seconds = profile["challenge_wait_max_seconds"]
-        if (
-            self.performance_profile != "BALANCED"
-            and "origin_warm_pause_ms" not in explicitly_set
-        ) or self.origin_warm_pause_ms is None:
-            self.origin_warm_pause_ms = profile["origin_warm_pause_ms"]
-        if (
-            self.performance_profile != "BALANCED"
-            and "surface_readiness_max_wait_ms" not in explicitly_set
-        ) or self.surface_readiness_max_wait_ms is None:
-            self.surface_readiness_max_wait_ms = profile[
-                "surface_readiness_max_wait_ms"
-            ]
+        for field_name in _PROFILE_CONTROLLED_FIELDS:
+            if (
+                self.performance_profile != "BALANCED"
+                and field_name not in explicitly_set
+            ) or getattr(self, field_name) is None:
+                setattr(self, field_name, profile[field_name])
 
         self.worker_orphan_recovery_grace_seconds = max(
             int(self.worker_orphan_recovery_grace_seconds), 60
@@ -224,6 +217,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "acquisition_artifact_cleanup_interval_seconds must be >= 0"
             )
+        if not 0.0 <= float(self.selector_self_heal_min_confidence) <= 1.0:
+            raise ValueError("selector_self_heal_min_confidence must be between 0 and 1")
         return self
 
     def coerce_url_timeout_seconds(self, value: object) -> float:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Any
+from collections.abc import MutableMapping
 from contextvars import ContextVar, Token
 from uuid import uuid4
 
@@ -10,17 +12,15 @@ try:
 except ImportError:  # pragma: no cover - optional dependency fallback
     structlog = None
 
-_correlation_id_ctx: ContextVar[str | None] = ContextVar(
-    "correlation_id", default=None
-)
+_correlation_id_ctx: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 _LOGGING_CONFIGURED = False
 
 
 def _add_correlation_id(
     logger: object,
     method_name: str,
-    event_dict: dict[str, object],
-) -> dict[str, object]:
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
     del logger, method_name
     correlation_id = get_correlation_id()
     if correlation_id:

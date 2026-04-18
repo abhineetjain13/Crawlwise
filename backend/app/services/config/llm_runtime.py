@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pydantic_settings import BaseSettings
 
+from app.services.config._module_exports import make_getattr, module_dir
 from app.services.config.runtime_settings import _settings_config
 
 
 class LLMRuntimeSettings(BaseSettings):
+    """LLM_* exports strip the LLM_ prefix before resolving settings attributes."""
+
     model_config = _settings_config(env_prefix="CRAWLER_LLM_")
 
     html_snippet_max_chars: int = 12000
@@ -42,49 +45,50 @@ class LLMRuntimeSettings(BaseSettings):
 
 
 llm_runtime_settings = LLMRuntimeSettings()
+_EXPORTS = {
+    name: name.removeprefix("LLM_").lower()
+    for name in (
+        "LLM_HTML_SNIPPET_MAX_CHARS",
+        "LLM_EXISTING_VALUES_MAX_CHARS",
+        "LLM_CANDIDATE_EVIDENCE_MAX_CHARS",
+        "LLM_DISCOVERED_SOURCES_MAX_CHARS",
+        "LLM_CLEAN_CANDIDATE_TEXT_LIMIT",
+        "LLM_PROVIDER_TIMEOUT_SECONDS",
+        "LLM_PROVIDER_RETRY_MAX_RETRIES",
+        "LLM_PROVIDER_RETRY_BASE_DELAY_SECONDS",
+        "LLM_PROVIDER_ERROR_EXCERPT_CHARS",
+        "LLM_CIRCUIT_FAILURE_THRESHOLD",
+        "LLM_CIRCUIT_COOLDOWN_SECONDS",
+        "LLM_PROMPT_TOKEN_LIMIT",
+        "LLM_PROMPT_TOKEN_CHAR_MULTIPLIER",
+        "LLM_PROMPT_SAFE_TRUNCATE_MAX_STR_LEN",
+        "LLM_PROMPT_SAFE_TRUNCATE_MAX_LIST_ITEMS",
+        "LLM_PROMPT_COMPACT_JSON_MAX_DEPTH",
+        "LLM_PROMPT_COMPACT_JSON_MAX_KEYS",
+        "LLM_PROMPT_COMPACT_JSON_MAX_LIST_ITEMS",
+        "LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS",
+        "LLM_HTML_SNIPPET_MIN_BUDGET",
+        "LLM_HTML_SNIPPET_WINDOW_MIN_CHARS",
+        "LLM_HTML_SNIPPET_WINDOW_MAX_CHARS",
+        "LLM_HTML_SNIPPET_MAX_CHUNKS",
+        "LLM_HTML_ANCHOR_MIN_LENGTH",
+        "LLM_SCHEMA_FIELD_NAME_MAX_LENGTH",
+        "LLM_GROQ_MAX_TOKENS",
+        "LLM_GROQ_TEMPERATURE",
+        "LLM_ANTHROPIC_MAX_TOKENS",
+        "LLM_ANTHROPIC_TEMPERATURE",
+        "LLM_NVIDIA_MAX_TOKENS",
+        "LLM_NVIDIA_TEMPERATURE",
+    )
+}
 
-LLM_HTML_SNIPPET_MAX_CHARS = llm_runtime_settings.html_snippet_max_chars
-LLM_EXISTING_VALUES_MAX_CHARS = llm_runtime_settings.existing_values_max_chars
-LLM_CANDIDATE_EVIDENCE_MAX_CHARS = (
-    llm_runtime_settings.candidate_evidence_max_chars
+__all__ = sorted([*(_EXPORTS.keys()), "LLMRuntimeSettings", "llm_runtime_settings"])
+
+__getattr__ = make_getattr(
+    attr_exports=_EXPORTS,
+    settings_obj=llm_runtime_settings,
 )
-LLM_DISCOVERED_SOURCES_MAX_CHARS = (
-    llm_runtime_settings.discovered_sources_max_chars
-)
-LLM_CLEAN_CANDIDATE_TEXT_LIMIT = llm_runtime_settings.clean_candidate_text_limit
-LLM_PROVIDER_TIMEOUT_SECONDS = llm_runtime_settings.provider_timeout_seconds
-LLM_PROVIDER_RETRY_MAX_RETRIES = llm_runtime_settings.provider_retry_max_retries
-LLM_PROVIDER_RETRY_BASE_DELAY_SECONDS = (
-    llm_runtime_settings.provider_retry_base_delay_seconds
-)
-LLM_PROVIDER_ERROR_EXCERPT_CHARS = llm_runtime_settings.provider_error_excerpt_chars
-LLM_CIRCUIT_FAILURE_THRESHOLD = llm_runtime_settings.circuit_failure_threshold
-LLM_CIRCUIT_COOLDOWN_SECONDS = llm_runtime_settings.circuit_cooldown_seconds
-LLM_PROMPT_TOKEN_LIMIT = llm_runtime_settings.prompt_token_limit
-LLM_PROMPT_TOKEN_CHAR_MULTIPLIER = llm_runtime_settings.prompt_token_char_multiplier
-LLM_PROMPT_SAFE_TRUNCATE_MAX_STR_LEN = (
-    llm_runtime_settings.prompt_safe_truncate_max_str_len
-)
-LLM_PROMPT_SAFE_TRUNCATE_MAX_LIST_ITEMS = (
-    llm_runtime_settings.prompt_safe_truncate_max_list_items
-)
-LLM_PROMPT_COMPACT_JSON_MAX_DEPTH = llm_runtime_settings.prompt_compact_json_max_depth
-LLM_PROMPT_COMPACT_JSON_MAX_KEYS = llm_runtime_settings.prompt_compact_json_max_keys
-LLM_PROMPT_COMPACT_JSON_MAX_LIST_ITEMS = (
-    llm_runtime_settings.prompt_compact_json_max_list_items
-)
-LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS = (
-    llm_runtime_settings.prompt_compact_leaf_string_max_chars
-)
-LLM_HTML_SNIPPET_MIN_BUDGET = llm_runtime_settings.html_snippet_min_budget
-LLM_HTML_SNIPPET_WINDOW_MIN_CHARS = llm_runtime_settings.html_snippet_window_min_chars
-LLM_HTML_SNIPPET_WINDOW_MAX_CHARS = llm_runtime_settings.html_snippet_window_max_chars
-LLM_HTML_SNIPPET_MAX_CHUNKS = llm_runtime_settings.html_snippet_max_chunks
-LLM_HTML_ANCHOR_MIN_LENGTH = llm_runtime_settings.html_anchor_min_length
-LLM_SCHEMA_FIELD_NAME_MAX_LENGTH = llm_runtime_settings.schema_field_name_max_length
-LLM_GROQ_MAX_TOKENS = llm_runtime_settings.groq_max_tokens
-LLM_GROQ_TEMPERATURE = llm_runtime_settings.groq_temperature
-LLM_ANTHROPIC_MAX_TOKENS = llm_runtime_settings.anthropic_max_tokens
-LLM_ANTHROPIC_TEMPERATURE = llm_runtime_settings.anthropic_temperature
-LLM_NVIDIA_MAX_TOKENS = llm_runtime_settings.nvidia_max_tokens
-LLM_NVIDIA_TEMPERATURE = llm_runtime_settings.nvidia_temperature
+
+
+def __dir__() -> list[str]:
+    return module_dir(globals(), __all__)

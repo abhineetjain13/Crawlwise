@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 
-from app.services.config.extraction_rules import NORMALIZATION_RULES
-
-_NORMALIZATION_RULES = NORMALIZATION_RULES
+from app.services.config.extraction_rules import (
+    NESTED_OBJECT_KEYS_CONFIG,
+    PAGE_URL_CURRENCY_HINTS_RAW,
+)
 
 
 def _build_page_url_currency_hint_pattern(token: object) -> str:
@@ -33,61 +34,14 @@ def _compile_page_url_currency_hints(
     return compiled_hints
 
 
-PAGE_URL_CURRENCY_HINTS = _compile_page_url_currency_hints(
-    _NORMALIZATION_RULES.get("page_url_currency_hints", {})
-)
-_NESTED_OBJECT_KEYS = _NORMALIZATION_RULES.get("nested_object_keys", {})
-NESTED_TEXT_KEYS = tuple(
-    _NESTED_OBJECT_KEYS.get(
-        "text_fields",
-        ["name", "label", "title", "text", "value", "content", "description", "alt"],
-    )
-)
-NESTED_URL_KEYS = tuple(
-    _NESTED_OBJECT_KEYS.get("url_fields", ["href", "url", "link", "canonical_url"])
-)
-NESTED_PRICE_KEYS = tuple(
-    _NESTED_OBJECT_KEYS.get(
-        "price_fields",
-        [
-            "specialValue",
-            "currentValue",
-            "special",
-            "current",
-            "price",
-            "amount",
-            "value",
-            "lowPrice",
-            "minPrice",
-            "displayPrice",
-            "formattedPrice",
-        ],
-    )
-)
-NESTED_ORIGINAL_PRICE_KEYS = tuple(
-    _NESTED_OBJECT_KEYS.get(
-        "original_price_fields",
-        [
-            "compareAtPrice",
-            "compare_at_price",
-            "listPrice",
-            "regularPrice",
-            "wasPrice",
-            "originalPrice",
-            "maxPrice",
-            "currentValue",
-            "price",
-        ],
-    )
-)
-NESTED_CURRENCY_KEYS = tuple(
-    _NESTED_OBJECT_KEYS.get(
-        "currency_fields",
-        ["currency", "currencyCode", "priceCurrency", "currency_code"],
-    )
-)
-NESTED_CATEGORY_KEYS = tuple(
-    _NESTED_OBJECT_KEYS.get(
-        "category_fields", ["name", "path", "pathEn", "breadcrumb", "categoryPath"]
-    )
-)
+PAGE_URL_CURRENCY_HINTS = _compile_page_url_currency_hints(PAGE_URL_CURRENCY_HINTS_RAW)
+_NESTED_OBJECT_KEYS = NESTED_OBJECT_KEYS_CONFIG
+if not isinstance(_NESTED_OBJECT_KEYS, dict):
+    raise RuntimeError("NESTED_OBJECT_KEYS_CONFIG must decode to a dict")
+
+NESTED_TEXT_KEYS = tuple(_NESTED_OBJECT_KEYS["text_fields"])
+NESTED_URL_KEYS = tuple(_NESTED_OBJECT_KEYS["url_fields"])
+NESTED_PRICE_KEYS = tuple(_NESTED_OBJECT_KEYS["price_fields"])
+NESTED_ORIGINAL_PRICE_KEYS = tuple(_NESTED_OBJECT_KEYS["original_price_fields"])
+NESTED_CURRENCY_KEYS = tuple(_NESTED_OBJECT_KEYS["currency_fields"])
+NESTED_CATEGORY_KEYS = tuple(_NESTED_OBJECT_KEYS["category_fields"])

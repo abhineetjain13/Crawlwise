@@ -32,7 +32,9 @@ class ADPAdapter(BaseAdapter):
         seen_keys: set[str] = set()
         for card in soup.select(".current-openings-item"):
             title_node = card.select_one("[id^='lblTitle_'], sdf-link, a")
-            title = self._clean_text(title_node.get_text(" ", strip=True) if title_node is not None else "")
+            title = self._clean_text(
+                title_node.get_text(" ", strip=True) if title_node is not None else ""
+            )
             if len(title) < 3:
                 continue
 
@@ -51,17 +53,23 @@ class ADPAdapter(BaseAdapter):
                 record["url"] = url
 
             location_values: list[str] = []
-            for node in card.select(".current-opening-location-item span, .current-opening-location-item"):
+            for node in card.select(
+                ".current-opening-location-item span, .current-opening-location-item"
+            ):
                 value = self._clean_text(node.get_text(" ", strip=True))
                 if value and value not in location_values:
                     location_values.append(value)
             location = " | ".join(location_values)
             post_elem = card.select_one(".current-opening-post-date")
-            posted = self._clean_text(post_elem.get_text(" ", strip=True) if post_elem is not None else "")
+            posted = self._clean_text(
+                post_elem.get_text(" ", strip=True) if post_elem is not None else ""
+            )
             more_locations = self._clean_text(
                 " ".join(
                     node.get_text(" ", strip=True)
-                    for node in card.select("[id^='job_item_location_'], .mdf-overlay-popover sdf-button")
+                    for node in card.select(
+                        "[id^='job_item_location_'], .mdf-overlay-popover sdf-button"
+                    )
                 )
             )
             if location:
@@ -81,7 +89,9 @@ class ADPAdapter(BaseAdapter):
     def _extract_detail(self, url: str, html: str) -> dict | None:
         soup = BeautifulSoup(html, "html.parser")
         title_node = soup.select_one("h1, .job-details-title, .job-description-title")
-        title = self._clean_text(title_node.get_text(" ", strip=True) if title_node is not None else "")
+        title = self._clean_text(
+            title_node.get_text(" ", strip=True) if title_node is not None else ""
+        )
         if len(title) < 3:
             return None
 
@@ -98,11 +108,15 @@ class ADPAdapter(BaseAdapter):
         if location:
             record["location"] = location
 
-        posted_match = re.search(r"(\d+\+?\s+days?\s+ago)", body_text, flags=re.IGNORECASE)
+        posted_match = re.search(
+            r"(\d+\+?\s+days?\s+ago)", body_text, flags=re.IGNORECASE
+        )
         if posted_match:
             record["posted_date"] = self._clean_text(posted_match.group(1))
 
-        requisition_match = re.search(r"Requisition\s+ID:\s*([A-Za-z0-9\-_]+)", body_text, flags=re.IGNORECASE)
+        requisition_match = re.search(
+            r"Requisition\s+ID:\s*([A-Za-z0-9\-_]+)", body_text, flags=re.IGNORECASE
+        )
         if requisition_match:
             record["requisition_id"] = requisition_match.group(1)
 
@@ -125,7 +139,9 @@ class ADPAdapter(BaseAdapter):
 
     def _extract_detail_location(self, soup: BeautifulSoup) -> str:
         details = []
-        for node in soup.select(".current-opening-location-item span, .current-opening-location-item"):
+        for node in soup.select(
+            ".current-opening-location-item span, .current-opening-location-item"
+        ):
             value = self._clean_text(node.get_text(" ", strip=True))
             if value and value not in details:
                 details.append(value)

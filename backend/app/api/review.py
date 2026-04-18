@@ -31,10 +31,14 @@ async def review_detail(
 ) -> ReviewResponse:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     payload = await build_review_payload(session, run_id)
     if payload is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     return ReviewResponse(
         run=CrawlRunResponse.model_validate(payload["run"], from_attributes=True),
         normalized_fields=payload["normalized_fields"],
@@ -42,7 +46,10 @@ async def review_detail(
         canonical_fields=payload["canonical_fields"],
         domain_mapping=payload["domain_mapping"],
         suggested_mapping=payload["suggested_mapping"],
-        records=[CrawlRecordResponse.model_validate(row, from_attributes=True) for row in payload["records"]],
+        records=[
+            CrawlRecordResponse.model_validate(row, from_attributes=True)
+            for row in payload["records"]
+        ],
     )
 
 
@@ -54,10 +61,14 @@ async def review_artifact_html(
 ) -> HTMLResponse:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     html_text = await load_review_html(session, run_id)
     if not html_text:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No HTML artifact found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No HTML artifact found"
+        )
     return HTMLResponse(content=html_text)
 
 
@@ -70,16 +81,20 @@ async def review_save(
 ) -> ReviewSaveResponse:
     run = await get_run(session, run_id)
     if run is None or (user.role != "admin" and run.user_id != user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND_DETAIL
+        )
     selections = [row.model_dump() for row in payload.selections]
     for extra_field in payload.extra_fields:
         name = str(extra_field or "").strip()
         if not name:
             continue
-        selections.append({
-            "source_field": name,
-            "output_field": name,
-            "selected": True,
-        })
+        selections.append(
+            {
+                "source_field": name,
+                "output_field": name,
+                "selected": True,
+            }
+        )
     result = await save_review(session, run, selections)
     return ReviewSaveResponse.model_validate(result)

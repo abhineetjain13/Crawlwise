@@ -3,8 +3,8 @@
 import { AlertCircle, Check, CheckCircle2, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 
-import { EmptyPanel, PageHeader, SectionHeader } from "../../components/ui/patterns";
-import { Badge, Button, Card, Input, Textarea } from "../../components/ui/primitives";
+import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from "../../components/ui/patterns";
+import { Badge, Button, Card, Input, Select, Textarea } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
 import type { SelectorCreatePayload, SelectorSuggestion } from "../../lib/api/types";
 import { getNormalizedDomain } from "../../lib/format/domain";
@@ -32,6 +32,9 @@ type RowMessage = {
 export default function SelectorsPage() {
   const [url, setUrl] = useState("");
   const [loadedUrl, setLoadedUrl] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [resolvedSurface, setResolvedSurface] = useState("generic");
+  const [iframePromoted, setIframePromoted] = useState(false);
   const [expectedColumns, setExpectedColumns] = useState("");
   const [rows, setRows] = useState<SelectorRow[]>([]);
   const [rowMessages, setRowMessages] = useState<Record<string, RowMessage>>({});
@@ -61,7 +64,10 @@ export default function SelectorsPage() {
         url: targetUrl,
         expected_columns: parsedColumns,
       });
-      setLoadedUrl(targetUrl);
+      setLoadedUrl(response.preview_url || targetUrl);
+      setPreviewUrl(api.selectorPreviewHtml(response.preview_url || targetUrl));
+      setResolvedSurface(response.surface || inferSelectorSurface(parsedColumns, targetUrl));
+      setIframePromoted(Boolean(response.iframe_promoted));
       setRows(
         parsedColumns.map((field) => {
           const suggestion = response.suggestions[field]?.[0];
@@ -187,6 +193,7 @@ export default function SelectorsPage() {
         acceptedRows.map(async (row) => {
           const payload: SelectorCreatePayload = {
             domain,
+            surface: resolvedSurface,
             field_name: normalizeField(row.fieldName),
             xpath: row.kind === "xpath" ? row.selectorValue.trim() : undefined,
             css_selector: row.kind === "css_selector" ? row.selectorValue.trim() : undefined,
@@ -237,14 +244,14 @@ export default function SelectorsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="page-stack">
       <PageHeader title="CSS / XPath Selector" />
 
-      <Card className="space-y-4">
+      <Card className="section-card">
         <SectionHeader title="Selector Inputs" description="Enter a page URL and expected column names, then let the LLM suggest selectors for each field." />
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)_auto] xl:items-end">
           <label className="grid gap-1.5">
-            <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Page URL</span>
+            <span className="field-label">Page URL</span>
             <Input
               value={url}
               onChange={(event) => setUrl(event.target.value)}
@@ -253,7 +260,7 @@ export default function SelectorsPage() {
             />
           </label>
           <label className="grid gap-1.5">
-            <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Expected Columns</span>
+            <span className="field-label">Expected Columns</span>
             <Textarea
               value={expectedColumns}
               onChange={(event) => setExpectedColumns(event.target.value)}
@@ -266,22 +273,33 @@ export default function SelectorsPage() {
             {loadingSuggestions ? "Loading..." : "Load Page"}
           </Button>
         </div>
-        {loadError ? <div className="alert-surface alert-danger">{loadError}</div> : null}
+        {loadError ? <InlineAlert message={loadError} /> : null}
       </Card>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(420px,0.95fr)]">
-        <Card className="space-y-4">
-          <SectionHeader title="Page Preview" description={loadedUrl || "Load a page to preview its DOM context."} />
+        <Card className="section-card">
+          <SectionHeader
+            title="Page Preview"
+            description={loadedUrl || "Load a page to preview its DOM context."}
+            action={
+              loadedUrl ? (
+                <div className="flex items-center gap-2">
+                  <Badge tone="info">{resolvedSurface}</Badge>
+                  {iframePromoted ? <Badge tone="warning">iframe promoted</Badge> : null}
+                </div>
+              ) : null
+            }
+          />
           <div className="bg-panel rounded-xl shadow-card backdrop-blur-md overflow-hidden p-0">
-            {loadedUrl ? (
+            {previewUrl ? (
               <iframe
-                key={loadedUrl}
-                src={loadedUrl}
+                key={previewUrl}
+                src={previewUrl}
                 title="Selector page preview"
                 className="h-[760px] w-full bg-panel"
                 loading="lazy"
                 referrerPolicy="no-referrer"
-                sandbox=""
+                sandbox="allow-same-origin"
               />
             ) : (
               <div className="grid h-[760px] place-items-center text-sm leading-[1.55] text-muted">
@@ -291,7 +309,7 @@ export default function SelectorsPage() {
           </div>
         </Card>
 
-        <Card className="space-y-4">
+        <Card className="section-card">
           <SectionHeader
             title="Field Rows"
             description="Review LLM suggestions, edit selectors manually, test arbitrary XPath/CSS/regex, then accept the rows you want to save."
@@ -313,7 +331,7 @@ export default function SelectorsPage() {
                     <div className="grid gap-3">
                       <div className="grid gap-3 xl:grid-cols-[150px_120px_minmax(0,1fr)_auto]">
                         <label className="grid gap-1">
-                          <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Field Name</span>
+                          <span className="field-label">Field Name</span>
                           <Input
                             value={row.fieldName}
                             onChange={(event) => updateRow(row.key, { fieldName: event.target.value, state: nextEditedState(row.state) })}
@@ -322,20 +340,19 @@ export default function SelectorsPage() {
                         </label>
 
                         <label className="grid gap-1">
-                          <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Type</span>
-                          <select
+                          <span className="field-label">Type</span>
+                          <Select
                             value={row.kind}
                             onChange={(event) => updateRow(row.key, { kind: event.target.value as SelectorKind, state: nextEditedState(row.state) })}
-                            className="control-select focus-ring"
                           >
                             <option value="xpath">XPath</option>
                             <option value="css_selector">CSS</option>
                             <option value="regex">Regex</option>
-                          </select>
+                          </Select>
                         </label>
 
                         <label className="grid gap-1" htmlFor={selectorInputId}>
-                          <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">XPath / CSS / Regex</span>
+                          <span className="field-label">XPath / CSS / Regex</span>
                           <div className="relative">
                             <Input
                               id={selectorInputId}
@@ -365,7 +382,7 @@ export default function SelectorsPage() {
                       </div>
 
                       <label className="grid gap-1">
-                        <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Extracted Value Preview</span>
+                        <span className="field-label">Extracted Value Preview</span>
                         <Input
                           value={row.extractedValue}
                           onChange={(event) => updateRow(row.key, { extractedValue: event.target.value })}
@@ -548,4 +565,15 @@ function createRowKey() {
 
 function normalizeField(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function inferSelectorSurface(fields: string[], url: string) {
+  const normalized = new Set(fields.map((field) => normalizeField(field)));
+  if (["company", "location", "apply_url", "salary", "remote"].some((field) => normalized.has(field))) {
+    return "job_detail";
+  }
+  if (String(url).toLowerCase().includes("jobs")) {
+    return "job_detail";
+  }
+  return "ecommerce_detail";
 }

@@ -39,7 +39,9 @@ async def user_detail(
 ) -> UserResponse:
     user = await get_user(session, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND_DETAIL
+        )
     return UserResponse.model_validate(user, from_attributes=True)
 
 
@@ -52,7 +54,9 @@ async def user_patch(
 ) -> UserResponse:
     user = await get_user(session, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND_DETAIL
+        )
     updated = await update_user(session, user, payload.model_dump(exclude_none=True))
     return UserResponse.model_validate(updated, from_attributes=True)
 
@@ -65,5 +69,7 @@ async def user_delete(
 ) -> None:
     user = await get_user(session, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND_DETAIL)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND_DETAIL
+        )
     await delete_user(session, user)

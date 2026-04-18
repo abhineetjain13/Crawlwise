@@ -32,7 +32,9 @@ class EbayAdapter(BaseAdapter):
         price_el = soup.select_one(".x-price-primary span, #prcIsum")
         image_el = soup.select_one("#icImg, .ux-image-carousel-item img")
         condition_el = soup.select_one(".x-item-condition-value span, #vi-itm-cond")
-        seller_el = soup.select_one(".x-sellercard-atf__info__about-seller span, .mbg-nw")
+        seller_el = soup.select_one(
+            ".x-sellercard-atf__info__about-seller span, .mbg-nw"
+        )
         if not title_el:
             return None
         return {
@@ -55,10 +57,12 @@ class EbayAdapter(BaseAdapter):
             title_text = title_el.get_text(strip=True) if title_el else ""
             if not title_text or title_text.lower() == "shop on ebay":
                 continue
-            records.append({
-                "title": title_text,
-                "price": price_el.get_text(strip=True) if price_el else None,
-                "image_url": image_el.get("src") if image_el else None,
-                "url": link_el.get("href", "") if link_el else "",
-            })
+            records.append(
+                {
+                    "title": title_text,
+                    "price": price_el.get_text(strip=True) if price_el else None,
+                    "image_url": image_el.get("src") if image_el else None,
+                    "url": link_el.get("href", "") if link_el else "",
+                }
+            )
         return records

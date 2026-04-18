@@ -72,7 +72,9 @@ class ICIMSAdapter(BaseAdapter):
 
         embedded_board_url = self._discover_embedded_board_url(url, html)
         if embedded_board_url:
-            html = await self._fetch_embedded_content(url=embedded_board_url, fallback_html=html)
+            html = await self._fetch_embedded_content(
+                url=embedded_board_url, fallback_html=html
+            )
 
         inline_records = self._extract_from_listing_html(html, base_url)
         if inline_records:
@@ -132,14 +134,14 @@ class ICIMSAdapter(BaseAdapter):
             endpoint = match.group(1)
             return endpoint if endpoint.startswith("http") else f"{base_url}{endpoint}"
         if "/ajax/joblisting/" in str(html or "").lower():
-            return (
-                f"{base_url}/ajax/joblisting/?num_items={ICIMS_PAGE_SIZE}&offset=0"
-            )
+            return f"{base_url}/ajax/joblisting/?num_items={ICIMS_PAGE_SIZE}&offset=0"
         return None
 
     def _discover_embedded_board_url(self, url: str, html: str) -> str | None:
         soup = BeautifulSoup(html, HTML_PARSER)
-        iframe = soup.select_one("iframe[src*='icims.com/jobs/search'], iframe[src*='in_iframe=1']")
+        iframe = soup.select_one(
+            "iframe[src*='icims.com/jobs/search'], iframe[src*='in_iframe=1']"
+        )
         if iframe is None:
             return None
         src = str(iframe.get("src") or "").strip()
@@ -149,7 +151,9 @@ class ICIMSAdapter(BaseAdapter):
 
     async def _follow_embedded_content_url(self, url: str, html: str) -> str:
         soup = BeautifulSoup(html, HTML_PARSER)
-        iframe = soup.select_one("iframe[src*='in_iframe=1'], iframe[src*='icims.com/jobs/']")
+        iframe = soup.select_one(
+            "iframe[src*='in_iframe=1'], iframe[src*='icims.com/jobs/']"
+        )
         if iframe is None:
             return html
         src = str(iframe.get("src") or "").strip()
@@ -170,11 +174,13 @@ class ICIMSAdapter(BaseAdapter):
         return response_text or fallback_html
 
     def _paginate_endpoint(self, endpoint: str, offset: int) -> str:
-        page_url = re.sub(r"offset=\d+", f"offset={offset}", endpoint) if "offset=" in endpoint else f"{endpoint}{'&' if '?' in endpoint else '?'}offset={offset}"
+        page_url = (
+            re.sub(r"offset=\d+", f"offset={offset}", endpoint)
+            if "offset=" in endpoint
+            else f"{endpoint}{'&' if '?' in endpoint else '?'}offset={offset}"
+        )
         if "num_items=" not in page_url:
-            page_url = (
-                f"{page_url}{'&' if '?' in page_url else '?'}num_items={ICIMS_PAGE_SIZE}"
-            )
+            page_url = f"{page_url}{'&' if '?' in page_url else '?'}num_items={ICIMS_PAGE_SIZE}"
         return page_url
 
     def _extract_from_listing_html(self, html: str, base_url: str) -> list[dict]:
@@ -229,10 +235,18 @@ class ICIMSAdapter(BaseAdapter):
             "title": title,
             "url": self._normalize_job_url(link.get("href", ""), base_url=base_url),
         }
-        description = row.select_one(".description, .iCIMS_JobContent, [class*='description'], [class*='Description']")
-        location = row.select_one("[class*='location'], [class*='Location'], .iCIMS_JobLocation")
-        department = row.select_one("[class*='category'], [class*='Category'], [class*='department'], [class*='Department'], .iCIMS_JobCategory")
-        posted = row.select_one("[class*='date'], [class*='Date'], [class*='posted'], .iCIMS_JobDate")
+        description = row.select_one(
+            ".description, .iCIMS_JobContent, [class*='description'], [class*='Description']"
+        )
+        location = row.select_one(
+            "[class*='location'], [class*='Location'], .iCIMS_JobLocation"
+        )
+        department = row.select_one(
+            "[class*='category'], [class*='Category'], [class*='department'], [class*='Department'], .iCIMS_JobCategory"
+        )
+        posted = row.select_one(
+            "[class*='date'], [class*='Date'], [class*='posted'], .iCIMS_JobDate"
+        )
         if location is not None:
             value = self._clean_text(location.get_text(" ", strip=True))
             if value and value != title:
@@ -283,7 +297,9 @@ class ICIMSAdapter(BaseAdapter):
 
     def _extract_detail(self, url: str, html: str) -> dict | None:
         soup = BeautifulSoup(html, HTML_PARSER)
-        title = soup.select_one("h1, .iCIMS_JobHeader h1, [class*='jobtitle'], [class*='JobTitle']")
+        title = soup.select_one(
+            "h1, .iCIMS_JobHeader h1, [class*='jobtitle'], [class*='JobTitle']"
+        )
         if title is None:
             return None
         record = {
@@ -291,8 +307,12 @@ class ICIMSAdapter(BaseAdapter):
             "url": self._normalize_job_url(url),
         }
         metadata = self._extract_header_fields(soup)
-        location = soup.select_one("[class*='location'], [class*='Location'], .iCIMS_JobLocation")
-        description = soup.select_one(".iCIMS_JobContent, [class*='jobdescription'], [class*='JobDescription']")
+        location = soup.select_one(
+            "[class*='location'], [class*='Location'], .iCIMS_JobLocation"
+        )
+        description = soup.select_one(
+            ".iCIMS_JobContent, [class*='jobdescription'], [class*='JobDescription']"
+        )
         if location is not None:
             value = self._clean_text(location.get_text(" ", strip=True))
             if value:
@@ -309,13 +329,19 @@ class ICIMSAdapter(BaseAdapter):
         for tag in node.select(".iCIMS_JobHeaderTag"):
             label = tag.select_one(".iCIMS_JobHeaderField, dt")
             value = tag.select_one(".iCIMS_JobHeaderData, dd")
-            label_text = self._normalize_header_label(label.get_text(" ", strip=True) if label is not None else "")
-            value_text = self._clean_text(value.get_text(" ", strip=True) if value is not None else "")
+            label_text = self._normalize_header_label(
+                label.get_text(" ", strip=True) if label is not None else ""
+            )
+            value_text = self._clean_text(
+                value.get_text(" ", strip=True) if value is not None else ""
+            )
             if label_text and value_text and label_text not in fields:
                 fields[label_text] = value_text
         return fields
 
-    def _apply_metadata_fields(self, record: dict[str, str], fields: dict[str, str]) -> None:
+    def _apply_metadata_fields(
+        self, record: dict[str, str], fields: dict[str, str]
+    ) -> None:
         metadata_mapping = {
             "campus_location": "location",
             "location": "location",
@@ -342,7 +368,11 @@ class ICIMSAdapter(BaseAdapter):
         if not resolved:
             return ""
         parsed = urlparse(resolved)
-        params = [(key, item) for key, item in parse_qsl(parsed.query, keep_blank_values=True) if key != "in_iframe"]
+        params = [
+            (key, item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+            if key != "in_iframe"
+        ]
         return urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
 
     def _looks_like_detail_url(self, url: str) -> bool:

@@ -24,11 +24,15 @@ def verify_password(password: str, hashed_password: str) -> bool:
 def create_access_token(subject: str, *, token_version: int = 0) -> str:
     expires_at = datetime.now(UTC) + timedelta(hours=settings.jwt_expire_hours)
     payload = {"sub": subject, "exp": expires_at, "ver": token_version}
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
+    )
 
 
 def decode_access_token(token: str) -> dict[str, str]:
-    return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    return jwt.decode(
+        token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+    )
 
 
 def _fernet() -> Fernet:

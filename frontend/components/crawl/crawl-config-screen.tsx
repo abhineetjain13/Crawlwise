@@ -5,8 +5,8 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { PageHeader, SectionHeader, TabBar } from "../ui/patterns";
-import { Button, Card, Input, Textarea } from "../ui/primitives";
+import { InlineAlert, PageHeader, SectionHeader, TabBar } from "../ui/patterns";
+import { Button, Card, Input, Select, Textarea } from "../ui/primitives";
 import { api } from "../../lib/api";
 import type { AdvancedCrawlMode, CrawlConfig, CrawlDomain } from "../../lib/api/types";
 import { CRAWL_DEFAULTS, CRAWL_LIMITS } from "../../lib/constants/crawl-defaults";
@@ -255,11 +255,11 @@ export function CrawlConfigScreen({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="page-stack">
       <PageHeader title="Crawl Studio" />
 
       <form className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_360px] xl:items-stretch" onSubmit={(event) => void startCrawl(event)}>
-        <div className="space-y-4">
+        <div className="page-stack">
           <Card className="space-y-5">
             <SectionHeader
               title="Target URL"
@@ -325,13 +325,14 @@ export function CrawlConfigScreen({
 
             {(crawlTab === "category" && categoryMode === "bulk") || (crawlTab === "pdp" && pdpMode === "batch") ? (
               <label className="grid gap-1.5">
-                <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">URLs (one per line)</span>
+                <span className="field-label">URLs (one per line)</span>
                 <div className="relative">
                   <Textarea
                     value={bulkUrls}
                     onChange={(event) => setBulkUrls(event.target.value)}
                     placeholder={"https://example.com/page-1\nhttps://example.com/page-2"}
-                    className="min-h-[220px] text-mono-body"
+                    rows={10}
+                    className="min-h-[420px] text-mono-body"
                     aria-label="Bulk URLs input"
                   />
                   {bulkUrls.trim() && (
@@ -343,7 +344,7 @@ export function CrawlConfigScreen({
               </label>
             ) : crawlTab === "pdp" && pdpMode === "csv" ? (
               <label className="grid gap-1.5">
-                <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">CSV File</span>
+                <span className="field-label">CSV File</span>
                 <Input
                   key="csv-file-input"
                   type="file"
@@ -355,7 +356,7 @@ export function CrawlConfigScreen({
               </label>
             ) : (
               <label className="grid gap-1.5">
-                <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Target URL</span>
+                <span className="field-label">Target URL</span>
                 <Input
                   key="target-url-input"
                   value={targetUrl}
@@ -380,7 +381,7 @@ export function CrawlConfigScreen({
             />
           </Card>
 
-          <Card className="space-y-4">
+          <Card className="section-card">
             <div className="flex items-center justify-between gap-4">
               <SectionHeader
                 title="Field Configuration"
@@ -406,7 +407,7 @@ export function CrawlConfigScreen({
                   />
                 ))
               ) : (
-                <div className="bg-background-alt rounded-lg shadow-card border-dashed px-4 py-6 text-sm leading-[1.55] text-muted">
+                <div className="surface-muted rounded-lg border-dashed px-4 py-6 text-sm leading-[1.55] text-muted">
                   No manual fields yet.
                 </div>
               )}
@@ -414,19 +415,17 @@ export function CrawlConfigScreen({
           </Card>
 
           {configError ? (
-            <div className="alert-surface alert-danger rounded-[var(--radius-lg)] px-4 py-3">
-              {configError}
-            </div>
+            <InlineAlert message={configError} />
           ) : null}
         </div>
 
         <div className="h-full xl:self-stretch">
           <div className="h-full xl:sticky xl:top-[68px]">
-          <Card className="flex h-full flex-col space-y-4">
+          <Card className="section-card flex h-full flex-col">
             <SectionHeader title="Crawl Settings" description="Set crawl behaviour and network controls." />
-            <div className="flex-1 space-y-4">
+            <div className="page-stack flex-1">
               <div className="space-y-2 px-1">
-                <div className="text-[11px] font-semibold tracking-wide text-muted uppercase">Domain</div>
+                <div className="field-label">Domain</div>
                 <TabBar
                   value={crawlDomain}
                   compact
@@ -459,7 +458,7 @@ export function CrawlConfigScreen({
                   <div className="space-y-4 px-1 py-3">
                     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
                       <div className="text-sm font-medium leading-[1.45] text-foreground text-secondary">Mode</div>
-                      <select
+                      <Select
                         aria-label="Advanced crawl mode"
                         value={advancedMode}
                         onChange={(event) => {
@@ -468,14 +467,14 @@ export function CrawlConfigScreen({
                             setAdvancedMode(next as AdvancedCrawlMode);
                           }
                         }}
-                        className="control-select focus-ring h-9 w-full"
+                        className="h-9 w-full"
                       >
                         <option value="auto">Auto</option>
                         <option value="scroll">Scroll</option>
                         <option value="load_more">Load More</option>
                         <option value="view_all">View All</option>
                         <option value="paginate">Paginate</option>
-                      </select>
+                      </Select>
                     </div>
 
                     <div className="space-y-3">
@@ -527,7 +526,7 @@ export function CrawlConfigScreen({
                   onChange={setProxyEnabled}
                 >
                   <div className="space-y-3 px-1 py-3">
-                    <div className="text-[11px] font-semibold tracking-wide text-muted uppercase">Proxy Pool</div>
+                    <div className="field-label">Proxy Pool</div>
                     <Textarea
                       value={proxyInput}
                       onChange={(event) => setProxyInput(event.target.value)}

@@ -40,7 +40,9 @@ async def test_correlation_middleware_strips_crlf_from_configured_header_name(
         assert request is not None
         return Response(status_code=204)
 
-    monkeypatch.setattr("app.main.settings.request_id_header", "X-Request-ID\r\nSet-Cookie")
+    monkeypatch.setattr(
+        "app.main.settings.request_id_header", "X-Request-ID\r\nSet-Cookie"
+    )
 
     request = Request(
         {

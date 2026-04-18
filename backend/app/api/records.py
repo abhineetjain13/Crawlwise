@@ -7,7 +7,10 @@ from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.common import PaginatedResponse, PaginationMeta
 from app.schemas.crawl import CrawlRecordProvenanceResponse, CrawlRecordResponse
-from app.services.crawl_access_service import RUN_NOT_FOUND_DETAIL, require_accessible_run
+from app.services.crawl_access_service import (
+    RUN_NOT_FOUND_DETAIL,
+    require_accessible_run,
+)
 from app.services.crawl_crud import get_run_records
 from app.services.record_export_service import (
     MAX_RECORD_PAGE_SIZE,

@@ -70,4 +70,3 @@ def transition_status(
             f"Invalid crawl status transition: {current_status} -> {target_status}"
         )
     return target_status
-

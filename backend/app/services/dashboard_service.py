@@ -39,14 +39,23 @@ async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) 
         (
             await session.execute(
                 select(func.count()).select_from(
-                    run_scope.where(CrawlRun.status.in_([status.value for status in ACTIVE_STATUSES])).subquery()
+                    run_scope.where(
+                        CrawlRun.status.in_(
+                            [status.value for status in ACTIVE_STATUSES]
+                        )
+                    ).subquery()
                 )
             )
         ).scalar()
         or 0
     )
     if user_id is None:
-        total_records = int((await session.execute(select(func.count()).select_from(CrawlRecord))).scalar() or 0)
+        total_records = int(
+            (
+                await session.execute(select(func.count()).select_from(CrawlRecord))
+            ).scalar()
+            or 0
+        )
     else:
         total_records = int(
             (
@@ -59,16 +68,24 @@ async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) 
             ).scalar()
             or 0
         )
-    recent_result = await session.execute(run_scope.order_by(CrawlRun.created_at.desc()).limit(10))
+    recent_result = await session.execute(
+        run_scope.order_by(CrawlRun.created_at.desc()).limit(10)
+    )
     recent_runs = list(recent_result.scalars().all())
-    domain_rows = await session.execute(select(CrawlRun.url) if user_id is None else select(CrawlRun.url).where(CrawlRun.user_id == user_id))
+    domain_rows = await session.execute(
+        select(CrawlRun.url)
+        if user_id is None
+        else select(CrawlRun.url).where(CrawlRun.user_id == user_id)
+    )
     counts: dict[str, int] = {}
     for url in domain_rows.scalars().all():
         domain = normalize_domain(url or "") or "unknown"
         counts[domain] = counts.get(domain, 0) + 1
     top_domains = [
         {"domain": key, "count": value}
-        for key, value in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:5]
+        for key, value in sorted(
+            counts.items(), key=lambda item: item[1], reverse=True
+        )[:5]
     ]
     return {
         "total_runs": total_runs,
@@ -180,7 +197,8 @@ async def build_operational_metrics(session: AsyncSession) -> dict:
         )
         completed_ts = (
             completed_at.replace(tzinfo=UTC)
-            if completed_at is not None and getattr(completed_at, "tzinfo", None) is None
+            if completed_at is not None
+            and getattr(completed_at, "tzinfo", None) is None
             else completed_at.astimezone(UTC)
             if completed_at is not None
             else None

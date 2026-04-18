@@ -24,8 +24,8 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
+    <div className="space-y-8">
+      <div className="space-y-3">
         <Title kicker="Auth">Sign in</Title>
         <Subtitle>
           Enter the bootstrap admin credentials from your backend <code className="text-sm leading-[1.55]">.env</code>{" "}
@@ -51,10 +51,15 @@ export default function LoginPage() {
           />
         </Field>
         {error ? <InlineAlert message={error} /> : null}
-        <div className="flex items-center gap-3 pt-1">
-          <Button type="submit">Sign in</Button>
+        <div className="pt-2">
+          <Button type="submit" size="lg" className="w-full">
+            Sign in
+          </Button>
         </div>
       </form>
+      <p className="panel-subtitle text-sm">
+        Access is provisioned through the backend bootstrap admin in this environment.
+      </p>
     </div>
   );
 }

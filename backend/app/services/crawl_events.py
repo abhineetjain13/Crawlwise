@@ -106,10 +106,16 @@ async def _should_persist_log(level: str, run_id: int, message: str) -> bool:
 
     async def _decide(redis) -> bool:
         sample_rate = max(1, int(settings.crawl_log_db_url_progress_sample_rate or 1))
-        if sample_rate > 1 and log_level == "info" and _URL_PROGRESS_PATTERN.match(message):
+        if (
+            sample_rate > 1
+            and log_level == "info"
+            and _URL_PROGRESS_PATTERN.match(message)
+        ):
             counter = int(await redis.incr(_url_progress_counter_key(run_id)))
             if counter == 1:
-                await redis.expire(_url_progress_counter_key(run_id), _COUNTER_TTL_SECONDS)
+                await redis.expire(
+                    _url_progress_counter_key(run_id), _COUNTER_TTL_SECONDS
+                )
             return counter % sample_rate == 1
 
         max_rows = max(1, int(settings.crawl_log_db_max_rows_per_run or 1))
@@ -148,7 +154,9 @@ def _append_log_file_line(
     )
 
 
-async def prepare_log_event(run_id: int, level: str, message: str) -> tuple[str, str, bool]:
+async def prepare_log_event(
+    run_id: int, level: str, message: str
+) -> tuple[str, str, bool]:
     normalized_level = _normalize_level(level)
     formatted_message = _format_message(message, None)
     logger.log(
@@ -157,7 +165,9 @@ async def prepare_log_event(run_id: int, level: str, message: str) -> tuple[str,
         run_id,
         formatted_message,
     )
-    should_persist = await _should_persist_log(normalized_level, run_id, formatted_message)
+    should_persist = await _should_persist_log(
+        normalized_level, run_id, formatted_message
+    )
     return normalized_level, formatted_message, should_persist
 
 
@@ -282,6 +292,7 @@ async def persist_run_summary_patch(
         await new_session.commit()
         await new_session.refresh(run)
         return serialize_run_snapshot(run)
+
 
 async def load_run_for_events(
     session: AsyncSession,

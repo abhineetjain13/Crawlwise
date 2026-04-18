@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 def _log_for_pytest(level: int, message: str, *args: object) -> None:
     logger.log(level, message, *args)
     root_logger = logging.getLogger()
-    if any(type(handler).__name__ == "LogCaptureHandler" for handler in root_logger.handlers):
+    if any(
+        type(handler).__name__ == "LogCaptureHandler"
+        for handler in root_logger.handlers
+    ):
         root_logger.log(level, message, *args)
+
 
 class _SettingsViewLike(Protocol):
     def urls(self) -> list[str]: ...
@@ -31,6 +35,7 @@ class _SettingsViewLike(Protocol):
 
 
 # CSV parsing
+
 
 def parse_csv_urls(csv_content: str) -> list[str]:
     """Parse URLs from CSV content (first column, skip header if present)."""
@@ -48,6 +53,7 @@ def parse_csv_urls(csv_content: str) -> list[str]:
 
 
 # URL normalization and collection
+
 
 def normalize_target_url(value: object) -> str:
     """Normalize a target URL by removing whitespace and unescaping HTML entities."""
@@ -109,18 +115,18 @@ def collect_target_urls(
     """Collect and deduplicate all target URLs from payload and settings."""
     settings_view = _settings_view(settings)
     candidates: list[str] = []
-    
+
     # Direct URL from payload
     direct_url = normalize_target_url(payload.get("url"))
     if direct_url:
         candidates.append(direct_url)
-    
+
     # URLs array from payload
     for value in payload.get("urls") or []:
         candidate = normalize_target_url(value)
         if candidate:
             candidates.append(candidate)
-    
+
     # URLs array from settings
     setting_urls = (
         settings_view.urls()
@@ -131,12 +137,12 @@ def collect_target_urls(
         candidate = normalize_target_url(value)
         if candidate:
             candidates.append(candidate)
-    
+
     # CSV content from settings
     csv_content = str(settings_view.get("csv_content") or "")
     if csv_content:
         candidates.extend(parse_csv_urls(csv_content))
-    
+
     # Deduplicate while preserving order
     return list(dict.fromkeys(candidates))
 
@@ -164,11 +170,15 @@ def resolve_traversal_mode(settings: object) -> str | None:
         return None
     # Preserve user-owned advanced mode semantics from the unified crawl UI.
     # `auto` means "no explicit traversal helper requested".
-    mode = str(
-        settings_view.get("traversal_mode")
-        or settings_view.get("advanced_mode")
-        or ""
-    ).strip().lower()
+    mode = (
+        str(
+            settings_view.get("traversal_mode")
+            or settings_view.get("advanced_mode")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if mode in {"", "none", "single"}:
         return None
     if mode == "auto":
@@ -194,6 +204,7 @@ def resolve_traversal_mode(settings: object) -> str | None:
 
 # Field name normalization
 
+
 def normalize_committed_field_name(value: object) -> str:
     """Normalize a field name to snake_case format."""
     text = str(value or "").strip()
@@ -212,9 +223,10 @@ def normalize_committed_field_name(value: object) -> str:
 
 # Extraction contract validation
 
+
 def validate_extraction_contract(contract_rows: list[dict]) -> None:
     """Validate extraction contract rows for field names, XPath, and regex syntax.
-    
+
     Raises ValueError if any validation errors are found.
     """
     errors: list[str] = []
@@ -222,17 +234,17 @@ def validate_extraction_contract(contract_rows: list[dict]) -> None:
         field_name = str(row.get("field_name") or "").strip()
         xpath = str(row.get("xpath") or "").strip()
         regex = str(row.get("regex") or "").strip()
-        
+
         if not field_name:
             errors.append(f"Row {index}: field_name is required")
-        
+
         if xpath:
             valid_xpath, xpath_error = validate_xpath_syntax(xpath)
             if not valid_xpath:
                 errors.append(
                     f"Row {index} ({field_name or 'unnamed'}): invalid XPath ({xpath_error})"
                 )
-        
+
         if regex:
             try:
                 regex_lib.compile(regex)
@@ -240,6 +252,6 @@ def validate_extraction_contract(contract_rows: list[dict]) -> None:
                 errors.append(
                     f"Row {index} ({field_name or 'unnamed'}): invalid regex ({exc})"
                 )
-    
+
     if errors:
         raise ValueError("; ".join(errors))

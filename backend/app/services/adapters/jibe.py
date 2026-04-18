@@ -40,7 +40,9 @@ class JibeAdapter(BaseAdapter):
         parsed = urlparse(url)
         api_url = f"{parsed.scheme}://{parsed.netloc}/api/jobs"
         query = self._build_query(url, html, surface)
-        request_url = api_url if not query else f"{api_url}?{urlencode(query, doseq=True)}"
+        request_url = (
+            api_url if not query else f"{api_url}?{urlencode(query, doseq=True)}"
+        )
         try:
             payload = await self._request_json_with_curl(
                 curl_requests.get,
@@ -60,12 +62,17 @@ class JibeAdapter(BaseAdapter):
         jobs = payload.get("jobs") if isinstance(payload, dict) else []
         if not isinstance(jobs, list):
             return []
-        normalized = [self._normalize_job(row, base_url=f"{parsed.scheme}://{parsed.netloc}") for row in jobs]
+        normalized = [
+            self._normalize_job(row, base_url=f"{parsed.scheme}://{parsed.netloc}")
+            for row in jobs
+        ]
         records = [row for row in normalized if row]
         if "detail" in str(surface or "").lower():
             target_id = self._extract_job_id_from_url(url)
             if target_id:
-                records = [row for row in records if str(row.get("job_id") or "") == target_id]
+                records = [
+                    row for row in records if str(row.get("job_id") or "") == target_id
+                ]
         return records
 
     def _build_query(self, url: str, html: str, surface: str) -> list[tuple[str, str]]:
@@ -76,7 +83,11 @@ class JibeAdapter(BaseAdapter):
             if value:
                 merged[key] = value
         search_config = self._extract_search_config(html)
-        config_query = search_config.get("query") if isinstance(search_config.get("query"), dict) else {}
+        config_query = (
+            search_config.get("query")
+            if isinstance(search_config.get("query"), dict)
+            else {}
+        )
         for key, value in config_query.items():
             normalized = self._normalize_query_value(value)
             if normalized and key not in merged:
@@ -113,17 +124,25 @@ class JibeAdapter(BaseAdapter):
             canonical_url = self._clean_text(meta.get("canonical_url"))
         job_id = self._clean_text(payload.get("req_id") or payload.get("slug"))
         url = canonical_url or (urljoin(base_url, f"/jobs/{job_id}") if job_id else "")
-        categories = payload.get("categories") if isinstance(payload.get("categories"), list) else []
+        categories = (
+            payload.get("categories")
+            if isinstance(payload.get("categories"), list)
+            else []
+        )
         tags7 = payload.get("tags7")
         description_html = str(payload.get("description") or "")
         description = self._html_to_text(description_html)
         full_location = self._clean_text(payload.get("full_location"))
         if not full_location:
             full_location = ", ".join(
-                part for part in [
-                    self._clean_text(payload.get("location_name") or payload.get("city")),
+                part
+                for part in [
+                    self._clean_text(
+                        payload.get("location_name") or payload.get("city")
+                    ),
                     self._clean_text(payload.get("state")),
-                ] if part
+                ]
+                if part
             )
         record = {
             "title": title,
@@ -132,14 +151,19 @@ class JibeAdapter(BaseAdapter):
             "job_id": job_id,
             "location": full_location or None,
             "company": self._clean_text(payload.get("hiring_organization")),
-            "department": self._clean_text(payload.get("department")) or self._join_names(categories),
+            "department": self._clean_text(payload.get("department"))
+            or self._join_names(categories),
             "job_type": self._clean_text(payload.get("employment_type")),
             "posted_date": self._clean_text(payload.get("posted_date")),
             "description": description or None,
             "salary": self._clean_text(tags7),
             "category": self._join_names(categories),
         }
-        return {key: value for key, value in record.items() if value not in (None, "", [], {})}
+        return {
+            key: value
+            for key, value in record.items()
+            if value not in (None, "", [], {})
+        }
 
     def _join_names(self, values: object) -> str:
         if not isinstance(values, list):

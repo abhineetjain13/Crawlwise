@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Copy, ExternalLink, Plus, Trash2 } from "lucide-react";
 
-import { Badge, Button, Input, Tooltip } from "../../components/ui/primitives";
+import { Badge, Button, Input, Select, Tooltip } from "../../components/ui/primitives";
 import {
   DataRegionEmpty,
   DataRegionError,
@@ -46,7 +46,7 @@ function RunRow({
             <Tooltip content={run.url}>
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="no-underline block max-w-[280px] truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-primary transition-colors hover:text-accent"
+                className="link-accent no-underline block max-w-[280px] truncate text-xs font-medium leading-[1.4] text-primary transition-colors"
               >
                 {domain || `Run #${run.id}`}
               </Link>
@@ -92,14 +92,14 @@ function RunRow({
       </td>
 
       {/* Records */}
-      <td>
+      <td className="text-right">
         <span className={cn("text-sm font-medium leading-[1.45] text-foreground tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
           {recordCount > 0 ? recordCount.toLocaleString() : "—"}
         </span>
       </td>
 
       {/* Date */}
-      <td>
+      <td className="text-right">
         <span className="text-[11px] leading-[1.45] text-muted">{formatDate(run.created_at)}</span>
       </td>
 
@@ -108,7 +108,7 @@ function RunRow({
         <div className="flex items-center justify-end gap-1.5 px-0 opacity-0 group-hover:opacity-100 transition-opacity">
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="ui-on-accent-surface no-underline focus-ring inline-flex h-7 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent)] bg-[var(--accent)] px-2.5 text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover transition-colors hover:opacity-90"
+                className="btn-link btn-link-primary btn-link-sm focus-ring"
               >
             Open <ArrowUpRight className="size-3" />
           </Link>
@@ -167,7 +167,7 @@ export default function RunsPage() {
     },
   });
 
-  const visibleRuns = query.data?.items?.slice(0, 50) ?? [];
+  const visibleRuns = query.data?.items ?? [];
 
   function applyFilters() {
     setAppliedDomainFilter(domainFilter.trim());
@@ -182,7 +182,7 @@ export default function RunsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="page-stack">
       <PageHeader
         title="Run History"
         actions={
@@ -197,32 +197,32 @@ export default function RunsPage() {
 
       {/* ── Filters ── */}
       <SurfacePanel className="p-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div className="flex-1">
-          <Input
-            placeholder="Filter by domain or URL…"
-            value={domainFilter}
-            onChange={(e) => setDomainFilter(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") applyFilters(); }}
-          />
-        </div>
-        <select
-          aria-label="Filter by status"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-          className="control-select focus-ring min-w-40"
-        >
-          <option value="">All statuses</option>
-          <option value="completed">Completed</option>
-          <option value="running">Running</option>
-          <option value="pending">Pending</option>
-          <option value="paused">Paused</option>
-          <option value="failed">Failed</option>
-          <option value="killed">Killed</option>
-          <option value="proxy_exhausted">Proxy Exhausted</option>
-        </select>
-        <Button onClick={applyFilters} size="sm">Filter</Button>
-        <Button variant="ghost" onClick={resetFilters} size="sm">Reset</Button>
+        <div className="grid gap-2 md:grid-cols-[minmax(320px,1fr)_180px_auto_auto] md:items-center">
+          <div className="min-w-0">
+            <Input
+              placeholder="Filter by domain or URL…"
+              value={domainFilter}
+              onChange={(e) => setDomainFilter(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") applyFilters(); }}
+            />
+          </div>
+          <Select
+            aria-label="Filter by status"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            className="w-full md:w-[180px]"
+          >
+            <option value="">All statuses</option>
+            <option value="completed">Completed</option>
+            <option value="running">Running</option>
+            <option value="pending">Pending</option>
+            <option value="paused">Paused</option>
+            <option value="failed">Failed</option>
+            <option value="killed">Killed</option>
+            <option value="proxy_exhausted">Proxy Exhausted</option>
+          </Select>
+          <Button onClick={applyFilters} size="sm">Filter</Button>
+          <Button variant="ghost" onClick={resetFilters} size="sm">Reset</Button>
         </div>
       </SurfacePanel>
 
@@ -244,12 +244,12 @@ export default function RunsPage() {
             <table className="compact-data-table">
               <thead>
                 <tr>
-                  <th className="min-w-[200px]">Run</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Records</th>
-                  <th className="whitespace-nowrap">Started</th>
-                  <th className="text-right">Actions</th>
+                  <th className="min-w-[200px] text-left font-semibold text-[var(--text-secondary)]">Run</th>
+                  <th className="text-left font-semibold text-[var(--text-secondary)]">Type</th>
+                  <th className="text-left font-semibold text-[var(--text-secondary)]">Status</th>
+                  <th className="text-right font-semibold text-[var(--text-secondary)]">Records</th>
+                  <th className="whitespace-nowrap text-right font-semibold text-[var(--text-secondary)]">Started</th>
+                  <th className="text-right font-semibold text-[var(--text-secondary)]">Actions</th>
                 </tr>
               </thead>
               <tbody>

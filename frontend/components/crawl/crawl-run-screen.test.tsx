@@ -332,4 +332,66 @@ describe("CrawlRunScreen", () => {
       }),
     );
   });
+
+  it("keeps batch crawl result URLs available after switching from table to logs", async () => {
+    apiMock.getCrawl.mockResolvedValue({
+      ...terminalRun(101),
+      surface: "ecommerce_listing",
+      url: "https://www.karenmillen.com/categories/womens-dresses",
+      settings: { crawl_module: "category", crawl_mode: "single" },
+      result_summary: {
+        extraction_verdict: "partial",
+        record_count: 2,
+      },
+    });
+    apiMock.getRecords.mockImplementation(async (_runId: number, params?: { page?: number; limit?: number }) => {
+      const limit = params?.limit ?? 100;
+      return {
+        items: [
+          {
+            ...makeRecord(1),
+            source_url: "https://www.karenmillen.com/p/1",
+            data: { title: "Dress 1", url: "https://www.karenmillen.com/p/1" },
+          },
+          {
+            ...makeRecord(2),
+            source_url: "https://www.karenmillen.com/p/2",
+            data: { title: "Dress 2", url: "https://www.karenmillen.com/p/2" },
+          },
+        ],
+        meta: { page: 1, limit, total: 2 },
+      };
+    });
+
+    renderRunScreen();
+
+    const logsTab = await screen.findByRole("button", { name: "Logs" });
+    fireEvent.click(logsTab);
+
+    const batchButton = await screen.findByRole("button", { name: "Batch Crawl Results (2)" });
+    fireEvent.click(batchButton);
+
+    expect(replaceMock).toHaveBeenCalledWith("/crawl?module=pdp&mode=batch");
+    expect(window.sessionStorage.getItem("bulk-crawl-prefill-v1")).toBe(
+      JSON.stringify({
+        domain: "commerce",
+        urls: [
+          "https://www.karenmillen.com/p/1",
+          "https://www.karenmillen.com/p/2",
+        ],
+      }),
+    );
+  });
+
+  it("triggers direct CSV export downloads from the terminal workspace", async () => {
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    renderRunScreen();
+
+    const button = await screen.findByRole("button", { name: "Excel (CSV)" });
+    fireEvent.click(button);
+
+    expect(apiMock.exportCsv).toHaveBeenCalledWith(101);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+  });
 });

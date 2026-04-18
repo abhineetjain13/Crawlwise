@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+    from prometheus_client import (
+        CONTENT_TYPE_LATEST,
+        CollectorRegistry,
+        Counter,
+        Gauge,
+        Histogram,
+        generate_latest,
+    )
 except ImportError:  # pragma: no cover - optional dependency fallback
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
     CollectorRegistry = None
@@ -15,6 +22,7 @@ from app.core.database import SessionLocal, engine
 from app.core.redis import get_redis, redis_failure_total, redis_is_enabled
 from app.models.crawl import CrawlRun
 from app.services.acquisition import browser_pool_snapshot
+
 
 class _NoopMetric:
     def labels(self, **_: object) -> "_NoopMetric":
@@ -35,44 +43,72 @@ class _NoopMetric:
 
 _registry = CollectorRegistry() if CollectorRegistry is not None else None
 
-crawl_runs_total = (Gauge(
-    "crawl_runs_total",
-    "Crawl runs grouped by status.",
-    labelnames=("status",),
-    registry=_registry,
-) if Gauge is not None else _NoopMetric())
-browser_pool_size = (Gauge(
-    "browser_pool_size",
-    "Current pooled browser count.",
-    registry=_registry,
-) if Gauge is not None else _NoopMetric())
-database_connections_active = (Gauge(
-    "database_connections_active",
-    "Currently checked-out database connections.",
-    registry=_registry,
-) if Gauge is not None else _NoopMetric())
-redis_failures_total_metric = (Gauge(
-    "redis_failures_total",
-    "Redis fail-open incidents.",
-    registry=_registry,
-) if Gauge is not None else _NoopMetric())
-acquisition_duration_seconds = (Histogram(
-    "acquisition_duration_seconds",
-    "Acquisition duration in seconds.",
-    registry=_registry,
-) if Histogram is not None else _NoopMetric())
-llm_task_duration_seconds = (Histogram(
-    "llm_task_duration_seconds",
-    "LLM task duration in seconds.",
-    labelnames=("task_type", "provider", "outcome"),
-    registry=_registry,
-) if Histogram is not None else _NoopMetric())
-llm_task_outcomes_total = (Counter(
-    "llm_task_outcomes_total",
-    "LLM task outcomes grouped by task, provider, and error category.",
-    labelnames=("task_type", "provider", "outcome", "error_category"),
-    registry=_registry,
-) if Counter is not None else _NoopMetric())
+crawl_runs_total = (
+    Gauge(
+        "crawl_runs_total",
+        "Crawl runs grouped by status.",
+        labelnames=("status",),
+        registry=_registry,
+    )
+    if Gauge is not None
+    else _NoopMetric()
+)
+browser_pool_size = (
+    Gauge(
+        "browser_pool_size",
+        "Current pooled browser count.",
+        registry=_registry,
+    )
+    if Gauge is not None
+    else _NoopMetric()
+)
+database_connections_active = (
+    Gauge(
+        "database_connections_active",
+        "Currently checked-out database connections.",
+        registry=_registry,
+    )
+    if Gauge is not None
+    else _NoopMetric()
+)
+redis_failures_total_metric = (
+    Gauge(
+        "redis_failures_total",
+        "Redis fail-open incidents.",
+        registry=_registry,
+    )
+    if Gauge is not None
+    else _NoopMetric()
+)
+acquisition_duration_seconds = (
+    Histogram(
+        "acquisition_duration_seconds",
+        "Acquisition duration in seconds.",
+        registry=_registry,
+    )
+    if Histogram is not None
+    else _NoopMetric()
+)
+llm_task_duration_seconds = (
+    Histogram(
+        "llm_task_duration_seconds",
+        "LLM task duration in seconds.",
+        labelnames=("task_type", "provider", "outcome"),
+        registry=_registry,
+    )
+    if Histogram is not None
+    else _NoopMetric()
+)
+llm_task_outcomes_total = (
+    Counter(
+        "llm_task_outcomes_total",
+        "LLM task outcomes grouped by task, provider, and error category.",
+        labelnames=("task_type", "provider", "outcome", "error_category"),
+        registry=_registry,
+    )
+    if Counter is not None
+    else _NoopMetric()
+)
 
 
 def observe_acquisition_duration(seconds: float) -> None:
@@ -162,7 +198,9 @@ async def render_prometheus_metrics() -> tuple[bytes, str]:
         )
         crawl_runs_total.clear()
         for status, count in rows.all():
-            crawl_runs_total.labels(status=str(status or "unknown")).set(int(count or 0))
+            crawl_runs_total.labels(status=str(status or "unknown")).set(
+                int(count or 0)
+            )
 
     browser_pool_size.set(int(browser_pool_snapshot()["size"]))
     database_connections_active.set(_database_connections_checked_out())

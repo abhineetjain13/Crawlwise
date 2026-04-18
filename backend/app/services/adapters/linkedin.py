@@ -32,8 +32,12 @@ class LinkedInAdapter(BaseAdapter):
 
     def _extract_detail(self, soup: BeautifulSoup, url: str) -> dict | None:
         title_el = soup.select_one(".top-card-layout__title, h1")
-        company_el = soup.select_one(".topcard__org-name-link, .top-card-layout__company-name, a[data-tracking-control-name='public_jobs_topcard-org-name']")
-        location_el = soup.select_one(".topcard__flavor--bullet, .top-card-layout__bullet")
+        company_el = soup.select_one(
+            ".topcard__org-name-link, .top-card-layout__company-name, a[data-tracking-control-name='public_jobs_topcard-org-name']"
+        )
+        location_el = soup.select_one(
+            ".topcard__flavor--bullet, .top-card-layout__bullet"
+        )
         desc_el = soup.select_one(".description__text, .show-more-less-html__markup")
         criteria = soup.select(".description__job-criteria-item")
         job_type = None
@@ -59,7 +63,9 @@ class LinkedInAdapter(BaseAdapter):
 
     def _extract_listing(self, soup: BeautifulSoup, url: str) -> list[dict]:
         records = []
-        cards = soup.select(".base-card, .job-search-card, .jobs-search__results-list li")
+        cards = soup.select(
+            ".base-card, .job-search-card, .jobs-search__results-list li"
+        )
         for card in cards:
             title_el = card.select_one(".base-search-card__title, h3")
             company_el = card.select_one(".base-search-card__subtitle a, h4 a")
@@ -68,11 +74,15 @@ class LinkedInAdapter(BaseAdapter):
             date_el = card.select_one("time")
             if not title_el:
                 continue
-            records.append({
-                "title": title_el.get_text(strip=True),
-                "company": company_el.get_text(strip=True) if company_el else None,
-                "location": location_el.get_text(strip=True) if location_el else None,
-                "posted_date": date_el.get("datetime") if date_el else None,
-                "apply_url": link_el.get("href", "") if link_el else "",
-            })
+            records.append(
+                {
+                    "title": title_el.get_text(strip=True),
+                    "company": company_el.get_text(strip=True) if company_el else None,
+                    "location": location_el.get_text(strip=True)
+                    if location_el
+                    else None,
+                    "posted_date": date_el.get("datetime") if date_el else None,
+                    "apply_url": link_el.get("href", "") if link_el else "",
+                }
+            )
         return records

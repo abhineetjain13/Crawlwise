@@ -1,270 +1,378 @@
-"""
-Extraction pipeline smoke runner for complex TEST_SITES validation.
-
-Tests the full acquisition -> discovery -> extraction path without a database.
+r"""
+Acceptance corpus runner for acquisition + extraction verification.
 
 Usage:
     cd backend
     set PYTHONPATH=.
     .venv\Scripts\python.exe run_extraction_smoke.py
+    .venv\Scripts\python.exe run_extraction_smoke.py --groups controls --limit 2
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 from app.services.acquisition.acquirer import AcquisitionRequest, acquire
+from app.services.acquisition.blocked_detector import detect_blocked_page
 from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.semantic_support import extract_semantic_detail_data
 from app.services.extract.service import extract_candidates
-from app.services.discover import parse_page_sources
 
-TEST_SITES: list[dict] = [
-    # --- Client demo URLs ---
-    {
-        "name": "Adorama Tamron lens PDP",
-        "url": "https://www.adorama.com/tamron-35-100mm-f2-8-di-iii-vxd-lens-sony-e-mount/p/tm35100e",
-        "surface": "ecommerce_detail",
-        "page_type": "pdp",
-        "expect_fields": ["title"],
-    },
-    {
-        "name": "Dice.com jobs listing",
-        "url": "https://www.dice.com/jobs",
-        "surface": "ecommerce_listing",
-        "page_type": "category",
-        "expect_min_records": 2,
-    },
-    {
-        "name": "Dice.com job detail",
-        # Dice job-detail URLs are volatile and may need to be refreshed when listings expire.
-        "url": "https://www.dice.com/job-detail/b3a0711d-49e9-4bcf-bab5-92dddfa53533",
-        "surface": "ecommerce_detail",
-        "page_type": "pdp",
-        "expect_fields": ["title"],
-        "skip_on_404": True,
-    },
-    {
-        "name": "SSENSE jacket PDP",
-        "url": "https://www.ssense.com/en-us/women/product/simone-rocha/black-sailor-collar-workwear-bow-denim-jacket/19231481",
-        "surface": "ecommerce_detail",
-        "page_type": "pdp",
-        "expect_fields": ["title"],
-    },
-    {
-        "name": "Arc'teryx shoe PDP",
-        "url": "https://arcteryx.com/us/en/shop/mens/sylan-2-shoe-0155",
-        "surface": "ecommerce_detail",
-        "page_type": "pdp",
-        "expect_fields": ["title"],
-    },
-    # --- Batch 2: diverse sites ---
-    {
-        "name": "Adafruit electronics PDP",
-        "url": "https://www.adafruit.com/product/5700",
-        "surface": "ecommerce_detail",
-        "page_type": "pdp",
-        "expect_fields": ["title", "price"],
-    },
-    {
-        "name": "SparkFun electronics PDP",
-        "url": "https://www.sparkfun.com/products/19030",
-        "surface": "ecommerce_detail",
-        "page_type": "pdp",
-        "expect_fields": ["title", "price"],
-    },
-    {
-        "name": "Open Food Facts Coca Cola data PDP",
-        "url": "https://world.openfoodfacts.org/product/5449000000996/coca-cola-original-taste",
-        "surface": "ecommerce_detail",
-        "page_type": "pdp",
-        "expect_fields": ["title"],
-    },
-    {
-        "name": "AutoZone oil filters listing",
-        "url": "https://www.autozone.com/filters-and-pcv/oil-filter",
-        "surface": "ecommerce_listing",
-        "page_type": "category",
-        "expect_min_records": 2,
-    },
-    {
-        "name": "Puma womens tops listing",
-        "url": "https://in.puma.com/in/en/womens/womens-clothing/womens-clothing-t-shirts-and-tops",
-        "surface": "ecommerce_listing",
-        "page_type": "category",
-        "expect_min_records": 2,
-    },
-]
+DEFAULT_CORPUS_PATH = (
+    Path(__file__).resolve().parent / "corpora" / "acceptance_corpus.json"
+)
+DEFAULT_REPORT_DIR = Path("artifacts/extraction_smoke")
 
 
-async def _run_one(site: dict, run_id: int) -> dict:
-    name = site["name"]
-    url = site["url"]
-    surface = site["surface"]
-    page_type = site["page_type"]
+def _resolve_effective_surface(surface: str, diagnostics: dict) -> str:
+    effective = str(diagnostics.get("surface_effective") or "").strip().lower()
+    if effective in {"job_listing", "job_detail", "ecommerce_listing", "ecommerce_detail"}:
+        return effective
+    return str(surface or "").strip().lower()
+
+
+def _value_present(value: object) -> bool:
+    return value not in (None, "", [], {})
+
+
+def _listing_field_coverage(
+    records: list[dict],
+    required_fields: list[str],
+    *,
+    sample_limit: int,
+) -> dict[str, float]:
+    if not required_fields:
+        return {}
+    sample = records[:sample_limit]
+    if not sample:
+        return {field: 0.0 for field in required_fields}
+    return {
+        field: round(
+            sum(1 for record in sample if _value_present(record.get(field))) / len(sample),
+            3,
+        )
+        for field in required_fields
+    }
+
+
+def _load_corpus(path: Path) -> dict[str, list[dict]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    groups = payload.get("groups")
+    if isinstance(groups, dict):
+        return {
+            str(group_name): [dict(site) for site in sites if isinstance(site, dict)]
+            for group_name, sites in groups.items()
+            if isinstance(sites, list)
+        }
+    return {
+        str(group_name): [dict(site) for site in sites if isinstance(site, dict)]
+        for group_name, sites in payload.items()
+        if isinstance(sites, list)
+    }
+
+
+def _select_sites(
+    corpus: dict[str, list[dict]],
+    selected_groups: list[str],
+    limit: int | None,
+) -> list[dict]:
+    selected: list[dict] = []
+    for group_name in selected_groups:
+        for site in corpus.get(group_name, []):
+            selected.append({**site, "_group": group_name})
+    return selected[:limit] if limit is not None else selected
+
+
+def _report_dir() -> Path:
+    return DEFAULT_REPORT_DIR
+
+
+def _coerce_max_elapsed_s(site: dict) -> float | None:
+    raw_value = site.get("max_elapsed_s")
+    if raw_value in (None, ""):
+        return None
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _apply_elapsed_assertion(result: dict[str, object], site: dict) -> None:
+    max_elapsed_s = _coerce_max_elapsed_s(site)
+    if max_elapsed_s is None:
+        return
+    result["max_elapsed_s"] = max_elapsed_s
+    elapsed_s = float(result.get("elapsed_s") or 0.0)
+    if elapsed_s <= max_elapsed_s:
+        return
+    result["ok"] = False
+    runtime_issue = (
+        f"Elapsed {elapsed_s:.2f}s exceeded max_elapsed_s={max_elapsed_s:.2f}s"
+    )
+    if result.get("issue"):
+        result["issue"] = f"{result['issue']}; {runtime_issue}"
+    elif not result.get("error"):
+        result["issue"] = runtime_issue
+
+
+def _build_summary(results: list[dict]) -> dict[str, dict[str, int]]:
+    summary: dict[str, dict[str, int]] = {}
+    for row in results:
+        group_name = str(row.get("group") or "default")
+        bucket = summary.setdefault(group_name, {"ok": 0, "failed": 0, "total": 0})
+        bucket["total"] += 1
+        if row.get("ok"):
+            bucket["ok"] += 1
+        else:
+            bucket["failed"] += 1
+    return summary
+
+
+def _write_report(
+    results: list[dict],
+    *,
+    corpus_path: Path,
+    selected_groups: list[str],
+    timeout_seconds: int,
+) -> Path:
+    report_dir = _report_dir()
+    report_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    path = report_dir / f"{stamp}__{'-'.join(selected_groups)}.json"
+    payload = {
+        "timestamp_utc": datetime.now(UTC).isoformat(),
+        "corpus_path": str(corpus_path),
+        "groups": selected_groups,
+        "timeout_seconds": timeout_seconds,
+        "summary": _build_summary(results),
+        "results": results,
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+async def _run_one(site: dict, run_id: int, timeout_seconds: int) -> dict:
+    name = str(site.get("name") or "").strip()
+    url = str(site.get("url") or "").strip()
+    surface = str(site.get("surface") or "").strip().lower()
+    page_type = str(site.get("page_type") or "").strip().lower()
     started = time.perf_counter()
-    result_entry: dict = {"name": name, "url": url, "surface": surface}
+    result: dict[str, object] = {
+        "group": site.get("_group"),
+        "name": name,
+        "url": url,
+        "surface": surface,
+        "page_type": page_type,
+        "baseline_reason": site.get("baseline_reason"),
+        "baseline_artifact": site.get("baseline_artifact"),
+    }
 
     try:
-        # Phase 1: Acquire
-        acquire_kwargs: dict[str, object] = {
-            "surface": surface,
-            "traversal_mode": None,
-            "max_pages": 5,
-            "max_scrolls": 5,
-            "sleep_ms": 0,
-            "requested_fields": [],
-        }
-        if page_type == "category":
-            # Category runs exercise explicit traversal mode wiring in acquisition.
-            acquire_kwargs["traversal_mode"] = "scroll"
-        acq = await asyncio.wait_for(
+        acquisition = await asyncio.wait_for(
             acquire(
                 AcquisitionRequest(
                     run_id=run_id,
                     url=url,
-                    **acquire_kwargs,
+                    surface=surface,
+                    traversal_mode=str(site.get("traversal_mode") or "").strip() or None,
+                    max_pages=5,
+                    max_scrolls=5,
+                    sleep_ms=0,
+                    requested_fields=list(site.get("expect_fields") or []),
                 )
             ),
-            timeout=45,
+            timeout=timeout_seconds,
         )
-        result_entry["method"] = acq.method
-        result_entry["html_len"] = len(acq.html or "")
-        result_entry["content_type"] = acq.content_type
-        result_entry["network_payloads"] = len(acq.network_payloads or [])
-        js_shell = (acq.diagnostics or {}).get("curl_needs_browser", False)
-        result_entry["js_shell_detected"] = js_shell
+        diagnostics = acquisition.diagnostics or {}
+        extractability = diagnostics.get("extractability") or {}
+        effective_surface = _resolve_effective_surface(surface, diagnostics)
 
-        if acq.content_type == "json":
-            result_entry["elapsed_s"] = time.perf_counter() - started
-            result_entry["ok"] = True
-            result_entry["records"] = 0
-            result_entry["note"] = "JSON API response, skipping DOM extraction"
-            return result_entry
-
-        html = acq.html or ""
-        curl_status_code = int((acq.diagnostics or {}).get("curl_status_code") or 0)
-        if site.get("skip_on_404") and curl_status_code == 404:
-            result_entry["ok"] = True
-            result_entry["skipped"] = True
-            result_entry["records"] = 0
-            result_entry["note"] = "Skipped because the target URL returned HTTP 404 and the listing is volatile"
-            result_entry["elapsed_s"] = round(time.perf_counter() - started, 2)
-            return result_entry
-
-        # Phase 2: Discover
-        parsed_sources = parse_page_sources(html)
-        manifest = SimpleNamespace(
-            json_ld=parsed_sources.get("json_ld") or [],
-            next_data=parsed_sources.get("next_data"),
-            _hydrated_states=parsed_sources.get("hydrated_states") or [],
+        result.update(
+            {
+                "method": acquisition.method,
+                "content_type": acquisition.content_type,
+                "effective_surface": effective_surface,
+                "artifact_path": acquisition.artifact_path,
+                "diagnostics_path": acquisition.diagnostics_path,
+                "html_len": len(acquisition.html or ""),
+                "network_payloads": len(acquisition.network_payloads or []),
+                "extractability_reason": extractability.get("reason"),
+                "extractability_escalated": extractability.get("escalated"),
+                "acquisition_runtime_reason": diagnostics.get(
+                    "acquisition_runtime_reason"
+                ),
+                "blocked": (
+                    detect_blocked_page(acquisition.html or "").as_dict()
+                    if acquisition.content_type == "html"
+                    else None
+                ),
+            }
         )
-        result_entry["json_ld_count"] = len(manifest.json_ld)
-        result_entry["has_next_data"] = bool(manifest.next_data)
-        result_entry["hydrated_states"] = len(manifest._hydrated_states)
 
-        # Phase 3: Extract
-        if page_type == "category":
+        if acquisition.content_type == "json":
+            result["ok"] = True
+            result["note"] = "JSON response; extraction corpus checks skipped"
+            return result
+
+        html = acquisition.html or ""
+        if "listing" in effective_surface:
             records = extract_listing_records(
-                html, surface, set(), page_url=url, max_records=50, xhr_payloads=acq.network_payloads or [],
+                html,
+                effective_surface,
+                set(),
+                page_url=url,
+                max_records=int(site.get("max_records") or 50),
+                xhr_payloads=acquisition.network_payloads or [],
             )
-            result_entry["records"] = len(records)
-            result_entry["record_sources"] = list({r.get("_source", "?") for r in records})
-            if records:
-                sample = records[0]
-                result_entry["sample_fields"] = [
-                    k for k in sample.keys() if not k.startswith("_")
-                ]
-                result_entry["sample_title"] = str(sample.get("title", ""))[:80]
-                result_entry["sample_url"] = str(sample.get("url", ""))[:120]
-
-            expect_min = site.get("expect_min_records", 0)
-            result_entry["ok"] = len(records) >= expect_min
-            if not result_entry["ok"]:
-                result_entry["issue"] = f"Expected >= {expect_min} records, got {len(records)}"
+            required_fields = [str(field) for field in site.get("required_record_fields") or []]
+            coverage = _listing_field_coverage(
+                records,
+                required_fields,
+                sample_limit=int(site.get("sample_limit") or 10),
+            )
+            thresholds = {
+                str(field): float(threshold)
+                for field, threshold in (site.get("required_record_field_coverage") or {}).items()
+            }
+            failing_fields = [
+                field
+                for field, threshold in thresholds.items()
+                if coverage.get(field, 0.0) < threshold
+            ]
+            result.update(
+                {
+                    "records": len(records),
+                    "required_record_fields": required_fields,
+                    "required_record_field_coverage": coverage,
+                    "sample_fields": (
+                        [key for key in records[0] if not str(key).startswith("_")]
+                        if records
+                        else []
+                    ),
+                    "sample_title": (
+                        str(records[0].get("title") or "")[:120] if records else ""
+                    ),
+                }
+            )
+            min_records = int(site.get("expect_min_records") or 0)
+            result["ok"] = len(records) >= min_records and not failing_fields
+            if len(records) < min_records:
+                result["issue"] = f"Expected >= {min_records} records, got {len(records)}"
+            elif failing_fields:
+                result["issue"] = f"Coverage below threshold for: {sorted(failing_fields)}"
         else:
-            # Detail page
-            semantic = extract_semantic_detail_data(html, requested_fields=[])
-            candidates, _ = extract_candidates(
-                url, surface, html, acq.network_payloads or [], additional_fields=[],
+            expected_fields = [str(field) for field in site.get("expect_fields") or []]
+            candidates, _trace = extract_candidates(
+                url,
+                effective_surface,
+                html,
+                acquisition.network_payloads or [],
+                additional_fields=[],
+                resolved_fields=expected_fields or None,
             )
-            result_entry["candidate_fields"] = sorted(candidates.keys())
-            result_entry["spec_count"] = len(semantic.get("specifications", {}))
-            result_entry["section_count"] = len(semantic.get("sections", {}))
-            result_entry["has_phantom_specs"] = (
-                "specifications" in candidates
-                and result_entry["spec_count"] < 2
+            found_fields = [field for field in expected_fields if candidates.get(field)]
+            missing_fields = [field for field in expected_fields if field not in found_fields]
+            result.update(
+                {
+                    "candidate_fields": sorted(candidates.keys()),
+                    "found_fields": found_fields,
+                    "missing_fields": missing_fields,
+                }
             )
-
-            expect_fields = site.get("expect_fields", [])
-            found = [f for f in expect_fields if f in candidates]
-            missing = [f for f in expect_fields if f not in candidates]
-            result_entry["found_fields"] = found
-            result_entry["missing_fields"] = missing
-            result_entry["ok"] = len(missing) == 0
-            if missing:
-                result_entry["issue"] = f"Missing expected fields: {missing}"
-
+            result["ok"] = not missing_fields
+            if missing_fields:
+                result["issue"] = f"Missing expected fields: {missing_fields}"
     except Exception as exc:
-        result_entry["ok"] = False
-        result_entry["error"] = f"{type(exc).__name__}: {exc}"
+        result["ok"] = False
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        result["elapsed_s"] = round(time.perf_counter() - started, 2)
+        _apply_elapsed_assertion(result, site)
 
-    result_entry["elapsed_s"] = round(time.perf_counter() - started, 2)
-    return result_entry
+    return result
 
 
-async def main():
-    print(f"Running extraction smoke tests for {len(TEST_SITES)} sites...")
+async def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the artifact-backed acceptance corpus for acquisition + extraction."
+    )
+    parser.add_argument(
+        "--corpus",
+        default=str(DEFAULT_CORPUS_PATH),
+        help="Path to the acceptance corpus JSON manifest.",
+    )
+    parser.add_argument(
+        "--groups",
+        nargs="*",
+        help="Corpus groups to run. Defaults to all groups in manifest order.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional global limit after group selection.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=90,
+        help="Per-site timeout in seconds.",
+    )
+    args = parser.parse_args(argv)
+
+    corpus_path = Path(args.corpus)
+    corpus = _load_corpus(corpus_path)
+    selected_groups = args.groups or list(corpus)
+    sites = _select_sites(corpus, selected_groups, args.limit)
+    print(f"Running acceptance corpus for {len(sites)} sites...")
     print("=" * 70)
-    results = []
-    for i, site in enumerate(TEST_SITES):
-        run_id = 9000 + i
-        print(f"\n[{i+1}/{len(TEST_SITES)}] {site['name']} ({site['surface']})")
-        print(f"  URL: {site['url']}")
-        result = await _run_one(site, run_id)
+
+    results: list[dict] = []
+    for offset, site in enumerate(sites, start=1):
+        run_id = 50000 + offset - 1
+        print(
+            f"\n[{offset}/{len(sites)}] {site.get('name')} "
+            f"[{site.get('_group')}]"
+        )
+        print(f"  URL: {site.get('url')}")
+        result = await _run_one(site, run_id, args.timeout)
         results.append(result)
 
-        status = "SKIP" if result.get("skipped") else "PASS" if result.get("ok") else "FAIL"
+        status = "PASS" if result.get("ok") else "FAIL"
         print(f"  Status: {status}")
-        print(f"  Method: {result.get('method', '?')}, HTML: {result.get('html_len', 0):,}")
+        print(
+            f"  Method: {result.get('method', '?')}, "
+            f"Reason: {result.get('extractability_reason', '?')}"
+        )
         if result.get("records") is not None:
-            print(f"  Records: {result['records']}, Sources: {result.get('record_sources', [])}")
-        if result.get("candidate_fields"):
-            print(f"  Fields: {result['candidate_fields'][:15]}")
-        if result.get("has_phantom_specs"):
-            print(f"  WARNING: Phantom specifications detected (spec_count={result['spec_count']})")
+            print(f"  Records: {result.get('records')}")
+        if result.get("found_fields") is not None:
+            print(f"  Found: {result.get('found_fields', [])}")
+        if result.get("required_record_field_coverage"):
+            print(f"  Coverage: {result['required_record_field_coverage']}")
         if result.get("issue"):
             print(f"  Issue: {result['issue']}")
         if result.get("error"):
             print(f"  Error: {result['error']}")
         print(f"  Elapsed: {result.get('elapsed_s', 0)}s")
 
-    # Summary
+    summary = _build_summary(results)
     print("\n" + "=" * 70)
-    passed = sum(1 for r in results if r.get("ok"))
-    total = len(results)
-    print(f"Results: {passed}/{total} passed")
-    for r in results:
-        status = "SKIP" if r.get("skipped") else "PASS" if r.get("ok") else "FAIL"
-        print(f"  [{status}] {r['name']}")
-
-    # Write report
-    report_dir = Path("artifacts/extraction_smoke")
-    report_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    report_path = report_dir / f"smoke_{ts}.json"
-    report_path.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
-    print(f"\nReport: {report_path}")
-
-    # Exit with non-zero code if any tests failed
-    if passed < total:
-        sys.exit(1)
+    print(json.dumps({"summary": summary}, indent=2))
+    report_path = _write_report(
+        results,
+        corpus_path=corpus_path,
+        selected_groups=selected_groups,
+        timeout_seconds=args.timeout,
+    )
+    print(f"Report: {report_path}")
+    return 0 if all(row.get("ok") for row in results) else 1
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main(sys.argv[1:])))

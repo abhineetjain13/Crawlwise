@@ -12,6 +12,15 @@ from app.services.config.crawl_runtime import (
     DNS_RESOLUTION_RETRY_DELAY_MS,
 )
 
+
+class SecurityError(ValueError):
+    """Raised when a URL is rejected for security policy reasons (SSRF guard,
+    blocked hostname/IP, non-public resolution). Subclasses ValueError so
+    existing `except ValueError` callers continue to work; security-aware
+    callers can catch SecurityError specifically to distinguish SSRF
+    rejections from generic input-validation failures."""
+
+
 _ALLOWED_SCHEMES = {"http", "https"}
 _ALLOWED_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
 _BLOCKED_HOSTNAMES = {
@@ -57,8 +66,10 @@ async def validate_public_target(url: str) -> ValidatedTarget:
     hostname = str(parsed.hostname or "").strip().lower()
     if not hostname:
         raise ValueError("Target URL must include a hostname")
-    if hostname in _BLOCKED_HOSTNAMES or any(hostname.endswith(suffix) for suffix in _BLOCKED_SUFFIXES):
-        raise ValueError(f"Target host is not allowed: {hostname}")
+    if hostname in _BLOCKED_HOSTNAMES or any(
+        hostname.endswith(suffix) for suffix in _BLOCKED_SUFFIXES
+    ):
+        raise SecurityError(f"Target host is not allowed: {hostname}")
 
     literal_ip = _parse_ip(hostname)
     if literal_ip is not None:
@@ -86,7 +97,9 @@ async def validate_public_target(url: str) -> ValidatedTarget:
         _raise_if_non_public_ip(ip_value, hostname)
         validated_ips.append(ip_text)
     if not validated_ips:
-        raise ValueError(f"Target host could not be resolved to a valid IP address: {hostname}")
+        raise ValueError(
+            f"Target host could not be resolved to a valid IP address: {hostname}"
+        )
     return ValidatedTarget(
         hostname=hostname,
         scheme=scheme,
@@ -108,7 +121,7 @@ async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
     if hostname in _BLOCKED_HOSTNAMES or any(
         hostname.endswith(suffix) for suffix in _BLOCKED_SUFFIXES
     ):
-        raise ValueError(f"Proxy host is not allowed: {hostname}")
+        raise SecurityError(f"Proxy host is not allowed: {hostname}")
 
     literal_ip = _parse_ip(hostname)
     if literal_ip is not None:
@@ -172,8 +185,6 @@ async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
     return resolved
 
 
-
-
 def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     try:
         return ipaddress.ip_address(value)
@@ -186,7 +197,9 @@ def _raise_if_non_public_ip(
     host_label: str,
 ) -> None:
     if ip_value in _BLOCKED_IPS:
-        raise ValueError(f"Target host resolves to a blocked platform IP address: {host_label} -> {ip_value}")
+        raise SecurityError(
+            f"Target host resolves to a blocked platform IP address: {host_label} -> {ip_value}"
+        )
     if (
         ip_value.is_private
         or ip_value.is_loopback
@@ -194,10 +207,14 @@ def _raise_if_non_public_ip(
         or ip_value.is_reserved
         or (isinstance(ip_value, ipaddress.IPv4Address) and ip_value in _CGNAT_NETWORK)
     ):
-        raise ValueError(f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}")
+        raise SecurityError(
+            f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}"
+        )
     if ip_value.is_global:
         return
-    raise ValueError(f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}")
+    raise SecurityError(
+        f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}"
+    )
 
 
 def _target_port(parsed) -> int:

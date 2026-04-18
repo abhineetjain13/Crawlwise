@@ -28,7 +28,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 VERDICT_SUCCESS, VERDICT_PARTIAL, VERDICT_BLOCKED = "success", "partial", "blocked"
-VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = "schema_miss", "listing_detection_failed", "empty"
+VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = (
+    "schema_miss",
+    "listing_detection_failed",
+    "empty",
+)
 CELERY_TASK_ID_KEY = "celery_task_id"
 logger = logging.getLogger(__name__)
 _local_run_tasks: dict[int, asyncio.Task[None]] = {}
@@ -93,7 +97,9 @@ def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
         except asyncio.CancelledError:
             exc = None
         except Exception:
-            logger.exception("Failed to inspect local crawl task completion for run %s", run_id)
+            logger.exception(
+                "Failed to inspect local crawl task completion for run %s", run_id
+            )
             exc = None
         if exc is not None:
             logger.error(
@@ -104,7 +110,9 @@ def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
 
             async def _record_failure() -> None:
                 async with SessionLocal() as session:
-                    await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")
+                    await _mark_run_failed(
+                        session, run_id, f"{type(exc).__name__}: {exc}"
+                    )
 
             asyncio.create_task(_record_failure())
         _local_run_tasks.pop(run_id, None)

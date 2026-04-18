@@ -25,10 +25,14 @@ _SCRIPT_NOISE_RE = (
     if CANDIDATE_SCRIPT_NOISE_PATTERN
     else None
 )
-_NON_EMPTY_UI_NOISE_PHRASES = [phrase for phrase in CANDIDATE_UI_NOISE_PHRASES if phrase]
+_NON_EMPTY_UI_NOISE_PHRASES = [
+    phrase for phrase in CANDIDATE_UI_NOISE_PHRASES if phrase
+]
 _UI_NOISE_PHRASES_RE = (
     re.compile(
-        r"\b(?:" + "|".join(re.escape(phrase) for phrase in _NON_EMPTY_UI_NOISE_PHRASES) + r")\b",
+        r"\b(?:"
+        + "|".join(re.escape(phrase) for phrase in _NON_EMPTY_UI_NOISE_PHRASES)
+        + r")\b",
         re.IGNORECASE,
     )
     if _NON_EMPTY_UI_NOISE_PHRASES

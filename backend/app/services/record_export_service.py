@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from functools import lru_cache
 from html import unescape
 from io import StringIO
+from urllib.parse import urlparse
 
 from app.models.crawl import CrawlRecord
 from app.models.user import User
@@ -16,7 +17,7 @@ from app.services.crawl_access_service import (
     require_accessible_record,
 )
 from app.services.crawl_crud import get_run_records
-from app.services.config.selectors import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
+from app.services.config.extraction_rules import DISCOVERIST_SCHEMA, MARKDOWN_VIEW
 from app.schemas.crawl import CrawlRecordProvenanceResponse
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +35,22 @@ RECORD_NOT_FOUND_RESPONSE = {
 RECORD_PROVENANCE_NOT_FOUND_RESPONSE = {
     404: {"description": f"{RECORD_NOT_FOUND_DETAIL} or {RUN_NOT_FOUND_DETAIL}"},
 }
-_FALLBACK_INTERNAL_FIELDS = frozenset({"page_markdown", "table_markdown", "record_type"})
+_FALLBACK_INTERNAL_FIELDS = frozenset(
+    {"page_markdown", "table_markdown", "record_type"}
+)
+_IMAGE_URL_SUFFIXES = (
+    ".avif",
+    ".bmp",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".svg",
+    ".tif",
+    ".tiff",
+    ".webp",
+)
 
 ExportStreamer = Callable[[AsyncSession, int], AsyncIterator[str]]
 
@@ -476,7 +492,7 @@ def export_headers(metadata: dict[str, int | bool]) -> dict[str, str]:
 
 def record_to_markdown(row: CrawlRecord) -> str:
     raw_data = row.data if isinstance(row.data, dict) else {}
-    data = clean_export_data(raw_data)
+    data = _sanitize_markdown_export_data(clean_export_data(raw_data))
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
     semantic = (
         source_trace.get("semantic")
@@ -512,7 +528,7 @@ def record_to_markdown(row: CrawlRecord) -> str:
         or f"Record {row.id}"
     )
     lines: list[str] = [f"# {title}"]
-    if row.source_url:
+    if row.source_url and not _looks_like_image_asset_url(row.source_url):
         lines.extend(["", f"Source: <{row.source_url}>"])
     record_url = stringify_markdown_value(data.get("url"))
     if record_url and record_url != row.source_url:
@@ -577,6 +593,52 @@ def record_to_markdown(row: CrawlRecord) -> str:
             lines.append(f"- **{label}:** {render_markdown_inline(value)}")
 
     return "\n".join(lines).strip()
+
+
+def _sanitize_markdown_export_data(data: dict[str, object]) -> dict[str, object]:
+    sanitized = dict(data)
+    primary_image = stringify_markdown_value(sanitized.get("image_url"))
+    additional_images = _dedupe_image_values(
+        sanitized.get("additional_images"),
+        primary_image=primary_image,
+    )
+    if additional_images:
+        sanitized["additional_images"] = ", ".join(additional_images)
+    else:
+        sanitized.pop("additional_images", None)
+    return sanitized
+
+
+def _dedupe_image_values(
+    value: object,
+    *,
+    primary_image: str = "",
+) -> list[str]:
+    parts: list[str] = []
+    seen: set[str] = set()
+    primary = str(primary_image or "").strip()
+    if primary:
+        seen.add(primary.lower())
+    for part in str(value or "").split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        normalized = candidate.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        parts.append(candidate)
+    return parts
+
+
+def _looks_like_image_asset_url(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    path = str(urlparse(text).path or "").strip().lower()
+    if not path:
+        return False
+    return path.endswith(_IMAGE_URL_SUFFIXES)
 
 
 def stringify_markdown_value(value: object) -> str:

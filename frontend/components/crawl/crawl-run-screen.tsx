@@ -439,9 +439,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     () => (outputTab === "table" ? filteredTableRecords : records).filter((record) => selectedIds.includes(record.id)),
     [filteredTableRecords, outputTab, records, selectedIds],
   );
+  const batchSourceRecords = useMemo(
+    () => (tableRecords.length ? tableRecords : records),
+    [records, tableRecords],
+  );
   const resultUrls = useMemo(
-    () => uniqueStrings((outputTab === "table" ? tableRecords : records).map((record) => extractRecordUrl(record))),
-    [outputTab, records, tableRecords],
+    () => uniqueStrings(batchSourceRecords.map((record) => extractRecordUrl(record))),
+    [batchSourceRecords],
   );
   const selectedResultUrls = useMemo(
     () => uniqueStrings(selectedRecords.map((record) => extractRecordUrl(record))),
@@ -506,24 +510,23 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
     return () => window.clearTimeout(timeoutId);
   }, [jsonRecordsQuery, missingRecentTerminalRecords, tableRecordsQuery]);
 
-  async function downloadExport(kind: "csv" | "json" | "markdown") {
+  function downloadExport(kind: "csv" | "json" | "markdown") {
+    setRunActionError("");
     const filename = `run-${runId}.${kind === "markdown" ? "md" : kind}`;
     try {
-      const blob =
+      const href =
         kind === "csv"
-          ? await api.downloadCsv(runId)
+          ? api.exportCsv(runId)
           : kind === "json"
-            ? await api.downloadJson(runId)
-            : await api.downloadMarkdown(runId);
-      const objectUrl = window.URL.createObjectURL(blob);
+            ? api.exportJson(runId)
+            : api.exportMarkdown(runId);
       const anchor = document.createElement("a");
-      anchor.href = objectUrl;
+      anchor.href = href;
       anchor.download = filename;
       anchor.style.display = "none";
       document.body.append(anchor);
       anchor.click();
       anchor.remove();
-      window.URL.revokeObjectURL(objectUrl);
     } catch (error) {
       setRunActionError(error instanceof Error ? error.message : "Unable to download export.");
     }
@@ -577,7 +580,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
 
   if (runQuery.error) {
     return (
-      <div className="space-y-4">
+      <div className="page-stack">
         <PageHeader
           title="Crawl Studio"
           actions={
@@ -598,7 +601,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="page-stack">
       <PageHeader
         title={run?.url ? (
           <span className="flex items-center gap-1.5">
@@ -626,14 +629,18 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             title="Some live panels failed to refresh"
             description="Data may be stale until these requests recover."
           />
-          <div className="alert-surface alert-danger space-y-1">
-            {panelRefreshErrors.map((panel) => (
-              <div key={panel.key}>
-                Unable to refresh {panel.label}:{" "}
-                {panel.error instanceof Error ? panel.error.message : "Unknown error."}
+          <InlineAlert
+            message={(
+              <div className="space-y-1">
+                {panelRefreshErrors.map((panel) => (
+                  <div key={panel.key}>
+                    Unable to refresh {panel.label}:{" "}
+                    {panel.error instanceof Error ? panel.error.message : "Unknown error."}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )}
+          />
           <div>
             <Button variant="secondary" type="button" onClick={() => void retryFailedPanels()}>
               Retry failed panels
@@ -643,7 +650,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       ) : null}
       {!showRunLoadingState && !terminal ? (
         <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.32fr)_minmax(0,0.68fr)]">
-          <Card className="space-y-4">
+          <Card className="section-card">
             <SectionHeader title="Progress" description={run ? <ProgressBar percent={progressPercent(run)} /> : "Loading run state..."} />
             <PreviewRow label="Run ID" value={run ? `#${run.id}` : "--"} mono />
             <PreviewRow
@@ -691,7 +698,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
             {runActionError ? <InlineAlert message={runActionError} /> : null}
           </Card>
 
-          <Card className="space-y-4">
+          <Card className="section-card">
             <SectionHeader
               title="Live Log Stream"
               description="Auto-scrolls while you stay at the bottom."
@@ -725,8 +732,9 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
       ) : null}
 
       {!showRunLoadingState && terminal ? (
-        <Card className="space-y-4">
+        <Card className="section-card">
           {runErrorMessage ? <InlineAlert tone="danger" message={runErrorMessage} /> : null}
+          {runActionError ? <InlineAlert tone="danger" message={runActionError} /> : null}
           <RunWorkspaceShell
             header={
               run?.url ? (
@@ -734,7 +742,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                   href={run.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="block truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover underline-offset-2 hover:underline"
+                  className="link-accent block truncate text-xs font-medium leading-[1.4] underline-offset-2 hover:underline"
                 >
                   {run.url}
                 </a>
@@ -805,7 +813,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                           }
                         />
                         {hasMoreTableRecords ? (
-                          <div className="bg-background-alt rounded-lg shadow-card flex items-center justify-between px-3 py-2 text-xs leading-[1.45] text-muted">
+                          <div className="surface-muted flex items-center justify-between rounded-lg px-3 py-2 text-xs leading-[1.45] text-muted">
                             <span>
                               Showing {tableRecords.length} of {tableTotal} records
                             </span>
@@ -847,7 +855,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       {recordsJson}
                     </pre>
                     {hasMoreJsonRecords ? (
-                      <div className="bg-background-alt rounded-lg shadow-card mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-xs leading-[1.45] text-muted">
+                      <div className="surface-muted mt-2 flex items-center justify-between rounded-[var(--radius-md)] px-3 py-2 text-xs leading-[1.45] text-muted">
                         <span>
                           JSON previewing {jsonRecords.length} of {recordsTotal} records
                         </span>
@@ -883,13 +891,13 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                       </Button>
                     </div>
                     {markdownQuery.isLoading && !markdown ? (
-                      <div className="bg-background-alt rounded-lg shadow-card space-y-2 px-3 pb-3 pt-12">
+                      <div className="surface-muted space-y-2 rounded-lg px-3 pb-3 pt-12">
                         {Array.from({ length: 8 }, (_, index) => (
                           <div key={index} className="skeleton h-5 w-full rounded-[var(--radius-md)]" />
                         ))}
                       </div>
                     ) : markdown ? (
-                      <div className="bg-background-alt rounded-lg shadow-card min-h-[55vh] max-h-[72vh] overflow-y-auto px-3 pb-3 pt-12">
+                      <div className="surface-muted min-h-[55vh] max-h-[72vh] rounded-lg overflow-y-auto px-3 pb-3 pt-12">
                         <article className="markdown-document max-w-none">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
@@ -907,7 +915,7 @@ export function CrawlRunScreen({ runId }: Readonly<CrawlRunScreenProps>) {
                         </article>
                       </div>
                     ) : (
-                      <div className="bg-background-alt rounded-lg shadow-card grid min-h-40 place-items-center border-dashed text-sm leading-[1.55] text-muted">
+                      <div className="surface-muted grid min-h-40 place-items-center rounded-lg border-dashed text-sm leading-[1.55] text-muted">
                         No markdown is available for this run.
                       </div>
                     )}

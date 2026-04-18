@@ -5,6 +5,7 @@ import logging
 import signal
 from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from app.core.celery_app import celery_app, worker_process_init, worker_process_shutdown
 from app.core.database import SessionLocal
@@ -16,9 +17,16 @@ from app.services._batch_runtime import process_run as process_run_async
 
 logger = logging.getLogger(__name__)
 _SignalHandler = Callable[[int, object | None], object]
-_ACTIVE_TASK_LOOP: asyncio.AbstractEventLoop | None = None
-_ACTIVE_RUN_TASK: asyncio.Task[None] | None = None
-_TERMINATION_REQUESTED = False
+
+
+@dataclass
+class _WorkerTaskState:
+    active_task_loop: asyncio.AbstractEventLoop | None = None
+    active_run_task: asyncio.Task[None] | None = None
+    termination_requested: bool = False
+
+
+_WORKER_TASK_STATE = _WorkerTaskState()
 
 
 @worker_process_init.connect
@@ -37,11 +45,12 @@ async def _run_with_session(run_id: int) -> None:
 
 
 def _task_termination_handler(signum: int, _frame: object | None) -> None:
-    global _TERMINATION_REQUESTED
-    _TERMINATION_REQUESTED = True
-    logger.warning("Received signal %s while processing crawl task; cancelling async run", signum)
-    loop = _ACTIVE_TASK_LOOP
-    task = _ACTIVE_RUN_TASK
+    _WORKER_TASK_STATE.termination_requested = True
+    logger.warning(
+        "Received signal %s while processing crawl task; cancelling async run", signum
+    )
+    loop = _WORKER_TASK_STATE.active_task_loop
+    task = _WORKER_TASK_STATE.active_run_task
     if loop is None or task is None or loop.is_closed() or task.done():
         return
     loop.call_soon_threadsafe(task.cancel)
@@ -64,29 +73,28 @@ def _install_task_signal_handlers() -> dict[int, _SignalHandler | int | None]:
 
 
 def _run_task_in_worker_loop(run_id: int) -> None:
-    global _ACTIVE_RUN_TASK, _ACTIVE_TASK_LOOP, _TERMINATION_REQUESTED
-    _TERMINATION_REQUESTED = False
+    _WORKER_TASK_STATE.termination_requested = False
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     task = loop.create_task(_run_with_session(run_id), name=f"crawl-run-{run_id}")
-    _ACTIVE_TASK_LOOP = loop
-    _ACTIVE_RUN_TASK = task
+    _WORKER_TASK_STATE.active_task_loop = loop
+    _WORKER_TASK_STATE.active_run_task = task
     try:
         loop.run_until_complete(task)
     except asyncio.CancelledError:
-        if _TERMINATION_REQUESTED:
+        if _WORKER_TASK_STATE.termination_requested:
             shutdown_browser_pool_sync()
             raise SystemExit(0) from None
         raise
     finally:
-        _ACTIVE_RUN_TASK = None
-        _ACTIVE_TASK_LOOP = None
+        _WORKER_TASK_STATE.active_run_task = None
+        _WORKER_TASK_STATE.active_task_loop = None
         try:
             loop.run_until_complete(loop.shutdown_asyncgens())
         finally:
             try:
                 loop.run_until_complete(loop.shutdown_default_executor())
-            except Exception:
+            except RuntimeError:
                 logger.warning("Failed to shutdown default executor", exc_info=True)
             finally:
                 asyncio.set_event_loop(None)

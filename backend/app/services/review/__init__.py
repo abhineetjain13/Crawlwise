@@ -4,11 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
+from app.services.config.extraction_rules import REVIEW_CONTAINER_KEYS
 from app.services.publish import refresh_record_commit_metadata
 from app.services.crawl_utils import normalize_committed_field_name
 from app.services.domain_utils import normalize_domain
 from app.services.normalizers import normalize_value
-from app.services.config.selectors import REVIEW_CONTAINER_KEYS
+from app.services.field_policy import normalize_review_target
 from app.services.schema_service import load_resolved_schema, persist_resolved_schema
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +38,9 @@ async def build_review_payload(session: AsyncSession, run_id: int) -> dict | Non
     run = await session.get(CrawlRun, run_id)
     if run is None:
         return None
-    records_result = await session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run_id))
+    records_result = await session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run_id)
+    )
     records = list(records_result.scalars().all())
     domain = _domain(run.url)
     canonical_fields = (await load_resolved_schema(session, run.surface, domain)).fields
@@ -46,11 +49,14 @@ async def build_review_payload(session: AsyncSession, run_id: int) -> dict | Non
         domain=domain,
         surface=run.surface,
     )
-    normalized_fields = sorted({
-        key for record in records
-        for key, val in _safe_dict(record.data).items()
-        if val not in (None, "", [], {}) and not str(key).startswith("_")
-    })
+    normalized_fields = sorted(
+        {
+            key
+            for record in records
+            for key, val in _safe_dict(record.data).items()
+            if val not in (None, "", [], {}) and not str(key).startswith("_")
+        }
+    )
     discovered_field_names: set[str] = set()
     for record in records:
         for row in _review_bucket_rows(record):
@@ -59,12 +65,22 @@ async def build_review_payload(session: AsyncSession, run_id: int) -> dict | Non
                 discovered_field_names.add(key)
     if not discovered_field_names:
         for record in records:
-            for src in (_safe_dict(record.discovered_data), _safe_dict(record.raw_data), _safe_dict(record.data)):
+            for src in (
+                _safe_dict(record.discovered_data),
+                _safe_dict(record.raw_data),
+                _safe_dict(record.data),
+            ):
                 for key, val in src.items():
-                    if val not in (None, "", [], {}) and not str(key).startswith("_") and key not in REVIEW_CONTAINER_KEYS:
+                    if (
+                        val not in (None, "", [], {})
+                        and not str(key).startswith("_")
+                        and key not in REVIEW_CONTAINER_KEYS
+                    ):
                         discovered_field_names.add(str(key))
     discovered_fields = sorted(discovered_field_names)
-    suggested_mapping = {field: domain_mapping.get(field, field) for field in discovered_fields}
+    suggested_mapping = {
+        field: domain_mapping.get(field, field) for field in discovered_fields
+    }
     return {
         "run": run,
         "records": records,
@@ -80,12 +96,16 @@ async def load_review_html(session: AsyncSession, run_id: int) -> str:
     run = await session.get(CrawlRun, run_id)
     if run is None:
         return ""
-    records_result = await session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run_id))
+    records_result = await session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run_id)
+    )
     records = list(records_result.scalars().all())
     return _load_review_html(records)
 
 
-async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dict]) -> dict:
+async def save_review(
+    session: AsyncSession, run: CrawlRun, selections: list[dict]
+) -> dict:
     selected_rows = [
         row
         for row in selections
@@ -93,15 +113,17 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
         and str(row.get("source_field") or "").strip()
         and str(row.get("output_field") or "").strip()
     ]
-    mapping = {
-        str(row["source_field"]).strip(): str(row["output_field"]).strip()
-        for row in selected_rows
-    }
     domain = _domain(run.url)
+    mapping: dict[str, str] = {}
+    for row in selected_rows:
+        source_field = normalize_committed_field_name(row.get("source_field"))
+        target_field = normalize_review_target(run.surface, row.get("output_field"))
+        if source_field and target_field:
+            mapping[source_field] = target_field
     resolved_schema = await load_resolved_schema(session, run.surface, domain)
     next_fields = [
         *resolved_schema.fields,
-        *[str(value or "").strip().lower() for value in mapping.values()],
+        *list(mapping.values()),
     ]
     updated_schema = await persist_resolved_schema(
         session,
@@ -110,14 +132,19 @@ async def save_review(session: AsyncSession, run: CrawlRun, selections: list[dic
             domain=resolved_schema.domain,
             baseline_fields=list(resolved_schema.baseline_fields),
             fields=list(dict.fromkeys(field for field in next_fields if field)),
-            new_fields=list(dict.fromkeys([
-                *resolved_schema.new_fields,
-                *[
-                    str(value or "").strip().lower()
-                    for value in mapping.values()
-                    if str(value or "").strip().lower() not in set(resolved_schema.baseline_fields)
-                ],
-            ])),
+            new_fields=list(
+                dict.fromkeys(
+                    [
+                        *resolved_schema.new_fields,
+                        *[
+                            str(value or "").strip().lower()
+                            for value in mapping.values()
+                            if str(value or "").strip().lower()
+                            not in set(resolved_schema.baseline_fields)
+                        ],
+                    ]
+                )
+            ),
             deprecated_fields=list(resolved_schema.deprecated_fields),
             source="review",
             saved_at=resolved_schema.saved_at,
@@ -205,17 +232,24 @@ def _review_bucket_rows(record: CrawlRecord) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, mapping: dict[str, str]) -> None:
+async def _promote_review_bucket_fields(
+    session: AsyncSession, run: CrawlRun, mapping: dict[str, str]
+) -> None:
     if not mapping:
         return
     normalized_mapping = {
-        normalize_committed_field_name(source_field): normalize_committed_field_name(target_field)
+        normalize_committed_field_name(source_field): normalize_committed_field_name(
+            target_field
+        )
         for source_field, target_field in mapping.items()
-        if normalize_committed_field_name(source_field) and normalize_committed_field_name(target_field)
+        if normalize_committed_field_name(source_field)
+        and normalize_committed_field_name(target_field)
     }
     if not normalized_mapping:
         return
-    records_result = await session.execute(select(CrawlRecord).where(CrawlRecord.run_id == run.id))
+    records_result = await session.execute(
+        select(CrawlRecord).where(CrawlRecord.run_id == run.id)
+    )
     records = list(records_result.scalars().all())
     for record in records:
         review_bucket = _review_bucket_rows(record)
@@ -249,14 +283,18 @@ async def _promote_review_bucket_fields(session: AsyncSession, run: CrawlRun, ma
 
         discovered_data = dict(_safe_dict(record.discovered_data))
         mapped_source_fields = {
-            source_field
-            for source_field in normalized_mapping.keys()
-            if source_field
+            source_field for source_field in normalized_mapping.keys() if source_field
         }
         discovered_data["review_bucket"] = [
-            row for row in remaining_rows
-            if normalize_committed_field_name(row.get("key")) not in mapped_source_fields
-            or _safe_dict(record.data).get(normalized_mapping.get(normalize_committed_field_name(row.get("key")), ""))
+            row
+            for row in remaining_rows
+            if normalize_committed_field_name(row.get("key"))
+            not in mapped_source_fields
+            or _safe_dict(record.data).get(
+                normalized_mapping.get(
+                    normalize_committed_field_name(row.get("key")), ""
+                )
+            )
             not in (None, "", [], {})
         ]
         record.discovered_data = {

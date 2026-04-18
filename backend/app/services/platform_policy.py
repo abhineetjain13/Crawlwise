@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import app.services.config.platform_registry as registry_data
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,38 @@ _DEFAULT_ADAPTER_ORDER = (
 )
 
 
+class PlatformConfig(BaseModel):
+    family: str
+    domain_patterns: list[str] = Field(default_factory=list)
+    url_contains: list[str] = Field(default_factory=list)
+    html_contains: list[str] = Field(default_factory=list)
+    html_regex: list[str] = Field(default_factory=list)
+    adapter_names: list[str] = Field(default_factory=list)
+    job_platform: bool = False
+    requires_browser: bool = False
+    proxy_policy: str | None = None
+    readiness_domains: list[str] = Field(default_factory=list)
+    readiness_path_patterns: list[str] = Field(default_factory=list)
+
+
+class PlatformRegistryDocument(BaseModel):
+    platforms: list[PlatformConfig] = Field(default_factory=list)
+
+
+def _platforms_path() -> Path:
+    return Path(__file__).with_name("config").joinpath("platforms.json")
+
+
+@lru_cache(maxsize=1)
+def load_platform_registry() -> PlatformRegistryDocument:
+    payload = json.loads(_platforms_path().read_text(encoding="utf-8"))
+    return PlatformRegistryDocument.model_validate(payload)
+
+
+def platform_configs() -> list[PlatformConfig]:
+    return list(load_platform_registry().platforms)
+
+
 def _normalize_patterns(values: list[str]) -> list[str]:
     return [value.strip().lower() for value in values if value and value.strip()]
 
@@ -52,22 +87,20 @@ def _matches_domain(host: str, pattern: str) -> bool:
 
 
 def platform_family_names() -> set[str]:
-    return {
-        config.family for config in registry_data.platform_configs() if config.family
-    }
+    return {config.family for config in platform_configs() if config.family}
 
 
 def job_platform_families() -> set[str]:
     return {
         config.family
-        for config in registry_data.platform_configs()
+        for config in platform_configs()
         if config.family and bool(config.job_platform)
     }
 
 
 def known_job_adapter_names() -> set[str]:
     names: set[str] = set()
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         if not config.job_platform:
             continue
         if config.family:
@@ -84,7 +117,7 @@ def known_job_adapter_names() -> set[str]:
 def known_ats_domains() -> list[str]:
     values = {
         pattern.strip().lower()
-        for config in registry_data.platform_configs()
+        for config in platform_configs()
         if config.job_platform
         for pattern in config.domain_patterns
         if pattern and pattern.strip()
@@ -95,7 +128,7 @@ def known_ats_domains() -> list[str]:
 def browser_first_platform_families() -> set[str]:
     return {
         config.family
-        for config in registry_data.platform_configs()
+        for config in platform_configs()
         if config.family and bool(config.requires_browser)
     }
 
@@ -103,7 +136,7 @@ def browser_first_platform_families() -> set[str]:
 def browser_first_domains() -> list[str]:
     values = {
         _normalize_domain(pattern)
-        for config in registry_data.platform_configs()
+        for config in platform_configs()
         if bool(config.requires_browser)
         for pattern in config.domain_patterns
         if _normalize_domain(pattern)
@@ -113,7 +146,7 @@ def browser_first_domains() -> list[str]:
 
 def configured_adapter_names() -> tuple[str, ...]:
     ordered_names: list[str] = []
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         for adapter_name in config.adapter_names:
             normalized = str(adapter_name or "").strip().lower()
             if normalized and normalized not in ordered_names:
@@ -127,7 +160,7 @@ def configured_adapter_names() -> tuple[str, ...]:
 def acquisition_hint_tokens() -> tuple[str, ...]:
     tokens = {
         token.strip().lower().strip("/")
-        for config in registry_data.platform_configs()
+        for config in platform_configs()
         for token in [
             *config.domain_patterns,
             *config.url_contains,
@@ -140,11 +173,11 @@ def acquisition_hint_tokens() -> tuple[str, ...]:
 
 def platform_config_for_family(
     family: str | None,
-) -> registry_data.PlatformConfig | None:
+) -> PlatformConfig | None:
     normalized = str(family or "").strip().lower()
     if not normalized:
         return None
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         if str(config.family or "").strip().lower() == normalized:
             return config
     return None
@@ -165,12 +198,12 @@ def detect_platform_family(url: str, html: str = "") -> str | None:
     normalized_html = str(html or "").lower()
     domain = _normalize_domain(urlparse(normalized_url).netloc)
 
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         domain_patterns = _normalize_patterns(config.domain_patterns)
         if any(_matches_domain(domain, pattern) for pattern in domain_patterns):
             return config.family
 
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         html_patterns = _normalize_patterns(config.html_contains)
         if any(pattern in normalized_html for pattern in html_patterns):
             return config.family
@@ -189,7 +222,7 @@ def detect_platform_family(url: str, html: str = "") -> str | None:
                     exc,
                 )
 
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         url_patterns = _normalize_patterns(config.url_contains)
         if not url_patterns:
             continue
@@ -218,7 +251,7 @@ def resolve_listing_readiness_platform(url: str) -> str | None:
     if not host or not path:
         return None
 
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         readiness_domains = _normalize_patterns(config.readiness_domains)
         readiness_patterns = [
             str(pattern or "").strip().lower()
@@ -245,7 +278,7 @@ def resolve_listing_readiness_platform(url: str) -> str | None:
 
 def listing_readiness_domains() -> dict[str, list[str]]:
     mapping: dict[str, list[str]] = {}
-    for config in registry_data.platform_configs():
+    for config in platform_configs():
         domains = _normalize_patterns(config.readiness_domains)
         if not domains or not config.family:
             continue

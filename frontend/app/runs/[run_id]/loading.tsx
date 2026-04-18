@@ -2,7 +2,7 @@ import { Card } from "../../../components/ui/primitives";
 
 export default function LoadingRunDetailPage() {
   return (
-    <div className="space-y-4" aria-busy="true">
+    <div className="page-stack" aria-busy="true">
       <div role="status" aria-live="polite" className="sr-only">
         Loading content
       </div>

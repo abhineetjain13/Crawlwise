@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 DEFAULT_ADMIN_EMAIL = "DEFAULT_ADMIN_EMAIL"
-DEFAULT_ADMIN_PASSWORD = "DEFAULT_ADMIN_PASSWORD"
+DEFAULT_ADMIN_PASSWORD = "DEFAULT_ADMIN_PASSWORD"  # nosec B105
 BOOTSTRAP_ADMIN_ONCE = "BOOTSTRAP_ADMIN_ONCE"
 
 
@@ -44,7 +44,9 @@ def _load_default_admin_credentials() -> tuple[str, str]:
     return email, password
 
 
-async def create_user(session: AsyncSession, email: str, password: str, role: str = "user") -> User:
+async def create_user(
+    session: AsyncSession, email: str, password: str, role: str = "user"
+) -> User:
     user = User(email=email.lower(), hashed_password=hash_password(password), role=role)
     session.add(user)
     await session.commit()
@@ -101,9 +103,15 @@ async def bootstrap_admin_user(session: AsyncSession) -> User | None:
     return user
 
 
-async def authenticate_user(session: AsyncSession, email: str, password: str) -> tuple[str, User] | None:
+async def authenticate_user(
+    session: AsyncSession, email: str, password: str
+) -> tuple[str, User] | None:
     result = await session.execute(select(User).where(User.email == email.lower()))
     user = result.scalar_one_or_none()
-    if user is None or not user.is_active or not verify_password(password, user.hashed_password):
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(password, user.hashed_password)
+    ):
         return None
     return create_access_token(str(user.id), token_version=user.token_version), user

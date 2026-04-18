@@ -66,10 +66,26 @@
     },
     {
       "family": "greenhouse",
-      "domain_patterns": ["boards.greenhouse.io", "boards-api.greenhouse.io"],
+      "domain_patterns": ["boards.greenhouse.io", "boards-api.greenhouse.io", "job-boards.greenhouse.io"],
       "url_contains": ["/embed/job_board", "/jobs/"],
       "html_regex": ["boards\\.greenhouse\\.io/embed/job_board\\?for=[a-z0-9_-]+"],
       "adapter_names": ["greenhouse"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "workday",
+      "domain_patterns": ["myworkdayjobs.com"],
+      "url_contains": ["/external", "/job/", "/jobs/"],
+      "html_contains": ["myworkdayjobs.com", "__next_data__", "workday"],
+      "job_platform": true,
+      "requires_browser": false
+    },
+    {
+      "family": "rippling",
+      "domain_patterns": ["ats.rippling.com"],
+      "url_contains": ["/jobs", "/job/"],
+      "html_contains": ["powered by rippling", "ats.rippling.com"],
       "job_platform": true,
       "requires_browser": false
     },

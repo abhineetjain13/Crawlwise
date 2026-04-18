@@ -537,54 +537,6 @@ export const LogTerminal = memo(function LogTerminal({
   );
 });
 
-export function AdvancedModePicker({
-  value,
-  onChange,
-  options,
-}: Readonly<{
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string; description: string }>;
-}>) {
-  return (
-    <div className="grid grid-cols-2 gap-2">
-      {options.map((option) => {
-        const active = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onChange(option.value)}
-            className={cn(
-              "rounded-[var(--radius-lg)] border px-3 py-2.5 text-left transition-all",
-              active
-                ? "advanced-picker-active border-[color:var(--accent)]"
-                : "border-border bg-[var(--advanced-picker-bg)] hover:border-[var(--border-strong)] hover:bg-[var(--advanced-picker-hover-bg)]",
-            )}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm font-medium leading-[1.45] text-foreground leading-none text-primary">
-                {option.label}
-              </span>
-              <span
-                className={cn(
-                  "text-[11px] font-semibold tracking-wide text-muted uppercase rounded-full px-2 py-0.5",
-                  active
-                    ? "bg-accent text-[var(--accent-foreground)]"
-                    : "bg-[var(--bg-elevated)] text-[var(--text-secondary)]",
-                )}
-              >
-                {active ? "Active" : "Mode"}
-              </span>
-            </div>
-            <p className="mt-1.5 text-xs leading-[1.45] leading-4 text-secondary">{option.description}</p>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export function SettingSection({
   label,
   description,
@@ -758,7 +710,7 @@ export function AdditionalFieldInput({
 
   return (
     <label className="grid gap-1.5">
-      <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Additional Fields</span>
+      <span className="field-label">Additional Fields</span>
       <Input
         value={value}
         onChange={(event) => handleChange(event.target.value)}
@@ -776,7 +728,7 @@ export function AdditionalFieldInput({
               type="button"
               onClick={() => onRemove(field)}
               aria-label={`Remove ${field}`}
-              className="bg-background-alt rounded-md shadow-card inline-flex items-center gap-1 px-2 py-1 text-xs leading-[1.45] text-foreground"
+              className="surface-muted inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs leading-[1.45] text-foreground"
             >
               <X className="size-3.5" aria-hidden="true" />
             </button>
@@ -802,7 +754,7 @@ export function ManualFieldEditor({
         <GripVertical className="size-4" />
       </div>
       <label className="grid gap-1">
-        <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">Field</span>
+        <span className="field-label">Field</span>
         <Input value={row.fieldName} onChange={(event) => onChange({ fieldName: event.target.value })} placeholder="price" className="text-mono-body" />
       </label>
       <ValidatedField
@@ -826,7 +778,7 @@ export function ManualFieldEditor({
           type="button"
           onClick={onDelete}
           aria-label={`Delete ${row.fieldName || "manual field"}`}
-          className="bg-background-alt shadow-card inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
+          className="surface-muted inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
         >
           <Trash2 className="size-4" />
         </button>
@@ -888,7 +840,7 @@ export const RecordsTable = memo(function RecordsTable({
     <div
       ref={setContainerRef}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-      className="bg-background-alt rounded-lg shadow-card max-h-[70vh] overflow-auto"
+      className="surface-muted max-h-[70vh] rounded-lg overflow-auto"
     >
       <table className="compact-data-table min-w-[960px]">
         <thead>
@@ -973,8 +925,8 @@ export function ActionButton({
 
 export function PreviewRow({ label, value, mono }: Readonly<{ label: string; value: ReactNode; mono?: boolean }>) {
   return (
-    <div className="bg-background-alt shadow-card flex items-start justify-between gap-4 rounded-[var(--radius-md)] px-3 py-2">
-      <div className="shrink-0 text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</div>
+    <div className="surface-muted flex items-start justify-between gap-4 rounded-[var(--radius-md)] px-3 py-2">
+      <div className="field-label shrink-0">{label}</div>
       <div className={cn("min-w-0 flex-1 text-right text-xs leading-[1.45] text-foreground", mono && "font-mono")}>
         {value || "--"}
       </div>
@@ -1063,17 +1015,6 @@ function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null
   return targetRef;
 }
 
-function getFocusableElements(container: HTMLDivElement | null) {
-  if (!container) {
-    return [] as HTMLElement[];
-  }
-  return Array.from(
-    container.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
-}
-
 function ValidatedField({
   label,
   value,
@@ -1091,7 +1032,7 @@ function ValidatedField({
 }>) {
   return (
     <label className="grid gap-1">
-      <span className="text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</span>
+      <span className="field-label">{label}</span>
       <div className="relative">
         <Input
           value={value}

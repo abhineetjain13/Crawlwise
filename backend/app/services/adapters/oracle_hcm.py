@@ -53,7 +53,11 @@ class OracleHCMAdapter(BaseAdapter):
         site_lang = self._extract_site_lang(url, html) or "en"
         company = self._extract_site_name(html)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-        target_job_id = self._extract_job_id_from_url(url) if "detail" in str(surface or "").lower() else ""
+        target_job_id = (
+            self._extract_job_id_from_url(url)
+            if "detail" in str(surface or "").lower()
+            else ""
+        )
         page_size = 100 if "listing" in str(surface or "").lower() else 25
         offset = 0
         records: list[dict] = []
@@ -85,7 +89,9 @@ class OracleHCMAdapter(BaseAdapter):
             response_item_count = len(items)
             batch_count = 0
             for item in items:
-                requisitions = item.get("requisitionList") if isinstance(item, dict) else None
+                requisitions = (
+                    item.get("requisitionList") if isinstance(item, dict) else None
+                )
                 if not isinstance(requisitions, list):
                     continue
                 for requisition in requisitions:
@@ -116,7 +122,9 @@ class OracleHCMAdapter(BaseAdapter):
 
         return records
 
-    def _build_endpoint(self, *, base_url: str, site_number: str, limit: int, offset: int) -> str:
+    def _build_endpoint(
+        self, *, base_url: str, site_number: str, limit: int, offset: int
+    ) -> str:
         finder = (
             f"findReqs;siteNumber={site_number},facetsList={_DEFAULT_FACETS},"
             f"offset={offset},limit={limit},sortBy=POSTING_DATES_DESC"
@@ -179,7 +187,11 @@ class OracleHCMAdapter(BaseAdapter):
             "job_type": job_type or None,
             "description": description or None,
         }
-        return {key: value for key, value in record.items() if value not in (None, "", [], {})}
+        return {
+            key: value
+            for key, value in record.items()
+            if value not in (None, "", [], {})
+        }
 
     def _extract_site_number(self, url: str, html: str) -> str:
         path_match = _SITE_PATH_RE.search(urlparse(str(url or "")).path)
@@ -207,7 +219,9 @@ class OracleHCMAdapter(BaseAdapter):
         meta = soup.find("meta", attrs={"property": "og:site_name"})
         if meta is not None:
             return self._clean_text(meta.get("content"))
-        return self._clean_text(soup.title.get_text(" ", strip=True) if soup.title is not None else "")
+        return self._clean_text(
+            soup.title.get_text(" ", strip=True) if soup.title is not None else ""
+        )
 
     def _extract_cx_config(self, html: str) -> dict:
         match = _CX_CONFIG_RE.search(str(html or ""))

@@ -1,0 +1,272 @@
+{
+  "TITLE_SELECTOR": "h1 a, h2 a, h3 a, h4 a, h5 a, h1, h2, h3, h4, h5",
+  "ANCHOR_SELECTOR": "a[href]",
+  "DOM_PATTERNS": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "apply_url",
+        "value": "a[data-apply-url], a.apply-button"
+      },
+      {
+        "key": "availability",
+        "value": "[itemprop='availability'], .availability, [data-stock], [data-availability]"
+      },
+      {
+        "key": "benefits",
+        "value": "[data-section='benefits'], .benefits, #benefits"
+      },
+      {
+        "key": "brand",
+        "value": "[itemprop='brand'], .brand, .product-brand"
+      },
+      {
+        "key": "category",
+        "value": "[itemprop='category'], nav.breadcrumb li:last-child"
+      },
+      {
+        "key": "company",
+        "value": ".company-name, [itemprop='hiringOrganization'] [itemprop='name']"
+      },
+      {
+        "key": "description",
+        "value": "[itemprop='description'], .product-description, [data-description], meta[name='description'], meta[property='og:description']"
+      },
+      {
+        "key": "features",
+        "value": "[data-section='features'], .features, .product-features, #features"
+      },
+      {
+        "key": "image_url",
+        "value": "[itemprop='image'], meta[property='og:image']"
+      },
+      {
+        "key": "job_type",
+        "value": "[itemprop='employmentType']"
+      },
+      {
+        "key": "location",
+        "value": ".job-location, [itemprop='jobLocation'] [itemprop='name']"
+      },
+      {
+        "key": "original_price",
+        "value": ".original-price, .compare-price, [data-original-price]"
+      },
+      {
+        "key": "price",
+        "value": "[itemprop='price'], .price, .product-price"
+      },
+      {
+        "key": "qualifications",
+        "value": "[data-section='qualifications'], .qualifications, #qualifications"
+      },
+      {
+        "key": "rating",
+        "value": "[itemprop='ratingValue']"
+      },
+      {
+        "key": "responsibilities",
+        "value": "[data-section='responsibilities'], .responsibilities, #responsibilities"
+      },
+      {
+        "key": "review_count",
+        "value": "[itemprop='reviewCount']"
+      },
+      {
+        "key": "salary",
+        "value": ".salary, [itemprop='baseSalary']"
+      },
+      {
+        "key": "sale_price",
+        "value": ".sale-price, .discount-price, [data-sale-price]"
+      },
+      {
+        "key": "skills",
+        "value": "[data-section='skills'], .skills, #skills"
+      },
+      {
+        "key": "sku",
+        "value": "[itemprop='sku']"
+      },
+      {
+        "key": "specifications",
+        "value": "[data-section='specifications'], .specifications, .product-specifications, #specifications"
+      },
+      {
+        "key": "title",
+        "value": "h1, [itemprop='name'], meta[property='og:title'], title"
+      }
+    ]
+  },
+  "CARD_SELECTORS": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "_jobs_selector_notes",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "USAJobs search result cards render as direct children of #search-results with classes border border-gray-lighter bg-white p-4; see backend/tests/services/extract/test_listing_extractor_urls.py."
+          ]
+        }
+      },
+      {
+        "key": "ecommerce",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "[data-component-type='s-search-result']",
+            ".s-item",
+            ".product-card",
+            ".product-item",
+            ".product-tile",
+            ".product-grid-item",
+            "[data-testid='product-card']",
+            "[data-test-id='product-card']",
+            ".grid-item[data-product-id]",
+            ".product_pod",
+            ".collection-product-card",
+            "[data-testid='grid-view-products'] > article",
+            "[data-testid='list-view-products'] > article",
+            "[data-testid*='product-list-item']",
+            "[data-test-id*='product-list-item']",
+            "li.grid__item",
+            ".plp-card",
+            ".search-result-gridview-item",
+            ".product",
+            "article.product",
+            "[itemscope][itemtype*='Product']",
+            ".thumbnail[itemscope]",
+            "[class*='ProductCard']",
+            "[class*='product-tile']",
+            "[class*='SearchResultTile']",
+            "[class*='AllEditionsItem-tile']",
+            "[class*='search-result-item']"
+          ]
+        }
+      },
+      {
+        "key": "jobs",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "[data-qa-id='search-result']",
+            "#search-results > div.border.border-gray-lighter.bg-white.p-4",
+            ".job_seen_beacon",
+            ".base-card",
+            ".job-card",
+            ".job-listing",
+            ".job-result",
+            ".posting",
+            "[data-testid='job-card']",
+            ".jobsearch-ResultsList > div",
+            "li.jobs-search__results-list-item",
+            "article.elementor-post",
+            "article[class*='category-jobs']",
+            ".elementor-post",
+            "li[data-testid='careers-search-result-listing']",
+            ".pp-content-post.job_listing",
+            ".pp-content-grid-post.job_listing",
+            "div.job_listing",
+            "tr.job-row",
+            "div[data-job-id]",
+            ".opening"
+          ]
+        }
+      }
+    ]
+  },
+  "PAGINATION_SELECTORS": {
+    "__type__": "dict",
+    "items": [
+      {
+        "key": "load_more",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "button:has-text('Load More')",
+            "button:has-text('Show More')",
+            "button:has-text('View All')",
+            "button:has-text('Load more')",
+            "button:has-text('Show more')",
+            "button:has-text('View all')",
+            "button:has-text('See more')",
+            "a:has-text('Load More')",
+            "a:has-text('Show More')",
+            "a:has-text('View All')",
+            "[data-testid='load-more']",
+            "[data-testid*='load-more' i]",
+            "[data-test-id*='load-more' i]",
+            ".load-more"
+          ]
+        }
+      },
+      {
+        "key": "next_page",
+        "value": {
+          "__type__": "list",
+          "items": [
+            "a[rel='next']",
+            "a[aria-label*='next' i]",
+            "a[title*='next' i]",
+            "a:has-text('Next')",
+            "button[aria-label*='next' i]"
+          ]
+        }
+      }
+    ]
+  },
+  "COOKIE_CONSENT_SELECTORS": {
+    "__type__": "list",
+    "items": [
+      "button#onetrust-accept-btn-handler",
+      "button#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+      "button#CybotCookiebotDialogBodyUnderlayAccept",
+      "#truste-consent-button",
+      "[data-consent='accept']",
+      "[data-consent-action='accept']",
+      "[data-accept='true']",
+      "[data-testid='cookie-accept']",
+      "[data-testid='consent-accept']",
+      ".cookie-banner [data-consent='accept']",
+      ".cookie-banner [data-accept='true']",
+      ".cookie-consent-accept",
+      "#cookieConsentAccept",
+      ".fc-button.fc-cta-consent",
+      ".fc-button.fc-cta-accept",
+      ".fc-primary-button",
+      "[id*='accept' i][id*='cookie' i]",
+      "[class*='accept' i][class*='cookie' i]",
+      "[id*='consent' i][id*='accept' i]",
+      "[class*='consent' i][class*='accept' i]",
+      "[aria-label='Accept Cookies']",
+      "[aria-label='Accept all']",
+      "[aria-label='Accept All']",
+      "[aria-label='Accept cookie policy']",
+      "[aria-label='Aceptar cookies']",
+      "[aria-label='Aceptar todo']",
+      "[aria-label='Tout accepter']",
+      "[aria-label='Accepter les cookies']",
+      "[aria-label='Alle akzeptieren']",
+      "[aria-label='Akzeptieren']",
+      "[aria-label='Aceitar cookies']",
+      "[aria-label='Aceitar tudo']",
+      "button:has-text('Accept All')",
+      "button:has-text('Accept Cookies')",
+      "button:has-text('I Accept')",
+      "button:has-text('Agree')",
+      "button:has-text('Aceptar todo')",
+      "button:has-text('Aceptar cookies')",
+      "button:has-text('Acepto')",
+      "button:has-text('Tout accepter')",
+      "button:has-text('Accepter')",
+      "button:has-text('Accepter les cookies')",
+      "button:has-text('Alle akzeptieren')",
+      "button:has-text('Akzeptieren')",
+      "button:has-text('Ich akzeptiere')",
+      "button:has-text('Aceitar tudo')",
+      "button:has-text('Aceitar cookies')",
+      "button:has-text('Concordo')"
+    ]
+  }
+}

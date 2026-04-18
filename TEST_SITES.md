@@ -195,27 +195,26 @@ parallel arrays, and non-standard schema patterns that stress-test normalisation
 | RD10 | `https://openlibrary.org/subjects/science.json` | JSON API | Medium | Subject listing — works array, author facets, edition count |
 | RD11 | `https://www.thecocktaildb.com/api/json/v1/1/search.php?s=margarita` | JSON API | Medium | Denormalised — ingredient1–15 + measure1–15 as flat columns |
 
----
+https://www.vc5partners.com/jobs/ 
+https://www.klingspor.com/jobs
+https://ehccareers-emory.icims.com/jobs/search?pr=0&amp;searchRelation=keyword_all
+https://careers.clarkassociatesinc.biz/
+https://atlasmedstaff.com/job-search/
+https://smithnephew.wd5.myworkdayjobs.com/External
+https://www.foxrccareers.com/foxrc-careers-home/jobs?limit=100&amp;page=1&amp;sortBy=relevance&amp;keywords=Dough%20Bird
+https://ats.rippling.com/en-GB/inhance-technologies/jobs
+https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location
+https://lcbhs.net/careers/
+https://www.paycomonline.net/v4/ats/web.php/portal/8EC14E985B45C7F52C531F487F62A2B8/career-page
+https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/?q=&o=postedDateDesc
+ https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=14fa7571-bfac-427f-aa18-9488391d4c5e&amp;ccId=19000101_000001&amp;type=MP&amp;lang=en_US&amp;selectedMenuKey=CurrentOpenings
 
-## Appendix — Coverage Matrix
-
-Use this to track extraction completeness per site after each test run.
-
-| Source | S (Sandbox) | LC | LJ | DC | DJ | RD |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| DOM text fields | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| JSON-LD (`@type: Product`) | ✓ | ✓ | — | ✓ | — | — |
-| JSON-LD (`@type: JobPosting`) | — | — | ✓ | — | ✓ | — |
-| Inline JSON (`window.__data__`) | ✓ | ✓ | — | ✓ | — | — |
-| `<script type="application/json">` | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| Open Graph meta tags | — | ✓ | ✓ | ✓ | ✓ | — |
-| `data-*` attributes | ✓ | ✓ | — | ✓ | — | — |
-| Hidden DOM (`display:none`, `aria-hidden`) | ✓ | ✓ | — | ✓ | — | — |
-| Spec / data tables | — | ✓ | — | ✓ | ✓ | — |
-| REST / JSON API response | — | — | — | — | — | ✓ |
-| GeoJSON / JSONAPI spec | — | — | — | — | — | ✓ |
-| Paginated continuation | ✓ | ✓ | ✓ | — | — | ✓ |
-
----
-
-*End of document*
+https://zadig-et-voltaire.com/eu/uk/
+https://31philliplim.com/collections
+https://www.lafayette148ny.com/media/sitemap-products.xml
+https://ar.puma.com/lo-mas-vendido
+https://www.karenmillen.com/
+https://www.ganni.com/en-gb/home
+http://www.phase-eight.com/
+https://www.toddsnyder.com/
+https://www.savannahs.com/us/home

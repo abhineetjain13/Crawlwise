@@ -17,7 +17,9 @@ from app.services.config.crawl_runtime import (
 )
 
 
-def _coerce_int(value: object, default: int, minimum: int, maximum: int | None = None) -> int:
+def _coerce_int(
+    value: object, default: int, minimum: int, maximum: int | None = None
+) -> int:
     try:
         result = max(minimum, int(value))
         if maximum is not None:
@@ -57,7 +59,10 @@ class CrawlRunSettings:
         return key in self.data
 
     def urls(self) -> list[str]:
-        return [normalize_target_url(value) for value in _coerce_sequence(self.data.get("urls"))]
+        return [
+            normalize_target_url(value)
+            for value in _coerce_sequence(self.data.get("urls"))
+        ]
 
     def proxy_list(self) -> list[str]:
         values = []
@@ -85,7 +90,9 @@ class CrawlRunSettings:
         return _coerce_int(self.data.get("max_records", 100), 100, 1)
 
     def max_scrolls(self) -> int:
-        return _coerce_int(self.data.get("max_scrolls", DEFAULT_MAX_SCROLLS), DEFAULT_MAX_SCROLLS, 1)
+        return _coerce_int(
+            self.data.get("max_scrolls", DEFAULT_MAX_SCROLLS), DEFAULT_MAX_SCROLLS, 1
+        )
 
     def sleep_ms(self) -> int:
         return _coerce_int(
@@ -102,7 +109,9 @@ class CrawlRunSettings:
         )
 
     def url_timeout_seconds(self) -> float:
-        return coerce_url_timeout_seconds(self.data.get("url_timeout_seconds", URL_PROCESS_TIMEOUT_SECONDS))
+        return coerce_url_timeout_seconds(
+            self.data.get("url_timeout_seconds", URL_PROCESS_TIMEOUT_SECONDS)
+        )
 
     def llm_enabled(self) -> bool:
         return bool(self.data.get("llm_enabled"))

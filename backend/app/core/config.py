@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     )
     cookie_store_dir: Path = Field(default=BASE_DIR / "cookie_store")
     playwright_headless: bool = True
+    browser_pool_size: int = 2
+    browser_context_timeout_seconds: float = 30.0
+    http_timeout_seconds: float = 20.0
+    http_max_connections: int = 50
+    http_max_keepalive_connections: int = 20
     anthropic_api_key: str = ""
     groq_api_key: str = ""
     nvidia_api_key: str = ""
@@ -124,7 +129,9 @@ def _check_secret_defaults() -> None:
     if default_admin_password in _INSECURE_ADMIN_PASSWORD_DEFAULTS:
         issues.append("default_admin_password is set to an insecure placeholder value")
     if settings.bootstrap_admin_once and not default_admin_password:
-        issues.append("bootstrap_admin_once requires a non-empty default_admin_password")
+        issues.append(
+            "bootstrap_admin_once requires a non-empty default_admin_password"
+        )
     if (
         settings.bootstrap_admin_once
         and default_admin_email in _INSECURE_ADMIN_EMAIL_DEFAULTS
@@ -167,12 +174,25 @@ def load_admin_bootstrap_settings() -> Settings:
 
     fresh = Settings()
     resolved = settings.model_copy()
-    if os.getenv("DEFAULT_ADMIN_EMAIL") is not None or os.getenv("default_admin_email") is not None:
-        resolved = resolved.model_copy(update={"default_admin_email": fresh.default_admin_email})
-    if os.getenv("DEFAULT_ADMIN_PASSWORD") is not None or os.getenv("default_admin_password") is not None:
+    if (
+        os.getenv("DEFAULT_ADMIN_EMAIL") is not None
+        or os.getenv("default_admin_email") is not None
+    ):
+        resolved = resolved.model_copy(
+            update={"default_admin_email": fresh.default_admin_email}
+        )
+    if (
+        os.getenv("DEFAULT_ADMIN_PASSWORD") is not None
+        or os.getenv("default_admin_password") is not None
+    ):
         resolved = resolved.model_copy(
             update={"default_admin_password": fresh.default_admin_password}
         )
-    if os.getenv("BOOTSTRAP_ADMIN_ONCE") is not None or os.getenv("bootstrap_admin_once") is not None:
-        resolved = resolved.model_copy(update={"bootstrap_admin_once": fresh.bootstrap_admin_once})
+    if (
+        os.getenv("BOOTSTRAP_ADMIN_ONCE") is not None
+        or os.getenv("bootstrap_admin_once") is not None
+    ):
+        resolved = resolved.model_copy(
+            update={"bootstrap_admin_once": fresh.bootstrap_admin_once}
+        )
     return resolved

@@ -10,6 +10,7 @@ import type {
   Dashboard,
   FieldCommitPayload,
   FieldCommitResponse,
+  LlmConfigCreatePayload,
   LoginResponse,
   Paginated,
   ReviewPayload,
@@ -21,6 +22,11 @@ import type {
   SelectorTestResponse,
   SelectorUpdatePayload,
   User,
+  LlmConfigRecord,
+  LlmConfigUpdatePayload,
+  LlmProviderCatalogItem,
+  LlmConnectionTestResponse,
+  LlmCostLogRecord,
 } from "./types";
 
 function withQuery(path: string, query: URLSearchParams) {
@@ -119,6 +125,16 @@ export const api = {
     apiClient.delete<{ deleted: number }>(`/api/selectors/domain/${encodeURIComponent(domain)}`),
   testSelector: (payload: { url: string; css_selector?: string | null; xpath?: string | null; regex?: string | null }) =>
     apiClient.post<SelectorTestResponse>("/api/selectors/test", payload),
+  selectorPreviewHtml: (url: string) => `${getApiBaseUrl()}/api/selectors/preview-html?url=${encodeURIComponent(url)}`,
+  listLlmProviders: () => apiClient.get<LlmProviderCatalogItem[]>("/api/llm/providers"),
+  listLlmConfigs: () => apiClient.get<LlmConfigRecord[]>("/api/llm/configs"),
+  createLlmConfig: (payload: LlmConfigCreatePayload) => apiClient.post<LlmConfigRecord>("/api/llm/configs", payload),
+  updateLlmConfig: (configId: number, payload: LlmConfigUpdatePayload) =>
+    apiClient.put<LlmConfigRecord>(`/api/llm/configs/${configId}`, payload),
+  deleteLlmConfig: (configId: number) => apiClient.delete<void>(`/api/llm/configs/${configId}`),
+  testLlmConnection: (payload: { provider: string; model: string; api_key?: string | null }) =>
+    apiClient.post<LlmConnectionTestResponse>("/api/llm/test-connection", payload),
+  listLlmCostLog: () => apiClient.get<LlmCostLogRecord[]>("/api/llm/cost-log"),
   listJobs: () => apiClient.get<ActiveJob[]>("/api/jobs/active"),
 };
 

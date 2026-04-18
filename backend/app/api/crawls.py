@@ -150,7 +150,9 @@ async def crawls_create(
     user: Annotated[User, Depends(get_current_user)],
 ) -> dict:
     try:
-        run = await create_crawl_run_from_payload(session, user.id, payload.model_dump())
+        run = await create_crawl_run_from_payload(
+            session, user.id, payload.model_dump()
+        )
     except ValueError as exc:
         _raise_http_from_value_error(
             status_code=status.HTTP_400_BAD_REQUEST,

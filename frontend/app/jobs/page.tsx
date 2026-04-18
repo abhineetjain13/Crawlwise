@@ -13,6 +13,7 @@ import { cn } from "../../lib/utils";
 import { Badge, Button, Card } from "../../components/ui/primitives";
 import {
   DataRegionEmpty,
+  DataRegionError,
   DataRegionLoading,
   InlineAlert,
   PageHeader,
@@ -54,7 +55,7 @@ export default function JobsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="page-stack">
       <PageHeader
         title="Jobs"
         description="Live run state for the local dev runner."
@@ -69,7 +70,7 @@ export default function JobsPage() {
         }
       />
 
-      <Card className="space-y-4">
+      <Card className="section-card">
         <SectionHeader
           title="Active Jobs"
           description="Auto-refreshes every 5 seconds. Hard kill is the only active-run control in dev mode."
@@ -79,8 +80,10 @@ export default function JobsPage() {
 
         {jobsQuery.isLoading ? (
           <DataRegionLoading count={6} />
+        ) : jobsQuery.isError ? (
+          <DataRegionError message="Failed to load jobs." />
         ) : jobs.length ? (
-          <TableSurface className="border border-border bg-transparent shadow-none">
+          <TableSurface className="table-surface-flat">
             <table className="compact-data-table min-w-[960px]">
               <thead>
                 <tr>

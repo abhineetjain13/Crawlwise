@@ -128,9 +128,10 @@ export default function DashboardPage() {
     return acc;
   }, {});
   const totalInDistribution = Object.values(statusCounts).reduce((a, b) => a + b, 0);
+  const sortedStatusEntries = Object.entries(statusCounts).sort(([, a], [, b]) => b - a);
 
   return (
-    <div className="space-y-5">
+    <div className="page-stack-lg">
       <PageHeader
         title="Dashboard"
         actions={
@@ -190,16 +191,12 @@ export default function DashboardPage() {
       {!isLoading && totalInDistribution > 0 ? (
         <div className="space-y-2.5">
           <div className="flex h-2 w-full overflow-hidden rounded-full bg-[var(--border)] gap-px">
-            {Object.entries(statusCounts)
-              .sort(([, a], [, b]) => b - a)
-              .map(([status, count]) => (
+            {sortedStatusEntries.map(([status, count]) => (
                 <StatusSegment key={status} status={status} count={count} total={totalInDistribution} />
               ))}
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-            {Object.entries(statusCounts)
-              .sort(([, a], [, b]) => b - a)
-              .map(([status, count]) => (
+            {sortedStatusEntries.map(([status, count]) => (
                 <div key={status} className="flex items-center gap-1.5 text-[11px] leading-[1.45] text-muted">
                   <Badge tone={statusTone(status)}>{statusLabel(status)}</Badge>
                   <span className="text-sm font-medium leading-[1.45] text-foreground tabular-nums">{count}</span>
@@ -215,7 +212,7 @@ export default function DashboardPage() {
         <SurfacePanel>
           <div className="flex items-center justify-between border-b border-[var(--divider)] px-4 py-3">
             <SectionHeader title="Recent Runs" description="Last 10 jobs" />
-            <Link href="/runs" className="no-underline text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-accent hover:underline">
+            <Link href="/runs" className="link-accent no-underline text-xs font-medium leading-[1.4] hover:underline">
               View all
             </Link>
           </div>

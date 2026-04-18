@@ -42,6 +42,8 @@ _ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
     "remoteok": RemoteOkAdapter,
     "shopify": ShopifyAdapter,
 }
+
+
 @lru_cache(maxsize=1)
 def registered_adapters() -> tuple[BaseAdapter, ...]:
     adapters: list[BaseAdapter] = []
@@ -54,7 +56,9 @@ def registered_adapters() -> tuple[BaseAdapter, ...]:
         adapters.append(factory())
 
     if unknown:
-        logger.warning("Skipping unknown adapter names from registry config: %s", sorted(unknown))
+        logger.warning(
+            "Skipping unknown adapter names from registry config: %s", sorted(unknown)
+        )
 
     # Signal-based Shopify should remain last even if config order drifts.
     adapters.sort(key=lambda adapter: adapter.name == "shopify")
@@ -97,8 +101,9 @@ async def try_blocked_adapter_recovery(
         for adapter in registered_adapters()
         if hasattr(adapter, "try_public_endpoint")
     ]
-    proxies = [proxy.strip() for proxy in (proxy_list or []) if proxy and proxy.strip()] or [None]
-    for proxy in proxies:
+    proxies = [proxy.strip() for proxy in (proxy_list or []) if proxy and proxy.strip()]
+    proxy_attempts = [*proxies] if proxies else [None]
+    for proxy in proxy_attempts:
         for adapter in recovery_adapters:
             try:
                 records = await adapter.try_public_endpoint(

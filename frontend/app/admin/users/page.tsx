@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { api } from "../../../lib/api";
 import type { Paginated, User } from "../../../lib/api/types";
 import { formatAdminUserDate as formatDate } from "../../../lib/format/date";
-import { Badge, Card, Input } from "../../../components/ui/primitives";
+import { Badge, Button, Card, Input, Metric, Select } from "../../../components/ui/primitives";
 import {
   DataRegionEmpty,
   DataRegionLoading,
@@ -56,40 +56,41 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="page-stack">
       <PageHeader title="Users" description="Manage roles and account status." />
 
       <div className="grid gap-3 md:grid-cols-3">
-        <MetricCard label="Total" value={counts.total} />
-        <MetricCard label="Active" value={counts.active} />
-        <MetricCard label="Inactive" value={counts.inactive} />
+        <Metric label="Total" value={counts.total} />
+        <Metric label="Active" value={counts.active} />
+        <Metric label="Inactive" value={counts.inactive} />
       </div>
 
-      <Card className="space-y-4">
+      <Card className="section-card">
         <SectionHeader title="User Management" description="Filter by email and status." />
-        <div className="flex flex-col gap-2 lg:flex-row">
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by email"
-            className="lg:max-w-sm"
-          />
-          <select
+        <div className="filter-toolbar">
+          <div className="filter-toolbar-field">
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search by email"
+            />
+          </div>
+          <Select
             value={status}
             onChange={(event) => setStatus(event.target.value as StatusFilter)}
-            className="control-select focus-ring"
+            className="sm:min-w-[180px]"
           >
             <option value="all">All Statuses</option>
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
-          </select>
+          </Select>
         </div>
         {updateError ? <InlineAlert message={updateError} /> : null}
 
         {usersQuery.isLoading ? (
           <DataRegionLoading count={6} />
         ) : users.length ? (
-          <TableSurface className="border border-border bg-transparent shadow-none">
+          <TableSurface className="table-surface-flat">
             <table className="compact-data-table min-w-[840px]">
               <thead>
                 <tr>
@@ -105,7 +106,7 @@ export default function AdminUsersPage() {
                   <tr key={user.id}>
                     <td className="text-sm font-medium leading-[1.45] text-foreground">{user.email}</td>
                     <td>
-                      <select
+                      <Select
                         value={user.role}
                         onChange={(event) => {
                           const role = event.target.value as User["role"];
@@ -114,11 +115,11 @@ export default function AdminUsersPage() {
                           }
                         }}
                         disabled={pendingUserId === user.id}
-                        className="control-select focus-ring min-w-24"
+                        className="min-w-24"
                       >
                         <option value="user">user</option>
                         <option value="admin">admin</option>
-                      </select>
+                      </Select>
                     </td>
                     <td>
                       <Badge tone={user.is_active ? "success" : "danger"}>
@@ -127,14 +128,16 @@ export default function AdminUsersPage() {
                     </td>
                     <td className="text-sm leading-[1.55] text-muted">{formatDate(user.created_at)}</td>
                     <td>
-                      <button
+                      <Button
                         type="button"
+                        variant="secondary"
+                        size="sm"
                         disabled={pendingUserId === user.id}
                         onClick={() => void updateUser(user.id, { is_active: !user.is_active })}
-                        className="focus-ring h-8 rounded-[var(--radius-md)] border border-border bg-transparent px-3 text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-foreground transition hover:bg-background-elevated disabled:opacity-40"
+                        className="min-w-[96px]"
                       >
                         {user.is_active ? "Deactivate" : "Reactivate"}
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))}
@@ -145,15 +148,6 @@ export default function AdminUsersPage() {
           <DataRegionEmpty title="No users found" description="Adjust the filters to broaden the result set." className="px-0" />
         )}
       </Card>
-    </div>
-  );
-}
-
-function MetricCard({ label, value }: Readonly<{ label: string; value: number }>) {
-  return (
-    <div className="bg-panel rounded-xl shadow-card backdrop-blur-md p-4">
-      <div className="text-[11px] font-semibold tracking-wide text-muted uppercase">{label}</div>
-      <div className="mt-1 text-xl font-bold tracking-tighter text-primary">{value}</div>
     </div>
   );
 }

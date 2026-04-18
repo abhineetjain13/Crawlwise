@@ -76,7 +76,13 @@ def json_ld_listing_count(
         )
 
     offers = payload.get("offers")
-    offer_items = offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []
+    offer_items = (
+        offers
+        if isinstance(offers, list)
+        else [offers]
+        if isinstance(offers, dict)
+        else []
+    )
     for offer in offer_items:
         if not isinstance(offer, dict):
             continue
@@ -106,6 +112,8 @@ def html_has_extractable_listings_from_soup(
     next_data_node = soup.select_one("script#__NEXT_DATA__")
     if next_data_node is None:
         return False
-    raw_next_data = next_data_node.string or next_data_node.get_text(" ", strip=True) or ""
+    raw_next_data = (
+        next_data_node.string or next_data_node.get_text(" ", strip=True) or ""
+    )
     signal_hits = sum(raw_next_data.count(key) for key in NEXT_DATA_PRODUCT_SIGNALS)
     return signal_hits >= 4

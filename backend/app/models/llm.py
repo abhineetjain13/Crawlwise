@@ -18,17 +18,25 @@ class LLMConfig(Base):
     model: Mapped[str] = mapped_column(String(255))
     api_key_encrypted: Mapped[str] = mapped_column(Text)
     task_type: Mapped[str] = mapped_column(String(60))
-    per_domain_daily_budget_usd: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
-    global_session_budget_usd: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    per_domain_daily_budget_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0")
+    )
+    global_session_budget_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
 
 class LLMCostLog(Base):
     __tablename__ = "llm_cost_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    run_id: Mapped[int | None] = mapped_column(ForeignKey("crawl_runs.id"), nullable=True, index=True)
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("crawl_runs.id"), nullable=True, index=True
+    )
     provider: Mapped[str] = mapped_column(String(30))
     model: Mapped[str] = mapped_column(String(255))
     task_type: Mapped[str] = mapped_column(String(60))
@@ -36,4 +44,6 @@ class LLMCostLog(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("0"))
     domain: Mapped[str] = mapped_column(String(255), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )

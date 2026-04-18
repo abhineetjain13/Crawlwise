@@ -25,9 +25,13 @@ async def register(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration is disabled. Enable REGISTRATION_ENABLED for multi-tenant deployments.",
         )
-    existing = await session.execute(select(User).where(User.email == payload.email.lower()))
+    existing = await session.execute(
+        select(User).where(User.email == payload.email.lower())
+    )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
+        )
     user = await create_user(session, payload.email, payload.password)
     return UserResponse.model_validate(user, from_attributes=True)
 
@@ -40,7 +44,9 @@ async def login(
 ) -> AuthResponse:
     authenticated = await authenticate_user(session, payload.email, payload.password)
     if authenticated is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+        )
     token, user = authenticated
     response.set_cookie("access_token", token, httponly=True, samesite="lax")
     return AuthResponse(

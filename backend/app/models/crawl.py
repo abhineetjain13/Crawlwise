@@ -120,7 +120,9 @@ class CrawlRun(Base):
         self.result_summary = merged
         return merged
 
-    def apply_batch_progress_patch(self, patch: Mapping[str, object]) -> dict[str, object]:
+    def apply_batch_progress_patch(
+        self, patch: Mapping[str, object]
+    ) -> dict[str, object]:
         return self.merge_summary_patch(patch)
 
     def build_batch_progress_state(
@@ -373,7 +375,9 @@ def _merge_run_acquisition_metrics(
             traversal_mode: int(traversal_modes_used.get(traversal_mode, 0) or 0) + 1,
         }
     elif current.get("traversal_modes_used"):
-        summary["traversal_modes_used"] = dict(current.get("traversal_modes_used") or {})
+        summary["traversal_modes_used"] = dict(
+            current.get("traversal_modes_used") or {}
+        )
 
     return summary
 
@@ -511,6 +515,24 @@ class ReviewPromotion(Base):
     surface: Mapped[str] = mapped_column(String(40))
     approved_schema: Mapped[dict] = mapped_column(JSONB, default=dict)
     field_mapping: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class DomainMemory(Base):
+    __tablename__ = "domain_memory"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), index=True)
+    surface: Mapped[str] = mapped_column(String(40), index=True)
+    platform: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    selectors: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

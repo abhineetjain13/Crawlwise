@@ -132,6 +132,7 @@ class FakeRedis:
         self._hashes.clear()
         self._ttl.clear()
 
+
 @pytest.fixture
 def workspace_tmp_path() -> Path:
     path = _WORKSPACE_TMP_ROOT / f"case-{next(_TMP_COUNTER)}"

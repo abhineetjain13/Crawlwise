@@ -139,7 +139,11 @@ class PaycomAdapter(BaseAdapter):
                     continue
                 seen_ids.add(job_id)
                 records.append(normalized)
-            total = int(body.get("jobPostingPreviewsCount", 0) or 0) if isinstance(body, dict) else 0
+            total = (
+                int(body.get("jobPostingPreviewsCount", 0) or 0)
+                if isinstance(body, dict)
+                else 0
+            )
             skip += take
             if len(previews) < take or (total and skip >= total):
                 break
@@ -185,11 +189,19 @@ class PaycomAdapter(BaseAdapter):
             "url": page_url,
             "apply_url": page_url,
             "location": self._clean_text(posting.get("location")),
-            "job_type": self._clean_text(posting.get("positionType") or posting.get("employmentType")),
-            "description": self._clean_text(posting.get("jobDescription") or posting.get("description")),
+            "job_type": self._clean_text(
+                posting.get("positionType") or posting.get("employmentType")
+            ),
+            "description": self._clean_text(
+                posting.get("jobDescription") or posting.get("description")
+            ),
             "posted_date": self._clean_text(posting.get("postedOn")),
         }
-        return {key: value for key, value in record.items() if value not in (None, "", [], {})}
+        return {
+            key: value
+            for key, value in record.items()
+            if value not in (None, "", [], {})
+        }
 
     def _extract_host_config(self, html: str) -> dict[str, str]:
         match = _CONFIG_RE.search(str(html or ""))
@@ -201,12 +213,18 @@ class PaycomAdapter(BaseAdapter):
             return {}
         lib_config_raw = payload.get("libConfig")
         try:
-            lib_config = json.loads(lib_config_raw) if isinstance(lib_config_raw, str) else (lib_config_raw if isinstance(lib_config_raw, dict) else {})
+            lib_config = (
+                json.loads(lib_config_raw)
+                if isinstance(lib_config_raw, str)
+                else (lib_config_raw if isinstance(lib_config_raw, dict) else {})
+            )
         except json.JSONDecodeError:
             lib_config = {}
         return {
             "auth_token": str(payload.get("sessionJWT") or "").strip(),
-            "service_base": str(lib_config.get("atsPortalMantleServiceUrl") or "").strip(),
+            "service_base": str(
+                lib_config.get("atsPortalMantleServiceUrl") or ""
+            ).strip(),
             "locale": str(lib_config.get("locale") or "").strip(),
         }
 
@@ -223,11 +241,17 @@ class PaycomAdapter(BaseAdapter):
             "url": urljoin(page_url, f"jobs/{job_id}"),
             "apply_url": urljoin(page_url, f"jobs/{job_id}"),
             "location": self._clean_text(preview.get("locations")),
-            "job_type": self._clean_text(preview.get("positionType") or preview.get("remoteType")),
+            "job_type": self._clean_text(
+                preview.get("positionType") or preview.get("remoteType")
+            ),
             "description": self._clean_text(preview.get("description")),
             "posted_date": self._clean_text(preview.get("postedOn")),
         }
-        return {key: value for key, value in record.items() if value not in (None, "", [], {})}
+        return {
+            key: value
+            for key, value in record.items()
+            if value not in (None, "", [], {})
+        }
 
     def _extract_job_id(self, url: str) -> str:
         match = _JOB_ID_RE.search(urlparse(str(url or "")).path)

@@ -62,14 +62,17 @@ class CrawlRecordResponse(BaseModel):
     def _clean_for_display(self) -> CrawlRecordResponse:
         """Expose canonical data, a review bucket, and only light trace metadata."""
         self.data = {
-            k: v for k, v in self.data.items()
+            k: v
+            for k, v in self.data.items()
             if (
                 v not in (None, "", [], {})
                 and not str(k).startswith("_")
                 and str(k) not in _DISPLAY_HIDDEN_RECORD_FIELDS
             )
         }
-        manifest_trace = _extract_manifest_trace(self.source_trace, self.discovered_data)
+        manifest_trace = _extract_manifest_trace(
+            self.source_trace, self.discovered_data
+        )
         self.review_bucket = _normalize_review_bucket(
             (self.discovered_data or {}).get("review_bucket"),
             fallback=self.discovered_data,
@@ -176,9 +179,15 @@ class CrawlRecordProvenanceResponse(BaseModel):
     @model_validator(mode="after")
     def _expand_provenance(self) -> CrawlRecordProvenanceResponse:
         self.raw_data = self.raw_data if isinstance(self.raw_data, dict) else {}
-        self.discovered_data = self.discovered_data if isinstance(self.discovered_data, dict) else {}
-        self.source_trace = self.source_trace if isinstance(self.source_trace, dict) else {}
-        self.manifest_trace = _extract_manifest_trace(self.source_trace, self.discovered_data)
+        self.discovered_data = (
+            self.discovered_data if isinstance(self.discovered_data, dict) else {}
+        )
+        self.source_trace = (
+            self.source_trace if isinstance(self.source_trace, dict) else {}
+        )
+        self.manifest_trace = _extract_manifest_trace(
+            self.source_trace, self.discovered_data
+        )
         self.source_trace = {
             key: value
             for key, value in self.source_trace.items()
@@ -211,7 +220,9 @@ def _sanitize_crawl_settings(value: object) -> dict:
         normalized_lookup = normalized_key.lower()
         if normalized_lookup in _SENSITIVE_SETTING_KEYS:
             continue
-        sanitized[normalized_key] = _sanitize_setting_value(normalized_lookup, raw_value)
+        sanitized[normalized_key] = _sanitize_setting_value(
+            normalized_lookup, raw_value
+        )
     return sanitized
 
 
@@ -223,7 +234,10 @@ def _sanitize_setting_value(key: str, value: object) -> object:
     if isinstance(value, dict):
         return _sanitize_crawl_settings(value)
     if isinstance(value, list):
-        return [_sanitize_crawl_settings(item) if isinstance(item, dict) else item for item in value]
+        return [
+            _sanitize_crawl_settings(item) if isinstance(item, dict) else item
+            for item in value
+        ]
     return value
 
 
@@ -238,7 +252,9 @@ def _sanitize_proxy_item(value: object) -> object:
                 continue
             sanitized[normalized_key] = raw_value
         for key in list(sanitized.keys()):
-            if key.lower() in {"url", "proxy", "proxy_url", "server"} and isinstance(sanitized[key], str):
+            if key.lower() in {"url", "proxy", "proxy_url", "server"} and isinstance(
+                sanitized[key], str
+            ):
                 sanitized[key] = _mask_proxy_url(sanitized[key])
         return sanitized
     return value
@@ -288,11 +304,15 @@ _LEGACY_REVIEW_KEYS = {
     "promoted_fields",
     "discovered_fields",
 }
-_DISCOVERED_DATA_EXCLUDE_KEYS = _LEGACY_MANIFEST_KEYS | _LEGACY_REVIEW_KEYS | {"review_bucket", "manifest_trace"}
+_DISCOVERED_DATA_EXCLUDE_KEYS = (
+    _LEGACY_MANIFEST_KEYS | _LEGACY_REVIEW_KEYS | {"review_bucket", "manifest_trace"}
+)
 _SOURCE_TRACE_EXCLUDE_KEYS = {"manifest_trace"}
 
 
-def _extract_manifest_trace(source_trace: object, discovered_data: object) -> dict[str, Any]:
+def _extract_manifest_trace(
+    source_trace: object, discovered_data: object
+) -> dict[str, Any]:
     trace = source_trace if isinstance(source_trace, dict) else {}
     discovered = discovered_data if isinstance(discovered_data, dict) else {}
     manifest_trace = trace.get("manifest_trace")
@@ -310,7 +330,9 @@ def _extract_manifest_trace(source_trace: object, discovered_data: object) -> di
     return legacy_manifest
 
 
-def _normalize_review_bucket(value: object, *, fallback: object | None = None) -> list[UnverifiedAttribute]:
+def _normalize_review_bucket(
+    value: object, *, fallback: object | None = None
+) -> list[UnverifiedAttribute]:
     rows: list[UnverifiedAttribute] = []
     seen: set[tuple[str, str]] = set()
     raw_rows = value if isinstance(value, list) else []
@@ -318,7 +340,10 @@ def _normalize_review_bucket(value: object, *, fallback: object | None = None) -
         normalized = _normalize_review_bucket_row(raw_row)
         if normalized is None:
             continue
-        dedupe_key = (normalized.key, _stable_review_value_fingerprint(normalized.value))
+        dedupe_key = (
+            normalized.key,
+            _stable_review_value_fingerprint(normalized.value),
+        )
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -331,14 +356,19 @@ def _normalize_review_bucket(value: object, *, fallback: object | None = None) -
         if not isinstance(payload, dict):
             continue
         for field_name, field_value in payload.items():
-            normalized = _normalize_review_bucket_row({
-                "key": field_name,
-                "value": field_value,
-                "source": key,
-            })
+            normalized = _normalize_review_bucket_row(
+                {
+                    "key": field_name,
+                    "value": field_value,
+                    "source": key,
+                }
+            )
             if normalized is None:
                 continue
-            dedupe_key = (normalized.key, _stable_review_value_fingerprint(normalized.value))
+            dedupe_key = (
+                normalized.key,
+                _stable_review_value_fingerprint(normalized.value),
+            )
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)

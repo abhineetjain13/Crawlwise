@@ -73,15 +73,13 @@ export function SectionHeader({
 }>) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0 flex-1 space-y-2">
+      <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex items-center gap-2">
-          {Icon && <Icon className="size-3.5 shrink-0 text-muted" />}
-          <h2 className="text-base font-semibold leading-snug tracking-normal text-primary">
-            {title}
-          </h2>
+          {Icon && <Icon className="size-3.5 shrink-0 text-[var(--text-muted)]" />}
+          <h2 className="panel-title">{title}</h2>
         </div>
         {description ? (
-          <div className="w-full text-xs leading-[1.45] text-muted">{description}</div>
+          <div className="panel-subtitle w-full">{description}</div>
         ) : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
@@ -215,10 +213,10 @@ export function EmptyPanel({
   description,
 }: Readonly<{ title: string; description: string }>) {
   return (
-    <div className="grid min-h-32 place-items-center rounded-[var(--radius-lg)] bg-[var(--subtle-panel-bg)] text-center px-6 py-8">
+    <div className="empty-panel">
       <div className="space-y-1">
-        <p className="text-sm leading-[1.55] font-medium text-primary">{title}</p>
-        <p className="text-xs leading-[1.45] text-muted">{description}</p>
+        <p className="text-sm font-medium leading-[1.55] text-[var(--text-primary)]">{title}</p>
+        <p className="text-xs leading-[1.45] text-[var(--text-muted)]">{description}</p>
       </div>
     </div>
   );
@@ -237,7 +235,7 @@ export function JsonPanel({
   className?: string;
 }>) {
   return (
-    <Card className={cn("space-y-4", className)}>
+    <Card className={cn("section-card", className)}>
       <SectionHeader title={title} description={subtitle} />
       {children}
     </Card>
@@ -261,7 +259,7 @@ export function SkeletonRows({
 /* ─── MetricSkeleton ─────────────────────────────────────────────────────── */
 export function MetricSkeleton() {
   return (
-    <div className="bg-panel rounded-xl shadow-card backdrop-blur-md stat-card space-y-2 p-4">
+    <div className="metric-card space-y-2">
       <Skeleton className="h-3 w-20" />
       <Skeleton className="h-9 w-28" />
       <Skeleton className="h-3 w-16" />
@@ -287,9 +285,11 @@ export function InlineCode({ children }: Readonly<{ children: ReactNode }>) {
 export function InlineAlert({
   message,
   tone = "danger",
+  className,
 }: Readonly<{
   message: ReactNode;
   tone?: "danger" | "warning" | "neutral";
+  className?: string;
 }>) {
   if (!message) return null;
   const toneClass =
@@ -297,8 +297,8 @@ export function InlineAlert({
       ? "alert-surface alert-danger"
       : tone === "warning"
         ? "alert-surface alert-warning"
-        : "alert-surface bg-panel text-muted";
-  return <div className={cn(toneClass)}>{message}</div>;
+        : "alert-surface alert-neutral";
+  return <div className={cn(toneClass, className)}>{message}</div>;
 }
 
 /* ─── StatusDot ──────────────────────────────────────────────────────────── */
@@ -350,12 +350,12 @@ export function RunWorkspaceShell({
   content: ReactNode;
 }>) {
   return (
-    <div className="space-y-4">
-      <div className="bg-panel rounded-lg shadow-elevated backdrop-blur-md flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+    <div className="page-stack">
+      <div className="panel panel-raised flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0 flex-1">{header}</div>
         {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
-      <div className="space-y-4">
+      <div className="page-stack">
         <div className="flex flex-wrap items-end justify-between gap-3">
           {tabs}
           {summary ? <div className="pb-2">{summary}</div> : null}

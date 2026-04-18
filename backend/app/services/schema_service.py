@@ -1,13 +1,14 @@
 from __future__ import annotations
+
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from app.services.config.field_mappings import (
-    CANONICAL_SCHEMAS,
-)
 from app.services.domain_utils import normalize_domain
-from app.services.field_alias_policy import field_allowed_for_surface as _field_allowed_for_surface
+from app.services.field_policy import (
+    canonical_fields_for_surface,
+    field_allowed_for_surface,
+)
 from app.services.pipeline.pipeline_config import SCHEMA_MAX_AGE_DAYS
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +16,7 @@ _SCHEMA_MAX_AGE = timedelta(days=SCHEMA_MAX_AGE_DAYS)
 
 
 def get_canonical_fields(surface: str) -> list[str]:
-    return list(CANONICAL_SCHEMAS.get(str(surface or "").strip().lower(), []))
+    return canonical_fields_for_surface(surface)
 
 
 @dataclass
@@ -41,6 +42,8 @@ def _dedupe_fields(values: Iterable[str] | None) -> list[str]:
         deduped.append(normalized)
         seen.add(normalized)
     return deduped
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -72,7 +75,7 @@ def _snapshot_to_resolved(
         for field in (
             payload.get("fields") if isinstance(payload.get("fields"), list) else []
         )
-        if _field_allowed_for_surface(surface, field)
+        if field_allowed_for_surface(surface, field)
     )
     baseline = _dedupe_fields(
         field
@@ -81,14 +84,16 @@ def _snapshot_to_resolved(
             if isinstance(payload.get("baseline_fields"), list)
             else baseline_fields
         )
-        if _field_allowed_for_surface(surface, field)
+        if field_allowed_for_surface(surface, field)
     )
     new_fields = _dedupe_fields(
         field
         for field in (
-            payload.get("new_fields") if isinstance(payload.get("new_fields"), list) else []
+            payload.get("new_fields")
+            if isinstance(payload.get("new_fields"), list)
+            else []
         )
-        if _field_allowed_for_surface(surface, field)
+        if field_allowed_for_surface(surface, field)
     )
     deprecated_fields = _dedupe_fields(
         field
@@ -97,12 +102,12 @@ def _snapshot_to_resolved(
             if isinstance(payload.get("deprecated_fields"), list)
             else []
         )
-        if _field_allowed_for_surface(surface, field)
+        if field_allowed_for_surface(surface, field)
     )
     fields = _dedupe_fields(
         field
         for field in [*baseline, *stored_fields, *explicit_fields]
-        if _field_allowed_for_surface(surface, field)
+        if field_allowed_for_surface(surface, field)
     )
     if not new_fields:
         baseline_set = set(baseline)
@@ -139,13 +144,13 @@ async def load_resolved_schema(
     baseline_fields = _dedupe_fields(
         field
         for field in get_canonical_fields(surface)
-        if _field_allowed_for_surface(surface, field)
+        if field_allowed_for_surface(surface, field)
     )
     normalized_domain = normalize_domain(domain)
     normalized_explicit = _dedupe_fields(
         field
         for field in (explicit_fields or [])
-        if _field_allowed_for_surface(surface, field)
+        if field_allowed_for_surface(surface, field)
     )
     if not normalized_domain:
         fields = _dedupe_fields([*baseline_fields, *normalized_explicit])
@@ -169,7 +174,9 @@ async def load_resolved_schema(
     )
 
 
-async def persist_resolved_schema(session: AsyncSession, schema: ResolvedSchema) -> ResolvedSchema:
+async def persist_resolved_schema(
+    session: AsyncSession, schema: ResolvedSchema
+) -> ResolvedSchema:
     del session
     schema.saved_at = schema.saved_at or _now_iso()
     schema.stale = False

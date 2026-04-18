@@ -5,7 +5,10 @@ from types import SimpleNamespace
 try:
     from celery import Celery
     from celery.signals import worker_process_init, worker_process_shutdown
-except ModuleNotFoundError:  # pragma: no cover - exercised only when Celery is not installed locally.
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised only when Celery is not installed locally.
+
     class _DummySignal:
         def connect(self, func):
             return func

@@ -21,10 +21,8 @@ export function ThemeToggle({ compact }: Readonly<{ compact?: boolean }>) {
       type="button"
       onClick={toggleTheme}
       className={cn(
-        "focus-ring bg-background-alt rounded-lg shadow-card inline-flex items-center justify-center rounded-[var(--radius-md)]",
-        "text-[var(--text-primary)] transition-all",
-        "hover:bg-[var(--button-ghost-hover-bg)] hover:text-[var(--accent)]",
-        compact ? "size-8" : "size-9",
+        "btn btn-secondary btn-icon focus-ring",
+        compact ? "btn-sm" : "btn-lg",
       )}
       aria-label="Toggle color theme"
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
