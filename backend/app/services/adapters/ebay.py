@@ -1,8 +1,22 @@
 # eBay platform adapter.
 from __future__ import annotations
 
+from selectolax.lexbor import LexborHTMLParser
+
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from bs4 import BeautifulSoup
+
+
+def _text(node: object) -> str:
+    return node.text(strip=True) if node is not None else ""
+
+
+def _attr(node: object, name: str) -> str | None:
+    if node is None:
+        return None
+    value = node.attributes.get(name)
+    if value is None:
+        return None
+    return str(value).strip() or None
 
 
 class EbayAdapter(BaseAdapter):
@@ -13,56 +27,57 @@ class EbayAdapter(BaseAdapter):
         return any(d in url for d in self.domains)
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
-        soup = BeautifulSoup(html, "html.parser")
+        parser = LexborHTMLParser(html)
         records = []
         if surface in ("ecommerce_detail",):
-            record = self._extract_detail(soup, url)
+            record = self._extract_detail(parser, url)
             if record:
                 records.append(record)
         elif surface in ("ecommerce_listing",):
-            records = self._extract_listing(soup, url)
+            records = self._extract_listing(parser, url)
         return AdapterResult(
             records=records,
             source_type="ebay_adapter",
             adapter_name=self.name,
         )
 
-    def _extract_detail(self, soup: BeautifulSoup, url: str) -> dict | None:
-        title_el = soup.select_one("h1.x-item-title__mainTitle span, h1#itemTitle")
-        price_el = soup.select_one(".x-price-primary span, #prcIsum")
-        image_el = soup.select_one("#icImg, .ux-image-carousel-item img")
-        condition_el = soup.select_one(".x-item-condition-value span, #vi-itm-cond")
-        seller_el = soup.select_one(
+    def _extract_detail(self, parser: LexborHTMLParser, url: str) -> dict | None:
+        title_el = parser.css_first("h1.x-item-title__mainTitle span, h1#itemTitle")
+        price_el = parser.css_first(".x-price-primary span, #prcIsum")
+        image_el = parser.css_first("#icImg, .ux-image-carousel-item img")
+        condition_el = parser.css_first(".x-item-condition-value span, #vi-itm-cond")
+        seller_el = parser.css_first(
             ".x-sellercard-atf__info__about-seller span, .mbg-nw"
         )
-        if not title_el:
+        title = _text(title_el)
+        if not title:
             return None
         return {
-            "title": title_el.get_text(strip=True),
-            "price": price_el.get_text(strip=True) if price_el else None,
-            "image_url": image_el.get("src") if image_el else None,
-            "availability": condition_el.get_text(strip=True) if condition_el else None,
-            "brand": seller_el.get_text(strip=True) if seller_el else None,
+            "title": title,
+            "price": _text(price_el) or None,
+            "image_url": _attr(image_el, "src"),
+            "availability": _text(condition_el) or None,
+            "brand": _text(seller_el) or None,
             "url": url,
         }
 
-    def _extract_listing(self, soup: BeautifulSoup, url: str) -> list[dict]:
+    def _extract_listing(self, parser: LexborHTMLParser, url: str) -> list[dict]:
         records = []
-        cards = soup.select(".s-item, .srp-results .s-item__wrapper")
+        cards = parser.css(".s-item, .srp-results .s-item__wrapper")
         for card in cards:
-            title_el = card.select_one(".s-item__title span, .s-item__title")
-            price_el = card.select_one(".s-item__price")
-            image_el = card.select_one(".s-item__image-wrapper img")
-            link_el = card.select_one(".s-item__link")
-            title_text = title_el.get_text(strip=True) if title_el else ""
+            title_el = card.css_first(".s-item__title span, .s-item__title")
+            price_el = card.css_first(".s-item__price")
+            image_el = card.css_first(".s-item__image-wrapper img")
+            link_el = card.css_first(".s-item__link")
+            title_text = _text(title_el)
             if not title_text or title_text.lower() == "shop on ebay":
                 continue
             records.append(
                 {
                     "title": title_text,
-                    "price": price_el.get_text(strip=True) if price_el else None,
-                    "image_url": image_el.get("src") if image_el else None,
-                    "url": link_el.get("href", "") if link_el else "",
+                    "price": _text(price_el) or None,
+                    "image_url": _attr(image_el, "src"),
+                    "url": _attr(link_el, "href") or "",
                 }
             )
         return records

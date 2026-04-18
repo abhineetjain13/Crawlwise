@@ -18,6 +18,7 @@ from app.services.field_policy import field_allowed_for_surface
 from app.services.llm_runtime import extract_missing_fields
 from app.services.platform_policy import detect_platform_family
 from app.services.publish import (
+    VERDICT_BLOCKED,
     VERDICT_EMPTY,
     VERDICT_ERROR,
     VERDICT_LISTING_FAILED,
@@ -26,11 +27,17 @@ from app.services.publish import (
     compute_verdict,
     finalize_url_metrics,
 )
+from app.services.robots_policy import (
+    ROBOTS_FETCH_FAILURE,
+    ROBOTS_MISSING,
+    check_url_crawlability,
+)
 from app.services.publish.metadata import refresh_record_commit_metadata
 from app.services.crawl_engine import extract_records
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .pipeline_config import LLMFallbackConfig, PipelineDefaults
 from .runtime_helpers import STAGE_ANALYZE, STAGE_FETCH, STAGE_SAVE, log_event, set_stage
 from .types import URLProcessingConfig, URLProcessingResult
 
@@ -184,10 +191,10 @@ async def _process_single_url(
     *,
     proxy_list: list[str] | None = None,
     traversal_mode: str | None = None,
-    max_pages: int = 5,
-    max_scrolls: int = 3,
-    max_records: int = 100,
-    sleep_ms: int = 0,
+    max_pages: int = PipelineDefaults.MAX_PAGES,
+    max_scrolls: int = PipelineDefaults.MAX_SCROLLS,
+    max_records: int = PipelineDefaults.MAX_RECORDS,
+    sleep_ms: int = PipelineDefaults.SLEEP_MS,
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
@@ -207,6 +214,47 @@ async def _process_single_url(
     )
     if resolved_config.update_run_state:
         await set_stage(session, run, STAGE_FETCH, current_url=url)
+    robots_result = await check_url_crawlability(url)
+    if not robots_result.allowed:
+        if resolved_config.persist_logs:
+            await log_event(
+                session,
+                run.id,
+                "warning",
+                f"[ROBOTS] Blocked by robots.txt: {url}",
+            )
+        return URLProcessingResult(
+            records=[],
+            verdict=VERDICT_BLOCKED,
+            url_metrics=finalize_url_metrics(
+                {
+                    "blocked": True,
+                    "final_url": url,
+                    "method": "",
+                    "requested_fields": list(run.requested_fields or []),
+                    "robots": {
+                        "allowed": False,
+                        "outcome": robots_result.outcome,
+                        "robots_url": robots_result.robots_url,
+                    },
+                },
+                record_count=0,
+            ),
+        )
+    if resolved_config.persist_logs and robots_result.outcome == ROBOTS_MISSING:
+        await log_event(
+            session,
+            run.id,
+            "info",
+            f"[ROBOTS] No robots.txt found for {url}; continuing",
+        )
+    if resolved_config.persist_logs and robots_result.outcome == ROBOTS_FETCH_FAILURE:
+        await log_event(
+            session,
+            run.id,
+            "warning",
+            f"[ROBOTS] robots.txt check failed for {url}; continuing",
+        )
     if resolved_config.persist_logs:
         await log_event(session, run.id, "info", f"[FETCH] Fetching {url}")
 
@@ -294,6 +342,7 @@ async def _process_single_url(
         adapter_records=acquisition_result.adapter_records,
         network_payloads=acquisition_result.network_payloads,
         selector_rules=selector_rules,
+        extraction_runtime_snapshot=run.settings_view.extraction_runtime_snapshot(),
     )
     if run.settings_view.llm_enabled() and "detail" in run.surface and records:
         records = await _apply_llm_fallback(
@@ -362,7 +411,9 @@ async def _apply_llm_fallback(
             if field_allowed_for_surface(run.surface, field_name)
             and next_record.get(field_name) in (None, "", [], {})
         ]
-        should_run = bool(missing_fields) or float(confidence.get("score", 1.0) or 1.0) < 0.55
+        should_run = bool(missing_fields) or float(
+            confidence.get("score", 1.0) or 1.0
+        ) < LLMFallbackConfig.CONFIDENCE_THRESHOLD
         if not should_run:
             updated_records.append(next_record)
             continue
@@ -406,7 +457,7 @@ async def _apply_llm_fallback(
         next_record["_self_heal"] = {
             "enabled": True,
             "triggered": True,
-            "threshold": 0.55,
+            "threshold": LLMFallbackConfig.CONFIDENCE_THRESHOLD,
             "mode": "missing_field_extraction",
             "error": error_message or None,
         }

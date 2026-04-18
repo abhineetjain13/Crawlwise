@@ -107,6 +107,36 @@ async def test_fetch_page_keeps_http_for_structured_shopify_detail(
     assert result.method == "curl_cffi"
 
 
+@pytest.mark.asyncio
+async def test_fetch_page_uses_browser_first_for_requires_browser_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+
+    async def unexpected_curl(url: str, timeout_seconds: float):
+        raise AssertionError(f"curl fetch should not run for browser-first platform {url} {timeout_seconds}")
+
+    async def unexpected_http(url: str, timeout_seconds: float):
+        raise AssertionError(f"http fallback should not run for browser-first platform {url} {timeout_seconds}")
+
+    async def fake_browser(url: str, timeout_seconds: float):
+        return crawl_fetch_runtime.PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body><h1>Rendered ADP</h1></body></html>",
+            status_code=200,
+            method="browser",
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", unexpected_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", unexpected_http)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", fake_browser)
+
+    result = await crawl_engine.fetch_page("https://workforcenow.adp.com/recruitment/recruitment.html?jobId=12345")
+
+    assert result.method == "browser"
+
+
 def test_browser_runtime_snapshot_exposes_capacity_shape() -> None:
     snapshot = crawl_engine.browser_runtime_snapshot()
 
@@ -278,6 +308,40 @@ def test_extract_job_detail_returns_requested_sections() -> None:
     assert "Python, SQL, Airflow." in record["skills"]
 
 
+def test_extract_job_detail_strips_tracking_params_from_output_urls() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "JobPosting",
+          "title": "Senior Data Engineer",
+          "hiringOrganization": {"name": "Data Corp"},
+          "url": "https://example.com/jobs/senior-data-engineer?utm_source=linkedin&fbclid=abc123&jobId=42"
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Senior Data Engineer</h1>
+      </body>
+    </html>
+    """
+
+    rows = crawl_engine.extract_records(
+        html,
+        "https://example.com/jobs/senior-data-engineer?utm_medium=email&sid=session-1&jobId=42",
+        "job_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["url"] == "https://example.com/jobs/senior-data-engineer?jobId=42"
+    assert record["apply_url"] == "https://example.com/jobs/senior-data-engineer?jobId=42"
+    assert record["source_url"] == "https://example.com/jobs/senior-data-engineer?jobId=42"
+
+
 def test_extract_greenhouse_job_detail_from_remix_state() -> None:
     html = """
     <html>
@@ -434,3 +498,30 @@ def test_extract_ecommerce_listing_returns_card_records() -> None:
     assert rows[0]["price"] == "19.99"
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
     assert rows[1]["title"] == "Widget Pro"
+
+
+def test_extract_ecommerce_listing_preserves_functional_query_params() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="/products/widget-prime?utm_source=newsletter&variant=blue&ref=campaign">
+            <img src="/images/widget-prime.jpg" alt="Widget Prime">
+            <h2 class="product-title">Widget Prime</h2>
+          </a>
+          <div class="price">$19.99</div>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = crawl_engine.extract_records(
+        html,
+        "https://example.com/collections/widgets?utm_campaign=spring&sort=featured",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://example.com/products/widget-prime?variant=blue"
+    assert rows[0]["source_url"] == "https://example.com/collections/widgets?sort=featured"

@@ -12,8 +12,14 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.core.config import settings
+from app.services.acquisition.browser_identity import build_playwright_context_options
+from app.services.acquisition.traversal import (
+    execute_listing_traversal,
+    should_run_traversal,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_utils import clean_text, hostname
+from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 
 logger = logging.getLogger(__name__)
@@ -88,7 +94,9 @@ class SharedBrowserRuntime:
         page = None
         self._active_contexts += 1
         try:
-            context = await self._browser.new_context()
+            context = await self._browser.new_context(
+                **build_playwright_context_options()
+            )
             page = await context.new_page()
             yield page
         finally:
@@ -330,19 +338,39 @@ async def _curl_fetch(url: str, timeout_seconds: float) -> PageFetchResult:
     return await asyncio.to_thread(_curl_fetch_sync, url, timeout_seconds)
 
 
-async def _browser_fetch(url: str, timeout_seconds: float) -> PageFetchResult:
+async def _browser_fetch(
+    url: str,
+    timeout_seconds: float,
+    *,
+    surface: str | None = None,
+    traversal_mode: str | None = None,
+    max_pages: int = 1,
+    max_scrolls: int = 1,
+) -> PageFetchResult:
     runtime = await _get_browser_runtime()
     async with runtime.page() as page:
         network_payloads: list[dict[str, object]] = []
         capture_tasks: list[asyncio.Task[None]] = []
+        malformed_payloads = 0
 
         async def _capture_response(response) -> None:
             content_type = str(response.headers.get("content-type", "") or "").lower()
             if "json" not in content_type and not response.url.lower().endswith(".json"):
                 return
+            if len(network_payloads) >= 25:
+                return
             try:
                 payload = await response.json()
             except Exception:
+                nonlocal malformed_payloads
+                malformed_payloads += 1
+                logger.debug(
+                    "Failed to decode intercepted JSON response from %s",
+                    response.url,
+                    exc_info=True,
+                )
+                return
+            if len(repr(payload)) > 500_000:
                 return
             network_payloads.append(
                 {
@@ -398,10 +426,31 @@ async def _browser_fetch(url: str, timeout_seconds: float) -> PageFetchResult:
             )
         except Exception:
             networkidle_timed_out = True
-        html = await page.content()
+        traversal_result = None
+        html_fragments: list[str]
+        if should_run_traversal(surface, traversal_mode):
+            traversal_result = await execute_listing_traversal(
+                page,
+                surface=str(surface or ""),
+                traversal_mode=str(traversal_mode or ""),
+                max_pages=max_pages,
+                max_scrolls=max_scrolls,
+            )
+            html_fragments = list(traversal_result.html_fragments or [])
+        else:
+            html_fragments = [await page.content()]
+        html = "\n".join(fragment for fragment in html_fragments if fragment)
         status_code = response.status if response is not None else 200
         if capture_tasks:
             await asyncio.gather(*capture_tasks, return_exceptions=True)
+        diagnostics = {
+            "navigation_strategy": navigation_strategy,
+            "networkidle_timed_out": networkidle_timed_out,
+            "network_payload_count": len(network_payloads),
+            "malformed_network_payloads": malformed_payloads,
+        }
+        if traversal_result is not None:
+            diagnostics.update(traversal_result.diagnostics())
         return PageFetchResult(
             url=url,
             final_url=page.url,
@@ -415,23 +464,65 @@ async def _browser_fetch(url: str, timeout_seconds: float) -> PageFetchResult:
             ),
             blocked=is_blocked_html(html, status_code),
             network_payloads=network_payloads[:25],
-            browser_diagnostics={
-                "navigation_strategy": navigation_strategy,
-                "networkidle_timed_out": networkidle_timed_out,
-                "network_payload_count": len(network_payloads),
-            },
+            browser_diagnostics=diagnostics,
         )
+
+
+async def _call_browser_fetch(
+    url: str,
+    timeout_seconds: float,
+    *,
+    surface: str | None = None,
+    traversal_mode: str | None = None,
+    max_pages: int = 1,
+    max_scrolls: int = 1,
+) -> PageFetchResult:
+    try:
+        return await _browser_fetch(
+            url,
+            timeout_seconds,
+            surface=surface,
+            traversal_mode=traversal_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+        )
+    except TypeError as exc:
+        message = str(exc)
+        if "unexpected keyword argument" not in message:
+            raise
+        return await _browser_fetch(url, timeout_seconds)
 
 
 async def fetch_page(
     url: str,
     *,
     timeout_seconds: float | None = None,
+    proxy_list: list[str] | None = None,
     prefer_browser: bool = False,
+    surface: str | None = None,
+    traversal_mode: str | None = None,
+    max_pages: int = 1,
+    max_scrolls: int = 1,
+    sleep_ms: int = 0,
 ) -> PageFetchResult:
+    del proxy_list, sleep_ms
     resolved_timeout = float(timeout_seconds or settings.http_timeout_seconds)
-    if prefer_browser or _host_prefers_browser(url):
-        browser_result = await _browser_fetch(url, resolved_timeout)
+    runtime_policy = resolve_platform_runtime_policy(url)
+    browser_first = (
+        prefer_browser
+        or _host_prefers_browser(url)
+        or bool(runtime_policy.get("requires_browser"))
+        or should_run_traversal(surface, traversal_mode)
+    )
+    if browser_first:
+        browser_result = await _call_browser_fetch(
+            url,
+            resolved_timeout,
+            surface=surface,
+            traversal_mode=traversal_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+        )
         _remember_browser_host(browser_result.final_url)
         return browser_result
 
@@ -440,7 +531,14 @@ async def fetch_page(
         try:
             result = await fetcher(url, resolved_timeout)
             if _should_escalate_to_browser(result):
-                browser_result = await _browser_fetch(url, resolved_timeout)
+                browser_result = await _call_browser_fetch(
+                    url,
+                    resolved_timeout,
+                    surface=surface,
+                    traversal_mode=traversal_mode,
+                    max_pages=max_pages,
+                    max_scrolls=max_scrolls,
+                )
                 _remember_browser_host(browser_result.final_url)
                 return browser_result
             return result

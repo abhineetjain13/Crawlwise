@@ -216,7 +216,7 @@ async def db_session():
 async def test_user(db_session: AsyncSession) -> User:
     """Create a test user with a deterministic password hash."""
     user = User(
-        email="test@example.com",
+        email=f"test-{next(_TMP_COUNTER)}@example.com",
         hashed_password=hash_password("password123"),
         role="admin",
     )

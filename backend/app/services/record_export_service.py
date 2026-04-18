@@ -719,26 +719,6 @@ def discoverist_schema() -> tuple[str, ...]:
         str(field_name) for field_name in DISCOVERIST_SCHEMA if str(field_name).strip()
     )
 
-
-# Backwards-compatible aliases for tests and thin API re-exports.
-_collect_export_rows = collect_export_rows
-_collect_export_metadata = collect_export_metadata
-_stream_export_json = stream_export_json
-_stream_export_csv = stream_export_csv
-_stream_export_tables_csv = stream_export_tables_csv
-_stream_table_rows_csv = stream_table_rows_csv
-_stream_export_discoverist = stream_export_discoverist
-_stream_export_markdown = stream_export_markdown
-_stream_export_artifacts_json = stream_export_artifacts_json
-_clean_export_data = clean_export_data
-_collect_table_export_rows = collect_table_export_rows
-_artifact_table_rows = artifact_table_rows
-_legacy_fallback_markdown_rows = legacy_fallback_markdown_rows
-_record_artifact_bundle = record_artifact_bundle
-_export_headers = export_headers
-_record_to_markdown = record_to_markdown
-_stringify_markdown_value = stringify_markdown_value
-_is_markdown_long_form = is_markdown_long_form
 _render_markdown_inline = render_markdown_inline
 _render_markdown_block = render_markdown_block
 _humanize_field_name = humanize_field_name

@@ -3,18 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import jmespath
-from bs4 import BeautifulSoup
 
-
-GREENHOUSE_DETAIL_SPEC = {
-    "title": "title",
-    "company": "company_name",
-    "location": "location.name",
-    "apply_url": "absolute_url",
-    "posted_date": "first_published",
-    "updated_at": "updated_at",
-    "description_html": "content",
-}
+from app.services.config.network_payload_specs import NETWORK_PAYLOAD_SPECS
+from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 
 
 def map_network_payloads_to_fields(
@@ -25,6 +16,9 @@ def map_network_payloads_to_fields(
 ) -> list[dict[str, Any]]:
     del page_url
     normalized_surface = str(surface or "").strip().lower()
+    surface_specs = NETWORK_PAYLOAD_SPECS.get(normalized_surface, ())
+    if not surface_specs:
+        return []
     rows: list[dict[str, Any]] = []
     for payload in payloads or []:
         if not isinstance(payload, dict):
@@ -32,71 +26,78 @@ def map_network_payloads_to_fields(
         body = payload.get("body")
         if not isinstance(body, (dict, list)):
             continue
-        if normalized_surface == "job_detail":
-            mapped = _map_job_detail_payload(body)
-            if mapped:
-                rows.append(mapped)
+        mapped = _map_payload_body(body, surface_specs=surface_specs)
+        if mapped:
+            rows.append(mapped)
     return rows
 
 
-def _map_job_detail_payload(body: object) -> dict[str, Any]:
-    if isinstance(body, dict) and body.get("content") and body.get("absolute_url"):
-        mapped = {
-            field: jmespath.search(path, body)
-            for field, path in GREENHOUSE_DETAIL_SPEC.items()
-        }
-        result = {
-            key: value
-            for key, value in mapped.items()
-            if value not in (None, "", [], {})
-        }
-        description_html = str(result.pop("description_html", "") or "").strip()
-        if description_html:
-            result.update(_extract_job_sections(description_html))
-            if "description" not in result:
-                result["description"] = _html_to_text(description_html)
-        if result.get("apply_url") and not result.get("url"):
-            result["url"] = result["apply_url"]
-        return result
+def _map_payload_body(
+    body: object,
+    *,
+    surface_specs: tuple[dict[str, object], ...],
+) -> dict[str, Any]:
+    for spec in surface_specs:
+        mapped = _map_body_with_spec(body, spec=spec)
+        if mapped:
+            return mapped
     return {}
 
 
-def _extract_job_sections(html: str) -> dict[str, str]:
-    soup = BeautifulSoup(str(html or ""), "html.parser")
-    sections: dict[str, str] = {}
-    for heading in soup.find_all(["h2", "h3", "strong"]):
-        heading_text = " ".join(heading.get_text(" ", strip=True).split()).strip()
-        if not heading_text:
+def _map_body_with_spec(
+    body: object,
+    *,
+    spec: dict[str, object],
+) -> dict[str, Any]:
+    required_path_groups = spec.get("required_path_groups", ())
+    if not _matches_required_path_groups(body, required_path_groups):
+        return {}
+    field_paths = spec.get("field_paths", {})
+    if not isinstance(field_paths, dict):
+        return {}
+    mapped = {
+        field_name: _first_non_empty_path(body, paths)
+        for field_name, paths in field_paths.items()
+        if isinstance(field_name, str)
+    }
+    result = {
+        key: value
+        for key, value in mapped.items()
+        if value not in (None, "", [], {})
+    }
+    description_html = str(result.pop("description_html", "") or "").strip()
+    if description_html:
+        result.update(extract_job_sections(description_html))
+        if "description" not in result:
+            result["description"] = html_to_text(description_html)
+    if result.get("apply_url") and not result.get("url"):
+        result["url"] = result["apply_url"]
+    return result
+
+
+def _matches_required_path_groups(
+    body: object,
+    required_path_groups: object,
+) -> bool:
+    if not isinstance(required_path_groups, tuple):
+        return True
+    for group in required_path_groups:
+        if not isinstance(group, tuple):
+            return False
+        if _first_non_empty_path(body, group) in (None, "", [], {}):
+            return False
+    return True
+
+
+def _first_non_empty_path(body: object, paths: object) -> Any:
+    if isinstance(paths, str):
+        paths = (paths,)
+    if not isinstance(paths, tuple):
+        return None
+    for path in paths:
+        if not isinstance(path, str) or not path.strip():
             continue
-        values: list[str] = []
-        for sibling in heading.next_siblings:
-            sibling_name = getattr(sibling, "name", "")
-            if sibling_name in {"h1", "h2", "h3"}:
-                break
-            text = (
-                sibling.get_text(" ", strip=True)
-                if hasattr(sibling, "get_text")
-                else str(sibling)
-            )
-            cleaned = " ".join(str(text or "").split()).strip()
-            if cleaned:
-                values.append(cleaned)
-        if values:
-            sections[heading_text.lower()] = " ".join(values)
-
-    mapped: dict[str, str] = {}
-    for label, value in sections.items():
-        if "what you" in label or "responsibil" in label:
-            mapped["responsibilities"] = value
-        elif "should have" in label or "qualif" in label or "who you are" in label:
-            mapped["qualifications"] = value
-        elif "benefit" in label or "perks" in label or "what we offer" in label:
-            mapped["benefits"] = value
-        elif "skill" in label or "bring" in label:
-            mapped["skills"] = value
-    return mapped
-
-
-def _html_to_text(value: str) -> str:
-    soup = BeautifulSoup(str(value or ""), "html.parser")
-    return " ".join(soup.get_text(" ", strip=True).split()).strip()
+        value = jmespath.search(path, body)
+        if value not in (None, "", [], {}):
+            return value
+    return None

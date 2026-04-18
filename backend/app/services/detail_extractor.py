@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from bs4 import BeautifulSoup
+from selectolax.lexbor import LexborHTMLParser
 
 from app.services.confidence import score_record_confidence
 from app.services.config.extraction_rules import NOISE_CONTAINER_REMOVAL_SELECTOR
@@ -20,7 +21,6 @@ from app.services.field_value_utils import (
     finalize_candidate_value,
     finalize_record,
     record_score,
-    safe_select,
     surface_alias_lookup,
     surface_fields,
     text_or_none,
@@ -30,13 +30,33 @@ from app.services.network_payload_mapper import map_network_payloads_to_fields
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.structured_sources import (
     harvest_js_state_objects,
+    parse_microdata,
+    parse_opengraph,
     parse_embedded_json,
     parse_json_ld,
 )
 from app.services.field_value_utils import collect_structured_candidates, coerce_field_value
 
 
+def _prepare_detail_dom(html: str) -> tuple[LexborHTMLParser, str]:
+    parser = LexborHTMLParser(html)
+import logging
+
+logger = logging.getLogger(__name__)
+
+def _prepare_detail_dom(html: str) -> tuple[LexborHTMLParser, str]:
+    parser = LexborHTMLParser(html)
+    try:
+        for node in parser.css(NOISE_CONTAINER_REMOVAL_SELECTOR):
+            node.decompose()
+    except Exception as exc:
+        logger.debug("noise_removal_failed selector=%s error=%s", NOISE_CONTAINER_REMOVAL_SELECTOR, exc)
+    return parser, parser.html
+    return parser, parser.html
+
+
 def _apply_dom_fallbacks(
+    dom_parser: LexborHTMLParser,
     soup: BeautifulSoup,
     page_url: str,
     surface: str,
@@ -46,10 +66,11 @@ def _apply_dom_fallbacks(
     selector_rules: list[dict[str, object]] | None = None,
 ) -> None:
     fields = surface_fields(surface, requested_fields)
-    h1 = soup.find("h1")
+    h1 = dom_parser.css_first("h1")
+    page_title = dom_parser.css_first("title")
     title = text_or_none(
-        (h1.get_text(" ", strip=True) if h1 else "")
-        or (soup.title.get_text(" ", strip=True) if soup.title else "")
+        (h1.text(separator=" ", strip=True) if h1 else "")
+        or (page_title.text(separator=" ", strip=True) if page_title else "")
     )
     if title:
         _add_sourced_candidate(
@@ -113,7 +134,8 @@ def _apply_dom_fallbacks(
                 coerce_field_value(normalized, value, page_url),
                 source="dom_sections",
             )
-    body_text = clean_text(soup.get_text(" ", strip=True))
+    body_node = dom_parser.body
+    body_text = clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
     if "price" in fields and not candidates.get("price"):
         price_match = PRICE_RE.search(body_text)
         if price_match:
@@ -242,10 +264,10 @@ def build_detail_record(
     adapter_records: list[dict[str, Any]] | None = None,
     network_payloads: list[dict[str, object]] | None = None,
     selector_rules: list[dict[str, object]] | None = None,
+    extraction_runtime_snapshot: dict[str, object] | None = None,
 ) -> dict[str, Any]:
-    soup = BeautifulSoup(html, "html.parser")
-    for node in safe_select(soup, NOISE_CONTAINER_REMOVAL_SELECTOR):
-        node.decompose()
+    dom_parser, cleaned_html = _prepare_detail_dom(html)
+    soup = BeautifulSoup(cleaned_html, "html.parser")
     alias_lookup = surface_alias_lookup(surface, requested_fields)
     candidates: dict[str, list[object]] = {}
     field_sources: dict[str, list[str]] = {}
@@ -300,6 +322,24 @@ def build_detail_record(
             field_sources=field_sources,
             source="json_ld",
         )
+    for payload in parse_microdata(soup, html, page_url):
+        _collect_structured_payload_candidates(
+            payload,
+            alias_lookup=alias_lookup,
+            page_url=page_url,
+            candidates=candidates,
+            field_sources=field_sources,
+            source="microdata",
+        )
+    for payload in parse_opengraph(soup, html, page_url):
+        _collect_structured_payload_candidates(
+            payload,
+            alias_lookup=alias_lookup,
+            page_url=page_url,
+            candidates=candidates,
+            field_sources=field_sources,
+            source="opengraph",
+        )
     for payload in parse_embedded_json(soup, html):
         _collect_structured_payload_candidates(
             payload,
@@ -310,6 +350,7 @@ def build_detail_record(
             source="embedded_json",
         )
     _apply_dom_fallbacks(
+        dom_parser,
         soup,
         page_url,
         surface,
@@ -329,6 +370,8 @@ def build_detail_record(
                     "network_payload",
                     "js_state",
                     "json_ld",
+                    "microdata",
+                    "opengraph",
                     "embedded_json",
                     "dom_h1",
                     "dom_selector",
@@ -369,12 +412,26 @@ def build_detail_record(
         requested_fields=requested_fields,
     )
     record["_confidence"] = confidence
+    selector_self_heal = (
+        extraction_runtime_snapshot.get("selector_self_heal")
+        if isinstance(extraction_runtime_snapshot, dict)
+        else None
+    )
     record["_self_heal"] = {
-        "enabled": bool(crawler_runtime_settings.selector_self_heal_enabled),
+        "enabled": bool(
+            selector_self_heal.get("enabled")
+            if isinstance(selector_self_heal, dict)
+            else crawler_runtime_settings.selector_self_heal_enabled
+        ),
         "triggered": False,
-        "threshold": float(crawler_runtime_settings.selector_self_heal_min_confidence),
+        "threshold": float(
+            selector_self_heal.get("min_confidence")
+            if isinstance(selector_self_heal, dict)
+            and selector_self_heal.get("min_confidence") is not None
+            else crawler_runtime_settings.selector_self_heal_min_confidence
+        ),
     }
-    return finalize_record(record)
+    return finalize_record(record, surface=surface)
 
 
 def extract_detail_records(
@@ -386,6 +443,7 @@ def extract_detail_records(
     adapter_records: list[dict[str, Any]] | None = None,
     network_payloads: list[dict[str, object]] | None = None,
     selector_rules: list[dict[str, object]] | None = None,
+    extraction_runtime_snapshot: dict[str, object] | None = None,
 ) -> list[dict[str, Any]]:
     record = build_detail_record(
         html,
@@ -395,6 +453,7 @@ def extract_detail_records(
         adapter_records=adapter_records,
         network_payloads=network_payloads,
         selector_rules=selector_rules,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
     )
     if record_score(record) <= 0:
         return []

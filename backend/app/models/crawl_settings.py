@@ -123,6 +123,10 @@ class CrawlRunSettings:
     def has_llm_config_snapshot(self) -> bool:
         return bool(self.llm_config_snapshot())
 
+    def extraction_runtime_snapshot(self) -> dict[str, Any]:
+        snapshot = self.data.get("extraction_runtime_snapshot")
+        return dict(snapshot) if isinstance(snapshot, Mapping) else {}
+
     def extraction_contract(self) -> list[dict[str, Any]]:
         rows = self.data.get("extraction_contract")
         if not isinstance(rows, Sequence) or isinstance(rows, str):

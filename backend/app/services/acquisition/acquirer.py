@@ -4,6 +4,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.services.crawl_engine import fetch_page, is_blocked_html
+from app.services.platform_policy import detect_platform_family, resolve_platform_runtime_policy
+from app.services.platform_url_normalizers import normalize_adp_detail_url
 
 
 @dataclass(slots=True)
@@ -53,8 +55,23 @@ class ProxyPoolExhausted(RuntimeError):
 
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
-    prefer_browser = bool(request.acquisition_profile.get("prefer_browser"))
-    result = await fetch_page(request.url, prefer_browser=prefer_browser)
+    effective_url = str(request.url or "")
+    if detect_platform_family(effective_url) == "adp":
+        effective_url = normalize_adp_detail_url(effective_url)
+    runtime_policy = resolve_platform_runtime_policy(effective_url)
+    prefer_browser = bool(request.acquisition_profile.get("prefer_browser")) or bool(
+        runtime_policy.get("requires_browser")
+    )
+    result = await fetch_page(
+        effective_url,
+        proxy_list=request.proxy_list,
+        prefer_browser=prefer_browser,
+        surface=request.surface,
+        traversal_mode=request.traversal_mode,
+        max_pages=request.max_pages,
+        max_scrolls=request.max_scrolls,
+        sleep_ms=request.sleep_ms,
+    )
     return AcquisitionResult(
         request=request,
         final_url=result.final_url,

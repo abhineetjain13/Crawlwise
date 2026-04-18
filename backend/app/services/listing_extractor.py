@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
+from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
     EXTRACTION_RULES,
@@ -36,9 +37,19 @@ from app.services.field_value_utils import (
     same_host,
     surface_alias_lookup,
     surface_fields,
-    text_or_none,
 )
 from app.services.structured_sources import parse_embedded_json, parse_json_ld
+from app.services.pipeline.pipeline_config import LISTING_FALLBACK_FRAGMENT_LIMIT
+
+
+def _prepare_listing_dom(html: str) -> tuple[LexborHTMLParser, str]:
+    parser = LexborHTMLParser(html)
+    try:
+        for node in parser.css(NOISE_CONTAINER_REMOVAL_SELECTOR):
+            node.decompose()
+    except Exception:
+        pass
+    return parser, parser.html
 
 
 def _structured_listing_record(
@@ -59,7 +70,7 @@ def _structured_listing_record(
             record[field_name] = finalized
     if not record.get("url") or not record.get("title"):
         return {}
-    return finalize_record(record)
+    return finalize_record(record, surface=surface)
 
 
 def _extract_structured_listing(
@@ -110,22 +121,37 @@ def _listing_title_is_noise(title: str) -> bool:
     return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
 
 
-def _listing_card_nodes(soup: BeautifulSoup, *, is_job: bool) -> list[Tag]:
+def _listing_card_html_fragments(
+    dom_parser: LexborHTMLParser, *, is_job: bool
+) -> list[str]:
     selector_group = "jobs" if is_job else "ecommerce"
     selectors = list(CARD_SELECTORS.get(selector_group) or [])
-    nodes: list[Tag] = []
-    seen: set[int] = set()
+    fragments: list[str] = []
+    seen: set[str] = set()
     for selector in selectors:
-        for node in safe_select(soup, selector):
-            marker = id(node)
-            if marker in seen:
+        try:
+            matches = dom_parser.css(selector)
+        except Exception:
+            matches = []
+        for node in matches:
+            fragment = str(node.html or "").strip()
+            if not fragment or fragment in seen:
                 continue
-            seen.add(marker)
-            nodes.append(node)
-    if nodes:
-        return nodes
-    fallbacks = soup.find_all(["article", "li", "div"], limit=200)
-    return [node for node in fallbacks if node.find("a", href=True)]
+            seen.add(fragment)
+            fragments.append(fragment)
+    if fragments:
+        return fragments
+    for node in dom_parser.css("article, li, div"):
+        if node.css_first("a[href]") is None:
+            continue
+        fragment = str(node.html or "").strip()
+        if not fragment or fragment in seen:
+            continue
+        seen.add(fragment)
+        fragments.append(fragment)
+        if len(fragments) >= LISTING_FALLBACK_FRAGMENT_LIMIT:
+            break
+    return fragments
 
 
 def _card_title_node(card: Tag) -> Tag | None:
@@ -223,7 +249,7 @@ def _listing_record_from_card(
         finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
         if finalized not in (None, "", [], {}):
             record[field_name] = finalized
-    cleaned = finalize_record(record)
+    cleaned = finalize_record(record, surface=surface)
     if not cleaned.get("url") or not cleaned.get("title"):
         return None
     return cleaned
@@ -237,11 +263,10 @@ def extract_listing_records(
     max_records: int,
     selector_rules: list[dict[str, object]] | None = None,
 ) -> list[dict[str, Any]]:
-    soup = BeautifulSoup(html, "html.parser")
-    for node in safe_select(soup, NOISE_CONTAINER_REMOVAL_SELECTOR):
-        node.decompose()
+    dom_parser, cleaned_html = _prepare_listing_dom(html)
+    soup = BeautifulSoup(cleaned_html, "html.parser")
     structured_records = _extract_structured_listing(
-        [*parse_json_ld(soup), *parse_embedded_json(soup, html)],
+        [*parse_json_ld(soup), *parse_embedded_json(soup, cleaned_html)],
         page_url,
         surface,
         max_records=max_records,
@@ -250,7 +275,13 @@ def extract_listing_records(
         return structured_records[:max_records]
     records: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
-    for card in _listing_card_nodes(soup, is_job=surface.startswith("job_")):
+    for fragment in _listing_card_html_fragments(
+        dom_parser, is_job=surface.startswith("job_")
+    ):
+        card_soup = BeautifulSoup(fragment, "html.parser")
+        card = card_soup.find(["article", "li", "div"]) or card_soup.find(True)
+        if not isinstance(card, Tag):
+            continue
         record = _listing_record_from_card(
             card,
             page_url,

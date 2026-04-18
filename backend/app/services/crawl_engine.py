@@ -22,6 +22,7 @@ def extract_records(
     adapter_records: list[dict] | None = None,
     network_payloads: list[dict[str, object]] | None = None,
     selector_rules: list[dict[str, object]] | None = None,
+    extraction_runtime_snapshot: dict[str, object] | None = None,
 ) -> list[dict]:
     if "listing" in surface:
         if adapter_records:
@@ -52,4 +53,5 @@ def extract_records(
         adapter_records=adapter_records,
         network_payloads=network_payloads,
         selector_rules=selector_rules,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
     )[:max_records]

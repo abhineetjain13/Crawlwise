@@ -102,15 +102,6 @@
     "__type__": "dict",
     "items": [
       {
-        "key": "_jobs_selector_notes",
-        "value": {
-          "__type__": "list",
-          "items": [
-            "USAJobs search result cards render as direct children of #search-results with classes border border-gray-lighter bg-white p-4; see backend/tests/services/extract/test_listing_extractor_urls.py."
-          ]
-        }
-      },
-      {
         "key": "ecommerce",
         "value": {
           "__type__": "list",

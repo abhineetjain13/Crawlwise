@@ -4,8 +4,25 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from selectolax.lexbor import LexborHTMLParser
+
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from bs4 import BeautifulSoup
+from app.services.platform_url_normalizers import normalize_adp_detail_url
+
+
+def _text(node: object, *, separator: str = "") -> str:
+    if node is None:
+        return ""
+    return node.text(separator=separator, strip=True)
+
+
+def _attr(node: object, name: str) -> str | None:
+    if node is None:
+        return None
+    value = node.attributes.get(name)
+    if value is None:
+        return None
+    return str(value).strip() or None
 
 
 class ADPAdapter(BaseAdapter):
@@ -27,13 +44,13 @@ class ADPAdapter(BaseAdapter):
         )
 
     def _extract_listing(self, url: str, html: str) -> list[dict]:
-        soup = BeautifulSoup(html, "html.parser")
+        parser = LexborHTMLParser(html)
         records: list[dict] = []
         seen_keys: set[str] = set()
-        for card in soup.select(".current-openings-item"):
-            title_node = card.select_one("[id^='lblTitle_'], sdf-link, a")
+        for card in parser.css(".current-openings-item"):
+            title_node = card.css_first("[id^='lblTitle_'], sdf-link, a")
             title = self._clean_text(
-                title_node.get_text(" ", strip=True) if title_node is not None else ""
+                _text(title_node, separator=" ")
             )
             if len(title) < 3:
                 continue
@@ -53,21 +70,21 @@ class ADPAdapter(BaseAdapter):
                 record["url"] = url
 
             location_values: list[str] = []
-            for node in card.select(
+            for node in card.css(
                 ".current-opening-location-item span, .current-opening-location-item"
             ):
-                value = self._clean_text(node.get_text(" ", strip=True))
+                value = self._clean_text(_text(node, separator=" "))
                 if value and value not in location_values:
                     location_values.append(value)
             location = " | ".join(location_values)
-            post_elem = card.select_one(".current-opening-post-date")
+            post_elem = card.css_first(".current-opening-post-date")
             posted = self._clean_text(
-                post_elem.get_text(" ", strip=True) if post_elem is not None else ""
+                _text(post_elem, separator=" ")
             )
             more_locations = self._clean_text(
                 " ".join(
-                    node.get_text(" ", strip=True)
-                    for node in card.select(
+                    _text(node, separator=" ")
+                    for node in card.css(
                         "[id^='job_item_location_'], .mdf-overlay-popover sdf-button"
                     )
                 )
@@ -87,15 +104,15 @@ class ADPAdapter(BaseAdapter):
         return records
 
     def _extract_detail(self, url: str, html: str) -> dict | None:
-        soup = BeautifulSoup(html, "html.parser")
-        title_node = soup.select_one("h1, .job-details-title, .job-description-title")
+        parser = LexborHTMLParser(html)
+        title_node = parser.css_first("h1, .job-details-title, .job-description-title")
         title = self._clean_text(
-            title_node.get_text(" ", strip=True) if title_node is not None else ""
+            _text(title_node, separator=" ")
         )
         if len(title) < 3:
             return None
 
-        body_text = self._clean_text(soup.get_text(" ", strip=True))
+        body_text = self._clean_text(self._text(parser.body))
         record: dict[str, str] = {
             "title": title,
             "url": url,
@@ -104,7 +121,7 @@ class ADPAdapter(BaseAdapter):
         if job_id:
             record["job_id"] = job_id
 
-        location = self._extract_detail_location(soup)
+        location = self._extract_detail_location(parser)
         if location:
             record["location"] = location
 
@@ -137,12 +154,12 @@ class ADPAdapter(BaseAdapter):
             record["apply_url"] = apply_url
         return record
 
-    def _extract_detail_location(self, soup: BeautifulSoup) -> str:
+    def _extract_detail_location(self, parser: LexborHTMLParser) -> str:
         details = []
-        for node in soup.select(
+        for node in parser.css(
             ".current-opening-location-item span, .current-opening-location-item"
         ):
-            value = self._clean_text(node.get_text(" ", strip=True))
+            value = self._clean_text(_text(node, separator=" "))
             if value and value not in details:
                 details.append(value)
         return " | ".join(details[:4])
@@ -173,12 +190,12 @@ class ADPAdapter(BaseAdapter):
         # handoff stays valid for browser navigation and follow-up detail fetches.
         return urlunparse(parsed._replace(query=next_query, fragment=job_id))
 
-    def _extract_job_dom_id(self, card: BeautifulSoup) -> str | None:
+    def _extract_job_dom_id(self, card: object) -> str | None:
         candidates = [
-            str(card.get("id") or "").strip(),
+            _attr(card, "id") or "",
         ]
-        for node in card.select("[id]"):
-            candidates.append(str(node.get("id") or "").strip())
+        for node in card.css("[id]"):
+            candidates.append(_attr(node, "id") or "")
         for candidate in candidates:
             if not candidate:
                 continue
@@ -205,3 +222,6 @@ class ADPAdapter(BaseAdapter):
 
     def _clean_text(self, value: str) -> str:
         return " ".join(str(value or "").split()).strip()
+
+    def _text(self, node: object, *, separator: str = " ") -> str:
+        return _text(node, separator=separator)

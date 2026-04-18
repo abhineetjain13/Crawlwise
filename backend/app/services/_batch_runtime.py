@@ -14,7 +14,7 @@ from app.services.crawl_state import (
     set_control_request,
     update_run_status,
 )
-from app.services.crawl_utils import normalize_target_url, parse_csv_urls
+from app.services.crawl_utils import normalize_target_url, parse_csv_urls_async
 from app.services.domain_utils import normalize_domain
 from app.services.pipeline.core import _mark_run_failed, _process_single_url
 from app.services.pipeline.runtime_helpers import STAGE_FETCH, log_event, set_stage
@@ -40,12 +40,12 @@ def _ensure_url_processing_result(
     raise TypeError(f"Unexpected URL result type: {type(url_result)!r}")
 
 
-def _resolve_run_urls(run: CrawlRun, settings_view) -> list[str]:
+async def _resolve_run_urls(run: CrawlRun, settings_view) -> list[str]:
     urls = settings_view.urls()
     if run.run_type == "batch" and urls:
         url_list = urls
     elif run.run_type == "csv" and settings_view.get("csv_content"):
-        url_list = parse_csv_urls(settings_view.get("csv_content"))
+        url_list = await parse_csv_urls_async(settings_view.get("csv_content"))
     elif run.url:
         url_list = [run.url]
     else:
@@ -72,7 +72,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             update_run_status(run, CrawlStatus.RUNNING)
 
         settings_view = run.settings_view
-        url_list = _resolve_run_urls(run, settings_view)
+        url_list = await _resolve_run_urls(run, settings_view)
         total_urls = len(url_list)
         if total_urls == 0:
             raise ValueError("No URL provided")

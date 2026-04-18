@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
-from bs4 import BeautifulSoup
 from glom import Coalesce, glom
+
+from app.services.extraction_html_helpers import extract_job_sections, html_to_text
+from app.services.extract.shared_variant_logic import (
+    normalized_variant_axis_key,
+    split_variant_axes,
+)
+from app.services.field_value_utils import extract_urls, text_or_none
+from app.services.normalizers import normalize_decimal_price
 
 
 NEXT_DATA_ECOMMERCE_SPEC = {
@@ -62,14 +70,13 @@ def map_js_state_to_fields(
     surface: str,
     page_url: str,
 ) -> dict[str, Any]:
-    del page_url
     normalized_surface = str(surface or "").strip().lower()
     if not js_state_objects:
         return {}
     if normalized_surface == "job_detail":
         return _map_job_detail_state(js_state_objects)
     if normalized_surface == "ecommerce_detail":
-        return _map_ecommerce_detail_state(js_state_objects)
+        return _map_ecommerce_detail_state(js_state_objects, page_url=page_url)
     return {}
 
 
@@ -100,28 +107,27 @@ def _map_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
     )
     description_html = str(mapped.pop("description_html", "") or "").strip()
     if description_html:
-        mapped.update(_extract_job_sections(description_html))
+        mapped.update(extract_job_sections(description_html))
         if "description" not in mapped:
-            mapped["description"] = _html_to_text(description_html)
+            mapped["description"] = html_to_text(description_html)
     if mapped.get("apply_url") and not mapped.get("url"):
         mapped["url"] = mapped["apply_url"]
     return mapped
 
 
-def _map_ecommerce_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
+def _map_ecommerce_detail_state(
+    js_state_objects: dict[str, Any],
+    *,
+    page_url: str,
+) -> dict[str, Any]:
     next_data = js_state_objects.get("__NEXT_DATA__")
     if isinstance(next_data, dict):
         mapped = _compact_dict(glom(next_data, NEXT_DATA_ECOMMERCE_SPEC, default={}))
         product = _find_product_payload(next_data)
         if isinstance(product, dict):
-            mapped.update(
-                _compact_dict(
-                    {
-                        "product_id": product.get("id"),
-                        "handle": mapped.get("handle") or product.get("handle"),
-                        "category": product.get("product_type") or product.get("type"),
-                    }
-                )
+            mapped = _merge_missing(
+                mapped,
+                _map_product_payload(product, page_url=page_url),
             )
         if mapped:
             return mapped
@@ -131,17 +137,7 @@ def _map_ecommerce_detail_state(js_state_objects: dict[str, Any]) -> dict[str, A
         product = _find_product_payload(payload)
         if not isinstance(product, dict):
             continue
-        return _compact_dict(
-            {
-                "title": product.get("title") or product.get("name"),
-                "brand": _name_or_value(product.get("brand") or product.get("vendor")),
-                "vendor": _name_or_value(product.get("vendor")),
-                "handle": product.get("handle"),
-                "description": product.get("description") or product.get("body_html"),
-                "product_id": product.get("id"),
-                "category": product.get("product_type") or product.get("type"),
-            }
-        )
+        return _map_product_payload(product, page_url=page_url)
     return {}
 
 
@@ -149,9 +145,20 @@ def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict
     if depth > limit:
         return None
     if isinstance(value, dict):
-        if any(key in value for key in ("variants", "product_type", "vendor", "handle")) and any(
-            key in value for key in ("title", "name")
-        ):
+        if any(
+            key in value
+            for key in (
+                "variants",
+                "product_type",
+                "vendor",
+                "handle",
+                "price",
+                "sku",
+                "images",
+                "image",
+                "availability",
+            )
+        ) and any(key in value for key in ("title", "name")):
             return value
         for item in value.values():
             found = _find_product_payload(item, depth=depth + 1, limit=limit)
@@ -165,45 +172,445 @@ def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict
     return None
 
 
-def _extract_job_sections(html: str) -> dict[str, str]:
-    soup = BeautifulSoup(str(html or ""), "html.parser")
-    sections: dict[str, str] = {}
-    for heading in soup.find_all(["h2", "h3", "strong"]):
-        heading_text = " ".join(heading.get_text(" ", strip=True).split()).strip()
-        if not heading_text:
-            continue
-        collected: list[str] = []
-        for sibling in heading.next_siblings:
-            sibling_name = getattr(sibling, "name", "")
-            if sibling_name in {"h1", "h2", "h3"}:
-                break
-            text = (
-                sibling.get_text(" ", strip=True)
-                if hasattr(sibling, "get_text")
-                else str(sibling)
+def _map_product_payload(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
+    images = _extract_product_images(product, page_url=page_url)
+    shopify_like = _looks_like_shopify_product(product)
+    option_names = _option_names(product.get("options"))
+    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
+    variants = _dedupe_variants(
+        [
+            normalized
+            for variant in raw_variants
+            if isinstance(variant, dict)
+            if (
+                normalized := _normalize_variant(
+                    variant,
+                    option_names=option_names,
+                    page_url=page_url,
+                    interpret_integral_as_cents=shopify_like,
+                )
             )
-            cleaned = " ".join(str(text or "").split()).strip()
-            if cleaned:
-                collected.append(cleaned)
-        if collected:
-            sections[heading_text.lower()] = " ".join(collected)
+        ]
+    )
+    selected_variant = _select_variant(variants, page_url=page_url)
+    axes = _variant_axes(variants)
+    selectable_axes, _ = split_variant_axes(
+        axes,
+        always_selectable_axes=frozenset({"size"}),
+    )
+    price = _variant_attribute(selected_variant, "price") or _normalize_price(
+        _first_value(
+            product,
+            "price",
+            "amount",
+            "minPrice",
+            "maxPrice",
+            "formattedPrice",
+        ),
+        interpret_integral_as_cents=shopify_like,
+    )
+    original_price = _variant_attribute(
+        selected_variant,
+        "original_price",
+    ) or _normalize_price(
+        _first_value(
+            product,
+            "compare_at_price",
+            "compareAtPrice",
+            "original_price",
+            "originalPrice",
+            "listPrice",
+        ),
+        interpret_integral_as_cents=shopify_like,
+    )
+    currency = (
+        _variant_attribute(selected_variant, "currency")
+        or text_or_none(product.get("currency"))
+        or text_or_none(product.get("currencyCode"))
+        or text_or_none(product.get("priceCurrency"))
+    )
+    availability = (
+        _availability_value(selected_variant)
+        or _availability_value(product)
+    )
+    stock_quantity = _stock_quantity(selected_variant)
+    if stock_quantity is None:
+        stock_quantity = _stock_quantity(product)
+    color = _variant_attribute(selected_variant, "color")
+    size = _variant_attribute(selected_variant, "size")
+    size_values = selectable_axes.get("size") if isinstance(selectable_axes, dict) else None
+    ordered_axes = _ordered_axes(option_names, selectable_axes)
 
-    mapped: dict[str, str] = {}
-    for label, value in sections.items():
-        if "what you" in label or "responsibil" in label:
-            mapped["responsibilities"] = value
-        elif "should have" in label or "qualif" in label or "who you are" in label:
-            mapped["qualifications"] = value
-        elif "benefit" in label or "perks" in label or "what we offer" in label:
-            mapped["benefits"] = value
-        elif "skill" in label or "bring" in label:
-            mapped["skills"] = value
-    return mapped
+    record = _compact_dict(
+        {
+            "title": product.get("title") or product.get("name"),
+            "brand": _name_or_value(product.get("brand") or product.get("vendor")),
+            "vendor": _name_or_value(product.get("vendor")),
+            "handle": product.get("handle"),
+            "description": product.get("description") or product.get("body_html"),
+            "product_id": product.get("id"),
+            "category": product.get("category") or product.get("product_type") or product.get("type"),
+            "product_type": product.get("product_type") or product.get("type"),
+            "price": price,
+            "original_price": original_price,
+            "currency": currency,
+            "availability": availability,
+            "stock_quantity": stock_quantity,
+            "sku": _variant_attribute(selected_variant, "sku") or product.get("sku"),
+            "barcode": _variant_attribute(selected_variant, "barcode") or product.get("barcode"),
+            "color": color,
+            "size": size,
+            "image_url": (
+                _variant_attribute(selected_variant, "image_url")
+                or (images[0] if images else None)
+            ),
+            "additional_images": images[1:] if len(images) > 1 else None,
+            "image_count": len(images) or None,
+            "variants": variants or None,
+            "selected_variant": selected_variant,
+            "variant_axes": selectable_axes or None,
+            "variant_count": len(variants) or None,
+            "available_sizes": size_values[:20] if size_values else None,
+            "tags": product.get("tags"),
+            "created_at": product.get("created_at"),
+            "updated_at": product.get("updated_at"),
+            "published_at": product.get("published_at"),
+        }
+    )
+    if ordered_axes:
+        record["option1_name"] = ordered_axes[0][0]
+        record["option1_values"] = ordered_axes[0][1]
+    if len(ordered_axes) > 1:
+        record["option2_name"] = ordered_axes[1][0]
+        record["option2_values"] = ordered_axes[1][1]
+    return record
 
 
-def _html_to_text(value: str) -> str:
-    soup = BeautifulSoup(str(value or ""), "html.parser")
-    return " ".join(soup.get_text(" ", strip=True).split()).strip()
+def _extract_product_images(product: dict[str, Any], *, page_url: str) -> list[str]:
+    values = extract_urls(product.get("images"), page_url)
+    values.extend(extract_urls(product.get("image"), page_url))
+    values.extend(extract_urls(product.get("featured_image"), page_url))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        lowered = value.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(value)
+    return deduped
+
+
+def _looks_like_shopify_product(product: dict[str, Any]) -> bool:
+    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
+    return any(
+        key in product
+        for key in (
+            "handle",
+            "compare_at_price",
+            "product_type",
+            "body_html",
+        )
+    ) or any(
+        isinstance(variant, dict)
+        and any(
+            field in variant
+            for field in ("option1", "compare_at_price", "inventory_quantity")
+        )
+        for variant in raw_variants
+    )
+
+
+def _option_names(raw_options: object) -> list[str]:
+    names: list[str] = []
+    if isinstance(raw_options, list):
+        for option in raw_options:
+            if isinstance(option, str):
+                names.append(option)
+            elif isinstance(option, dict):
+                label = option.get("name") or option.get("title")
+                if label:
+                    names.append(str(label))
+    return names
+
+
+def _normalize_variant(
+    variant: dict[str, Any],
+    *,
+    option_names: list[str],
+    page_url: str,
+    interpret_integral_as_cents: bool,
+) -> dict[str, Any] | None:
+    row: dict[str, Any] = {}
+    variant_id = text_or_none(variant.get("id"))
+    if variant_id:
+        row["variant_id"] = variant_id
+        row["url"] = _variant_url(page_url, variant_id)
+    for field_name in ("sku", "barcode"):
+        value = text_or_none(variant.get(field_name))
+        if value:
+            row[field_name] = value
+    price = _normalize_price(
+        _first_value(variant, "price", "amount", "formattedPrice"),
+        interpret_integral_as_cents=interpret_integral_as_cents,
+    )
+    if price is not None:
+        row["price"] = price
+    original_price = _normalize_price(
+        _first_value(
+            variant,
+            "compare_at_price",
+            "compareAtPrice",
+            "original_price",
+            "originalPrice",
+            "listPrice",
+        ),
+        interpret_integral_as_cents=interpret_integral_as_cents,
+    )
+    if original_price is not None:
+        row["original_price"] = original_price
+    currency = text_or_none(
+        variant.get("currency")
+        or variant.get("currencyCode")
+        or variant.get("priceCurrency")
+    )
+    if currency:
+        row["currency"] = currency
+    availability = _availability_value(variant)
+    if availability:
+        row["availability"] = availability
+    stock_quantity = _stock_quantity(variant)
+    if stock_quantity is not None:
+        row["stock_quantity"] = stock_quantity
+    image_url = next(
+        iter(
+            extract_urls(
+                variant.get("featured_image") or variant.get("image"),
+                page_url,
+            )
+        ),
+        None,
+    )
+    if image_url:
+        row["image_url"] = image_url
+    option_values = _variant_option_values(variant, option_names=option_names)
+    if option_values:
+        row["option_values"] = option_values
+        if option_values.get("color"):
+            row["color"] = option_values["color"]
+        if option_values.get("size"):
+            row["size"] = option_values["size"]
+    for field_name in ("title", "name", "color", "size"):
+        value = text_or_none(variant.get(field_name))
+        if value and field_name not in row:
+            row["title" if field_name == "name" else field_name] = value
+    return row or None
+
+
+def _variant_option_values(
+    variant: dict[str, Any],
+    *,
+    option_names: list[str],
+) -> dict[str, str]:
+    option_values: dict[str, str] = {}
+    raw_options = variant.get("options") if isinstance(variant.get("options"), list) else []
+    for index in range(1, 4):
+        axis_name = (
+            option_names[index - 1]
+            if index - 1 < len(option_names)
+            else f"option_{index}"
+        )
+        axis_key = normalized_variant_axis_key(axis_name) or f"option_{index}"
+        value = variant.get(f"option{index}")
+        if value in (None, "", [], {}) and index - 1 < len(raw_options):
+            value = raw_options[index - 1]
+        cleaned = text_or_none(value)
+        if cleaned:
+            option_values[axis_key] = cleaned
+    return option_values
+
+
+def _variant_axes(variants: list[dict[str, Any]]) -> dict[str, list[str]]:
+    axes: dict[str, list[str]] = {}
+    for variant in variants:
+        option_values = variant.get("option_values")
+        if not isinstance(option_values, dict):
+            continue
+        for axis_name, value in option_values.items():
+            cleaned = text_or_none(value)
+            if not cleaned:
+                continue
+            axes.setdefault(str(axis_name), [])
+            if cleaned not in axes[str(axis_name)]:
+                axes[str(axis_name)].append(cleaned)
+    return axes
+
+
+def _ordered_axes(
+    option_names: list[str],
+    selectable_axes: dict[str, list[str]],
+) -> list[tuple[str, list[str]]]:
+    ordered: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
+    for option_name in option_names:
+        axis_key = normalized_variant_axis_key(option_name)
+        axis_values = selectable_axes.get(axis_key or "")
+        if axis_key and axis_values:
+            ordered.append((axis_key, axis_values))
+            seen.add(axis_key)
+    for axis_name, axis_values in selectable_axes.items():
+        if axis_name in seen or not axis_values:
+            continue
+        ordered.append((axis_name, axis_values))
+    return ordered
+
+
+def _dedupe_variants(variants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for variant in variants:
+        fingerprint = _variant_fingerprint(variant)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        deduped.append(variant)
+    return deduped
+
+
+def _variant_fingerprint(variant: dict[str, Any]) -> str:
+    variant_id = text_or_none(variant.get("variant_id"))
+    if variant_id:
+        return f"id:{variant_id}"
+    sku = text_or_none(variant.get("sku"))
+    if sku:
+        return f"sku:{sku}"
+    option_values = variant.get("option_values")
+    if isinstance(option_values, dict) and option_values:
+        return repr(sorted(option_values.items()))
+    return repr(sorted(variant.items()))
+
+
+def _select_variant(
+    variants: list[dict[str, Any]],
+    *,
+    page_url: str,
+) -> dict[str, Any] | None:
+    if not variants:
+        return None
+    parsed = urlsplit(str(page_url or "").strip())
+    requested_variant_id = next(
+        (
+            str(value).strip()
+            for key, value in parse_qsl(parsed.query, keep_blank_values=False)
+            if key == "variant" and str(value).strip()
+        ),
+        "",
+    )
+    if requested_variant_id:
+        matched = next(
+            (
+                variant
+                for variant in variants
+                if text_or_none(variant.get("variant_id")) == requested_variant_id
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched
+    return next(
+        (variant for variant in variants if variant.get("availability") == "in_stock"),
+        variants[0],
+    )
+
+
+def _normalize_price(
+    value: Any,
+    *,
+    interpret_integral_as_cents: bool,
+) -> str | None:
+    return normalize_decimal_price(
+        value,
+        interpret_integral_as_cents=interpret_integral_as_cents,
+    )
+
+
+def _availability_value(value: dict[str, Any] | None) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get("availability") or value.get("inventory_status") or value.get("stock_status")
+    cleaned = text_or_none(raw)
+    if cleaned:
+        lowered = cleaned.lower()
+        if lowered in {"instock", "in stock", "available", "true"}:
+            return "in_stock"
+        if lowered in {"outofstock", "out of stock", "sold out", "false"}:
+            return "out_of_stock"
+        if lowered in {"limited stock", "low stock"}:
+            return "limited_stock"
+        return cleaned
+    available = value.get("available")
+    if isinstance(available, bool):
+        return "in_stock" if available else "out_of_stock"
+    if available not in (None, "", [], {}):
+        normalized_available = str(available).strip().lower()
+        if normalized_available in {"1", "true", "yes", "available", "in-stock"}:
+            return "in_stock"
+        return None
+    stock_quantity = _stock_quantity(value)
+    if stock_quantity is None:
+        return None
+    return "in_stock" if stock_quantity > 0 else "out_of_stock"
+
+
+def _stock_quantity(value: dict[str, Any] | None) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    for key in ("inventory_quantity", "stock_quantity", "quantity"):
+        raw = value.get(key)
+        if raw in (None, "", [], {}):
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _variant_url(page_url: str, variant_id: str) -> str:
+    parsed = urlsplit(str(page_url or "").strip())
+    query_pairs = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != "variant"
+    ]
+    query_pairs.append(("variant", variant_id))
+    return urlunsplit(parsed._replace(query=urlencode(query_pairs, doseq=True)))
+
+
+def _variant_attribute(
+    variant: dict[str, Any] | None,
+    field_name: str,
+) -> Any:
+    if not isinstance(variant, dict):
+        return None
+    return variant.get(field_name)
+
+
+def _first_value(payload: dict[str, Any] | None, *keys: str) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    for key in keys:
+        if payload.get(key) not in (None, "", [], {}):
+            return payload.get(key)
+    return None
+
+
+def _merge_missing(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(primary)
+    for key, value in secondary.items():
+        if merged.get(key) in (None, "", [], {}):
+            merged[key] = value
+    return _compact_dict(merged)
 
 
 def _name_or_value(value: Any) -> Any:

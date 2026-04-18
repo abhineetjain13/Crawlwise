@@ -18,7 +18,9 @@ from app.services.crawl_utils import (
 )
 from app.services.db_utils import escape_like_pattern
 from app.services.field_policy import expand_requested_fields
+from app.services.llm_config_service import snapshot_active_configs
 from app.services.normalizers import normalize_value
+from app.services.run_config_snapshot import snapshot_extraction_runtime_settings
 from app.services.url_safety import ensure_public_crawl_targets
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +58,11 @@ async def create_crawl_run(
         settings = settings_view.with_updates(
             domain_requested_fields=domain_requested_fields
         ).as_dict()
+        settings_view = CrawlRunSettings.from_value(settings)
+    settings = settings_view.with_updates(
+        llm_config_snapshot=await snapshot_active_configs(session),
+        extraction_runtime_snapshot=snapshot_extraction_runtime_settings(),
+    ).as_dict()
     run_type = payload.get("run_type")
     if not run_type:
         raise ValueError("run_type is required")
