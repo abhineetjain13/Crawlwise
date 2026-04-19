@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -57,38 +57,6 @@ class CrawlRecordResponse(BaseModel):
     provenance_available: bool = False
     raw_html_path: str | None = None
     created_at: datetime
-
-    @model_validator(mode="after")
-    def _clean_for_display(self) -> CrawlRecordResponse:
-        """Expose canonical data, a review bucket, and only light trace metadata."""
-        self.data = {
-            k: v
-            for k, v in self.data.items()
-            if (
-                v not in (None, "", [], {})
-                and not str(k).startswith("_")
-                and str(k) not in _DISPLAY_HIDDEN_RECORD_FIELDS
-            )
-        }
-        manifest_trace = _extract_manifest_trace(
-            self.source_trace, self.discovered_data
-        )
-        self.review_bucket = _normalize_review_bucket(
-            (self.discovered_data or {}).get("review_bucket"),
-            fallback=self.discovered_data,
-        )
-        self.discovered_data = {
-            k: v
-            for k, v in self.discovered_data.items()
-            if k not in _DISCOVERED_DATA_EXCLUDE_KEYS and v not in (None, "", [], {})
-        }
-        self.source_trace = {
-            k: v
-            for k, v in self.source_trace.items()
-            if k not in _SOURCE_TRACE_EXCLUDE_KEYS and v not in (None, "", [], {})
-        }
-        self.provenance_available = bool(manifest_trace)
-        return self
 
 
 class DashboardResponse(BaseModel):
@@ -400,3 +368,39 @@ def _stable_review_value_fingerprint(value: object) -> str:
         return json.dumps(value, sort_keys=True, default=str)
     except TypeError:
         return str(value).strip().casefold()
+
+
+def serialize_crawl_record_response(value: object) -> CrawlRecordResponse:
+    record = CrawlRecordResponse.model_validate(value, from_attributes=True)
+    manifest_trace = _extract_manifest_trace(record.source_trace, record.discovered_data)
+    record.data = {
+        key: item
+        for key, item in record.data.items()
+        if (
+            item not in (None, "", [], {})
+            and not str(key).startswith("_")
+            and str(key) not in _DISPLAY_HIDDEN_RECORD_FIELDS
+        )
+    }
+    record.review_bucket = _normalize_review_bucket(
+        (record.discovered_data or {}).get("review_bucket"),
+        fallback=record.discovered_data,
+    )
+    record.discovered_data = {
+        key: item
+        for key, item in record.discovered_data.items()
+        if key not in _DISCOVERED_DATA_EXCLUDE_KEYS and item not in (None, "", [], {})
+    }
+    record.source_trace = {
+        key: item
+        for key, item in record.source_trace.items()
+        if key not in _SOURCE_TRACE_EXCLUDE_KEYS and item not in (None, "", [], {})
+    }
+    record.provenance_available = bool(manifest_trace)
+    return record
+
+
+def serialize_crawl_record_responses(
+    values: Iterable[object],
+) -> list[CrawlRecordResponse]:
+    return [serialize_crawl_record_response(value) for value in values]

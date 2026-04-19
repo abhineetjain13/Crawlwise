@@ -12,6 +12,7 @@ from app.services.extract.shared_variant_logic import (
 )
 from app.services.field_value_utils import extract_urls, text_or_none
 from app.services.normalizers import normalize_decimal_price
+from app.services.platform_policy import platform_js_state_extractors
 
 
 NEXT_DATA_ECOMMERCE_SPEC = {
@@ -82,34 +83,6 @@ _DECLARATIVE_PRODUCT_ROOTS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-REMIX_GREENHOUSE_SPEC = {
-    "title": Coalesce(
-        "state.loaderData.routes/$url_token_.jobs_.$job_post_id.jobPost.title",
-        default=None,
-    ),
-    "company": Coalesce(
-        "state.loaderData.routes/$url_token_.jobs_.$job_post_id.jobPost.company_name",
-        default=None,
-    ),
-    "location": Coalesce(
-        "state.loaderData.routes/$url_token_.jobs_.$job_post_id.jobPost.job_post_location",
-        default=None,
-    ),
-    "apply_url": Coalesce(
-        "state.loaderData.routes/$url_token_.jobs_.$job_post_id.jobPost.public_url",
-        default=None,
-    ),
-    "posted_date": Coalesce(
-        "state.loaderData.routes/$url_token_.jobs_.$job_post_id.jobPost.published_at",
-        default=None,
-    ),
-    "description_html": Coalesce(
-        "state.loaderData.routes/$url_token_.jobs_.$job_post_id.jobPost.content",
-        default=None,
-    ),
-}
-
-
 def map_js_state_to_fields(
     js_state_objects: dict[str, Any],
     *,
@@ -127,30 +100,9 @@ def map_js_state_to_fields(
 
 
 def _map_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
-    remix_state = js_state_objects.get("__remixContext")
-    if not isinstance(remix_state, dict):
+    mapped = _map_platform_job_detail_state(js_state_objects)
+    if not mapped:
         return {}
-    loader_data = (
-        remix_state.get("state", {}).get("loaderData", {})
-        if isinstance(remix_state.get("state"), dict)
-        else {}
-    )
-    route_data = (
-        loader_data.get("routes/$url_token_.jobs_.$job_post_id", {})
-        if isinstance(loader_data, dict)
-        else {}
-    )
-    job_post = route_data.get("jobPost", {}) if isinstance(route_data, dict) else {}
-    mapped = _compact_dict(
-        {
-            "title": job_post.get("title"),
-            "company": job_post.get("company_name"),
-            "location": job_post.get("job_post_location"),
-            "apply_url": job_post.get("public_url"),
-            "posted_date": job_post.get("published_at"),
-            "description_html": job_post.get("content"),
-        }
-    )
     description_html = str(mapped.pop("description_html", "") or "").strip()
     if description_html:
         mapped.update(extract_job_sections(description_html))
@@ -159,6 +111,63 @@ def _map_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
     if mapped.get("apply_url") and not mapped.get("url"):
         mapped["url"] = mapped["apply_url"]
     return mapped
+
+
+def _map_platform_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str, Any]:
+    for state_key, payload in js_state_objects.items():
+        if not isinstance(payload, dict):
+            continue
+        extractors = platform_js_state_extractors(
+            surface="job_detail",
+            state_key=state_key,
+        )
+        for extractor in extractors:
+            mapped = _map_configured_state_payload(
+                payload,
+                root_paths=extractor.root_paths,
+                field_paths=extractor.field_paths,
+            )
+            if mapped:
+                return mapped
+    return {}
+
+
+def _map_configured_state_payload(
+    payload: dict[str, Any],
+    *,
+    root_paths: list[list[str]],
+    field_paths: dict[str, list[list[str]]],
+) -> dict[str, Any]:
+    for root_path in root_paths:
+        candidate = _path_value(payload, root_path)
+        if not isinstance(candidate, dict):
+            continue
+        mapped = _compact_dict(
+            {
+                field_name: _first_path_value(candidate, paths)
+                for field_name, paths in field_paths.items()
+            }
+        )
+        if mapped:
+            return mapped
+    return {}
+
+
+def _first_path_value(payload: dict[str, Any], paths: list[list[str]]) -> Any:
+    for path in paths:
+        value = _path_value(payload, path)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _path_value(payload: Any, path: list[str]) -> Any:
+    current = payload
+    for segment in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(segment)
+    return current
 
 
 def _map_ecommerce_detail_state(

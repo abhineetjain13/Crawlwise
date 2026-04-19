@@ -55,6 +55,27 @@ def _set_task_id(run: CrawlRun, task_id: str | None) -> None:
         run.remove_summary_keys(CELERY_TASK_ID_KEY)
 
 
+def _get_live_local_run_task(run_id: int) -> asyncio.Task[None] | None:
+    task = _local_run_tasks.get(run_id)
+    if task is None:
+        return None
+    if task.done():
+        _local_run_tasks.pop(run_id, None)
+        return None
+    return task
+
+
+def _clear_local_run_task(
+    run_id: int, *, expected_task: asyncio.Task[None] | None = None
+) -> None:
+    task = _local_run_tasks.get(run_id)
+    if task is None:
+        return
+    if expected_task is not None and task is not expected_task:
+        return
+    _local_run_tasks.pop(run_id, None)
+
+
 async def _load_run_with_normalized_status(
     retry_session: AsyncSession, run_id: int
 ) -> tuple[CrawlRun, CrawlStatus]:
@@ -88,6 +109,7 @@ async def _run_with_local_session(run_id: int) -> None:
 
 
 def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
+    _clear_local_run_task(run_id)
     task = asyncio.create_task(_run_with_local_session(run_id))
     _local_run_tasks[run_id] = task
 
@@ -115,7 +137,7 @@ def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
                     )
 
             asyncio.create_task(_record_failure())
-        _local_run_tasks.pop(run_id, None)
+        _clear_local_run_task(run_id, expected_task=completed_task)
 
     task.add_done_callback(_cleanup)
     return task
@@ -167,7 +189,7 @@ async def pause_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
         if current != CrawlStatus.RUNNING:
             raise ValueError(f"Cannot pause run in state: {retry_run.status}")
         task_id = _get_task_id(retry_run)
-        local_task = _local_run_tasks.get(run_id)
+        local_task = _get_live_local_run_task(run_id)
         if local_task is not None:
             set_control_request(retry_run, CONTROL_REQUEST_PAUSE)
             await log_event(
@@ -217,9 +239,10 @@ async def kill_run(session: AsyncSession, run: CrawlRun) -> CrawlRun:
         if current in TERMINAL_STATUSES:
             raise ValueError(f"Cannot kill run in terminal state: {retry_run.status}")
         task_id = _get_task_id(retry_run)
-        local_task = _local_run_tasks.get(run_id)
+        local_task = _get_live_local_run_task(run_id)
         if local_task is not None:
             set_control_request(retry_run, CONTROL_REQUEST_KILL)
+            _clear_local_run_task(run_id, expected_task=local_task)
             local_task.cancel()
             update_run_status(retry_run, CrawlStatus.KILLED)
             _set_task_id(retry_run, None)
@@ -264,7 +287,7 @@ async def recover_stale_local_runs(session: AsyncSession) -> int:
     )
     recovered = 0
     for run in result.scalars().all():
-        _local_run_tasks.pop(int(run.id), None)
+        _clear_local_run_task(int(run.id))
         _set_task_id(run, None)
         if run.status_value == CrawlStatus.PENDING:
             update_run_status(run, CrawlStatus.KILLED)
@@ -279,5 +302,8 @@ async def recover_stale_local_runs(session: AsyncSession) -> int:
                 int(run.id),
                 "Local dev runner was interrupted by backend restart or process termination",
             )
+            await session.refresh(run)
+            _set_task_id(run, None)
+            await session.commit()
         recovered += 1
     return recovered

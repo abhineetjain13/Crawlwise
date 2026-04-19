@@ -14,10 +14,13 @@ from app.services import crawl_fetch_runtime
 class _FakeHandle:
     label: str
     page: "_FakeExpansionPage"
+    actionable: bool = True
 
-    async def evaluate(self, script: str) -> str | None:
+    async def evaluate(self, script: str) -> str | dict[str, bool] | None:
         if "pieces" in script:
             return self.label
+        if "getBoundingClientRect" in script:
+            return {"actionable": self.actionable}
         self.page.expanded = True
         return None
 
@@ -34,11 +37,14 @@ class _FakeLocator:
         self._page = page
 
     async def element_handles(self) -> list[_FakeHandle]:
-        return [_FakeHandle(label, self._page) for label in self._page.labels]
+        return [
+            _FakeHandle(row["label"], self._page, actionable=bool(row.get("actionable", True)))
+            for row in self._page.labels
+        ]
 
 
 class _FakeExpansionPage:
-    def __init__(self, labels: list[str]) -> None:
+    def __init__(self, labels: list[str] | list[dict[str, object]]) -> None:
         self.labels = labels
         self.expanded = False
         self.url = "https://example.com/products/widget"
@@ -95,7 +101,9 @@ class _FakeRuntime:
 async def test_browser_fetch_expands_detail_accordions_before_collecting_html(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = _FakeExpansionPage(["product specifications", "share"])
+    page = _FakeExpansionPage(
+        [{"label": "product specifications"}, {"label": "share"}]
+    )
 
     async def _fake_runtime():
         return _FakeRuntime(page)
@@ -122,7 +130,9 @@ async def test_expand_all_interactive_elements_respects_small_interaction_cap(
     original_limit = crawl_fetch_runtime.crawler_runtime_settings.detail_expand_max_interactions
     crawl_fetch_runtime.crawler_runtime_settings.detail_expand_max_interactions = 1
     try:
-        page = _FakeExpansionPage(["product details", "product dimensions"])
+        page = _FakeExpansionPage(
+            [{"label": "product details"}, {"label": "product dimensions"}]
+        )
         diagnostics = await crawl_fetch_runtime.expand_all_interactive_elements(
             page,
             surface="ecommerce_detail",
@@ -133,3 +143,21 @@ async def test_expand_all_interactive_elements_respects_small_interaction_cap(
         assert diagnostics["expanded_elements"] == ["product details"]
     finally:
         crawl_fetch_runtime.crawler_runtime_settings.detail_expand_max_interactions = original_limit
+
+
+@pytest.mark.asyncio
+async def test_expand_all_interactive_elements_skips_non_actionable_candidates() -> None:
+    page = _FakeExpansionPage(
+        [
+            {"label": "product details", "actionable": False},
+            {"label": "product specifications", "actionable": True},
+        ]
+    )
+
+    diagnostics = await crawl_fetch_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["product specifications"]

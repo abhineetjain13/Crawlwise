@@ -176,6 +176,7 @@ Current live behavior:
 - browser runtime is pooled and exposes runtime snapshots
 - `browserforge`-backed context identity is active
 - traversal is explicit and separate from browser escalation
+- JSON-expected acquisition now stays in `acquisition/http_client.py`; adapters consume decoded payloads instead of compensating for transport quirks
 
 ### 6.4 Extraction
 
@@ -205,6 +206,7 @@ Important implemented features:
 - Nuxt `__NUXT_DATA__` payload revival is live in structured-source harvesting
 - `network_payload_mapper.py` now uses declarative specs from `config/network_payload_specs.py`
 - tracking-parameter stripping is live in field-value normalization via `w3lib`
+- platform registry config in `config/platforms.json` now owns adapter registration metadata, network signatures, JS-state mappings, and listing-readiness selectors/waits
 
 ### 6.5 Publish and persistence
 

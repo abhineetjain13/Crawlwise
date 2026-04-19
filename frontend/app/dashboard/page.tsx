@@ -25,6 +25,8 @@ import {
   dashboardStatusBarColor,
   dashboardStatusLabel as statusLabel,
   dashboardStatusTone as statusTone,
+  runExecutionLabel,
+  runExecutionTone,
 } from "../../lib/ui/status";
 
 /* ─── Domain bar ─────────────────────────────────────────────────────────── */
@@ -84,7 +86,7 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       className="no-underline group flex items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 transition-colors hover:bg-[var(--bg-elevated)]"
     >
       {/* Status dot */}
-      <StatusDot tone={statusTone(run.status)} />
+      <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
       {/* Domain */}
       <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-primary transition-colors group-hover:text-accent">
         {domain || `Run #${run.id}`}
@@ -96,7 +98,9 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
         </span>
       ) : null}
       {/* Badge */}
-      <Badge tone={statusTone(run.status)}>{statusLabel(run.status)}</Badge>
+      <Badge tone={runExecutionTone(run.status, run.result_summary)}>
+        {runExecutionLabel(run.status, run.result_summary)}
+      </Badge>
       {/* Arrow */}
       <ArrowUpRight className="size-3 shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100" />
     </Link>

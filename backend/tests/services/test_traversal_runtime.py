@@ -76,6 +76,8 @@ class _FakePage:
         self.page_index = 0
         self.scroll_index = 0
         self.load_more_clicks = 0
+        self.goto_calls: list[str] = []
+        self.load_state_calls: list[str] = []
 
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator(self, selector)
@@ -95,13 +97,15 @@ class _FakePage:
         del timeout_ms
 
     async def wait_for_load_state(self, state: str, timeout: int | None = None) -> None:
-        del state, timeout
+        del timeout
+        self.load_state_calls.append(state)
 
     async def content(self) -> str:
         return self.state.html
 
     async def goto(self, url: str, wait_until: str | None = None, timeout: int | None = None) -> None:
         del wait_until, timeout
+        self.goto_calls.append(url)
         self.url = url
         self.page_index = min(self.page_index + 1, len(self.paginated_states) - 1)
         self.state = self.paginated_states[self.page_index]
@@ -201,6 +205,73 @@ async def test_paginate_traversal_does_not_append_duplicate_html_without_progres
 
 
 @pytest.mark.asyncio
+async def test_paginate_traversal_blocks_off_domain_links() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://ads.example.net/promo",
+        ),
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=2,
+        max_scrolls=1,
+    )
+
+    assert result.stop_reason == "paginate_off_domain"
+    assert result.html_fragments == ["<div>page-1</div>"]
+    assert page.goto_calls == []
+
+
+@pytest.mark.asyncio
+async def test_paginate_traversal_waits_for_navigation_transition() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://example.com/listing?page=2",
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+            ),
+            _State(
+                html="<div>page-2</div>",
+                card_count=4,
+                scroll_height=1500,
+                controls=set(),
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=2,
+        max_scrolls=1,
+    )
+
+    assert result.pages_advanced == 1
+    assert "domcontentloaded" in page.load_state_calls
+    assert "networkidle" in page.load_state_calls
+
+
+@pytest.mark.asyncio
 async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
     page = _FakePage(
         surface="ecommerce_listing",
@@ -229,6 +300,7 @@ async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
     assert result.progress_events == 1
     assert result.card_count == 5
     assert result.html_fragments == ["<div>before</div>", "<div>after</div>"]
+    assert "networkidle" in page.load_state_calls
 
 
 @pytest.mark.asyncio

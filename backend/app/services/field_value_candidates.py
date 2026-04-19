@@ -16,6 +16,7 @@ from app.services.field_value_core import (
     extract_urls,
     text_or_none,
 )
+from app.services.normalizers import normalize_decimal_price
 
 
 def candidate_fingerprint(value: object) -> str:
@@ -115,6 +116,44 @@ def _variant_axes_from_rows(variants: list[dict[str, object]]) -> dict[str, list
     return axes
 
 
+def _looks_like_shopify_price_payload(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if any(
+        key in payload
+        for key in ("handle", "body_html", "product_type", "compare_at_price")
+    ):
+        return True
+    raw_variants = payload.get("variants")
+    if isinstance(raw_variants, list):
+        return any(
+            isinstance(variant, dict)
+            and any(
+                field in variant
+                for field in ("option1", "compare_at_price", "inventory_quantity")
+            )
+            for variant in raw_variants
+        )
+    return any(field in payload for field in ("option1", "compare_at_price", "inventory_quantity"))
+
+
+def _coerce_structured_candidate_value(
+    canonical: str,
+    value: object,
+    *,
+    page_url: str,
+    payload: object,
+) -> object | None:
+    if canonical in {"price", "sale_price", "original_price"} and _looks_like_shopify_price_payload(payload):
+        normalized = normalize_decimal_price(
+            value,
+            interpret_integral_as_cents=True,
+        )
+        if normalized not in (None, ""):
+            return normalized
+    return coerce_field_value(canonical, value, page_url)
+
+
 def collect_structured_candidates(
     payload: object,
     alias_lookup: dict[str, str],
@@ -159,7 +198,12 @@ def collect_structured_candidates(
                 add_candidate(
                     candidates,
                     canonical,
-                    coerce_field_value(canonical, value, page_url),
+                    _coerce_structured_candidate_value(
+                        canonical,
+                        value,
+                        page_url=page_url,
+                        payload=payload,
+                    ),
                 )
             collect_structured_candidates(
                 value,

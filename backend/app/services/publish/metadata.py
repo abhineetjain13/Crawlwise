@@ -45,16 +45,22 @@ def refresh_record_commit_metadata(
     field_name: str,
     value: object,
     source_label: str = "user_commit",
+    preserve_existing_sources: bool = False,
 ) -> None:
     normalized_field = str(field_name or "").strip().lower()
     if not normalized_field:
         return
     source_trace = dict(record.source_trace or {})
     field_discovery = dict(source_trace.get("field_discovery") or {})
+    existing = field_discovery.get(normalized_field)
+    if preserve_existing_sources and isinstance(existing, dict) and existing.get("sources"):
+        sources = list(existing["sources"])
+    else:
+        sources = [source_label]
     field_discovery[normalized_field] = {
         "status": "found",
         "value": _stringify_value(value),
-        "sources": [source_label],
+        "sources": sources,
     }
     source_trace["field_discovery"] = field_discovery
 

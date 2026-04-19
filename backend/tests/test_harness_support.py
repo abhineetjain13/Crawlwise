@@ -12,6 +12,12 @@ def test_infer_surface_prefers_explicit_surface() -> None:
 def test_infer_surface_classifies_job_and_commerce_urls() -> None:
     assert infer_surface("https://example.com/careers") == "job_listing"
     assert infer_surface("https://example.com/products/widget-1") == "ecommerce_detail"
+    assert (
+        infer_surface(
+            "https://secure7.saashr.com/ta/6208610.careers?ein_id=1&career_portal_id=2&ShowJob=587687242"
+        )
+        == "job_detail"
+    )
 
 
 def test_parse_test_sites_markdown_reads_urls_from_tail(tmp_path: Path) -> None:
@@ -43,4 +49,4 @@ def test_classify_failure_mode_flags_missing_adapter_registration() -> None:
         "records": 0,
     }
 
-    assert classify_failure_mode(result) == "adapter_not_registered"
+    assert classify_failure_mode(result) == "adapter_not_matched"

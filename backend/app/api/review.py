@@ -6,11 +6,11 @@ from typing import Annotated
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.crawl import (
-    CrawlRecordResponse,
     CrawlRunResponse,
     ReviewResponse,
     ReviewSaveRequest,
     ReviewSaveResponse,
+    serialize_crawl_record_responses,
 )
 from app.services.crawl_crud import get_run
 from app.services.review import build_review_payload, load_review_html, save_review
@@ -46,10 +46,7 @@ async def review_detail(
         canonical_fields=payload["canonical_fields"],
         domain_mapping=payload["domain_mapping"],
         suggested_mapping=payload["suggested_mapping"],
-        records=[
-            CrawlRecordResponse.model_validate(row, from_attributes=True)
-            for row in payload["records"]
-        ],
+        records=serialize_crawl_record_responses(payload["records"]),
     )
 
 

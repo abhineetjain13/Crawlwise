@@ -30,4 +30,14 @@ def prepare_browser_pool_for_worker_process() -> None:
 
 
 class BrowserPool:
-    pass
+    @staticmethod
+    def snapshot() -> dict[str, object]:
+        return browser_pool_snapshot()
+
+    @staticmethod
+    async def shutdown() -> None:
+        await shutdown_browser_pool()
+
+    @staticmethod
+    def shutdown_sync() -> None:
+        shutdown_browser_pool_sync()

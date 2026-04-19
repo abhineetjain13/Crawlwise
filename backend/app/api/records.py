@@ -6,7 +6,11 @@ from typing import Annotated
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
 from app.schemas.common import PaginatedResponse, PaginationMeta
-from app.schemas.crawl import CrawlRecordProvenanceResponse, CrawlRecordResponse
+from app.schemas.crawl import (
+    CrawlRecordProvenanceResponse,
+    CrawlRecordResponse,
+    serialize_crawl_record_responses,
+)
 from app.services.crawl_access_service import (
     RUN_NOT_FOUND_DETAIL,
     require_accessible_run,
@@ -46,10 +50,7 @@ async def records_list(
 
     rows, total = await get_run_records(session, run_id, page, limit)
     return PaginatedResponse(
-        items=[
-            CrawlRecordResponse.model_validate(row, from_attributes=True)
-            for row in rows
-        ],
+        items=serialize_crawl_record_responses(rows),
         meta=PaginationMeta(page=page, limit=limit, total=total),
     )
 

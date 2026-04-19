@@ -22,6 +22,7 @@ _ROBOTS_CACHE = TTLCache(
     ttl=PIPELINE_CONFIG.robots_cache_ttl,
 )
 _ROBOTS_CACHE_LOCK = RLock()
+_ROBOTS_FETCH_ERRORS = (TimeoutError, URLError, OSError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,10 +90,7 @@ def _load_robots_snapshot(base_url: str) -> _RobotsSnapshot:
 
 def _fetch_robots_snapshot(base_url: str) -> _RobotsSnapshot:
     robots_url = f"{base_url}/robots.txt"
-    request = Request(
-        robots_url,
-        headers={"User-Agent": PIPELINE_CONFIG.robots_fetch_user_agent},
-    )
+    request = _robots_request(robots_url)
     try:
         with urlopen(request, timeout=settings.http_timeout_seconds) as response:
             body = response.read().decode(_response_encoding(response), errors="replace")
@@ -100,26 +98,12 @@ def _fetch_robots_snapshot(base_url: str) -> _RobotsSnapshot:
         if exc.code in {404, 410}:
             return _RobotsSnapshot(robots_url=robots_url, parser=None, missing=True)
         if exc.code in {401, 403}:
-            parser = RobotFileParser()
-            parser.set_url(robots_url)
-            parser.parse(["User-agent: *", "Disallow: /"])
-            return _RobotsSnapshot(robots_url=robots_url, parser=parser)
-        return _RobotsSnapshot(
-            robots_url=robots_url,
-            parser=None,
-            error=f"HTTP {exc.code}",
-        )
-    except (TimeoutError, URLError, OSError, ValueError) as exc:
-        return _RobotsSnapshot(
-            robots_url=robots_url,
-            parser=None,
-            error=str(exc),
-        )
+            return _disallow_all_snapshot(robots_url)
+        return _error_snapshot(robots_url, f"HTTP {exc.code}")
+    except _ROBOTS_FETCH_ERRORS as exc:
+        return _error_snapshot(robots_url, str(exc))
 
-    parser = RobotFileParser()
-    parser.set_url(robots_url)
-    parser.parse(body.splitlines())
-    return _RobotsSnapshot(robots_url=robots_url, parser=parser)
+    return _parse_robots_snapshot(robots_url, body)
 
 
 def _base_url(url: str) -> str:
@@ -136,3 +120,32 @@ def _response_encoding(response) -> str:
         if content_charset:
             return str(content_charset)
     return "utf-8"
+
+
+def _robots_request(robots_url: str) -> Request:
+    return Request(
+        robots_url,
+        headers={"User-Agent": PIPELINE_CONFIG.robots_fetch_user_agent},
+    )
+
+
+def _parse_robots_snapshot(robots_url: str, body: str) -> _RobotsSnapshot:
+    parser = RobotFileParser()
+    parser.set_url(robots_url)
+    parser.parse(body.splitlines())
+    return _RobotsSnapshot(robots_url=robots_url, parser=parser)
+
+
+def _disallow_all_snapshot(robots_url: str) -> _RobotsSnapshot:
+    parser = RobotFileParser()
+    parser.set_url(robots_url)
+    parser.parse(["User-agent: *", "Disallow: /"])
+    return _RobotsSnapshot(robots_url=robots_url, parser=parser)
+
+
+def _error_snapshot(robots_url: str, error: str) -> _RobotsSnapshot:
+    return _RobotsSnapshot(
+        robots_url=robots_url,
+        parser=None,
+        error=error,
+    )

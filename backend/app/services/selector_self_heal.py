@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from bs4 import BeautifulSoup
+from bs4.element import Comment, NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRun
@@ -16,21 +19,107 @@ from app.services.field_policy import field_allowed_for_surface
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value
 
+_SELECTOR_SYNTHESIS_MAX_HTML_CHARS = 200_000
+_SELECTOR_SYNTHESIS_ALLOWED_ATTRS = frozenset(
+    {"class", "id", "data-testid", "itemprop", "name", "aria-label", "href"}
+)
+_SELECTOR_SYNTHESIS_DROP_TAGS = frozenset({"script", "style", "noscript", "svg"})
+_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS = frozenset(
+    {
+        "nav",
+        "footer",
+        "aside",
+        "form",
+        "button",
+        "input",
+        "select",
+        "textarea",
+        "iframe",
+        "canvas",
+        "template",
+    }
+)
+
 
 def reduce_html_for_selector_synthesis(html: str) -> str:
     soup = BeautifulSoup(str(html or ""), "html.parser")
-    for node in soup(["script", "style", "noscript", "svg"]):
+    for node in soup.find_all(string=lambda value: isinstance(value, Comment)):
+        node.extract()
+    for node in soup(_SELECTOR_SYNTHESIS_DROP_TAGS):
+        node.decompose()
+    for node in soup(_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS):
         node.decompose()
     for tag in soup.find_all(True):
         allowed_attrs = {
             key: value
             for key, value in tag.attrs.items()
-            if key
-            in {"class", "id", "data-testid", "itemprop", "name", "aria-label", "href"}
+            if key in _SELECTOR_SYNTHESIS_ALLOWED_ATTRS
         }
         tag.attrs = allowed_attrs
-    text = str(soup)
-    return text[:200_000]
+    reduced = BeautifulSoup("<html><body></body></html>", "html.parser")
+    source_root = soup.body or soup
+    target_root = reduced.body or reduced
+    _append_reduced_children(
+        reduced,
+        target_root,
+        list(source_root.children),
+        _SELECTOR_SYNTHESIS_MAX_HTML_CHARS - len(str(reduced)),
+    )
+    return str(reduced)
+
+
+def _append_reduced_children(
+    output_soup: BeautifulSoup,
+    target_parent: Tag | BeautifulSoup,
+    children: list[object],
+    budget: int,
+) -> int:
+    used = 0
+    for child in children:
+        remaining = budget - used
+        if remaining <= 0:
+            break
+        used += _append_reduced_node(output_soup, target_parent, child, remaining)
+    return used
+
+
+def _append_reduced_node(
+    output_soup: BeautifulSoup,
+    target_parent: Tag | BeautifulSoup,
+    node: object,
+    budget: int,
+) -> int:
+    if budget <= 0:
+        return 0
+    if isinstance(node, NavigableString):
+        text = str(node)
+        if not text.strip():
+            return 0
+        chunk = text[:budget]
+        target_parent.append(chunk)
+        return len(chunk)
+    if not isinstance(node, Tag):
+        return 0
+    if node.name in _SELECTOR_SYNTHESIS_LOW_VALUE_TAGS:
+        return 0
+    serialized = str(node)
+    if len(serialized) <= budget:
+        target_parent.append(deepcopy(node))
+        return len(serialized)
+    clone = output_soup.new_tag(node.name, attrs=dict(node.attrs))
+    empty_size = len(str(clone))
+    if empty_size >= budget:
+        return 0
+    used = _append_reduced_children(
+        output_soup,
+        clone,
+        list(node.children),
+        budget - empty_size,
+    )
+    if used <= 0 and not clone.attrs:
+        return 0
+    target_parent.append(clone)
+    return len(str(clone))
 
 
 def selector_self_heal_enabled(run: CrawlRun) -> tuple[bool, float]:

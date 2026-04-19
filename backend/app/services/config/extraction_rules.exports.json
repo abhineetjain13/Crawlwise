@@ -6899,7 +6899,7 @@
       "youtu.be"
     ]
   },
-  "NOISE_CONTAINER_REMOVAL_SELECTOR": "aside, nav, [class*='filter' i], [class*='facet' i], [class*='sidebar' i], [class*='breadcrumb' i], [class*='navigation' i], [class*='menu' i], footer, header",
+  "NOISE_CONTAINER_REMOVAL_SELECTOR": "aside, nav, [class~='filter' i], [class~='filters' i], [class*='facet' i], [class*='sidebar' i], [class*='breadcrumb' i], [class*='navigation' i], [class*='menu' i], footer, header",
   "SPEC_LABEL_BLOCK_PATTERNS": {
     "__type__": "tuple",
     "items": [

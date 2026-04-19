@@ -345,3 +345,47 @@ def test_job_detail_mappers_keep_shared_html_section_behavior() -> None:
             "url": "https://jobs.example.com/platform-engineer",
         }
     ]
+
+
+def test_map_js_state_to_fields_uses_platform_owned_job_detail_selector_config() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__remixContext": {
+                "state": {
+                    "loaderData": {
+                        "routes/$url_token_.jobs_.$job_post_id": {
+                            "jobPost": {
+                                "title": "Manager, Engineering",
+                                "company_name": "Greenhouse",
+                                "job_post_location": "Ontario",
+                                "public_url": "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699",
+                                "published_at": "2026-04-09T10:05:53-04:00",
+                                "content": (
+                                    "<p>Lead the reporting and analytics engineering domain.</p>"
+                                    "<h2>What you’ll do</h2><ul><li>Lead and mentor engineers.</li></ul>"
+                                    "<h2>You should have</h2><ul><li>5+ years of engineering experience.</li></ul>"
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        surface="job_detail",
+        page_url="https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699",
+    )
+
+    assert mapped["title"] == "Manager, Engineering"
+    assert mapped["company"] == "Greenhouse"
+    assert mapped["location"] == "Ontario"
+    assert (
+        mapped["apply_url"]
+        == "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699"
+    )
+    assert mapped["posted_date"] == "2026-04-09T10:05:53-04:00"
+    assert "Lead and mentor engineers." in mapped["responsibilities"]
+    assert "5+ years of engineering experience." in mapped["qualifications"]
+    assert (
+        mapped["url"]
+        == "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699"
+    )

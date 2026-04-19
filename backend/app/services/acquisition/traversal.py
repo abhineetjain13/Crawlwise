@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
@@ -177,9 +177,10 @@ async def _run_load_more_traversal(
             break
         result.iterations += 1
         result.load_more_clicks += 1
+        current_url = page.url
         await locator.click(timeout=1000)
         await page.wait_for_timeout(int(crawler_runtime_settings.load_more_wait_min_ms))
-        await _settle_after_action(page)
+        await _wait_for_transition(page, previous_url=current_url)
         current = await _page_snapshot(page, surface=surface)
         if _snapshot_progressed(previous, current):
             result.progress_events += 1
@@ -214,14 +215,23 @@ async def _run_paginate_traversal(
         current_url = page.url
         href = await locator.get_attribute("href")
         if href and not str(href).strip().lower().startswith("javascript:"):
+            next_url = urljoin(current_url, href)
+            if not _is_same_origin(current_url, next_url):
+                result.stop_reason = "paginate_off_domain"
+                break
             await page.goto(
-                urljoin(current_url, href),
+                next_url,
                 wait_until="domcontentloaded",
                 timeout=int(crawler_runtime_settings.pagination_navigation_timeout_ms),
             )
+            await _wait_for_transition(
+                page,
+                previous_url=current_url,
+                navigation_expected=True,
+            )
         else:
             await locator.click(timeout=1000)
-        await _settle_after_action(page)
+            await _wait_for_transition(page, previous_url=current_url)
         current = await _page_snapshot(page, surface=surface)
         if page.url != current_url or _snapshot_progressed(previous, current):
             html_fragments.append(await page.content())
@@ -334,3 +344,64 @@ async def _settle_after_action(page) -> None:
                 int(crawler_runtime_settings.pagination_post_click_poll_ms),
             )
         )
+
+
+async def _wait_for_transition(
+    page,
+    *,
+    previous_url: str,
+    navigation_expected: bool = False,
+) -> None:
+    await _wait_for_navigation_if_changed(
+        page,
+        previous_url=previous_url,
+        navigation_expected=navigation_expected,
+    )
+    await _settle_after_action(page)
+
+
+async def _wait_for_navigation_if_changed(
+    page,
+    *,
+    previous_url: str,
+    navigation_expected: bool,
+) -> None:
+    if navigation_expected or page.url != previous_url:
+        await _wait_for_domcontentloaded(page)
+        return
+    poll_ms = max(1, int(crawler_runtime_settings.pagination_post_click_poll_ms))
+    deadline_ms = max(
+        poll_ms,
+        int(crawler_runtime_settings.pagination_post_click_timeout_ms),
+    )
+    waited_ms = 0
+    while waited_ms < deadline_ms:
+        await page.wait_for_timeout(poll_ms)
+        waited_ms += poll_ms
+        if page.url != previous_url:
+            await _wait_for_domcontentloaded(page)
+            return
+
+
+async def _wait_for_domcontentloaded(page) -> None:
+    try:
+        await page.wait_for_load_state(
+            "domcontentloaded",
+            timeout=int(
+                crawler_runtime_settings.pagination_post_click_domcontentloaded_timeout_ms
+            ),
+        )
+    except Exception:
+        return
+
+
+def _is_same_origin(current_url: str, next_url: str) -> bool:
+    current = urlsplit(str(current_url or ""))
+    next_value = urlsplit(str(next_url or ""))
+    return (
+        str(current.scheme or "").lower(),
+        str(current.netloc or "").lower(),
+    ) == (
+        str(next_value.scheme or "").lower(),
+        str(next_value.netloc or "").lower(),
+    )

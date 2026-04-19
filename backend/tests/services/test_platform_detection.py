@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.services.platform_policy import detect_platform_family
+from app.services.platform_policy import (
+    detect_platform_family,
+    resolve_listing_readiness_override,
+)
 
 
 def test_detect_platform_family_for_real_client_ats_urls() -> None:
@@ -35,4 +38,51 @@ def test_detect_platform_family_for_real_client_ats_urls() -> None:
             "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=14fa7571-bfac-427f-aa18-9488391d4c5e&ccId=19000101_000001&type=MP&lang=en_US&selectedMenuKey=CurrentOpenings"
         )
         == "adp"
+    )
+
+
+def test_resolve_listing_readiness_override_uses_platform_registry_config() -> None:
+    workday = resolve_listing_readiness_override(
+        "https://smithnephew.wd5.myworkdayjobs.com/External"
+    )
+    adp = resolve_listing_readiness_override(
+        "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=1"
+    )
+
+    assert workday == {
+        "platform": "workday",
+        "domain": "smithnephew.wd5.myworkdayjobs.com",
+        "selectors": [
+            "a[href*='/External/job/']",
+            "a[href*='/job/']",
+            "[data-automation-id='jobTitle']",
+        ],
+        "max_wait_ms": 15000,
+    }
+    assert adp == {
+        "platform": "adp",
+        "domain": "workforcenow.adp.com",
+        "selectors": [".current-openings-item", "[id^='lblTitle_']"],
+        "max_wait_ms": 20000,
+    }
+
+
+def test_detect_platform_family_ignores_html_marker_matches_on_unrelated_domains() -> None:
+    html = """
+    <html>
+      <head>
+        <script>window.__NEXT_DATA__ = {};</script>
+      </head>
+      <body>
+        <footer>Workday privacy choices</footer>
+      </body>
+    </html>
+    """
+
+    assert (
+        detect_platform_family(
+            "https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products",
+            html,
+        )
+        is None
     )

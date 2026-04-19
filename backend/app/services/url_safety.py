@@ -11,6 +11,7 @@ from app.services.config.crawl_runtime import (
     DNS_RESOLUTION_RETRIES,
     DNS_RESOLUTION_RETRY_DELAY_MS,
 )
+from app.services.network_resolution import dns_resolution_families
 
 
 class SecurityError(ValueError):
@@ -157,21 +158,29 @@ async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
 
 async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
     attempts = max(1, int(DNS_RESOLUTION_RETRIES) + 1)
+    families = dns_resolution_families()
+    records: list[tuple[object, ...]] | None = None
+    last_error: socket.gaierror | None = None
     for attempt in range(1, attempts + 1):
-        try:
-            records = await asyncio.to_thread(
-                socket.getaddrinfo,
-                hostname,
-                port,
-                socket.AF_UNSPEC,
-                socket.SOCK_STREAM,
-            )
-            break
-        except socket.gaierror as exc:
-            if attempt < attempts:
-                await asyncio.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
+        for family in families:
+            try:
+                records = await asyncio.to_thread(
+                    socket.getaddrinfo,
+                    hostname,
+                    port,
+                    family,
+                    socket.SOCK_STREAM,
+                )
+                break
+            except socket.gaierror as exc:
+                last_error = exc
                 continue
-            raise ValueError(f"Target host could not be resolved: {hostname}") from exc
+        if records is not None:
+            break
+        if attempt < attempts:
+            await asyncio.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
+            continue
+        raise ValueError(f"Target host could not be resolved: {hostname}") from last_error
 
     resolved: list[str] = []
     seen: set[str] = set()

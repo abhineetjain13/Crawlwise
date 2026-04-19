@@ -164,7 +164,9 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
 
             verdicts.append(str(url_result.verdict or VERDICT_ERROR))
-            record_count += len(url_result.records)
+            record_count += as_int(
+                url_result.url_metrics.get("record_count", len(url_result.records))
+            )
             method = str(url_result.url_metrics.get("method") or "").strip()
             if method:
                 methods[method] = int(methods.get(method, 0) or 0) + 1

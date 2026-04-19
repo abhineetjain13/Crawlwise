@@ -1,209 +1,156 @@
-<!-- Ground-truthed against codebase on 2026-04-18. Each claim annotated with STILL TRUE / PARTIALLY TRUE / NO LONGER TRUE. -->
-
 1. SOLID / DRY / KISS — Core Software Principles
 Score: 3/10
 Violations:
-[HIGH] app/services/field_value_utils.py → Entire file (lines 1–791):
-**STILL TRUE.** Massive God Module violation (SRP). Still mixes URL absolutization (lines 79–130), regex constants (PRICE_RE, lines 27–30), generic HTML stripping (coerce_text), recursive JSON-LD parsing (collect_structured_candidates, lines 442–555), variant schema generation (_structured_variant_rows, lines 371–415), and DOM selector fallbacks (apply_selector_fallbacks, lines 742–780). Partial progress: `extraction_html_helpers.py` was created (Slice 1 partial) factoring out `html_to_text`/`extract_job_sections`, but the core god-module shape remains.
-[HIGH] app/services/record_export_service.py → stream_export_json, stream_export_csv, stream_export_tables_csv, stream_export_discoverist (lines 142–234):
-**STILL TRUE.** Severe DRY violation. Every format duplicates the same pagination while loop and buffer management. Lines 723–746 additionally add 14 backwards-compatible function aliases (`_stream_export_json = stream_export_json` etc.) purely to satisfy outdated tests — a hard layer violation blocking refactoring.
-[MEDIUM] app/services/detail_extractor.py → build_detail_record (lines 256–368):
-**STATUS CHANGED — DESIGN INTENT, NOT A BUG.** The function still evaluates all extraction sources (adapter, network, JS state, JSON-LD, microdata, opengraph, embedded JSON, DOM) sequentially and accumulates into a shared `candidates` dict without early-exit. However, the current design is intentional multi-source aggregation — Slice 2 has actually added microdata and OpenGraph as additional sources. Early-exit remains a valid future optimization but is not the KISS violation the audit implied.
-Verdict:
-The codebase suffers from heavy procedural scripts masquerading as service modules. Data extraction flows are built as monolithic top-down functions rather than pipelined, composable processors.
-
+[CRITICAL] pipeline/core.py → _process_single_url (lines 145–298): Massive God function. Handles robots.txt validation, HTTP/Browser acquisition, network payload injection, adapter execution, fallback extraction, DB logging, URL metric finalization, and selector self-healing in a single linear block. Blatant SRP violation making unit testing impossible without mocking the universe.
+[HIGH] js_state_mapper.py → _map_js_state_to_fields (lines 80-90): Directly references _map_job_detail_state and _map_ecommerce_detail_state which internally hardcode schema keys (REMIX_GREENHOUSE_SPEC). OCP violation; adding a new platform requires modifying the generic state mapper.
+[HIGH] adapters/adp.py, adapters/greenhouse.py, adapters/icims.py: Repeated implementation of _clean_text (e.g., adp.py lines 152-153) despite the existence of app.services.field_value_utils.clean_text. DRY violation.
+[MEDIUM] config/_module_exports.py → make_getattr (lines 7-30): Over-engineered dynamic module attribute injection to override __getattr__. Breaks IDE autocompletion, static typing (mypy), and makes configuration resolution unnecessarily opaque (KISS violation).
+Verdict: The core pipeline is heavily procedural rather than object-oriented or composed of discrete functional stages. Dynamic config injection and adapter-level boilerplate create unnecessary technical debt.
 2. Configuration Hygiene — No Site-Specific Hacks
-Score: 1/10
+Score: 2/10
 Violations:
-[CRITICAL] app/services/crawl_utils.py → _normalize_adp_detail_url (lines 67–97):
-**STILL TRUE.** Blatant violation of INVARIANTS.md §29 (Generic crawler paths stay generic). Still hardcodes workforcenow.adp.com, myjobs.adp.com, and recruiting.adp.com directly in a core utility module. Unchanged since audit.
-[CRITICAL] app/services/network_payload_mapper.py → _map_job_detail_payload + GREENHOUSE_DETAIL_SPEC:
-**PARTIALLY TRUE — SIGNIFICANTLY IMPROVED.** The old `_map_job_detail_payload` inline function is gone. Greenhouse and generic job/ecommerce specs are now declared in `app/services/config/network_payload_specs.py` (Slice 3 landed). Mapper uses generic `_first_non_empty_path()`. The specs are still Greenhouse-aware but are config-declared, not inlined in service code.
-[MEDIUM] app/services/detail_extractor.py → _apply_dom_fallbacks (lines 92-100):
-**VERIFY NEEDED.** The "remote"/"work from home" string matching claim needs verification against the current file structure — the module was rewritten in the refactor.
-Verdict:
-ADP hardcoding in crawl_utils.py is the remaining live Invariant 29 violation. Network mapper tenant leak is substantially resolved by moving specs to config.
-
+[CRITICAL] crawl_fetch_runtime.py → _classify_network_endpoint (lines 541–558): Hardcodes site-specific domains ("greenhouse", "workday", "lever.co", "shopify") directly inside the core browser interception logic. Pure hack. This logic belongs in platform_policy.json and the PlatformRegistryDocument.
+[HIGH] js_state_mapper.py → REMIX_GREENHOUSE_SPEC (lines 53-80): Hardcodes a site-specific Greenhouse JSONPath schema into the generic JS state mapper.
+[MEDIUM] domain_utils.py → normalize_domain (lines 24-26): Hardcodes port 80 and 443 stripping inside business logic rather than referencing configuration or standard library constants.
+[LOW] platform_url_normalizers.py → normalize_adp_detail_url (lines 10-14): Site-specific normalizer lives in global scope rather than being encapsulated within the ADPAdapter boundary.
+Verdict: Severe configuration hygiene failures. The abstraction boundary between the generic crawler engine and platform-specific heuristics is completely broken by inline string matching in hot paths.
 3. Scalability, Maintainability & Resource Management
 Score: 4/10
 Violations:
-[CRITICAL] app/services/crawl_fetch_runtime.py → _browser_fetch / _capture_response (lines 339–426):
-**PARTIALLY TRUE.** network_payloads.append(...) still captures every JSON response with no upfront size cap. The [:25] slice is still applied downstream (line 420) rather than at the intercept layer as recommended. Diagnostic improvement: `network_payload_count` now reports pre-slice count, making unbounded growth visible. The recommended fix (cap inside _capture_response before append) is not implemented.
-[HIGH] app/services/crawl_utils.py → parse_csv_urls (lines 40–52):
-**STILL TRUE.** Reads entire CSV payloads into memory using io.StringIO(csv_content) synchronously. Blocks asyncio event loop. No async version.
-[HIGH] app/services/crawl_fetch_runtime.py → SharedBrowserRuntime.page (lines 84–104):
-**STILL TRUE.** Context cleanup still relies on a basic `finally: await context.close()`. `_active_contexts` counter exists (line 90) but no PID tracking or forced teardown.
-Verdict:
-Dangerous memory handling in the browser capture phase and synchronous I/O on batch data pose immediate production risks under load.
-
+[CRITICAL] crawl_fetch_runtime.py → is_blocked_html (lines 122–171): Performs synchronous, CPU-bound BeautifulSoup parsing and DOM iteration (node.decompose(), soup.get_text()) directly on the async event loop. Will stall the event loop under concurrent load.
+[HIGH] script_text_extractor.py → iter_script_text_nodes (lines 14-25): Uses Selector(text=html) synchronously. parsel parsing is CPU-intensive and blocks the async thread.
+[HIGH] crawl_fetch_runtime.py → _capture_response (lines 280-285): Reads response.body() into memory without stream chunking. Though constrained by _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES, 500KB * 25 payloads * N concurrent contexts = OOM risk under heavy concurrency.
+[MEDIUM] crawl_service.py → _track_local_run_task (lines 59-86): Spawns unbounded asyncio.create_task references into a global _local_run_tasks dictionary. While it has a _cleanup callback, task cancellation during shutdown creates race conditions handled clumsily by recover_stale_local_runs.
+Verdict: CPU-bound HTML parsing on the async event loop is a fatal flaw that will choke the API and Celery workers under scale. Resource tracking relies on globals rather than structured concurrency.
 4. Extraction & Normalisation Pipeline Audit
-Score: 3/10
+Score: 6/10
 Violations:
-[CRITICAL] app/services/js_state_mapper.py → _map_ecommerce_detail_state (line 252):
-**STILL TRUE.** `product.get("product_type")` is still mapped to the category field (`"category": product.get("category") or product.get("product_type") or product.get("type")`) without validating against the schema policy for the requested surface.
-[HIGH] app/services/structured_sources.py → _extract_assignment_payload (lines 144–196):
-**STILL TRUE.** Uses brittle regex combined with `_balanced_json_fragment()` custom brace-counting parser. Function unchanged. The `_revive_nuxt_data_payload` improvement (Slice 2) handles __NUXT_DATA__ revival but does not replace the fragile extraction mechanism for __PRELOADED_STATE__.
-[MEDIUM] app/services/detail_extractor.py → record["_self_heal"] metadata (lines 394–398):
-**STILL TRUE.** `selector_self_heal_enabled` and `selector_self_heal_min_confidence` are pulled directly from live `crawler_runtime_settings` at record-build time, bypassing the CrawlRunSettings snapshot. Violates INVARIANTS.md §26 (config must be snapshot-stable).
-Verdict:
-Hydrated state extraction improved: Slice 2 added extruct microdata, Open Graph, and NUXT_DATA revival. The pipeline now has more structured sources. But schema bleed in JS state mapper and snapshot bypass in self-heal metadata remain.
-
+[CRITICAL] detail_extractor.py → _materialize_record (lines 169–200): Accumulates candidates using candidates.get(field_name,[]). finalize_candidate_value blindly takes the first value without sorting by source tier. Because build_detail_record invokes sources in priority order, it usually works, but _apply_dom_fallbacks arbitrarily mutates candidates. Unsafe implicit priority ranking.
+[HIGH] crawl_fetch_runtime.py → expand_all_interactive_elements (lines 393-448): Blindly selects [data-testid*='expand'] and invokes .click(). Missing AOM/visibility checks prior to clicking, causing potential overlap/modal interference.
+[MEDIUM] selector_self_heal.py → reduce_html_for_selector_synthesis (lines 26-28): Slices HTML at 200,000 characters (text[:200_000]). Blind string slicing of HTML creates malformed markup, which is then fed to the LLM for XPath synthesis, causing hallucinations.
+[MEDIUM] records.py → CrawlRecordResponse._clean_for_display (lines 52-66): The API schema relies on a Pydantic model_validator to scrub _ prefixed fields instead of maintaining a strict separation between raw DB models and external DTOs.
+Verdict: The extraction hierarchy works conceptually, but implementation relies on implicit ordering rather than strict, typed source-priority tracking. The LLM context truncation is dangerously naive.
 5. Traversal Mode Audit
-Score: 1/10
+Score: 5/10
 Violations:
-[CRITICAL] app/services/_batch_runtime.py & app/services/pipeline/core.py:
-Traversal is a ghost feature. app/services/crawl_utils.py correctly parses advanced_mode (paginate, scroll, load_more), and passes it to URLProcessingConfig. However, nowhere in the execution engine is there a loop to actually paginate, scroll, or click "Next". The crawler only ever fetches a single page per URL.
-[HIGH] app/services/crawl_fetch_runtime.py → _browser_fetch (lines 201–229):
-Playwright implementation performs a standard goto, waits for network idle, and returns. No interaction, no scrolling to trigger lazy-loaded images, and no viewport modification to ensure visibility-gated elements render.
-Verdict:
-Pagination and infinite scroll are completely missing from the execution layer despite extensive configuration support.
-
+[CRITICAL] traversal.py → _run_paginate_traversal (lines 142-150): Uses urljoin(current_url, href) and issues page.goto(). If the pagination link points to a cross-domain promotion or relative path escaping the tenant, the crawler escapes the domain boundary. Missing same-origin enforcement constraint.
+[HIGH] traversal.py → _run_paginate_traversal (lines 151): Uses locator.click(timeout=1000) without capturing the resulting navigation Promise, leading to race conditions where _page_snapshot captures the DOM before the SPA transition completes.
+[MEDIUM] crawl_utils.py → resolve_traversal_mode (lines 100-131): Complex string normalizations ("infinite_scroll" to "scroll", "view_all" to "load_more") mixed with legacy advanced_mode flags. Tangled configuration inheritance.
+Verdict: Traversal lacks robust off-domain protection and mismanages Playwright's asynchronous navigation lifecycle during pagination.
 6. Resilience & Error Handling
 Score: 4/10
 Violations:
-[HIGH] app/services/adapters/base.py → _request_json_with_curl (lines 142–146):
-except Exception: silently swallows all execution errors (including asyncio.CancelledError or MemoryError) and returns None, hiding critical systemic failures.
-[HIGH] app/services/crawl_fetch_runtime.py → _browser_fetch (lines 173–175):
-except Exception: return inside _capture_response. If the intercepted JSON is malformed, it silently drops the payload instead of logging the anomaly for observability.
-[MEDIUM] app/services/llm_provider_client.py → call_provider_with_retry (lines 40–62):
-Complies with Invariant 27 (fails fast on 429), but handles provider timeouts identically to parsing failures, advancing the retry loop immediately without applying the base_delay_s backoff it defines.
-Verdict:
-Widespread use of bare except Exception: masks system instability and logic errors.
-
+[HIGH] crawl_fetch_runtime.py → _capture_response (lines 280-285, 289-296): Contains bare except Exception: return. Silently swallows JSON decode errors and body read failures without updating URL metrics or logging the failure reason cleanly to the run.
+[HIGH] robots_policy.py → _fetch_robots_snapshot (lines 60-84): Catches generic Exception implicitly via (TimeoutError, URLError, OSError, ValueError). However, urlopen blocks the thread indefinitely if the underlying socket hangs because Python's default socket timeout isn't strictly honored by all TLS handshakes unless specified at the context level.
+[MEDIUM] crawl_fetch_runtime.py → _browser_fetch (lines 331-344): goto wrapped in try/except falling back to wait_until="commit". But if the page crashes entirely (Target Closed), it raises TargetClosedError which is swallowed and returned as a generic 200 OK with whatever empty DOM was present.
+Verdict: Widespread use of broad exception catching (except Exception) that masks underlying Playwright instability and network partition errors.
 7. Dead Code & Technical Debt Hotspots
-Score: 0/10
+Score: 6/10
 Violations:
-[CRITICAL] app/api/selectors.py, app/services/selectors_runtime.py, app/services/domain_memory_service.py:
-**CONFIRMED ACTIVE — STILL A LIVE VIOLATION.** All three files exist and were last modified 2026-04-18. The entire Domain Memory and Selector CRUD system is actively running. `test_selectors_runtime.py` and `test_domain_memory_service.py` exist as test coverage. This directly violates INVARIANTS.md §5 (Deleted subsystems stay deleted). Must be eradicated.
-[HIGH] app/services/record_export_service.py → (lines 723–746):
-**STILL TRUE.** 14 backwards-compatible function aliases (`_stream_export_json = stream_export_json` etc.) exported purely to satisfy outdated tests. Hard layer violation that prevents refactoring.
-[MEDIUM] app/services/crawl_state.py → (line 29):
-# TODO: implement event publishing left in production path for status transitions.
-[MEDIUM] app/services/config/selectors.exports.json → (lines 59–65):
-"_jobs_selector_notes" injected directly into the CARD_SELECTORS dictionary schema, polluting runtime config with developer comments.
-Verdict:
-The resurrection of the banned Domain Memory subsystem is the highest-severity unresolved issue in the codebase as of 2026-04-18. It is actively maintained with tests, indicating deliberate reintroduction rather than accidental drift.
-
+[MEDIUM] crawl_state.py → update_run_status (line 25): # TODO: implement event publishing. Leftover technical debt in core state transitions.
+[MEDIUM] runtime_helpers.py → log_for_pytest (lines 13-14): Exists entirely to be patched in tests. Production code should never contain test-specific stubs.
+[LOW] browser_pool.py → BrowserPool (lines 22-23): Empty class stub (pass) that serves no purpose, as browser pool logic is handled by SharedBrowserRuntime in crawl_fetch_runtime.py.
+Verdict: Moderate technical debt. Test-specific hooks in production files break boundary cleanliness.
 8. Acquisition Mode Audit & Site Coverage
 Score: 5/10
 Violations:
-[HIGH] app/services/crawl_engine.py → fetch_page (lines 54–60):
-platform_policy.requires_browser configuration is essentially ignored. The fetch_page function only uses prefer_browser (which comes from the user config profile) or _host_prefers_browser (an ephemeral runtime cache). Known JS-heavy platforms (like ADP) will burn a failed curl_cffi request every single time before escalating via _should_escalate_to_browser.
-[MEDIUM] app/services/crawl_fetch_runtime.py → _browser_fetch (lines 201–210):
-The fallback logic for networkidle timeout catches Exception and falls back to wait_until="commit", but does not stop the previous goto task, potentially leaving orphaned network requests hanging.
-**IMPROVEMENT NOTE:** Slice 4 (Browser Fingerprint Restoration) has landed. `acquisition/browser_identity.py` (72 lines) uses browserforge-based coherent identity generation replacing static values. `test_browser_context.py` (137 lines) covers context creation behavior.
-Verdict:
-Browser escalation works reactively (on block/js-shell) but ignores proactive platform configurations, wasting bandwidth and time on doomed requests. Browser identity now uses dynamic fingerprinting.
-
+[CRITICAL] network_payload_specs.py → NETWORK_PAYLOAD_SPECS (lines 11-140): Completely missing declarative specs for Workday, Taleo, Lever, and standard SPA commerce APIs. The framework supports XHR mapping but lacks the actual definitions, resulting in silent fallback to DOM scraping for these platforms.
+[HIGH] crawl_fetch_runtime.py → fetch_page (lines 504-511): The decision to escalate to browser (_should_escalate_to_browser) relies on _looks_like_js_shell which triggers if text < 120 chars and 3+ scripts exist. Extremely brittle heuristic that fails on modern SSR-hydrated sites that ship substantial text but require JS for the specific extraction targets.
+[MEDIUM] browser_identity.py → create_browser_identity (lines 19-36): Generates realistic fingerprints but drops user-agent from extra_http_headers and passes it via context options, which in Playwright CDP can mismatch navigator.userAgent unless userAgent is strictly aligned in CDP overrides.
+Verdict: The XHR interception engine is conceptually strong but practically empty due to missing payload specs. Escalation heuristics to the browser are brittle.
 FINAL SUMMARY
-Overall Score: 2.6/10 (original) — partial improvement in progress
-
-## Ground-Truth Status Summary (2026-04-18)
-
-### Extraction Enhancement Tracker — Slice Status
-
-| Slice | Covers | Status | Evidence |
-|-------|--------|--------|----------|
-| Slice 1 | JS State ecommerce + HTML helpers dedup | **IN PROGRESS (partial)** | `extraction_html_helpers.py` exists (44 lines); `test_state_mappers.py` exists (219 lines). JS state ecommerce field extension not yet confirmed complete. |
-| Slice 2 | Structured-source coverage (extruct, OG, Nuxt3) | **LANDED (untracked)** | `structured_sources.py` imports extruct, has `parse_microdata`, `parse_opengraph`, `_revive_nuxt_data_payload`. `detail_extractor.py` calls both. `test_detail_extractor_structured_sources.py` exists (113 lines). |
-| Slice 3 | Generic network payload mapping | **LANDED (untracked)** | `config/network_payload_specs.py` exists (327 lines); `network_payload_mapper.py` uses declarative specs + `_first_non_empty_path()`. `test_network_payload_mapper.py` exists (133 lines). |
-| Slice 4 | Browser fingerprint restoration | **LANDED (untracked)** | `acquisition/browser_identity.py` exists (72 lines); `test_browser_context.py` exists (137 lines). |
-| Slice 5 | URL tracking-param strip | **LANDED (committed)** | `field_value_utils.py` imports `w3lib.url.url_query_cleaner` (line 11), has `TRACKING_PARAM_PREFIXES` and `strip_tracking_query_params()` (line 109). |
-| Slice 6 | robots.txt dispatch gate | **NOT STARTED** | No `robots_policy.py` found. |
-| Slice 7 | selectolax CSS-path migration | **NOT STARTED** | No selectolax import found. |
-| Slice 8 | parsel script-text upgrade | **NOT STARTED** | No parsel import found. |
-
-### Critical Path (re-ranked by current state)
-
-1. **Domain Memory resurrection** — Highest severity. All three banned files active as of 2026-04-18. Invariant 5 violation.
-2. **ADP hardcodes in crawl_utils.py** — `_normalize_adp_detail_url` lines 67–97. Unchanged. Invariant 29 violation.
-3. **Unbounded network capture** — Cap must move into `_capture_response` before append, not downstream `[:25]` slice.
-4. **`_self_heal` snapshot bypass** — `detail_extractor.py:394–398` reads live settings, not frozen snapshot. Invariant 26 violation.
-5. **`field_value_utils.py` God Module** — Slice 1 partial progress only; core shape unchanged.
-6. **Missing traversal engine** — `advanced_mode` config accepted but no Playwright execution loop exists.
-
-### Genuine Strengths
-LLM Isolation: The LLM boundary in llm_tasks.py cleanly separates non-deterministic fallback logic from the deterministic extraction engine, adhering well to the extraction source hierarchy invariant.
-Fail-Open Redis: The redis_fail_open implementation in app/core/redis.py correctly ensures that temporary cache/state failures do not take down the primary crawl ingestion flow.
-**NEW (post-audit):** Declarative network payload specs in `config/network_payload_specs.py` replace inline Greenhouse tenant logic. Extruct-backed microdata and Open Graph extraction are now wired into the candidate pipeline. Dynamic browser identity via browserforge replaces static user-agent strings. w3lib tracking-param stripping is live.
-
+Overall Score: 4.5/10
+Critical Path:
+CPU-Blocking I/O in Async Paths: is_blocked_html and iter_script_text_nodes run synchronous BeautifulSoup and parsel operations on the async event loop, risking complete API/worker deadlock under high concurrency.
+SRP Violation in _process_single_url: The 150-line monolith in pipeline/core.py intertwines network I/O, LLM execution, DOM parsing, and database transactions, making isolated error recovery impossible.
+Off-Domain Pagination Leaks: _run_paginate_traversal blindly follows href attributes via page.goto(), allowing the crawler to escape the target tenant and scrape unintended external domains.
+Configuration Bleed: Hardcoded domains ("greenhouse", "workday", "shopify") in crawl_fetch_runtime.py bypass the platform_policy configuration engine.
+Memory Exhaustion via XHR Interception: Unbounded body byte accumulation in _capture_response risks OOM crashes when Playwright context concurrency scales up.
+Genuine Strengths:
+Selector Self-Healing Loop: selector_self_heal.py successfully implements an autonomous feedback loop, calling the LLM (discover_xpath_candidates), validating the output (_validated_xpath_rules), and persisting it back to domain_memory for future runs.
+Robust Field Normalization: field_value_core.py and normalizers.py effectively execute rigorous standardizations (cent-to-dollar conversions, clean location concatenations, tracker query stripping) safely decoupled from extraction.
 TOP 5 ARCHITECTURAL RECOMMENDATIONS
-1. Implement Early-Exit Candidate Collection
-Affected Files: app/services/detail_extractor.py (build_detail_record).
-Current: Appends candidates from all sources (Network, JS State, JSON-LD, microdata, opengraph, DOM) to a master dict, then finalizes together. Now has 8 source types post-Slice-2. Wastes CPU parsing the DOM even if the network payload already provided a 100% confidence record.
-Target:
+1. Decouple CPU-Bound HTML Parsing from the Event Loop
+Target: crawl_fetch_runtime.py (is_blocked_html), script_text_extractor.py.
+Current: Synchronous BeautifulSoup and parsel parsing runs directly in async def functions, blocking the asyncio loop.
+Target Structure: Wrap all BeautifulSoup(html, "html.parser") and Selector(text=html) calls in asyncio.to_thread(). For extraction, instantiate a singleton ProcessPoolExecutor for heavy DOM traversal.
+Simplification: Prevents the need to sprinkle await asyncio.sleep(0) hacks. Cleanly segregates I/O tasks from CPU tasks.
+Outcome: Eliminates worker deadlocks and drastically improves concurrent request throughput.
+2. Refactor _process_single_url using the Chain of Responsibility
+Target: pipeline/core.py (_process_single_url).
+Current: A massive monolithic function checking robots.txt, fetching, adapting, parsing, LLM fallback, and saving.
+Target Structure:
+
+class PipelineContext: url: str; run: CrawlRun; html: str; records: list
+class PipelineStage(Protocol): async def process(ctx: PipelineContext) -> None
+# Implement: RobotsStage, AcquisitionStage, AdapterStage, DomExtractionStage, LLMFallbackStage, PersistenceStage.
+Simplification: Reduces core.py from 300+ lines of nested if statements to a clear, iterable array of stage execution.
+Outcome: Resolves the SRP violation, allows unit testing individual pipeline stages, and isolates DB transaction boundaries.
+3. Enforce strict Domain Boundaries in Traversal
+Target: traversal.py (_run_paginate_traversal).
+Current: await page.goto(urljoin(current_url, href)) navigates without verifying the destination host.
+Target Structure: Extract the netloc of the original run URL. Before page.goto, compare urlparse(next_url).netloc. If it diverges, raise an OffDomainTraversalError and halt pagination.
+Simplification: Consolidates domain safety checks.
+Outcome: Prevents the crawler from bleeding into external advertising, social media, or partner sites during unbounded pagination.
+4. Purge Tenant Hardcodes from the Acquisition Runtime
+Target: crawl_fetch_runtime.py (_classify_network_endpoint), js_state_mapper.py.
+Current: Hardcodes strings like "greenhouse" and "shopify" in generic pipeline interceptors.
+Target Structure: Use the existing PlatformConfig. Add network_signatures and js_state_roots to the schema in platforms.json. Read these inside _classify_network_endpoint dynamically via platform_configs().
+Simplification: Removes branch logic and centralizes all tenant-specific behaviors into JSON config.
+Outcome: Restores OCP compliance and makes adding new XHR-intercepted platforms a config-only operation.
+5. Safe HTML Truncation via DOM Parsing
+Target: selector_self_heal.py (reduce_html_for_selector_synthesis).
+Current: Performs blind string slicing (text[:200_000]), potentially truncating in the middle of a <div... which breaks XPath syntax generation in the LLM.
+Target Structure: Use BeautifulSoup to find the main content node (<main>, <article>, or #root). Serialize only that node. If still too large, iteratively .decompose() non-essential tags (footers, asides) before serialization.
+Simplification: Removes arbitrary character limits in favor of semantic content extraction.
+Outcome: Prevents LLM hallucinations caused by malformed HTML strings, improving selector synthesis accuracy.
+EXTRACTION ENHANCEMENT RECOMMENDATIONS
+1. XHR Ghost-Routing / Playwright Request Interception
+Concept: (Apify/Zyte pattern). Modern ATS platforms (Workday, Taleo, Lever) load job data via background JSON APIs. Parsing the DOM is brittle and slow.
+Gap Addressed: network_payload_specs.py is virtually empty. The system is equipped to intercept JSON but lacks the mappings for the most critical enterprise ATS platforms.
+Implementation Sketch:
 code
 Python
-record = {}
-for source_fn, name in [(extract_network, "network"), (extract_js, "js_state"), ...]:
-    candidates = source_fn()
-    record.update({k: v for k, v in candidates.items() if k not in record})
-    if record_score(record) >= max_possible: break
-Simplification: Removes the need to track large lists of overlapping candidates and complex deduplication logic inside add_candidate.
-Outcome: Drastically reduces CPU usage on SPA sites by skipping BeautifulSoup parsing entirely if hydrated state provides all requested fields.
-
-2. Purge Hardcoded Site Hacks from Core
-Affected Files: app/services/crawl_utils.py (_normalize_adp_detail_url).
-Current: ADP domain string matching still buried in generic routing utility. Network mapper Greenhouse leak is resolved (Slice 3).
-Target: Move ADP query manipulation into app/services/adapters/adp.py (via a normalize_url interface).
-Simplification: Standardizes adapter boundaries. Removes branching logic from core utilities.
-Outcome: Fixes critical violation of Invariant 29. Prevents core pipeline modifications every time a new site family is added.
-
-3. Create Unified Export Streamer
-Affected Files: app/services/record_export_service.py.
-Current: stream_export_json, stream_export_csv, and stream_export_discoverist each implement their own DB pagination while loop. 14 backwards-compat aliases block refactoring.
-Target: Create a single async def iter_records(run_id) generator. The format functions just consume it: async for record in iter_records(run_id): yield format(record).
-Simplification: Drops ~80 lines of duplicated database offset/limit logic.
-Outcome: Eliminates DRY violations and ensures consistent pagination performance across all export types.
-
-4. Cap Memory Usage in Browser Interception
-Affected Files: app/services/crawl_fetch_runtime.py (_browser_fetch).
-Current: network_payloads.append(payload) stores unlimited JSON files in memory per page load. [:25] slice is applied downstream after all payloads are already captured.
-Target: Add an early exit in _capture_response: if len(network_payloads) >= 25 or len(payload_bytes) > 500_000, return immediately. Only capture URLs matching specific data patterns, ignoring obvious telemetry endpoints.
-Simplification: Replaces downstream array slicing [:25] with upfront prevention.
-Outcome: Fixes a critical OOM vector. Scalability score improves instantly.
-
-EXTRACTION ENHANCEMENT RECOMMENDATIONS
-1. Schema Healing via Declarative Path Specs (glom)
-Gap Found: js_state_mapper.py relies on deep, recursive, bespoke _find_product_payload functions that are brittle to structural changes.
-Competitor Reference: Diffbot's structured data normalization layer; Scrapy ItemLoaders.
-Target Slot: Hydrated State (js_state_mapper.py).
-Sketch:
+# network_payload_specs.py
+"job_detail": (
+    {
+        "name": "workday_detail",
+        "required_path_groups": (("jobPostingInfo",),),
+        "field_paths": {
+            "title": ("jobPostingInfo.title",),
+            "description_html": ("jobPostingInfo.jobDescription",),
+            "location": ("jobPostingInfo.location",),
+            "posted_date": ("jobPostingInfo.startDate",)
+        }
+    },
+)
+Yield Improvement: Near 100% precision on Workday/Lever jobs. Reduces reliance on the brittle _apply_dom_fallbacks and entirely skips LLM fallback for these platforms.
+2. Schema Healing via Declarative Path Specs (glom)
+Concept: (Diffbot/glom pattern). Replace massive nested if/elif dictionary retrieval logic with declarative fallback paths.
+Gap Addressed: structured_sources.py _parse_opengraph_fallback and _parse_microdata_node are deeply nested and prone to missing variant keys.
+Implementation Sketch:
 code
 Python
 from glom import glom, Coalesce
-ECOMMERCE_SPEC = {
-    "title": Coalesce("product.title", "productData.name", "query.product.title", default=None),
-    "price": Coalesce("product.price", "offers.0.price", default=None)
+
+# Replace nested dict.get() chains:
+OPENGRAPH_SPEC = {
+    "title": Coalesce("og:title", "twitter:title", default=None),
+    "image": Coalesce("og:image", "og:image:secure_url", "twitter:image", default=None),
+    "price": Coalesce("product:price:amount", "og:price:amount", default=None),
 }
-def extract_state(js_data):
-    return {k: v for k, v in glom(js_data, ECOMMERCE_SPEC).items() if v}
-Yield Improvement: Drastically improves reliability on Shopify, Next.js, and Nuxt sites. Eliminates manual recursive searching, recovering partial records instantly when frontend devs nest data one level deeper.
-
-2. Accessibility Tree Expansion (AOM)
-Gap Found: build_detail_record parses the static DOM, meaning specs/features hidden behind "Read More" or Accordions are totally missed if they aren't in the initial HTML footprint.
-Competitor Reference: Playwright accessibility.snapshot() used in Zyte and Apify.
-Target Slot: Pre-DOM parse browser expansion (inside _browser_fetch before page.content()).
-Sketch:
+normalized = glom(raw_meta_tags, OPENGRAPH_SPEC)
+Yield Improvement: Significant cleanup of technical debt in structured data parsing. Uncovers hidden image and price data currently missed due to slight key variations.
+3. Accessibility Tree (AOM) Snapshotting for LLM Context
+Concept: (Scrapy-Playwright / Diffbot pattern). Instead of feeding raw HTML to the LLM for missing field extraction, feed it the Accessibility Object Model (AOM) tree, which represents exactly what the user sees hierarchically.
+Gap Addressed: llm_tasks.py truncates raw HTML (which is 90% markup noise) via _truncate_html.
+Implementation Sketch:
 code
 Python
-buttons = await page.locator("button:has-text('Read More'), button[aria-expanded='false']").all()
-for btn in buttons[:3]:  # Cap clicks to avoid infinite traps
-    try: await btn.click(timeout=1000)
-    except Exception: pass
-await page.wait_for_timeout(500) # allow animations
-html = await page.content()
-Yield Improvement: Recovers "features", "specifications", and "responsibilities" fields on 30%+ of modern JS-rendered PDPs and ATS sites, heavily reducing the need for LLM fallback.
-
-3. XHR Ghost-Routing / Targeted Interception
-Gap Found: The current network interceptor blindly grabs the first 25 JSON files it sees. It misses critical GraphQL or specific REST endpoints if they load late.
-Competitor Reference: Apify's RequestQueue interception pattern.
-Target Slot: XHR/JSON source (network_payload_mapper.py).
-Sketch:
-code
-Python
-TARGET_ENDPOINTS = re.compile(r"/api/v1/jobs|/graphql\?operationName=ProductDetail")
-async def _capture_response(response):
-    if TARGET_ENDPOINTS.search(response.url):
-        network_payloads.append(await response.json())
-Yield Improvement: Secures 100% accurate data extraction from Workday, Taleo, and modern headless commerce sites without touching the DOM, reducing extraction time by skipping BeautifulSoup logic entirely.
+# crawl_fetch_runtime.py
+async def _capture_aom_snapshot(page: Page) -> str:
+    snapshot = await page.accessibility.snapshot()
+    # Recursively format node['role'] and node['name']
+    def format_node(node, indent=0):
+        text = f"{'  ' * indent}[{node['role']}] {node.get('name', '')}\n"
+        for child in node.get('children',

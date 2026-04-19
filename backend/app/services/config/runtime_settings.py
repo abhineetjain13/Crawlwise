@@ -111,6 +111,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     proxy_failure_state_max_entries: int = 1024
     dns_resolution_retries: int = 1
     dns_resolution_retry_delay_ms: int = 250
+    network_address_family_preference: Literal["auto", "ipv4", "ipv6"] = "auto"
     acquire_host_min_interval_ms: int = 250
     pacing_host_cache_max_entries: int = 1024
     pacing_host_cache_ttl_seconds: int = 3600

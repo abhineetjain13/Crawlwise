@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass, field
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.acquisition import AcquisitionRequest
 from app.services.acquisition.acquirer import acquire as _acquire
-from app.services.adapters.registry import run_adapter
+from app.services.acquisition.policy import AcquisitionPlan
+from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
 from app.services.artifact_store import persist_html_artifact
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
 from app.services.domain_memory_service import load_domain_selector_rules
@@ -51,6 +53,47 @@ __all__ = [
 ]
 
 acquire = _acquire
+
+
+@dataclass(slots=True)
+class _URLProcessingContext:
+    session: AsyncSession
+    run: CrawlRun
+    url: str
+    config: URLProcessingConfig
+    requested_fields: list[str] = field(default_factory=list)
+    surface: str = ""
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        session: AsyncSession,
+        run: CrawlRun,
+        url: str,
+        config: URLProcessingConfig,
+    ) -> "_URLProcessingContext":
+        return cls(
+            session=session,
+            run=run,
+            url=url,
+            config=config,
+            requested_fields=list(run.requested_fields or []),
+            surface=run.surface,
+        )
+
+
+@dataclass(slots=True)
+class _FetchedURLStage:
+    context: _URLProcessingContext
+    acquisition_result: object
+    url_metrics: dict[str, object]
+
+
+@dataclass(slots=True)
+class _ExtractedURLStage:
+    fetched: _FetchedURLStage
+    records: list[dict[str, object]]
 
 
 def get_selector_defaults(_domain: str, _field_name: str) -> list[dict]:
@@ -187,6 +230,7 @@ async def _persist_records(
                 field_name=field_name,
                 value=value,
                 source_label=str(record.get("_source") or "extraction"),
+                preserve_existing_sources=True,
             )
         persisted += 1
     return persisted
@@ -210,41 +254,94 @@ async def _process_single_url(
     prefetched_acquisition=None,
 ) -> URLProcessingResult:
     del checkpoint
-    resolved_config = _resolved_url_processing_config(
-        config,
-        proxy_list=proxy_list,
-        traversal_mode=traversal_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        max_records=max_records,
-        sleep_ms=sleep_ms,
-        update_run_state=update_run_state,
-        persist_logs=persist_logs,
+    context = _URLProcessingContext.build(
+        session=session,
+        run=run,
+        url=url,
+        config=_resolved_url_processing_config(
+            config,
+            proxy_list=proxy_list,
+            traversal_mode=traversal_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            max_records=max_records,
+            sleep_ms=sleep_ms,
+            update_run_state=update_run_state,
+            persist_logs=persist_logs,
+        ),
     )
-    if resolved_config.update_run_state:
-        await set_stage(session, run, STAGE_FETCH, current_url=url)
-        await session.commit()
-    robots_result = None
-    if run.settings_view.respect_robots_txt():
-        robots_result = await check_url_crawlability(url)
+    await _enter_fetch_stage(context)
+    robots_result = await _run_robots_gate(context)
+    if robots_result is not None:
+        return robots_result
+    fetched = await _run_fetch_stage(
+        context,
+        prefetched_acquisition=prefetched_acquisition,
+    )
+    if context.config.prefetch_only:
+        return _build_prefetch_only_result(context, fetched)
+    await _enter_analyze_stage(context)
+    extracted = await _run_extraction_stage(context, fetched)
+    return await _run_persistence_stage(context, extracted)
+
+
+async def _enter_fetch_stage(context: _URLProcessingContext) -> None:
+    if context.config.update_run_state:
+        await set_stage(context.session, context.run, STAGE_FETCH, current_url=context.url)
+        await context.session.commit()
+
+
+async def _enter_analyze_stage(context: _URLProcessingContext) -> None:
+    if context.config.update_run_state:
+        await set_stage(
+            context.session,
+            context.run,
+            STAGE_ANALYZE,
+            current_url=context.url,
+        )
+        await context.session.commit()
+
+
+async def _enter_save_stage(context: _URLProcessingContext) -> None:
+    if context.config.update_run_state:
+        await set_stage(context.session, context.run, STAGE_SAVE, current_url=context.url)
+        await context.session.commit()
+
+
+async def _log_pipeline_event(
+    context: _URLProcessingContext,
+    level: str,
+    message: str,
+    *,
+    commit: bool = True,
+) -> None:
+    if not context.config.persist_logs:
+        return
+    await log_event(context.session, context.run.id, level, message)
+    if commit:
+        await context.session.commit()
+
+
+async def _run_robots_gate(
+    context: _URLProcessingContext,
+) -> URLProcessingResult | None:
+    if context.run.settings_view.respect_robots_txt():
+        robots_result = await check_url_crawlability(context.url)
         if not robots_result.allowed:
-            if resolved_config.persist_logs:
-                await log_event(
-                    session,
-                    run.id,
-                    "warning",
-                    f"[ROBOTS] Blocked by robots.txt: {url}",
-                )
-                await session.commit()
+            await _log_pipeline_event(
+                context,
+                "warning",
+                f"[ROBOTS] Blocked by robots.txt: {context.url}",
+            )
             return URLProcessingResult(
                 records=[],
                 verdict=VERDICT_BLOCKED,
                 url_metrics=finalize_url_metrics(
                     {
                         "blocked": True,
-                        "final_url": url,
+                        "final_url": context.url,
                         "method": "",
-                        "requested_fields": list(run.requested_fields or []),
+                        "requested_fields": list(context.requested_fields),
                         "robots": {
                             "allowed": False,
                             "outcome": robots_result.outcome,
@@ -254,90 +351,215 @@ async def _process_single_url(
                     record_count=0,
                 ),
             )
-        if resolved_config.persist_logs and robots_result.outcome == ROBOTS_MISSING:
-            await log_event(
-                session,
-                run.id,
+        if robots_result.outcome == ROBOTS_MISSING:
+            await _log_pipeline_event(
+                context,
                 "info",
-                f"[ROBOTS] No robots.txt found for {url}; continuing",
+                f"[ROBOTS] No robots.txt found for {context.url}; continuing",
             )
-            await session.commit()
-        if resolved_config.persist_logs and robots_result.outcome == ROBOTS_FETCH_FAILURE:
-            await log_event(
-                session,
-                run.id,
+        if robots_result.outcome == ROBOTS_FETCH_FAILURE:
+            await _log_pipeline_event(
+                context,
                 "warning",
-                f"[ROBOTS] robots.txt check failed for {url}; continuing",
+                f"[ROBOTS] robots.txt check failed for {context.url}; continuing",
             )
-            await session.commit()
-    elif resolved_config.persist_logs:
-        await log_event(session, run.id, "info", f"[ROBOTS] Ignoring robots.txt for {url}")
-        await session.commit()
-    if resolved_config.persist_logs:
-        await log_event(session, run.id, "info", f"[FETCH] Fetching {url}")
-        await session.commit()
+        return None
+    await _log_pipeline_event(
+        context,
+        "info",
+        f"[ROBOTS] Ignoring robots.txt for {context.url}",
+    )
+    return None
 
-    acquisition_request = AcquisitionRequest(
-        run_id=run.id,
-        url=url,
-        surface=run.surface,
-        proxy_list=list(resolved_config.proxy_list or []),
-        traversal_mode=resolved_config.traversal_mode,
-        max_pages=resolved_config.max_pages,
-        max_scrolls=resolved_config.max_scrolls,
-        sleep_ms=resolved_config.sleep_ms,
-        requested_fields=list(run.requested_fields or []),
+
+def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionRequest:
+    return AcquisitionRequest(
+        run_id=context.run.id,
+        url=context.url,
+        surface=context.surface,
+        proxy_list=list(context.config.proxy_list or []),
+        traversal_mode=context.config.traversal_mode,
+        max_pages=context.config.max_pages,
+        max_scrolls=context.config.max_scrolls,
+        sleep_ms=context.config.sleep_ms,
+        requested_fields=list(context.requested_fields),
         requested_field_selectors={
-            field_name: get_selector_defaults(normalize_domain(url), field_name)
-            for field_name in list(run.requested_fields or [])
+            field_name: get_selector_defaults(normalize_domain(context.url), field_name)
+            for field_name in list(context.requested_fields)
             if field_name
         },
-        acquisition_profile=dict(build_acquisition_profile(run.settings_view)),
+        acquisition_profile=dict(build_acquisition_profile(context.run.settings_view)),
     )
-    acquisition_result = prefetched_acquisition or await acquire(acquisition_request)
-    url_metrics = build_url_metrics(
-        acquisition_result,
-        requested_fields=list(run.requested_fields or []),
-    )
-    if resolved_config.prefetch_only:
-        verdict = compute_verdict(
-            is_listing="listing" in run.surface,
-            blocked=bool(acquisition_result.blocked),
-            record_count=1 if acquisition_result.html else 0,
-        )
-        return URLProcessingResult(
-            records=[],
-            verdict=verdict,
-            url_metrics=finalize_url_metrics(url_metrics, record_count=0),
-        )
 
-    if resolved_config.update_run_state:
-        await set_stage(session, run, STAGE_ANALYZE, current_url=url)
-        await session.commit()
+
+async def _run_fetch_stage(
+    context: _URLProcessingContext,
+    *,
+    prefetched_acquisition,
+) -> _FetchedURLStage:
+    await _log_pipeline_event(context, "info", f"[FETCH] Fetching {context.url}")
+    acquisition_request = _build_acquisition_request(context)
+    acquisition_result = prefetched_acquisition or await acquire(acquisition_request)
+    return _FetchedURLStage(
+        context=context,
+        acquisition_result=acquisition_result,
+        url_metrics=build_url_metrics(
+            acquisition_result,
+            requested_fields=list(context.requested_fields),
+        ),
+    )
+
+
+def _build_prefetch_only_result(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+) -> URLProcessingResult:
+    verdict = compute_verdict(
+        is_listing="listing" in context.surface,
+        blocked=bool(fetched.acquisition_result.blocked),
+        record_count=1 if fetched.acquisition_result.html else 0,
+    )
+    return URLProcessingResult(
+        records=[],
+        verdict=verdict,
+        url_metrics=finalize_url_metrics(fetched.url_metrics, record_count=0),
+    )
+
+
+async def _run_extraction_stage(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+) -> _ExtractedURLStage:
+    acquisition_result = fetched.acquisition_result
+    records, selector_rules = await _extract_records_for_acquisition(
+        context,
+        fetched,
+    )
+    if _should_retry_browser_after_empty(acquisition_result, records):
+        await _log_pipeline_event(
+            context,
+            "info",
+            f"[EXTRACT] No records via {acquisition_result.method}; retrying browser render for {context.url}",
+        )
+        retry_request = _build_acquisition_request(context).with_profile_updates(
+            prefer_browser=True,
+            retry_reason="empty_extraction",
+        )
+        try:
+            browser_result = await acquire(retry_request)
+        except (RuntimeError, ValueError, TypeError, OSError) as exc:
+            await _log_pipeline_event(
+                context,
+                "warning",
+                f"[EXTRACT] Browser retry failed for {context.url}: {type(exc).__name__}: {exc}",
+            )
+        else:
+            fetched.acquisition_result = browser_result
+            acquisition_result = browser_result
+            records, selector_rules = await _extract_records_for_acquisition(
+                context,
+                fetched,
+            )
+    if "detail" in context.surface and records:
+        records, selector_rules = await apply_selector_self_heal(
+            context.session,
+            run=context.run,
+            page_url=acquisition_result.final_url,
+            html=acquisition_result.html,
+            records=records,
+            adapter_records=acquisition_result.adapter_records,
+            network_payloads=acquisition_result.network_payloads,
+            selector_rules=selector_rules,
+        )
+    if context.run.settings_view.llm_enabled() and "detail" in context.surface and records:
+        records = await _apply_llm_fallback(
+            context.session,
+            run=context.run,
+            page_url=acquisition_result.final_url,
+            html=acquisition_result.html,
+            records=records,
+        )
+    return _ExtractedURLStage(fetched=fetched, records=records)
+
+
+async def _extract_records_for_acquisition(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    acquisition_result = fetched.acquisition_result
+    acquisition_result.adapter_records = []
+    acquisition_result.adapter_name = None
+    acquisition_result.adapter_source_type = None
+
     adapter_result = await run_adapter(
         acquisition_result.final_url,
         acquisition_result.html,
-        run.surface,
+        context.surface,
     )
+    if (
+        (adapter_result is None or not list(adapter_result.records or []))
+        and acquisition_result.blocked
+    ):
+        adapter_result = await try_blocked_adapter_recovery(
+            acquisition_result.final_url,
+            AcquisitionPlan(
+                surface=context.surface,
+                adapter_recovery_enabled=True,
+            ),
+            proxy_list=list(context.config.proxy_list or []),
+        )
     if adapter_result is not None:
         acquisition_result.adapter_records = list(adapter_result.records or [])
         acquisition_result.adapter_name = adapter_result.adapter_name or None
         acquisition_result.adapter_source_type = adapter_result.source_type or None
+
     platform_family = detect_platform_family(
         acquisition_result.final_url,
         acquisition_result.html,
     )
     if platform_family and not acquisition_result.adapter_name:
         acquisition_result.adapter_name = platform_family
-    url_metrics = build_url_metrics(
+
+    fetched.url_metrics = build_url_metrics(
         acquisition_result,
-        requested_fields=list(run.requested_fields or []),
+        requested_fields=list(context.requested_fields),
     )
-    selector_rules = [
+    selector_rules = await _load_selector_rules(context, acquisition_result.final_url)
+    records = extract_records(
+        acquisition_result.html,
+        acquisition_result.final_url,
+        context.surface,
+        max_records=context.config.max_records,
+        requested_fields=list(context.requested_fields),
+        adapter_records=acquisition_result.adapter_records,
+        network_payloads=acquisition_result.network_payloads,
+        selector_rules=selector_rules,
+        extraction_runtime_snapshot=context.run.settings_view.extraction_runtime_snapshot(),
+    )
+    return records, selector_rules
+
+
+def _should_retry_browser_after_empty(
+    acquisition_result,
+    records: list[dict[str, object]],
+) -> bool:
+    if records:
+        return False
+    if acquisition_result.blocked or acquisition_result.method == "browser":
+        return False
+    content_type = str(getattr(acquisition_result, "content_type", "") or "").lower()
+    return "json" not in content_type
+
+
+async def _load_selector_rules(
+    context: _URLProcessingContext,
+    page_url: str,
+) -> list[dict[str, object]]:
+    return [
         *await load_domain_selector_rules(
-            session,
-            domain=normalize_domain(acquisition_result.final_url),
-            surface=run.surface,
+            context.session,
+            domain=normalize_domain(page_url),
+            surface=context.surface,
         ),
         *[
             {
@@ -349,73 +571,50 @@ async def _process_single_url(
                 "status": "validated",
                 "is_active": True,
             }
-            for row in run.settings_view.extraction_contract()
+            for row in context.run.settings_view.extraction_contract()
             if isinstance(row, dict)
         ],
     ]
-    records = extract_records(
-        acquisition_result.html,
-        acquisition_result.final_url,
-        run.surface,
-        max_records=resolved_config.max_records,
-        requested_fields=list(run.requested_fields or []),
-        adapter_records=acquisition_result.adapter_records,
-        network_payloads=acquisition_result.network_payloads,
-        selector_rules=selector_rules,
-        extraction_runtime_snapshot=run.settings_view.extraction_runtime_snapshot(),
-    )
-    if "detail" in run.surface and records:
-        records, selector_rules = await apply_selector_self_heal(
-            session,
-            run=run,
-            page_url=acquisition_result.final_url,
-            html=acquisition_result.html,
-            records=records,
-            adapter_records=acquisition_result.adapter_records,
-            network_payloads=acquisition_result.network_payloads,
-            selector_rules=selector_rules,
-        )
-    if run.settings_view.llm_enabled() and "detail" in run.surface and records:
-        records = await _apply_llm_fallback(
-            session,
-            run=run,
-            page_url=acquisition_result.final_url,
-            html=acquisition_result.html,
-            records=records,
-        )
+
+
+async def _run_persistence_stage(
+    context: _URLProcessingContext,
+    extracted: _ExtractedURLStage,
+) -> URLProcessingResult:
+    acquisition_result = extracted.fetched.acquisition_result
     raw_html_path = persist_html_artifact(
-        run_id=run.id,
+        run_id=context.run.id,
         source_url=acquisition_result.final_url,
         html=acquisition_result.html,
     )
-    if resolved_config.update_run_state:
-        await set_stage(session, run, STAGE_SAVE, current_url=url)
-        await session.commit()
+    await _enter_save_stage(context)
     persisted_count = await _persist_records(
-        session,
-        run,
-        records[: resolved_config.max_records],
+        context.session,
+        context.run,
+        extracted.records[: context.config.max_records],
         acquisition_result=acquisition_result,
         raw_html_path=raw_html_path,
     )
     verdict = compute_verdict(
-        is_listing="listing" in run.surface,
+        is_listing="listing" in context.surface,
         blocked=bool(acquisition_result.blocked),
         record_count=persisted_count,
     )
-    if resolved_config.persist_logs:
-        await log_event(
-            session,
-            run.id,
-            "info",
-            f"[SAVE] {persisted_count} record(s) persisted for {acquisition_result.final_url}",
-        )
-    if verdict == VERDICT_EMPTY and "listing" in run.surface and persisted_count == 0:
+    await _log_pipeline_event(
+        context,
+        "info",
+        f"[SAVE] {persisted_count} record(s) persisted for {acquisition_result.final_url}",
+        commit=False,
+    )
+    if verdict == VERDICT_EMPTY and "listing" in context.surface and persisted_count == 0:
         verdict = VERDICT_LISTING_FAILED
     return URLProcessingResult(
-        records=records[: resolved_config.max_records],
+        records=extracted.records[: context.config.max_records],
         verdict=verdict,
-        url_metrics=finalize_url_metrics(url_metrics, record_count=persisted_count),
+        url_metrics=finalize_url_metrics(
+            extracted.fetched.url_metrics,
+            record_count=persisted_count,
+        ),
     )
 
 

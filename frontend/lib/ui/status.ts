@@ -1,4 +1,8 @@
 type Tone = "success" | "warning" | "danger" | "accent" | "neutral" | "info";
+type RunSummaryLike = {
+  extraction_verdict?: unknown;
+  record_count?: unknown;
+} | null | undefined;
 
 const DASHBOARD_STATUS_CONFIG: Record<string, { tone: Tone; label: string }> = {
   completed: { tone: "success", label: "Completed" },
@@ -64,4 +68,50 @@ export function dashboardStatusDotColor(status: string): string {
 
 export function humanizeStatus(status: string): string {
   return String(status || "").replace(/_/g, " ").trim();
+}
+
+export function runExecutionTone(
+  status: string,
+  summary?: RunSummaryLike,
+): Exclude<Tone, "info"> {
+  if (status !== "completed") {
+    return runsStatusTone(status);
+  }
+  const verdict = String(summary?.extraction_verdict ?? "").trim().toLowerCase();
+  const recordCount = typeof summary?.record_count === "number" ? summary.record_count : 0;
+  if (verdict === "blocked" || verdict === "error") return "danger";
+  if (
+    verdict === "partial" ||
+    verdict === "schema_miss" ||
+    verdict === "listing_detection_failed" ||
+    verdict === "empty" ||
+    recordCount === 0
+  ) {
+    return "warning";
+  }
+  return "success";
+}
+
+export function runExecutionDot(status: string, summary?: RunSummaryLike): string {
+  const tone = runExecutionTone(status, summary);
+  if (tone === "success") return "var(--success)";
+  if (tone === "danger") return "var(--danger)";
+  if (tone === "warning") return "var(--warning)";
+  if (tone === "accent") return "var(--accent)";
+  return "var(--text-muted)";
+}
+
+export function runExecutionLabel(status: string, summary?: RunSummaryLike): string {
+  if (status !== "completed") {
+    return dashboardStatusLabel(status);
+  }
+  const verdict = String(summary?.extraction_verdict ?? "").trim().toLowerCase();
+  const recordCount = typeof summary?.record_count === "number" ? summary.record_count : 0;
+  if (verdict === "blocked") return "Blocked";
+  if (verdict === "error") return "Error";
+  if (verdict === "partial") return "Partial";
+  if (verdict === "listing_detection_failed") return "Listing Failed";
+  if (verdict === "schema_miss") return "Schema Miss";
+  if (verdict === "empty" || recordCount === 0) return "No Results";
+  return dashboardStatusLabel(status);
 }

@@ -19,9 +19,11 @@ from app.services.adapters.remoteok import RemoteOkAdapter
 from app.services.adapters.remotive import RemotiveAdapter
 from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
+from app.services.adapters.ultipro import UltiProAdapter
 from app.services.adapters.walmart import WalmartAdapter
+from app.services.adapters.workday import WorkdayAdapter
 from app.services.acquisition.policy import AcquisitionPlan
-from app.services.platform_policy import configured_adapter_names
+from app.services.platform_policy import configured_adapter_names, is_job_platform_signal
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,8 @@ _ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
     "icims": ICIMSAdapter,
     "oracle_hcm": OracleHCMAdapter,
     "paycom": PaycomAdapter,
+    "ultipro_ukg": UltiProAdapter,
+    "workday": WorkdayAdapter,
     "saashr": SaaSHRAdapter,
     "jibe": JibeAdapter,
     "indeed": IndeedAdapter,
@@ -78,7 +82,32 @@ async def run_adapter(url: str, html: str, surface: str) -> AdapterResult | None
     adapter = await resolve_adapter(url, html)
     if adapter is None:
         return None
-    return await adapter.extract(url, html, surface)
+    if not _surface_allows_adapter(adapter, surface):
+        return None
+    try:
+        return await adapter.extract(url, html, surface)
+    except Exception:
+        logger.warning(
+            "Adapter %s failed open for %s surface=%s",
+            adapter.name,
+            url,
+            surface,
+            exc_info=True,
+        )
+        return None
+
+
+def _surface_allows_adapter(adapter: BaseAdapter, surface: str) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    if not normalized_surface:
+        return True
+    is_job_adapter = is_job_platform_signal(
+        platform_family=adapter.platform_family,
+        adapter_hint=adapter.name,
+    )
+    if normalized_surface.startswith("job_"):
+        return is_job_adapter
+    return not is_job_adapter
 
 
 async def try_blocked_adapter_recovery(

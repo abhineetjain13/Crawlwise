@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Pattern
@@ -28,6 +29,10 @@ def iter_script_text_nodes(html: str) -> list[ScriptTextNode]:
             )
         )
     return nodes
+
+
+async def iter_script_text_nodes_async(html: str) -> list[ScriptTextNode]:
+    return await asyncio.to_thread(iter_script_text_nodes, html)
 
 
 def extract_script_text_by_id(html: str, script_id: str) -> str | None:

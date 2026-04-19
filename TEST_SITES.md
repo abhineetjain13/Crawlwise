@@ -205,16 +205,19 @@ https://www.foxrccareers.com/foxrc-careers-home/jobs?limit=100&amp;page=1&amp;so
 https://ats.rippling.com/en-GB/inhance-technologies/jobs
 https://ibmwjb.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs?mode=location
 https://lcbhs.net/careers/
+https://secure7.saashr.com/ta/6208610.careers?CareersSearch=&ein_id=118959061&amp;career_portal_id=6062087&amp;InFrameset=1&amp;HostedBy=lcbhs.net&amp;ShowJob=587687242
 https://www.paycomonline.net/v4/ats/web.php/portal/8EC14E985B45C7F52C531F487F62A2B8/career-page
 https://recruiting.ultipro.com/KAP1002KAPC/JobBoard/1e739e24-c237-44f3-9f7a-310b0cec4162/?q=&o=postedDateDesc
  https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=14fa7571-bfac-427f-aa18-9488391d4c5e&amp;ccId=19000101_000001&amp;type=MP&amp;lang=en_US&amp;selectedMenuKey=CurrentOpenings
 
-https://zadig-et-voltaire.com/eu/uk/
+https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127
 https://31philliplim.com/collections
 https://www.lafayette148ny.com/media/sitemap-products.xml
 https://ar.puma.com/lo-mas-vendido
-https://www.karenmillen.com/
-https://www.ganni.com/en-gb/home
-http://www.phase-eight.com/
-https://www.toddsnyder.com/
-https://www.savannahs.com/us/home
+https://www.karenmillen.com/eu/categories/womens-trousers
+https://www.ganni.com/en-gb/trainers/
+https://www.phase-eight.com/clothing/dresses/
+https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos
+https://savannahs.com/collections/all-boots
+https://www.kitchenaid.com/countertop-appliances/food-processors/food-processor-and-chopper-products
+https://www.dyson.in/vacuum-cleaners/cord-free

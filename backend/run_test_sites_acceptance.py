@@ -27,7 +27,7 @@ from app.services.adapters.registry import run_adapter
 from app.services.crawl_engine import extract_records
 from app.services.platform_policy import detect_platform_family
 
-from harness_support import classify_failure_mode, parse_test_sites_markdown
+from harness_support import classify_failure_mode, infer_surface, parse_test_sites_markdown
 
 DEFAULT_TEST_SITES_PATH = Path(__file__).resolve().parent.parent / "TEST_SITES.md"
 DEFAULT_REPORT_DIR = Path("artifacts/test_sites_acceptance")
@@ -134,14 +134,30 @@ async def main(argv: list[str]) -> int:
     parser.add_argument("--start-line", type=int, default=198, help="1-based start line")
     parser.add_argument("--limit", type=int, default=None, help="Optional site limit")
     parser.add_argument("--timeout", type=int, default=90, help="Per-site timeout in seconds")
+    parser.add_argument(
+        "--url",
+        action="append",
+        default=[],
+        help="Explicit URL to smoke-test. Repeat to bypass TEST_SITES.md selection.",
+    )
     args = parser.parse_args(argv)
 
     source_path = Path(args.path)
-    sites = parse_test_sites_markdown(source_path, start_line=args.start_line)
+    explicit_urls = [str(value or "").strip() for value in args.url if str(value or "").strip()]
+    if explicit_urls:
+        sites = [
+            {"name": url, "url": url, "surface": infer_surface(url)}
+            for url in explicit_urls
+        ]
+    else:
+        sites = parse_test_sites_markdown(source_path, start_line=args.start_line)
     if args.limit is not None:
         sites = sites[: args.limit]
 
-    print(f"Running {len(sites)} TEST_SITES entries from line {args.start_line}...")
+    if explicit_urls:
+        print(f"Running {len(sites)} explicit TEST_SITES URLs...")
+    else:
+        print(f"Running {len(sites)} TEST_SITES entries from line {args.start_line}...")
     print("=" * 70)
 
     results: list[dict[str, object]] = []

@@ -615,3 +615,60 @@ def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record
     record = rows[0]
     assert record["_extraction_tiers"]["early_exit"] == "structured_data"
     assert record["_extraction_tiers"]["current"] == "structured_data"
+
+
+def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Trompette 100 suede boots",
+          "offers": {
+            "price": "939.00",
+            "priceCurrency": "EUR",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+        <script>
+          ShopifyAnalytics.meta = {
+            "product": {
+              "id": 8214341320770,
+              "title": "Trompette 100 suede boots",
+              "handle": "trompette-100-suede-boots-rv27109s",
+              "vendor": "Roger Vivier",
+              "product_type": "Boots",
+              "compare_at_price": 156500,
+              "variants": [
+                {
+                  "id": 43633663574082,
+                  "price": 93900,
+                  "compare_at_price": 156500,
+                  "option1": "36",
+                  "inventory_quantity": 1
+                }
+              ]
+            }
+          };
+        </script>
+      </head>
+      <body>
+        <h1>Trompette 100 suede boots</h1>
+      </body>
+    </html>
+    """
+
+    rows = crawl_engine.extract_records(
+        html,
+        "https://savannahs.com/collections/all-boots/products/trompette-100-suede-boots-rv27109s",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["price"] == "939.00"
+    assert record["original_price"] == "1565"

@@ -14,6 +14,7 @@ from app.services.config.adapter_runtime_settings import (
     ICIMS_PAGINATION_TIMEOUT_SECONDS,
     ICIMS_TITLE_MIN_LENGTH,
 )
+from app.services.field_value_utils import clean_text
 from bs4 import BeautifulSoup, Tag
 
 try:  # pragma: no cover - optional dependency
@@ -383,4 +384,4 @@ class ICIMSAdapter(BaseAdapter):
         )
 
     def _clean_text(self, value: str) -> str:
-        return " ".join(str(value or "").split()).strip()
+        return clean_text(value)

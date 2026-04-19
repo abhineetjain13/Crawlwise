@@ -18,6 +18,7 @@ _DETAIL_HINTS = (
     "/dp/",
     "/job/",
     "/viewjob",
+    "showjob=",
 )
 _LISTING_HINTS = (
     "/collections",
@@ -55,7 +56,7 @@ def infer_surface(url: str, explicit_surface: object | None = None) -> str:
     if family in job_platform_families():
         if any(token in normalized_url for token in _JOB_LISTING_HINTS):
             return "job_listing"
-        if any(token in normalized_url for token in ("/job/", "/viewjob")):
+        if any(token in normalized_url for token in ("/job/", "/viewjob", "showjob=")):
             return "job_detail"
         return "job_listing"
     if any(token in normalized_url for token in _JOB_LISTING_HINTS):

@@ -45,6 +45,7 @@ class SaaSHRAdapter(BaseAdapter):
         company_code = self._extract_company_code(board_url)
         if not company_code:
             return []
+        target_job_id = self._requested_job_id(board_url)
         params = dict(parse_qsl(parsed.query, keep_blank_values=True))
         ein_id = str(params.get("ein_id") or "").strip()
         career_portal_id = str(params.get("career_portal_id") or "").strip()
@@ -93,10 +94,14 @@ class SaaSHRAdapter(BaseAdapter):
                 if not normalized:
                     continue
                 job_id = str(normalized.get("job_id") or "").strip()
+                if target_job_id and job_id != target_job_id:
+                    continue
                 if job_id in seen_ids:
                     continue
                 seen_ids.add(job_id)
                 records.append(normalized)
+                if target_job_id and records:
+                    return records
             if len(rows) < size:
                 break
             offset += size
@@ -188,6 +193,10 @@ class SaaSHRAdapter(BaseAdapter):
         params["ShowJob"] = job_id
         query = urlencode(params)
         return parsed._replace(query=query).geturl()
+
+    def _requested_job_id(self, board_url: str) -> str:
+        params = dict(parse_qsl(urlparse(board_url).query, keep_blank_values=True))
+        return self._clean_text(params.get("ShowJob"))
 
     def _clean_text(self, value: object) -> str:
         return " ".join(str(value or "").split()).strip()

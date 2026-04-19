@@ -22,7 +22,9 @@
         "^/mascsr/default/mdf/recruitment/recruitment\\.html$",
         "^/srccar/public/.*$",
         "^/srccsh/public/.*$"
-      ]
+      ],
+      "readiness_selectors": [".current-openings-item", "[id^='lblTitle_']"],
+      "readiness_max_wait_ms": 20000
     },
     {
       "family": "oracle_hcm",
@@ -35,7 +37,9 @@
       "readiness_domains": ["fa.ocs.oraclecloud.com", "candidateexperience.oraclecloud.com"],
       "readiness_path_patterns": [
         "^/hcmui/candidateexperience/[^/]*(?:/[^/]+)*/sites/cx_[^/]+/(?:jobs|requisitions)(?:/[^/]+)*/*$"
-      ]
+      ],
+      "readiness_selectors": ["a[href*='/job/']"],
+      "readiness_max_wait_ms": 25000
     },
     {
       "family": "paycom",
@@ -49,7 +53,9 @@
       "readiness_path_patterns": [
         "^/v4/ats/web\\.php/portal/.+/career-page(?:/.*)?$",
         "^/v4/ats/web\\.php/portal/.+/jobs(?:/.*)?$"
-      ]
+      ],
+      "readiness_selectors": ["a[href*='/jobs/']"],
+      "readiness_max_wait_ms": 20000
     },
     {
       "family": "ultipro_ukg",
@@ -62,7 +68,13 @@
       "readiness_domains": ["recruiting.ultipro.com"],
       "readiness_path_patterns": [
         "^/jobboard(?:/.*)?$"
-      ]
+      ],
+      "readiness_selectors": [
+        "a[href*='/jobboard/jobdetails/']",
+        "a[href*='/jobboard/']",
+        "[data-testid*='job' i]"
+      ],
+      "readiness_max_wait_ms": 20000
     },
     {
       "family": "greenhouse",
@@ -71,15 +83,57 @@
       "html_regex": ["boards\\.greenhouse\\.io/embed/job_board\\?for=[a-z0-9_-]+"],
       "adapter_names": ["greenhouse"],
       "job_platform": true,
-      "requires_browser": false
+      "requires_browser": false,
+      "network_signature_patterns": ["greenhouse"],
+      "js_state_extractors": [
+        {
+          "surface": "job_detail",
+          "state_key": "__remixContext",
+          "root_paths": [
+            ["state", "loaderData", "routes/$url_token_.jobs_.$job_post_id", "jobPost"]
+          ],
+          "field_paths": {
+            "title": [["title"]],
+            "company": [["company_name"]],
+            "location": [["job_post_location"]],
+            "apply_url": [["public_url"]],
+            "posted_date": [["published_at"]],
+            "description_html": [["content"]]
+          }
+        }
+      ]
     },
     {
       "family": "workday",
       "domain_patterns": ["myworkdayjobs.com"],
       "url_contains": ["/external", "/job/", "/jobs/"],
       "html_contains": ["myworkdayjobs.com", "__next_data__", "workday"],
+      "adapter_names": ["workday"],
       "job_platform": true,
-      "requires_browser": false
+      "requires_browser": false,
+      "readiness_domains": ["myworkdayjobs.com"],
+      "readiness_path_patterns": [
+        "^/(?:[a-z]{2}(?:-[a-z]{2})?/)?external(?:/.*)?$"
+      ],
+      "readiness_selectors": [
+        "a[href*='/External/job/']",
+        "a[href*='/job/']",
+        "[data-automation-id='jobTitle']"
+      ],
+      "readiness_max_wait_ms": 15000,
+      "network_signature_patterns": ["workday", "myworkdayjobs.com"]
+    },
+    {
+      "family": "lever",
+      "network_signature_patterns": ["lever.co", "/lever/"]
+    },
+    {
+      "family": "shopify",
+      "network_signature_patterns": ["shopify", "product.js", "/cart.js"]
+    },
+    {
+      "family": "nextjs",
+      "network_signature_patterns": ["__next", "_next/data"]
     },
     {
       "family": "rippling",

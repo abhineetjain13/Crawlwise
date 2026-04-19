@@ -28,6 +28,7 @@ from app.services.field_value_utils import (
     apply_selector_fallbacks,
     clean_text,
     coerce_field_value,
+    coerce_text,
     collect_structured_candidates,
     extract_page_images,
     extract_label_value_pairs,
@@ -68,6 +69,9 @@ def _structured_listing_record(
         finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
         if finalized not in (None, "", [], {}):
             record[field_name] = finalized
+    preferred_title = coerce_text(payload.get("name") or payload.get("title"))
+    if preferred_title:
+        record["title"] = preferred_title
     if not record.get("url") or not record.get("title"):
         return {}
     return finalize_record(record, surface=surface)

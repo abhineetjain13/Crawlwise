@@ -20,7 +20,7 @@ import { api } from "../../lib/api";
 import type { CrawlRun, RunStatus } from "../../lib/api/types";
 import { formatRunsDate as formatDate } from "../../lib/format/date";
 import { getDomain } from "../../lib/format/domain";
-import { humanizeStatus, runsStatusTone as statusTone } from "../../lib/ui/status";
+import { runExecutionLabel, runExecutionTone } from "../../lib/ui/status";
 import { cn } from "../../lib/utils";
 
 type StatusFilter = "" | RunStatus;
@@ -41,7 +41,7 @@ function RunRow({
       {/* Domain + URL */}
       <td>
         <div className="flex items-center gap-2.5">
-          <StatusDot tone={statusTone(run.status)} />
+          <StatusDot tone={runExecutionTone(run.status, run.result_summary)} />
           <div className="flex min-w-0 items-center gap-2">
             <Tooltip content={run.url}>
               <Link
@@ -88,7 +88,9 @@ function RunRow({
 
       {/* Status */}
       <td>
-        <Badge tone={statusTone(run.status)}>{humanizeStatus(run.status)}</Badge>
+        <Badge tone={runExecutionTone(run.status, run.result_summary)}>
+          {runExecutionLabel(run.status, run.result_summary)}
+        </Badge>
       </td>
 
       {/* Records */}

@@ -1,0 +1,303 @@
+from __future__ import annotations
+
+import pytest
+
+from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
+from app.services.pipeline.core import _process_single_url
+from app.services.pipeline.types import URLProcessingConfig
+from app.services.robots_policy import RobotsPolicyResult
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _detail_html() -> str:
+    return "<html><body><h1>Widget Prime</h1></body></html>"
+
+
+def _listing_html() -> str:
+    return "<html><body><h1>Empty category</h1></body></html>"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_blocks_before_acquire_when_robots_disallows(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/private/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": True},
+        },
+    )
+
+    async def _disallow(url: str, *, user_agent: str = "*") -> RobotsPolicyResult:
+        del user_agent
+        return RobotsPolicyResult(
+            allowed=False,
+            outcome="disallowed",
+            robots_url="https://example.com/robots.txt",
+        )
+
+    async def _unexpected_acquire(request):
+        raise AssertionError(f"acquire should not run for {request.url}")
+
+    monkeypatch.setattr("app.services.pipeline.core.check_url_crawlability", _disallow)
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _unexpected_acquire)
+
+    result = await _process_single_url(db_session, run, run.url)
+    logs = await get_run_logs(db_session, run.id)
+
+    assert result.records == []
+    assert result.verdict == "blocked"
+    assert result.url_metrics["robots"]["allowed"] is False
+    assert result.url_metrics["robots"]["outcome"] == "disallowed"
+    assert [log.message for log in logs] == [
+        "[ROBOTS] Blocked by robots.txt: https://example.com/private/widget-prime"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_prefetch_only_returns_metrics_without_persisting_records(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    result = await _process_single_url(
+        db_session,
+        run,
+        run.url,
+        URLProcessingConfig(prefetch_only=True),
+    )
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert result.records == []
+    assert result.verdict == "success"
+    assert result.url_metrics["record_count"] == 0
+    assert total == 0
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_marks_empty_listing_as_listing_detection_failed(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_listing_html(),
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+
+    result = await _process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert result.records == []
+    assert result.verdict == "listing_detection_failed"
+    assert result.url_metrics["record_count"] == 0
+    assert total == 0
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_persists_detail_records_after_self_heal_and_llm_fallback(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False, "llm_enabled": True},
+            "additional_fields": ["price"],
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    async def _fake_self_heal(session, **kwargs):
+        del session
+        record = dict(kwargs["records"][0])
+        record["title"] = "Widget Prime (self-healed)"
+        record["_self_heal"] = {"mode": "selector_synthesis", "triggered": True}
+        return [record], list(kwargs["selector_rules"])
+
+    async def _fake_llm(session, *, records, **kwargs):
+        del session, kwargs
+        record = dict(records[0])
+        record["price"] = "19.99"
+        return [record]
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [{"title": "Widget Prime", "_source": "extraction"}],
+    )
+    monkeypatch.setattr("app.services.pipeline.core.apply_selector_self_heal", _fake_self_heal)
+    monkeypatch.setattr("app.services.pipeline.core._apply_llm_fallback", _fake_llm)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_html_artifact",
+        lambda **kwargs: "artifacts/widget-prime.html",
+    )
+
+    result = await _process_single_url(db_session, run, run.url)
+    await db_session.refresh(run)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert result.verdict == "success"
+    assert result.records == [
+        {
+            "title": "Widget Prime (self-healed)",
+            "_source": "extraction",
+            "_self_heal": {"mode": "selector_synthesis", "triggered": True},
+            "price": "19.99",
+        }
+    ]
+    assert run.summary_dict()["current_stage"] == "SAVE"
+    assert total == 1
+    assert rows[0].data == {"title": "Widget Prime (self-healed)", "price": "19.99"}
+    assert rows[0].raw_html_path == "artifacts/widget-prime.html"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_retries_with_browser_after_empty_non_browser_extraction(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    acquire_calls: list[dict[str, object]] = []
+
+    async def _fake_acquire(request):
+        acquire_calls.append(dict(request.acquisition_profile))
+        if request.acquisition_profile.get("prefer_browser"):
+            return AcquisitionResult(
+                request=request,
+                final_url=request.url,
+                html="<html><body>browser</body></html>",
+                method="browser",
+                status_code=200,
+            )
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>http</body></html>",
+            method="curl_cffi",
+            status_code=200,
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    def _extract_records(html, *args, **kwargs):
+        del args, kwargs
+        if "browser" in html:
+            return [{"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}]
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_html_artifact",
+        lambda **kwargs: "artifacts/widgets.html",
+    )
+
+    result = await _process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert len(acquire_calls) == 2
+    assert acquire_calls[1]["prefer_browser"] is True
+    assert result.verdict == "success"
+    assert result.url_metrics["method"] == "browser"
+    assert total == 1
+    assert rows[0].data["title"] == "Widget Prime"

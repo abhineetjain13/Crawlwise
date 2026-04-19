@@ -104,3 +104,26 @@ async def test_check_url_crawlability_allows_when_robots_fetch_fails(
     assert result.allowed is True
     assert result.outcome == robots_policy.ROBOTS_FETCH_FAILURE
     assert result.error
+
+
+@pytest.mark.asyncio
+async def test_check_url_crawlability_treats_forbidden_robots_as_disallow_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    robots_policy.reset_robots_policy_cache()
+
+    def _forbidden(request, timeout):
+        raise HTTPError(
+            url=request.full_url,
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(robots_policy, "urlopen", _forbidden)
+
+    result = await robots_policy.check_url_crawlability("https://example.com/private")
+
+    assert result.allowed is False
+    assert result.outcome == robots_policy.ROBOTS_DISALLOWED

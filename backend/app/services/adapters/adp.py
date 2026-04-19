@@ -7,6 +7,9 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.field_value_utils import clean_text
+
+
 def _text(node: object, *, separator: str = "") -> str:
     if node is None:
         return ""
@@ -218,7 +221,7 @@ class ADPAdapter(BaseAdapter):
         )
 
     def _clean_text(self, value: str) -> str:
-        return " ".join(str(value or "").split()).strip()
+        return clean_text(value)
 
     def _text(self, node: object, *, separator: str = " ") -> str:
         return _text(node, separator=separator)

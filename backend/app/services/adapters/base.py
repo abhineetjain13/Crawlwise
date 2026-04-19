@@ -62,6 +62,7 @@ class BaseAdapter(ABC):
         self,
         url: str,
         *,
+        expect_json: bool = False,
         method: str = "GET",
         headers: dict[str, str] | None = None,
         json_body: Any | None = None,
@@ -75,6 +76,7 @@ class BaseAdapter(ABC):
         return await request_result(
             url,
             proxy=proxy,
+            expect_json=expect_json,
             method=method,
             headers=headers,
             json_body=json_body,
@@ -101,10 +103,11 @@ class BaseAdapter(ABC):
             data=data,
             proxy=proxy,
             timeout_seconds=timeout_seconds,
+            expect_json=True,
         )
         if response.status_code != 200:
             return None
-        return response.json_data
+        return response.json_data if isinstance(response.json_data, (dict, list)) else None
 
     async def _request_text(
         self,

@@ -11,6 +11,7 @@ from html import unescape
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.field_value_utils import clean_text
 from bs4 import BeautifulSoup
 
 
@@ -328,4 +329,4 @@ class GreenhouseAdapter(BaseAdapter):
         return self._clean_text(match.group(1) if match else query_id)
 
     def _clean_text(self, value: str) -> str:
-        return " ".join(str(value or "").split()).strip()
+        return clean_text(value)

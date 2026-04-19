@@ -88,6 +88,56 @@ def test_listing_extractor_preserves_css_card_field_output() -> None:
     assert rows[0]["review_count"] == 128
 
 
+def test_listing_extractor_prefers_structured_name_over_item_position_for_title() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "ItemList",
+          "itemListElement": [
+            {
+              "@type": "ListItem",
+              "position": 1,
+              "item": {
+                "@type": "Product",
+                "name": "Dyson V12 Detect Slim",
+                "url": "/vacuum-cleaners/cord-free/dyson-v12-detect-slim",
+                "offers": {
+                  "@type": "Offer",
+                  "price": "55900",
+                  "availability": "https://schema.org/InStock"
+                }
+              }
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://www.dyson.in/vacuum-cleaners/cord-free",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.dyson.in/vacuum-cleaners/cord-free",
+            "_source": "structured_listing",
+            "title": "Dyson V12 Detect Slim",
+            "price": "55900",
+            "availability": "in_stock",
+            "url": "https://www.dyson.in/vacuum-cleaners/cord-free/dyson-v12-detect-slim",
+        }
+    ]
+
+
 def test_xpath_selector_extraction_remains_unchanged() -> None:
     html = """
     <html>

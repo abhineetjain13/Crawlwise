@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from bs4 import BeautifulSoup
+import pytest
 
+from app.services.script_text_extractor import (
+    iter_script_text_nodes,
+    iter_script_text_nodes_async,
+)
 from app.services.structured_sources import harvest_js_state_objects, parse_embedded_json
 
 
@@ -63,3 +68,20 @@ def test_parse_embedded_json_ignores_inline_script_without_complete_json_termina
     rows = parse_embedded_json(BeautifulSoup(html, "html.parser"), html)
 
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_iter_script_text_nodes_async_matches_sync_output() -> None:
+    html = """
+    <html>
+      <head>
+        <script id="alpha" type="application/json">{"ok": true}</script>
+        <script>window.answer = 42;</script>
+      </head>
+    </html>
+    """
+
+    async_rows = await iter_script_text_nodes_async(html)
+    sync_rows = iter_script_text_nodes(html)
+
+    assert async_rows == sync_rows

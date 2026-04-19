@@ -22,7 +22,16 @@ from app.services.acquisition.traversal import (
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_utils import clean_text, hostname
-from app.services.platform_policy import resolve_platform_runtime_policy
+from app.services.network_resolution import (
+    address_family_preference,
+    build_async_http_client,
+    should_retry_with_forced_ipv4,
+)
+from app.services.platform_policy import (
+    classify_network_endpoint_family,
+    resolve_listing_readiness_override,
+    resolve_platform_runtime_policy,
+)
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 
 logger = logging.getLogger(__name__)
@@ -39,6 +48,7 @@ _NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
 _BROWSER_PREFERRED_HOST_TTL_SECONDS = 1800.0
 _BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
 _SHARED_HTTP_CLIENT: httpx.AsyncClient | None = None
+_SHARED_HTTP_CLIENT_FAMILY: str | None = None
 _SHARED_HTTP_CLIENT_LOCK = asyncio.Lock()
 _BROWSER_RUNTIME: SharedBrowserRuntime | None = None
 _BROWSER_RUNTIME_LOCK = asyncio.Lock()
@@ -91,6 +101,13 @@ class PageFetchResult:
     headers: httpx.Headers = field(default_factory=httpx.Headers)
     network_payloads: list[dict[str, object]] = field(default_factory=list)
     browser_diagnostics: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkPayloadReadResult:
+    body: bytes | None
+    outcome: str
+    error: str | None = None
 
 
 class SharedBrowserRuntime:
@@ -292,12 +309,31 @@ def _state_payload_has_content(payload: Any) -> bool:
     return payload not in (None, "")
 
 
-def _should_escalate_to_browser(result: PageFetchResult) -> bool:
+def _should_escalate_to_browser(
+    result: PageFetchResult,
+    *,
+    surface: str | None = None,
+) -> bool:
     if result.blocked:
         return True
-    if _looks_like_js_shell(result.html) and not _has_extractable_detail_signals(result.html):
+    has_detail_signals = _has_extractable_detail_signals(result.html)
+    if _looks_like_js_shell(result.html) and not has_detail_signals:
+        return True
+    if "detail" in str(surface or "").lower() and not has_detail_signals:
         return True
     return False
+
+
+async def _is_blocked_html_async(html: str, status_code: int) -> bool:
+    return await asyncio.to_thread(is_blocked_html, html, status_code)
+
+
+async def _should_escalate_to_browser_async(
+    result: PageFetchResult,
+    *,
+    surface: str | None = None,
+) -> bool:
+    return await asyncio.to_thread(_should_escalate_to_browser, result, surface=surface)
 
 
 def _remember_browser_host(url: str) -> None:
@@ -323,12 +359,23 @@ def _host_prefers_browser(url: str) -> bool:
 
 
 async def _get_shared_http_client() -> httpx.AsyncClient:
-    global _SHARED_HTTP_CLIENT
-    if _SHARED_HTTP_CLIENT is not None and not _SHARED_HTTP_CLIENT.is_closed:
+    global _SHARED_HTTP_CLIENT, _SHARED_HTTP_CLIENT_FAMILY
+    family_preference = address_family_preference()
+    if (
+        _SHARED_HTTP_CLIENT is not None
+        and not _SHARED_HTTP_CLIENT.is_closed
+        and _SHARED_HTTP_CLIENT_FAMILY == family_preference
+    ):
         return _SHARED_HTTP_CLIENT
     async with _SHARED_HTTP_CLIENT_LOCK:
-        if _SHARED_HTTP_CLIENT is None or _SHARED_HTTP_CLIENT.is_closed:
-            _SHARED_HTTP_CLIENT = httpx.AsyncClient(
+        if (
+            _SHARED_HTTP_CLIENT is None
+            or _SHARED_HTTP_CLIENT.is_closed
+            or _SHARED_HTTP_CLIENT_FAMILY != family_preference
+        ):
+            if _SHARED_HTTP_CLIENT is not None and not _SHARED_HTTP_CLIENT.is_closed:
+                await _SHARED_HTTP_CLIENT.aclose()
+            _SHARED_HTTP_CLIENT = build_async_http_client(
                 follow_redirects=True,
                 timeout=settings.http_timeout_seconds,
                 limits=httpx.Limits(
@@ -336,15 +383,17 @@ async def _get_shared_http_client() -> httpx.AsyncClient:
                     max_keepalive_connections=settings.http_max_keepalive_connections,
                 ),
             )
+            _SHARED_HTTP_CLIENT_FAMILY = family_preference
         return _SHARED_HTTP_CLIENT
 
 
 async def close_shared_http_client() -> None:
-    global _SHARED_HTTP_CLIENT
+    global _SHARED_HTTP_CLIENT, _SHARED_HTTP_CLIENT_FAMILY
     async with _SHARED_HTTP_CLIENT_LOCK:
         if _SHARED_HTTP_CLIENT is not None and not _SHARED_HTTP_CLIENT.is_closed:
             await _SHARED_HTTP_CLIENT.aclose()
         _SHARED_HTTP_CLIENT = None
+        _SHARED_HTTP_CLIENT_FAMILY = None
 
 
 async def _get_browser_runtime() -> SharedBrowserRuntime:
@@ -390,8 +439,23 @@ async def reset_fetch_runtime_state() -> None:
 
 async def _http_fetch(url: str, timeout_seconds: float) -> PageFetchResult:
     client = await _get_shared_http_client()
-    response = await client.get(url, timeout=timeout_seconds)
+    try:
+        response = await client.get(url, timeout=timeout_seconds)
+    except Exception as exc:
+        if not should_retry_with_forced_ipv4(exc):
+            raise
+        async with build_async_http_client(
+            follow_redirects=True,
+            timeout=settings.http_timeout_seconds,
+            limits=httpx.Limits(
+                max_connections=settings.http_max_connections,
+                max_keepalive_connections=settings.http_max_keepalive_connections,
+            ),
+            force_ipv4=True,
+        ) as retry_client:
+            response = await retry_client.get(url, timeout=timeout_seconds)
     html = response.text or ""
+    blocked = await _is_blocked_html_async(html, response.status_code)
     return PageFetchResult(
         url=url,
         final_url=str(response.url),
@@ -399,7 +463,7 @@ async def _http_fetch(url: str, timeout_seconds: float) -> PageFetchResult:
         status_code=response.status_code,
         method="httpx",
         content_type=response.headers.get("content-type", "text/html"),
-        blocked=is_blocked_html(html, response.status_code),
+        blocked=blocked,
         headers=_copy_headers(response.headers),
     )
 
@@ -445,6 +509,9 @@ async def _browser_fetch(
         network_payload_lock = asyncio.Lock()
         capture_tasks: list[asyncio.Task[None]] = []
         malformed_payloads = 0
+        payload_read_failures = 0
+        payload_closed_failures = 0
+        oversized_payloads = 0
         normalized_surface = str(surface or "")
 
         async def _capture_response(response) -> None:
@@ -456,20 +523,38 @@ async def _browser_fetch(
                 captured_count=len(network_payloads),
             ):
                 return
-            try:
-                body_bytes = await _read_network_payload_body(response)
-            except Exception:
+            body_result = await _read_network_payload_body(response)
+            if body_result.outcome == "response_closed":
+                nonlocal payload_closed_failures
+                payload_closed_failures += 1
                 logger.debug(
-                    "Failed to read intercepted response body from %s",
+                    "Skipped intercepted response body after page closed: %s",
                     response.url,
-                    exc_info=True,
                 )
                 return
+            if body_result.outcome == "too_large":
+                nonlocal oversized_payloads
+                oversized_payloads += 1
+                logger.debug(
+                    "Skipped oversized intercepted response body from %s",
+                    response.url,
+                )
+                return
+            if body_result.outcome == "read_error":
+                nonlocal payload_read_failures
+                payload_read_failures += 1
+                logger.debug(
+                    "Failed to read intercepted response body from %s: %s",
+                    response.url,
+                    body_result.error or "unknown error",
+                )
+                return
+            body_bytes = body_result.body
             if body_bytes is None:
                 return
             try:
                 payload = json.loads(body_bytes.decode("utf-8", errors="replace"))
-            except Exception:
+            except json.JSONDecodeError:
                 nonlocal malformed_payloads
                 malformed_payloads += 1
                 logger.debug(
@@ -546,6 +631,7 @@ async def _browser_fetch(
             )
         except Exception:
             networkidle_timed_out = True
+        readiness_diagnostics = await _wait_for_listing_readiness(page, url)
         expansion_diagnostics: dict[str, object] = {}
         if surface and "detail" in str(surface).lower():
             expansion_diagnostics = await expand_all_interactive_elements(
@@ -569,11 +655,16 @@ async def _browser_fetch(
         status_code = response.status if response is not None else 200
         if capture_tasks:
             await asyncio.gather(*capture_tasks, return_exceptions=True)
+        blocked = await _is_blocked_html_async(html, status_code)
         diagnostics = {
             "navigation_strategy": navigation_strategy,
             "networkidle_timed_out": networkidle_timed_out,
             "network_payload_count": len(network_payloads),
             "malformed_network_payloads": malformed_payloads,
+            "network_payload_read_failures": payload_read_failures,
+            "closed_network_payloads": payload_closed_failures,
+            "skipped_oversized_network_payloads": oversized_payloads,
+            "listing_readiness": readiness_diagnostics,
             "detail_expansion": expansion_diagnostics,
         }
         if traversal_result is not None:
@@ -589,7 +680,7 @@ async def _browser_fetch(
                 if response is not None
                 else "text/html"
             ),
-            blocked=is_blocked_html(html, status_code),
+            blocked=blocked,
             headers=(
                 _copy_headers(response.headers)
                 if response is not None
@@ -598,6 +689,56 @@ async def _browser_fetch(
             network_payloads=network_payloads[:_MAX_CAPTURED_NETWORK_PAYLOADS],
             browser_diagnostics=diagnostics,
         )
+
+
+async def _wait_for_listing_readiness(page: Any, page_url: str) -> dict[str, object]:
+    override = resolve_listing_readiness_override(page_url)
+    if not override:
+        return {}
+    selectors = [
+        str(selector or "").strip()
+        for selector in list(override.get("selectors") or [])
+        if str(selector or "").strip()
+    ]
+    if not selectors:
+        return {}
+    max_wait_ms = int(
+        override.get("max_wait_ms")
+        or crawler_runtime_settings.listing_readiness_max_wait_ms
+        or 0
+    )
+    if max_wait_ms <= 0:
+        return {}
+    combined_selector = ", ".join(selectors)
+    try:
+        await page.wait_for_selector(
+            combined_selector,
+            state="attached",
+            timeout=max_wait_ms,
+        )
+    except Exception as exc:
+        return {
+            "platform": str(override.get("platform") or ""),
+            "max_wait_ms": max_wait_ms,
+            "status": "timed_out",
+            "attempted_selectors": selectors,
+            "failures": [f"{combined_selector}:{type(exc).__name__}"],
+        }
+    matched_selector = selectors[0]
+    for selector in selectors:
+        try:
+            if await page.locator(selector).count():
+                matched_selector = selector
+                break
+        except Exception:
+            continue
+    return {
+        "platform": str(override.get("platform") or ""),
+        "combined_selector": combined_selector,
+        "max_wait_ms": max_wait_ms,
+        "matched_selector": matched_selector,
+        "status": "matched",
+    }
 
 
 async def _call_browser_fetch(
@@ -611,28 +752,16 @@ async def _call_browser_fetch(
 ) -> PageFetchResult:
     try:
         return await _browser_fetch(
-            url,
-            timeout_seconds,
-            surface=surface,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
+            url, timeout_seconds, surface=surface, traversal_mode=traversal_mode,
+            max_pages=max_pages, max_scrolls=max_scrolls,
         )
     except TypeError as exc:
         message = str(exc)
-        if (
-            "unexpected keyword argument" not in message
-            or not _is_browser_fetch_signature_error(exc)
-        ):
+        if "unexpected keyword argument" not in message or not _is_browser_fetch_signature_error(exc):
             raise
         logger.info(
             "Falling back to legacy _browser_fetch signature without traversal parameters for %s; dropped surface=%r traversal_mode=%r max_pages=%r max_scrolls=%r; error=%s",
-            url,
-            surface,
-            traversal_mode,
-            max_pages,
-            max_scrolls,
-            message,
+            url, surface, traversal_mode, max_pages, max_scrolls, message,
         )
         return await _browser_fetch(url, timeout_seconds)
 
@@ -701,17 +830,7 @@ def _classify_network_endpoint(
 ) -> dict[str, str]:
     lowered_url = str(response_url or "").strip().lower()
     normalized_surface = str(surface or "").strip().lower()
-    family = "generic"
-    if "greenhouse" in lowered_url:
-        family = "greenhouse"
-    elif "workday" in lowered_url:
-        family = "workday"
-    elif "lever.co" in lowered_url or "/lever/" in lowered_url:
-        family = "lever"
-    elif "shopify" in lowered_url:
-        family = "shopify"
-    elif "__next" in lowered_url or "_next/data" in lowered_url:
-        family = "nextjs"
+    family = classify_network_endpoint_family(response_url)
 
     endpoint_type = "generic_json"
     if "/graphql" in lowered_url or "graphql?" in lowered_url:
@@ -781,6 +900,8 @@ async def expand_all_interactive_elements(
             label = await _interactive_label(handle)
             if keywords and label and not any(keyword in label for keyword in keywords):
                 continue
+            if not await _is_actionable_interactive_handle(handle):
+                continue
             await handle.scroll_into_view_if_needed()
             try:
                 await handle.click(timeout=1_000)
@@ -828,6 +949,35 @@ async def _interactive_label(handle: Any) -> str:
     return " ".join(str(value or "").split()).strip().lower()
 
 
+async def _is_actionable_interactive_handle(handle: Any) -> bool:
+    state = await handle.evaluate(
+        """(node) => {
+            if (!(node instanceof HTMLElement) || !node.isConnected) {
+                return { actionable: false };
+            }
+            const style = window.getComputedStyle(node);
+            const rect = node.getBoundingClientRect();
+            const disabled = Boolean(
+                node.hasAttribute('disabled') ||
+                node.getAttribute('aria-disabled') === 'true' ||
+                node.inert
+            );
+            const hidden = Boolean(
+                node.hidden ||
+                node.getAttribute('aria-hidden') === 'true' ||
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                style.pointerEvents === 'none'
+            );
+            const collapsed = rect.width <= 0 || rect.height <= 0;
+            return { actionable: !(disabled || hidden || collapsed) };
+        }"""
+    )
+    if not isinstance(state, dict):
+        return False
+    return bool(state.get("actionable"))
+
+
 def _coerce_content_length(headers: dict[str, object] | Any) -> int | None:
     if not headers:
         return None
@@ -839,11 +989,35 @@ def _coerce_content_length(headers: dict[str, object] | Any) -> int | None:
     return max(0, parsed)
 
 
-async def _read_network_payload_body(response) -> bytes | None:
-    body_bytes = await response.body()
+async def _read_network_payload_body(response) -> NetworkPayloadReadResult:
+    try:
+        body_bytes = await response.body()
+    except Exception as exc:
+        if _is_response_closed_error(exc):
+            return NetworkPayloadReadResult(
+                body=None,
+                outcome="response_closed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        return NetworkPayloadReadResult(
+            body=None,
+            outcome="read_error",
+            error=f"{type(exc).__name__}: {exc}",
+        )
     if len(body_bytes) > _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES:
-        return None
-    return body_bytes
+        return NetworkPayloadReadResult(body=None, outcome="too_large")
+    return NetworkPayloadReadResult(body=body_bytes, outcome="read")
+
+
+def _is_response_closed_error(exc: Exception) -> bool:
+    class_name = type(exc).__name__.lower()
+    message = str(exc or "").lower()
+    return (
+        "targetclosed" in class_name
+        or "target closed" in message
+        or "page closed" in message
+        or "browser has been closed" in message
+    )
 
 
 async def fetch_page(
@@ -869,12 +1043,8 @@ async def fetch_page(
     )
     if browser_first:
         browser_result = await _call_browser_fetch(
-            url,
-            resolved_timeout,
-            surface=surface,
-            traversal_mode=traversal_mode,
-            max_pages=max_pages,
-            max_scrolls=max_scrolls,
+            url, resolved_timeout, surface=surface, traversal_mode=traversal_mode,
+            max_pages=max_pages, max_scrolls=max_scrolls,
         )
         _remember_browser_host(browser_result.final_url)
         return browser_result
@@ -883,14 +1053,10 @@ async def fetch_page(
     for fetcher in (_curl_fetch, _http_fetch):
         try:
             result = await fetcher(url, resolved_timeout)
-            if _should_escalate_to_browser(result):
+            if await _should_escalate_to_browser_async(result, surface=surface):
                 browser_result = await _call_browser_fetch(
-                    url,
-                    resolved_timeout,
-                    surface=surface,
-                    traversal_mode=traversal_mode,
-                    max_pages=max_pages,
-                    max_scrolls=max_scrolls,
+                    url, resolved_timeout, surface=surface, traversal_mode=traversal_mode,
+                    max_pages=max_pages, max_scrolls=max_scrolls,
                 )
                 _remember_browser_host(browser_result.final_url)
                 return browser_result
@@ -904,5 +1070,15 @@ async def fetch_page(
                 exc_info=True,
             )
     if last_error is not None:
-        raise last_error
+        logger.info("HTTP fetchers exhausted for %s (%s); attempting browser fallback", url, type(last_error).__name__)
+        try:
+            browser_result = await _call_browser_fetch(
+                url, resolved_timeout, surface=surface, traversal_mode=traversal_mode,
+                max_pages=max_pages, max_scrolls=max_scrolls,
+            )
+        except Exception:
+            logger.debug("Browser fallback failed for %s after HTTP transport errors", url, exc_info=True)
+            raise last_error
+        _remember_browser_host(browser_result.final_url)
+        return browser_result
     raise RuntimeError(f"Failed to fetch {url}")

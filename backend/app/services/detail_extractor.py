@@ -11,7 +11,6 @@ from app.services.confidence import score_record_confidence
 from app.services.config.extraction_rules import EXTRACTION_RULES, NOISE_CONTAINER_REMOVAL_SELECTOR
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_utils import (
-    PERCENT_RE,
     PRICE_RE,
     RATING_RE,
     REVIEW_COUNT_RE,
@@ -50,6 +49,7 @@ _SOURCE_PRIORITY = (
     "opengraph",
     "embedded_json",
     "dom_h1",
+    "dom_canonical",
     "dom_selector",
     "dom_sections",
     "dom_images",
@@ -97,6 +97,7 @@ def _apply_dom_fallbacks(
     surface: str,
     requested_fields: list[str] | None,
     candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
     selector_rules: list[dict[str, object]] | None = None,
 ) -> None:
@@ -110,6 +111,7 @@ def _apply_dom_fallbacks(
     if title:
         _add_sourced_candidate(
             candidates,
+            candidate_sources,
             field_sources,
             "title",
             title,
@@ -136,16 +138,18 @@ def _apply_dom_fallbacks(
         from app.services.field_value_utils import absolute_url
 
         _add_sourced_candidate(
-            candidates,
-            field_sources,
-            "url",
-            absolute_url(page_url, canonical.get("href")),
-            source="dom_canonical",
+                candidates,
+                candidate_sources,
+                field_sources,
+                "url",
+                absolute_url(page_url, canonical.get("href")),
+                source="dom_canonical",
         )
     images = extract_page_images(soup, page_url)
     if images:
         _add_sourced_candidate(
             candidates,
+            candidate_sources,
             field_sources,
             "image_url",
             images[0],
@@ -153,6 +157,7 @@ def _apply_dom_fallbacks(
         )
         _add_sourced_candidate(
             candidates,
+            candidate_sources,
             field_sources,
             "additional_images",
             images[1:],
@@ -166,6 +171,7 @@ def _apply_dom_fallbacks(
         if normalized:
             _add_sourced_candidate(
                 candidates,
+                candidate_sources,
                 field_sources,
                 normalized,
                 coerce_field_value(normalized, value, page_url),
@@ -180,19 +186,10 @@ def _apply_dom_fallbacks(
         if price_match:
             _add_sourced_candidate(
                 candidates,
+                candidate_sources,
                 field_sources,
                 "price",
                 price_match.group(0),
-                source="dom_text",
-            )
-    if "discount_percentage" in fields and not candidates.get("discount_percentage"):
-        percent_match = PERCENT_RE.search(body_text)
-        if percent_match:
-            _add_sourced_candidate(
-                candidates,
-                field_sources,
-                "discount_percentage",
-                percent_match.group(0),
                 source="dom_text",
             )
     if "review_count" in fields and not candidates.get("review_count"):
@@ -200,6 +197,7 @@ def _apply_dom_fallbacks(
         if review_match:
             _add_sourced_candidate(
                 candidates,
+                candidate_sources,
                 field_sources,
                 "review_count",
                 review_match.group(1),
@@ -210,6 +208,7 @@ def _apply_dom_fallbacks(
         if rating_match:
             _add_sourced_candidate(
                 candidates,
+                candidate_sources,
                 field_sources,
                 "rating",
                 rating_match.group(1),
@@ -222,6 +221,7 @@ def _apply_dom_fallbacks(
         if "remote" in lowered or "work from home" in lowered:
             _add_sourced_candidate(
                 candidates,
+                candidate_sources,
                 field_sources,
                 "remote",
                 "remote",
@@ -231,6 +231,7 @@ def _apply_dom_fallbacks(
 
 def _add_sourced_candidate(
     candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
     field_name: str,
     value: object,
@@ -242,6 +243,7 @@ def _add_sourced_candidate(
     after = len(candidates.get(field_name, []))
     if after <= before:
         return
+    candidate_sources.setdefault(field_name, []).extend([source] * (after - before))
     bucket = field_sources.setdefault(field_name, [])
     if source not in bucket:
         bucket.append(source)
@@ -253,6 +255,7 @@ def _collect_record_candidates(
     page_url: str,
     fields: list[str],
     candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
     source: str,
 ) -> None:
@@ -267,6 +270,7 @@ def _collect_record_candidates(
             continue
         _add_sourced_candidate(
             candidates,
+            candidate_sources,
             field_sources,
             normalized_field,
             coerce_field_value(normalized_field, value, page_url),
@@ -280,6 +284,7 @@ def _collect_structured_payload_candidates(
     alias_lookup: dict[str, str],
     page_url: str,
     candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
     source: str,
 ) -> None:
@@ -294,6 +299,7 @@ def _collect_structured_payload_candidates(
         for value in values:
             _add_sourced_candidate(
                 candidates,
+                candidate_sources,
                 field_sources,
                 field_name,
                 value,
@@ -303,14 +309,41 @@ def _collect_structured_payload_candidates(
 
 def _primary_source_for_record(
     record: dict[str, Any],
-    candidates: dict[str, list[object]],
-    field_sources: dict[str, list[str]],
+    selected_field_sources: dict[str, str],
 ) -> str:
     for source_name in _SOURCE_PRIORITY:
-        for field_name, source_list in field_sources.items():
-            if field_name in record and field_name in candidates and source_name in source_list:
+        for field_name, source in selected_field_sources.items():
+            if field_name in record and source == source_name:
                 return source_name
     return "structured_dom"
+
+
+_SOURCE_PRIORITY_RANK = {
+    source_name: index for index, source_name in enumerate(_SOURCE_PRIORITY)
+}
+
+
+def _ordered_candidates_for_field(
+    field_name: str,
+    candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
+) -> list[tuple[str | None, object]]:
+    values = list(candidates.get(field_name, []))
+    sources = list(candidate_sources.get(field_name, []))
+    indexed_entries = [
+        (
+            _SOURCE_PRIORITY_RANK.get(
+                sources[index] if index < len(sources) else None,
+                len(_SOURCE_PRIORITY_RANK),
+            ),
+            index,
+            sources[index] if index < len(sources) else None,
+            value,
+        )
+        for index, value in enumerate(values)
+    ]
+    indexed_entries.sort(key=lambda row: (row[0], row[1]))
+    return [(source, value) for _, _, source, value in indexed_entries]
 
 
 def _selector_self_heal_config(
@@ -343,6 +376,7 @@ def _materialize_record(
     requested_fields: list[str] | None,
     fields: list[str],
     candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
     field_sources: dict[str, list[str]],
     extraction_runtime_snapshot: dict[str, object] | None,
     tier_name: str,
@@ -352,16 +386,31 @@ def _materialize_record(
         "source_url": page_url,
         "url": page_url,
     }
+    selected_field_sources: dict[str, str] = {}
     for field_name in fields:
-        finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
+        ordered_candidates = _ordered_candidates_for_field(
+            field_name,
+            candidates,
+            candidate_sources,
+        )
+        finalized = finalize_candidate_value(
+            field_name,
+            [value for _, value in ordered_candidates],
+        )
         if finalized not in (None, "", [], {}):
             record[field_name] = finalized
+            selected_source = next(
+                (source for source, _ in ordered_candidates if source),
+                None,
+            )
+            if selected_source:
+                selected_field_sources[field_name] = selected_source
     record["_field_sources"] = {
         field_name: list(source_list)
         for field_name, source_list in field_sources.items()
         if field_name in record
     }
-    record["_source"] = _primary_source_for_record(record, candidates, field_sources)
+    record["_source"] = _primary_source_for_record(record, selected_field_sources)
     _dedupe_primary_and_additional_images(record)
     confidence = score_record_confidence(
         record,
@@ -481,6 +530,7 @@ def build_detail_record(
     soup = BeautifulSoup(cleaned_html, "html.parser")
     alias_lookup = surface_alias_lookup(surface, requested_fields)
     candidates: dict[str, list[object]] = {}
+    candidate_sources: dict[str, list[str]] = {}
     field_sources: dict[str, list[str]] = {}
     fields = surface_fields(surface, requested_fields)
     selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
@@ -493,6 +543,7 @@ def build_detail_record(
                 page_url=page_url,
                 fields=fields,
                 candidates=candidates,
+                candidate_sources=candidate_sources,
                 field_sources=field_sources,
                 source="adapter",
             )
@@ -506,6 +557,7 @@ def build_detail_record(
             page_url=page_url,
             fields=fields,
             candidates=candidates,
+            candidate_sources=candidate_sources,
             field_sources=field_sources,
             source="network_payload",
         )
@@ -516,6 +568,7 @@ def build_detail_record(
         requested_fields=requested_fields,
         fields=fields,
         candidates=candidates,
+        candidate_sources=candidate_sources,
         field_sources=field_sources,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
         tier_name="authoritative",
@@ -533,6 +586,7 @@ def build_detail_record(
         page_url=page_url,
         fields=fields,
         candidates=candidates,
+        candidate_sources=candidate_sources,
         field_sources=field_sources,
         source="js_state",
     )
@@ -543,6 +597,7 @@ def build_detail_record(
         requested_fields=requested_fields,
         fields=fields,
         candidates=candidates,
+        candidate_sources=candidate_sources,
         field_sources=field_sources,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
         tier_name="js_state",
@@ -555,6 +610,7 @@ def build_detail_record(
             alias_lookup=alias_lookup,
             page_url=page_url,
             candidates=candidates,
+            candidate_sources=candidate_sources,
             field_sources=field_sources,
             source="json_ld",
         )
@@ -564,6 +620,7 @@ def build_detail_record(
             alias_lookup=alias_lookup,
             page_url=page_url,
             candidates=candidates,
+            candidate_sources=candidate_sources,
             field_sources=field_sources,
             source="microdata",
         )
@@ -573,6 +630,7 @@ def build_detail_record(
             alias_lookup=alias_lookup,
             page_url=page_url,
             candidates=candidates,
+            candidate_sources=candidate_sources,
             field_sources=field_sources,
             source="opengraph",
         )
@@ -582,6 +640,7 @@ def build_detail_record(
             alias_lookup=alias_lookup,
             page_url=page_url,
             candidates=candidates,
+            candidate_sources=candidate_sources,
             field_sources=field_sources,
             source="embedded_json",
         )
@@ -592,6 +651,7 @@ def build_detail_record(
         requested_fields=requested_fields,
         fields=fields,
         candidates=candidates,
+        candidate_sources=candidate_sources,
         field_sources=field_sources,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
         tier_name="structured_data",
@@ -618,6 +678,7 @@ def build_detail_record(
         surface,
         requested_fields,
         candidates,
+        candidate_sources,
         field_sources,
         selector_rules=selector_rules,
     )
@@ -628,6 +689,7 @@ def build_detail_record(
         requested_fields=requested_fields,
         fields=fields,
         candidates=candidates,
+        candidate_sources=candidate_sources,
         field_sources=field_sources,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
         tier_name="dom",

@@ -14,10 +14,6 @@ async def log_event(session, run_id: int | None, level: str, message: str) -> No
     await session.flush()
 
 
-def log_for_pytest(message: str) -> str:
-    return message
-
-
 async def set_stage(
     session,
     run,
