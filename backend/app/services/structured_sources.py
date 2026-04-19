@@ -51,10 +51,7 @@ _NON_STATE_ASSIGNMENT_PATTERNS = (
 def json_candidates(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, dict):
         if "@graph" in value and isinstance(value["@graph"], list):
-            rows: list[dict[str, Any]] = []
-            for item in value["@graph"]:
-                rows.extend(json_candidates(item))
-            return rows
+            return _resolve_json_ld_graph(value["@graph"])
         return [value]
     if isinstance(value, list):
         rows: list[dict[str, Any]] = []
@@ -71,10 +68,108 @@ def parse_json_ld(soup: BeautifulSoup) -> list[dict[str, Any]]:
         if not raw:
             continue
         try:
-            rows.extend(json_candidates(json.loads(raw)))
+            rows.extend(json_ld_candidates(json.loads(raw)))
         except json.JSONDecodeError:
             continue
     return rows
+
+
+def json_ld_candidates(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        if "@graph" in value and isinstance(value["@graph"], list):
+            return _resolve_json_ld_graph(value["@graph"])
+        return [value]
+    if isinstance(value, list):
+        nodes = [item for item in value if isinstance(item, dict)]
+        if nodes and any(_looks_like_json_ld_node(node) for node in nodes):
+            return _resolve_json_ld_graph(nodes)
+        rows: list[dict[str, Any]] = []
+        for item in value:
+            rows.extend(json_ld_candidates(item))
+        return rows
+    return []
+
+
+def _resolve_json_ld_graph(graph: list[Any]) -> list[dict[str, Any]]:
+    nodes = [item for item in graph if isinstance(item, dict)]
+    id_index = {
+        str(node.get("@id") or "").strip(): node
+        for node in nodes
+        if str(node.get("@id") or "").strip()
+    }
+    resolved = [
+        _resolve_json_ld_value(node, id_index=id_index, path=()) for node in nodes
+    ]
+    return sorted(
+        resolved,
+        key=lambda node: _json_ld_node_priority(node),
+    )
+
+
+def _resolve_json_ld_value(
+    value: Any,
+    *,
+    id_index: dict[str, dict[str, Any]],
+    path: tuple[str, ...],
+) -> Any:
+    if isinstance(value, list):
+        return [
+            _resolve_json_ld_value(item, id_index=id_index, path=path)
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+
+    node_id = str(value.get("@id") or "").strip()
+    resolved: dict[str, Any] = {}
+    if node_id and node_id in id_index and node_id not in path:
+        base_node = id_index[node_id]
+        if base_node is not value:
+            resolved.update(
+                _resolve_json_ld_value(
+                    base_node,
+                    id_index=id_index,
+                    path=path + (node_id,),
+                )
+            )
+
+    next_path = path + ((node_id,) if node_id else ())
+    for key, item in value.items():
+        if key == "@graph":
+            continue
+        if key == "@id" and node_id:
+            resolved[key] = node_id
+            continue
+        resolved[str(key)] = _resolve_json_ld_value(
+            item,
+            id_index=id_index,
+            path=next_path,
+        )
+    return resolved
+
+
+def _json_ld_node_priority(node: dict[str, Any]) -> tuple[int, str]:
+    raw_type = node.get("@type")
+    if isinstance(raw_type, list):
+        lowered_types = {str(item or "").strip().lower() for item in raw_type}
+    else:
+        lowered_types = {str(raw_type or "").strip().lower()}
+    lowered_types.discard("")
+    if lowered_types & {"product", "productgroup", "jobposting", "itemlist", "listitem"}:
+        return (0, _json_ld_node_id(node))
+    if lowered_types & {"offer", "aggregateoffer"}:
+        return (1, _json_ld_node_id(node))
+    if lowered_types & {"brand", "organization", "person"}:
+        return (3, _json_ld_node_id(node))
+    return (2, _json_ld_node_id(node))
+
+
+def _json_ld_node_id(node: dict[str, Any]) -> str:
+    return str(node.get("@id") or node.get("name") or "").strip().lower()
+
+
+def _looks_like_json_ld_node(node: dict[str, Any]) -> bool:
+    return any(key in node for key in ("@context", "@graph", "@id", "@type"))
 
 
 def parse_microdata(
@@ -372,10 +467,7 @@ def _first_value(value: object) -> object | None:
 def _revive_nuxt_data_payload(payload: Any) -> Any:
     if not isinstance(payload, list) or not payload:
         return payload
-    try:
-        return _revive_flattened_slot(payload, 0, {})
-    except Exception:
-        return payload
+    return _revive_flattened_slot(payload, 0, {})
 
 
 def _revive_flattened_slot(
@@ -395,12 +487,12 @@ def _revive_flattened_slot(
             revived[str(key)] = _revive_flattened_ref(slots, item, cache)
         return revived
     if isinstance(value, list):
+        revived_list: list[Any] = []
+        cache[index] = revived_list
         wrapper = _revive_flattened_wrapper(slots, value, cache)
         if wrapper is not None:
             cache[index] = wrapper
             return wrapper
-        revived_list: list[Any] = []
-        cache[index] = revived_list
         revived_list.extend(_revive_flattened_ref(slots, item, cache) for item in value)
         return revived_list
     cache[index] = value

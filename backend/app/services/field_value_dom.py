@@ -9,13 +9,12 @@ from lxml import etree
 from lxml import html as lxml_html
 
 from app.services.config.extraction_rules import EXTRACTION_RULES, SEMANTIC_SECTION_NOISE
+from app.services.config.surface_hints import detail_path_hints
 from app.services.field_policy import normalize_field_key, normalize_requested_field
 
 from app.services.field_value_candidates import add_candidate
 from app.services.field_value_core import (
     IMAGE_FIELDS,
-    JOB_URL_HINTS,
-    PRODUCT_URL_HINTS,
     URL_FIELDS,
     absolute_url,
     clean_text,
@@ -62,7 +61,7 @@ def _looks_like_image_asset_url(url: str) -> bool:
         return True
     if any(path.endswith(ext) for ext in _PAGE_FILE_EXTENSIONS):
         return False
-    if any(marker in path for marker in (*PRODUCT_URL_HINTS, *JOB_URL_HINTS)):
+    if any(marker in path for marker in detail_path_hints()):
         return False
     if any(hint in host_and_path for hint in _IMAGE_URL_HINTS):
         return True
@@ -102,7 +101,12 @@ def _is_non_primary_image_context(node: Tag) -> bool:
     return any(hint in context for hint in _NON_PRIMARY_IMAGE_SECTION_HINTS)
 
 
-def _is_other_detail_link(url: str, page_url: str) -> bool:
+def _is_other_detail_link(
+    url: str,
+    page_url: str,
+    *,
+    surface: str | None = None,
+) -> bool:
     candidate = clean_text(url)
     if not candidate:
         return False
@@ -119,7 +123,7 @@ def _is_other_detail_link(url: str, page_url: str) -> bool:
     path = (candidate_parts.path or "").lower()
     if any(path.endswith(ext) for ext in _PAGE_FILE_EXTENSIONS):
         return True
-    return any(marker in path for marker in (*PRODUCT_URL_HINTS, *JOB_URL_HINTS))
+    return any(marker in path for marker in detail_path_hints(surface))
 
 
 def safe_select(root: BeautifulSoup | Tag, selector: str) -> list[Tag]:
@@ -283,6 +287,7 @@ def extract_page_images(
     page_url: str,
     *,
     exclude_linked_detail_images: bool = False,
+    surface: str | None = None,
 ) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
@@ -294,6 +299,7 @@ def extract_page_images(
             if link is not None and _is_other_detail_link(
                 absolute_url(page_url, link.get("href")),
                 page_url,
+                surface=surface,
             ):
                 continue
         candidate = absolute_url(

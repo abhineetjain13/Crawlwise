@@ -41,33 +41,10 @@ async def request_result(
     proxy: str | None = None,
     timeout_seconds: float | None = None,
 ) -> HttpFetchResult:
-    if prefer_browser or (
-        not expect_json
-        and
-        method.upper() == "GET"
-        and not headers
-        and json_body is None
-        and data is None
-        and proxy is None
-    ):
-        from app.services.crawl_fetch_runtime import fetch_page
-
-        result = await fetch_page(
-            url,
-            prefer_browser=prefer_browser,
-            timeout_seconds=timeout_seconds,
-        )
-        return HttpFetchResult(
-            url=url,
-            final_url=result.final_url,
-            text=result.html,
-            status_code=result.status_code,
-            headers=_copy_headers(result.headers),
-            json_data=_parse_json_payload(
-                result.html,
-                content_type=result.headers.get("content-type"),
-            ),
-        )
+    # Browser acquisition is orchestrated by the acquisition pipeline, not
+    # by this low-level HTTP helper. Keep the flag for call compatibility,
+    # but service all requests through the shared HTTP client.
+    del prefer_browser
 
     timeout = timeout_seconds or settings.http_timeout_seconds
     try:

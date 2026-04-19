@@ -6,15 +6,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.core.redis import redis_fail_open, redis_is_enabled
-from app.services.config.llm_runtime import (
-    LLM_CIRCUIT_COOLDOWN_SECONDS,
-    LLM_CIRCUIT_FAILURE_THRESHOLD,
-)
+from app.services.config.llm_runtime import llm_runtime_settings
 
 ERROR_PREFIX = "Error:"
 logger = logging.getLogger(__name__)
 
 _LLM_CIRCUIT_KEY_PREFIX = "crawl:llm:circuit"
+DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 5
 _RECORD_LLM_FAILURE_LUA = """
 local stats_key = KEYS[1]
 local open_key = KEYS[2]
@@ -94,12 +92,15 @@ def _get_circuit(provider: str) -> _CircuitState:
 
 def _local_circuit_is_open(provider: str) -> bool:
     circuit = _get_circuit(provider)
-    if circuit.consecutive_failures < LLM_CIRCUIT_FAILURE_THRESHOLD:
+    failure_threshold = _resolved_failure_threshold()
+    if failure_threshold is None:
+        return False
+    if circuit.consecutive_failures < failure_threshold:
         return False
     if circuit.opened_at is None:
         return False
     elapsed = time.monotonic() - circuit.opened_at
-    if elapsed >= LLM_CIRCUIT_COOLDOWN_SECONDS:
+    if elapsed >= llm_runtime_settings.circuit_cooldown_seconds:
         logger.info(
             "Circuit half-open for provider=%s; allowing probe request",
             provider,
@@ -121,8 +122,10 @@ def _record_local_failure(provider: str, category: LLMErrorCategory) -> None:
     circuit.consecutive_failures += 1
     circuit.total_failures += 1
     circuit.last_error_category = category
+    failure_threshold = _resolved_failure_threshold()
     if (
-        circuit.consecutive_failures >= LLM_CIRCUIT_FAILURE_THRESHOLD
+        failure_threshold is not None
+        and circuit.consecutive_failures >= failure_threshold
         and circuit.opened_at is None
     ):
         circuit.opened_at = time.monotonic()
@@ -143,7 +146,21 @@ def _shared_circuit_open_key(provider: str) -> str:
 
 
 def _shared_circuit_stats_ttl_seconds() -> int:
-    return max(300, int(LLM_CIRCUIT_COOLDOWN_SECONDS or 0) * 10)
+    return max(300, int(llm_runtime_settings.circuit_cooldown_seconds or 0) * 10)
+
+
+def _resolved_failure_threshold() -> int | None:
+    raw_threshold = getattr(
+        llm_runtime_settings,
+        "circuit_failure_threshold",
+        DEFAULT_CIRCUIT_FAILURE_THRESHOLD,
+    )
+    if raw_threshold is None:
+        raw_threshold = DEFAULT_CIRCUIT_FAILURE_THRESHOLD
+    try:
+        return max(1, int(raw_threshold))
+    except (TypeError, ValueError):
+        return None
 
 
 async def circuit_is_open(provider: str) -> bool:
@@ -202,8 +219,8 @@ async def record_failure(provider: str, category: LLMErrorCategory) -> None:
             _shared_circuit_open_key(provider),
             str(category),
             _shared_circuit_stats_ttl_seconds(),
-            LLM_CIRCUIT_FAILURE_THRESHOLD,
-            max(1, int(LLM_CIRCUIT_COOLDOWN_SECONDS or 0)),
+            _resolved_failure_threshold() or 1,
+            max(1, int(llm_runtime_settings.circuit_cooldown_seconds or 0)),
             opened_at,
         )
 

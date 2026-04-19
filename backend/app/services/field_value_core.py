@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from w3lib.url import url_query_cleaner
 
 from app.services.config.field_mappings import CANONICAL_SCHEMAS
+from app.services.config.surface_hints import detail_path_hints
 from app.services.field_policy import (
     expand_requested_fields,
     get_surface_field_aliases,
@@ -16,8 +17,8 @@ from app.services.field_policy import (
 )
 from app.services.normalizers import normalize_record_fields
 
-PRODUCT_URL_HINTS = ("/dp/", "/p/", "/pd/", "/product", "/products/", "/item/")
-JOB_URL_HINTS = ("/job", "/jobs", "/career", "/careers", "/position", "/posting", "/opening")
+PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
+JOB_URL_HINTS = detail_path_hints("job_detail")
 PRICE_RE = re.compile(r"[$€£₹]\s?\d[\d,]*(?:\.\d{1,2})?")
 PERCENT_RE = re.compile(r"\b\d{1,3}(?:\.\d+)?\s?%")
 REVIEW_COUNT_RE = re.compile(r"\b(\d[\d,]*)\s+reviews?\b", re.I)

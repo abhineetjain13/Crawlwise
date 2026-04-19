@@ -3,6 +3,12 @@ from __future__ import annotations
 import importlib
 
 from app.models.crawl_settings import CrawlRunSettings
+from app.services.acquisition_plan import AcquisitionPlan
+from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.exceptions import CrawlerConfigurationError
+from app.services.pipeline.pipeline_config import PipelineDefaults
+from app.services.platform_policy import resolve_platform_runtime_policy
+import pytest
 
 
 def test_static_config_exports_remain_import_stable() -> None:
@@ -44,3 +50,35 @@ def test_crawl_run_settings_exposes_normalized_acquisition_plan() -> None:
     assert plan.max_scrolls == 2
     assert plan.max_records == 9
     assert plan.sleep_ms == 500
+
+
+def test_runtime_backed_defaults_remain_single_source_of_truth() -> None:
+    plan = AcquisitionPlan(surface="job_listing")
+    settings = CrawlRunSettings.from_value({})
+
+    assert PipelineDefaults.MAX_PAGES == crawler_runtime_settings.default_max_pages
+    assert PipelineDefaults.MAX_SCROLLS == crawler_runtime_settings.default_max_scrolls
+    assert PipelineDefaults.MAX_RECORDS == crawler_runtime_settings.default_max_records
+    assert PipelineDefaults.SLEEP_MS == crawler_runtime_settings.default_sleep_ms
+    assert plan.max_pages == crawler_runtime_settings.default_max_pages
+    assert plan.max_scrolls == crawler_runtime_settings.default_max_scrolls
+    assert plan.max_records == crawler_runtime_settings.default_max_records
+    assert settings.max_records() == crawler_runtime_settings.default_max_records
+
+
+def test_invalid_traversal_mode_raises_configuration_error() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "advanced_enabled": True,
+            "traversal_mode": "totally_invalid_mode",
+        }
+    )
+
+    with pytest.raises(CrawlerConfigurationError, match="Unsupported traversal_mode"):
+        settings.traversal_mode()
+
+
+def test_platform_runtime_policy_does_not_force_browser_for_vendor_specific_domains() -> None:
+    policy = resolve_platform_runtime_policy("https://www.autozone.com/")
+
+    assert policy["requires_browser"] is False

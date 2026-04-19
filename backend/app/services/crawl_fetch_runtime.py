@@ -62,8 +62,13 @@ def _should_escalate_to_browser(
     result: PageFetchResult,
     *,
     surface: str | None = None,
+    runtime_policy: dict[str, object] | None = None,
 ) -> bool:
-    return should_escalate_to_browser(result, surface=surface)
+    return should_escalate_to_browser(
+        result,
+        surface=surface,
+        runtime_policy=runtime_policy,
+    )
 
 
 async def _get_shared_http_client(*, proxy: str | None = None):
@@ -129,8 +134,14 @@ async def _should_escalate_to_browser_async(
     result: PageFetchResult,
     *,
     surface: str | None = None,
+    runtime_policy: dict[str, object] | None = None,
 ) -> bool:
-    return await asyncio.to_thread(_should_escalate_to_browser, result, surface=surface)
+    return await asyncio.to_thread(
+        _should_escalate_to_browser,
+        result,
+        surface=surface,
+        runtime_policy=runtime_policy,
+    )
 
 
 def _should_capture_network_payload(*, url: str, content_type: str, headers, captured_count: int) -> bool:
@@ -195,7 +206,7 @@ async def fetch_page(
     max_scrolls: int = 1,
 ) -> PageFetchResult:
     resolved_timeout = float(timeout_seconds or settings.http_timeout_seconds)
-    runtime_policy = resolve_platform_runtime_policy(url)
+    runtime_policy = resolve_platform_runtime_policy(url, surface=surface)
     proxies = [
         value
         for value in {
@@ -276,8 +287,17 @@ async def fetch_page(
                 vendor = _vendor_confirmed_block(result)
                 if vendor:
                     vendor_block_confirmed = True
+                result_runtime_policy = resolve_platform_runtime_policy(
+                    result.final_url or result.url,
+                    result.html,
+                    surface=surface,
+                )
 
-                if vendor or await _should_escalate_to_browser_async(result, surface=surface):
+                if vendor or await _should_escalate_to_browser_async(
+                    result,
+                    surface=surface,
+                    runtime_policy=result_runtime_policy,
+                ):
                     resolved_browser_reason = (
                         browser_reason
                         or (f"vendor-block:{vendor}" if vendor else "http-escalation")

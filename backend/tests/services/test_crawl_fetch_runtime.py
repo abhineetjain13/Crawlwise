@@ -13,9 +13,16 @@ from app.services.acquisition.runtime import PageFetchResult, should_escalate_to
 
 
 class _FakeResponse:
-    def __init__(self, body: bytes | None = None, *, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        body: bytes | None = None,
+        *,
+        error: Exception | None = None,
+        url: str = "https://example.com/api/data.json",
+    ) -> None:
         self._body = body
         self._error = error
+        self.url = url
         self.body_calls = 0
 
     async def body(self) -> bytes:
@@ -44,6 +51,19 @@ def test_should_capture_network_payload_skips_noise_and_large_declared_payloads(
         headers={"content-length": "512"},
         captured_count=0,
     )
+    assert should_capture_network_payload(
+        url="https://example.com/api/products",
+        content_type="application/json",
+        headers={"content-length": "600000"},
+        captured_count=0,
+    )
+    assert should_capture_network_payload(
+        url="https://example.com/products/widget/product.js",
+        content_type="application/json",
+        headers={"content-length": "6000000"},
+        captured_count=0,
+        surface="ecommerce_detail",
+    )
 
 
 def test_classify_network_endpoint_uses_platform_config_family_signatures() -> None:
@@ -63,12 +83,37 @@ def test_classify_network_endpoint_uses_platform_config_family_signatures() -> N
 
 @pytest.mark.asyncio
 async def test_read_network_payload_body_rejects_oversized_body_before_decode() -> None:
-    response = _FakeResponse(b"x" * 600_000)
+    response = _FakeResponse(b"x" * 3_500_000)
 
     body = await read_network_payload_body(response)
 
     assert body.outcome == "too_large"
     assert body.body is None
+    assert response.body_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_read_network_payload_body_accepts_large_but_in_budget_body() -> None:
+    response = _FakeResponse(b"x" * 600_000)
+
+    body = await read_network_payload_body(response)
+
+    assert body.outcome == "read"
+    assert body.body == b"x" * 600_000
+    assert response.body_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_read_network_payload_body_accepts_high_value_large_body_with_scaled_budget() -> None:
+    response = _FakeResponse(
+        b"x" * 3_500_000,
+        url="https://example.com/products/widget/product.js",
+    )
+
+    body = await read_network_payload_body(response, surface="ecommerce_detail")
+
+    assert body.outcome == "read"
+    assert body.body == b"x" * 3_500_000
     assert response.body_calls == 1
 
 
@@ -144,6 +189,42 @@ async def test_detail_surface_without_signals_escalates_even_when_html_is_not_a_
 
     assert await should_escalate_to_browser_async(result, surface="job_detail") is True
     assert await should_escalate_to_browser_async(result, surface="job_listing") is False
+
+
+@pytest.mark.asyncio
+async def test_should_escalate_to_browser_async_uses_runtime_policy_for_missing_detail_signals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.acquisition.runtime.resolve_platform_runtime_policy",
+        lambda url, html="", *, surface=None: {
+            "family": None,
+            "requires_browser": False,
+            "proxy_policy": None,
+            "http_browser_escalation": {
+                "js_shell_without_detail_signals": False,
+                "missing_detail_signals": False,
+                "listing_shell_without_listing_signals": False,
+            },
+        },
+    )
+    result = PageFetchResult(
+        url="https://ats.example.com/careers?ShowJob=123",
+        final_url="https://ats.example.com/careers?ShowJob=123",
+        html=(
+            "<html><body><h1>Careers</h1>"
+            + "<ul>"
+            + "".join(f"<li><a href='#'>Job {index}</a></li>" for index in range(20))
+            + "</ul>"
+            + "<p>" + ("Lots of visible non-detail copy. " * 30) + "</p>"
+            + "</body></html>"
+        ),
+        status_code=200,
+        method="httpx",
+        blocked=False,
+    )
+
+    assert await should_escalate_to_browser_async(result, surface="job_detail") is False
 
 
 @pytest.mark.asyncio
@@ -411,8 +492,13 @@ async def test_fetch_page_host_preference_requires_repeated_good_browser_outcome
         async def _unexpected_http(url: str, timeout: float, *, proxy: str | None = None):
             raise AssertionError(f"http fallback should not run for {url} {timeout} {proxy}")
 
-        async def _fake_should_escalate(result: PageFetchResult, *, surface: str | None = None) -> bool:
-            del result, surface
+        async def _fake_should_escalate(
+            result: PageFetchResult,
+            *,
+            surface: str | None = None,
+            runtime_policy=None,
+        ) -> bool:
+            del result, surface, runtime_policy
             return next(should_escalate_values)
 
         async def _fake_browser(url, timeout, **kwargs):
@@ -482,8 +568,13 @@ async def test_fetch_page_does_not_prefer_host_after_bad_browser_outcome(
     async def _unexpected_http(url: str, timeout: float, *, proxy: str | None = None):
         raise AssertionError(f"http fallback should not run for {url} {timeout} {proxy}")
 
-    async def _fake_should_escalate(result: PageFetchResult, *, surface: str | None = None) -> bool:
-        del result, surface
+    async def _fake_should_escalate(
+        result: PageFetchResult,
+        *,
+        surface: str | None = None,
+        runtime_policy=None,
+    ) -> bool:
+        del result, surface, runtime_policy
         return next(should_escalate_values)
 
     async def _fake_browser(url, timeout, **kwargs):

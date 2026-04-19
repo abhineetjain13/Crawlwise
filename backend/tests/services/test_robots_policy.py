@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -34,7 +35,7 @@ class _FakeResponse:
 async def test_check_url_crawlability_allows_url_when_robots_allows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    robots_policy.reset_robots_policy_cache()
+    await robots_policy.reset_robots_policy_cache()
     monkeypatch.setattr(
         robots_policy,
         "urlopen",
@@ -52,7 +53,7 @@ async def test_check_url_crawlability_allows_url_when_robots_allows(
 async def test_check_url_crawlability_blocks_url_when_robots_disallows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    robots_policy.reset_robots_policy_cache()
+    await robots_policy.reset_robots_policy_cache()
     monkeypatch.setattr(
         robots_policy,
         "urlopen",
@@ -69,7 +70,7 @@ async def test_check_url_crawlability_blocks_url_when_robots_disallows(
 async def test_check_url_crawlability_allows_missing_robots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    robots_policy.reset_robots_policy_cache()
+    await robots_policy.reset_robots_policy_cache()
 
     def _missing(request, timeout):
         raise HTTPError(
@@ -92,7 +93,7 @@ async def test_check_url_crawlability_allows_missing_robots(
 async def test_check_url_crawlability_allows_when_robots_fetch_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    robots_policy.reset_robots_policy_cache()
+    await robots_policy.reset_robots_policy_cache()
 
     def _fail(request, timeout):
         raise URLError("timeout")
@@ -110,7 +111,7 @@ async def test_check_url_crawlability_allows_when_robots_fetch_fails(
 async def test_check_url_crawlability_treats_forbidden_robots_as_disallow_all(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    robots_policy.reset_robots_policy_cache()
+    await robots_policy.reset_robots_policy_cache()
 
     def _forbidden(request, timeout):
         raise HTTPError(
@@ -127,3 +128,30 @@ async def test_check_url_crawlability_treats_forbidden_robots_as_disallow_all(
 
     assert result.allowed is False
     assert result.outcome == robots_policy.ROBOTS_DISALLOWED
+
+
+@pytest.mark.asyncio
+async def test_check_url_crawlability_reuses_inflight_fetch_for_same_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await robots_policy.reset_robots_policy_cache()
+    calls = 0
+
+    def _delayed_success(request, timeout):
+        nonlocal calls
+        del request, timeout
+        calls += 1
+        import time
+
+        time.sleep(0.05)
+        return _FakeResponse("User-agent: *\nDisallow:")
+
+    monkeypatch.setattr(robots_policy, "urlopen", _delayed_success)
+
+    results = await asyncio.gather(
+        robots_policy.check_url_crawlability("https://example.com/public"),
+        robots_policy.check_url_crawlability("https://example.com/public?page=2"),
+    )
+
+    assert calls == 1
+    assert all(result.allowed for result in results)

@@ -130,6 +130,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_navigation_optimistic_wait_ms: int = 3000
     browser_navigation_min_commit_wait_ms: int = 8000
     browser_navigation_min_final_commit_timeout_ms: int = 15000
+    browser_capture_max_network_payloads: int = 25
+    browser_capture_max_network_payload_bytes: int = 3000000
+    browser_capture_total_network_payload_bytes: int = 12000000
     browser_readiness_visible_text_min: int = 120
     interruptible_wait_poll_ms: int = 250
     cooperative_sleep_poll_ms: int = 250
@@ -219,6 +222,19 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("max_url_process_timeout_seconds must be > 0")
         if self.browser_render_timeout_seconds <= 0:
             raise ValueError("browser_render_timeout_seconds must be > 0")
+        if self.browser_capture_max_network_payloads <= 0:
+            raise ValueError("browser_capture_max_network_payloads must be > 0")
+        if self.browser_capture_max_network_payload_bytes <= 0:
+            raise ValueError("browser_capture_max_network_payload_bytes must be > 0")
+        if self.browser_capture_total_network_payload_bytes <= 0:
+            raise ValueError("browser_capture_total_network_payload_bytes must be > 0")
+        if (
+            self.browser_capture_total_network_payload_bytes
+            < self.browser_capture_max_network_payload_bytes
+        ):
+            raise ValueError(
+                "browser_capture_total_network_payload_bytes must be >= browser_capture_max_network_payload_bytes"
+            )
         if self.acquisition_artifact_ttl_seconds < 0:
             raise ValueError("acquisition_artifact_ttl_seconds must be >= 0")
         if self.acquisition_artifact_cleanup_interval_seconds < 0:

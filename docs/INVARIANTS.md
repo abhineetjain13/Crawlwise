@@ -27,17 +27,18 @@ These rules are the backend contract. Refactors may change structure, not these 
 
 13. Domain memory is scoped by normalized `(domain, surface)`. Generic fallback may supplement a surface-specific rule set, not override the scoping model.
 14. Selector CRUD, review saves, and selector self-heal may improve future extraction, but they must remain explicit, diagnosable flows.
-15. Automatically synthesized selectors must be validated before they are saved or reused.
+15. Reused domain-memory selectors should satisfy later runs before new selector synthesis is attempted. Do not trigger another generic self-heal pass once the requested fields are already covered.
+16. Automatically synthesized selectors must be validated before they are saved or reused.
 
 ## 5. LLM and snapshots
 
-16. LLM use is opt-in at run time through settings and active config. It must not silently activate itself.
-17. Run snapshots are stable within a run. `llm_config_snapshot` and `extraction_runtime_snapshot` should prevent mid-run config drift.
-18. LLM failures should degrade gracefully and remain visible in diagnostics rather than corrupting extraction state.
+17. LLM use is opt-in at run time through settings and active config. It must not silently activate itself.
+18. Run snapshots are stable within a run. `llm_config_snapshot` and `extraction_runtime_snapshot` should prevent mid-run config drift.
+19. LLM failures should degrade gracefully and remain visible in diagnostics rather than corrupting extraction state.
 
 ## 6. Codebase shape
 
-19. Generic crawler paths stay generic. Do not hardcode tenant- or site-specific behavior in shared runtime or extraction code.
-20. Pipeline boundaries should use typed objects and explicit contracts rather than growing positional argument sprawl.
-21. CPU-bound parsing and sync third-party calls must not block async hot paths.
-22. If a rule is important enough to preserve, it should have a clear owning test.
+20. Generic crawler paths stay generic. Do not hardcode tenant- or site-specific behavior in shared runtime or extraction code.
+21. Pipeline boundaries should use typed objects and explicit contracts rather than growing positional argument sprawl.
+22. CPU-bound parsing and sync third-party calls must not block async hot paths.
+23. If a rule is important enough to preserve, it should have a clear owning test.

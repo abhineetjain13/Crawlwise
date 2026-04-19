@@ -4,18 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
-from app.services.config.llm_runtime import (
-    LLM_ANTHROPIC_MAX_TOKENS,
-    LLM_ANTHROPIC_TEMPERATURE,
-    LLM_GROQ_MAX_TOKENS,
-    LLM_GROQ_TEMPERATURE,
-    LLM_NVIDIA_MAX_TOKENS,
-    LLM_NVIDIA_TEMPERATURE,
-    LLM_PROVIDER_ERROR_EXCERPT_CHARS,
-    LLM_PROVIDER_RETRY_BASE_DELAY_SECONDS,
-    LLM_PROVIDER_RETRY_MAX_RETRIES,
-    LLM_PROVIDER_TIMEOUT_SECONDS,
-)
+from app.services.config.llm_runtime import llm_runtime_settings
 from app.services.llm_circuit_breaker import (
     ERROR_PREFIX,
     LLMErrorCategory,
@@ -59,8 +48,8 @@ async def call_provider_with_retry(
     api_key: str,
     system_prompt: str,
     user_prompt: str,
-    max_retries: int = LLM_PROVIDER_RETRY_MAX_RETRIES,
-    base_delay_s: float = LLM_PROVIDER_RETRY_BASE_DELAY_SECONDS,
+    max_retries: int = llm_runtime_settings.provider_retry_max_retries,
+    base_delay_s: float = llm_runtime_settings.provider_retry_base_delay_seconds,
 ) -> tuple[str, int, int]:
     del base_delay_s
     normalized_provider = str(provider or "").strip().lower()
@@ -136,7 +125,9 @@ async def _call_groq(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(timeout=LLM_PROVIDER_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(
+        timeout=llm_runtime_settings.provider_timeout_seconds
+    ) as client:
         response = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
@@ -149,8 +140,8 @@ async def _call_groq(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "max_tokens": LLM_GROQ_MAX_TOKENS,
-                "temperature": LLM_GROQ_TEMPERATURE,
+                "max_tokens": llm_runtime_settings.groq_max_tokens,
+                "temperature": llm_runtime_settings.groq_temperature,
             },
         )
     if response.status_code != 200:
@@ -164,7 +155,9 @@ async def _call_anthropic(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(timeout=LLM_PROVIDER_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(
+        timeout=llm_runtime_settings.provider_timeout_seconds
+    ) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -174,8 +167,8 @@ async def _call_anthropic(
             },
             json={
                 "model": model,
-                "max_tokens": LLM_ANTHROPIC_MAX_TOKENS,
-                "temperature": LLM_ANTHROPIC_TEMPERATURE,
+                "max_tokens": llm_runtime_settings.anthropic_max_tokens,
+                "temperature": llm_runtime_settings.anthropic_temperature,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": user_prompt}],
             },
@@ -205,7 +198,9 @@ async def _call_nvidia(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[str, int, int]:
-    async with httpx.AsyncClient(timeout=LLM_PROVIDER_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(
+        timeout=llm_runtime_settings.provider_timeout_seconds
+    ) as client:
         response = await client.post(
             "https://integrate.api.nvidia.com/v1/chat/completions",
             headers={
@@ -218,8 +213,8 @@ async def _call_nvidia(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "max_tokens": LLM_NVIDIA_MAX_TOKENS,
-                "temperature": LLM_NVIDIA_TEMPERATURE,
+                "max_tokens": llm_runtime_settings.nvidia_max_tokens,
+                "temperature": llm_runtime_settings.nvidia_temperature,
             },
         )
     if response.status_code != 200:
@@ -230,7 +225,7 @@ async def _call_nvidia(
 def _http_error(response: httpx.Response) -> str:
     return (
         f"{ERROR_PREFIX} HTTP {response.status_code}: "
-        f"{response.text[:LLM_PROVIDER_ERROR_EXCERPT_CHARS]}"
+        f"{response.text[:llm_runtime_settings.provider_error_excerpt_chars]}"
     )
 
 

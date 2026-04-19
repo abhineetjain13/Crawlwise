@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
+from app.services.field_value_utils import clean_text
 from bs4 import BeautifulSoup
 
 
@@ -149,8 +150,8 @@ class OracleHCMAdapter(BaseAdapter):
     ) -> dict | None:
         if not isinstance(requisition, dict):
             return None
-        title = self._clean_text(requisition.get("Title"))
-        job_id = self._clean_text(requisition.get("Id"))
+        title = clean_text(requisition.get("Title"))
+        job_id = clean_text(requisition.get("Id"))
         if not title or not job_id:
             return None
 
@@ -161,13 +162,13 @@ class OracleHCMAdapter(BaseAdapter):
         ]
         description = "\n\n".join(part for part in description_parts if part)
         location = self._join_locations(requisition)
-        department = self._clean_text(requisition.get("Department"))
-        category = self._clean_text(
+        department = clean_text(requisition.get("Department"))
+        category = clean_text(
             requisition.get("Organization")
             or requisition.get("JobFunction")
             or requisition.get("JobFamily")
         )
-        job_type = self._clean_text(
+        job_type = clean_text(
             requisition.get("JobType")
             or requisition.get("WorkerType")
             or requisition.get("ContractType")
@@ -179,7 +180,7 @@ class OracleHCMAdapter(BaseAdapter):
             "url": f"{base_url}/hcmUI/CandidateExperience/{site_lang}/sites/{site_number}/job/{job_id}/",
             "apply_url": f"{base_url}/hcmUI/CandidateExperience/{site_lang}/sites/{site_number}/job/{job_id}/",
             "job_id": job_id,
-            "posted_date": self._clean_text(requisition.get("PostedDate")),
+            "posted_date": clean_text(requisition.get("PostedDate")),
             "location": location or None,
             "company": company or None,
             "department": department or None,
@@ -196,30 +197,30 @@ class OracleHCMAdapter(BaseAdapter):
     def _extract_site_number(self, url: str, html: str) -> str:
         path_match = _SITE_PATH_RE.search(urlparse(str(url or "")).path)
         if path_match:
-            return self._clean_text(path_match.group(1))
+            return clean_text(path_match.group(1))
         config = self._extract_cx_config(html)
         app = config.get("app") if isinstance(config.get("app"), dict) else {}
-        return self._clean_text(app.get("siteNumber"))
+        return clean_text(app.get("siteNumber"))
 
     def _extract_site_lang(self, url: str, html: str) -> str:
         path_match = _LANG_PATH_RE.search(urlparse(str(url or "")).path)
         if path_match:
-            return self._clean_text(path_match.group(1))
+            return clean_text(path_match.group(1))
         config = self._extract_cx_config(html)
         app = config.get("app") if isinstance(config.get("app"), dict) else {}
-        return self._clean_text(app.get("siteLang"))
+        return clean_text(app.get("siteLang"))
 
     def _extract_site_name(self, html: str) -> str:
         config = self._extract_cx_config(html)
         app = config.get("app") if isinstance(config.get("app"), dict) else {}
-        site_name = self._clean_text(app.get("siteName"))
+        site_name = clean_text(app.get("siteName"))
         if site_name:
             return site_name
         soup = BeautifulSoup(str(html or ""), "html.parser")
         meta = soup.find("meta", attrs={"property": "og:site_name"})
         if meta is not None:
-            return self._clean_text(meta.get("content"))
-        return self._clean_text(
+            return clean_text(meta.get("content"))
+        return clean_text(
             soup.title.get_text(" ", strip=True) if soup.title is not None else ""
         )
 
@@ -243,19 +244,19 @@ class OracleHCMAdapter(BaseAdapter):
     def _extract_job_id_from_url(self, url: str) -> str:
         path = urlparse(str(url or "")).path
         match = _JOB_PATH_RE.search(path)
-        return self._clean_text(match.group(1)) if match else ""
+        return clean_text(match.group(1)) if match else ""
 
     def _format_location_item(self, item: dict) -> str:
         parts = [
-            self._clean_text(item.get("TownOrCity")),
-            self._clean_text(item.get("Region2")),
-            self._clean_text(item.get("Country")),
+            clean_text(item.get("TownOrCity")),
+            clean_text(item.get("Region2")),
+            clean_text(item.get("Country")),
         ]
         location = ", ".join(part for part in parts if part)
-        return location or self._clean_text(item.get("LocationName"))
+        return location or clean_text(item.get("LocationName"))
 
     def _iter_location_values(self, requisition: dict):
-        primary = self._clean_text(requisition.get("PrimaryLocation"))
+        primary = clean_text(requisition.get("PrimaryLocation"))
         if primary:
             yield primary
         for key in _LOCATION_LIST_KEYS:
@@ -277,9 +278,6 @@ class OracleHCMAdapter(BaseAdapter):
         if not html:
             return ""
         if "<" not in html or ">" not in html:
-            return self._clean_text(html)
+            return clean_text(html)
         soup = BeautifulSoup(html, "html.parser")
-        return self._clean_text(soup.get_text(" ", strip=True))
-
-    def _clean_text(self, value: object) -> str:
-        return " ".join(str(value or "").split()).strip()
+        return clean_text(soup.get_text(" ", strip=True))

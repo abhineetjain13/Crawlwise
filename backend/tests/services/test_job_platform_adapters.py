@@ -7,6 +7,7 @@ from app.services.acquisition.http_client import HttpFetchResult, request_result
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.adapters.registry import registered_adapters, run_adapter
 from app.services.adapters.saashr import SaaSHRAdapter
+from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.ultipro import UltiProAdapter
 from app.services.adapters.workday import WorkdayAdapter
 from app.services.listing_extractor import extract_listing_records
@@ -131,12 +132,6 @@ def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic
 async def test_request_result_uses_direct_http_for_expected_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fetch_page_calls: list[str] = []
-
-    async def _fake_fetch_page(*args, **kwargs):
-        fetch_page_calls.append(str(args[0]))
-        raise AssertionError("fetch_page should not be used for expected JSON")
-
     class _FakeResponse:
         status_code = 200
         url = "https://example.com/api/jobs"
@@ -161,10 +156,6 @@ async def test_request_result_uses_direct_http_for_expected_json(
         return _FakeClient()
 
     monkeypatch.setattr(
-        "app.services.crawl_fetch_runtime.fetch_page",
-        _fake_fetch_page,
-    )
-    monkeypatch.setattr(
         "app.services.acquisition.http_client.get_shared_http_client",
         _fake_get_shared,
     )
@@ -174,8 +165,51 @@ async def test_request_result_uses_direct_http_for_expected_json(
         expect_json=True,
     )
 
-    assert fetch_page_calls == []
     assert result.json_data == {"jobs": [{"id": 1}]}
+
+
+@pytest.mark.asyncio
+async def test_request_result_does_not_orchestrate_browser_fetches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_methods: list[str] = []
+
+    class _FakeResponse:
+        status_code = 200
+        url = "https://example.com/jobs/123"
+        headers = httpx.Headers({"content-type": "text/html"})
+        text = "<html><body>detail page</body></html>"
+
+    class _FakeClient:
+        async def request(
+            self,
+            method,
+            url,
+            headers=None,
+            json=None,
+            data=None,
+            timeout=None,
+        ):
+            del url, headers, json, data, timeout
+            observed_methods.append(str(method))
+            return _FakeResponse()
+
+    async def _fake_get_shared(*, proxy=None, force_ipv4=False):
+        del proxy, force_ipv4
+        return _FakeClient()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.get_shared_http_client",
+        _fake_get_shared,
+    )
+
+    result = await request_result(
+        "https://example.com/jobs/123",
+        prefer_browser=True,
+    )
+
+    assert observed_methods == ["GET"]
+    assert result.text == "<html><body>detail page</body></html>"
 
 
 @pytest.mark.asyncio
@@ -626,3 +660,41 @@ def test_extract_listing_records_preserves_job_cards_inside_filtered_container()
             "salary": "$1,886",
         }
     ]
+
+
+def test_shopify_adapter_strips_blank_and_empty_tags() -> None:
+    adapter = ShopifyAdapter()
+
+    record = adapter._build_product_record(
+        {
+            "title": "Widget",
+            "vendor": "Acme",
+            "handle": "widget",
+            "images": [],
+            "tags": " featured, , new  , ",
+            "variants": [],
+        },
+        page_url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+    )
+
+    assert record["tags"] == ["featured", "new"]
+
+
+def test_shopify_adapter_treats_blank_tag_string_as_empty_list() -> None:
+    adapter = ShopifyAdapter()
+
+    record = adapter._build_product_record(
+        {
+            "title": "Widget",
+            "vendor": "Acme",
+            "handle": "widget",
+            "images": [],
+            "tags": "   ",
+            "variants": [],
+        },
+        page_url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+    )
+
+    assert record["tags"] == []

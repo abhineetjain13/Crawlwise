@@ -2,21 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.services.config.runtime_settings import crawler_runtime_settings
+
 SCHEMA_MAX_AGE_DAYS = 30
 LISTING_FALLBACK_FRAGMENT_LIMIT: int = 200
-SECTION_PATTERNS: dict[str, list[str]] = {
-    "responsibilities": ["what you", "responsibil"],
-    "qualifications": ["should have", "qualif", "who you are"],
-    "benefits": ["benefit", "perks", "what we offer"],
-    "skills": ["skill", "bring"],
-}
 
 
 class PipelineDefaults:
-    MAX_PAGES: int = 5
-    MAX_SCROLLS: int = 3
-    MAX_RECORDS: int = 100
-    SLEEP_MS: int = 0
+    MAX_PAGES: int = crawler_runtime_settings.default_max_pages
+    MAX_SCROLLS: int = crawler_runtime_settings.default_max_scrolls
+    MAX_RECORDS: int = crawler_runtime_settings.default_max_records
+    SLEEP_MS: int = crawler_runtime_settings.default_sleep_ms
 
 
 class LLMFallbackConfig:

@@ -17,7 +17,7 @@ from app.services.domain_memory_service import (
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import field_allowed_for_surface
 from app.services.llm_runtime import discover_xpath_candidates
-from app.services.xpath_service import extract_selector_value
+from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 
 _SELECTOR_SYNTHESIS_MAX_HTML_CHARS = 200_000
 _SELECTOR_SYNTHESIS_ALLOWED_ATTRS = frozenset(
@@ -214,11 +214,7 @@ async def apply_selector_self_heal(
         if confidence_score >= threshold:
             updated_records.append(next_record)
             continue
-        if (
-            existing_rule_count > 0
-            and not requested_missing_fields
-            and confidence_score >= 0.3
-        ):
+        if existing_rule_count > 0 and not requested_missing_fields:
             updated_records.append(next_record)
             continue
         target_fields = selector_self_heal_targets(run=run, record=next_record)
@@ -317,14 +313,20 @@ def _validated_xpath_rules(
         xpath = str(row.get("xpath") or "").strip()
         if not field_name or field_name not in allowed_fields or not xpath:
             continue
-        sample_value, count, selector_used = extract_selector_value(html, xpath=xpath)
+        validated_xpath, _ = validate_or_convert_xpath(xpath)
+        if not validated_xpath:
+            continue
+        sample_value, count, selector_used = extract_selector_value(
+            html,
+            xpath=validated_xpath,
+        )
         if count <= 0 or sample_value in (None, ""):
             continue
         rules.append(
             {
                 "field_name": field_name,
                 "css_selector": None,
-                "xpath": selector_used or xpath,
+                "xpath": selector_used or validated_xpath,
                 "regex": None,
                 "sample_value": sample_value,
                 "source": "selector_self_heal",

@@ -5,6 +5,7 @@ import re
 
 import regex as regex_lib
 from bs4 import BeautifulSoup, NavigableString, Tag
+from cssselect import GenericTranslator, SelectorError
 from lxml import etree
 from lxml import html as lxml_html
 
@@ -46,24 +47,23 @@ def extract_selector_value(
     xpath: str | None = None,
     regex: str | None = None,
 ) -> tuple[str | None, int, str | None]:
+    resolved_xpath: str | None = None
     if xpath:
-        valid_xpath, _ = validate_xpath_syntax(xpath)
-        if not valid_xpath:
-            xpath = None
-    if xpath:
+        resolved_xpath, _ = validate_or_convert_xpath(xpath)
+    if resolved_xpath:
         tree = _build_xpath_tree(html_text)
         if tree is not None:
             try:
-                matches = tree.xpath(xpath)
+                matches = tree.xpath(resolved_xpath)
             except etree.XPathError:
                 matches = []
             values = _coerce_xpath_matches(matches[:12])
             if values:
                 filtered_values = _apply_regex_filter(regex, values)
                 if filtered_values:
-                    return filtered_values[0], len(filtered_values), xpath
+                    return filtered_values[0], len(filtered_values), resolved_xpath
                 if not regex:
-                    return values[0], len(values), xpath
+                    return values[0], len(values), resolved_xpath
     if css_selector:
         soup = BeautifulSoup(html_text, "html.parser")
         normalized = _normalize_css_selector(css_selector)
@@ -80,6 +80,32 @@ def extract_selector_value(
         if filtered_values:
             return filtered_values[0], len(filtered_values), regex
     return None, 0, None
+
+
+def validate_or_convert_xpath(candidate: str) -> tuple[str | None, str | None]:
+    xpath = str(candidate or "").strip()
+    if not xpath:
+        return None, "XPath is empty"
+    prefer_css_translation = _looks_like_css_selector(xpath)
+    valid_xpath, xpath_error = validate_xpath_syntax(xpath)
+    if valid_xpath and not prefer_css_translation:
+        return xpath, None
+
+    normalized_css = _normalize_css_selector(xpath)
+    if not normalized_css:
+        return (xpath, None) if valid_xpath else (None, xpath_error)
+    try:
+        converted = GenericTranslator().css_to_xpath(normalized_css)
+    except SelectorError:
+        return (xpath, None) if valid_xpath else (None, xpath_error)
+    converted = _normalize_translated_css_xpath(converted)
+
+    valid_converted_xpath, converted_error = validate_xpath_syntax(converted)
+    if not valid_converted_xpath:
+        if valid_xpath:
+            return xpath, None
+        return None, converted_error or xpath_error
+    return converted, None
 
 
 def validate_xpath_syntax(xpath: str) -> tuple[bool, str | None]:
@@ -109,11 +135,11 @@ def validate_xpath_candidate(
     tree = _build_xpath_tree(html_text)
     if tree is None:
         return {"valid": False, "matched_value": None, "count": 0}
-    valid_xpath, _ = validate_xpath_syntax(xpath)
-    if not valid_xpath:
+    resolved_xpath, _ = validate_or_convert_xpath(xpath)
+    if not resolved_xpath:
         return {"valid": False, "matched_value": None, "count": 0}
     try:
-        matches = tree.xpath(xpath)
+        matches = tree.xpath(resolved_xpath)
     except etree.XPathError:
         return {"valid": False, "matched_value": None, "count": 0}
     matched_value = _coerce_xpath_match(matches[:1])
@@ -238,6 +264,39 @@ def _normalize_css_selector(selector: str) -> str:
     normalized = normalized.replace("::shadow", " ")
     normalized = normalized.replace(">>>", " ")
     normalized = " ".join(part for part in normalized.split() if part)
+    return normalized
+
+
+def _looks_like_css_selector(candidate: str) -> bool:
+    normalized = str(candidate or "").strip()
+    if not normalized:
+        return False
+    if normalized.startswith(("//", ".//", "./", "/", "(", "@", "*", "..")):
+        return False
+    if "::" in normalized or "@" in normalized:
+        return False
+    if _XPATH_FUNCTION_PATTERN.search(normalized):
+        return False
+    if "#" in normalized:
+        return True
+    if re.search(r"(?<!\.)\.[A-Za-z_][\w-]*", normalized):
+        return True
+    if any(token in normalized for token in (">", "+", "~", ",")):
+        return True
+    if " " in normalized and "/" not in normalized:
+        return True
+    if "[" in normalized and "]" in normalized and "=" in normalized:
+        return True
+    return False
+
+
+def _normalize_translated_css_xpath(xpath: str) -> str:
+    normalized = str(xpath or "").strip()
+    if not normalized:
+        return normalized
+    normalized = re.sub(r"^descendant-or-self::", "//", normalized)
+    normalized = re.sub(r"/descendant-or-self::\*/", "//", normalized)
+    normalized = re.sub(r"/descendant-or-self::", "//", normalized)
     return normalized
 
 

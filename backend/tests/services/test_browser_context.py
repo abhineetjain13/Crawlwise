@@ -79,6 +79,61 @@ def test_build_playwright_context_options_keeps_security_invariants(
     assert options["is_mobile"] is True
 
 
+def test_build_playwright_context_options_normalizes_incoherent_client_hints_after_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad_fingerprint = SimpleNamespace(
+        screen=SimpleNamespace(width=1366, height=768, devicePixelRatio=1),
+        navigator=SimpleNamespace(
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            language="en-US",
+            maxTouchPoints=0,
+            userAgentData={
+                "brands": [{"brand": "Brave", "version": "130"}],
+                "mobile": False,
+                "platform": "Windows",
+                "uaFullVersion": "130.0.0.0",
+            },
+        ),
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html",
+            "sec-ch-ua": '"Brave";v="130"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+        },
+    )
+    attempts = {"count": 0}
+
+    def _generate():
+        attempts["count"] += 1
+        return bad_fingerprint
+
+    monkeypatch.setattr(
+        browser_identity,
+        "_FINGERPRINT_GENERATOR",
+        SimpleNamespace(generate=_generate),
+    )
+
+    options = browser_identity.build_playwright_context_options()
+
+    assert attempts["count"] == 3
+    assert options["user_agent"].endswith("Chrome/145.0.0.0 Safari/537.36")
+    assert options["extra_http_headers"]["sec-ch-ua"] == (
+        '"Not/A)Brand";v="99", "Chromium";v="145", "Google Chrome";v="145"'
+    )
+    assert "Brave" not in options["extra_http_headers"]["sec-ch-ua"]
+    assert options["extra_http_headers"]["sec-ch-ua-platform"] == '"Windows"'
+
+
 @pytest.mark.asyncio
 async def test_shared_browser_runtime_passes_generated_context_options(
     monkeypatch: pytest.MonkeyPatch,

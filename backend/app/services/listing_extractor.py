@@ -21,9 +21,7 @@ from app.services.extraction_context import (
 )
 from app.services.field_policy import normalize_requested_field
 from app.services.field_value_utils import (
-    JOB_URL_HINTS,
     PRICE_RE,
-    PRODUCT_URL_HINTS,
     RATING_RE,
     REVIEW_COUNT_RE,
     absolute_url,
@@ -42,6 +40,7 @@ from app.services.field_value_utils import (
     surface_alias_lookup,
     surface_fields,
 )
+from app.services.config.surface_hints import detail_path_hints
 from app.services.pipeline.pipeline_config import LISTING_FALLBACK_FRAGMENT_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -245,7 +244,7 @@ def _detail_like_path(url: str, *, is_job: bool) -> bool:
     lowered = url.lower()
     if any(marker in lowered for marker in LISTING_DETAIL_PATH_MARKERS):
         return True
-    hints = JOB_URL_HINTS if is_job else PRODUCT_URL_HINTS
+    hints = detail_path_hints("job_detail" if is_job else "ecommerce_detail")
     return any(marker in lowered for marker in hints)
 
 
@@ -291,7 +290,7 @@ def _listing_record_from_card(
         candidates,
         selector_rules=selector_rules,
     )
-    image_urls = extract_page_images(card, page_url)
+    image_urls = extract_page_images(card, page_url, surface=surface)
     if image_urls:
         add_candidate(candidates, "image_url", image_urls[0])
         add_candidate(candidates, "additional_images", image_urls[1:])

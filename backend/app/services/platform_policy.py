@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from app.services.config.surface_hints import surface_group
+
 logger = logging.getLogger(__name__)
 
 _GENERIC_JOB_TOKENS = (
@@ -376,11 +378,29 @@ def listing_readiness_domains() -> dict[str, list[str]]:
     return mapping
 
 
-def resolve_platform_runtime_policy(url: str, html: str = "") -> dict[str, Any]:
+def _resolve_http_browser_escalation_policy(surface: str | None) -> dict[str, bool]:
+    normalized_surface = str(surface or "").strip().lower()
+    group = surface_group(normalized_surface)
+    return {
+        "js_shell_without_detail_signals": True,
+        "missing_detail_signals": bool(group and normalized_surface.endswith("_detail")),
+        "listing_shell_without_listing_signals": bool(
+            group and normalized_surface.endswith("_listing")
+        ),
+    }
+
+
+def resolve_platform_runtime_policy(
+    url: str,
+    html: str = "",
+    *,
+    surface: str | None = None,
+) -> dict[str, Any]:
     family = detect_platform_family(url, html)
     config = platform_config_for_family(family)
     return {
         "family": family,
         "requires_browser": bool(config.requires_browser) if config else False,
         "proxy_policy": config.proxy_policy if config else None,
+        "http_browser_escalation": _resolve_http_browser_escalation_policy(surface),
     }

@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
+from app.services.field_value_utils import clean_text
 from bs4 import BeautifulSoup
 
 
@@ -115,14 +116,14 @@ class JibeAdapter(BaseAdapter):
         payload = row.get("data") if isinstance(row, dict) else None
         if not isinstance(payload, dict):
             return None
-        title = self._clean_text(payload.get("title"))
+        title = clean_text(payload.get("title"))
         if not title:
             return None
         canonical_url = ""
         meta = payload.get("meta_data")
         if isinstance(meta, dict):
-            canonical_url = self._clean_text(meta.get("canonical_url"))
-        job_id = self._clean_text(payload.get("req_id") or payload.get("slug"))
+            canonical_url = clean_text(meta.get("canonical_url"))
+        job_id = clean_text(payload.get("req_id") or payload.get("slug"))
         url = canonical_url or (urljoin(base_url, f"/jobs/{job_id}") if job_id else "")
         categories = (
             payload.get("categories")
@@ -132,31 +133,31 @@ class JibeAdapter(BaseAdapter):
         tags7 = payload.get("tags7")
         description_html = str(payload.get("description") or "")
         description = self._html_to_text(description_html)
-        full_location = self._clean_text(payload.get("full_location"))
+        full_location = clean_text(payload.get("full_location"))
         if not full_location:
             full_location = ", ".join(
                 part
                 for part in [
-                    self._clean_text(
+                    clean_text(
                         payload.get("location_name") or payload.get("city")
                     ),
-                    self._clean_text(payload.get("state")),
+                    clean_text(payload.get("state")),
                 ]
                 if part
             )
         record = {
             "title": title,
             "url": url,
-            "apply_url": self._clean_text(payload.get("apply_url")),
+            "apply_url": clean_text(payload.get("apply_url")),
             "job_id": job_id,
             "location": full_location or None,
-            "company": self._clean_text(payload.get("hiring_organization")),
-            "department": self._clean_text(payload.get("department"))
+            "company": clean_text(payload.get("hiring_organization")),
+            "department": clean_text(payload.get("department"))
             or self._join_names(categories),
-            "job_type": self._clean_text(payload.get("employment_type")),
-            "posted_date": self._clean_text(payload.get("posted_date")),
+            "job_type": clean_text(payload.get("employment_type")),
+            "posted_date": clean_text(payload.get("posted_date")),
             "description": description or None,
-            "salary": self._clean_text(tags7),
+            "salary": clean_text(tags7),
             "category": self._join_names(categories),
         }
         return {
@@ -171,24 +172,22 @@ class JibeAdapter(BaseAdapter):
         names: list[str] = []
         for item in values:
             if isinstance(item, dict):
-                cleaned = self._clean_text(item.get("name"))
+                cleaned = clean_text(item.get("name"))
             else:
-                cleaned = self._clean_text(item)
+                cleaned = clean_text(item)
             if cleaned and cleaned not in names:
                 names.append(cleaned)
         return " | ".join(names)
 
     def _html_to_text(self, html: str) -> str:
         if "<" not in html or ">" not in html:
-            return self._clean_text(html)
+            return clean_text(html)
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ", strip=True)
-        return self._clean_text(text)
+        return clean_text(text)
 
     def _extract_job_id_from_url(self, url: str) -> str:
         path = urlparse(url).path
         match = re.search(r"/jobs/(\d+)", path)
         return match.group(1) if match else ""
 
-    def _clean_text(self, value: object) -> str:
-        return " ".join(str(value or "").split()).strip()

@@ -21,7 +21,11 @@ from app.services.field_policy import normalize_field_key
 from app.services.field_value_utils import PRICE_RE, clean_text
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.platform_policy import detect_platform_family, job_platform_families
-from app.services.xpath_service import build_absolute_xpath, extract_selector_value
+from app.services.xpath_service import (
+    build_absolute_xpath,
+    extract_selector_value,
+    validate_or_convert_xpath,
+)
 from app.services.url_safety import ensure_public_crawl_targets
 
 
@@ -325,13 +329,16 @@ async def suggest_selectors(
             xpath = str(row.get("xpath") or "").strip()
             if not field_name or not xpath:
                 continue
+            validated_xpath, _ = validate_or_convert_xpath(xpath)
+            if not validated_xpath:
+                continue
             sample_value, _count, selector_used = extract_selector_value(
                 html,
-                xpath=xpath,
+                xpath=validated_xpath,
             )
             candidate = {
                 "field_name": field_name,
-                "xpath": selector_used or xpath,
+                "xpath": selector_used or validated_xpath,
                 "sample_value": sample_value,
                 "source": "llm_xpath",
             }

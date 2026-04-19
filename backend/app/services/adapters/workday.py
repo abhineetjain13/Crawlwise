@@ -102,24 +102,24 @@ class WorkdayAdapter(BaseAdapter):
         info = payload.get("jobPostingInfo")
         if not isinstance(info, dict):
             return self._extract_detail_from_html(url, html)
-        title = self._clean_text(info.get("title"))
+        title = clean_text(info.get("title"))
         if not title:
             return None
         description_html = str(info.get("jobDescription") or "")
         record = {
             "title": title,
             "url": url,
-            "apply_url": self._clean_text(info.get("externalUrl")) or url,
-            "location": self._clean_text(info.get("location")),
-            "posted_date": self._clean_text(info.get("postedOn")),
-            "job_type": self._clean_text(info.get("timeType")),
-            "job_id": self._clean_text(info.get("jobReqId") or info.get("jobPostingId")),
-            "start_date": self._clean_text(info.get("startDate")),
-            "country": self._clean_text(info.get("country")),
+            "apply_url": clean_text(info.get("externalUrl")) or url,
+            "location": clean_text(info.get("location")),
+            "posted_date": clean_text(info.get("postedOn")),
+            "job_type": clean_text(info.get("timeType")),
+            "job_id": clean_text(info.get("jobReqId") or info.get("jobPostingId")),
+            "start_date": clean_text(info.get("startDate")),
+            "country": clean_text(info.get("country")),
         }
         hiring_org = payload.get("hiringOrganization")
         if isinstance(hiring_org, dict):
-            record["company"] = self._clean_text(
+            record["company"] = clean_text(
                 hiring_org.get("name") or hiring_org.get("legalName")
             )
         if description_html:
@@ -166,7 +166,7 @@ class WorkdayAdapter(BaseAdapter):
         )
         match = pattern.search(str(html or ""))
         if match:
-            return self._clean_text(match.group("prefix"))
+            return clean_text(match.group("prefix"))
         return f"/{site_slug}"
 
     def _normalize_listing_row(
@@ -177,8 +177,8 @@ class WorkdayAdapter(BaseAdapter):
     ) -> dict | None:
         if not isinstance(row, dict):
             return None
-        title = self._clean_text(row.get("title"))
-        external_path = self._clean_text(row.get("externalPath"))
+        title = clean_text(row.get("title"))
+        external_path = clean_text(row.get("externalPath"))
         if not title or not external_path:
             return None
         normalized_prefix = "/" + str(context["localized_prefix"]).strip("/")
@@ -194,13 +194,13 @@ class WorkdayAdapter(BaseAdapter):
             "title": title,
             "url": detail_url,
             "apply_url": detail_url,
-            "location": self._clean_text(row.get("locationsText")),
-            "posted_date": self._clean_text(row.get("postedOn")),
+            "location": clean_text(row.get("locationsText")),
+            "posted_date": clean_text(row.get("postedOn")),
         }
         bullet_fields = row.get("bulletFields")
         if isinstance(bullet_fields, list):
             for value in bullet_fields:
-                cleaned = self._clean_text(value)
+                cleaned = clean_text(value)
                 if cleaned and not record.get("job_id"):
                     record["job_id"] = cleaned
                     break
@@ -225,12 +225,12 @@ class WorkdayAdapter(BaseAdapter):
     def _extract_detail_from_html(self, url: str, html: str) -> dict | None:
         soup = BeautifulSoup(str(html or ""), "html.parser")
         title_node = soup.select_one("h1")
-        title = self._clean_text(
+        title = clean_text(
             title_node.get_text(" ", strip=True) if title_node is not None else ""
         )
         if not title:
             return None
-        body_text = self._clean_text(soup.get_text(" ", strip=True))
+        body_text = clean_text(soup.get_text(" ", strip=True))
         record = {
             "title": title,
             "url": url,
@@ -253,6 +253,3 @@ class WorkdayAdapter(BaseAdapter):
         if path_segments and _LOCALE_RE.fullmatch(path_segments[0]):
             return path_segments[0], path_segments[1:]
         return "", path_segments
-
-    def _clean_text(self, value: object) -> str:
-        return clean_text(value)

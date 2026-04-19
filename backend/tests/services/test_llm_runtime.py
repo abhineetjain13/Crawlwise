@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.services import llm_tasks
 from app.models.llm import LLMCostLog
 from app.services import llm_runtime
 from sqlalchemy import select
@@ -140,3 +141,16 @@ async def test_run_prompt_task_returns_typed_provider_failure(
     assert result.error_category == llm_runtime.LLMErrorCategory.RATE_LIMITED
     assert "rate limited" in result.error_message.lower()
     assert cost_logs == []
+
+
+def test_trim_prompt_section_body_skips_expensive_large_json_reparse() -> None:
+    large_json = '{"items":[' + ",".join('"value"' for _ in range(5000)) + "]}"
+
+    trimmed = llm_tasks._trim_prompt_section_body(
+        large_json,
+        120,
+        "[TRUNCATED]",
+    )
+
+    assert trimmed.endswith("[TRUNCATED]}")
+    assert len(trimmed) <= 120

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from threading import RLock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -21,7 +20,8 @@ _ROBOTS_CACHE = TTLCache(
     maxsize=PIPELINE_CONFIG.robots_cache_size,
     ttl=PIPELINE_CONFIG.robots_cache_ttl,
 )
-_ROBOTS_CACHE_LOCK = RLock()
+_ROBOTS_CACHE_LOCK: asyncio.Lock | None = None
+_ROBOTS_INFLIGHT_FETCHES: dict[str, asyncio.Task["_RobotsSnapshot"]] | None = None
 _ROBOTS_FETCH_ERRORS = (TimeoutError, URLError, OSError)
 
 
@@ -41,8 +41,29 @@ class _RobotsSnapshot:
     error: str | None = None
 
 
-def reset_robots_policy_cache() -> None:
-    with _ROBOTS_CACHE_LOCK:
+def _get_lock() -> asyncio.Lock:
+    global _ROBOTS_CACHE_LOCK
+    if _ROBOTS_CACHE_LOCK is None:
+        _ROBOTS_CACHE_LOCK = asyncio.Lock()
+    return _ROBOTS_CACHE_LOCK
+
+
+def _get_inflight() -> dict[str, asyncio.Task["_RobotsSnapshot"]]:
+    global _ROBOTS_INFLIGHT_FETCHES
+    if _ROBOTS_INFLIGHT_FETCHES is None:
+        _ROBOTS_INFLIGHT_FETCHES = {}
+    return _ROBOTS_INFLIGHT_FETCHES
+
+
+async def reset_robots_policy_cache() -> None:
+    async with _get_lock():
+        inflight = _get_inflight()
+        tasks = list(inflight.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        inflight.clear()
         _ROBOTS_CACHE.clear()
 
 
@@ -51,11 +72,7 @@ async def check_url_crawlability(
     *,
     user_agent: str = "*",
 ) -> RobotsPolicyResult:
-    return await asyncio.to_thread(_check_url_crawlability_sync, url, user_agent)
-
-
-def _check_url_crawlability_sync(url: str, user_agent: str) -> RobotsPolicyResult:
-    snapshot = _load_robots_snapshot(_base_url(url))
+    snapshot = await _load_robots_snapshot(_base_url(url))
     if snapshot.missing:
         return RobotsPolicyResult(
             allowed=True,
@@ -77,15 +94,31 @@ def _check_url_crawlability_sync(url: str, user_agent: str) -> RobotsPolicyResul
     )
 
 
-def _load_robots_snapshot(base_url: str) -> _RobotsSnapshot:
-    with _ROBOTS_CACHE_LOCK:
+async def _load_robots_snapshot(base_url: str) -> _RobotsSnapshot:
+    async with _get_lock():
         cached = _ROBOTS_CACHE.get(base_url)
-    if cached is not None:
-        return cached
-    snapshot = _fetch_robots_snapshot(base_url)
-    with _ROBOTS_CACHE_LOCK:
+        if cached is not None:
+            return cached
+        inflight = _get_inflight()
+        fetch_task = inflight.get(base_url)
+        if fetch_task is None:
+            fetch_task = asyncio.create_task(
+                asyncio.to_thread(_fetch_robots_snapshot, base_url)
+            )
+            inflight[base_url] = fetch_task
+    try:
+        snapshot = await fetch_task
+    finally:
+        async with _get_lock():
+            inflight = _get_inflight()
+            if inflight.get(base_url) is fetch_task:
+                inflight.pop(base_url, None)
+    async with _get_lock():
+        cached = _ROBOTS_CACHE.get(base_url)
+        if cached is not None:
+            return cached
         _ROBOTS_CACHE[base_url] = snapshot
-    return snapshot
+        return snapshot
 
 
 def _fetch_robots_snapshot(base_url: str) -> _RobotsSnapshot:

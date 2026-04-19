@@ -148,6 +148,7 @@ Primary files:
 
 - `acquisition/acquirer.py`
 - `acquisition/runtime.py`
+- `acquisition/browser_capture.py`
 - `acquisition/browser_runtime.py`
 - `acquisition/http_client.py` (thin adapter over `runtime.get_shared_http_client`)
 - `acquisition/browser_identity.py`
@@ -165,6 +166,7 @@ Responsibilities:
 - JS-shell and blocked-page escalation
 - browser identity generation
 - network payload capture
+- temporary screenshot staging for browser artifacts
 - detail-page expansion
 - listing traversal
 - cookie policy enforcement
@@ -177,18 +179,20 @@ Current live behavior:
 - `browserforge`-backed context identity is active
 - traversal is explicit and separate from browser escalation
 - JSON-expected acquisition now stays in `acquisition/http_client.py`; adapters consume decoded payloads instead of compensating for transport quirks
+- browser network interception is bounded through a small response-queue worker pool with per-endpoint payload budgets instead of untracked background tasks
 - browser diagnostics now classify `browser_reason` and `browser_outcome`, record phase timings and HTML bytes, and preserve failed browser-attempt evidence even when the final acquisition method stays HTTP
 - browser rendering now probes extractability at `domcontentloaded`, skips optimistic/network-idle/readiness waits when content is already usable, and limits detail expansion with bounded DOM-first then accessibility-assisted fallback
 - blocked-page detection is evidence-based: anti-bot vendor markers alone do not block a page, but challenge-specific signals such as CAPTCHA-delivery elements and corroborating blocker text do
 - browser outcomes now distinguish challenge pages, low-content terminal shells, and explicit navigation/page-closed failures instead of collapsing them into generic browser HTML
 - listing traversal now captures bounded per-step listing snapshots for extraction instead of concatenating full rendered DOMs across page turns, and diagnostics expose traversal fragment count plus traversal HTML bytes
+- browser screenshots are staged to temp files inside the artifacts area and then persisted by the pipeline, avoiding large in-memory PNG handoffs on the hot path
 - a single shared HTTP client pool in `acquisition/runtime.py` is keyed on `(proxy, address-family preference, force_ipv4)`; `acquisition/http_client.py` no longer maintains a second pool and simply delegates to `get_shared_http_client`
 - curl_cffi impersonation target is now an actionable setting (`crawler_runtime_settings.curl_impersonate_target`, default `chrome131`) rather than dead config, and httpx clients ship with a matching default Chrome `User-Agent`/`Accept` header set so direct HTTP requests present a coherent identity
 - browser contexts apply `playwright-stealth` when installed and accept a per-fetch `proxy` for rotated-proxy traversal; `temporary_browser_page` is a thin wrapper over `SharedBrowserRuntime.page(proxy=...)`
 - `browser_identity` is host-OS-locked via `browserforge`, with a small regeneration loop to reject fingerprints whose UA tokens disagree with the OS
 - blocked-page escalation is now two-pronged: vendor-specific response headers (DataDome, Cloudflare, Akamai, PerimeterX, Sucuri, ...) classified via `classify_block_from_headers` short-circuit into the browser and mark the host vendor-blocked so sibling fetchers skip further HTTP attempts; HTML heuristics continue to catch vendor-silent blocks
 - `is_non_retryable_http_status` keeps `401` out of browser escalation (auth walls) while still escalating `403`/`429` challenges, and `classify_blocked_page` emits typed `BlockPageClassification` outcomes (`auth_wall`, `rate_limited`, `challenge_page`, ...) distinct from network failures
-- `platforms.json` carries a `datadome_protected` entry flagging known DataDome hosts with `requires_browser: true` so the crawler doesn't waste HTTP attempts on them
+- platform/runtime policy no longer hardcodes vendor-owned domains just to force browser usage; escalation is driven by runtime policy, response/header evidence, and structured blocker signatures
 - the legacy `async def fetch_page` trampoline in `acquisition/runtime.py` has been removed; callers import `fetch_page` from `crawl_fetch_runtime` directly
 
 ### 6.4 Extraction
@@ -229,7 +233,8 @@ Primary files:
 - `publish/metrics.py`
 - `publish/metadata.py`
 - `artifact_store.py`
-- persistence flow in `pipeline/core.py`
+- `pipeline/core.py`
+- `pipeline/persistence.py`
 
 Responsibilities:
 
@@ -237,6 +242,7 @@ Responsibilities:
 - compute acquisition and URL metrics
 - build/persist field-discovery metadata
 - persist HTML artifacts plus browser diagnostics/screenshot sidecars when a browser attempt occurred
+- keep artifact I/O and `CrawlRecord` persistence out of the orchestration hot path in `pipeline/core.py`
 - write `CrawlRecord` rows and update run summaries
 
 Current verdict rules:
@@ -271,6 +277,8 @@ Current storage/runtime model:
 - selectors are persisted inside `DomainMemory`
 - runtime can layer surface-specific and generic rules
 - selector self-heal reuses stamped extraction runtime snapshot data
+- selector self-heal persists only validated improvements and reuses domain memory on later runs before attempting another synthesis pass
+- once reused domain-memory rules satisfy the requested fields for a record, the pipeline does not launch a second generic selector-synthesis round just because confidence remains low
 
 ### 6.7 LLM admin and runtime
 

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from app.services.pipeline.pipeline_config import SECTION_PATTERNS
+_JOB_SECTION_PATTERNS: dict[str, tuple[str, ...]] = {
+    "responsibilities": ("what you", "responsibil"),
+    "qualifications": ("should have", "qualif", "who you are"),
+    "benefits": ("benefit", "perks", "what we offer"),
+    "skills": ("skill", "bring"),
+}
 
 
 def html_to_text(value: str) -> str:
@@ -35,7 +40,7 @@ def extract_job_sections(html: str) -> dict[str, str]:
 
     mapped: dict[str, str] = {}
     for label, value in sections.items():
-        for section, patterns in SECTION_PATTERNS.items():
+        for section, patterns in _JOB_SECTION_PATTERNS.items():
             if any(pattern in label for pattern in patterns):
                 combined = " ".join(
                     piece

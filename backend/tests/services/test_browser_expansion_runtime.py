@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -114,6 +115,8 @@ class _FakeExpansionPage:
         accessibility_snapshot: dict[str, object] | None = None,
         role_targets: set[tuple[str, str]] | None = None,
         goto_failures: dict[str, Exception] | None = None,
+        response_events: list[Any] | None = None,
+        wait_for_selector_error: Exception | None = None,
     ) -> None:
         self.base_html = base_html
         self.expanded_html = expanded_html or base_html
@@ -128,6 +131,10 @@ class _FakeExpansionPage:
         self.role_targets = set(role_targets or set())
         self.goto_calls: list[str] = []
         self.goto_failures = dict(goto_failures or {})
+        self.response_events = list(response_events or [])
+        self.wait_for_selector_error = wait_for_selector_error
+        self.wait_for_selector_calls: list[tuple[str, str | None, int | None]] = []
+        self.listeners: dict[str, list[Any]] = {}
         self.accessibility = SimpleNamespace(
             snapshot=self._snapshot if accessibility_snapshot is not None else None
         )
@@ -137,7 +144,15 @@ class _FakeExpansionPage:
         return self._accessibility_snapshot
 
     def on(self, event_name: str, callback: Any) -> None:
-        del event_name, callback
+        self.listeners.setdefault(event_name, []).append(callback)
+
+    def remove_listener(self, event_name: str, callback: Any) -> None:
+        listeners = self.listeners.get(event_name)
+        if not listeners:
+            return
+        self.listeners[event_name] = [
+            listener for listener in listeners if listener is not callback
+        ]
 
     async def goto(
         self,
@@ -151,6 +166,9 @@ class _FakeExpansionPage:
         self.goto_calls.append(strategy)
         if strategy in self.goto_failures:
             raise self.goto_failures[strategy]
+        for callback in list(self.listeners.get("response", [])):
+            for response in self.response_events:
+                callback(response)
         return SimpleNamespace(status=200, headers={"content-type": "text/html"})
 
     async def wait_for_timeout(self, timeout_ms: int) -> None:
@@ -164,6 +182,17 @@ class _FakeExpansionPage:
         del timeout
         self.load_state_calls.append(state)
 
+    async def wait_for_selector(
+        self,
+        selector: str,
+        *,
+        state: str | None = None,
+        timeout: int | None = None,
+    ) -> None:
+        self.wait_for_selector_calls.append((selector, state, timeout))
+        if self.wait_for_selector_error is not None:
+            raise self.wait_for_selector_error
+
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator(self, selector)
 
@@ -173,6 +202,13 @@ class _FakeExpansionPage:
 
     async def content(self) -> str:
         return self.expanded_html if self.expanded else self.base_html
+
+    async def screenshot(self, *, path: str | Path | None = None, **kwargs) -> bytes:
+        del kwargs
+        payload = b"fake-png"
+        if path is not None:
+            Path(path).write_bytes(payload)
+        return payload
 
 
 class _FakeRuntime:
@@ -245,6 +281,71 @@ async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle(
     assert result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
     assert page.wait_timeout_calls == []
     assert page.load_state_calls == []
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_bounds_response_capture_workers_under_burst_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeResponse:
+        def __init__(self, index: int) -> None:
+            self.url = f"https://example.com/api/{index}"
+            self.headers = {"content-type": "application/json"}
+            self.request = SimpleNamespace(method="GET")
+            self.status = 200
+
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+        response_events=[_FakeResponse(index) for index in range(200)],
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    async def _fake_read_network_payload_body(response, **_kwargs):
+        return browser_runtime.NetworkPayloadReadResult(
+            body=f'{{"id": "{response.url}"}}'.encode("utf-8"),
+            outcome="ok",
+        )
+
+    create_task_calls = 0
+    original_create_task = browser_runtime.asyncio.create_task
+
+    def _counting_create_task(coro):
+        nonlocal create_task_calls
+        create_task_calls += 1
+        return original_create_task(coro)
+
+    monkeypatch.setattr(browser_runtime.asyncio, "create_task", _counting_create_task)
+    monkeypatch.setattr(
+        browser_runtime,
+        "should_capture_network_payload",
+        lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        browser_runtime,
+        "read_network_payload_body",
+        _fake_read_network_payload_body,
+    )
+    monkeypatch.setattr(
+        browser_runtime,
+        "classify_network_endpoint",
+        lambda **kwargs: {"type": "api", "family": "generic"},
+    )
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert create_task_calls == browser_runtime._NETWORK_CAPTURE_WORKERS
+    assert len(result.network_payloads) == browser_runtime._MAX_CAPTURED_NETWORK_PAYLOADS
+    assert (
+        result.browser_diagnostics["dropped_network_payload_events"]
+        >= 200 - browser_runtime._NETWORK_CAPTURE_QUEUE_SIZE
+    )
 
 
 @pytest.mark.asyncio
@@ -441,6 +542,46 @@ def test_build_failed_browser_diagnostics_marks_timeout_explicitly() -> None:
 
     assert diagnostics["browser_outcome"] == "render_timeout"
     assert diagnostics["failure_kind"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_listing_readiness_treats_only_playwright_timeout_as_recoverable() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        wait_for_selector_error=PlaywrightTimeoutError("listing readiness timeout"),
+    )
+
+    diagnostics = await browser_runtime._wait_for_listing_readiness(
+        page,
+        override={
+            "platform": "example",
+            "selectors": [".listing-card"],
+            "max_wait_ms": 250,
+        },
+    )
+
+    assert diagnostics["status"] == "timed_out"
+    assert diagnostics["attempted_selectors"] == [".listing-card"]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_listing_readiness_propagates_browser_closure() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        wait_for_selector_error=PlaywrightError(
+            "Target page, context or browser has been closed"
+        ),
+    )
+
+    with pytest.raises(PlaywrightError, match="closed"):
+        await browser_runtime._wait_for_listing_readiness(
+            page,
+            override={
+                "platform": "example",
+                "selectors": [".listing-card"],
+                "max_wait_ms": 250,
+            },
+        )
 
 
 @pytest.mark.asyncio

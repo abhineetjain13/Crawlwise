@@ -9,26 +9,7 @@ from typing import Any
 from app.core.metrics import observe_llm_task_duration, record_llm_task_outcome
 from app.models.crawl import CrawlRun
 from app.models.llm import LLMCostLog
-from app.services.config.llm_runtime import (
-    LLM_CANDIDATE_EVIDENCE_MAX_CHARS,
-    LLM_DISCOVERED_SOURCES_MAX_CHARS,
-    LLM_EXISTING_VALUES_MAX_CHARS,
-    LLM_HTML_ANCHOR_MIN_LENGTH,
-    LLM_HTML_SNIPPET_MAX_CHARS,
-    LLM_HTML_SNIPPET_MAX_CHUNKS,
-    LLM_HTML_SNIPPET_MIN_BUDGET,
-    LLM_HTML_SNIPPET_WINDOW_MAX_CHARS,
-    LLM_HTML_SNIPPET_WINDOW_MIN_CHARS,
-    LLM_PROMPT_COMPACT_JSON_MAX_DEPTH,
-    LLM_PROMPT_COMPACT_JSON_MAX_KEYS,
-    LLM_PROMPT_COMPACT_JSON_MAX_LIST_ITEMS,
-    LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS,
-    LLM_PROMPT_SAFE_TRUNCATE_MAX_LIST_ITEMS,
-    LLM_PROMPT_SAFE_TRUNCATE_MAX_STR_LEN,
-    LLM_PROMPT_TOKEN_CHAR_MULTIPLIER,
-    LLM_PROMPT_TOKEN_LIMIT,
-    LLM_SCHEMA_FIELD_NAME_MAX_LENGTH,
-)
+from app.services.config.llm_runtime import llm_runtime_settings
 from app.services.llm_cache import (
     build_llm_cache_key,
     load_cached_llm_result,
@@ -46,6 +27,7 @@ from app.services.llm_types import LLMTaskResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _PAGE_CLASSIFICATION_TYPES = {"listing", "detail", "challenge", "error", "unknown"}
+_PROMPT_JSON_REPARSE_MAX_CHARS = 16_384
 
 
 async def run_prompt_task(
@@ -233,11 +215,11 @@ async def discover_xpath_candidates(
             "missing_fields_json": json.dumps(missing_fields),
             "existing_values_json": _truncate_json_literal(
                 existing_values,
-                LLM_EXISTING_VALUES_MAX_CHARS,
+                llm_runtime_settings.existing_values_max_chars,
             ),
             "html_snippet": _truncate_html(
                 html_text,
-                LLM_HTML_SNIPPET_MAX_CHARS,
+                llm_runtime_settings.html_snippet_max_chars,
                 anchors=missing_fields,
             ),
         },
@@ -266,11 +248,11 @@ async def extract_missing_fields(
             "missing_fields_json": json.dumps(missing_fields),
             "existing_values_json": _truncate_json_literal(
                 existing_values,
-                LLM_EXISTING_VALUES_MAX_CHARS,
+                llm_runtime_settings.existing_values_max_chars,
             ),
             "html_snippet": _truncate_html(
                 html_text,
-                LLM_HTML_SNIPPET_MAX_CHARS,
+                llm_runtime_settings.html_snippet_max_chars,
                 anchors=missing_fields,
             ),
         },
@@ -303,19 +285,19 @@ async def review_field_candidates(
             "target_fields_json": json.dumps(target_fields),
             "existing_values_json": _truncate_json_literal(
                 {field: existing_values.get(field) for field in target_fields},
-                LLM_EXISTING_VALUES_MAX_CHARS,
+                llm_runtime_settings.existing_values_max_chars,
             ),
             "candidate_evidence_json": _truncate_json_literal(
                 _safe_truncate_for_prompt(candidate_evidence),
-                LLM_CANDIDATE_EVIDENCE_MAX_CHARS,
+                llm_runtime_settings.candidate_evidence_max_chars,
             ),
             "discovered_sources_json": _truncate_json_literal(
                 discovered_sources,
-                LLM_DISCOVERED_SOURCES_MAX_CHARS,
+                llm_runtime_settings.discovered_sources_max_chars,
             ),
             "html_snippet": _truncate_html(
                 html_text,
-                LLM_HTML_SNIPPET_MAX_CHARS,
+                llm_runtime_settings.html_snippet_max_chars,
                 anchors=[
                     *target_fields,
                     *[
@@ -484,7 +466,7 @@ def _validate_schema_inference_payload(payload: object) -> str | None:
 def _is_valid_schema_field_name(value: str) -> bool:
     return (
         bool(value)
-        and len(value) <= LLM_SCHEMA_FIELD_NAME_MAX_LENGTH
+        and len(value) <= llm_runtime_settings.schema_field_name_max_length
         and value.replace("_", "").isalnum()
         and value.lower() == value
         and not value.startswith("_")
@@ -536,12 +518,12 @@ def _build_targeted_html_snippet(html_text: str, anchors: list[str], limit: int)
     if not normalized_anchors:
         return ""
     lowered_html = html_text.lower()
-    snippet_budget = max(LLM_HTML_SNIPPET_MIN_BUDGET, limit)
+    snippet_budget = max(llm_runtime_settings.html_snippet_min_budget, limit)
     window = max(
-        LLM_HTML_SNIPPET_WINDOW_MIN_CHARS,
+        llm_runtime_settings.html_snippet_window_min_chars,
         min(
-            LLM_HTML_SNIPPET_WINDOW_MAX_CHARS,
-            snippet_budget // LLM_PROMPT_TOKEN_CHAR_MULTIPLIER,
+            llm_runtime_settings.html_snippet_window_max_chars,
+            snippet_budget // llm_runtime_settings.prompt_token_char_multiplier,
         ),
     )
     chunks: list[str] = []
@@ -562,7 +544,7 @@ def _build_targeted_html_snippet(html_text: str, anchors: list[str], limit: int)
         rendered = "\n...\n".join(chunks)
         if len(rendered) >= snippet_budget:
             return rendered[:snippet_budget]
-        if len(chunks) >= LLM_HTML_SNIPPET_MAX_CHUNKS:
+        if len(chunks) >= llm_runtime_settings.html_snippet_max_chunks:
             break
     return "\n...\n".join(chunks)[:snippet_budget]
 
@@ -580,7 +562,10 @@ def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
             raw.replace("&", "and"),
         }:
             cleaned = " ".join(candidate.split())
-            if len(cleaned) < LLM_HTML_ANCHOR_MIN_LENGTH or cleaned in seen:
+            if (
+                len(cleaned) < llm_runtime_settings.html_anchor_min_length
+                or cleaned in seen
+            ):
                 continue
             seen.add(cleaned)
             terms.append(cleaned)
@@ -589,8 +574,8 @@ def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
 
 def _safe_truncate_for_prompt(
     value: object,
-    max_str_len: int = LLM_PROMPT_SAFE_TRUNCATE_MAX_STR_LEN,
-    max_list_items: int = LLM_PROMPT_SAFE_TRUNCATE_MAX_LIST_ITEMS,
+    max_str_len: int = llm_runtime_settings.prompt_safe_truncate_max_str_len,
+    max_list_items: int = llm_runtime_settings.prompt_safe_truncate_max_list_items,
 ) -> object:
     if isinstance(value, str):
         return value[:max_str_len] + "..." if len(value) > max_str_len else value
@@ -642,8 +627,11 @@ def _truncate_json_literal(value: Any, limit: int) -> str:
     return json.dumps(str(compact)[: max(0, limit - 2)], default=str)
 
 
-def _enforce_token_limit(text: str, limit: int = LLM_PROMPT_TOKEN_LIMIT) -> str:
-    char_limit = limit * LLM_PROMPT_TOKEN_CHAR_MULTIPLIER
+def _enforce_token_limit(
+    text: str,
+    limit: int = llm_runtime_settings.prompt_token_limit,
+) -> str:
+    char_limit = limit * llm_runtime_settings.prompt_token_char_multiplier
     if len(text) <= char_limit:
         return text
     suffix = "\n\n[TRUNCATED DUE TO TOKEN LIMIT]"
@@ -697,22 +685,42 @@ def _trim_prompt_section_body(body: str, budget: int, placeholder: str) -> str:
     if len(stripped) <= budget:
         return stripped
     if stripped.startswith(("{", "[")):
-        try:
-            parsed = parse_json(stripped)
-        except json.JSONDecodeError:
-            pass
-        else:
-            return _truncate_json_literal(parsed, budget)
+        if len(stripped) <= _PROMPT_JSON_REPARSE_MAX_CHARS:
+            try:
+                parsed = parse_json(stripped)
+            except json.JSONDecodeError:
+                pass
+            else:
+                return _truncate_json_literal(parsed, budget)
+        return _truncate_json_text_literal(stripped, budget, placeholder)
     if budget <= len(placeholder):
         return placeholder[:budget]
     return stripped[: budget - len(placeholder)].rstrip() + placeholder
+
+
+def _truncate_json_text_literal(text: str, budget: int, placeholder: str) -> str:
+    if budget <= 0:
+        return ""
+    if len(text) <= budget:
+        return text
+    if budget <= len(placeholder):
+        return placeholder[:budget]
+    closing = ""
+    if text.startswith("{") and budget > len(placeholder) + 1:
+        closing = "}"
+    elif text.startswith("[") and budget > len(placeholder) + 1:
+        closing = "]"
+    head_budget = budget - len(placeholder) - len(closing)
+    if head_budget <= 0:
+        return (placeholder + closing)[:budget]
+    return text[:head_budget].rstrip() + placeholder + closing
 
 
 def _compact_json_value(
     value: Any,
     *,
     depth: int = 0,
-    max_depth: int = LLM_PROMPT_COMPACT_JSON_MAX_DEPTH,
+    max_depth: int = llm_runtime_settings.prompt_compact_json_max_depth,
 ) -> Any:
     if value in (None, "", [], {}):
         return value
@@ -721,7 +729,7 @@ def _compact_json_value(
     if isinstance(value, dict):
         compact: dict[str, Any] = {}
         for index, (key, item) in enumerate(value.items()):
-            if index >= LLM_PROMPT_COMPACT_JSON_MAX_KEYS:
+            if index >= llm_runtime_settings.prompt_compact_json_max_keys:
                 break
             compact[str(key)] = _compact_json_value(
                 item,
@@ -732,7 +740,9 @@ def _compact_json_value(
     if isinstance(value, list):
         return [
             _compact_json_value(item, depth=depth + 1, max_depth=max_depth)
-            for item in value[:LLM_PROMPT_COMPACT_JSON_MAX_LIST_ITEMS]
+            for item in value[
+                : llm_runtime_settings.prompt_compact_json_max_list_items
+            ]
         ]
     return _compact_leaf_value(value)
 
@@ -740,8 +750,10 @@ def _compact_json_value(
 def _compact_leaf_value(value: Any) -> Any:
     if isinstance(value, str):
         stripped = value.strip()
-        if len(stripped) > LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS:
-            return stripped[:LLM_PROMPT_COMPACT_LEAF_STRING_MAX_CHARS]
+        if len(stripped) > llm_runtime_settings.prompt_compact_leaf_string_max_chars:
+            return stripped[
+                : llm_runtime_settings.prompt_compact_leaf_string_max_chars
+            ]
         return stripped
     return value
 

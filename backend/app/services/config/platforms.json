@@ -212,20 +212,6 @@
       "adapter_names": ["remoteok"],
       "job_platform": true,
       "requires_browser": false
-    },
-    {
-      "family": "datadome_protected",
-      "domain_patterns": [
-        "autozone.com",
-        "footlocker.com",
-        "hermes.com",
-        "rue21.com",
-        "ssense.com",
-        "leroymerlin.fr",
-        "reddit.com"
-      ],
-      "job_platform": false,
-      "requires_browser": true
     }
   ]
 }

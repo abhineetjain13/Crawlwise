@@ -6,6 +6,7 @@ import logging
 import time
 from urllib.parse import urljoin, urlsplit
 
+from app.services.acquisition.runtime import classify_blocked_page_async
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
 from selectolax.lexbor import LexborHTMLParser
@@ -192,24 +193,11 @@ async def _detect_auto_mode(page, *, surface: str) -> str | None:
         return "load_more"
     scroll_signals = await _has_scroll_signals(page, surface=surface)
     next_page_locator = await _find_actionable_locator(page, "next_page")
-    if scroll_signals:
-        if next_page_locator is None:
-            return "scroll"
-        href = ""
-        try:
-            href = str(await next_page_locator.get_attribute("href") or "").strip().lower()
-        except Exception:
-            logger.debug("Traversal next_page href inspection failed", exc_info=True)
-        card_count = await _card_count(page, surface=surface)
-        if (
-            not href
-            or href.startswith("#")
-            or href.startswith("javascript:")
-            or card_count >= int(crawler_runtime_settings.listing_min_items)
-        ):
-            return "scroll"
     if next_page_locator is not None:
-        return "paginate"
+        if await _looks_like_paginate_control(next_page_locator):
+            return "paginate"
+        if not scroll_signals:
+            return "paginate"
     if scroll_signals:
         return "scroll"
     return None
@@ -342,10 +330,7 @@ async def _run_paginate_traversal(
         current_url = page.url
         href = await locator.get_attribute("href")
         normalized_href = str(href or "").strip().lower()
-        if normalized_href.startswith("#"):
-            _set_stop_reason(result, "paginate_fragment_only", surface=surface)
-            break
-        if href and not normalized_href.startswith("javascript:"):
+        if href and not normalized_href.startswith(("#", "javascript:")):
             next_url = urljoin(current_url, href)
             if not _is_same_origin(current_url, next_url):
                 _set_stop_reason(result, "paginate_off_domain", surface=surface)
@@ -375,6 +360,9 @@ async def _run_paginate_traversal(
                 previous_url=current_url,
                 deadline_at=deadline_at,
             )
+        if await _page_matches_block_challenge(page):
+            _set_stop_reason(result, "paginate_blocked", surface=surface)
+            break
         current = await _page_snapshot(page, surface=surface)
         if page.url != current_url or _snapshot_progressed(previous, current):
             await _append_html_fragment(page, result, surface=surface)
@@ -436,6 +424,85 @@ async def _append_html_fragment(
                 return
             break
     result.html_fragments.append((value, is_fallback))
+
+
+async def _looks_like_paginate_control(locator) -> bool:
+    href = ""
+    try:
+        href = str(await locator.get_attribute("href") or "").strip().lower()
+    except Exception:
+        logger.debug("Traversal next_page href inspection failed", exc_info=True)
+    if href and not href.startswith(("#", "javascript:")):
+        return True
+    try:
+        inspection = await locator.evaluate(
+            """
+            (node) => {
+              if (!(node instanceof Element)) {
+                return {};
+              }
+              const rawHref = String(node.getAttribute('href') || '').trim().toLowerCase();
+              const label = [
+                node.getAttribute('aria-label'),
+                node.getAttribute('title'),
+                node.textContent,
+              ]
+                .filter(Boolean)
+                .join(' ')
+                .replace(/\\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+              const container = node.closest(
+                "[aria-label*='pagination' i], [data-testid*='pagination' i], [class*='pagination' i], nav, [role='navigation']"
+              );
+              const containerText = String(container?.textContent || '')
+                .replace(/\\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+              const datasetKeys = Object.keys(node.dataset || {});
+              return {
+                raw_href: rawHref,
+                has_click_handler:
+                  typeof node.onclick === 'function' ||
+                  node.hasAttribute('onclick') ||
+                  datasetKeys.some((key) => /(page|paginate|next|cursor)/i.test(key)),
+                pagination_container: Boolean(container),
+                pagination_text:
+                  /\\b(next|previous|prev|page|older|newer)\\b/.test(label) ||
+                  /\\b(next|previous|prev|page|older|newer)\\b/.test(containerText),
+                sibling_page_numbers: /(?:^|\\s)\\d+(?:\\s|$)/.test(containerText),
+                is_button_like:
+                  String(node.tagName || '').toLowerCase() === 'button' ||
+                  String(node.getAttribute('role') || '').trim().toLowerCase() === 'button',
+              };
+            }
+            """
+        )
+    except Exception:
+        logger.debug("Traversal next_page control inspection failed", exc_info=True)
+        return False
+    if not isinstance(inspection, dict):
+        return False
+    if bool(inspection.get("pagination_container")) and (
+        bool(inspection.get("has_click_handler"))
+        or bool(inspection.get("is_button_like"))
+    ):
+        return True
+    if bool(inspection.get("pagination_text")) and (
+        bool(inspection.get("has_click_handler"))
+        or bool(inspection.get("sibling_page_numbers"))
+        or bool(inspection.get("is_button_like"))
+    ):
+        return True
+    return False
+
+
+async def _page_matches_block_challenge(page) -> bool:
+    html = await page.content()
+    if not html:
+        return False
+    classification = await classify_blocked_page_async(html, 200)
+    return bool(classification.blocked)
 
 
 def _bounded_traversal_fragment_html(

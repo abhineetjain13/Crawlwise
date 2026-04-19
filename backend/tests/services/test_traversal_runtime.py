@@ -18,6 +18,7 @@ class _State:
     overflow_containers: int = 0
     controls: set[str] | None = None
     next_href: str | None = None
+    next_control_state: dict[str, Any] | None = None
 
 
 class _FakeLocator:
@@ -49,12 +50,23 @@ class _FakeLocator:
             self._page.state = self._page.load_more_states[min(self._page.load_more_clicks, len(self._page.load_more_states) - 1)]
             return
         if group == "next_page":
-            await self._page.goto(self._page.state.next_href or self._page.url)
+            next_href = str(self._page.state.next_href or "").strip().lower()
+            if next_href and not next_href.startswith(("#", "javascript:")):
+                await self._page.goto(self._page.state.next_href or self._page.url)
+                return
+            self._page.page_index = min(self._page.page_index + 1, len(self._page.paginated_states) - 1)
+            self._page.state = self._page.paginated_states[self._page.page_index]
 
     async def get_attribute(self, name: str) -> str | None:
         if name == "href" and _selector_group(self._selector) == "next_page":
             return self._page.state.next_href
         return None
+
+    async def evaluate(self, script: str) -> Any:
+        del script
+        if _selector_group(self._selector) == "next_page":
+            return dict(self._page.state.next_control_state or {})
+        return {}
 
 
 class _FakePage:
@@ -298,6 +310,118 @@ async def test_paginate_traversal_waits_for_navigation_transition() -> None:
     assert result.pages_advanced == 1
     assert "domcontentloaded" in page.load_state_calls
     assert "networkidle" in page.load_state_calls
+
+
+@pytest.mark.asyncio
+async def test_auto_traversal_prefers_paginate_for_spa_next_button() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls={"next_page"},
+            next_href="#",
+            next_control_state={
+                "raw_href": "#",
+                "has_click_handler": True,
+                "pagination_container": True,
+                "pagination_text": True,
+                "sibling_page_numbers": True,
+                "is_button_like": False,
+            },
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=2500,
+                client_height=600,
+                controls={"next_page"},
+                next_href="#",
+                next_control_state={
+                    "raw_href": "#",
+                    "has_click_handler": True,
+                    "pagination_container": True,
+                    "pagination_text": True,
+                    "sibling_page_numbers": True,
+                    "is_button_like": False,
+                },
+            ),
+            _State(
+                html="<div>page-2</div>",
+                card_count=5,
+                scroll_height=2800,
+                client_height=600,
+                controls=set(),
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="auto",
+        max_pages=2,
+        max_scrolls=2,
+    )
+
+    assert result.selected_mode == "paginate"
+    assert result.pages_advanced == 1
+    assert result.progress_events == 1
+    assert [f for f, _ in result.html_fragments] == ["<div>page-1</div>", "<div>page-2</div>"]
+
+
+@pytest.mark.asyncio
+async def test_paginate_traversal_stops_before_recording_block_challenge() -> None:
+    challenge_html = """
+    <html>
+      <head><title>Just a moment...</title></head>
+      <body>
+        <main>Checking your browser before accessing Cloudflare protected content.</main>
+        <div id="cf-challenge-running">Just a moment...</div>
+      </body>
+    </html>
+    """
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://example.com/listing?page=2",
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+            ),
+            _State(
+                html=challenge_html,
+                card_count=0,
+                scroll_height=900,
+                controls=set(),
+            ),
+        ],
+    )
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=2,
+        max_scrolls=1,
+    )
+
+    assert result.stop_reason == "paginate_blocked"
+    assert result.pages_advanced == 0
+    assert result.progress_events == 0
+    assert [f for f, _ in result.html_fragments] == ["<div>page-1</div>"]
 
 
 @pytest.mark.asyncio

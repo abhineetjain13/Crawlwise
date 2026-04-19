@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
+import pytest
+
 from app.services.acquisition.runtime import classify_blocked_page
 from app.services.crawl_fetch_runtime import is_blocked_html
 
@@ -77,3 +81,34 @@ def test_classify_blocked_page_detects_datadome_captcha_delivery_challenge() -> 
     assert classification.outcome == "challenge_page"
     assert "datadome" in classification.provider_hits
     assert "captcha_delivery_iframe" in classification.challenge_element_hits
+
+
+def test_classify_blocked_page_uses_configured_challenge_element_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.acquisition import runtime
+
+    signatures = deepcopy(runtime.BLOCK_SIGNATURES)
+    signatures["challenge_elements"] = {
+        "iframe_src_markers": {
+            "challenge.vendor.test": "vendor_iframe",
+        },
+        "iframe_title_markers": {},
+        "script_src_markers": {},
+        "html_markers": {},
+    }
+    monkeypatch.setattr(runtime, "BLOCK_SIGNATURES", signatures)
+
+    html = """
+    <html>
+      <head><title>Just a moment...</title></head>
+      <body>
+        <iframe src="https://challenge.vendor.test/frame"></iframe>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is True
+    assert "vendor_iframe" in classification.challenge_element_hits

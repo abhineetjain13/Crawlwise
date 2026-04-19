@@ -3,7 +3,6 @@ from __future__ import annotations
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
-from app.services.config._module_exports import make_getattr, module_dir
 from app.services.config.runtime_settings import _settings_config
 
 
@@ -45,27 +44,5 @@ class AdapterRuntimeSettings(BaseSettings):
 
 
 adapter_runtime_settings = AdapterRuntimeSettings()
-_EXPORTS = {
-    name: name.lower()
-    for name in (
-        "SHOPIFY_REQUEST_TIMEOUT_SECONDS",
-        "SHOPIFY_CATALOG_LIMIT",
-        "SHOPIFY_MAX_PRODUCTS",
-        "SHOPIFY_MAX_OPTION_AXIS_COUNT",
-        "ICIMS_PAGINATION_TIMEOUT_SECONDS",
-        "ICIMS_PAGE_SIZE",
-        "ICIMS_MAX_OFFSET",
-        "ICIMS_TITLE_MIN_LENGTH",
-    )
-}
 
-__all__ = sorted([*(_EXPORTS.keys()), "AdapterRuntimeSettings", "adapter_runtime_settings"])
-
-__getattr__ = make_getattr(
-    attr_exports=_EXPORTS,
-    settings_obj=adapter_runtime_settings,
-)
-
-
-def __dir__() -> list[str]:
-    return module_dir(globals(), __all__)
+__all__ = ["AdapterRuntimeSettings", "adapter_runtime_settings"]

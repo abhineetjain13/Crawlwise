@@ -46,7 +46,7 @@ This file defines how code should be shaped and how agents and humans should cha
 4. Extraction
    Files: `crawl_engine.py`, `detail_extractor.py`, `listing_extractor.py`, `structured_sources.py`, `js_state_mapper.py`, `network_payload_mapper.py`
 5. Publish and persistence
-   Files: `publish/*`, `artifact_store.py`, persistence in `pipeline/core.py`
+   Files: `publish/*`, `artifact_store.py`, `pipeline/core.py`, `pipeline/persistence.py`
 6. Review, selectors, and domain memory
    Files: `review/__init__.py`, `selectors_runtime.py`, `selector_self_heal.py`, `domain_memory_service.py`
 7. LLM admin and runtime

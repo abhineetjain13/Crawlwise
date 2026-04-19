@@ -101,8 +101,8 @@ class UltiProAdapter(BaseAdapter):
             "base_url": f"{parsed.scheme}://{parsed.netloc}",
             "board_id": board_id,
             "company_code": company_code,
-            "order_by": self._clean_text(params.get("o")) or _DEFAULT_ORDER,
-            "query": self._clean_text(params.get("q")),
+            "order_by": clean_text(params.get("o")) or _DEFAULT_ORDER,
+            "query": clean_text(params.get("q")),
             "board_url": f"{parsed.scheme}://{parsed.netloc}/{company_code}/JobBoard/{board_id}/",
         }
 
@@ -146,30 +146,30 @@ class UltiProAdapter(BaseAdapter):
     ) -> dict | None:
         if not isinstance(row, dict):
             return None
-        title = self._clean_text(row.get("Title") or row.get("title"))
-        opportunity_id = self._clean_text(row.get("Id") or row.get("id"))
+        title = clean_text(row.get("Title") or row.get("title"))
+        opportunity_id = clean_text(row.get("Id") or row.get("id"))
         if not title or not opportunity_id:
             return None
         detail_url = self._build_detail_url(
             context["board_url"],
             opportunity_id=opportunity_id,
-            posting_id=self._clean_text(row.get("PostingId") or row.get("postingId")),
+            posting_id=clean_text(row.get("PostingId") or row.get("postingId")),
         )
         record = {
             "title": title,
             "job_id": opportunity_id,
             "url": detail_url,
             "apply_url": detail_url,
-            "location": self._clean_text(
+            "location": clean_text(
                 row.get("LocationName")
                 or row.get("Location")
                 or row.get("location")
             ),
-            "posted_date": self._clean_text(row.get("PostedDate") or row.get("postedDate")),
-            "requisition_id": self._clean_text(
+            "posted_date": clean_text(row.get("PostedDate") or row.get("postedDate")),
+            "requisition_id": clean_text(
                 row.get("RequisitionNumber") or row.get("requisitionNumber")
             ),
-            "category": self._clean_text(
+            "category": clean_text(
                 row.get("JobCategoryName") or row.get("jobCategoryName")
             ),
         }
@@ -199,12 +199,12 @@ class UltiProAdapter(BaseAdapter):
     def _extract_detail_from_html(self, url: str, html: str) -> dict | None:
         soup = BeautifulSoup(str(html or ""), "html.parser")
         title_node = soup.select_one("h1, h2")
-        title = self._clean_text(
+        title = clean_text(
             title_node.get_text(" ", strip=True) if title_node is not None else ""
         )
         if not title:
             return None
-        body_text = self._clean_text(soup.get_text(" ", strip=True))
+        body_text = clean_text(soup.get_text(" ", strip=True))
         record = {
             "title": title,
             "url": url,
@@ -225,6 +225,3 @@ class UltiProAdapter(BaseAdapter):
             or "opportunitydetail" in parsed.path.lower()
             or "opportunityid=" in parsed.query.lower()
         )
-
-    def _clean_text(self, value: object) -> str:
-        return clean_text(value)

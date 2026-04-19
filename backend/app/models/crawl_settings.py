@@ -6,16 +6,8 @@ from typing import Any
 
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.crawl_utils import normalize_target_url, resolve_traversal_mode
-from app.services.config.crawl_runtime import (
-    DEFAULT_MAX_PAGES,
-    DEFAULT_MAX_SCROLLS,
-    MAX_MAX_PAGES,
-    MIN_MAX_PAGES,
-    MIN_REQUEST_DELAY_MS,
-    URL_BATCH_CONCURRENCY,
-    URL_PROCESS_TIMEOUT_SECONDS,
-    coerce_url_timeout_seconds,
-)
+from app.services.config.crawl_runtime import coerce_url_timeout_seconds
+from app.services.config.runtime_settings import crawler_runtime_settings
 
 
 def _coerce_int(
@@ -81,18 +73,27 @@ class CrawlRunSettings:
 
     def max_pages(self) -> int:
         return _coerce_int(
-            self.data.get("max_pages", DEFAULT_MAX_PAGES),
-            DEFAULT_MAX_PAGES,
-            MIN_MAX_PAGES,
-            MAX_MAX_PAGES,
+            self.data.get("max_pages", crawler_runtime_settings.default_max_pages),
+            crawler_runtime_settings.default_max_pages,
+            crawler_runtime_settings.min_max_pages,
+            crawler_runtime_settings.max_max_pages,
         )
 
     def max_records(self) -> int:
-        return _coerce_int(self.data.get("max_records", 100), 100, 1)
+        return _coerce_int(
+            self.data.get("max_records", crawler_runtime_settings.default_max_records),
+            crawler_runtime_settings.default_max_records,
+            1,
+        )
 
     def max_scrolls(self) -> int:
         return _coerce_int(
-            self.data.get("max_scrolls", DEFAULT_MAX_SCROLLS), DEFAULT_MAX_SCROLLS, 1
+            self.data.get(
+                "max_scrolls",
+                crawler_runtime_settings.default_max_scrolls,
+            ),
+            crawler_runtime_settings.default_max_scrolls,
+            1,
         )
 
     def respect_robots_txt(self) -> bool:
@@ -102,21 +103,27 @@ class CrawlRunSettings:
 
     def sleep_ms(self) -> int:
         return _coerce_int(
-            self.data.get("sleep_ms", MIN_REQUEST_DELAY_MS),
-            MIN_REQUEST_DELAY_MS,
-            MIN_REQUEST_DELAY_MS,
+            self.data.get("sleep_ms", crawler_runtime_settings.min_request_delay_ms),
+            crawler_runtime_settings.min_request_delay_ms,
+            crawler_runtime_settings.min_request_delay_ms,
         )
 
     def url_batch_concurrency(self) -> int:
         return _coerce_int(
-            self.data.get("url_batch_concurrency", URL_BATCH_CONCURRENCY),
-            URL_BATCH_CONCURRENCY,
+            self.data.get(
+                "url_batch_concurrency",
+                crawler_runtime_settings.url_batch_concurrency,
+            ),
+            crawler_runtime_settings.url_batch_concurrency,
             1,
         )
 
     def url_timeout_seconds(self) -> float:
         return coerce_url_timeout_seconds(
-            self.data.get("url_timeout_seconds", URL_PROCESS_TIMEOUT_SECONDS)
+            self.data.get(
+                "url_timeout_seconds",
+                crawler_runtime_settings.url_process_timeout_seconds,
+            )
         )
 
     def llm_enabled(self) -> bool:

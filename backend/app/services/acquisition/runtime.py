@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import logging
 import re
@@ -18,6 +19,7 @@ from app.services.network_resolution import (
     build_async_http_client,
     should_retry_with_forced_ipv4,
 )
+from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 
 logger = logging.getLogger(__name__)
@@ -244,20 +246,37 @@ def should_escalate_to_browser(
     result: PageFetchResult,
     *,
     surface: str | None = None,
+    runtime_policy: Mapping[str, Any] | None = None,
 ) -> bool:
     if is_non_retryable_http_status(result.status_code):
         return False
     if result.blocked or is_retryable_http_status(result.status_code):
         return True
+    resolved_policy = (
+        runtime_policy
+        if runtime_policy is not None
+        else resolve_platform_runtime_policy(
+            result.final_url or result.url,
+            result.html,
+            surface=surface,
+        )
+    )
+    escalation_policy = resolved_policy.get("http_browser_escalation")
+    if not isinstance(escalation_policy, Mapping):
+        escalation_policy = {}
     analysis = _analyze_html(result.html)
     has_detail_signals = _has_extractable_detail_signals(result.html, analysis=analysis)
     has_listing_signals = _has_extractable_listing_signals(result.html, analysis=analysis)
-    if _looks_like_js_shell(result.html, analysis=analysis) and not has_detail_signals:
+    if (
+        bool(escalation_policy.get("js_shell_without_detail_signals", True))
+        and _looks_like_js_shell(result.html, analysis=analysis)
+        and not has_detail_signals
+    ):
         return True
-    if "detail" in str(surface or "").lower() and not has_detail_signals:
+    if bool(escalation_policy.get("missing_detail_signals")) and not has_detail_signals:
         return True
     if (
-        "listing" in str(surface or "").lower()
+        bool(escalation_policy.get("listing_shell_without_listing_signals"))
         and not has_listing_signals
         and _looks_like_listing_shell(result, analysis=analysis)
     ):
@@ -280,8 +299,14 @@ async def should_escalate_to_browser_async(
     result: PageFetchResult,
     *,
     surface: str | None = None,
+    runtime_policy: Mapping[str, Any] | None = None,
 ) -> bool:
-    return await asyncio.to_thread(should_escalate_to_browser, result, surface=surface)
+    return await asyncio.to_thread(
+        should_escalate_to_browser,
+        result,
+        surface=surface,
+        runtime_policy=runtime_policy,
+    )
 
 
 async def get_shared_http_client(
@@ -592,28 +617,45 @@ def _string_sequence(value: object) -> list[str]:
 
 
 def _challenge_element_hits(soup: BeautifulSoup, lowered_html: str) -> list[str]:
+    challenge_elements = _mapping_or_empty(BLOCK_SIGNATURES.get("challenge_elements"))
+    iframe_src_markers = {
+        str(marker or "").strip().lower(): str(hit or "").strip()
+        for marker, hit in _mapping_or_empty(challenge_elements.get("iframe_src_markers")).items()
+        if str(marker or "").strip() and str(hit or "").strip()
+    }
+    iframe_title_markers = {
+        str(marker or "").strip().lower(): str(hit or "").strip()
+        for marker, hit in _mapping_or_empty(challenge_elements.get("iframe_title_markers")).items()
+        if str(marker or "").strip() and str(hit or "").strip()
+    }
+    script_src_markers = {
+        str(marker or "").strip().lower(): str(hit or "").strip()
+        for marker, hit in _mapping_or_empty(challenge_elements.get("script_src_markers")).items()
+        if str(marker or "").strip() and str(hit or "").strip()
+    }
+    html_markers = {
+        str(marker or "").strip().lower(): str(hit or "").strip()
+        for marker, hit in _mapping_or_empty(challenge_elements.get("html_markers")).items()
+        if str(marker or "").strip() and str(hit or "").strip()
+    }
     hits: list[str] = []
     for iframe in list(soup.find_all("iframe")):
         src = str(iframe.get("src") or "").strip().lower()
         title = str(iframe.get("title") or "").strip().lower()
-        if "captcha-delivery.com" in src:
-            hits.append("captcha_delivery_iframe")
-        if "captcha" in title:
-            hits.append("captcha_titled_iframe")
-        if "datadome" in title:
-            hits.append("datadome_titled_iframe")
+        for marker, hit in iframe_src_markers.items():
+            if marker in src:
+                hits.append(hit)
+        for marker, hit in iframe_title_markers.items():
+            if marker in title:
+                hits.append(hit)
     for script in list(soup.find_all("script")):
         src = str(script.get("src") or "").strip().lower()
-        if "captcha-delivery.com" in src:
-            hits.append("captcha_delivery_script")
-        if "datadome" in src:
-            hits.append("datadome_script")
-    if "geo.captcha-delivery.com" in lowered_html:
-        hits.append("captcha_delivery_host")
-    if "ct.captcha-delivery.com" in lowered_html:
-        hits.append("captcha_delivery_bootstrap")
-    if "title=\"datadome captcha\"" in lowered_html:
-        hits.append("datadome_captcha_title")
+        for marker, hit in script_src_markers.items():
+            if marker in src:
+                hits.append(hit)
+    for marker, hit in html_markers.items():
+        if marker in lowered_html:
+            hits.append(hit)
     return hits
 
 

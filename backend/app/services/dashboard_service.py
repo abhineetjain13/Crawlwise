@@ -123,7 +123,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
 
     await reset_fetch_runtime_state()
     await reset_pacing_state()
-    reset_robots_policy_cache()
+    await reset_robots_policy_cache()
 
     artifacts_removed = _reset_directory(settings.artifacts_dir)
     cookies_removed = _reset_directory(settings.cookie_store_dir)

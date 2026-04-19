@@ -5,7 +5,6 @@ from types import MappingProxyType
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
-from app.services.config._module_exports import make_getattr, module_dir
 from app.services.config.runtime_settings import _settings_config
 
 
@@ -69,74 +68,12 @@ class ExtractionAuditSettings(BaseSettings):
 
 
 extraction_audit_settings = ExtractionAuditSettings()
-_EXPORTS = {
-    name: name.lower()
-    for name in (
-        "LISTING_CARD_GROUP_MIN_SIZE",
-        "LISTING_CARD_GROUP_MIN_SIGNAL_RATIO",
-        "LISTING_CARD_GROUP_SAMPLE_SIZE",
-        "LISTING_CARD_SUBSTANTIAL_TEXT_MIN_CHARS",
-        "LISTING_CARD_MULTI_ELEMENT_MIN_CHILDREN",
-        "LISTING_CARD_MAX_REGEX_INPUT_CHARS",
-        "LISTING_CARD_REPEATED_LINK_ROOT_MAX_DEPTH",
-        "LISTING_CARD_MIN_PATH_SEGMENTS",
-        "LISTING_CARD_JOB_TITLE_MIN_CHARS",
-        "LISTING_CARD_LISTING_TITLE_MIN_CHARS",
-        "LISTING_CARD_JOB_METADATA_TEXT_MAX_CHARS",
-        "LISTING_CARD_JOB_METADATA_SALARY_MAX_CHARS",
-        "LISTING_CARD_JOB_COMPANY_LINE_MAX_CHARS",
-        "LISTING_CARD_JOB_COMPANY_SUFFIX_MAX_CHARS",
-        "LISTING_CARD_JOB_LOCATION_LINE_MAX_CHARS",
-        "LISTING_CARD_COLOR_LABEL_MAX_CHARS",
-        "LISTING_CARD_PRODUCT_URL_SCAN_MAX_DEPTH",
-        "LISTING_CARD_PRODUCT_URL_SCAN_MAX_LIST_ITEMS",
-        "LISTING_CARD_COMMERCE_STRONG_SIGNAL_SCORE",
-        "LISTING_CARD_COMMERCE_PARTIAL_SIGNAL_SCORE",
-        "LISTING_CARD_JOB_STRONG_SIGNAL_SCORE",
-        "LISTING_CARD_JOB_PARTIAL_SIGNAL_SCORE",
-        "LISTING_CARD_GENERIC_MEDIA_SIGNAL_SCORE",
-        "LISTING_CARD_GENERIC_HEADING_SIGNAL_SCORE",
-        "LISTING_CARD_GENERIC_TEXT_SIGNAL_SCORE",
-        "JSON_LISTING_SEARCH_MAX_DEPTH",
-        "JSON_LISTING_ALIAS_MAX_DEPTH",
-        "JSON_LISTING_DEFAULT_MAX_RECORDS",
-        "JSON_CANDIDATE_ARRAY_SAMPLE_SIZE",
-        "JSON_CANDIDATE_TITLE_SCORE",
-        "JSON_CANDIDATE_URL_SCORE",
-        "JSON_CANDIDATE_JOB_SCORE",
-        "JSON_CANDIDATE_COMMERCE_SCORE",
-        "JSON_ALIAS_VISIT_LIST_LIMIT",
-        "JSON_IMAGE_LIST_LIMIT",
-        "SOURCE_PARSER_EMBEDDED_BLOB_MAX_DEPTH",
-        "SOURCE_PARSER_EMBEDDED_BLOB_LIST_SAMPLE_SIZE",
-        "SOURCE_PARSER_EMBEDDED_BLOB_STRONG_SIGNAL_THRESHOLD",
-        "SOURCE_PARSER_EMBEDDED_BLOB_SUPPORTING_SIGNAL_THRESHOLD",
-        "SOURCE_PARSER_EMBEDDED_BLOB_STRONG_ONLY_THRESHOLD",
-        "SOURCE_PARSER_EMBEDDED_BLOB_WEAK_SIGNAL_THRESHOLD",
-        "SOURCE_PARSER_PREVIOUS_HEADING_LIMIT",
-    )
-}
-_SPECIAL_EXPORTS = {
-    "SOURCE_PARSER_DATALAYER_FIELD_WEIGHTS": lambda: MappingProxyType(
-        extraction_audit_settings.source_parser_datalayer_field_weights
-    ),
-}
-
-__all__ = sorted(
-    [
-        *(_EXPORTS.keys()),
-        *(_SPECIAL_EXPORTS.keys()),
-        "ExtractionAuditSettings",
-        "extraction_audit_settings",
-    ]
+SOURCE_PARSER_DATALAYER_FIELD_WEIGHTS = MappingProxyType(
+    extraction_audit_settings.source_parser_datalayer_field_weights
 )
 
-__getattr__ = make_getattr(
-    attr_exports=_EXPORTS,
-    dynamic_exports=_SPECIAL_EXPORTS,
-    settings_obj=extraction_audit_settings,
-)
-
-
-def __dir__() -> list[str]:
-    return module_dir(globals(), __all__)
+__all__ = [
+    "ExtractionAuditSettings",
+    "SOURCE_PARSER_DATALAYER_FIELD_WEIGHTS",
+    "extraction_audit_settings",
+]

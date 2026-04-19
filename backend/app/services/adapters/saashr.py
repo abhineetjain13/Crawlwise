@@ -5,6 +5,7 @@ import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.field_value_utils import clean_text
 from bs4 import BeautifulSoup
 
 
@@ -132,7 +133,7 @@ class SaaSHRAdapter(BaseAdapter):
         except (OSError, RuntimeError, ValueError, TypeError):
             return ""
         return (
-            self._clean_text(payload.get("comp_name"))
+            clean_text(payload.get("comp_name"))
             if isinstance(payload, dict)
             else ""
         )
@@ -149,15 +150,15 @@ class SaaSHRAdapter(BaseAdapter):
 
     def _extract_company_code(self, board_url: str) -> str:
         match = _COMPANY_RE.search(urlparse(str(board_url or "")).path)
-        return self._clean_text(match.group(1)) if match else ""
+        return clean_text(match.group(1)) if match else ""
 
     def _normalize_row(
         self, row: object, *, board_url: str, company_name: str
     ) -> dict | None:
         if not isinstance(row, dict):
             return None
-        title = self._clean_text(row.get("job_title"))
-        job_id = self._clean_text(row.get("id"))
+        title = clean_text(row.get("job_title"))
+        job_id = clean_text(row.get("id"))
         if not title or not job_id:
             return None
         location_payload = (
@@ -166,8 +167,8 @@ class SaaSHRAdapter(BaseAdapter):
         location = ", ".join(
             part
             for part in [
-                self._clean_text(location_payload.get("city")),
-                self._clean_text(location_payload.get("state")),
+                clean_text(location_payload.get("city")),
+                clean_text(location_payload.get("state")),
             ]
             if part
         )
@@ -179,7 +180,7 @@ class SaaSHRAdapter(BaseAdapter):
             "apply_url": detail_url,
             "location": location or None,
             "company": company_name or None,
-            "description": self._clean_text(row.get("job_description")),
+            "description": clean_text(row.get("job_description")),
         }
         return {
             key: value
@@ -196,7 +197,4 @@ class SaaSHRAdapter(BaseAdapter):
 
     def _requested_job_id(self, board_url: str) -> str:
         params = dict(parse_qsl(urlparse(board_url).query, keep_blank_values=True))
-        return self._clean_text(params.get("ShowJob"))
-
-    def _clean_text(self, value: object) -> str:
-        return " ".join(str(value or "").split()).strip()
+        return clean_text(params.get("ShowJob"))

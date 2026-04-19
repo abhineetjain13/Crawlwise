@@ -1,27 +1,21 @@
 from __future__ import annotations
 
-import hashlib
-import logging
 import asyncio
+import logging
 from dataclasses import dataclass, field
 
 from app.core.database import SessionLocal
-from app.models.crawl import CrawlRecord, CrawlRun
+from app.models.crawl import CrawlRun
 from app.services.acquisition.acquirer import AcquisitionRequest
 from app.services.acquisition.acquirer import acquire as _acquire
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
 from app.services.acquisition.browser_runtime import build_failed_browser_diagnostics
-from app.services.artifact_store import (
-    persist_html_artifact,
-    persist_json_artifact,
-    persist_png_artifact,
-)
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
 from app.services.domain_memory_service import load_domain_selector_rules
 from app.services.domain_utils import normalize_domain
 from app.services.confidence import score_record_confidence
-from app.services.field_value_utils import coerce_field_value
+from app.services.field_value_utils import coerce_field_value, finalize_record
 from app.services.field_policy import field_allowed_for_surface
 from app.services.llm_runtime import extract_missing_fields
 from app.services.platform_policy import detect_platform_family
@@ -41,12 +35,12 @@ from app.services.robots_policy import (
     check_url_crawlability,
 )
 from app.services.selector_self_heal import apply_selector_self_heal
-from app.services.publish.metadata import refresh_record_commit_metadata
 from app.services.extraction_runtime import extract_records
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .pipeline_config import LLMFallbackConfig, PipelineDefaults
+from .persistence import persist_acquisition_artifacts, persist_extracted_records
 from .runtime_helpers import STAGE_ANALYZE, STAGE_FETCH, STAGE_SAVE, log_event, set_stage
 from .types import URLProcessingConfig, URLProcessingResult
 
@@ -131,14 +125,6 @@ def _resolved_url_processing_config(
         persist_logs=persist_logs,
     )
 
-
-def _record_identity_key(source_url: str) -> str | None:
-    text = str(source_url or "").strip()
-    if not text:
-        return None
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _mapping_or_empty(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -180,106 +166,6 @@ def _merge_browser_diagnostics(
     merged = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     merged.update(dict(diagnostics or {}))
     acquisition_result.browser_diagnostics = merged
-
-
-def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[str, object]:
-    field_discovery = {}
-    field_sources = _mapping_or_empty(record.get("_field_sources"))
-    for key, value in record.items():
-        if str(key).startswith("_"):
-            continue
-        field_discovery[str(key)] = {
-            "status": "found",
-            "value": str(value),
-            "sources": _string_list(
-                field_sources.get(str(key), [str(record.get("_source") or "extraction")])
-            ),
-        }
-    return {
-        "acquisition": {
-            "method": acquisition_result.method,
-            "status_code": acquisition_result.status_code,
-            "final_url": acquisition_result.final_url,
-            "blocked": acquisition_result.blocked,
-            "adapter_name": acquisition_result.adapter_name,
-            "adapter_source_type": acquisition_result.adapter_source_type,
-            "network_payload_count": len(list(acquisition_result.network_payloads or [])),
-            "browser_diagnostics": _mapping_or_empty(acquisition_result.browser_diagnostics),
-        },
-        "extraction": {
-            "source": str(record.get("_source") or "extraction"),
-            "confidence": _mapping_or_empty(record.get("_confidence")),
-            "self_heal": _mapping_or_empty(record.get("_self_heal")),
-            "manifest_trace": _mapping_or_empty(record.get("_manifest_trace")),
-            "review_bucket": list(record.get("_review_bucket") or [])
-            if isinstance(record.get("_review_bucket"), list)
-            else [],
-            "semantic": _mapping_or_empty(record.get("_semantic")),
-        },
-        "field_discovery": field_discovery,
-    }
-
-
-async def _persist_records(
-    session: AsyncSession,
-    run: CrawlRun,
-    records: list[dict[str, object]],
-    *,
-    acquisition_result,
-    raw_html_path: str | None = None,
-) -> int:
-    persisted = 0
-    seen_identities: set[str] = set()
-    for record in records:
-        data = {
-            key: value
-            for key, value in dict(record).items()
-            if value not in (None, "", [], {}) and not str(key).startswith("_")
-        }
-        if not data:
-            continue
-        source_url = str(
-            data.get("url") or data.get("source_url") or acquisition_result.final_url
-        )
-        identity_key = _record_identity_key(source_url)
-        if identity_key and identity_key in seen_identities:
-            continue
-        if identity_key is not None:
-            seen_identities.add(identity_key)
-        crawl_record = CrawlRecord(
-            run_id=run.id,
-            source_url=source_url,
-            url_identity_key=identity_key,
-            data=data,
-            raw_data=dict(record),
-            discovered_data={
-                key: value
-                for key, value in {
-                    "confidence": _mapping_or_empty(record.get("_confidence")),
-                    "manifest_trace": _mapping_or_empty(record.get("_manifest_trace")),
-                    "semantic": _mapping_or_empty(record.get("_semantic")),
-                    "review_bucket": list(record.get("_review_bucket") or [])
-                    if isinstance(record.get("_review_bucket"), list)
-                    else [],
-                }.items()
-                if value not in (None, "", [], {})
-            },
-            source_trace=_build_source_trace(acquisition_result, record),
-            raw_html_path=raw_html_path,
-        )
-        session.add(crawl_record)
-        await session.flush()
-        for field_name, value in data.items():
-            refresh_record_commit_metadata(
-                crawl_record,
-                run=run,
-                field_name=field_name,
-                value=value,
-                source_label=str(record.get("_source") or "extraction"),
-                preserve_existing_sources=True,
-            )
-        persisted += 1
-    return persisted
 
 
 async def _process_single_url(
@@ -507,6 +393,7 @@ async def _run_extraction_stage(
                 "warning",
                 f"[EXTRACT] Browser retry failed for {context.url}: {type(exc).__name__}: {exc}",
             )
+            raise
         else:
             fetched.acquisition_result = browser_result
             acquisition_result = browser_result
@@ -665,19 +552,14 @@ async def _run_persistence_stage(
     extracted: _ExtractedURLStage,
 ) -> URLProcessingResult:
     acquisition_result = extracted.fetched.acquisition_result
-    raw_html_path = await asyncio.to_thread(
-        persist_html_artifact,
+    raw_html_path = await persist_acquisition_artifacts(
         run_id=context.run.id,
-        source_url=acquisition_result.final_url,
-        html=acquisition_result.html,
-    )
-    await _persist_browser_artifacts(
-        context,
         acquisition_result=acquisition_result,
-        raw_html_path=raw_html_path,
+        browser_attempted=_browser_attempted(acquisition_result),
+        screenshot_required=_screenshot_required(_browser_outcome(acquisition_result)),
     )
     await _enter_save_stage(context)
-    persisted_count = await _persist_records(
+    persisted_count = await persist_extracted_records(
         context.session,
         context.run,
         extracted.records[: context.config.max_records],
@@ -704,56 +586,6 @@ async def _run_persistence_stage(
             extracted.fetched.url_metrics,
             record_count=persisted_count,
         ),
-    )
-
-
-async def _persist_browser_artifacts(
-    context: _URLProcessingContext,
-    *,
-    acquisition_result,
-    raw_html_path: str,
-) -> None:
-    if not _browser_attempted(acquisition_result):
-        return
-    diagnostics = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
-    browser_outcome = str(diagnostics.get("browser_outcome") or "").strip().lower()
-    screenshot_bytes = getattr(acquisition_result, "artifacts", {}).get(
-        "browser_screenshot_png",
-        b"",
-    )
-    screenshot_path = ""
-    if _screenshot_required(browser_outcome) and isinstance(
-        screenshot_bytes,
-        (bytes, bytearray),
-    ):
-        screenshot_path = await asyncio.to_thread(
-            persist_png_artifact,
-            run_id=context.run.id,
-            source_url=acquisition_result.final_url,
-            suffix="browser",
-            content=bytes(screenshot_bytes),
-        )
-    diagnostics_payload = dict(diagnostics)
-    diagnostics_payload["artifact_paths"] = {
-        "html": raw_html_path or None,
-        "screenshot": screenshot_path or None,
-    }
-    diagnostics_path = await asyncio.to_thread(
-        persist_json_artifact,
-        run_id=context.run.id,
-        source_url=acquisition_result.final_url,
-        suffix="browser",
-        payload=diagnostics_payload,
-    )
-    _merge_browser_diagnostics(
-        acquisition_result,
-        {
-            "artifact_paths": {
-                "html": raw_html_path or None,
-                "diagnostics": diagnostics_path or None,
-                "screenshot": screenshot_path or None,
-            }
-        },
     )
 
 
@@ -805,6 +637,7 @@ async def _apply_llm_fallback(
             },
         )
         field_sources = _mapping_or_empty(next_record.get("_field_sources"))
+        applied_llm_fields: list[str] = []
         if isinstance(payload, dict):
             for field_name, value in payload.items():
                 normalized_field = str(field_name or "").strip().lower()
@@ -819,16 +652,26 @@ async def _apply_llm_fallback(
                     value,
                     page_url,
                 )
+                applied_llm_fields.append(normalized_field)
                 current_sources = _string_list(field_sources.get(normalized_field))
                 if "llm_missing_field_extraction" not in current_sources:
                     current_sources.append("llm_missing_field_extraction")
                 field_sources[normalized_field] = current_sources
+        if applied_llm_fields:
+            canonical_record = {
+                key: value
+                for key, value in next_record.items()
+                if not str(key).startswith("_")
+            }
+            next_record.update(finalize_record(canonical_record, surface=run.surface))
         next_record["_field_sources"] = field_sources
         next_record["_confidence"] = score_record_confidence(
             next_record,
             surface=run.surface,
             requested_fields=requested_fields,
         )
+        if applied_llm_fields and not str(next_record.get("_source") or "").strip():
+            next_record["_source"] = "llm_missing_field_extraction"
         next_record["_self_heal"] = {
             "enabled": True,
             "triggered": True,

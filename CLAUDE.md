@@ -51,9 +51,11 @@ submit crawl -> persist run -> dispatch worker -> process each URL
 ## Repo Facts That Matter
 
 - Per-URL execution lives in `backend/app/services/pipeline/core.py`.
+- Artifact and `CrawlRecord` persistence live in `backend/app/services/pipeline/persistence.py`.
 - Fetch/runtime behavior lives mainly in `backend/app/services/crawl_fetch_runtime.py`.
 - Extraction facade is `backend/app/services/crawl_engine.py`.
 - Domain memory is live and stores selector rules by normalized `(domain, surface)`.
+- Selector self-heal should reuse validated domain memory before attempting another synthesis pass.
 - Selectors API is live at `/api/selectors`.
 - LLM admin API is live at `/api/llm`.
 - Record provenance API is live at `/api/records/{record_id}/provenance`.
@@ -116,6 +118,7 @@ These landed recently and should be assumed live unless code says otherwise:
 - extruct-backed microdata and Open Graph structured-source support
 - Nuxt `__NUXT_DATA__` revival in structured-source harvesting
 - declarative network payload specs for generic job/ecommerce detail mapping
+- bounded browser network-payload capture and temp-file screenshot staging
 - browser identity generation via `browserforge`
 - URL tracking-parameter stripping in field-value normalization
 - selector self-heal with domain-memory persistence/reuse

@@ -7,10 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from app.services.config.crawl_runtime import (
-    DNS_RESOLUTION_RETRIES,
-    DNS_RESOLUTION_RETRY_DELAY_MS,
-)
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.network_resolution import dns_resolution_families
 
 
@@ -157,7 +154,7 @@ async def validate_proxy_endpoint(proxy_url: str) -> ValidatedTarget:
 
 
 async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
-    attempts = max(1, int(DNS_RESOLUTION_RETRIES) + 1)
+    attempts = max(1, int(crawler_runtime_settings.dns_resolution_retries) + 1)
     families = dns_resolution_families()
     records: list[tuple[object, ...]] | None = None
     last_error: socket.gaierror | None = None
@@ -178,7 +175,9 @@ async def _resolve_host_ips(hostname: str, port: int) -> list[str]:
         if records is not None:
             break
         if attempt < attempts:
-            await asyncio.sleep(max(0, DNS_RESOLUTION_RETRY_DELAY_MS) / 1000)
+            await asyncio.sleep(
+                max(0, crawler_runtime_settings.dns_resolution_retry_delay_ms) / 1000
+            )
             continue
         raise ValueError(f"Target host could not be resolved: {hostname}") from last_error
 

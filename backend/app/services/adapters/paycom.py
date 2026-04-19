@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
+from app.services.field_value_utils import clean_text
 
 
 _CONFIG_RE = re.compile(r"var configsFromHost = (\{.*?\});\s*var Mountable", re.DOTALL)
@@ -180,7 +181,7 @@ class PaycomAdapter(BaseAdapter):
         posting = body.get("jobPosting") if isinstance(body, dict) else None
         if not isinstance(posting, dict):
             return None
-        title = self._clean_text(posting.get("jobTitle"))
+        title = clean_text(posting.get("jobTitle"))
         if not title:
             return None
         record = {
@@ -188,14 +189,14 @@ class PaycomAdapter(BaseAdapter):
             "job_id": job_id,
             "url": page_url,
             "apply_url": page_url,
-            "location": self._clean_text(posting.get("location")),
-            "job_type": self._clean_text(
+            "location": clean_text(posting.get("location")),
+            "job_type": clean_text(
                 posting.get("positionType") or posting.get("employmentType")
             ),
-            "description": self._clean_text(
+            "description": clean_text(
                 posting.get("jobDescription") or posting.get("description")
             ),
-            "posted_date": self._clean_text(posting.get("postedOn")),
+            "posted_date": clean_text(posting.get("postedOn")),
         }
         return {
             key: value
@@ -231,8 +232,8 @@ class PaycomAdapter(BaseAdapter):
     def _normalize_preview(self, preview: object, *, page_url: str) -> dict | None:
         if not isinstance(preview, dict):
             return None
-        title = self._clean_text(preview.get("jobTitle"))
-        job_id = self._clean_text(preview.get("jobId"))
+        title = clean_text(preview.get("jobTitle"))
+        job_id = clean_text(preview.get("jobId"))
         if not title or not job_id:
             return None
         record = {
@@ -240,12 +241,12 @@ class PaycomAdapter(BaseAdapter):
             "job_id": job_id,
             "url": urljoin(page_url, f"jobs/{job_id}"),
             "apply_url": urljoin(page_url, f"jobs/{job_id}"),
-            "location": self._clean_text(preview.get("locations")),
-            "job_type": self._clean_text(
+            "location": clean_text(preview.get("locations")),
+            "job_type": clean_text(
                 preview.get("positionType") or preview.get("remoteType")
             ),
-            "description": self._clean_text(preview.get("description")),
-            "posted_date": self._clean_text(preview.get("postedOn")),
+            "description": clean_text(preview.get("description")),
+            "posted_date": clean_text(preview.get("postedOn")),
         }
         return {
             key: value
@@ -255,7 +256,4 @@ class PaycomAdapter(BaseAdapter):
 
     def _extract_job_id(self, url: str) -> str:
         match = _JOB_ID_RE.search(urlparse(str(url or "")).path)
-        return self._clean_text(match.group(1)) if match else ""
-
-    def _clean_text(self, value: object) -> str:
-        return " ".join(str(value or "").split()).strip()
+        return clean_text(match.group(1)) if match else ""

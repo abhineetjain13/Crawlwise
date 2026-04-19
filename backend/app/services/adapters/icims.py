@@ -8,12 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.config.adapter_runtime_settings import (
-    ICIMS_MAX_OFFSET,
-    ICIMS_PAGE_SIZE,
-    ICIMS_PAGINATION_TIMEOUT_SECONDS,
-    ICIMS_TITLE_MIN_LENGTH,
-)
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.field_value_utils import clean_text
 from bs4 import BeautifulSoup, Tag
 
@@ -87,12 +82,16 @@ class ICIMSAdapter(BaseAdapter):
 
         records: list[dict] = []
         seen_urls: set[str] = set()
-        for offset in range(0, ICIMS_MAX_OFFSET, ICIMS_PAGE_SIZE):
+        for offset in range(
+            0,
+            adapter_runtime_settings.icims_max_offset,
+            adapter_runtime_settings.icims_page_size,
+        ):
             page_url = self._paginate_endpoint(endpoint, offset)
             try:
                 response_text = await self._request_text(
                     page_url,
-                    timeout_seconds=ICIMS_PAGINATION_TIMEOUT_SECONDS,
+                    timeout_seconds=adapter_runtime_settings.icims_pagination_timeout_seconds,
                 )
             except _ICIMS_PAGINATION_ERRORS as exc:
                 logger.warning(
@@ -123,7 +122,7 @@ class ICIMSAdapter(BaseAdapter):
                     continue
                 seen_urls.add(record_url)
                 records.append(record)
-            if len(batch) < ICIMS_PAGE_SIZE:
+            if len(batch) < adapter_runtime_settings.icims_page_size:
                 break
         return records
 
@@ -135,7 +134,10 @@ class ICIMSAdapter(BaseAdapter):
             endpoint = match.group(1)
             return endpoint if endpoint.startswith("http") else f"{base_url}{endpoint}"
         if "/ajax/joblisting/" in str(html or "").lower():
-            return f"{base_url}/ajax/joblisting/?num_items={ICIMS_PAGE_SIZE}&offset=0"
+            return (
+                f"{base_url}/ajax/joblisting/"
+                f"?num_items={adapter_runtime_settings.icims_page_size}&offset=0"
+            )
         return None
 
     def _discover_embedded_board_url(self, url: str, html: str) -> str | None:
@@ -167,7 +169,7 @@ class ICIMSAdapter(BaseAdapter):
         try:
             response_text = await self._request_text(
                 url,
-                timeout_seconds=ICIMS_PAGINATION_TIMEOUT_SECONDS,
+                timeout_seconds=adapter_runtime_settings.icims_pagination_timeout_seconds,
             )
         except Exception:
             logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
@@ -181,7 +183,10 @@ class ICIMSAdapter(BaseAdapter):
             else f"{endpoint}{'&' if '?' in endpoint else '?'}offset={offset}"
         )
         if "num_items=" not in page_url:
-            page_url = f"{page_url}{'&' if '?' in page_url else '?'}num_items={ICIMS_PAGE_SIZE}"
+            page_url = (
+                f"{page_url}{'&' if '?' in page_url else '?'}"
+                f"num_items={adapter_runtime_settings.icims_page_size}"
+            )
         return page_url
 
     def _extract_from_listing_html(self, html: str, base_url: str) -> list[dict]:
@@ -227,9 +232,9 @@ class ICIMSAdapter(BaseAdapter):
         if link is None:
             return None
         title_node = link.select_one("h1, h2, h3, h4") or link
-        title = self._clean_text(title_node.get_text(" ", strip=True))
+        title = clean_text(title_node.get_text(" ", strip=True))
         title = re.sub(r"(?i)^posting job title\s+", "", title).strip()
-        if not title or len(title) < ICIMS_TITLE_MIN_LENGTH:
+        if not title or len(title) < adapter_runtime_settings.icims_title_min_length:
             return None
         metadata = self._extract_header_fields(row)
         record = {
@@ -249,19 +254,19 @@ class ICIMSAdapter(BaseAdapter):
             "[class*='date'], [class*='Date'], [class*='posted'], .iCIMS_JobDate"
         )
         if location is not None:
-            value = self._clean_text(location.get_text(" ", strip=True))
+            value = clean_text(location.get_text(" ", strip=True))
             if value and value != title:
                 record["location"] = value
         if department is not None:
-            value = self._clean_text(department.get_text(" ", strip=True))
+            value = clean_text(department.get_text(" ", strip=True))
             if value and value != title:
                 record["department"] = value
         if posted is not None:
-            value = self._clean_text(posted.get_text(" ", strip=True))
+            value = clean_text(posted.get_text(" ", strip=True))
             if value:
                 record["posted_date"] = value
         if description is not None:
-            value = self._clean_text(description.get_text(" ", strip=True))
+            value = clean_text(description.get_text(" ", strip=True))
             if value:
                 record["description"] = value
         self._apply_metadata_fields(record, metadata)
@@ -275,9 +280,9 @@ class ICIMSAdapter(BaseAdapter):
         )
         if not link_match:
             return None
-        title = self._clean_text(_HTML_TAG_RE.sub("", link_match.group(2)))
+        title = clean_text(_HTML_TAG_RE.sub("", link_match.group(2)))
         title = re.sub(r"(?i)^posting job title\s+", "", title).strip()
-        if not title or len(title) < ICIMS_TITLE_MIN_LENGTH:
+        if not title or len(title) < adapter_runtime_settings.icims_title_min_length:
             return None
         record: dict[str, str] = {
             "title": title,
@@ -291,7 +296,7 @@ class ICIMSAdapter(BaseAdapter):
             match = re.search(pattern, row_html, re.IGNORECASE | re.DOTALL)
             if not match:
                 continue
-            value = self._clean_text(_HTML_TAG_RE.sub("", match.group(1)))
+            value = clean_text(_HTML_TAG_RE.sub("", match.group(1)))
             if value and value != title:
                 record[field_name] = value
         return record
@@ -304,7 +309,7 @@ class ICIMSAdapter(BaseAdapter):
         if title is None:
             return None
         record = {
-            "title": self._clean_text(title.get_text(" ", strip=True)),
+            "title": clean_text(title.get_text(" ", strip=True)),
             "url": self._normalize_job_url(url),
         }
         metadata = self._extract_header_fields(soup)
@@ -315,11 +320,11 @@ class ICIMSAdapter(BaseAdapter):
             ".iCIMS_JobContent, [class*='jobdescription'], [class*='JobDescription']"
         )
         if location is not None:
-            value = self._clean_text(location.get_text(" ", strip=True))
+            value = clean_text(location.get_text(" ", strip=True))
             if value:
                 record["location"] = value
         if description is not None:
-            value = self._clean_text(description.get_text(" ", strip=True))
+            value = clean_text(description.get_text(" ", strip=True))
             if value:
                 record["description"] = value
         self._apply_metadata_fields(record, metadata)
@@ -333,7 +338,7 @@ class ICIMSAdapter(BaseAdapter):
             label_text = self._normalize_header_label(
                 label.get_text(" ", strip=True) if label is not None else ""
             )
-            value_text = self._clean_text(
+            value_text = clean_text(
                 value.get_text(" ", strip=True) if value is not None else ""
             )
             if label_text and value_text and label_text not in fields:
@@ -361,7 +366,7 @@ class ICIMSAdapter(BaseAdapter):
                 record[target_name] = value
 
     def _normalize_header_label(self, value: str) -> str:
-        cleaned = self._clean_text(value).lower()
+        cleaned = clean_text(value).lower()
         return re.sub(r"[^a-z0-9]+", "_", cleaned).strip("_")
 
     def _normalize_job_url(self, value: str, *, base_url: str = "") -> str:
@@ -383,5 +388,3 @@ class ICIMSAdapter(BaseAdapter):
             or re.search(r"/jobs?/\d+", path, flags=re.IGNORECASE)
         )
 
-    def _clean_text(self, value: str) -> str:
-        return clean_text(value)

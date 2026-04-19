@@ -87,4 +87,22 @@ BLOCK_SIGNATURES = {
         r"security\s+check",
         r"pardon\s+our\s+interruption",
     ],
+    "challenge_elements": {
+        "iframe_src_markers": {
+            "captcha-delivery.com": "captcha_delivery_iframe",
+        },
+        "iframe_title_markers": {
+            "captcha": "captcha_titled_iframe",
+            "datadome": "datadome_titled_iframe",
+        },
+        "script_src_markers": {
+            "captcha-delivery.com": "captcha_delivery_script",
+            "datadome": "datadome_script",
+        },
+        "html_markers": {
+            "geo.captcha-delivery.com": "captcha_delivery_host",
+            "ct.captcha-delivery.com": "captcha_delivery_bootstrap",
+            'title="datadome captcha"': "datadome_captcha_title",
+        },
+    },
 }

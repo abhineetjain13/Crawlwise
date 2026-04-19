@@ -8,12 +8,7 @@ import math
 from urllib.parse import parse_qsl, urljoin, urlparse, urlsplit
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.config.adapter_runtime_settings import (
-    SHOPIFY_CATALOG_LIMIT,
-    SHOPIFY_MAX_PRODUCTS,
-    SHOPIFY_MAX_OPTION_AXIS_COUNT,
-    SHOPIFY_REQUEST_TIMEOUT_SECONDS,
-)
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.extract.shared_variant_logic import (
     normalized_variant_axis_key,
     split_variant_axes,
@@ -85,7 +80,7 @@ class ShopifyAdapter(BaseAdapter):
                 data = await self._request_json(
                     api_url,
                     proxy=proxy,
-                    timeout_seconds=SHOPIFY_REQUEST_TIMEOUT_SECONDS,
+                    timeout_seconds=adapter_runtime_settings.shopify_request_timeout_seconds,
                 )
             except _FETCH_ERRORS:
                 return []
@@ -100,17 +95,23 @@ class ShopifyAdapter(BaseAdapter):
                 else "/products.json"
             )
             products: list[dict] = []
-            max_pages = max(1, math.ceil(SHOPIFY_MAX_PRODUCTS / SHOPIFY_CATALOG_LIMIT))
+            max_pages = max(
+                1,
+                math.ceil(
+                    adapter_runtime_settings.shopify_max_products
+                    / adapter_runtime_settings.shopify_catalog_limit
+                ),
+            )
             for page in range(1, max_pages + 1):
                 api_url = (
                     f"{parsed.scheme}://{parsed.netloc}{api_path}"
-                    f"?limit={SHOPIFY_CATALOG_LIMIT}&page={page}"
+                    f"?limit={adapter_runtime_settings.shopify_catalog_limit}&page={page}"
                 )
                 try:
                     data = await self._request_json(
                         api_url,
                         proxy=proxy,
-                        timeout_seconds=SHOPIFY_REQUEST_TIMEOUT_SECONDS,
+                        timeout_seconds=adapter_runtime_settings.shopify_request_timeout_seconds,
                     )
                 except _FETCH_ERRORS:
                     break
@@ -120,12 +121,15 @@ class ShopifyAdapter(BaseAdapter):
                 if not isinstance(batch, list) or not batch:
                     break
                 products.extend(product for product in batch if isinstance(product, dict))
-                if len(products) >= SHOPIFY_MAX_PRODUCTS or len(batch) < SHOPIFY_CATALOG_LIMIT:
+                if (
+                    len(products) >= adapter_runtime_settings.shopify_max_products
+                    or len(batch) < adapter_runtime_settings.shopify_catalog_limit
+                ):
                     break
 
         return [
             self._build_product_record(product, page_url=url, surface=surface)
-            for product in products[:SHOPIFY_MAX_PRODUCTS]
+            for product in products[: adapter_runtime_settings.shopify_max_products]
             if isinstance(product, dict)
         ]
 
@@ -277,7 +281,10 @@ class ShopifyAdapter(BaseAdapter):
         raw_options = (
             variant.get("options") if isinstance(variant.get("options"), list) else []
         )
-        for index in range(1, SHOPIFY_MAX_OPTION_AXIS_COUNT + 1):
+        for index in range(
+            1,
+            adapter_runtime_settings.shopify_max_option_axis_count + 1,
+        ):
             axis_name = (
                 option_names[index - 1]
                 if index - 1 < len(option_names)
@@ -338,10 +345,11 @@ class ShopifyAdapter(BaseAdapter):
                 image_url := self._normalize_url(self._image_src(img), parsed.scheme)
             )
         ]
+        raw_tags = product.get("tags")
         tags = (
-            product.get("tags", "").split(", ")
-            if isinstance(product.get("tags"), str)
-            else product.get("tags", [])
+            [token for token in (item.strip() for item in raw_tags.strip().split(",")) if token]
+            if isinstance(raw_tags, str) and raw_tags.strip()
+            else ([] if isinstance(raw_tags, str) else product.get("tags", []))
         )
         record = {
             "title": product.get("title"),

@@ -76,7 +76,10 @@ ProxyPoolExhausted = ProxyPoolExhaustedError
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     requested_url = str(request.url or "")
     effective_url = normalize_platform_acquisition_url(requested_url) or requested_url
-    runtime_policy = resolve_platform_runtime_policy(effective_url)
+    runtime_policy = resolve_platform_runtime_policy(
+        effective_url,
+        surface=request.surface,
+    )
     prefer_browser = bool(request.acquisition_profile.get("prefer_browser")) or bool(
         runtime_policy.get("requires_browser")
     )

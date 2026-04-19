@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import json
 import logging
-import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -14,6 +12,17 @@ import httpx
 from bs4 import BeautifulSoup, Comment
 
 from app.core.config import settings
+from app.services.acquisition.browser_capture import (
+    _MAX_CAPTURED_NETWORK_PAYLOADS,
+    BrowserNetworkCapture as _BrowserNetworkCapture,
+    _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES,
+    _NETWORK_CAPTURE_QUEUE_SIZE,
+    _NETWORK_CAPTURE_WORKERS,
+    capture_browser_screenshot,
+    classify_network_endpoint,
+    read_network_payload_body,
+    should_capture_network_payload,
+)
 from app.services.acquisition.browser_identity import build_playwright_context_options
 from app.services.acquisition.runtime import (
     BlockPageClassification,
@@ -32,7 +41,6 @@ from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_utils import clean_text
 from app.services.field_value_utils import hostname
 from app.services.platform_policy import (
-    classify_network_endpoint_family,
     resolve_browser_readiness_policy,
     resolve_listing_readiness_override,
 )
@@ -56,16 +64,6 @@ async def _apply_stealth(page: Any) -> None:
         await _STEALTH_APPLIER(page)
     except Exception:
         logger.debug("Failed to apply playwright-stealth", exc_info=True)
-
-_MAX_CAPTURED_NETWORK_PAYLOADS = 25
-_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES = 500_000
-_NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
-    r"geolocation|geoip|geo/|/geo\b|\banalytics\b|tracking|telemetry|"
-    r"klarna\.com|affirm\.com|afterpay\.com|olapic-cdn\.com|livechat|"
-    r"zendesk\.com|intercom\.io|facebook\.com|google-analytics|"
-    r"googletagmanager|sentry\.io|datadome|px\.ads|cdn-cgi/|captcha",
-    re.I,
-)
 _BROWSER_PREFERRED_HOST_TTL_SECONDS = 1800.0
 _BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
 _BROWSER_PREFERRED_HOST_SUCCESSES: dict[str, tuple[int, float]] = {}
@@ -403,321 +401,384 @@ async def browser_fetch(
     async with page_context as page:
         started_at = time.perf_counter()
         phase_timings_ms: dict[str, int] = {}
-        readiness_probes: list[dict[str, object]] = []
-        network_payloads: list[dict[str, object]] = []
-        network_payload_lock = asyncio.Lock()
-        capture_tasks: list[asyncio.Task[None]] = []
-        malformed_payloads = 0
-        payload_read_failures = 0
-        payload_closed_failures = 0
-        oversized_payloads = 0
         normalized_surface = str(surface or "")
-
-        async def _capture_response(response) -> None:
-            content_type = str(response.headers.get("content-type", "") or "").lower()
-            if not should_capture_network_payload(
-                url=response.url,
-                content_type=content_type,
-                headers=response.headers,
-                captured_count=len(network_payloads),
-            ):
-                return
-            body_result = await read_network_payload_body(response)
-            if body_result.outcome == "response_closed":
-                nonlocal payload_closed_failures
-                async with network_payload_lock:
-                    payload_closed_failures += 1
-                return
-            if body_result.outcome == "too_large":
-                nonlocal oversized_payloads
-                async with network_payload_lock:
-                    oversized_payloads += 1
-                return
-            if body_result.outcome == "read_error":
-                nonlocal payload_read_failures
-                async with network_payload_lock:
-                    payload_read_failures += 1
-                return
-            body_bytes = body_result.body
-            if body_bytes is None:
-                return
-            try:
-                payload = json.loads(body_bytes.decode("utf-8", errors="replace"))
-            except json.JSONDecodeError:
-                nonlocal malformed_payloads
-                async with network_payload_lock:
-                    malformed_payloads += 1
-                return
-            endpoint_info = classify_network_endpoint(
-                response_url=response.url,
-                surface=normalized_surface,
-            )
-            async with network_payload_lock:
-                if not should_capture_network_payload(
-                    url=response.url,
-                    content_type=content_type,
-                    headers=response.headers,
-                    captured_count=len(network_payloads),
-                ):
-                    return
-                network_payloads.append(
-                    {
-                        "url": response.url,
-                        "method": getattr(response.request, "method", "GET"),
-                        "status": int(getattr(response, "status", 0) or 0),
-                        "content_type": content_type,
-                        "endpoint_type": endpoint_info["type"],
-                        "endpoint_family": endpoint_info["family"],
-                        "body": payload,
-                    }
-                )
-
-        def _schedule_capture(response) -> None:
-            capture_tasks.append(asyncio.create_task(_capture_response(response)))
-
-        page.on("response", _schedule_capture)
-        response = None
-        networkidle_timed_out = False
+        payload_capture = _BrowserNetworkCapture(
+            surface=normalized_surface,
+            should_capture_payload=should_capture_network_payload,
+            classify_endpoint=classify_network_endpoint,
+            read_payload_body=read_network_payload_body,
+        )
+        payload_capture.attach(page)
         traversal_active = should_run_traversal(surface, traversal_mode)
         readiness_policy = resolve_browser_readiness_policy(
             url,
             traversal_active=traversal_active,
         )
         readiness_override = readiness_policy.get("listing_override")
-        goto_timeout_ms = min(
-            int(timeout_seconds * 1000),
-            int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms),
-        )
-        fallback_timeout_ms = min(
-            int(timeout_seconds * 1000),
-            int(crawler_runtime_settings.browser_navigation_min_final_commit_timeout_ms),
-        )
-        from playwright.async_api import Error as PlaywrightError
-        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+        try:
+            response, navigation_strategy = await _navigate_browser_page(
+                page,
+                url=url,
+                timeout_seconds=timeout_seconds,
+                phase_timings_ms=phase_timings_ms,
+            )
+            (
+                current_probe,
+                readiness_probes,
+                networkidle_timed_out,
+                networkidle_skip_reason,
+                readiness_diagnostics,
+                expansion_diagnostics,
+            ) = await _settle_browser_page(
+                page,
+                url=url,
+                surface=normalized_surface,
+                timeout_seconds=timeout_seconds,
+                readiness_override=readiness_override,
+                readiness_policy=readiness_policy,
+                phase_timings_ms=phase_timings_ms,
+            )
+            html, traversal_result = await _serialize_browser_page_content(
+                page,
+                surface=surface,
+                traversal_mode=traversal_mode,
+                traversal_active=traversal_active,
+                timeout_seconds=timeout_seconds,
+                max_pages=max_pages,
+                max_scrolls=max_scrolls,
+                phase_timings_ms=phase_timings_ms,
+            )
+            response_missing = response is None
+            status_code = response.status if response is not None else 0
+            if response_missing:
+                logger.warning(
+                    "Browser navigation returned no response for %s using %s strategy",
+                    url,
+                    navigation_strategy,
+                )
+            payload_capture_started_at = time.perf_counter()
+            capture_summary = await payload_capture.close(page)
+            phase_timings_ms["payload_capture"] = _elapsed_ms(
+                payload_capture_started_at
+            )
+            blocked_classification = await classify_blocked_page_async(html, status_code)
+            blocked = bool(
+                blocked_classification.blocked
+                or await blocked_html_checker(html, status_code)
+            )
+            html_bytes = len(html.encode("utf-8"))
+            challenge_evidence = list(blocked_classification.evidence or [])
+            low_content_reason = classify_low_content_reason(html, html_bytes=html_bytes)
+            browser_outcome = classify_browser_outcome(
+                html=html,
+                html_bytes=html_bytes,
+                blocked=blocked,
+                block_classification=blocked_classification,
+                traversal_result=traversal_result,
+            )
+            screenshot_path = ""
+            if browser_outcome != "usable_content":
+                screenshot_started_at = time.perf_counter()
+                screenshot_path = await capture_browser_screenshot(page)
+                phase_timings_ms["screenshot_capture"] = _elapsed_ms(
+                    screenshot_started_at
+                )
+            else:
+                phase_timings_ms["screenshot_capture"] = 0
+            phase_timings_ms["total"] = _elapsed_ms(started_at)
+            diagnostics = {
+                "browser_attempted": True,
+                "browser_reason": str(browser_reason or "").strip().lower() or None,
+                "browser_outcome": browser_outcome,
+                "navigation_strategy": navigation_strategy,
+                "response_missing": response_missing,
+                "networkidle_timed_out": networkidle_timed_out,
+                "networkidle_wait_reason": readiness_policy.get("networkidle_reason"),
+                "networkidle_skip_reason": networkidle_skip_reason,
+                "html_bytes": html_bytes,
+                "phase_timings_ms": phase_timings_ms,
+                "challenge_evidence": challenge_evidence,
+                "challenge_provider_hits": list(blocked_classification.provider_hits or []),
+                "challenge_element_hits": list(
+                    blocked_classification.challenge_element_hits or []
+                ),
+                "low_content_reason": low_content_reason,
+                "readiness_probes": readiness_probes,
+                "network_payload_count": capture_summary.network_payload_count,
+                "malformed_network_payloads": capture_summary.malformed_network_payloads,
+                "network_payload_read_failures": (
+                    capture_summary.network_payload_read_failures
+                ),
+                "closed_network_payloads": capture_summary.closed_network_payloads,
+                "skipped_oversized_network_payloads": (
+                    capture_summary.skipped_oversized_network_payloads
+                ),
+                "dropped_network_payload_events": capture_summary.dropped_payload_events,
+                "listing_readiness": readiness_diagnostics,
+                "detail_expansion": expansion_diagnostics,
+            }
+            if traversal_result is not None:
+                diagnostics.update(traversal_result.diagnostics())
+            return PageFetchResult(
+                url=url,
+                final_url=page.url,
+                html=html,
+                status_code=status_code,
+                method="browser",
+                content_type=(
+                    response.headers.get("content-type", "text/html")
+                    if response is not None
+                    else "text/html"
+                ),
+                blocked=blocked,
+                headers=(
+                    copy_headers(response.headers)
+                    if response is not None
+                    else httpx.Headers()
+                ),
+                network_payloads=capture_summary.payloads,
+                browser_diagnostics=diagnostics,
+                artifacts=(
+                    {"browser_screenshot_path": screenshot_path}
+                    if screenshot_path
+                    else {}
+                ),
+            )
+        finally:
+            await payload_capture.close(page)
 
-        navigation_strategy = "domcontentloaded"
-        navigation_started_at = time.perf_counter()
+
+def _append_readiness_probe(
+    readiness_probes: list[dict[str, object]],
+    *,
+    stage: str,
+    probe: dict[str, object],
+) -> None:
+    readiness_probes.append({"stage": stage, **probe})
+
+
+async def _navigate_browser_page(
+    page: Any,
+    *,
+    url: str,
+    timeout_seconds: float,
+    phase_timings_ms: dict[str, int],
+):
+    goto_timeout_ms = min(
+        int(timeout_seconds * 1000),
+        int(crawler_runtime_settings.browser_navigation_domcontentloaded_timeout_ms),
+    )
+    fallback_timeout_ms = min(
+        int(timeout_seconds * 1000),
+        int(crawler_runtime_settings.browser_navigation_min_final_commit_timeout_ms),
+    )
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    navigation_strategy = "domcontentloaded"
+    navigation_started_at = time.perf_counter()
+    try:
+        response = await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=goto_timeout_ms,
+        )
+    except asyncio.CancelledError:
+        raise
+    except (PlaywrightTimeoutError, PlaywrightError):
+        navigation_strategy = "commit"
         try:
             response = await page.goto(
                 url,
-                wait_until="domcontentloaded",
-                timeout=goto_timeout_ms,
+                wait_until="commit",
+                timeout=fallback_timeout_ms,
             )
         except asyncio.CancelledError:
             raise
-        except (PlaywrightTimeoutError, PlaywrightError):
-            navigation_strategy = "commit"
-            try:
-                response = await page.goto(
-                    url,
-                    wait_until="commit",
-                    timeout=fallback_timeout_ms,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                phase_timings_ms["navigation"] = _elapsed_ms(navigation_started_at)
-                setattr(exc, "browser_phase_timings_ms", dict(phase_timings_ms))
-                setattr(exc, "browser_navigation_strategy", navigation_strategy)
-                raise
-        finally:
+        except Exception as exc:
             phase_timings_ms["navigation"] = _elapsed_ms(navigation_started_at)
+            setattr(exc, "browser_phase_timings_ms", dict(phase_timings_ms))
+            setattr(exc, "browser_navigation_strategy", navigation_strategy)
+            raise
+    finally:
+        phase_timings_ms["navigation"] = _elapsed_ms(navigation_started_at)
+    return response, navigation_strategy
+
+
+async def _settle_browser_page(
+    page: Any,
+    *,
+    url: str,
+    surface: str,
+    timeout_seconds: float,
+    readiness_override: dict[str, object] | None,
+    readiness_policy: dict[str, object],
+    phase_timings_ms: dict[str, int],
+) -> tuple[
+    dict[str, object],
+    list[dict[str, object]],
+    bool,
+    str | None,
+    dict[str, object],
+    dict[str, object],
+]:
+    readiness_probes: list[dict[str, object]] = []
+    current_probe = await probe_browser_readiness(
+        page,
+        url=url,
+        surface=surface,
+        listing_override=readiness_override,
+    )
+    _append_readiness_probe(
+        readiness_probes,
+        stage="after_navigation",
+        probe=current_probe,
+    )
+    wait_ms = min(
+        int(timeout_seconds * 1000),
+        int(crawler_runtime_settings.browser_navigation_optimistic_wait_ms),
+    )
+    if wait_ms > 0 and not current_probe["is_ready"]:
+        optimistic_wait_started_at = time.perf_counter()
+        await page.wait_for_timeout(wait_ms)
+        phase_timings_ms["optimistic_wait"] = _elapsed_ms(optimistic_wait_started_at)
         current_probe = await probe_browser_readiness(
             page,
             url=url,
-            surface=normalized_surface,
+            surface=surface,
             listing_override=readiness_override,
         )
-        readiness_probes.append({"stage": "after_navigation", **current_probe})
-        wait_ms = min(
-            int(timeout_seconds * 1000),
-            int(crawler_runtime_settings.browser_navigation_optimistic_wait_ms),
+        _append_readiness_probe(
+            readiness_probes,
+            stage="after_optimistic_wait",
+            probe=current_probe,
         )
-        if wait_ms > 0 and not current_probe["is_ready"]:
-            optimistic_wait_started_at = time.perf_counter()
-            await page.wait_for_timeout(wait_ms)
-            phase_timings_ms["optimistic_wait"] = _elapsed_ms(
-                optimistic_wait_started_at
+    else:
+        phase_timings_ms["optimistic_wait"] = 0
+
+    networkidle_timed_out = False
+    networkidle_skip_reason = None
+    if not current_probe["is_ready"] and bool(readiness_policy.get("require_networkidle")):
+        networkidle_wait_started_at = time.perf_counter()
+        try:
+            await page.wait_for_load_state(
+                "networkidle",
+                timeout=min(
+                    int(timeout_seconds * 1000),
+                    int(crawler_runtime_settings.browser_navigation_networkidle_timeout_ms),
+                ),
             )
-            current_probe = await probe_browser_readiness(
-                page,
-                url=url,
-                surface=normalized_surface,
-                listing_override=readiness_override,
-            )
-            readiness_probes.append({"stage": "after_optimistic_wait", **current_probe})
-        else:
-            phase_timings_ms["optimistic_wait"] = 0
-        networkidle_skip_reason = None
-        if not current_probe["is_ready"] and bool(readiness_policy.get("require_networkidle")):
-            networkidle_wait_started_at = time.perf_counter()
-            try:
-                await page.wait_for_load_state(
-                    "networkidle",
-                    timeout=min(
-                        int(timeout_seconds * 1000),
-                        int(crawler_runtime_settings.browser_navigation_networkidle_timeout_ms),
-                    ),
-                )
-            except Exception:
-                networkidle_timed_out = True
-            phase_timings_ms["networkidle_wait"] = _elapsed_ms(networkidle_wait_started_at)
-            current_probe = await probe_browser_readiness(
-                page,
-                url=url,
-                surface=normalized_surface,
-                listing_override=readiness_override,
-            )
-            readiness_probes.append({"stage": "after_networkidle", **current_probe})
-        else:
-            phase_timings_ms["networkidle_wait"] = 0
-            networkidle_skip_reason = (
-                "fast_path_ready"
-                if current_probe["is_ready"]
-                else "not_required"
-            )
-        if not current_probe["is_ready"] and readiness_override is not None:
-            readiness_started_at = time.perf_counter()
-            readiness_diagnostics = await wait_for_listing_readiness(
-                page,
-                url,
-                override=readiness_override,
-            )
-            phase_timings_ms["readiness_wait"] = _elapsed_ms(readiness_started_at)
-            current_probe = await probe_browser_readiness(
-                page,
-                url=url,
-                surface=normalized_surface,
-                listing_override=readiness_override,
-            )
-            readiness_probes.append({"stage": "after_platform_readiness", **current_probe})
-        else:
-            phase_timings_ms["readiness_wait"] = 0
-            readiness_diagnostics = {
-                "status": "skipped",
-                "reason": "fast_path_ready" if current_probe["is_ready"] else "no_platform_override",
-            }
-        expansion_started_at = time.perf_counter()
-        expansion_diagnostics = await expand_detail_content_if_needed(
+        except Exception:
+            networkidle_timed_out = True
+        phase_timings_ms["networkidle_wait"] = _elapsed_ms(networkidle_wait_started_at)
+        current_probe = await probe_browser_readiness(
             page,
-            surface=normalized_surface,
-            readiness_probe=current_probe,
-        )
-        phase_timings_ms["expansion"] = _elapsed_ms(expansion_started_at)
-        if expansion_diagnostics.get("clicked_count", 0):
-            current_probe = await probe_browser_readiness(
-                page,
-                url=url,
-                surface=normalized_surface,
-                listing_override=readiness_override,
-            )
-            readiness_probes.append({"stage": "after_detail_expansion", **current_probe})
-        traversal_result = None
-        traversal_started_at = time.perf_counter()
-        if traversal_active:
-            traversal_result = await execute_listing_traversal(
-                page,
-                surface=str(surface or ""),
-                traversal_mode=str(traversal_mode or ""),
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                timeout_seconds=timeout_seconds,
-            )
-            html = traversal_result.compose_html()
-        else:
-            html = ""
-        phase_timings_ms["traversal"] = _elapsed_ms(traversal_started_at)
-        serialization_started_at = time.perf_counter()
-        if traversal_result is None:
-            html = await page.content()
-        phase_timings_ms["content_serialization"] = _elapsed_ms(
-            serialization_started_at
-        )
-        response_missing = response is None
-        status_code = response.status if response is not None else 0
-        if response_missing:
-            logger.warning(
-                "Browser navigation returned no response for %s using %s strategy",
-                url,
-                navigation_strategy,
-            )
-        payload_capture_started_at = time.perf_counter()
-        if capture_tasks:
-            await asyncio.gather(*capture_tasks, return_exceptions=True)
-        phase_timings_ms["payload_capture"] = _elapsed_ms(payload_capture_started_at)
-        async with network_payload_lock:
-            network_payload_count = len(network_payloads)
-            malformed_network_payloads = malformed_payloads
-            network_payload_read_failures = payload_read_failures
-            closed_network_payloads = payload_closed_failures
-            skipped_oversized_network_payloads = oversized_payloads
-        blocked_classification = await classify_blocked_page_async(html, status_code)
-        blocked = bool(
-            blocked_classification.blocked or await blocked_html_checker(html, status_code)
-        )
-        html_bytes = len(html.encode("utf-8"))
-        challenge_evidence = list(blocked_classification.evidence or [])
-        low_content_reason = classify_low_content_reason(html, html_bytes=html_bytes)
-        browser_outcome = classify_browser_outcome(
-            html=html,
-            html_bytes=html_bytes,
-            blocked=blocked,
-            block_classification=blocked_classification,
-            traversal_result=traversal_result,
-        )
-        screenshot_png = b""
-        if browser_outcome != "usable_content":
-            screenshot_started_at = time.perf_counter()
-            screenshot_png = await capture_browser_screenshot(page)
-            phase_timings_ms["screenshot_capture"] = _elapsed_ms(screenshot_started_at)
-        else:
-            phase_timings_ms["screenshot_capture"] = 0
-        phase_timings_ms["total"] = _elapsed_ms(started_at)
-        diagnostics = {
-            "browser_attempted": True,
-            "browser_reason": str(browser_reason or "").strip().lower() or None,
-            "browser_outcome": browser_outcome,
-            "navigation_strategy": navigation_strategy,
-            "response_missing": response_missing,
-            "networkidle_timed_out": networkidle_timed_out,
-            "networkidle_wait_reason": readiness_policy.get("networkidle_reason"),
-            "networkidle_skip_reason": networkidle_skip_reason,
-            "html_bytes": html_bytes,
-            "phase_timings_ms": phase_timings_ms,
-            "challenge_evidence": challenge_evidence,
-            "challenge_provider_hits": list(blocked_classification.provider_hits or []),
-            "challenge_element_hits": list(
-                blocked_classification.challenge_element_hits or []
-            ),
-            "low_content_reason": low_content_reason,
-            "readiness_probes": readiness_probes,
-            "network_payload_count": network_payload_count,
-            "malformed_network_payloads": malformed_network_payloads,
-            "network_payload_read_failures": network_payload_read_failures,
-            "closed_network_payloads": closed_network_payloads,
-            "skipped_oversized_network_payloads": skipped_oversized_network_payloads,
-            "listing_readiness": readiness_diagnostics,
-            "detail_expansion": expansion_diagnostics,
-        }
-        if traversal_result is not None:
-            diagnostics.update(traversal_result.diagnostics())
-        return PageFetchResult(
             url=url,
-            final_url=page.url,
-            html=html,
-            status_code=status_code,
-            method="browser",
-            content_type=(
-                response.headers.get("content-type", "text/html")
-                if response is not None
-                else "text/html"
-            ),
-            blocked=blocked,
-            headers=(copy_headers(response.headers) if response is not None else httpx.Headers()),
-            network_payloads=network_payloads[:_MAX_CAPTURED_NETWORK_PAYLOADS],
-            browser_diagnostics=diagnostics,
-            artifacts={"browser_screenshot_png": screenshot_png} if screenshot_png else {},
+            surface=surface,
+            listing_override=readiness_override,
         )
+        _append_readiness_probe(
+            readiness_probes,
+            stage="after_networkidle",
+            probe=current_probe,
+        )
+    else:
+        phase_timings_ms["networkidle_wait"] = 0
+        networkidle_skip_reason = (
+            "fast_path_ready" if current_probe["is_ready"] else "not_required"
+        )
+
+    if not current_probe["is_ready"] and readiness_override is not None:
+        readiness_started_at = time.perf_counter()
+        readiness_diagnostics = await wait_for_listing_readiness(
+            page,
+            url,
+            override=readiness_override,
+        )
+        phase_timings_ms["readiness_wait"] = _elapsed_ms(readiness_started_at)
+        current_probe = await probe_browser_readiness(
+            page,
+            url=url,
+            surface=surface,
+            listing_override=readiness_override,
+        )
+        _append_readiness_probe(
+            readiness_probes,
+            stage="after_platform_readiness",
+            probe=current_probe,
+        )
+    else:
+        phase_timings_ms["readiness_wait"] = 0
+        readiness_diagnostics = {
+            "status": "skipped",
+            "reason": (
+                "fast_path_ready" if current_probe["is_ready"] else "no_platform_override"
+            ),
+        }
+
+    expansion_started_at = time.perf_counter()
+    expansion_diagnostics = await expand_detail_content_if_needed(
+        page,
+        surface=surface,
+        readiness_probe=current_probe,
+    )
+    phase_timings_ms["expansion"] = _elapsed_ms(expansion_started_at)
+    if expansion_diagnostics.get("clicked_count", 0):
+        current_probe = await probe_browser_readiness(
+            page,
+            url=url,
+            surface=surface,
+            listing_override=readiness_override,
+        )
+        _append_readiness_probe(
+            readiness_probes,
+            stage="after_detail_expansion",
+            probe=current_probe,
+        )
+    return (
+        current_probe,
+        readiness_probes,
+        networkidle_timed_out,
+        networkidle_skip_reason,
+        readiness_diagnostics,
+        expansion_diagnostics,
+    )
+
+
+async def _serialize_browser_page_content(
+    page: Any,
+    *,
+    surface: str | None,
+    traversal_mode: str | None,
+    traversal_active: bool,
+    timeout_seconds: float,
+    max_pages: int,
+    max_scrolls: int,
+    phase_timings_ms: dict[str, int],
+):
+    traversal_result = None
+    traversal_started_at = time.perf_counter()
+    if traversal_active:
+        traversal_result = await execute_listing_traversal(
+            page,
+            surface=str(surface or ""),
+            traversal_mode=str(traversal_mode or ""),
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            timeout_seconds=timeout_seconds,
+        )
+        html = traversal_result.compose_html()
+    else:
+        html = ""
+    phase_timings_ms["traversal"] = _elapsed_ms(traversal_started_at)
+
+    serialization_started_at = time.perf_counter()
+    if traversal_result is None:
+        html = await page.content()
+    phase_timings_ms["content_serialization"] = _elapsed_ms(
+        serialization_started_at
+    )
+    return html, traversal_result
 
 
 async def wait_for_listing_readiness(
@@ -735,6 +796,8 @@ async def _wait_for_listing_readiness(
     *,
     override: dict[str, object] | None,
 ) -> dict[str, object]:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
     if not override:
         return {}
     selectors = [
@@ -758,7 +821,9 @@ async def _wait_for_listing_readiness(
             state="attached",
             timeout=max_wait_ms,
         )
-    except Exception as exc:
+    except asyncio.CancelledError:
+        raise
+    except PlaywrightTimeoutError as exc:
         return {
             "platform": str(override.get("platform") or ""),
             "max_wait_ms": max_wait_ms,
@@ -768,12 +833,9 @@ async def _wait_for_listing_readiness(
         }
     matched_selector = None
     for selector in selectors:
-        try:
-            if await page.locator(selector).count():
-                matched_selector = selector
-                break
-        except Exception:
-            continue
+        if await page.locator(selector).count():
+            matched_selector = selector
+            break
     return {
         "platform": str(override.get("platform") or ""),
         "combined_selector": combined_selector,
@@ -996,93 +1058,6 @@ async def expand_detail_content_if_needed(
         "dom": dom,
         "aom": aom,
     }
-
-
-def should_capture_network_payload(
-    *,
-    url: str,
-    content_type: str,
-    headers: dict[str, object] | Any,
-    captured_count: int,
-) -> bool:
-    lowered_url = str(url or "").lower()
-    if "json" not in content_type and not lowered_url.endswith(".json"):
-        return False
-    if captured_count >= _MAX_CAPTURED_NETWORK_PAYLOADS:
-        return False
-    if _NETWORK_PAYLOAD_NOISE_URL_RE.search(lowered_url):
-        return False
-    content_length = coerce_content_length(headers)
-    if content_length is not None and content_length > _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES:
-        return False
-    return True
-
-
-def classify_network_endpoint(*, response_url: str, surface: str) -> dict[str, str]:
-    lowered_url = str(response_url or "").strip().lower()
-    normalized_surface = str(surface or "").strip().lower()
-    family = classify_network_endpoint_family(response_url)
-
-    endpoint_type = "generic_json"
-    if "/graphql" in lowered_url or "graphql?" in lowered_url:
-        endpoint_type = "graphql"
-    elif normalized_surface == "job_detail" and any(
-        token in lowered_url
-        for token in (
-            "/jobs/",
-            "/job_posts/",
-            "/postings/",
-            "/positions/",
-            "/requisition/",
-            "/careers/",
-        )
-    ):
-        endpoint_type = "job_api"
-    elif normalized_surface == "ecommerce_detail" and any(
-        token in lowered_url
-        for token in (
-            "/products/",
-            "/product/",
-            "product.js",
-            "/variants/",
-            "/cart.js",
-        )
-    ):
-        endpoint_type = "product_api"
-    return {"type": endpoint_type, "family": family}
-
-
-async def read_network_payload_body(response) -> NetworkPayloadReadResult:
-    try:
-        body_bytes = await response.body()
-    except Exception as exc:
-        if is_response_closed_error(exc):
-            return NetworkPayloadReadResult(
-                body=None,
-                outcome="response_closed",
-                error=f"{type(exc).__name__}: {exc}",
-            )
-        return NetworkPayloadReadResult(
-            body=None,
-            outcome="read_error",
-            error=f"{type(exc).__name__}: {exc}",
-        )
-    if len(body_bytes) > _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES:
-        return NetworkPayloadReadResult(body=None, outcome="too_large")
-    return NetworkPayloadReadResult(body=body_bytes, outcome="read")
-
-
-def is_response_closed_error(exc: Exception) -> bool:
-    class_name = type(exc).__name__.lower()
-    message = str(exc or "").lower()
-    return (
-        "targetclosed" in class_name
-        or "target closed" in message
-        or "page closed" in message
-        or "browser has been closed" in message
-    )
-
-
 async def expand_all_interactive_elements(
     page: Any,
     *,
@@ -1310,19 +1285,6 @@ async def is_actionable_interactive_handle(handle: Any) -> bool:
     if not isinstance(state, dict):
         return False
     return bool(state.get("actionable"))
-
-
-def coerce_content_length(headers: dict[str, object] | Any) -> int | None:
-    if not headers:
-        return None
-    raw_value = headers.get("content-length")
-    try:
-        parsed = int(str(raw_value or "").strip())
-    except (TypeError, ValueError):
-        return None
-    return max(0, parsed)
-
-
 def classify_browser_outcome(
     *,
     html: str,
@@ -1401,16 +1363,6 @@ def _visible_text_from_soup(soup: BeautifulSoup) -> str:
         if text:
             pieces.append(text)
     return clean_text(" ".join(pieces))
-
-
-async def capture_browser_screenshot(page: Any) -> bytes:
-    try:
-        return await page.screenshot(full_page=True, type="png")
-    except Exception:
-        logger.debug("Browser screenshot capture failed", exc_info=True)
-        return b""
-
-
 def build_failed_browser_diagnostics(
     *,
     browser_reason: str | None,
@@ -1458,7 +1410,11 @@ __all__ = [
     "SharedBrowserRuntime",
     "_BROWSER_PREFERRED_HOSTS",
     "_BROWSER_PREFERRED_HOST_SUCCESSES",
+    "_MAX_CAPTURED_NETWORK_PAYLOADS",
     "_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES",
+    "_NETWORK_CAPTURE_QUEUE_SIZE",
+    "_NETWORK_CAPTURE_WORKERS",
+    "NetworkPayloadReadResult",
     "browser_fetch",
     "browser_runtime_snapshot",
     "build_failed_browser_diagnostics",

@@ -49,7 +49,7 @@ class ADPAdapter(BaseAdapter):
         seen_keys: set[str] = set()
         for card in parser.css(".current-openings-item"):
             title_node = card.css_first("[id^='lblTitle_'], sdf-link, a")
-            title = self._clean_text(
+            title = clean_text(
                 _text(title_node, separator=" ")
             )
             if len(title) < 3:
@@ -73,15 +73,15 @@ class ADPAdapter(BaseAdapter):
             for node in card.css(
                 ".current-opening-location-item span, .current-opening-location-item"
             ):
-                value = self._clean_text(_text(node, separator=" "))
+                value = clean_text(_text(node, separator=" "))
                 if value and value not in location_values:
                     location_values.append(value)
             location = " | ".join(location_values)
             post_elem = card.css_first(".current-opening-post-date")
-            posted = self._clean_text(
+            posted = clean_text(
                 _text(post_elem, separator=" ")
             )
-            more_locations = self._clean_text(
+            more_locations = clean_text(
                 " ".join(
                     _text(node, separator=" ")
                     for node in card.css(
@@ -106,13 +106,13 @@ class ADPAdapter(BaseAdapter):
     def _extract_detail(self, url: str, html: str) -> dict | None:
         parser = LexborHTMLParser(html)
         title_node = parser.css_first("h1, .job-details-title, .job-description-title")
-        title = self._clean_text(
+        title = clean_text(
             _text(title_node, separator=" ")
         )
         if len(title) < 3:
             return None
 
-        body_text = self._clean_text(self._text(parser.body))
+        body_text = clean_text(self._text(parser.body))
         record: dict[str, str] = {
             "title": title,
             "url": url,
@@ -129,7 +129,7 @@ class ADPAdapter(BaseAdapter):
             r"(\d+\+?\s+days?\s+ago)", body_text, flags=re.IGNORECASE
         )
         if posted_match:
-            record["posted_date"] = self._clean_text(posted_match.group(1))
+            record["posted_date"] = clean_text(posted_match.group(1))
 
         requisition_match = re.search(
             r"Requisition\s+ID:\s*([A-Za-z0-9\-_]+)", body_text, flags=re.IGNORECASE
@@ -143,7 +143,7 @@ class ADPAdapter(BaseAdapter):
             flags=re.IGNORECASE,
         )
         if salary_match:
-            record["salary"] = self._clean_text(salary_match.group(1))
+            record["salary"] = clean_text(salary_match.group(1))
 
         description = self._extract_detail_description(body_text)
         if description:
@@ -159,7 +159,7 @@ class ADPAdapter(BaseAdapter):
         for node in parser.css(
             ".current-opening-location-item span, .current-opening-location-item"
         ):
-            value = self._clean_text(_text(node, separator=" "))
+            value = clean_text(_text(node, separator=" "))
             if value and value not in details:
                 details.append(value)
         return " | ".join(details[:4])
@@ -173,7 +173,7 @@ class ADPAdapter(BaseAdapter):
             match = re.search(pattern, body_text, flags=re.IGNORECASE)
             if not match:
                 continue
-            value = self._clean_text(match.group(1))
+            value = clean_text(match.group(1))
             if value and len(value) > 40:
                 return value
         return ""
@@ -219,9 +219,6 @@ class ADPAdapter(BaseAdapter):
             or "requisition id:" in lowered_html
             or "backapply" in lowered_html
         )
-
-    def _clean_text(self, value: str) -> str:
-        return clean_text(value)
 
     def _text(self, node: object, *, separator: str = " ") -> str:
         return _text(node, separator=separator)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,30 @@ def persist_png_artifact(
         f"{_artifact_base_path(run_id=run_id, source_url=source_url).name}.{normalized_suffix}.png"
     )
     artifact_path.write_bytes(bytes(content))
+    return str(artifact_path)
+
+
+def persist_png_artifact_from_file(
+    *,
+    run_id: int,
+    source_url: str,
+    suffix: str,
+    file_path: str | Path,
+) -> str:
+    source = Path(file_path)
+    if not source.is_file():
+        return ""
+    normalized_suffix = str(suffix or "").strip().lower()
+    if not normalized_suffix:
+        return ""
+    artifact_path = _artifact_base_path(run_id=run_id, source_url=source_url).with_name(
+        f"{_artifact_base_path(run_id=run_id, source_url=source_url).name}.{normalized_suffix}.png"
+    )
+    try:
+        source.replace(artifact_path)
+    except OSError:
+        shutil.copyfile(source, artifact_path)
+        source.unlink(missing_ok=True)
     return str(artifact_path)
 
 

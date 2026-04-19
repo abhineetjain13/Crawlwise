@@ -135,6 +135,7 @@ def _apply_dom_fallbacks(
         soup,
         page_url,
         exclude_linked_detail_images=True,
+        surface=surface,
     )
     if images:
         _add_sourced_candidate(
@@ -301,10 +302,20 @@ def _primary_source_for_record(
     record: dict[str, Any],
     selected_field_sources: dict[str, str],
 ) -> str:
-    for source_name in _SOURCE_PRIORITY:
-        for field_name, source in selected_field_sources.items():
-            if field_name in record and source == source_name:
-                return source_name
+    del record
+    selected_sources = [
+        str(source or "").strip()
+        for source in selected_field_sources.values()
+        if str(source or "").strip()
+    ]
+    if selected_sources:
+        return min(
+            selected_sources,
+            key=lambda source_name: _SOURCE_PRIORITY_RANK.get(
+                source_name,
+                len(_SOURCE_PRIORITY_RANK),
+            ),
+        )
     return "structured_dom"
 
 
@@ -334,6 +345,18 @@ def _ordered_candidates_for_field(
     ]
     indexed_entries.sort(key=lambda row: (row[0], row[1]))
     return [(source, value) for _, _, source, value in indexed_entries]
+
+
+def _winning_candidates_for_field(
+    ordered_candidates: list[tuple[str | None, object]],
+) -> tuple[list[object], str | None]:
+    if not ordered_candidates:
+        return [], None
+    winning_source = ordered_candidates[0][0]
+    return (
+        [value for source, value in ordered_candidates if source == winning_source],
+        winning_source,
+    )
 
 
 def _selector_self_heal_config(
@@ -384,16 +407,15 @@ def _materialize_record(
             candidates,
             candidate_sources,
         )
+        winning_values, selected_source = _winning_candidates_for_field(
+            ordered_candidates,
+        )
         finalized = finalize_candidate_value(
             field_name,
-            [value for _, value in ordered_candidates],
+            winning_values,
         )
         if finalized not in (None, "", [], {}):
             record[field_name] = finalized
-            selected_source = next(
-                (source for source, _ in ordered_candidates if source),
-                None,
-            )
             if selected_source:
                 selected_field_sources[field_name] = selected_source
     record["_field_sources"] = {

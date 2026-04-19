@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_runtime import extract_records
 from app.services.selector_self_heal import (
+    _validated_xpath_rules,
     _selector_heal_improved_record,
     reduce_html_for_selector_synthesis,
 )
@@ -87,6 +88,39 @@ def test_extract_records_applies_selector_rules_and_tracks_selector_source() -> 
 
     assert record["description"] == "Built for long mileage."
     assert record["_field_sources"]["description"] == ["dom_selector"]
+
+
+def test_extract_records_keeps_first_match_for_long_text_fields() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget Prime</h1>
+          <div class="product-description">DOM fallback description.</div>
+        </main>
+      </body>
+    </html>
+    """
+    record = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["description"],
+        adapter_records=[{"description": "Adapter description."}],
+        selector_rules=[
+            {
+                "field_name": "description",
+                "css_selector": ".product-description",
+                "is_active": True,
+            }
+        ],
+    )[0]
+
+    assert record["description"] == "Adapter description."
+    assert "adapter" in str(record["_field_sources"]["description"])
+    assert "dom_selector" in str(record["_field_sources"]["description"])
+    assert record["_source"] == "adapter"
 
 
 def test_extract_records_applies_regex_as_post_filter_to_xpath_result() -> None:
@@ -192,3 +226,26 @@ def test_selector_self_heal_requires_field_level_improvement_before_persisting()
         after_record={"title": "Widget Prime", "price": ""},
         target_fields=["price"],
     ) is False
+
+
+def test_selector_self_heal_converts_css_candidates_before_persisting_xpath() -> None:
+    rules = _validated_xpath_rules(
+        html="""
+        <html>
+          <body>
+            <div class="custom-specs">Rubber outsole, reinforced toe cap.</div>
+          </body>
+        </html>
+        """,
+        candidates=[
+            {
+                "field_name": "specifications",
+                "xpath": "div.custom-specs",
+            }
+        ],
+        target_fields=["specifications"],
+    )
+
+    assert len(rules) == 1
+    assert rules[0]["sample_value"] == "Rubber outsole, reinforced toe cap."
+    assert str(rules[0]["xpath"]).startswith("//div")

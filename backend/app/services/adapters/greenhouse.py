@@ -185,18 +185,18 @@ class GreenhouseAdapter(BaseAdapter):
             href = raw_href if isinstance(raw_href, str) else ""
             if href and not href.startswith("http"):
                 href = urljoin(url, href)
-            title = self._clean_text(
+            title = clean_text(
                 title_el.get_text(" ", strip=True) if title_el else ""
             )
             if not title and anchor:
-                title = self._clean_text(anchor.get_text(" ", strip=True))
+                title = clean_text(anchor.get_text(" ", strip=True))
             if not title:
                 continue
             if location_el is None:
                 location_el = opening.select_one(
                     ".body__secondary.body--metadata, .body--metadata, a [class*='location'], a p + p",
                 )
-            location = self._clean_text(
+            location = clean_text(
                 location_el.get_text(" ", strip=True) if location_el else ""
             )
             records.append(
@@ -212,17 +212,17 @@ class GreenhouseAdapter(BaseAdapter):
     def _extract_detail_from_html(self, html: str, url: str) -> dict | None:
         soup = BeautifulSoup(html, _HTML_PARSER)
         title_node = soup.select_one("h1")
-        title = self._clean_text(
+        title = clean_text(
             title_node.get_text(" ", strip=True) if title_node is not None else ""
         )
         if not title:
             return None
         location_node = soup.select_one("[class*='location'], .location")
-        location = self._clean_text(
+        location = clean_text(
             location_node.get_text(" ", strip=True) if location_node is not None else ""
         )
         content_root = soup.select_one("main") or soup
-        description = self._clean_text(content_root.get_text(" ", strip=True))
+        description = clean_text(content_root.get_text(" ", strip=True))
         record = {
             "title": title,
             "url": url,
@@ -238,22 +238,22 @@ class GreenhouseAdapter(BaseAdapter):
         }
 
     def _normalize_detail_record(self, payload: dict, *, page_url: str) -> dict | None:
-        title = self._clean_text(payload.get("title"))
+        title = clean_text(payload.get("title"))
         if not title:
             return None
         location = payload.get("location", {})
         location_name = (
-            self._clean_text(location.get("name"))
+            clean_text(location.get("name"))
             if isinstance(location, dict)
-            else self._clean_text(location)
+            else clean_text(location)
         )
         record = {
             "title": title,
-            "url": self._clean_text(payload.get("absolute_url")) or page_url,
-            "apply_url": self._clean_text(payload.get("absolute_url")) or page_url,
-            "company": self._clean_text(payload.get("company_name")),
+            "url": clean_text(payload.get("absolute_url")) or page_url,
+            "apply_url": clean_text(payload.get("absolute_url")) or page_url,
+            "company": clean_text(payload.get("company_name")),
             "location": location_name or None,
-            "posted_date": self._clean_text(
+            "posted_date": clean_text(
                 payload.get("first_published") or payload.get("updated_at")
             ),
         }
@@ -266,7 +266,7 @@ class GreenhouseAdapter(BaseAdapter):
         if content:
             sections = self._extract_sections_from_html(content)
             record.update(sections)
-            description = self._clean_text(
+            description = clean_text(
                 BeautifulSoup(content, _HTML_PARSER).get_text(" ", strip=True)
             )
             if description:
@@ -283,7 +283,7 @@ class GreenhouseAdapter(BaseAdapter):
         soup = BeautifulSoup(str(html or ""), _HTML_PARSER)
         sections: dict[str, str] = {}
         for heading in list(soup.find_all(["h2", "h3", "strong"])):
-            heading_text = self._clean_text(heading.get_text(" ", strip=True)).lower()
+            heading_text = clean_text(heading.get_text(" ", strip=True)).lower()
             if not heading_text:
                 continue
             values: list[str] = []
@@ -296,7 +296,7 @@ class GreenhouseAdapter(BaseAdapter):
                     if hasattr(sibling, "get_text")
                     else str(sibling)
                 )
-                cleaned = self._clean_text(text)
+                cleaned = clean_text(text)
                 if cleaned:
                     values.append(cleaned)
             value = " ".join(values).strip()
@@ -325,7 +325,7 @@ class GreenhouseAdapter(BaseAdapter):
     def _normalize_pay_range(self, payload: object) -> str:
         if not isinstance(payload, dict):
             return ""
-        currency = self._clean_text(
+        currency = clean_text(
             payload.get("currency_type", {}).get("name")
             if isinstance(payload.get("currency_type"), dict)
             else payload.get("currency_type")
@@ -357,7 +357,7 @@ class GreenhouseAdapter(BaseAdapter):
             return ""
         if isinstance(value, (int, float, Decimal)):
             return str(value)
-        return self._clean_text(str(value))
+        return clean_text(str(value))
 
     def _parse_int(self, value: object) -> int | None:
         text = self._normalize_scalar_text(value)
@@ -371,7 +371,4 @@ class GreenhouseAdapter(BaseAdapter):
     def _extract_job_id(self, url: str) -> str:
         match = re.search(r"/jobs/(\d+)", urlparse(str(url or "")).path)
         query_id = parse_qs(urlparse(str(url or "")).query).get("gh_jid", [""])[0]
-        return self._clean_text(match.group(1) if match else query_id)
-
-    def _clean_text(self, value: object) -> str:
-        return clean_text(value)
+        return clean_text(match.group(1) if match else query_id)

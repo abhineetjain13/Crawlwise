@@ -11,20 +11,11 @@ from html import unescape
 from typing import Any, Protocol
 
 import regex as regex_lib
+from app.services.exceptions import CrawlerConfigurationError
 from app.services.xpath_service import validate_xpath_syntax
 
 HTTP_URL_PREFIXES = ("http://", "https://")
 logger = logging.getLogger(__name__)
-
-
-def _log_for_pytest(level: int, message: str, *args: object) -> None:
-    logger.log(level, message, *args)
-    root_logger = logging.getLogger()
-    if any(
-        type(handler).__name__ == "LogCaptureHandler"
-        for handler in root_logger.handlers
-    ):
-        root_logger.log(level, message, *args)
 
 
 class _SettingsViewLike(Protocol):
@@ -164,15 +155,8 @@ def resolve_traversal_mode(settings: object) -> str | None:
         mode = "load_more"
     if mode in _TRAVERSAL_MODES:
         return mode
-    if advanced_enabled:
-        _log_for_pytest(
-            logging.WARNING,
-            "Unrecognized traversal_mode=%r with advanced_enabled=true; ignoring invalid listing traversal request",
-            mode,
-        )
-        return None
-    _log_for_pytest(logging.WARNING, "Unrecognized traversal_mode=%r; ignoring", mode)
-    return None
+    logger.error("Unrecognized traversal_mode=%r", mode)
+    raise CrawlerConfigurationError(f"Unsupported traversal_mode: {mode}")
 
 
 # Field name normalization

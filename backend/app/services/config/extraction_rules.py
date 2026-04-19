@@ -5,19 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from app.services.config._export_data import load_export_data
-from app.services.config._module_exports import make_getattr, module_dir
-from app.services.config.crawl_runtime import (
-    DYNAMIC_FIELD_NAME_MAX_TOKENS,
-    MAX_CANDIDATES_PER_FIELD,
-)
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.platform_policy import known_ats_domains
 
 _EXPORTS_PATH = Path(__file__).with_name("extraction_rules.exports.json")
-_DYNAMIC_EXPORTS = {
-    "DYNAMIC_FIELD_NAME_MAX_TOKENS": DYNAMIC_FIELD_NAME_MAX_TOKENS,
-    "KNOWN_ATS_PLATFORMS": known_ats_domains,
-    "MAX_CANDIDATES_PER_FIELD": MAX_CANDIDATES_PER_FIELD,
-}
 
 
 @lru_cache(maxsize=1)
@@ -33,40 +24,34 @@ def _acquisition_guard_export(rule_name: str) -> frozenset[object]:
     )
 
 
-_COMPUTED_EXPORTS = {
-    **_DYNAMIC_EXPORTS,
-    "JOB_REDIRECT_SHELL_TITLES": lambda: _acquisition_guard_export(
-        "job_redirect_shell_titles"
-    ),
-    "JOB_REDIRECT_SHELL_CANONICAL_URLS": lambda: _acquisition_guard_export(
-        "job_redirect_shell_canonical_urls"
-    ),
-    "JOB_REDIRECT_SHELL_HEADINGS": lambda: _acquisition_guard_export(
-        "job_redirect_shell_headings"
-    ),
-    "JOB_ERROR_PAGE_TITLES": lambda: _acquisition_guard_export(
-        "job_error_page_titles"
-    ),
-    "JOB_ERROR_PAGE_HEADINGS": lambda: _acquisition_guard_export(
-        "job_error_page_headings"
-    ),
+_STATIC_EXPORTS = {
+    name: value
+    for name, value in _static_exports().items()
+    if not name.startswith("_")
 }
+globals().update(_STATIC_EXPORTS)
+
+DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_tokens
+KNOWN_ATS_PLATFORMS = known_ats_domains
+MAX_CANDIDATES_PER_FIELD = crawler_runtime_settings.max_candidates_per_field
+JOB_REDIRECT_SHELL_TITLES = _acquisition_guard_export("job_redirect_shell_titles")
+JOB_REDIRECT_SHELL_CANONICAL_URLS = _acquisition_guard_export(
+    "job_redirect_shell_canonical_urls"
+)
+JOB_REDIRECT_SHELL_HEADINGS = _acquisition_guard_export("job_redirect_shell_headings")
+JOB_ERROR_PAGE_TITLES = _acquisition_guard_export("job_error_page_titles")
+JOB_ERROR_PAGE_HEADINGS = _acquisition_guard_export("job_error_page_headings")
 
 __all__ = sorted(
     [
-        *(name for name in _static_exports().keys() if not name.startswith("_")),
-        *_COMPUTED_EXPORTS.keys(),
+        *_STATIC_EXPORTS.keys(),
+        "DYNAMIC_FIELD_NAME_MAX_TOKENS",
+        "JOB_ERROR_PAGE_HEADINGS",
+        "JOB_ERROR_PAGE_TITLES",
+        "JOB_REDIRECT_SHELL_CANONICAL_URLS",
+        "JOB_REDIRECT_SHELL_HEADINGS",
+        "JOB_REDIRECT_SHELL_TITLES",
+        "KNOWN_ATS_PLATFORMS",
+        "MAX_CANDIDATES_PER_FIELD",
     ]
 )
-
-__getattr__ = make_getattr(
-    module_globals=globals(),
-    value_exports=_static_exports,
-    dynamic_exports=_COMPUTED_EXPORTS,
-    allow_private=False,
-    cache=True,
-)
-
-
-def __dir__() -> list[str]:
-    return module_dir(globals(), __all__)

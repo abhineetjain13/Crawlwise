@@ -111,3 +111,144 @@ def test_extract_ecommerce_detail_from_array_style_nuxt_payload() -> None:
     assert record["product_id"] == "4242"
     assert record["category"] == "Gadgets"
     assert record["_source"] == "js_state"
+
+
+def test_extract_ecommerce_detail_from_nuxt_payload_with_self_referential_wrapper() -> None:
+    html = """
+    <html>
+      <head>
+        <script id="__NUXT_DATA__" type="application/json">
+          [
+            {"data":1,"meta":2},
+            {"product":3},
+            ["Reactive",2],
+            {"title":4,"vendor":5,"handle":6,"id":7,"product_type":8},
+            "Nuxt Payload Widget",
+            "Acme",
+            "nuxt-payload-widget",
+            4242,
+            "Gadgets"
+          ]
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/nuxt-payload-widget",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Nuxt Payload Widget"
+    assert record["brand"] == "Acme"
+    assert record["handle"] == "nuxt-payload-widget"
+    assert record["_source"] == "js_state"
+
+
+def test_extract_ecommerce_detail_resolves_json_ld_graph_node_references() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@id": "#brand",
+              "@type": "Brand",
+              "name": "Acme"
+            },
+            {
+              "@id": "#offer",
+              "@type": "Offer",
+              "price": "29.99",
+              "priceCurrency": "USD",
+              "availability": "https://schema.org/InStock"
+            },
+            {
+              "@id": "#product",
+              "@type": "Product",
+              "name": "Graph Widget",
+              "brand": {"@id": "#brand"},
+              "offers": {"@id": "#offer"}
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/graph-widget",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Graph Widget"
+    assert record["brand"] == "Acme"
+    assert record["price"] == "29.99"
+    assert record["currency"] == "USD"
+    assert record["availability"] == "in_stock"
+    assert record["_source"] == "json_ld"
+
+
+def test_extract_ecommerce_detail_resolves_top_level_json_ld_array_references() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        [
+          {
+            "@context": "https://schema.org",
+            "@id": "#brand",
+            "@type": "Brand",
+            "name": "Acme"
+          },
+          {
+            "@context": "https://schema.org",
+            "@id": "#offer",
+            "@type": "Offer",
+            "price": "39.99",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+          },
+          {
+            "@context": "https://schema.org",
+            "@id": "#product",
+            "@type": "Product",
+            "name": "Array Widget",
+            "brand": {"@id": "#brand"},
+            "offers": [{"@id": "#offer"}]
+          }
+        ]
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/array-widget",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Array Widget"
+    assert record["brand"] == "Acme"
+    assert record["price"] == "39.99"
+    assert record["currency"] == "USD"
+    assert record["availability"] == "in_stock"
+    assert record["_source"] == "json_ld"

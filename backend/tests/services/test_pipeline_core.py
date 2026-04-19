@@ -6,9 +6,10 @@ from pathlib import Path
 import pytest
 
 from app.services.acquisition_plan import AcquisitionPlan
-from app.services.acquisition.acquirer import AcquisitionResult
+from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
-from app.services.pipeline.core import _process_single_url
+from app.services.pipeline.core import _apply_llm_fallback, _process_single_url
+from app.services.pipeline.persistence import persist_acquisition_artifacts
 from app.services.pipeline.types import URLProcessingConfig
 from app.services.robots_policy import RobotsPolicyResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -236,9 +237,14 @@ async def test_process_single_url_persists_detail_records_after_self_heal_and_ll
     )
     monkeypatch.setattr("app.services.pipeline.core.apply_selector_self_heal", _fake_self_heal)
     monkeypatch.setattr("app.services.pipeline.core._apply_llm_fallback", _fake_llm)
+
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widget-prime.html"
+
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_html_artifact",
-        lambda **kwargs: "artifacts/widget-prime.html",
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
     )
 
     result = await _process_single_url(db_session, run, run.url)
@@ -314,9 +320,13 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
     monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widgets.html"
+
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_html_artifact",
-        lambda **kwargs: "artifacts/widgets.html",
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
     )
 
     result = await _process_single_url(db_session, run, run.url)
@@ -328,6 +338,66 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
     assert result.url_metrics["method"] == "browser"
     assert total == 1
     assert rows[0].data["title"] == "Widget Prime"
+
+
+@pytest.mark.asyncio
+async def test_apply_llm_fallback_re_normalizes_llm_values_before_return(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime?utm_source=mail",
+            "surface": "ecommerce_detail",
+            "settings": {"llm_enabled": True},
+            "additional_fields": ["review_count", "availability"],
+        },
+    )
+
+    async def _fake_extract_missing_fields(*args, **kwargs):
+        del args, kwargs
+        return (
+            {
+                "review_count": "1,234 reviews",
+                "availability": "In Stock",
+                "url": "https://example.com/products/widget-prime?utm_source=mail",
+            },
+            None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_missing_fields",
+        _fake_extract_missing_fields,
+    )
+
+    rows = await _apply_llm_fallback(
+        db_session,
+        run=run,
+        page_url="https://example.com/products/widget-prime?utm_source=mail",
+        html=_detail_html(),
+        records=[
+            {
+                "title": "Widget Prime",
+                "source_url": "https://example.com/products/widget-prime?utm_source=mail",
+                "url": "https://example.com/products/widget-prime?utm_source=mail",
+                "_source": "json_ld",
+                "_field_sources": {"title": ["json_ld"]},
+                "_confidence": {"score": 0.1},
+                "_self_heal": {"enabled": False, "triggered": False},
+            }
+        ],
+    )
+
+    assert rows[0]["review_count"] == 1234
+    assert rows[0]["availability"] == "in_stock"
+    assert rows[0]["url"] == "https://example.com/products/widget-prime"
+    assert rows[0]["source_url"] == "https://example.com/products/widget-prime"
+    assert rows[0]["_field_sources"]["review_count"] == ["llm_missing_field_extraction"]
+    assert rows[0]["_self_heal"]["mode"] == "missing_field_extraction"
 
 
 @pytest.mark.asyncio
@@ -389,9 +459,13 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
             }
         ],
     )
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widget-prime.html"
+
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_html_artifact",
-        lambda **kwargs: "artifacts/widget-prime.html",
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
     )
 
     result = await _process_single_url(db_session, run, run.url)
@@ -420,6 +494,8 @@ async def test_process_single_url_persists_browser_diagnostics_and_screenshot_ar
         },
     )
     artifacts_dir = tmp_path / "artifacts"
+    staged_screenshot = tmp_path / "browser-screenshot.png"
+    staged_screenshot.write_bytes(b"fake-png")
     monkeypatch.setattr("app.services.artifact_store.settings.artifacts_dir", artifacts_dir)
 
     async def _fake_acquire(request):
@@ -438,7 +514,7 @@ async def test_process_single_url_persists_browser_diagnostics_and_screenshot_ar
                 "phase_timings_ms": {"navigation": 1200},
                 "challenge_evidence": ["captcha", "datadome"],
             },
-            artifacts={"browser_screenshot_png": b"fake-png"},
+            artifacts={"browser_screenshot_path": str(staged_screenshot)},
         )
 
     async def _no_adapter(*args, **kwargs):
@@ -462,12 +538,46 @@ async def test_process_single_url_persists_browser_diagnostics_and_screenshot_ar
 
     assert len(diagnostics_files) == 1
     assert len(screenshot_files) == 1
+    assert not staged_screenshot.exists()
 
     diagnostics_payload = json.loads(diagnostics_files[0].read_text(encoding="utf-8"))
     assert diagnostics_payload["browser_outcome"] == "challenge_page"
     assert diagnostics_payload["browser_reason"] == "http-escalation"
     assert diagnostics_payload["artifact_paths"]["html"].endswith(".html")
     assert diagnostics_payload["artifact_paths"]["screenshot"].endswith(".png")
+
+
+@pytest.mark.asyncio
+async def test_persist_acquisition_artifacts_treats_none_artifacts_as_empty_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr("app.services.artifact_store.settings.artifacts_dir", artifacts_dir)
+
+    acquisition_result = AcquisitionResult(
+        request=AcquisitionRequest(
+            run_id=7,
+            url="https://example.com/products/widget-prime",
+            plan=AcquisitionPlan(surface="ecommerce_detail"),
+        ),
+        final_url="https://example.com/products/widget-prime",
+        html="<html><body>Widget Prime</body></html>",
+        method="browser",
+        status_code=200,
+        browser_diagnostics={"browser_attempted": True},
+        artifacts=None,
+    )
+
+    raw_html_path = await persist_acquisition_artifacts(
+        run_id=7,
+        acquisition_result=acquisition_result,
+        browser_attempted=True,
+        screenshot_required=True,
+    )
+
+    assert raw_html_path.endswith(".html")
+    assert acquisition_result.browser_diagnostics["artifact_paths"]["screenshot"] is None
 
 
 @pytest.mark.asyncio
@@ -515,9 +625,13 @@ async def test_process_single_url_does_not_retry_browser_after_empty_browser_acq
     monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widgets.html"
+
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_html_artifact",
-        lambda **kwargs: "artifacts/widgets.html",
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
     )
 
     result = await _process_single_url(db_session, run, run.url)
@@ -572,9 +686,13 @@ async def test_process_single_url_does_not_retry_browser_after_prior_challenge_a
     monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widgets.html"
+
     monkeypatch.setattr(
-        "app.services.pipeline.core.persist_html_artifact",
-        lambda **kwargs: "artifacts/widgets.html",
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
     )
 
     result = await _process_single_url(db_session, run, run.url)
@@ -586,7 +704,7 @@ async def test_process_single_url_does_not_retry_browser_after_prior_challenge_a
 
 
 @pytest.mark.asyncio
-async def test_process_single_url_keeps_browser_retry_failure_metrics_when_final_method_is_http(
+async def test_process_single_url_raises_when_browser_retry_fails(
     db_session: AsyncSession,
     test_user,
     monkeypatch: pytest.MonkeyPatch,
@@ -631,14 +749,18 @@ async def test_process_single_url_keeps_browser_retry_failure_metrics_when_final
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
 
-    result = await _process_single_url(db_session, run, run.url)
+    with pytest.raises(TimeoutError, match="browser retry timed out"):
+        await _process_single_url(db_session, run, run.url)
 
+    logs = await get_run_logs(db_session, run.id)
     artifact_dir = artifacts_dir / "runs" / str(run.id) / "pages"
     diagnostics_files = list(artifact_dir.glob("*.browser.json"))
 
     assert len(acquire_calls) == 2
-    assert result.url_metrics["method"] == "curl_cffi"
-    assert result.url_metrics["browser_attempted"] is True
-    assert result.url_metrics["browser_reason"] == "empty-extraction retry"
-    assert result.url_metrics["browser_outcome"] == "render_timeout"
-    assert len(diagnostics_files) == 1
+    assert [log.message for log in logs] == [
+        "[ROBOTS] Ignoring robots.txt for https://example.com/category/widgets",
+        "[FETCH] Fetching https://example.com/category/widgets",
+        "[EXTRACT] No records via curl_cffi; retrying browser render for https://example.com/category/widgets",
+        "[EXTRACT] Browser retry failed for https://example.com/category/widgets: TimeoutError: browser retry timed out",
+    ]
+    assert len(diagnostics_files) == 0
