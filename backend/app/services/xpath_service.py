@@ -57,36 +57,28 @@ def extract_selector_value(
                 matches = tree.xpath(xpath)
             except etree.XPathError:
                 matches = []
-            value = _coerce_xpath_match(matches[:1])
-            if value is not None:
-                return value, len(matches), xpath
+            values = _coerce_xpath_matches(matches[:12])
+            if values:
+                filtered_values = _apply_regex_filter(regex, values)
+                if filtered_values:
+                    return filtered_values[0], len(filtered_values), xpath
+                if not regex:
+                    return values[0], len(values), xpath
     if css_selector:
         soup = BeautifulSoup(html_text, "html.parser")
         normalized = _normalize_css_selector(css_selector)
         matches = soup.select(normalized) if normalized else []
         if matches:
-            return _node_value(matches[0]), len(matches), css_selector
-    if regex:
-        try:
-            match = regex_lib.search(regex, html_text, regex_lib.DOTALL, timeout=0.05)
-        except TimeoutError:
-            logger.warning(
-                "Timed out while evaluating selector regex",
-                extra={"pattern": regex[:200]},
-            )
-            match = None
-        except regex_lib.error:
-            logger.warning(
-                "Failed to evaluate selector regex", extra={"pattern": regex[:200]}
-            )
-            match = None
-        if match:
-            if match.groups():
-                value = next((group for group in match.groups() if group), None)
-            else:
-                value = match.group(0)
-            if value:
-                return str(value).strip(), 1, regex
+            values = [value for value in (_node_value(node) for node in matches[:12]) if value]
+            filtered_values = _apply_regex_filter(regex, values)
+            if filtered_values:
+                return filtered_values[0], len(filtered_values), css_selector
+            if not regex:
+                return values[0], len(values), css_selector
+    if regex and not xpath and not css_selector:
+        filtered_values = _apply_regex_filter(regex, [html_text])
+        if filtered_values:
+            return filtered_values[0], len(filtered_values), regex
     return None, 0, None
 
 
@@ -180,16 +172,52 @@ def _validate_xpath_policy(xpath: str) -> str | None:
 
 
 def _coerce_xpath_match(results: list[object]) -> str | None:
-    if not results:
-        return None
-    first = results[0]
-    if isinstance(first, str):
-        return first.strip() or None
-    if hasattr(first, "text_content"):
-        text = first.text_content().strip()
-        return text or None
-    text = str(first).strip()
-    return text or None
+    values = _coerce_xpath_matches(results)
+    return values[0] if values else None
+
+
+def _coerce_xpath_matches(results: list[object]) -> list[str]:
+    values: list[str] = []
+    for result in results:
+        if isinstance(result, str):
+            text = result.strip()
+        elif hasattr(result, "text_content"):
+            text = result.text_content().strip()
+        else:
+            text = str(result).strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _apply_regex_filter(pattern: str | None, values: list[str]) -> list[str]:
+    if not pattern:
+        return values
+    filtered: list[str] = []
+    for value in values:
+        try:
+            match = regex_lib.search(pattern, value, regex_lib.DOTALL, timeout=0.05)
+        except TimeoutError:
+            logger.warning(
+                "Timed out while evaluating selector regex",
+                extra={"pattern": pattern[:200]},
+            )
+            return []
+        except regex_lib.error:
+            logger.warning(
+                "Failed to evaluate selector regex", extra={"pattern": pattern[:200]}
+            )
+            return []
+        if not match:
+            continue
+        if match.groups():
+            extracted = next((group for group in match.groups() if group), None)
+        else:
+            extracted = match.group(0)
+        normalized = str(extracted or "").strip()
+        if normalized:
+            filtered.append(normalized)
+    return filtered
 
 
 def _node_value(node: Tag) -> str | None:

@@ -595,6 +595,7 @@ async def _extract_records_for_acquisition(
         network_payloads=acquisition_result.network_payloads,
         selector_rules=selector_rules,
         extraction_runtime_snapshot=context.run.settings_view.extraction_runtime_snapshot(),
+        content_type=acquisition_result.content_type,
     )
     return records, selector_rules
 

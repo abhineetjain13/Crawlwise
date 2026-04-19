@@ -529,6 +529,184 @@ def test_extract_ecommerce_listing_preserves_functional_query_params() -> None:
     assert rows[0]["source_url"] == "https://example.com/collections/widgets?sort=featured"
 
 
+def test_extract_ecommerce_listing_does_not_treat_repeated_testimonials_as_products() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="quote">
+          <span class="text">“The world as we have created it is a process of our thinking.”</span>
+          <span>by <small class="author">Albert Einstein</small></span>
+        </div>
+        <div class="quote">
+          <span class="text">“It is our choices that show what we truly are.”</span>
+          <span>by <small class="author">J.K. Rowling</small></span>
+        </div>
+        <div class="quote">
+          <span class="text">“There are only two ways to live your life.”</span>
+          <span>by <small class="author">Albert Einstein</small></span>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/testimonials",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == []
+
+
+def test_extract_ecommerce_listing_from_embedded_js_assignment_products() -> None:
+    html = """
+    <html>
+      <body>
+        <script>
+          var products = [
+            {
+              "title": "Trail Runner",
+              "url": "/products/trail-runner",
+              "price": "109.95"
+            },
+            {
+              "title": "Commuter Backpack",
+              "url": "/products/commuter-backpack",
+              "price": "89.50"
+            }
+          ];
+        </script>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://store.example.com/collections/featured",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["title"] == "Trail Runner"
+    assert rows[0]["url"] == "https://store.example.com/products/trail-runner"
+    assert rows[0]["_source"] == "structured_listing"
+
+
+def test_extract_records_emits_raw_json_array_items() -> None:
+    raw_json = """
+    [
+      {"id": 1, "title": "Fjallraven Backpack", "price": 109.95, "description": "Travel pack"},
+      {"id": 2, "title": "Mens Casual Tee", "price": 22.3, "description": "Cotton tee"}
+    ]
+    """
+
+    rows = extract_records(
+        raw_json,
+        "https://fakestoreapi.com/products",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/json; charset=utf-8",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["title"] == "Fjallraven Backpack"
+    assert rows[0]["price"] == "109.95"
+    assert rows[0]["_source"] == "raw_json"
+
+
+def test_extract_records_emits_nested_raw_json_list_items() -> None:
+    raw_json = """
+    {
+      "products": [
+        {"id": 1, "title": "Essence Mascara Lash Princess", "description": "Popular mascara", "price": 9.99, "brand": "Essence"},
+        {"id": 2, "title": "Eyeshadow Palette", "description": "Neutral tones", "price": 19.99, "brand": "Glamour"}
+      ],
+      "total": 2
+    }
+    """
+
+    rows = extract_records(
+        raw_json,
+        "https://dummyjson.com/products",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/json; charset=utf-8",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["title"] == "Essence Mascara Lash Princess"
+    assert rows[0]["description"] == "Popular mascara"
+    assert rows[0]["brand"] == "Essence"
+
+
+def test_extract_records_emits_nested_graphql_listing_items() -> None:
+    raw_json = """
+    {
+      "data": {
+        "search": {
+          "edges": [
+            {
+              "node": {
+                "id": "sku-1",
+                "title": "Trail Runner",
+                "url": "/products/trail-runner",
+                "price": "109.95"
+              }
+            },
+            {
+              "node": {
+                "id": "sku-2",
+                "title": "Commuter Backpack",
+                "url": "/products/commuter-backpack",
+                "price": "89.50"
+              }
+            }
+          ]
+        }
+      }
+    }
+    """
+
+    rows = extract_records(
+        raw_json,
+        "https://store.example.com/api/search",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/json; charset=utf-8",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["title"] == "Trail Runner"
+    assert rows[1]["url"] == "https://store.example.com/products/commuter-backpack"
+
+
+def test_extract_records_does_not_synthesize_listing_from_nested_json_without_items() -> None:
+    raw_json = """
+    {
+      "data": {
+        "search": {
+          "summary": {
+            "title": "Featured products",
+            "description": "Top picks for spring"
+          }
+        }
+      }
+    }
+    """
+
+    rows = extract_records(
+        raw_json,
+        "https://store.example.com/api/search",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/json; charset=utf-8",
+    )
+
+    assert rows == []
+
+
 def test_extract_detail_keeps_dom_stage_for_high_scoring_js_state_when_long_text_missing() -> None:
     html = """
     <html>

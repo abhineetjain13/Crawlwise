@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 import logging
+import time
 from urllib.parse import urljoin, urlsplit
 
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -127,9 +128,15 @@ async def execute_listing_traversal(
     traversal_mode: str,
     max_pages: int,
     max_scrolls: int,
+    timeout_seconds: float | None = None,
 ) -> TraversalResult:
     normalized_mode = str(traversal_mode or "").strip().lower()
     result = TraversalResult(requested_mode=normalized_mode)
+    deadline_at = (
+        time.monotonic() + float(timeout_seconds)
+        if timeout_seconds is not None and float(timeout_seconds) > 0
+        else None
+    )
     if not should_run_traversal(surface, normalized_mode):
         _set_stop_reason(result, "not_listing_or_disabled", surface=surface, traversal_mode=normalized_mode)
         result.html_fragments = [(await page.content(), True)]
@@ -154,6 +161,7 @@ async def execute_listing_traversal(
             surface=surface,
             max_scrolls=max_scrolls,
             result=result,
+            deadline_at=deadline_at,
         )
     elif selected_mode == "load_more":
         await _run_load_more_traversal(
@@ -161,6 +169,7 @@ async def execute_listing_traversal(
             surface=surface,
             max_clicks=max(1, int(max_pages)),
             result=result,
+            deadline_at=deadline_at,
         )
     elif selected_mode == "paginate":
         await _run_paginate_traversal(
@@ -168,6 +177,7 @@ async def execute_listing_traversal(
             surface=surface,
             max_pages=max_pages,
             result=result,
+            deadline_at=deadline_at,
         )
     else:
         _set_stop_reason(result, "unsupported_mode", surface=surface, traversal_mode=normalized_mode)
@@ -178,11 +188,29 @@ async def execute_listing_traversal(
 
 
 async def _detect_auto_mode(page, *, surface: str) -> str | None:
-    if await _find_actionable_locator(page, "next_page") is not None:
-        return "paginate"
     if await _find_actionable_locator(page, "load_more") is not None:
         return "load_more"
-    if await _has_scroll_signals(page, surface=surface):
+    scroll_signals = await _has_scroll_signals(page, surface=surface)
+    next_page_locator = await _find_actionable_locator(page, "next_page")
+    if scroll_signals:
+        if next_page_locator is None:
+            return "scroll"
+        href = ""
+        try:
+            href = str(await next_page_locator.get_attribute("href") or "").strip().lower()
+        except Exception:
+            logger.debug("Traversal next_page href inspection failed", exc_info=True)
+        card_count = await _card_count(page, surface=surface)
+        if (
+            not href
+            or href.startswith("#")
+            or href.startswith("javascript:")
+            or card_count >= int(crawler_runtime_settings.listing_min_items)
+        ):
+            return "scroll"
+    if next_page_locator is not None:
+        return "paginate"
+    if scroll_signals:
         return "scroll"
     return None
 
@@ -193,6 +221,7 @@ async def _run_scroll_traversal(
     surface: str,
     max_scrolls: int,
     result: TraversalResult,
+    deadline_at: float | None,
 ) -> None:
     max_iterations = min(
         max(1, int(max_scrolls)),
@@ -202,6 +231,9 @@ async def _run_scroll_traversal(
     await _append_html_fragment(page, result, surface=surface)
     previous = await _page_snapshot(page, surface=surface)
     for _ in range(max_iterations):
+        if _deadline_reached(deadline_at):
+            _set_stop_reason(result, "budget_exceeded", surface=surface)
+            break
         result.iterations += 1
         result.scroll_iterations += 1
         await page.evaluate(
@@ -212,8 +244,15 @@ async def _run_scroll_traversal(
             }
             """
         )
-        await page.wait_for_timeout(int(crawler_runtime_settings.scroll_wait_min_ms))
-        await _settle_after_action(page)
+        wait_ms = _remaining_timeout_ms(
+            deadline_at,
+            int(crawler_runtime_settings.scroll_wait_min_ms),
+        )
+        if wait_ms <= 0:
+            _set_stop_reason(result, "budget_exceeded", surface=surface)
+            break
+        await page.wait_for_timeout(wait_ms)
+        await _settle_after_action(page, deadline_at=deadline_at)
         current = await _page_snapshot(page, surface=surface)
         if _snapshot_progressed(previous, current):
             result.progress_events += 1
@@ -236,6 +275,7 @@ async def _run_load_more_traversal(
     surface: str,
     max_clicks: int,
     result: TraversalResult,
+    deadline_at: float | None,
 ) -> None:
     max_iterations = min(
         max(1, int(max_clicks)),
@@ -244,6 +284,9 @@ async def _run_load_more_traversal(
     await _append_html_fragment(page, result, surface=surface)
     previous = await _page_snapshot(page, surface=surface)
     for _ in range(max_iterations):
+        if _deadline_reached(deadline_at):
+            _set_stop_reason(result, "budget_exceeded", surface=surface)
+            break
         locator = await _find_actionable_locator(page, "load_more")
         if locator is None:
             _set_stop_reason(result, "load_more_not_found", surface=surface)
@@ -252,8 +295,15 @@ async def _run_load_more_traversal(
         result.load_more_clicks += 1
         current_url = page.url
         await locator.click(timeout=1000)
-        await page.wait_for_timeout(int(crawler_runtime_settings.load_more_wait_min_ms))
-        await _wait_for_transition(page, previous_url=current_url)
+        wait_ms = _remaining_timeout_ms(
+            deadline_at,
+            int(crawler_runtime_settings.load_more_wait_min_ms),
+        )
+        if wait_ms <= 0:
+            _set_stop_reason(result, "budget_exceeded", surface=surface)
+            break
+        await page.wait_for_timeout(wait_ms)
+        await _wait_for_transition(page, previous_url=current_url, deadline_at=deadline_at)
         current = await _page_snapshot(page, surface=surface)
         if _snapshot_progressed(previous, current):
             result.progress_events += 1
@@ -274,12 +324,16 @@ async def _run_paginate_traversal(
     surface: str,
     max_pages: int,
     result: TraversalResult,
+    deadline_at: float | None,
 ) -> None:
     previous = await _page_snapshot(page, surface=surface)
     result.card_count = previous["card_count"]
     await _append_html_fragment(page, result, surface=surface)
     page_limit = max(1, int(max_pages))
     for _ in range(max(0, page_limit - 1)):
+        if _deadline_reached(deadline_at):
+            _set_stop_reason(result, "budget_exceeded", surface=surface)
+            break
         locator = await _find_actionable_locator(page, "next_page")
         if locator is None:
             _set_stop_reason(result, "next_page_not_found", surface=surface)
@@ -296,19 +350,31 @@ async def _run_paginate_traversal(
             if not _is_same_origin(current_url, next_url):
                 _set_stop_reason(result, "paginate_off_domain", surface=surface)
                 break
+            goto_timeout_ms = _remaining_timeout_ms(
+                deadline_at,
+                int(crawler_runtime_settings.pagination_navigation_timeout_ms),
+            )
+            if goto_timeout_ms <= 0:
+                _set_stop_reason(result, "budget_exceeded", surface=surface)
+                break
             await page.goto(
                 next_url,
                 wait_until="domcontentloaded",
-                timeout=int(crawler_runtime_settings.pagination_navigation_timeout_ms),
+                timeout=goto_timeout_ms,
             )
             await _wait_for_transition(
                 page,
                 previous_url=current_url,
                 navigation_expected=True,
+                deadline_at=deadline_at,
             )
         else:
             await locator.click(timeout=1000)
-            await _wait_for_transition(page, previous_url=current_url)
+            await _wait_for_transition(
+                page,
+                previous_url=current_url,
+                deadline_at=deadline_at,
+            )
         current = await _page_snapshot(page, surface=surface)
         if page.url != current_url or _snapshot_progressed(previous, current):
             await _append_html_fragment(page, result, surface=surface)
@@ -633,19 +699,28 @@ async def _has_scroll_signals(page, *, surface: str) -> bool:
     )
 
 
-async def _settle_after_action(page) -> None:
+async def _settle_after_action(page, *, deadline_at: float | None) -> None:
+    settle_timeout_ms = _remaining_timeout_ms(
+        deadline_at,
+        int(crawler_runtime_settings.pagination_post_click_settle_timeout_ms),
+    )
+    if settle_timeout_ms <= 0:
+        return
     try:
         await page.wait_for_load_state(
             "networkidle",
-            timeout=int(crawler_runtime_settings.pagination_post_click_settle_timeout_ms),
+            timeout=settle_timeout_ms,
         )
     except Exception:
-        await page.wait_for_timeout(
+        wait_ms = _remaining_timeout_ms(
+            deadline_at,
             max(
                 int(crawler_runtime_settings.traversal_min_settle_wait_ms),
                 int(crawler_runtime_settings.pagination_post_click_poll_ms),
-            )
+            ),
         )
+        if wait_ms > 0:
+            await page.wait_for_timeout(wait_ms)
 
 
 async def _wait_for_transition(
@@ -653,13 +728,15 @@ async def _wait_for_transition(
     *,
     previous_url: str,
     navigation_expected: bool = False,
+    deadline_at: float | None = None,
 ) -> None:
     await _wait_for_navigation_if_changed(
         page,
         previous_url=previous_url,
         navigation_expected=navigation_expected,
+        deadline_at=deadline_at,
     )
-    await _settle_after_action(page)
+    await _settle_after_action(page, deadline_at=deadline_at)
 
 
 async def _wait_for_navigation_if_changed(
@@ -667,9 +744,10 @@ async def _wait_for_navigation_if_changed(
     *,
     previous_url: str,
     navigation_expected: bool,
+    deadline_at: float | None,
 ) -> None:
     if navigation_expected or page.url != previous_url:
-        await _wait_for_domcontentloaded(page)
+        await _wait_for_domcontentloaded(page, deadline_at=deadline_at)
         return
     poll_ms = max(1, int(crawler_runtime_settings.pagination_post_click_poll_ms))
     deadline_ms = max(
@@ -678,24 +756,44 @@ async def _wait_for_navigation_if_changed(
     )
     waited_ms = 0
     while waited_ms < deadline_ms:
-        await page.wait_for_timeout(poll_ms)
-        waited_ms += poll_ms
+        step_ms = _remaining_timeout_ms(deadline_at, poll_ms)
+        if step_ms <= 0:
+            return
+        await page.wait_for_timeout(step_ms)
+        waited_ms += step_ms
         if page.url != previous_url:
-            await _wait_for_domcontentloaded(page)
+            await _wait_for_domcontentloaded(page, deadline_at=deadline_at)
             return
 
 
-async def _wait_for_domcontentloaded(page) -> None:
+async def _wait_for_domcontentloaded(page, *, deadline_at: float | None) -> None:
+    timeout_ms = _remaining_timeout_ms(
+        deadline_at,
+        int(crawler_runtime_settings.pagination_post_click_domcontentloaded_timeout_ms),
+    )
+    if timeout_ms <= 0:
+        return
     try:
         await page.wait_for_load_state(
             "domcontentloaded",
-            timeout=int(
-                crawler_runtime_settings.pagination_post_click_domcontentloaded_timeout_ms
-            ),
+            timeout=timeout_ms,
         )
     except Exception:
         logger.debug("Traversal domcontentloaded wait failed", exc_info=True)
         return
+
+
+def _deadline_reached(deadline_at: float | None) -> bool:
+    return deadline_at is not None and time.monotonic() >= deadline_at
+
+
+def _remaining_timeout_ms(deadline_at: float | None, default_ms: int) -> int:
+    if deadline_at is None:
+        return max(1, int(default_ms))
+    remaining_ms = int((deadline_at - time.monotonic()) * 1000)
+    if remaining_ms <= 0:
+        return 0
+    return max(1, min(int(default_ms), remaining_ms))
 
 
 def _is_same_origin(current_url: str, next_url: str) -> bool:

@@ -8,8 +8,13 @@ from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.confidence import score_record_confidence
-from app.services.config.extraction_rules import EXTRACTION_RULES, NOISE_CONTAINER_REMOVAL_SELECTOR
+from app.services.config.extraction_rules import EXTRACTION_RULES
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.extraction_context import (
+    collect_js_state_objects,
+    collect_structured_source_payloads,
+    prepare_extraction_context,
+)
 from app.services.field_value_utils import (
     PRICE_RE,
     RATING_RE,
@@ -30,13 +35,6 @@ from app.services.field_value_utils import (
 )
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
-from app.services.structured_sources import (
-    harvest_js_state_objects,
-    parse_embedded_json,
-    parse_json_ld,
-    parse_microdata,
-    parse_opengraph,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -74,25 +72,6 @@ _DOM_OPTIONAL_CUE_FIELDS: dict[str, frozenset[str]] = {
     "ecommerce_detail": frozenset({"features", "materials", "care", "dimensions"}),
     "job_detail": frozenset({"benefits", "skills", "requirements"}),
 }
-
-
-def _prepare_detail_dom(html: str) -> tuple[LexborHTMLParser, str]:
-    parser = LexborHTMLParser(html)
-    try:
-        for node in parser.css(NOISE_CONTAINER_REMOVAL_SELECTOR):
-            tag = str(getattr(node, "tag", "") or "").strip().lower()
-            if tag in {"html", "body"}:
-                continue
-            node.decompose()
-    except Exception as exc:
-        logger.debug(
-            "noise_removal_failed selector=%s error=%s",
-            NOISE_CONTAINER_REMOVAL_SELECTOR,
-            exc,
-        )
-    return parser, parser.html
-
-
 def _apply_dom_fallbacks(
     dom_parser: LexborHTMLParser,
     soup: BeautifulSoup,
@@ -538,8 +517,9 @@ def build_detail_record(
     selector_rules: list[dict[str, object]] | None = None,
     extraction_runtime_snapshot: dict[str, object] | None = None,
 ) -> dict[str, Any]:
-    dom_parser, cleaned_html = _prepare_detail_dom(html)
-    soup = BeautifulSoup(cleaned_html, "html.parser")
+    context = prepare_extraction_context(html)
+    dom_parser = context.dom_parser
+    soup = context.soup
     alias_lookup = surface_alias_lookup(surface, requested_fields)
     candidates: dict[str, list[object]] = {}
     candidate_sources: dict[str, list[str]] = {}
@@ -576,13 +556,13 @@ def build_detail_record(
             )
 
     def _collect_structured_stage() -> None:
-        structured_sources = (
-            ("json_ld", parse_json_ld(soup)),
-            ("microdata", parse_microdata(soup, html, page_url)),
-            ("opengraph", parse_opengraph(soup, html, page_url)),
-            ("embedded_json", parse_embedded_json(soup, html)),
+        structured_sources = collect_structured_source_payloads(
+            context,
+            page_url=page_url,
         )
         for source_name, payloads in structured_sources:
+            if source_name == "js_state":
+                continue
             for payload in payloads:
                 _collect_structured_payload_candidates(
                     payload,
@@ -596,7 +576,7 @@ def build_detail_record(
 
     def _collect_js_state_stage() -> None:
         mapped_js_fields = map_js_state_to_fields(
-            harvest_js_state_objects(soup, html),
+            collect_js_state_objects(context),
             surface=surface,
             page_url=page_url,
         )

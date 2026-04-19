@@ -251,9 +251,16 @@ def should_escalate_to_browser(
         return True
     analysis = _analyze_html(result.html)
     has_detail_signals = _has_extractable_detail_signals(result.html, analysis=analysis)
+    has_listing_signals = _has_extractable_listing_signals(result.html, analysis=analysis)
     if _looks_like_js_shell(result.html, analysis=analysis) and not has_detail_signals:
         return True
     if "detail" in str(surface or "").lower() and not has_detail_signals:
+        return True
+    if (
+        "listing" in str(surface or "").lower()
+        and not has_listing_signals
+        and _looks_like_listing_shell(result, analysis=analysis)
+    ):
         return True
     return False
 
@@ -446,6 +453,78 @@ def _has_extractable_detail_signals(
             "window.__remixcontext",
             "__next_data__",
             "__nuxt__",
+        )
+    )
+
+
+def _has_extractable_listing_signals(
+    html: str,
+    *,
+    analysis: HtmlAnalysis | None = None,
+) -> bool:
+    parsed = analysis or _analyze_html(html)
+    if not parsed.html:
+        return False
+    for payload in parse_json_ld(parsed.soup):
+        if not isinstance(payload, dict):
+            continue
+        raw_type = payload.get("@type")
+        normalized_type = (
+            " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+        ).lower()
+        if any(token in normalized_type for token in ("itemlist", "product", "jobposting")):
+            return True
+    detail_like_anchor_count = 0
+    for anchor in parsed.soup.find_all("a", href=True):
+        href = str(anchor.get("href") or "").strip().lower()
+        if any(
+            marker in href
+            for marker in (
+                "/products/",
+                "/product/",
+                "/p/",
+                "/dp/",
+                "/item/",
+                "/job/",
+                "/jobs/",
+                "/viewjob",
+                "showjob=",
+            )
+        ):
+            detail_like_anchor_count += 1
+            if detail_like_anchor_count >= 3:
+                return True
+    return False
+
+
+def _looks_like_listing_shell(
+    result: PageFetchResult,
+    *,
+    analysis: HtmlAnalysis | None = None,
+) -> bool:
+    parsed = analysis or _analyze_html(result.html)
+    lowered_surface = str(result.final_url or result.url or "").strip().lower()
+    lowered_html = parsed.lowered_html
+    if "#/" in lowered_surface:
+        return True
+    if int(result.status_code or 0) == 202:
+        return True
+    root = parsed.soup.find(id=re.compile(r"root|app|__next", re.I))
+    script_count = len(parsed.soup.find_all("script"))
+    if len(parsed.visible_text) > 400:
+        return False
+    if root is None and script_count < 3:
+        return False
+    return any(
+        token in lowered_html
+        for token in (
+            "__next_data__",
+            "__nuxt__",
+            "ng-version",
+            "data-reactroot",
+            "data-react-class",
+            "application/json",
+            "application/ld+json",
         )
     )
 

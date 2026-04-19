@@ -126,6 +126,130 @@ def test_listing_extractor_does_not_remove_body_for_sidebar_layouts() -> None:
     ]
 
 
+def test_listing_extractor_preserves_faceted_grid_results() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="faceted-grid">
+          <ul class="rc-listing-grid">
+            <li class="rc-listing-grid__item">
+              <article class="product-card">
+                <a href="/item/alpha-strat">
+                  <h2 class="product-title">Alpha Strat</h2>
+                </a>
+                <div class="price">$1,299.00</div>
+              </article>
+            </li>
+          </ul>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://reverb.com/marketplace?product_type=electric-guitars",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://reverb.com/marketplace?product_type=electric-guitars",
+            "_source": "dom_listing",
+            "title": "Alpha Strat",
+            "price": "1299.00",
+            "url": "https://reverb.com/item/alpha-strat",
+        }
+    ]
+
+
+def test_detail_extractor_ignores_js_state_inside_removed_noise_containers() -> None:
+    html = """
+    <html>
+      <body>
+        <aside>
+          <script type="application/json" id="__NEXT_DATA__">
+          {
+            "props": {
+              "pageProps": {
+                "product": {
+                  "title": "Noise Widget",
+                  "price": "999.99",
+                  "description": "Sidebar state that should be ignored."
+                }
+              }
+            }
+          }
+          </script>
+        </aside>
+        <main>
+          <h1>Widget Prime</h1>
+          <div class="price">$19.99</div>
+          <p>Built from the primary content area.</p>
+        </main>
+      </body>
+    </html>
+    """
+
+    record = build_detail_record(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        ["title", "price", "description"],
+    )
+
+    assert record["title"] == "Widget Prime"
+    assert record["price"] == "19.99"
+    assert record["_source"] != "js_state"
+
+
+def test_listing_extractor_ignores_structured_payloads_inside_removed_noise_containers() -> None:
+    html = """
+    <html>
+      <body>
+        <aside>
+          <script type="application/json">
+          {
+            "@type": "Product",
+            "name": "Noise Widget",
+            "url": "/products/noise-widget",
+            "offers": {
+              "price": "999.99"
+            }
+          }
+          </script>
+        </aside>
+        <main>
+          <article class="product-card">
+            <a href="/products/widget-prime">
+              <h2>Widget Prime</h2>
+            </a>
+            <div class="price">$19.99</div>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/collections/widgets",
+            "_source": "dom_listing",
+            "title": "Widget Prime",
+            "price": "19.99",
+            "url": "https://example.com/products/widget-prime",
+        }
+    ]
+
+
 def test_detail_extractor_normalizes_category_objects_from_network_payloads() -> None:
     record = build_detail_record(
         "<html><body><h1>Combination Pliers</h1></body></html>",
@@ -222,6 +346,27 @@ def test_xpath_selector_extraction_remains_unchanged() -> None:
     assert value == "$150,000"
     assert count == 1
     assert selector_used == "//span[@data-testid='salary']/text()"
+
+
+def test_xpath_selector_extraction_applies_regex_to_xpath_result() -> None:
+    html = """
+    <html>
+      <body>
+        <span class="rating">star-rating Three</span>
+        <script>var unrelated = "star-rating Five";</script>
+      </body>
+    </html>
+    """
+
+    value, count, selector_used = extract_selector_value(
+        html,
+        xpath="//span[@class='rating']/text()",
+        regex=r"star-rating\s+(\w+)",
+    )
+
+    assert value == "Three"
+    assert count == 1
+    assert selector_used == "//span[@class='rating']/text()"
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import logging
 from typing import Any
 
@@ -14,9 +13,12 @@ from app.services.config.extraction_rules import (
     LISTING_MERCHANDISING_TITLE_PREFIXES,
     LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_WEAK_TITLES,
-    NOISE_CONTAINER_REMOVAL_SELECTOR,
 )
 from app.services.config.selectors import CARD_SELECTORS
+from app.services.extraction_context import (
+    collect_structured_source_payloads,
+    prepare_extraction_context,
+)
 from app.services.field_policy import normalize_requested_field
 from app.services.field_value_utils import (
     JOB_URL_HINTS,
@@ -40,29 +42,9 @@ from app.services.field_value_utils import (
     surface_alias_lookup,
     surface_fields,
 )
-from app.services.structured_sources import (
-    harvest_js_state_objects,
-    parse_embedded_json,
-    parse_json_ld,
-    parse_microdata,
-    parse_opengraph,
-)
 from app.services.pipeline.pipeline_config import LISTING_FALLBACK_FRAGMENT_LIMIT
 
 logger = logging.getLogger(__name__)
-
-
-def _prepare_listing_dom(html: str) -> tuple[LexborHTMLParser, str]:
-    parser = LexborHTMLParser(html)
-    try:
-        for node in parser.css(NOISE_CONTAINER_REMOVAL_SELECTOR):
-            tag = str(getattr(node, "tag", "") or "").strip().lower()
-            if tag in {"html", "body"}:
-                continue
-            node.decompose()
-    except Exception:
-        logger.debug("listing_noise_removal_failed", exc_info=True)
-    return parser, parser.html
 
 
 def _structured_listing_record(
@@ -84,9 +66,27 @@ def _structured_listing_record(
     preferred_title = coerce_text(payload.get("name") or payload.get("title"))
     if preferred_title:
         record["title"] = preferred_title
+    if not record.get("url"):
+        fallback_url = _structured_listing_url(payload, page_url)
+        if fallback_url:
+            record["url"] = fallback_url
     if not record.get("url") or not record.get("title"):
         return {}
     return finalize_record(record, surface=surface)
+
+
+def _structured_listing_url(payload: dict[str, Any], page_url: str) -> str | None:
+    for key in ("url", "link", "href"):
+        resolved = absolute_url(page_url, payload.get(key))
+        if resolved:
+            return resolved
+    author = payload.get("author")
+    if isinstance(author, dict):
+        for key in ("url", "link", "href"):
+            resolved = absolute_url(page_url, author.get(key))
+            if resolved:
+                return resolved
+    return None
 
 
 def _extract_structured_listing(
@@ -99,20 +99,7 @@ def _extract_structured_listing(
     records: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     for payload in payloads:
-        raw_type = payload.get("@type")
-        normalized_type = " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
-        normalized_type = normalized_type.lower()
-        items: list[dict[str, Any]] = []
-        if "itemlist" in normalized_type:
-            for item in payload.get("itemListElement") or []:
-                entry = item.get("item") if isinstance(item, dict) else None
-                if isinstance(entry, dict):
-                    items.append(entry)
-                elif isinstance(item, dict):
-                    items.append(item)
-        elif any(token in normalized_type for token in ("product", "jobposting")):
-            items.append(payload)
-        for item in items:
+        for item in _structured_listing_items(payload):
             record = _structured_listing_record(item, page_url, surface)
             url = str(record.get("url") or "")
             if not url or url in seen_urls or url == page_url:
@@ -122,6 +109,81 @@ def _extract_structured_listing(
             if len(records) >= max_records:
                 return records
     return records
+
+
+def _structured_listing_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for candidate in _listing_payload_candidates(payload):
+        if not isinstance(candidate, dict):
+            continue
+        raw_type = candidate.get("@type")
+        normalized_type = (
+            " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+        ).lower()
+        if "itemlist" in normalized_type:
+            for item in candidate.get("itemListElement") or []:
+                entry = item.get("item") if isinstance(item, dict) else None
+                if isinstance(entry, dict):
+                    items.append(entry)
+                elif isinstance(item, dict):
+                    items.append(item)
+        elif any(token in normalized_type for token in ("product", "jobposting")):
+            items.append(candidate)
+        elif _looks_like_untyped_listing_payload(candidate):
+            items.append(candidate)
+    return items
+
+
+def _listing_payload_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = [payload]
+    main_entity = payload.get("mainEntity")
+    if isinstance(main_entity, dict):
+        candidates.append(main_entity)
+    elif isinstance(main_entity, list):
+        candidates.extend(item for item in main_entity if isinstance(item, dict))
+    return candidates
+
+
+def _allow_embedded_json_listing_payloads(payloads: list[dict[str, Any]]) -> bool:
+    if len(payloads) >= 2:
+        return True
+    for payload in payloads:
+        raw_type = payload.get("@type")
+        normalized_type = (
+            " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+        ).lower()
+        if "itemlist" in normalized_type:
+            return True
+        if isinstance(payload.get("itemListElement"), list) and payload.get("itemListElement"):
+            return True
+        main_entity = payload.get("mainEntity")
+        if not isinstance(main_entity, dict):
+            continue
+        main_entity_type = main_entity.get("@type")
+        normalized_main_entity_type = (
+            " ".join(main_entity_type)
+            if isinstance(main_entity_type, list)
+            else str(main_entity_type or "")
+        ).lower()
+        if "itemlist" in normalized_main_entity_type:
+            return True
+        if isinstance(main_entity.get("itemListElement"), list) and main_entity.get("itemListElement"):
+            return True
+    return False
+
+
+def _looks_like_untyped_listing_payload(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    has_title = bool(coerce_text(payload.get("name") or payload.get("title")))
+    if not has_title:
+        return False
+    if any(payload.get(key) for key in ("url", "link", "href")):
+        return True
+    author = payload.get("author")
+    if isinstance(author, dict) and any(author.get(key) for key in ("url", "link", "href")):
+        return True
+    return bool(payload.get("price") or payload.get("offers"))
 
 
 def _listing_title_is_noise(title: str) -> bool:
@@ -260,7 +322,10 @@ def _listing_record_from_card(
         review_match = REVIEW_COUNT_RE.search(card_text)
         if review_match:
             add_candidate(candidates, "review_count", review_match.group(1))
-    record: dict[str, Any] = {"source_url": page_url, "_source": "dom_listing"}
+    record: dict[str, Any] = {
+        "source_url": page_url,
+        "_source": "dom_listing",
+    }
     for field_name in surface_fields(surface, None):
         finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
         if finalized not in (None, "", [], {}):
@@ -279,23 +344,25 @@ def extract_listing_records(
     max_records: int,
     selector_rules: list[dict[str, object]] | None = None,
 ) -> list[dict[str, Any]]:
-    dom_parser, cleaned_html = _prepare_listing_dom(html)
-    soup = BeautifulSoup(cleaned_html, "html.parser")
-    js_state_payloads = [
-        payload
-        for payload in harvest_js_state_objects(soup, cleaned_html).values()
-        if isinstance(payload, dict)
-    ]
+    context = prepare_extraction_context(html)
+    dom_parser = context.dom_parser
 
     def _structured_stage() -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        for source_name, source_payloads in collect_structured_source_payloads(
+            context,
+            page_url=page_url,
+        ):
+            if source_name == "js_state":
+                continue
+            payload_list = list(source_payloads)
+            if source_name == "embedded_json" and not _allow_embedded_json_listing_payloads(
+                payload_list
+            ):
+                continue
+            payloads.extend(payload_list)
         return _extract_structured_listing(
-            [
-                *parse_json_ld(soup),
-                *parse_microdata(soup, cleaned_html, page_url),
-                *parse_opengraph(soup, cleaned_html, page_url),
-                *parse_embedded_json(soup, cleaned_html),
-                *js_state_payloads,
-            ],
+            payloads,
             page_url,
             surface,
             max_records=max_records,

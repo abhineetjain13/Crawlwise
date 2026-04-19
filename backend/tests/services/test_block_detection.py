@@ -39,7 +39,7 @@ def test_is_blocked_html_does_not_block_on_provider_marker_alone() -> None:
     html = """
     <html>
       <head>
-        <script src="https://cdn.example.com/datadome.js"></script>
+        <meta name="provider" content="datadome" />
         <title>Widget Prime</title>
       </head>
       <body>

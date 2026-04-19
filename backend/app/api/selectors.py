@@ -24,7 +24,7 @@ from app.services.selectors_runtime import (
     test_selector,
     update_selector_record,
 )
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,7 +97,7 @@ async def selectors_delete_domain(
     domain: str,
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
-    surface: str | None = Query(default=None),
+    surface: str | None = None,
 ) -> dict[str, int]:
     deleted = await delete_domain_selector_records(
         session,
@@ -139,7 +139,7 @@ async def selectors_test(
 @router.get("/preview-html", response_class=HTMLResponse)
 async def selectors_preview_html(
     _: Annotated[User, Depends(get_current_user)],
-    url: str = Query(...),
+    url: str,
 ) -> HTMLResponse:
     document = await fetch_selector_document(url)
     return HTMLResponse(

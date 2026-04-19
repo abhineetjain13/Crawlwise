@@ -18,11 +18,10 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.services.acquisition import (
+from app.services.acquisition.acquirer import (
     AcquisitionRequest,
     acquire,
 )
-from app.services.acquisition.runtime import is_blocked_html
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter
 from app.services.extraction_runtime import extract_records
@@ -58,11 +57,6 @@ async def _run_one(site: dict[str, str], run_id: int, timeout_seconds: int) -> d
             ),
             timeout=timeout_seconds,
         )
-        blocked = (
-            is_blocked_html(acquisition.html or "", acquisition.status_code)
-            if acquisition.content_type.startswith("text/html")
-            else False
-        )
         adapter_result = None
         if acquisition.content_type.startswith("text/html"):
             adapter_result = await run_adapter(url, acquisition.html or "", surface)
@@ -73,6 +67,7 @@ async def _run_one(site: dict[str, str], run_id: int, timeout_seconds: int) -> d
             max_records=50,
             adapter_records=list(adapter_result.records or []) if adapter_result else None,
             network_payloads=acquisition.network_payloads or [],
+            content_type=acquisition.content_type,
         )
         result.update(
             {
@@ -81,7 +76,7 @@ async def _run_one(site: dict[str, str], run_id: int, timeout_seconds: int) -> d
                 "method": acquisition.method,
                 "status_code": acquisition.status_code,
                 "content_type": acquisition.content_type,
-                "blocked": blocked,
+                "blocked": bool(acquisition.blocked),
                 "html_len": len(acquisition.html or ""),
                 "network_payloads": len(acquisition.network_payloads or []),
                 "browser_diagnostics": dict(acquisition.browser_diagnostics or {}),

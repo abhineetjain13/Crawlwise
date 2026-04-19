@@ -197,9 +197,11 @@ async def apply_selector_self_heal(
     existing_rule_count = len(selector_rules_from_memory(memory))
     reduced_html = reduce_html_for_selector_synthesis(html)
 
+    persisted_rules = False
     for record in records:
         next_record = dict(record)
         confidence = _mapping_or_empty(next_record.get("_confidence"))
+        confidence_score = _safe_float(confidence.get("score"), default=1.0)
         requested_missing_fields = [
             field_name
             for field_name in [
@@ -209,10 +211,14 @@ async def apply_selector_self_heal(
             ]
             if next_record.get(field_name) in (None, "", [], {})
         ]
-        if _safe_float(confidence.get("score"), default=1.0) >= threshold:
+        if confidence_score >= threshold:
             updated_records.append(next_record)
             continue
-        if existing_rule_count > 0 and not requested_missing_fields:
+        if (
+            existing_rule_count > 0
+            and not requested_missing_fields
+            and confidence_score >= 0.3
+        ):
             updated_records.append(next_record)
             continue
         target_fields = selector_self_heal_targets(run=run, record=next_record)
@@ -274,6 +280,7 @@ async def apply_selector_self_heal(
                 surface=run.surface,
                 selectors=selector_payload_from_rules(current_rules),
             )
+            persisted_rules = True
         rerun_record["_self_heal"] = {
             "enabled": True,
             "triggered": True,
@@ -290,7 +297,8 @@ async def apply_selector_self_heal(
         updated_records.append(rerun_record)
         if improved:
             existing_rule_count += len(synthesized_rules)
-    await session.flush()
+    if persisted_rules:
+        await session.flush()
     return updated_records, current_rules
 
 

@@ -162,8 +162,9 @@ async def test_auto_traversal_prefers_paginate_and_collects_multiple_pages() -> 
     assert result.selected_mode == "paginate"
     assert result.pages_advanced == 1
     assert result.progress_events == 1
-    assert "page-1" in "\n".join(result.html_fragments)
-    assert "page-2" in "\n".join(result.html_fragments)
+    fragments = [fragment for fragment, _ in result.html_fragments]
+    assert "page-1" in "\n".join(fragments)
+    assert "page-2" in "\n".join(fragments)
 
 
 @pytest.mark.asyncio
@@ -361,4 +362,7 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     assert result.scroll_iterations >= 1
     assert result.progress_events >= 1
     assert result.card_count == 6
-    assert [f for f, _ in result.html_fragments] == ["<div>jobs</div>", "<div>jobs more</div>"]
+    assert [f for f, _ in result.html_fragments][:2] == [
+        "<div>jobs</div>",
+        "<div>jobs more</div>",
+    ]

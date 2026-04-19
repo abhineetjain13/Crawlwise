@@ -50,3 +50,23 @@ def test_classify_failure_mode_flags_missing_adapter_registration() -> None:
     }
 
     assert classify_failure_mode(result) == "adapter_not_matched"
+
+
+def test_classify_failure_mode_treats_browser_challenge_diagnostics_as_blocked() -> None:
+    result = {
+        "ok": False,
+        "blocked": False,
+        "browser_diagnostics": {
+            "browser_outcome": "usable_content",
+            "challenge_evidence": [
+                "strong:captcha",
+                "provider:cloudflare",
+            ],
+            "challenge_provider_hits": ["cloudflare"],
+        },
+        "surface": "ecommerce_listing",
+        "records": 0,
+        "adapter_records": 0,
+    }
+
+    assert classify_failure_mode(result) == "blocked"

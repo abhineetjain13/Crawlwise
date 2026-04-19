@@ -245,6 +245,39 @@ def extract_regex_values(
     return values
 
 
+def filter_values_by_regex(
+    values: list[object],
+    pattern: str,
+    field_name: str,
+    page_url: str,
+) -> list[object]:
+    filtered: list[object] = []
+    try:
+        for candidate in values:
+            match = regex_lib.search(
+                pattern,
+                str(candidate),
+                regex_lib.DOTALL,
+                timeout=0.05,
+            )
+            if not match:
+                continue
+            raw_value = next((group for group in match.groups() if group), None)
+            if raw_value is None:
+                raw_value = match.group(0)
+            value = coerce_field_value(field_name, raw_value, page_url)
+            if value in (None, "", [], {}):
+                continue
+            filtered.append(value)
+            if len(filtered) >= 12:
+                break
+    except TimeoutError:
+        logger.warning("Timed out while evaluating selector regex for %s", field_name)
+    except regex_lib.error:
+        logger.warning("Failed to evaluate selector regex for %s", field_name)
+    return filtered
+
+
 def extract_page_images(
     root: BeautifulSoup | Tag,
     page_url: str,
@@ -373,18 +406,20 @@ def apply_selector_fallbacks(
         field_name = normalize_field_key(str(row.get("field_name") or ""))
         if field_name not in fields or not bool(row.get("is_active", True)):
             continue
-        for selector_key in ("css_selector", "xpath", "regex"):
-            selector = str(row.get(selector_key) or "").strip()
-            if not selector:
-                continue
-            if selector_key == "css_selector":
-                values = extract_selector_values(root, selector, field_name, page_url)
-            elif selector_key == "xpath":
-                values = extract_xpath_values(root, selector, field_name, page_url)
-            else:
-                values = extract_regex_values(root, selector, field_name, page_url)
-            for value in values:
-                add_candidate(candidates, field_name, value)
+        xpath = str(row.get("xpath") or "").strip()
+        css_selector = str(row.get("css_selector") or "").strip()
+        regex = str(row.get("regex") or "").strip()
+        values: list[object] = []
+        if xpath:
+            values = extract_xpath_values(root, xpath, field_name, page_url)
+        if not values and css_selector:
+            values = extract_selector_values(root, css_selector, field_name, page_url)
+        if values and regex:
+            values = filter_values_by_regex(values, regex, field_name, page_url)
+        elif not values and regex and not xpath and not css_selector:
+            values = extract_regex_values(root, regex, field_name, page_url)
+        for value in values:
+            add_candidate(candidates, field_name, value)
     dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
     for field_name in fields:
         selector = str(dom_patterns.get(field_name) or "").strip()

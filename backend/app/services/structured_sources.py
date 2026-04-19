@@ -33,6 +33,15 @@ _ASSIGNMENT_STATE_PATTERNS = (
     "__PRELOADED_STATE__",
     "__remixContext",
 )
+_EMBEDDED_ASSIGNMENT_NAMES = (
+    "data",
+    "items",
+    "listings",
+    "posts",
+    "products",
+    "records",
+    "results",
+)
 _NON_STATE_ASSIGNMENT_PATTERNS = (
     re.compile(r"ShopifyAnalytics\.meta\s*=\s*(\{.*?\})\s*;", re.S),
     re.compile(r"var\s+meta\s*=\s*(\{.*?\})\s*;", re.S),
@@ -117,6 +126,8 @@ def parse_embedded_json(soup: BeautifulSoup, html: str) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             rows.extend(json_candidates(payload))
+    for payload in _extract_generic_assignment_payloads(html):
+        rows.extend(json_candidates(payload))
     return rows
 
 
@@ -156,6 +167,26 @@ def _extract_assignment_payload(html: str, state_name: str) -> Any | None:
         return json.loads(fragment)
     except json.JSONDecodeError:
         return None
+
+
+def _extract_generic_assignment_payloads(html: str) -> list[Any]:
+    payloads: list[Any] = []
+    patterns = [
+        re.compile(rf"(?:var|let|const)\s+{re.escape(name)}\s*=\s*", re.S)
+        for name in _EMBEDDED_ASSIGNMENT_NAMES
+    ]
+    for node in iter_script_text_nodes(html):
+        raw = node.text
+        for pattern in patterns:
+            for match in pattern.finditer(raw):
+                fragment = _balanced_json_fragment(raw[match.end() :])
+                if not fragment:
+                    continue
+                try:
+                    payloads.append(json.loads(fragment))
+                except json.JSONDecodeError:
+                    continue
+    return payloads
 
 
 def _balanced_json_fragment(text: str) -> str:

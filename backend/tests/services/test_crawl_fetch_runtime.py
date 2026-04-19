@@ -147,6 +147,43 @@ async def test_detail_surface_without_signals_escalates_even_when_html_is_not_a_
 
 
 @pytest.mark.asyncio
+async def test_listing_hash_router_shell_escalates_to_browser() -> None:
+    result = PageFetchResult(
+        url="https://practicesoftwaretesting.com/#/",
+        final_url="https://practicesoftwaretesting.com/#/",
+        html=(
+            "<html><body><div id='root'></div>"
+            "<script></script><script></script><script></script>"
+            "</body></html>"
+        ),
+        status_code=200,
+        method="httpx",
+        blocked=False,
+    )
+
+    assert await should_escalate_to_browser_async(result, surface="ecommerce_listing") is True
+
+
+@pytest.mark.asyncio
+async def test_listing_202_shell_escalates_to_browser() -> None:
+    result = PageFetchResult(
+        url="https://www.govplanet.com/for-sale/equipment",
+        final_url="https://www.govplanet.com/for-sale/equipment",
+        html=(
+            "<html><body><div id='app'></div>"
+            "<script type='application/json'>{\"pending\":true}</script>"
+            "<script></script><script></script>"
+            "</body></html>"
+        ),
+        status_code=202,
+        method="httpx",
+        blocked=False,
+    )
+
+    assert await should_escalate_to_browser_async(result, surface="ecommerce_listing") is True
+
+
+@pytest.mark.asyncio
 async def test_fetch_page_falls_back_to_browser_after_http_transport_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

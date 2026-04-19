@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging as _logging
 import platform as _platform
 import re as _re
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ _HOST_OS_UA_TOKENS = {
     "macos": "macintosh",
     "linux": "linux",
 }
+_logger = _logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +119,9 @@ def _generate_coherent_fingerprint():
         ua = str(fingerprint.navigator.userAgent or "").lower()
         if expected_token in ua and _is_version_coherent(fingerprint):
             return fingerprint
+    _logger.warning(
+        "Failed to generate coherent fingerprint after 3 attempts, using last generated"
+    )
     return fingerprint
 
 

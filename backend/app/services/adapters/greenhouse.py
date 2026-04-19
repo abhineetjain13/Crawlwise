@@ -15,6 +15,8 @@ from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.field_value_utils import clean_text
 from bs4 import BeautifulSoup
 
+_HTML_PARSER = "html.parser"
+
 
 class GreenhouseAdapter(BaseAdapter):
     name = "greenhouse"
@@ -159,7 +161,7 @@ class GreenhouseAdapter(BaseAdapter):
 
     def _extract_from_html(self, html: str, url: str) -> list[dict]:
         """Extract jobs from the Greenhouse HTML board page."""
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, _HTML_PARSER)
         records = []
 
         # Standard Greenhouse board HTML structure
@@ -208,7 +210,7 @@ class GreenhouseAdapter(BaseAdapter):
         return records
 
     def _extract_detail_from_html(self, html: str, url: str) -> dict | None:
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, _HTML_PARSER)
         title_node = soup.select_one("h1")
         title = self._clean_text(
             title_node.get_text(" ", strip=True) if title_node is not None else ""
@@ -265,7 +267,7 @@ class GreenhouseAdapter(BaseAdapter):
             sections = self._extract_sections_from_html(content)
             record.update(sections)
             description = self._clean_text(
-                BeautifulSoup(content, "html.parser").get_text(" ", strip=True)
+                BeautifulSoup(content, _HTML_PARSER).get_text(" ", strip=True)
             )
             if description:
                 record["description"] = description
@@ -278,7 +280,7 @@ class GreenhouseAdapter(BaseAdapter):
         }
 
     def _extract_sections_from_html(self, html: str) -> dict[str, str]:
-        soup = BeautifulSoup(str(html or ""), "html.parser")
+        soup = BeautifulSoup(str(html or ""), _HTML_PARSER)
         sections: dict[str, str] = {}
         for heading in list(soup.find_all(["h2", "h3", "strong"])):
             heading_text = self._clean_text(heading.get_text(" ", strip=True)).lower()
@@ -300,15 +302,25 @@ class GreenhouseAdapter(BaseAdapter):
             value = " ".join(values).strip()
             if not value:
                 continue
-            if "what you" in heading_text or "responsibil" in heading_text:
-                sections["responsibilities"] = value
-            elif "should have" in heading_text or "qualif" in heading_text or "who you are" in heading_text:
-                sections["qualifications"] = value
-            elif "benefit" in heading_text or "perks" in heading_text or "offer" in heading_text:
-                sections["benefits"] = value
-            elif "skill" in heading_text or "bring" in heading_text:
-                sections["skills"] = value
+            section_name = self._section_name_for_heading(heading_text)
+            if section_name is not None:
+                sections[section_name] = value
         return sections
+
+    def _section_name_for_heading(self, heading_text: str) -> str | None:
+        if "what you" in heading_text or "responsibil" in heading_text:
+            return "responsibilities"
+        if (
+            "should have" in heading_text
+            or "qualif" in heading_text
+            or "who you are" in heading_text
+        ):
+            return "qualifications"
+        if "benefit" in heading_text or "perks" in heading_text or "offer" in heading_text:
+            return "benefits"
+        if "skill" in heading_text or "bring" in heading_text:
+            return "skills"
+        return None
 
     def _normalize_pay_range(self, payload: object) -> str:
         if not isinstance(payload, dict):

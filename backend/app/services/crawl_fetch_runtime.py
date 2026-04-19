@@ -352,9 +352,7 @@ async def fetch_page(
                     exc_info=True,
                 )
         if last_browser_error is not None:
-            raise type(last_error)(
-                f"{last_error} (browser fallback failed: {last_browser_error})"
-            ) from last_browser_error
+            raise last_error from last_browser_error
         raise last_error
     raise RuntimeError(f"Failed to fetch {url}")
 

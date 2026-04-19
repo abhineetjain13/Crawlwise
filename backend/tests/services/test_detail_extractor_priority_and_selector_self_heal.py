@@ -89,6 +89,37 @@ def test_extract_records_applies_selector_rules_and_tracks_selector_source() -> 
     assert record["_field_sources"]["description"] == ["dom_selector"]
 
 
+def test_extract_records_applies_regex_as_post_filter_to_xpath_result() -> None:
+    html = """
+    <html>
+      <body>
+        <script>window.badSku = "SKU: 99999";</script>
+        <main>
+          <div class="sku">SKU: 12345</div>
+        </main>
+      </body>
+    </html>
+    """
+    record = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["sku"],
+        selector_rules=[
+            {
+                "field_name": "sku",
+                "xpath": "//div[@class='sku']/text()",
+                "regex": r"SKU:\s*(\d+)",
+                "is_active": True,
+            }
+        ],
+    )[0]
+
+    assert record["sku"] == "12345"
+    assert record["_field_sources"]["sku"] == ["dom_selector"]
+
+
 def test_selector_self_heal_config_falls_back_to_runtime_enabled_when_missing() -> None:
     original_enabled = crawler_runtime_settings.selector_self_heal_enabled
     original_threshold = crawler_runtime_settings.selector_self_heal_min_confidence

@@ -22,7 +22,7 @@ Date: 2026-04-19
 
 ## Residual Risks
 
-- Detail and listing extraction still perform mixed parsing in some paths. That is now a pure extraction follow-up, not a browser-runtime blocker.
+- Detail and listing extraction now share a single prepared extraction context, so cleaned-vs-original HTML drift no longer regresses structured parsing between the two pipelines.
 - Removing `parsel` from the backend dependency list assumes no external tooling imports it through this project package. Repo-local usage is now gone.
 
 ## Verification

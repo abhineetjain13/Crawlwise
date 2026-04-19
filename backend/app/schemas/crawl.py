@@ -305,17 +305,7 @@ def _normalize_review_bucket(
     seen: set[tuple[str, str]] = set()
     raw_rows = value if isinstance(value, list) else []
     for raw_row in raw_rows:
-        normalized = _normalize_review_bucket_row(raw_row)
-        if normalized is None:
-            continue
-        dedupe_key = (
-            normalized.key,
-            _stable_review_value_fingerprint(normalized.value),
-        )
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        rows.append(normalized)
+        _append_review_bucket_row(rows, seen, raw_row)
     if rows:
         return rows
     fallback_dict = fallback if isinstance(fallback, dict) else {}
@@ -324,23 +314,15 @@ def _normalize_review_bucket(
         if not isinstance(payload, dict):
             continue
         for field_name, field_value in payload.items():
-            normalized = _normalize_review_bucket_row(
+            _append_review_bucket_row(
+                rows,
+                seen,
                 {
                     "key": field_name,
                     "value": field_value,
                     "source": key,
                 }
             )
-            if normalized is None:
-                continue
-            dedupe_key = (
-                normalized.key,
-                _stable_review_value_fingerprint(normalized.value),
-            )
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            rows.append(normalized)
     return rows
 
 
@@ -359,6 +341,24 @@ def _normalize_review_bucket_row(value: object) -> UnverifiedAttribute | None:
         value=raw_value,
         source=source,
     )
+
+
+def _append_review_bucket_row(
+    rows: list[UnverifiedAttribute],
+    seen: set[tuple[str, str]],
+    value: object,
+) -> None:
+    normalized = _normalize_review_bucket_row(value)
+    if normalized is None:
+        return
+    dedupe_key = (
+        normalized.key,
+        _stable_review_value_fingerprint(normalized.value),
+    )
+    if dedupe_key in seen:
+        return
+    seen.add(dedupe_key)
+    rows.append(normalized)
 
 
 def _stable_review_value_fingerprint(value: object) -> str:

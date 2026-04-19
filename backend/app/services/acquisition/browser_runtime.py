@@ -621,6 +621,7 @@ async def browser_fetch(
                 traversal_mode=str(traversal_mode or ""),
                 max_pages=max_pages,
                 max_scrolls=max_scrolls,
+                timeout_seconds=timeout_seconds,
             )
             html = traversal_result.compose_html()
         else:

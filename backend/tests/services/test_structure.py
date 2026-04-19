@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVICES_ROOT = ROOT / "app" / "services"
 EXTRACTION_MODULES = [
     SERVICES_ROOT / "extraction_runtime.py",
+    SERVICES_ROOT / "extraction_context.py",
     SERVICES_ROOT / "crawl_fetch_runtime.py",
     SERVICES_ROOT / "detail_extractor.py",
     SERVICES_ROOT / "listing_extractor.py",

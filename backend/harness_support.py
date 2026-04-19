@@ -90,11 +90,17 @@ def classify_failure_mode(result: dict[str, object]) -> str:
     if result.get("ok"):
         return "success"
     error_text = str(result.get("error") or "").lower()
+    browser_diagnostics = result.get("browser_diagnostics")
+    diagnostics = (
+        dict(browser_diagnostics)
+        if isinstance(browser_diagnostics, dict)
+        else {}
+    )
     if "getaddrinfo failed" in error_text:
         return "dns_or_network_failure"
     if "chrome-error://chromewebdata/" in error_text:
         return "browser_navigation_failure"
-    if result.get("blocked"):
+    if result.get("blocked") or _diagnostics_indicate_challenge(diagnostics):
         return "blocked"
     family = str(result.get("platform_family") or "").strip().lower()
     config = platform_config_for_family(family)
@@ -115,6 +121,32 @@ def classify_failure_mode(result: dict[str, object]) -> str:
             return "listing_extraction_empty"
         return "detail_extraction_empty"
     return "unknown_failure"
+
+
+def _diagnostics_indicate_challenge(diagnostics: dict[str, object]) -> bool:
+    if str(diagnostics.get("browser_outcome") or "").strip().lower() == "challenge_page":
+        return True
+    if list(diagnostics.get("challenge_element_hits") or []):
+        return True
+    if list(diagnostics.get("challenge_provider_hits") or []):
+        return True
+    evidence = [
+        str(item or "").strip().lower()
+        for item in list(diagnostics.get("challenge_evidence") or [])
+        if str(item or "").strip()
+    ]
+    return any(
+        item.startswith(
+            (
+                "title:",
+                "strong:",
+                "provider:",
+                "active_provider:",
+                "challenge_element:",
+            )
+        )
+        for item in evidence
+    )
 
 
 def _safe_int(value: object) -> int:
