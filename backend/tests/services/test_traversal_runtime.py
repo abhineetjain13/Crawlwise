@@ -231,6 +231,34 @@ async def test_paginate_traversal_blocks_off_domain_links() -> None:
 
 
 @pytest.mark.asyncio
+async def test_paginate_traversal_logs_explicit_stop_reason(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://ads.example.net/promo",
+        ),
+    )
+
+    with caplog.at_level("INFO"):
+        result = await execute_listing_traversal(
+            page,
+            surface="ecommerce_listing",
+            traversal_mode="paginate",
+            max_pages=2,
+            max_scrolls=1,
+        )
+
+    assert result.stop_reason == "paginate_off_domain"
+    assert "stop_reason=paginate_off_domain" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_paginate_traversal_waits_for_navigation_transition() -> None:
     page = _FakePage(
         surface="ecommerce_listing",

@@ -29,10 +29,7 @@ __all__ = [
 
 
 def update_run_status(run, target: str | CrawlStatus) -> CrawlStatus:
-    """Update run status.
-
-    # TODO: implement event publishing
-    """
+    """Update run status and clear run-scoped progress counters on terminal transitions."""
     previous_status = str(run.status)
     next_status = transition_status(run.status, target)
     run.status = next_status.value

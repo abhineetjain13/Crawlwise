@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import pytest
 
 from app.services.script_text_extractor import (
+    ScriptTextNode,
     iter_script_text_nodes,
     iter_script_text_nodes_async,
 )
@@ -81,7 +82,20 @@ async def test_iter_script_text_nodes_async_matches_sync_output() -> None:
     </html>
     """
 
-    async_rows = await iter_script_text_nodes_async(html)
-    sync_rows = iter_script_text_nodes(html)
+    expected_rows = [
+        ScriptTextNode(
+            script_id="alpha",
+            script_type="application/json",
+            text='{"ok": true}',
+        ),
+        ScriptTextNode(
+            script_id="",
+            script_type="",
+            text="window.answer = 42;",
+        ),
+    ]
+    async_rows = list(await iter_script_text_nodes_async(html))
+    sync_rows = list(iter_script_text_nodes(html))
 
+    assert sync_rows == expected_rows
     assert async_rows == sync_rows

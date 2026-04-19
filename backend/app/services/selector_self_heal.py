@@ -7,7 +7,7 @@ from bs4.element import Comment, NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRun
-from app.services.crawl_engine import extract_records
+from app.services.extraction_runtime import extract_records
 from app.services.domain_memory_service import (
     load_domain_memory,
     save_domain_memory,
@@ -45,11 +45,11 @@ def reduce_html_for_selector_synthesis(html: str) -> str:
     soup = BeautifulSoup(str(html or ""), "html.parser")
     for node in soup.find_all(string=lambda value: isinstance(value, Comment)):
         node.extract()
-    for node in soup(_SELECTOR_SYNTHESIS_DROP_TAGS):
+    for node in list(soup.find_all(_SELECTOR_SYNTHESIS_DROP_TAGS)):
         node.decompose()
-    for node in soup(_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS):
+    for node in list(soup.find_all(_SELECTOR_SYNTHESIS_LOW_VALUE_TAGS)):
         node.decompose()
-    for tag in soup.find_all(True):
+    for tag in list(soup.find_all(True)):
         allowed_attrs = {
             key: value
             for key, value in tag.attrs.items()
@@ -248,13 +248,7 @@ async def apply_selector_self_heal(
             }
             updated_records.append(next_record)
             continue
-        current_rules = _merge_selector_rules(current_rules, synthesized_rules)
-        await save_domain_memory(
-            session,
-            domain=domain,
-            surface=run.surface,
-            selectors=selector_payload_from_rules(current_rules),
-        )
+        candidate_rules = _merge_selector_rules(current_rules, synthesized_rules)
         rerun_records = extract_records(
             html,
             page_url,
@@ -263,10 +257,23 @@ async def apply_selector_self_heal(
             requested_fields=list(run.requested_fields or []),
             adapter_records=adapter_records,
             network_payloads=network_payloads,
-            selector_rules=current_rules,
+            selector_rules=candidate_rules,
             extraction_runtime_snapshot=run.settings_view.extraction_runtime_snapshot(),
         )
         rerun_record = dict(rerun_records[0]) if rerun_records else next_record
+        improved = _selector_heal_improved_record(
+            before_record=next_record,
+            after_record=rerun_record,
+            target_fields=target_fields,
+        )
+        if improved:
+            current_rules = candidate_rules
+            await save_domain_memory(
+                session,
+                domain=domain,
+                surface=run.surface,
+                selectors=selector_payload_from_rules(current_rules),
+            )
         rerun_record["_self_heal"] = {
             "enabled": True,
             "triggered": True,
@@ -277,10 +284,12 @@ async def apply_selector_self_heal(
                 str(row.get("field_name") or "").strip().lower()
                 for row in synthesized_rules
             ],
-            "error": error_message or None,
+            "persisted": improved,
+            "error": error_message or (None if improved else "no_quality_improvement"),
         }
         updated_records.append(rerun_record)
-        existing_rule_count += len(synthesized_rules)
+        if improved:
+            existing_rule_count += len(synthesized_rules)
     await session.flush()
     return updated_records, current_rules
 
@@ -356,6 +365,22 @@ def _merge_selector_rules(
         merged.append({"id": next_id, **row})
         next_id += 1
     return merged
+
+
+def _selector_heal_improved_record(
+    *,
+    before_record: dict[str, object],
+    after_record: dict[str, object],
+    target_fields: list[str],
+) -> bool:
+    for field_name in target_fields:
+        before_value = before_record.get(field_name)
+        after_value = after_record.get(field_name)
+        if before_value in (None, "", [], {}) and after_value not in (None, "", [], {}):
+            return True
+        if before_value != after_value and after_value not in (None, "", [], {}):
+            return True
+    return False
 
 
 def _safe_float(value: object, *, default: float) -> float:

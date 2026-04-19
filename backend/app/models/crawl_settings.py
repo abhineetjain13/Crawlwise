@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.services.acquisition_plan import AcquisitionPlan
 from app.services.crawl_utils import normalize_target_url, resolve_traversal_mode
 from app.services.config.crawl_runtime import (
     DEFAULT_MAX_PAGES,
@@ -144,6 +145,24 @@ class CrawlRunSettings:
             if key in self.data:
                 profile[key] = bool(self.data.get(key))
         return profile
+
+    def acquisition_plan(
+        self,
+        *,
+        surface: str,
+        max_records: int | None = None,
+        adapter_recovery_enabled: bool = False,
+    ) -> AcquisitionPlan:
+        return AcquisitionPlan(
+            surface=str(surface or "").strip(),
+            proxy_list=tuple(self.proxy_list()),
+            traversal_mode=self.traversal_mode(),
+            max_pages=self.max_pages(),
+            max_scrolls=self.max_scrolls(),
+            max_records=max_records if max_records is not None else self.max_records(),
+            sleep_ms=self.sleep_ms(),
+            adapter_recovery_enabled=adapter_recovery_enabled,
+        )
 
     def with_updates(self, **updates: Any) -> CrawlRunSettings:
         merged = dict(self.data)

@@ -16,6 +16,8 @@ _LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2})?$", re.IGNORECASE)
 class WorkdayAdapter(BaseAdapter):
     name = "workday"
     platform_family = "workday"
+    max_records = 500
+    max_pages = 25
 
     async def can_handle(self, url: str, html: str) -> bool:
         return self._matches_platform_family(url, html)
@@ -42,8 +44,11 @@ class WorkdayAdapter(BaseAdapter):
         limit = 20
         offset = 0
         total: int | None = None
+        pages_processed = 0
 
         while True:
+            if len(records) >= self.max_records or pages_processed >= self.max_pages:
+                break
             payload = await self._request_json(
                 endpoint,
                 method="POST",
@@ -66,7 +71,10 @@ class WorkdayAdapter(BaseAdapter):
             rows = payload.get("jobPostings")
             if not isinstance(rows, list) or not rows:
                 break
+            pages_processed += 1
             for row in rows:
+                if len(records) >= self.max_records:
+                    break
                 normalized = self._normalize_listing_row(row, context=context)
                 if not normalized:
                     continue
@@ -173,8 +181,14 @@ class WorkdayAdapter(BaseAdapter):
         external_path = self._clean_text(row.get("externalPath"))
         if not title or not external_path:
             return None
+        normalized_prefix = "/" + str(context["localized_prefix"]).strip("/")
+        normalized_path = "/" + external_path.lstrip("/")
+        if normalized_path.startswith(normalized_prefix + "/") or normalized_path == normalized_prefix:
+            detail_path = normalized_path
+        else:
+            detail_path = f"{normalized_prefix}{normalized_path}"
         detail_url = (
-            f"{context['base_url']}{context['localized_prefix']}{external_path}"
+            f"{context['base_url']}{detail_path}"
         )
         record = {
             "title": title,

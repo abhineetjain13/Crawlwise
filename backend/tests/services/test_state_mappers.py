@@ -148,6 +148,46 @@ def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None
     ]
 
 
+def test_map_network_payloads_to_fields_recovers_workday_job_detail_payload() -> None:
+    mapped = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://example.wd5.myworkdayjobs.com/wday/cxs/acme/External/job/123",
+                "endpoint_type": "job_api",
+                "endpoint_family": "workday",
+                "body": {
+                    "jobPostingInfo": {
+                        "title": "Assembler",
+                        "jobDescription": "<p>Build things.</p>",
+                        "location": "Grafton, WI",
+                        "postedOn": "Posted Today",
+                        "timeType": "Full time",
+                        "jobReqId": "REQ-100",
+                        "externalUrl": "https://example.wd5.myworkdayjobs.com/en-US/External/job/123",
+                    },
+                    "hiringOrganization": {"name": "Acme Manufacturing"},
+                },
+            }
+        ],
+        surface="job_detail",
+        page_url="https://example.wd5.myworkdayjobs.com/en-US/External/job/123",
+    )
+
+    assert mapped == [
+        {
+            "title": "Assembler",
+            "company": "Acme Manufacturing",
+            "location": "Grafton, WI",
+            "apply_url": "https://example.wd5.myworkdayjobs.com/en-US/External/job/123",
+            "url": "https://example.wd5.myworkdayjobs.com/en-US/External/job/123",
+            "posted_date": "Posted Today",
+            "job_type": "Full time",
+            "job_id": "REQ-100",
+            "description": "Build things.",
+        }
+    ]
+
+
 def test_map_js_state_to_fields_recovers_generic_nextjs_product_payload_without_schema_bleed() -> None:
     mapped = map_js_state_to_fields(
         {

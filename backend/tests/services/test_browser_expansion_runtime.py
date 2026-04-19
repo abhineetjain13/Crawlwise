@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 
-from app.services import crawl_fetch_runtime
+from app.services.acquisition import browser_runtime
+from app.services.config.runtime_settings import crawler_runtime_settings
 
 
 @dataclass
@@ -108,12 +109,11 @@ async def test_browser_fetch_expands_detail_accordions_before_collecting_html(
     async def _fake_runtime():
         return _FakeRuntime(page)
 
-    monkeypatch.setattr(crawl_fetch_runtime, "_get_browser_runtime", _fake_runtime)
-
-    result = await crawl_fetch_runtime._browser_fetch(
+    result = await browser_runtime.browser_fetch(
         "https://example.com/products/widget",
         5,
         surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
     )
 
     assert "Rubber outsole" in result.html
@@ -127,13 +127,13 @@ async def test_browser_fetch_expands_detail_accordions_before_collecting_html(
 async def test_expand_all_interactive_elements_respects_small_interaction_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_limit = crawl_fetch_runtime.crawler_runtime_settings.detail_expand_max_interactions
-    crawl_fetch_runtime.crawler_runtime_settings.detail_expand_max_interactions = 1
+    original_limit = crawler_runtime_settings.detail_expand_max_interactions
+    crawler_runtime_settings.detail_expand_max_interactions = 1
     try:
         page = _FakeExpansionPage(
             [{"label": "product details"}, {"label": "product dimensions"}]
         )
-        diagnostics = await crawl_fetch_runtime.expand_all_interactive_elements(
+        diagnostics = await browser_runtime.expand_all_interactive_elements(
             page,
             surface="ecommerce_detail",
         )
@@ -142,7 +142,7 @@ async def test_expand_all_interactive_elements_respects_small_interaction_cap(
         assert diagnostics["clicked_count"] == 1
         assert diagnostics["expanded_elements"] == ["product details"]
     finally:
-        crawl_fetch_runtime.crawler_runtime_settings.detail_expand_max_interactions = original_limit
+        crawler_runtime_settings.detail_expand_max_interactions = original_limit
 
 
 @pytest.mark.asyncio
@@ -154,7 +154,7 @@ async def test_expand_all_interactive_elements_skips_non_actionable_candidates()
         ]
     )
 
-    diagnostics = await crawl_fetch_runtime.expand_all_interactive_elements(
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
         page,
         surface="ecommerce_detail",
     )

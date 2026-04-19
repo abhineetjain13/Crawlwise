@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import logging
 import regex as regex_lib
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, Tag
 from lxml import etree
 from lxml import html as lxml_html
 
-from app.services.config.extraction_rules import EXTRACTION_RULES
+from app.services.config.extraction_rules import EXTRACTION_RULES, SEMANTIC_SECTION_NOISE
 from app.services.field_policy import normalize_field_key, normalize_requested_field
 
 from app.services.field_value_candidates import add_candidate
 from app.services.field_value_core import (
     IMAGE_FIELDS,
+    JOB_URL_HINTS,
+    PRODUCT_URL_HINTS,
     URL_FIELDS,
     absolute_url,
     clean_text,
@@ -25,6 +28,18 @@ from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
 
+_CANDIDATE_CLEANUP = dict(EXTRACTION_RULES.get("candidate_cleanup") or {})
+_IMAGE_FILE_EXTENSIONS = tuple(_CANDIDATE_CLEANUP.get("image_file_extensions") or ())
+_PAGE_FILE_EXTENSIONS = (".asp", ".aspx", ".htm", ".html", ".jsp", ".php")
+_IMAGE_URL_HINTS = tuple(_CANDIDATE_CLEANUP.get("image_url_hint_tokens") or ())
+_NON_PRIMARY_IMAGE_SECTION_HINTS = tuple(
+    str(token).lower()
+    for token in (
+        SEMANTIC_SECTION_NOISE.get("label_skip_tokens")
+        or ()
+    )
+)
+
 
 def _srcset_urls(value: object) -> list[str]:
     urls: list[str] = []
@@ -34,6 +49,77 @@ def _srcset_urls(value: object) -> list[str]:
             continue
         urls.append(token.split(" ", 1)[0].strip())
     return [url for url in urls if url]
+
+
+def _looks_like_image_asset_url(url: str) -> bool:
+    lowered = clean_text(url).lower()
+    if not lowered or lowered.startswith(("data:", "javascript:", "mailto:")):
+        return False
+    parsed = urlparse(lowered)
+    path = parsed.path or ""
+    host_and_path = f"{parsed.netloc}{path}"
+    if any(path.endswith(ext) for ext in _IMAGE_FILE_EXTENSIONS):
+        return True
+    if any(path.endswith(ext) for ext in _PAGE_FILE_EXTENSIONS):
+        return False
+    if any(marker in path for marker in (*PRODUCT_URL_HINTS, *JOB_URL_HINTS)):
+        return False
+    if any(hint in host_and_path for hint in _IMAGE_URL_HINTS):
+        return True
+    query = parsed.query
+    return "format=" in query or "fm=" in query
+
+
+def _node_attr_text(node: Tag, *, max_depth: int = 6) -> str:
+    parts: list[str] = []
+    current: Tag | None = node
+    depth = 0
+    while isinstance(current, Tag) and depth < max_depth:
+        for attr_name in (
+            "id",
+            "class",
+            "data-component",
+            "data-qa",
+            "data-section",
+            "data-section-id",
+            "data-section-type",
+            "data-testid",
+            "aria-label",
+        ):
+            value = current.get(attr_name)
+            if isinstance(value, list):
+                parts.extend(str(item) for item in value if item)
+            elif value not in (None, "", [], {}):
+                parts.append(str(value))
+        parent = current.parent
+        current = parent if isinstance(parent, Tag) else None
+        depth += 1
+    return " ".join(parts).lower()
+
+
+def _is_non_primary_image_context(node: Tag) -> bool:
+    context = _node_attr_text(node)
+    return any(hint in context for hint in _NON_PRIMARY_IMAGE_SECTION_HINTS)
+
+
+def _is_other_detail_link(url: str, page_url: str) -> bool:
+    candidate = clean_text(url)
+    if not candidate:
+        return False
+    lowered = candidate.lower()
+    if lowered.startswith(("#", "javascript:", "mailto:")) or _looks_like_image_asset_url(candidate):
+        return False
+    page_parts = urlparse(page_url)
+    candidate_parts = urlparse(candidate)
+    if (
+        (page_parts.hostname or "").lower() == (candidate_parts.hostname or "").lower()
+        and (page_parts.path.rstrip("/") or "/") == (candidate_parts.path.rstrip("/") or "/")
+    ):
+        return False
+    path = (candidate_parts.path or "").lower()
+    if any(path.endswith(ext) for ext in _PAGE_FILE_EXTENSIONS):
+        return True
+    return any(marker in path for marker in (*PRODUCT_URL_HINTS, *JOB_URL_HINTS))
 
 
 def safe_select(root: BeautifulSoup | Tag, selector: str) -> list[Tag]:
@@ -65,6 +151,8 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
             image_candidates,
             page_url,
         )
+        if node.name not in {"img", "source"} and str(node.get("as") or "").lower() != "image":
+            urls = [url for url in urls if _looks_like_image_asset_url(url)]
         if field_name == "additional_images":
             return urls or None
         return urls[0] if urls else None
@@ -157,10 +245,24 @@ def extract_regex_values(
     return values
 
 
-def extract_page_images(root: BeautifulSoup | Tag, page_url: str) -> list[str]:
+def extract_page_images(
+    root: BeautifulSoup | Tag,
+    page_url: str,
+    *,
+    exclude_linked_detail_images: bool = False,
+) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
     for node in root.find_all("img"):
+        if _is_non_primary_image_context(node):
+            continue
+        if exclude_linked_detail_images:
+            link = node.find_parent("a", href=True)
+            if link is not None and _is_other_detail_link(
+                absolute_url(page_url, link.get("href")),
+                page_url,
+            ):
+                continue
         candidate = absolute_url(
             page_url,
             node.get("src") or node.get("data-src") or node.get("data-original") or "",
@@ -168,6 +270,22 @@ def extract_page_images(root: BeautifulSoup | Tag, page_url: str) -> list[str]:
         if not candidate:
             continue
         lowered = candidate.lower()
+        if lowered.startswith("data:"):
+            continue
+        if any(
+            token in lowered
+            for token in (
+                "analytics",
+                "tracking",
+                "pixel",
+                "spacer",
+                "blank.gif",
+                "doubleclick",
+                "google-analytics",
+                "googletagmanager",
+            )
+        ):
+            continue
         if lowered in seen:
             continue
         seen.add(lowered)

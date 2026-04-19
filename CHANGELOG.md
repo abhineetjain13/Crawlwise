@@ -2,6 +2,15 @@
 
 ## 2026-04-19
 
+- Completed the final Codex audit verification pass and refreshed `docs/audits/codex-audit-verification.md` to match the current workspace state with the validation slice still at `90 passed`.
+- Removed the last dead compatibility surfaces by deleting `backend/app/services/crawl_engine.py`, `backend/app/services/acquisition/browser_client.py`, and `backend/app/services/acquisition/browser_pool.py`, and moved production callers onto `backend/app/services/extraction_runtime.py` plus the owned acquisition runtime modules.
+- Removed the discarded `sleep_ms` fetch boundary argument and made pipeline provenance persistence write structured `manifest_trace`, `review_bucket`, and `semantic` payloads into persisted crawl records.
+- Closed the named private compat-layer test coupling from the audit by moving the remaining browser/runtime tests onto owned modules and dropping the last private constant import from `test_crawl_fetch_runtime.py`.
+- Completed Slice B: review/schema persistence cleanup, acquisition dead-surface cleanup, and contract-test cleanup.
+- Made `schema_service` honest by loading resolved schemas from the latest persisted `ReviewPromotion.approved_schema` snapshot instead of pretending to persist in-memory state.
+- Simplified review save flow so `ReviewPromotion` remains the single DB-backed owner of approved schema persistence, with review responses and later schema loads reading the same stored snapshot.
+- Removed misleading dead surface in acquisition facades by dropping unused browser-identity re-exports from `browser_client.py` and collapsing `ProxyPoolExhausted` to the real shared exception type.
+- Replaced brittle helper-level tests with higher-level contract tests for review/schema loading, selector-rule extraction behavior, and pipeline LLM fallback persistence, while keeping external route and output contracts unchanged.
 - Added the Gemini audit remediation tracker and six independent slice docs under `docs/plans/`.
 - Completed Slice 1: acquisition hot-path hardening.
 - Completed Slice 4: pipeline orchestration split.
@@ -25,3 +34,17 @@
 - Added a post-transport-error browser fallback in `fetch_page` so HTTP transport failures (`TooManyRedirects`, DNS/`getaddrinfo`, etc.) attempt a browser fetch before re-raising the original exception.
 - Removed the body-text `discount_percentage` regex fallback in `detail_extractor` to stop fabricating discount values from unrelated copy (e.g., composition text, care instructions).
 - Stopped per-field commit metadata refresh from clobbering extraction-time field provenance; `refresh_record_commit_metadata` now preserves existing per-field sources during initial persistence.
+- Completed the first Codex audit remediation pass aimed at raising the overall score toward the 8/10 target while staying within `docs/ENGINEERING_STRATEGY.md` ownership boundaries.
+- Moved acquisition-owned callers off the mixed `crawl_engine` transport facade so `acquisition/acquirer.py`, `browser_client.py`, and `http_client.py` now depend on `crawl_fetch_runtime.py` directly.
+- Made acquisition proxy handling real end-to-end: `fetch_page` now threads proxy attempts through curl/http/browser fetches, supports proxied Playwright launches for browser-required paths, and stops discarding `proxy_list` at the runtime boundary.
+- Replaced per-request adapter HTTP clients with shared async clients and implemented host pacing state in `acquisition/http_client.py` and `acquisition/pacing.py`.
+- Expanded traversal semantics to preserve `single`/`sitemap`/`crawl` intent, reject fragment-only pagination loops, and emit debug logging instead of silent traversal failures.
+- Reordered detail extraction so structured data is applied ahead of hydrated JS state, added Workday and Lever payload specs plus config-driven payload-family priority, and expanded listing structured-source coverage to microdata, Open Graph, and harvested JS state.
+- Tightened selector self-heal so synthesized rules are only persisted after the rerun improves targeted fields, preventing domain-memory poisoning from speculative selectors.
+- Moved HTML artifact persistence off the async hot path with `asyncio.to_thread`, enriched persisted source traces with manifest/review/semantic metadata, and filtered analytics/pixel image URLs from DOM extraction.
+- Guarded LLM provider JSON decoding, removed the `greenhouse.io` hardcode from selector surface inference, added Workday JS-state config coverage, and removed the undeclared Rippling adapter registration from platform config.
+- Added focused backend coverage for proxy-aware fetch/runtime behavior, Workday payload mapping, selector self-heal improvement gating, traversal edge cases, and the updated extraction ordering.
+- Completed the audit-driven top-5 architectural follow-up: introduced acquisition-owned runtime boundary modules (`acquisition/runtime.py`, `acquisition/browser_runtime.py`) and removed transport/browser-runtime re-exports from `crawl_engine.py`.
+- Threaded a normalized `AcquisitionPlan` from `CrawlRunSettings` through `URLProcessingConfig` into `AcquisitionRequest`, so pipeline execution now has one authoritative acquisition shape instead of re-specifying proxy/traversal/paging defaults at each layer.
+- Reworked detail and listing extraction into explicit ordered stage pipelines instead of repeated hand-written collect/materialize blocks, keeping source precedence grep-friendly and harder to drift during future changes.
+- Removed the no-op pipeline selector-default wrappers from the request build path and added focused tests for normalized acquisition-plan creation and config synchronization.

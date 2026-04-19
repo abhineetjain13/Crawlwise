@@ -5,6 +5,7 @@ import pytest
 from app.models.crawl import CrawlRecord, ReviewPromotion
 from app.services.crawl_crud import create_crawl_run
 from app.services.review import save_review
+from app.services.schema_service import load_resolved_schema
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,3 +71,72 @@ async def test_save_review_persists_mapping_and_promotes_values(
     assert record.data["materials"] == "Cotton blend"
     assert "review_bucket" not in record.discovered_data
     assert promotion.field_mapping == {"material_notes": "materials"}
+    assert promotion.approved_schema["fields"] == result["canonical_fields"]
+    assert promotion.approved_schema["saved_at"]
+
+
+@pytest.mark.asyncio
+async def test_load_resolved_schema_reads_latest_review_promotion_snapshot(
+    db_session: AsyncSession,
+    test_user,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget",
+            "surface": "ecommerce_detail",
+        },
+    )
+    db_session.add_all(
+        [
+            ReviewPromotion(
+                run_id=run.id,
+                domain="example.com",
+                surface="ecommerce_detail",
+                approved_schema={
+                    "fields": ["title", "materials"],
+                    "baseline_fields": ["title"],
+                    "new_fields": ["materials"],
+                    "deprecated_fields": [],
+                    "source": "review",
+                    "saved_at": "2026-04-10T12:00:00+00:00",
+                },
+                field_mapping={"material_notes": "materials"},
+            ),
+            ReviewPromotion(
+                run_id=run.id,
+                domain="example.com",
+                surface="ecommerce_detail",
+                approved_schema={
+                    "fields": ["title", "materials", "care"],
+                    "baseline_fields": ["title"],
+                    "new_fields": ["materials", "care"],
+                    "deprecated_fields": [],
+                    "source": "review",
+                    "saved_at": "2026-04-11T12:00:00+00:00",
+                },
+                field_mapping={
+                    "material_notes": "materials",
+                    "care_instructions": "care",
+                },
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    schema = await load_resolved_schema(
+        db_session,
+        "ecommerce_detail",
+        "https://example.com/products/widget",
+        explicit_fields=["materials", "dimensions"],
+    )
+
+    assert schema.domain == "example.com"
+    assert schema.source == "review"
+    assert schema.saved_at == "2026-04-11T12:00:00+00:00"
+    assert "title" in schema.fields
+    assert "materials" in schema.fields
+    assert "care" in schema.fields
+    assert "dimensions" in schema.fields

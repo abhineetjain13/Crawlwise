@@ -65,7 +65,10 @@ def refresh_record_commit_metadata(
     source_trace["field_discovery"] = field_discovery
 
     requested_fields = [
-        str(item or "").strip().lower() for item in list(run.requested_fields or [])
+        normalized
+        for item in list(run.requested_fields or [])
+        for normalized in [str(item or "").strip().lower()]
+        if normalized
     ]
     found_fields = {
         key
@@ -92,4 +95,6 @@ def refresh_record_commit_metadata(
 def _stringify_value(value: object) -> str:
     if isinstance(value, (dict, list)):
         return str(value)
-    return str(value or "")
+    if value is None:
+        return ""
+    return str(value)

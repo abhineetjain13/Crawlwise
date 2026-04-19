@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.services import crawl_engine
 from app.services import crawl_fetch_runtime
+from app.services.extraction_runtime import extract_records
 
 
 def _js_shell_html() -> str:
@@ -53,8 +53,8 @@ async def test_fetch_page_uses_browser_after_js_shell_detection(
     monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", unexpected_http)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", fake_browser)
 
-    first = await crawl_engine.fetch_page("https://example.com/listing")
-    second = await crawl_engine.fetch_page("https://example.com/detail")
+    first = await crawl_fetch_runtime.fetch_page("https://example.com/listing")
+    second = await crawl_fetch_runtime.fetch_page("https://example.com/detail")
 
     assert first.method == "browser"
     assert second.method == "browser"
@@ -102,7 +102,7 @@ async def test_fetch_page_keeps_http_for_structured_shopify_detail(
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", fake_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", unexpected_browser)
 
-    result = await crawl_engine.fetch_page("https://example.com/products/hatch-jean")
+    result = await crawl_fetch_runtime.fetch_page("https://example.com/products/hatch-jean")
 
     assert result.method == "curl_cffi"
 
@@ -132,13 +132,13 @@ async def test_fetch_page_uses_browser_first_for_requires_browser_platform(
     monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", unexpected_http)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", fake_browser)
 
-    result = await crawl_engine.fetch_page("https://workforcenow.adp.com/recruitment/recruitment.html?jobId=12345")
+    result = await crawl_fetch_runtime.fetch_page("https://workforcenow.adp.com/recruitment/recruitment.html?jobId=12345")
 
     assert result.method == "browser"
 
 
 def test_browser_runtime_snapshot_exposes_capacity_shape() -> None:
-    snapshot = crawl_engine.browser_runtime_snapshot()
+    snapshot = crawl_fetch_runtime.browser_runtime_snapshot()
 
     assert {"ready", "size", "max_size", "active", "queued", "capacity"} <= set(
         snapshot
@@ -203,7 +203,7 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/products/widget-prime",
         "ecommerce_detail",
@@ -286,7 +286,7 @@ def test_extract_job_detail_returns_requested_sections() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/jobs/senior-data-engineer",
         "job_detail",
@@ -328,7 +328,7 @@ def test_extract_job_detail_strips_tracking_params_from_output_urls() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/jobs/senior-data-engineer?utm_medium=email&sid=session-1&jobId=42",
         "job_detail",
@@ -372,7 +372,7 @@ def test_extract_greenhouse_job_detail_from_remix_state() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699",
         "job_detail",
@@ -442,7 +442,7 @@ def test_extract_product_group_variants_without_schema_pollution() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/p/jim-bag",
         "ecommerce_detail",
@@ -485,7 +485,7 @@ def test_extract_ecommerce_listing_returns_card_records() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/collections/widgets",
         "ecommerce_listing",
@@ -515,7 +515,7 @@ def test_extract_ecommerce_listing_preserves_functional_query_params() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/collections/widgets?utm_campaign=spring&sort=featured",
         "ecommerce_listing",
@@ -556,7 +556,7 @@ def test_extract_detail_keeps_dom_stage_for_high_scoring_js_state_when_long_text
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/products/trail-runner",
         "ecommerce_detail",
@@ -601,7 +601,7 @@ def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/products/widget-prime",
         "ecommerce_detail",
@@ -661,7 +661,7 @@ def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents(
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://savannahs.com/collections/all-boots/products/trompette-100-suede-boots-rv27109s",
         "ecommerce_detail",
@@ -672,3 +672,37 @@ def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents(
     record = rows[0]
     assert record["price"] == "939.00"
     assert record["original_price"] == "1565"
+
+
+def test_extract_detail_dom_images_excludes_related_product_cards() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Trail Runner</h1>
+        <section class="product-gallery">
+          <img src="/images/trail-runner-1.jpg" alt="Trail Runner front">
+          <img src="/images/trail-runner-2.jpg" alt="Trail Runner side">
+        </section>
+        <section class="related-products">
+          <a href="/products/city-runner">
+            <img src="/images/city-runner.jpg" alt="City Runner">
+          </a>
+          <a href="/products/mountain-runner">
+            <img src="/images/mountain-runner.jpg" alt="Mountain Runner">
+          </a>
+        </section>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["image_url"] == "https://example.com/images/trail-runner-1.jpg"
+    assert record["additional_images"] == "https://example.com/images/trail-runner-2.jpg"

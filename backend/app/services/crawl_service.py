@@ -136,11 +136,29 @@ def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
                         session, run_id, f"{type(exc).__name__}: {exc}"
                     )
 
-            asyncio.create_task(_record_failure())
+            failure_task = asyncio.create_task(_record_failure())
+            failure_task.add_done_callback(
+                lambda completed_task: _log_background_task_exception(
+                    completed_task,
+                    f"Failed to persist failure state for run {run_id}",
+                )
+            )
         _clear_local_run_task(run_id, expected_task=completed_task)
 
     task.add_done_callback(_cleanup)
     return task
+
+
+def _log_background_task_exception(
+    task: asyncio.Task[None],
+    message: str,
+) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.warning("%s: cancelled", message)
+    except Exception:
+        logger.exception(message)
 
 
 async def _dispatch_run_locally(session: AsyncSession, run: CrawlRun) -> CrawlRun:

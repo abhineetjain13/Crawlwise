@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.services.adapters.greenhouse import GreenhouseAdapter
@@ -39,3 +41,30 @@ async def test_greenhouse_adapter_extracts_detail_from_public_api(
     assert record["apply_url"] == "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699"
     assert "Lead and mentor engineers." in record["responsibilities"]
     assert "5+ years of engineering experience." in record["qualifications"]
+
+
+def test_greenhouse_adapter_normalizes_numeric_pay_ranges_and_strong_sections() -> None:
+    adapter = GreenhouseAdapter()
+
+    salary = adapter._normalize_pay_range(
+        {
+            "currency_type": {"name": "USD"},
+            "min_cents": 150000,
+            "max_cents": Decimal("250000"),
+            "title": "yearly",
+        }
+    )
+    sections = adapter._extract_sections_from_html(
+        """
+        <div>
+          <strong>What you'll do</strong>
+          <p>Build systems.</p>
+          <strong>You should have</strong>
+          <p>5+ years.</p>
+        </div>
+        """
+    )
+
+    assert salary == "USD 1500 - 2500 yearly"
+    assert sections["responsibilities"] == "Build systems."
+    assert sections["qualifications"] == "5+ years."

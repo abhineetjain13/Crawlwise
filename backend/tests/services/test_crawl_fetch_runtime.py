@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.crawl_fetch_runtime import (
-    _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES,
-    _classify_network_endpoint,
-    _should_escalate_to_browser_async,
-    _read_network_payload_body,
-    _should_capture_network_payload,
-    PageFetchResult,
+from app.services.acquisition.browser_runtime import (
+    classify_network_endpoint,
+    read_network_payload_body,
+    should_capture_network_payload,
 )
+from app.services.acquisition.runtime import PageFetchResult, should_escalate_to_browser_async
 
 
 class _FakeResponse:
@@ -26,19 +24,19 @@ class _FakeResponse:
 
 
 def test_should_capture_network_payload_skips_noise_and_large_declared_payloads() -> None:
-    assert not _should_capture_network_payload(
+    assert not should_capture_network_payload(
         url="https://example.com/telemetry/events",
         content_type="application/json",
         headers={},
         captured_count=0,
     )
-    assert not _should_capture_network_payload(
+    assert not should_capture_network_payload(
         url="https://example.com/api/products",
         content_type="application/json",
-        headers={"content-length": str(_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES + 1)},
+        headers={"content-length": "9999999"},
         captured_count=0,
     )
-    assert _should_capture_network_payload(
+    assert should_capture_network_payload(
         url="https://example.com/api/products",
         content_type="application/json",
         headers={"content-length": "512"},
@@ -47,24 +45,24 @@ def test_should_capture_network_payload_skips_noise_and_large_declared_payloads(
 
 
 def test_classify_network_endpoint_uses_platform_config_family_signatures() -> None:
-    assert _classify_network_endpoint(
+    assert classify_network_endpoint(
         response_url="https://boards-api.greenhouse.io/v1/boards/acme/jobs/1234",
         surface="job_detail",
     ) == {"type": "job_api", "family": "greenhouse"}
-    assert _classify_network_endpoint(
+    assert classify_network_endpoint(
         response_url="https://shop.example.com/products/widget/product.js",
         surface="ecommerce_detail",
     ) == {"type": "product_api", "family": "shopify"}
-    assert _classify_network_endpoint(
+    assert classify_network_endpoint(
         response_url="https://store.example.com/_next/data/build-id/widget.json",
         surface="ecommerce_detail",
     ) == {"type": "generic_json", "family": "nextjs"}
 
 
 async def test_read_network_payload_body_rejects_oversized_body_before_decode() -> None:
-    response = _FakeResponse(b"x" * (_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES + 1))
+    response = _FakeResponse(b"x" * 600_000)
 
-    body = await _read_network_payload_body(response)
+    body = await read_network_payload_body(response)
 
     assert body.outcome == "too_large"
     assert body.body is None
@@ -75,7 +73,7 @@ async def test_read_network_payload_body_rejects_oversized_body_before_decode() 
 async def test_read_network_payload_body_marks_closed_page_failures_explicitly() -> None:
     response = _FakeResponse(error=RuntimeError("Target closed"))
 
-    result = await _read_network_payload_body(response)
+    result = await read_network_payload_body(response)
 
     assert result.outcome == "response_closed"
     assert result.body is None
@@ -86,7 +84,7 @@ async def test_read_network_payload_body_marks_closed_page_failures_explicitly()
 async def test_read_network_payload_body_marks_generic_read_failures_explicitly() -> None:
     response = _FakeResponse(error=RuntimeError("socket reset"))
 
-    result = await _read_network_payload_body(response)
+    result = await read_network_payload_body(response)
 
     assert result.outcome == "read_error"
     assert result.body is None
@@ -103,9 +101,9 @@ async def test_should_escalate_to_browser_async_uses_thread_offload(
         calls.append(func.__name__)
         return func(*args, **kwargs)
 
-    monkeypatch.setattr("app.services.crawl_fetch_runtime.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr("app.services.acquisition.runtime.asyncio.to_thread", _fake_to_thread)
 
-    result = await _should_escalate_to_browser_async(
+    result = await should_escalate_to_browser_async(
         PageFetchResult(
             url="https://example.com",
             final_url="https://example.com",
@@ -117,7 +115,7 @@ async def test_should_escalate_to_browser_async_uses_thread_offload(
     )
 
     assert result is True
-    assert calls == ["_should_escalate_to_browser"]
+    assert calls == ["should_escalate_to_browser"]
 
 
 @pytest.mark.asyncio
@@ -141,8 +139,8 @@ async def test_detail_surface_without_signals_escalates_even_when_html_is_not_a_
         blocked=False,
     )
 
-    assert await _should_escalate_to_browser_async(result, surface="job_detail") is True
-    assert await _should_escalate_to_browser_async(result, surface="job_listing") is False
+    assert await should_escalate_to_browser_async(result, surface="job_detail") is True
+    assert await should_escalate_to_browser_async(result, surface="job_listing") is False
 
 
 @pytest.mark.asyncio
@@ -153,10 +151,12 @@ async def test_fetch_page_falls_back_to_browser_after_http_transport_errors(
 
     from app.services import crawl_fetch_runtime
 
-    async def _failing_curl(url: str, timeout: float):
+    async def _failing_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del proxy
         raise httpx.TooManyRedirects("redirect loop")
 
-    async def _failing_http(url: str, timeout: float):
+    async def _failing_http(url: str, timeout: float, *, proxy: str | None = None):
+        del proxy
         raise OSError(11001, "getaddrinfo failed")
 
     browser_calls: list[str] = []
@@ -183,6 +183,38 @@ async def test_fetch_page_falls_back_to_browser_after_http_transport_errors(
 
     assert result.method == "browser"
     assert browser_calls == ["https://ar.puma.com/pd/widget.html"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_returns_non_retryable_404_without_browser_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import crawl_fetch_runtime
+
+    async def _fake_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del timeout, proxy
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body>not found</body></html>",
+            status_code=404,
+            method="curl_cffi",
+            blocked=False,
+        )
+
+    async def _unexpected_browser(url, timeout, **kwargs):
+        raise AssertionError(f"browser fallback should not run for non-retryable status {url} {timeout} {kwargs}")
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _unexpected_browser)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/missing-job",
+        surface="job_detail",
+    )
+
+    assert result.status_code == 404
+    assert result.method == "curl_cffi"
 
 
 @pytest.mark.asyncio
@@ -223,7 +255,8 @@ async def test_http_fetch_retries_with_forced_ipv4_after_dns_failure(
         del html, status_code
         return False
 
-    async def _fake_get_shared_http_client():
+    async def _fake_get_shared_http_client(*, proxy: str | None = None):
+        del proxy
         return _SharedClient()
 
     monkeypatch.setattr(crawl_fetch_runtime, "_get_shared_http_client", _fake_get_shared_http_client)
@@ -247,10 +280,12 @@ async def test_fetch_page_reraises_original_transport_error_when_browser_also_fa
 
     original_error = httpx.ConnectError("getaddrinfo failed")
 
-    async def _failing_curl(url: str, timeout: float):
+    async def _failing_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del proxy
         raise original_error
 
-    async def _failing_http(url: str, timeout: float):
+    async def _failing_http(url: str, timeout: float, *, proxy: str | None = None):
+        del proxy
         raise original_error
 
     async def _failing_browser(url, timeout, **kwargs):
@@ -262,3 +297,41 @@ async def test_fetch_page_reraises_original_transport_error_when_browser_also_fa
 
     with pytest.raises(httpx.ConnectError):
         await crawl_fetch_runtime.fetch_page("https://paycomonline.net/career-page")
+
+
+@pytest.mark.asyncio
+async def test_reset_fetch_runtime_state_closes_adapter_and_runtime_http_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import crawl_fetch_runtime
+
+    calls: list[str] = []
+
+    async def _fake_shutdown_browser_runtime() -> None:
+        calls.append("browser")
+
+    async def _fake_close_runtime_http_client() -> None:
+        calls.append("runtime_http")
+
+    async def _fake_close_adapter_http_client() -> None:
+        calls.append("adapter_http")
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "shutdown_browser_runtime",
+        _fake_shutdown_browser_runtime,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "close_shared_http_client",
+        _fake_close_runtime_http_client,
+    )
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "close_adapter_shared_http_client",
+        _fake_close_adapter_http_client,
+    )
+
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+
+    assert calls == ["browser", "runtime_http", "adapter_http"]

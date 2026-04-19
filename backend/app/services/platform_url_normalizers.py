@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from app.services.platform_policy import detect_platform_family
+
 
 def normalize_adp_detail_url(url: str | None) -> str | None:
     parsed = urlparse(str(url or "").strip())
@@ -31,3 +33,14 @@ def normalize_adp_detail_url(url: str | None) -> str | None:
     if not replaced_job_id:
         normalized_pairs.append(("jobId", job_id))
     return urlunparse(parsed._replace(query=urlencode(normalized_pairs, doseq=True)))
+
+
+def normalize_platform_acquisition_url(
+    url: str | None,
+    *,
+    html: str = "",
+) -> str | None:
+    family = detect_platform_family(str(url or ""), html)
+    if family == "adp":
+        return normalize_adp_detail_url(url)
+    return url

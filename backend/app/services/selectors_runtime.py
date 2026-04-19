@@ -8,9 +8,9 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.acquisition.runtime import fetch_page
 from app.services.config.extraction_rules import EXTRACTION_RULES
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.crawl_fetch_runtime import fetch_page
 from app.services.domain_memory_service import (
     load_domain_memory,
     save_domain_memory,
@@ -20,6 +20,7 @@ from app.services.domain_memory_service import (
 from app.services.field_policy import normalize_field_key
 from app.services.field_value_utils import PRICE_RE, clean_text
 from app.services.llm_runtime import discover_xpath_candidates
+from app.services.platform_policy import detect_platform_family, job_platform_families
 from app.services.xpath_service import build_absolute_xpath, extract_selector_value
 from app.services.url_safety import ensure_public_crawl_targets
 
@@ -54,7 +55,10 @@ def infer_surface(*, url: str, expected_fields: Iterable[str] | None = None) -> 
     if normalized_fields & _COMMERCE_FIELD_HINTS:
         return "ecommerce_detail"
     lowered_url = str(url or "").lower()
-    if any(token in lowered_url for token in ("jobs", "careers", "greenhouse.io")):
+    detected_family = str(detect_platform_family(url) or "").strip().lower()
+    if detected_family and detected_family in job_platform_families():
+        return "job_detail"
+    if any(token in lowered_url for token in ("jobs", "careers")):
         return "job_detail"
     return "ecommerce_detail"
 

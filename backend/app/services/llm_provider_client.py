@@ -48,7 +48,7 @@ async def call_provider(
         return f"{ERROR_PREFIX} Unsupported provider: {normalized_provider}", 0, 0
     try:
         return await dispatch(api_key, model, system_prompt, user_prompt)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         return f"{ERROR_PREFIX} {type(exc).__name__}: {exc}", 0, 0
 
 
@@ -155,7 +155,7 @@ async def _call_groq(
         )
     if response.status_code != 200:
         return _http_error(response), 0, 0
-    return _extract_chat_completion_payload(response.json())
+    return _extract_chat_completion_payload(_safe_json_response(response))
 
 
 async def _call_anthropic(
@@ -182,7 +182,7 @@ async def _call_anthropic(
         )
     if response.status_code != 200:
         return _http_error(response), 0, 0
-    data = response.json()
+    data = _safe_json_response(response)
     content = data.get("content")
     if not isinstance(content, list):
         return f"{ERROR_PREFIX} Unexpected anthropic response", 0, 0
@@ -224,7 +224,7 @@ async def _call_nvidia(
         )
     if response.status_code != 200:
         return _http_error(response), 0, 0
-    return _extract_chat_completion_payload(response.json())
+    return _extract_chat_completion_payload(_safe_json_response(response))
 
 
 def _http_error(response: httpx.Response) -> str:
@@ -232,6 +232,18 @@ def _http_error(response: httpx.Response) -> str:
         f"{ERROR_PREFIX} HTTP {response.status_code}: "
         f"{response.text[:LLM_PROVIDER_ERROR_EXCERPT_CHARS]}"
     )
+
+
+def _safe_json_response(response: httpx.Response) -> dict[str, Any]:
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid JSON from LLM provider response: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise ValueError("Invalid JSON from LLM provider response: expected object")
+    return data
 
 
 def _extract_chat_completion_payload(data: dict[str, Any]) -> tuple[str, int, int]:

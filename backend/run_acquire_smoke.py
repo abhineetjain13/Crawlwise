@@ -21,8 +21,9 @@ from app.core.config import settings
 from app.services.acquisition import (
     AcquisitionRequest,
     acquire,
-    detect_blocked_page,
 )
+from app.services.acquisition.runtime import is_blocked_html
+from app.services.acquisition_plan import AcquisitionPlan
 from app.services.platform_policy import detect_platform_family
 
 from harness_support import infer_surface
@@ -79,16 +80,17 @@ async def _run_one(run_id: int, name: str, url: str, timeout_seconds: int) -> di
                 AcquisitionRequest(
                     run_id=run_id,
                     url=url,
-                    surface=surface,
-                    max_pages=3,
-                    max_scrolls=3,
-                    sleep_ms=0,
+                    plan=AcquisitionPlan(
+                        surface=surface,
+                        max_pages=3,
+                        max_scrolls=3,
+                    ),
                 )
             ),
             timeout=timeout_seconds,
         )
         blocked = (
-            detect_blocked_page(result.html or "", result.status_code)
+            is_blocked_html(result.html or "", result.status_code)
             if result.content_type and result.content_type.startswith("text/html")
             else False
         )

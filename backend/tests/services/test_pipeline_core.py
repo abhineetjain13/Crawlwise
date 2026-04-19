@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.services.acquisition_plan import AcquisitionPlan
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
 from app.services.pipeline.core import _process_single_url
@@ -102,6 +103,29 @@ async def test_process_single_url_prefetch_only_returns_metrics_without_persisti
     assert result.url_metrics["record_count"] == 0
     assert total == 0
     assert rows == []
+
+
+def test_url_processing_config_syncs_compatibility_fields_from_acquisition_plan() -> None:
+    config = URLProcessingConfig.from_acquisition_plan(
+        AcquisitionPlan(
+            surface="job_listing",
+            proxy_list=("http://proxy-1",),
+            traversal_mode="paginate",
+            max_pages=7,
+            max_scrolls=3,
+            max_records=11,
+            sleep_ms=900,
+        ),
+        persist_logs=False,
+    )
+
+    assert config.proxy_list == ["http://proxy-1"]
+    assert config.traversal_mode == "paginate"
+    assert config.max_pages == 7
+    assert config.max_scrolls == 3
+    assert config.max_records == 11
+    assert config.sleep_ms == 900
+    assert config.persist_logs is False
 
 
 @pytest.mark.asyncio
@@ -301,3 +325,75 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
     assert result.url_metrics["method"] == "browser"
     assert total == 1
     assert rows[0].data["title"] == "Widget Prime"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_non_numeric(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"llm_enabled": True},
+            "additional_fields": ["price"],
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    async def _fake_extract_missing_fields(*args, **kwargs):
+        del args, kwargs
+        return {"price": "19.99"}, None
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_missing_fields",
+        _fake_extract_missing_fields,
+    )
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.load_domain_selector_rules",
+        _no_selector_rules,
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [
+            {
+                "title": "Widget Prime",
+                "_confidence": {"score": "not-a-number"},
+                "_self_heal": {},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_html_artifact",
+        lambda **kwargs: "artifacts/widget-prime.html",
+    )
+
+    result = await _process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert result.records[0]["price"] == "19.99"
+    assert total == 1
+    assert rows[0].data["price"] == "19.99"

@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from app.services.acquisition_plan import AcquisitionPlan
 
-
-@dataclass(slots=True)
-class AcquisitionPlan:
-    surface: str
-    adapter_recovery_enabled: bool = False
+__all__ = ["AcquisitionPlan"]

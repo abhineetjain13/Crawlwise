@@ -136,13 +136,11 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             )
             await session.commit()
             remaining_records = max(max_records - record_count, 1)
-            url_config = URLProcessingConfig(
-                proxy_list=proxy_list,
-                traversal_mode=traversal_mode,
-                max_pages=max_pages,
-                max_scrolls=max_scrolls,
-                max_records=remaining_records,
-                sleep_ms=sleep_ms,
+            url_config = URLProcessingConfig.from_acquisition_plan(
+                run.settings_view.acquisition_plan(
+                    surface=run.surface,
+                    max_records=remaining_records,
+                ),
                 update_run_state=True,
                 persist_logs=True,
             )

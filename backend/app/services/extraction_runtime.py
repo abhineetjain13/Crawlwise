@@ -1,13 +1,5 @@
 from __future__ import annotations
 
-from app.services.crawl_fetch_runtime import (
-    PageFetchResult as PageFetchResult,
-    browser_runtime_snapshot as browser_runtime_snapshot,
-    close_shared_http_client as close_shared_http_client,
-    fetch_page as fetch_page,
-    is_blocked_html as is_blocked_html,
-    shutdown_browser_runtime as shutdown_browser_runtime,
-)
 from app.services.detail_extractor import extract_detail_records
 from app.services.listing_extractor import extract_listing_records
 

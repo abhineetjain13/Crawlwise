@@ -4,20 +4,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from app.models.crawl import ReviewPromotion
 from app.services.domain_utils import normalize_domain
-from app.services.field_policy import (
-    canonical_fields_for_surface,
-    field_allowed_for_surface,
-)
+from app.services.field_policy import canonical_fields_for_surface, field_allowed_for_surface
 from app.services.pipeline.pipeline_config import SCHEMA_MAX_AGE_DAYS
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _SCHEMA_MAX_AGE = timedelta(days=SCHEMA_MAX_AGE_DAYS)
-
-
-def get_canonical_fields(surface: str) -> list[str]:
-    return canonical_fields_for_surface(surface)
-
 
 @dataclass
 class ResolvedSchema:
@@ -44,10 +38,6 @@ def _dedupe_fields(values: Iterable[str] | None) -> list[str]:
     return deduped
 
 
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
 def _parse_saved_at(value: object) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -67,6 +57,7 @@ def _snapshot_to_resolved(
     explicit_fields: list[str],
 ) -> ResolvedSchema:
     payload = snapshot if isinstance(snapshot, dict) else {}
+    explicit_field_set = set(explicit_fields)
     saved_at = str(payload.get("saved_at") or "").strip() or None
     saved_at_dt = _parse_saved_at(saved_at)
     stale = bool(saved_at_dt and datetime.now(UTC) - saved_at_dt > _SCHEMA_MAX_AGE)
@@ -107,7 +98,7 @@ def _snapshot_to_resolved(
     fields = _dedupe_fields(
         field
         for field in [*baseline, *stored_fields, *explicit_fields]
-        if field_allowed_for_surface(surface, field)
+        if field in explicit_field_set or field_allowed_for_surface(surface, field)
     )
     if not new_fields:
         baseline_set = set(baseline)
@@ -140,17 +131,14 @@ async def load_resolved_schema(
     *,
     explicit_fields: list[str] | None = None,
 ) -> ResolvedSchema:
-    del session
     baseline_fields = _dedupe_fields(
         field
-        for field in get_canonical_fields(surface)
+        for field in canonical_fields_for_surface(surface)
         if field_allowed_for_surface(surface, field)
     )
     normalized_domain = normalize_domain(domain)
     normalized_explicit = _dedupe_fields(
-        field
-        for field in (explicit_fields or [])
-        if field_allowed_for_surface(surface, field)
+        explicit_fields or []
     )
     if not normalized_domain:
         fields = _dedupe_fields([*baseline_fields, *normalized_explicit])
@@ -165,44 +153,23 @@ async def load_resolved_schema(
             saved_at=None,
             stale=False,
         )
+    result = await session.execute(
+        select(ReviewPromotion.approved_schema)
+        .where(
+            ReviewPromotion.domain == normalized_domain,
+            ReviewPromotion.surface == surface,
+        )
+        .order_by(ReviewPromotion.created_at.desc(), ReviewPromotion.id.desc())
+        .limit(1)
+    )
+    snapshot = result.scalar_one_or_none()
     return _snapshot_to_resolved(
         surface=surface,
         domain=normalized_domain,
         baseline_fields=baseline_fields,
-        snapshot=None,
+        snapshot=snapshot if isinstance(snapshot, dict) else None,
         explicit_fields=normalized_explicit,
     )
-
-
-async def persist_resolved_schema(
-    session: AsyncSession, schema: ResolvedSchema
-) -> ResolvedSchema:
-    del session
-    schema.saved_at = schema.saved_at or _now_iso()
-    schema.stale = False
-    return schema
-
-
-async def resolve_schema(
-    session: AsyncSession,
-    surface: str,
-    domain: str,
-    *,
-    run_id: int | None = None,
-    explicit_fields: list[str] | None = None,
-    html: str = "",
-    url: str = "",
-    sample_record: dict | None = None,
-    llm_enabled: bool = False,
-) -> ResolvedSchema:
-    del run_id, html, url, sample_record, llm_enabled
-    resolved = await load_resolved_schema(
-        session,
-        surface,
-        domain,
-        explicit_fields=explicit_fields,
-    )
-    return resolved
 
 
 def schema_trace_payload(schema: ResolvedSchema) -> dict:

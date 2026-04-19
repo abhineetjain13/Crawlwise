@@ -121,7 +121,29 @@
         "[data-automation-id='jobTitle']"
       ],
       "readiness_max_wait_ms": 15000,
-      "network_signature_patterns": ["workday", "myworkdayjobs.com"]
+      "network_signature_patterns": ["workday", "myworkdayjobs.com"],
+      "js_state_extractors": [
+        {
+          "surface": "job_detail",
+          "state_key": "__NEXT_DATA__",
+          "root_paths": [
+            ["props", "pageProps", "jobPostingInfo"],
+            ["props", "pageProps", "job"],
+            ["props", "pageProps"]
+          ],
+          "field_paths": {
+            "title": [["title"]],
+            "company": [["hiringOrganization", "name"], ["company", "name"], ["company"]],
+            "location": [["location"]],
+            "apply_url": [["externalUrl"], ["applyUrl"]],
+            "posted_date": [["postedOn"], ["datePosted"]],
+            "job_type": [["timeType"]],
+            "job_id": [["jobReqId"], ["externalJobPath"]],
+            "country": [["country"]],
+            "description_html": [["jobDescription"], ["description"]]
+          }
+        }
+      ]
     },
     {
       "family": "lever",
@@ -140,7 +162,7 @@
       "domain_patterns": ["ats.rippling.com"],
       "url_contains": ["/jobs", "/job/"],
       "html_contains": ["powered by rippling", "ats.rippling.com"],
-      "job_platform": true,
+      "job_platform": false,
       "requires_browser": false
     },
     {

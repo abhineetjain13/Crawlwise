@@ -37,7 +37,7 @@ from app.core.telemetry import (
 )
 from app.services.acquisition import (
     close_shared_http_client,
-    shutdown_browser_pool,
+    shutdown_browser_runtime,
     validate_cookie_policy_config,
 )
 from app.services.auth_service import bootstrap_admin_user
@@ -62,7 +62,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        await shutdown_browser_pool()
+        await shutdown_browser_runtime()
         await close_shared_http_client()
         await close_redis()
         await dispose_engine()

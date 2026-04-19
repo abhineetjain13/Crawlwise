@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 
 import pytest
 
@@ -270,3 +271,23 @@ async def test_recover_stale_local_runs_clears_task_entries_and_task_ids(
     )
     assert pending_run.id not in crawl_service._local_run_tasks
     assert running_run.id not in crawl_service._local_run_tasks
+
+
+def test_log_background_task_exception_logs_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _boom() -> None:
+        raise RuntimeError("write failed")
+
+    async def _exercise() -> None:
+        task = asyncio.create_task(_boom())
+        await asyncio.sleep(0)
+        with caplog.at_level(logging.ERROR):
+            crawl_service._log_background_task_exception(
+                task,
+                "Failed to persist failure state for run 1",
+            )
+
+    asyncio.run(_exercise())
+
+    assert "Failed to persist failure state for run 1" in caplog.text

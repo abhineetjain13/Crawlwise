@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
@@ -39,8 +40,16 @@ from app.services.field_value_utils import (
     surface_alias_lookup,
     surface_fields,
 )
-from app.services.structured_sources import parse_embedded_json, parse_json_ld
+from app.services.structured_sources import (
+    harvest_js_state_objects,
+    parse_embedded_json,
+    parse_json_ld,
+    parse_microdata,
+    parse_opengraph,
+)
 from app.services.pipeline.pipeline_config import LISTING_FALLBACK_FRAGMENT_LIMIT
+
+logger = logging.getLogger(__name__)
 
 
 def _prepare_listing_dom(html: str) -> tuple[LexborHTMLParser, str]:
@@ -49,7 +58,7 @@ def _prepare_listing_dom(html: str) -> tuple[LexborHTMLParser, str]:
         for node in parser.css(NOISE_CONTAINER_REMOVAL_SELECTOR):
             node.decompose()
     except Exception:
-        pass
+        logger.debug("listing_noise_removal_failed", exc_info=True)
     return parser, parser.html
 
 
@@ -269,36 +278,55 @@ def extract_listing_records(
 ) -> list[dict[str, Any]]:
     dom_parser, cleaned_html = _prepare_listing_dom(html)
     soup = BeautifulSoup(cleaned_html, "html.parser")
-    structured_records = _extract_structured_listing(
-        [*parse_json_ld(soup), *parse_embedded_json(soup, cleaned_html)],
-        page_url,
-        surface,
-        max_records=max_records,
-    )
-    if structured_records:
-        return structured_records[:max_records]
-    records: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    for fragment in _listing_card_html_fragments(
-        dom_parser, is_job=surface.startswith("job_")
-    ):
-        card_soup = BeautifulSoup(fragment, "html.parser")
-        card = card_soup.find(["article", "li", "div"]) or card_soup.find(True)
-        if not isinstance(card, Tag):
-            continue
-        record = _listing_record_from_card(
-            card,
+    js_state_payloads = [
+        payload
+        for payload in harvest_js_state_objects(soup, cleaned_html).values()
+        if isinstance(payload, dict)
+    ]
+
+    def _structured_stage() -> list[dict[str, Any]]:
+        return _extract_structured_listing(
+            [
+                *parse_json_ld(soup),
+                *parse_microdata(soup, cleaned_html, page_url),
+                *parse_opengraph(soup, cleaned_html, page_url),
+                *parse_embedded_json(soup, cleaned_html),
+                *js_state_payloads,
+            ],
             page_url,
             surface,
-            selector_rules=selector_rules,
+            max_records=max_records,
         )
-        if record is None:
-            continue
-        url = str(record.get("url") or "")
-        if not url or url in seen_urls:
-            continue
-        seen_urls.add(url)
-        records.append(record)
-        if len(records) >= max_records:
-            break
-    return records
+
+    def _dom_stage() -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for fragment in _listing_card_html_fragments(
+            dom_parser, is_job=surface.startswith("job_")
+        ):
+            card_soup = BeautifulSoup(fragment, "html.parser")
+            card = card_soup.find(["article", "li", "div"]) or card_soup.find(True)
+            if not isinstance(card, Tag):
+                continue
+            record = _listing_record_from_card(
+                card,
+                page_url,
+                surface,
+                selector_rules=selector_rules,
+            )
+            if record is None:
+                continue
+            url = str(record.get("url") or "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            records.append(record)
+            if len(records) >= max_records:
+                break
+        return records
+
+    for extractor in (_structured_stage, _dom_stage):
+        records = extractor()
+        if records:
+            return records[:max_records]
+    return []

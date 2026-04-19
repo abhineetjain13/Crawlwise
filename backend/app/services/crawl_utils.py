@@ -122,7 +122,7 @@ def collect_target_urls(
 
 # Traversal mode resolution
 
-_TRAVERSAL_MODES = {"paginate", "scroll", "load_more"}
+_TRAVERSAL_MODES = {"paginate", "scroll", "load_more", "single", "sitemap", "crawl"}
 
 
 def resolve_traversal_mode(settings: object) -> str | None:
@@ -152,7 +152,7 @@ def resolve_traversal_mode(settings: object) -> str | None:
         .strip()
         .lower()
     )
-    if mode in {"", "none", "single"}:
+    if mode in {"", "none"}:
         return None
     if mode == "auto":
         return "auto" if advanced_enabled else None

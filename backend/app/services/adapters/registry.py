@@ -22,7 +22,7 @@ from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.ultipro import UltiProAdapter
 from app.services.adapters.walmart import WalmartAdapter
 from app.services.adapters.workday import WorkdayAdapter
-from app.services.acquisition.policy import AcquisitionPlan
+from app.services.acquisition_plan import AcquisitionPlan
 from app.services.platform_policy import configured_adapter_names, is_job_platform_signal
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,10 @@ _ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
     "remoteok": RemoteOkAdapter,
     "shopify": ShopifyAdapter,
 }
+
+
+def available_adapter_names() -> tuple[str, ...]:
+    return tuple(sorted(_ADAPTER_FACTORIES))
 
 
 @lru_cache(maxsize=1)
@@ -77,15 +81,18 @@ async def resolve_adapter(url: str, html: str) -> BaseAdapter | None:
     return None
 
 
-async def run_adapter(url: str, html: str, surface: str) -> AdapterResult | None:
+async def run_adapter(
+    url: str, html: str, surface: str | None
+) -> AdapterResult | None:
     """Convenience: resolve and run adapter in one call."""
     adapter = await resolve_adapter(url, html)
     if adapter is None:
         return None
-    if not _surface_allows_adapter(adapter, surface):
+    normalized_surface = str(surface or "")
+    if not _surface_allows_adapter(adapter, normalized_surface):
         return None
     try:
-        return await adapter.extract(url, html, surface)
+        return await adapter.extract(url, html, normalized_surface)
     except Exception:
         logger.warning(
             "Adapter %s failed open for %s surface=%s",
@@ -97,7 +104,7 @@ async def run_adapter(url: str, html: str, surface: str) -> AdapterResult | None
         return None
 
 
-def _surface_allows_adapter(adapter: BaseAdapter, surface: str) -> bool:
+def _surface_allows_adapter(adapter: BaseAdapter, surface: str | None) -> bool:
     normalized_surface = str(surface or "").strip().lower()
     if not normalized_surface:
         return True

@@ -4,13 +4,17 @@ from typing import Final
 
 
 FieldPathMap = dict[str, tuple[str, ...]]
-PayloadMappingSpec = dict[str, str | tuple[tuple[str, ...], ...] | FieldPathMap]
+PayloadMappingSpec = dict[
+    str,
+    str | tuple[str, ...] | tuple[tuple[str, ...], ...] | FieldPathMap,
+]
 
 
 NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
     "job_detail": (
         {
             "name": "greenhouse_detail",
+            "endpoint_families": ("greenhouse",),
             "required_path_groups": (
                 ("content",),
                 ("absolute_url",),
@@ -23,6 +27,45 @@ NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
                 "posted_date": ("first_published",),
                 "updated_at": ("updated_at",),
                 "description_html": ("content",),
+            },
+        },
+        {
+            "name": "workday_detail",
+            "endpoint_families": ("workday",),
+            "required_path_groups": (
+                ("jobPostingInfo.title",),
+                ("jobPostingInfo.jobDescription",),
+            ),
+            "field_paths": {
+                "title": ("jobPostingInfo.title",),
+                "company": ("hiringOrganization.name",),
+                "location": ("jobPostingInfo.location",),
+                "apply_url": ("jobPostingInfo.externalUrl",),
+                "posted_date": ("jobPostingInfo.postedOn",),
+                "job_type": ("jobPostingInfo.timeType",),
+                "job_id": ("jobPostingInfo.jobReqId",),
+                "country": ("jobPostingInfo.country",),
+                "description_html": ("jobPostingInfo.jobDescription",),
+            },
+        },
+        {
+            "name": "lever_detail",
+            "endpoint_families": ("lever",),
+            "required_path_groups": (
+                ("text", "description", "categories.team"),
+                ("applyUrl", "hostedUrl", "urls.apply"),
+            ),
+            "field_paths": {
+                "title": ("text",),
+                "company": ("company",),
+                "location": ("categories.location",),
+                "team": ("categories.team",),
+                "department": ("categories.department",),
+                "commitment": ("categories.commitment",),
+                "workplace_type": ("categories.workplaceType",),
+                "apply_url": ("applyUrl", "hostedUrl", "urls.apply"),
+                "posted_date": ("createdAt",),
+                "description_html": ("description", "descriptionPlain"),
             },
         },
         {
@@ -144,6 +187,7 @@ NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
     "ecommerce_detail": (
         {
             "name": "generic_ecommerce_detail",
+            "endpoint_families": ("shopify", "nextjs"),
             "required_path_groups": (
                 (
                     "product.title",

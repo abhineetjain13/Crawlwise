@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.services.platform_policy import (
     detect_platform_family,
+    is_job_platform_signal,
     resolve_listing_readiness_override,
 )
 
@@ -86,3 +87,8 @@ def test_detect_platform_family_ignores_html_marker_matches_on_unrelated_domains
         )
         is None
     )
+
+
+def test_platform_registry_does_not_treat_detection_only_families_as_job_adapters() -> None:
+    assert detect_platform_family("https://ats.rippling.com/en-GB/acme/jobs") == "rippling"
+    assert is_job_platform_signal(platform_family="rippling") is False

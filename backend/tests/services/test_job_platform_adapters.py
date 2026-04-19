@@ -10,6 +10,7 @@ from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.ultipro import UltiProAdapter
 from app.services.adapters.workday import WorkdayAdapter
 from app.services.listing_extractor import extract_listing_records
+from app.services.platform_url_normalizers import normalize_platform_acquisition_url
 
 
 class _DummyAdapter(BaseAdapter):
@@ -17,6 +18,7 @@ class _DummyAdapter(BaseAdapter):
         return True
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
+        self.captured_surface = surface
         return AdapterResult()
 
     async def _request_result(self, url: str, **kwargs) -> HttpFetchResult:
@@ -73,6 +75,28 @@ async def test_run_adapter_skips_job_platform_adapter_for_commerce_surface(
 
 
 @pytest.mark.asyncio
+async def test_run_adapter_coerces_nullable_surface_to_empty_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _DummyAdapter()
+    adapter.name = "shopify"
+    adapter.platform_family = "shopify"
+    monkeypatch.setattr(
+        "app.services.adapters.registry.registered_adapters",
+        lambda: (adapter,),
+    )
+
+    result = await run_adapter(
+        "https://example.com/products/widget",
+        "<html><body>product</body></html>",
+        None,
+    )
+
+    assert result == AdapterResult()
+    assert adapter.captured_surface == ""
+
+
+@pytest.mark.asyncio
 async def test_run_adapter_fails_open_when_adapter_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -93,6 +117,16 @@ async def test_run_adapter_fails_open_when_adapter_raises(
     assert result is None
 
 
+def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic() -> None:
+    normalized = normalize_platform_acquisition_url(
+        "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?jobId= 12345 &lang=en_US"
+    )
+
+    assert normalized == (
+        "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?jobId=12345&lang=en_US"
+    )
+
+
 @pytest.mark.asyncio
 async def test_request_result_uses_direct_http_for_expected_json(
     monkeypatch: pytest.MonkeyPatch,
@@ -110,14 +144,16 @@ async def test_request_result_uses_direct_http_for_expected_json(
         text = '<html><body><pre>{"jobs":[{"id":1}]}</pre></body></html>'
 
     class _FakeClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def request(self, method, url, headers=None, json=None, data=None):
-            del method, url, headers, json, data
+        async def request(
+            self,
+            method,
+            url,
+            headers=None,
+            json=None,
+            data=None,
+            timeout=None,
+        ):
+            del method, url, headers, json, data, timeout
             return _FakeResponse()
 
     monkeypatch.setattr(
@@ -125,7 +161,7 @@ async def test_request_result_uses_direct_http_for_expected_json(
         _fake_fetch_page,
     )
     monkeypatch.setattr(
-        "app.services.acquisition.http_client.httpx.AsyncClient",
+        "app.services.acquisition.http_client.build_async_http_client",
         lambda **kwargs: _FakeClient(),
     )
 
@@ -139,9 +175,61 @@ async def test_request_result_uses_direct_http_for_expected_json(
 
 
 @pytest.mark.asyncio
+async def test_request_result_applies_per_request_timeout_with_shared_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.acquisition import http_client as http_client_module
+
+    observed_timeouts: list[float] = []
+
+    class _FakeResponse:
+        status_code = 200
+        url = "https://example.com/api/jobs"
+        headers = httpx.Headers({"content-type": "application/json"})
+        text = '{"jobs":[{"id":1}]}'
+
+    class _FakeClient:
+        is_closed = False
+
+        async def request(
+            self,
+            method,
+            url,
+            headers=None,
+            json=None,
+            data=None,
+            timeout=None,
+        ):
+            del method, url, headers, json, data
+            observed_timeouts.append(float(timeout))
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.build_async_http_client",
+        lambda **kwargs: _FakeClient(),
+    )
+    http_client_module._SHARED_CLIENTS.clear()
+
+    await request_result(
+        "https://example.com/api/jobs",
+        expect_json=True,
+        timeout_seconds=1.5,
+    )
+    await request_result(
+        "https://example.com/api/jobs",
+        expect_json=True,
+        timeout_seconds=3.0,
+    )
+
+    assert observed_timeouts == [1.5, 3.0]
+
+
+@pytest.mark.asyncio
 async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.services.acquisition import http_client as http_client_module
+
     client_builds: list[bool] = []
 
     class _FakeResponse:
@@ -160,8 +248,16 @@ async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def request(self, method, url, headers=None, json=None, data=None):
-            del method, url, headers, json, data
+        async def request(
+            self,
+            method,
+            url,
+            headers=None,
+            json=None,
+            data=None,
+            timeout=None,
+        ):
+            del method, url, headers, json, data, timeout
             if not self._force_ipv4:
                 raise OSError(11001, "getaddrinfo failed")
             return _FakeResponse()
@@ -175,6 +271,7 @@ async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
         "app.services.acquisition.http_client.build_async_http_client",
         _fake_build_async_http_client,
     )
+    http_client_module._SHARED_CLIENTS.clear()
 
     result = await request_result(
         "https://example.com/api/jobs",
@@ -235,6 +332,37 @@ async def test_workday_adapter_extracts_listing_from_cxs_api(
 
 
 @pytest.mark.asyncio
+async def test_workday_adapter_normalizes_listing_paths_without_leading_slash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = WorkdayAdapter()
+
+    async def _fake_request_json(url: str, **kwargs):
+        del url, kwargs
+        return {
+            "total": 1,
+            "jobPostings": [
+                {
+                    "title": "Assembler",
+                    "externalPath": "job/US-WI/Assembler_REQ-1",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+
+    result = await adapter.extract(
+        "https://example.wd5.myworkdayjobs.com/en-US/External",
+        "",
+        "job_listing",
+    )
+
+    assert result.records[0]["url"] == (
+        "https://example.wd5.myworkdayjobs.com/en-US/External/job/US-WI/Assembler_REQ-1"
+    )
+
+
+@pytest.mark.asyncio
 async def test_workday_adapter_extracts_detail_from_cxs_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -284,6 +412,63 @@ async def test_workday_adapter_extracts_detail_from_cxs_api(
             "benefits": "Health and dental.",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_workday_adapter_falls_back_to_html_when_detail_title_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = WorkdayAdapter()
+
+    async def _fake_request_json(url: str, **kwargs):
+        del url, kwargs
+        return {
+            "jobPostingInfo": {
+                "title": "",
+                "jobDescription": "",
+            }
+        }
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+
+    result = await adapter.extract(
+        "https://smithnephew.wd5.myworkdayjobs.com/en-US/External/job/US---Lexington/Sports-Medicine-Territory-Manager--Lexington--KY-_R89546-1",
+        "<html><body><h1>HTML fallback title</h1><p>HTML fallback description</p></body></html>",
+        "job_detail",
+    )
+
+    assert result.records == []
+
+
+@pytest.mark.asyncio
+async def test_workday_adapter_does_not_duplicate_localized_prefix_in_listing_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = WorkdayAdapter()
+
+    async def _fake_request_json(url: str, **kwargs):
+        del url, kwargs
+        return {
+            "total": 1,
+            "jobPostings": [
+                {
+                    "title": "Assembler",
+                    "externalPath": "/en-US/External/job/US-WI/Assembler_REQ-1",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+
+    result = await adapter.extract(
+        "https://example.wd5.myworkdayjobs.com/en-US/External",
+        "",
+        "job_listing",
+    )
+
+    assert result.records[0]["url"] == (
+        "https://example.wd5.myworkdayjobs.com/en-US/External/job/US-WI/Assembler_REQ-1"
+    )
 
 
 @pytest.mark.asyncio

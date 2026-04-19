@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -135,3 +136,63 @@ async def test_shared_browser_runtime_passes_generated_context_options(
             "bypass_csp": False,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_semaphore_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class FakeContext:
+        async def new_page(self):
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            del kwargs
+            return FakeContext()
+
+    runtime = crawl_fetch_runtime.SharedBrowserRuntime(max_contexts=1)
+    runtime._browser = FakeBrowser()
+    runtime._playwright = object()
+
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "build_playwright_context_options",
+        lambda: {},
+    )
+
+    async def _hold_page() -> None:
+        async with runtime.page():
+            entered.set()
+            await release.wait()
+
+    first = asyncio.create_task(_hold_page())
+    await entered.wait()
+    second = asyncio.create_task(_hold_page())
+    await asyncio.sleep(0)
+
+    snapshot = runtime.snapshot()
+
+    assert snapshot["active"] == 1
+    assert snapshot["queued"] == 1
+
+    release.set()
+    await asyncio.gather(first, second)
+
+
+def test_browser_runtime_snapshot_prunes_expired_browser_host_preferences() -> None:
+    crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS.clear()
+    crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS["expired.example.com"] = 0.0
+    crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS["fresh.example.com"] = 999999999999.0
+
+    snapshot = crawl_fetch_runtime.browser_runtime_snapshot()
+
+    assert snapshot["preferred_hosts"] == 1
+    assert "expired.example.com" not in crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS
+    assert "fresh.example.com" in crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS

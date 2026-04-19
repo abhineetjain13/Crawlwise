@@ -1,43 +1,41 @@
 from __future__ import annotations
 
-from bs4 import BeautifulSoup
-from selectolax.lexbor import LexborHTMLParser
+from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.extraction_runtime import extract_records
+from app.services.selector_self_heal import (
+    _selector_heal_improved_record,
+    reduce_html_for_selector_synthesis,
+)
 
-from app.services.detail_extractor import _apply_dom_fallbacks, _materialize_record
-from app.services.selector_self_heal import reduce_html_for_selector_synthesis
 
-
-def test_materialize_record_prefers_higher_priority_source_even_when_candidates_arrive_out_of_order() -> None:
-    record = _materialize_record(
-        page_url="https://example.com/products/widget-prime",
-        surface="ecommerce_detail",
+def test_extract_records_prefers_higher_priority_adapter_value_even_when_dom_value_exists() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget Prime</h1>
+          <span class="price">$999.99</span>
+        </main>
+      </body>
+    </html>
+    """
+    record = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=1,
         requested_fields=["title", "price"],
-        fields=["title", "price"],
-        candidates={
-            "title": ["Widget Prime"],
-            "price": ["999.99", "19.99"],
-        },
-        candidate_sources={
-            "title": ["dom_h1"],
-            "price": ["dom_text", "adapter"],
-        },
-        field_sources={
-            "title": ["dom_h1"],
-            "price": ["dom_text", "adapter"],
-        },
-        extraction_runtime_snapshot=None,
-        tier_name="dom",
-        completed_tiers=["authoritative", "dom"],
-    )
+        adapter_records=[{"price": "19.99", "_source": "adapter"}],
+    )[0]
 
     assert record["title"] == "Widget Prime"
     assert record["price"] == "19.99"
-    assert "dom_text" in str(record["_field_sources"]["price"])
     assert "adapter" in str(record["_field_sources"]["price"])
+    assert "dom_selector" in str(record["_field_sources"]["price"])
     assert record["_source"] == "adapter"
 
 
-def test_dom_fallbacks_do_not_fabricate_discount_percentage_from_unrelated_body_text() -> None:
+def test_extract_records_does_not_fabricate_discount_percentage_from_unrelated_body_text() -> None:
     html = """
     <html>
       <body>
@@ -49,23 +47,72 @@ def test_dom_fallbacks_do_not_fabricate_discount_percentage_from_unrelated_body_
       </body>
     </html>
     """
-    candidates: dict[str, list[object]] = {}
-    candidate_sources: dict[str, list[str]] = {}
-    field_sources: dict[str, list[str]] = {}
-
-    _apply_dom_fallbacks(
-        LexborHTMLParser(html),
-        BeautifulSoup(html, "html.parser"),
+    record = extract_records(
+        html,
         "https://www.phase-eight.com/product/elowen-wide-leg-jumpsuit-10022060230.html",
         "ecommerce_detail",
-        ["title", "price", "discount_percentage"],
-        candidates,
-        candidate_sources,
-        field_sources,
-    )
+        max_records=1,
+        requested_fields=["title", "price", "discount_percentage"],
+    )[0]
 
-    assert "discount_percentage" not in candidates
-    assert "discount_percentage" not in field_sources
+    assert "discount_percentage" not in record
+    assert "discount_percentage" not in record.get("_field_sources", {})
+
+
+def test_extract_records_applies_selector_rules_and_tracks_selector_source() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget Prime</h1>
+          <div class="product-description">Built for long mileage.</div>
+        </main>
+      </body>
+    </html>
+    """
+    record = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["description"],
+        selector_rules=[
+            {
+                "field_name": "description",
+                "css_selector": ".product-description",
+                "is_active": True,
+            }
+        ],
+    )[0]
+
+    assert record["description"] == "Built for long mileage."
+    assert record["_field_sources"]["description"] == ["dom_selector"]
+
+
+def test_selector_self_heal_config_falls_back_to_runtime_enabled_when_missing() -> None:
+    original_enabled = crawler_runtime_settings.selector_self_heal_enabled
+    original_threshold = crawler_runtime_settings.selector_self_heal_min_confidence
+    crawler_runtime_settings.selector_self_heal_enabled = True
+    crawler_runtime_settings.selector_self_heal_min_confidence = 0.77
+    try:
+        record = extract_records(
+            "<html><body><h1>Widget Prime</h1></body></html>",
+            "https://example.com/products/widget-prime",
+            "ecommerce_detail",
+            max_records=1,
+            extraction_runtime_snapshot={
+                "selector_self_heal": {"enabled": None, "min_confidence": None}
+            },
+        )[0]
+    finally:
+        crawler_runtime_settings.selector_self_heal_enabled = original_enabled
+        crawler_runtime_settings.selector_self_heal_min_confidence = original_threshold
+
+    assert record["_self_heal"] == {
+        "enabled": True,
+        "triggered": False,
+        "threshold": 0.77,
+    }
 
 
 def test_reduce_html_for_selector_synthesis_keeps_valid_content_focused_html() -> None:
@@ -89,6 +136,8 @@ def test_reduce_html_for_selector_synthesis_keeps_valid_content_focused_html() -
     """
 
     reduced = reduce_html_for_selector_synthesis(html)
+    from bs4 import BeautifulSoup
+
     parsed = BeautifulSoup(reduced, "html.parser")
     main = parsed.find("main", attrs={"id": "product-detail"})
 
@@ -99,3 +148,16 @@ def test_reduce_html_for_selector_synthesis_keeps_valid_content_focused_html() -
     assert main.find("article", attrs={"class": "product"}) is not None
     assert "Widget Prime" in main.get_text(" ", strip=True)
     assert "Rubber outsole, reinforced toe cap." in main.get_text(" ", strip=True)
+
+
+def test_selector_self_heal_requires_field_level_improvement_before_persisting() -> None:
+    assert _selector_heal_improved_record(
+        before_record={"title": "Widget Prime", "price": ""},
+        after_record={"title": "Widget Prime", "price": "19.99"},
+        target_fields=["price"],
+    ) is True
+    assert _selector_heal_improved_record(
+        before_record={"title": "Widget Prime", "price": ""},
+        after_record={"title": "Widget Prime", "price": ""},
+        target_fields=["price"],
+    ) is False

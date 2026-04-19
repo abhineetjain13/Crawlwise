@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from html import unescape
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -279,14 +280,14 @@ class GreenhouseAdapter(BaseAdapter):
     def _extract_sections_from_html(self, html: str) -> dict[str, str]:
         soup = BeautifulSoup(str(html or ""), "html.parser")
         sections: dict[str, str] = {}
-        for heading in soup.find_all(["h2", "h3", "strong"]):
+        for heading in list(soup.find_all(["h2", "h3", "strong"])):
             heading_text = self._clean_text(heading.get_text(" ", strip=True)).lower()
             if not heading_text:
                 continue
             values: list[str] = []
             for sibling in heading.next_siblings:
-                sibling_name = getattr(sibling, "name", "")
-                if sibling_name in {"h1", "h2", "h3"}:
+                sibling_name = str(getattr(sibling, "name", "") or "").lower()
+                if sibling_name in {"h1", "h2", "h3", "strong"}:
                     break
                 text = (
                     sibling.get_text(" ", strip=True)
@@ -312,21 +313,53 @@ class GreenhouseAdapter(BaseAdapter):
     def _normalize_pay_range(self, payload: object) -> str:
         if not isinstance(payload, dict):
             return ""
-        currency = self._clean_text(payload.get("currency_type", {}).get("name") if isinstance(payload.get("currency_type"), dict) else payload.get("currency_type"))
-        min_value = self._clean_text(payload.get("min_cents") or payload.get("min_amount"))
-        max_value = self._clean_text(payload.get("max_cents") or payload.get("max_amount"))
-        interval = self._clean_text(payload.get("title"))
-        if min_value.isdigit():
-            min_value = str(int(min_value) / 100)
-        if max_value.isdigit():
-            max_value = str(int(max_value) / 100)
+        currency = self._clean_text(
+            payload.get("currency_type", {}).get("name")
+            if isinstance(payload.get("currency_type"), dict)
+            else payload.get("currency_type")
+        )
+        min_value = self._normalize_pay_value(
+            payload.get("min_cents"),
+            payload.get("min_amount"),
+        )
+        max_value = self._normalize_pay_value(
+            payload.get("max_cents"),
+            payload.get("max_amount"),
+        )
+        interval = self._normalize_scalar_text(payload.get("title"))
         numbers = " - ".join(part for part in (min_value, max_value) if part)
         return " ".join(part for part in (currency, numbers, interval) if part).strip()
+
+    def _normalize_pay_value(self, raw_cents: object, raw_amount: object) -> str:
+        cents_text = self._normalize_scalar_text(raw_cents)
+        cents_value = self._parse_int(cents_text)
+        if cents_value is not None:
+            whole_units, remainder = divmod(cents_value, 100)
+            if remainder == 0:
+                return str(whole_units)
+            return f"{cents_value / 100:.2f}"
+        return self._normalize_scalar_text(raw_amount)
+
+    def _normalize_scalar_text(self, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (int, float, Decimal)):
+            return str(value)
+        return self._clean_text(str(value))
+
+    def _parse_int(self, value: object) -> int | None:
+        text = self._normalize_scalar_text(value)
+        if not text:
+            return None
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            return None
 
     def _extract_job_id(self, url: str) -> str:
         match = re.search(r"/jobs/(\d+)", urlparse(str(url or "")).path)
         query_id = parse_qs(urlparse(str(url or "")).query).get("gh_jid", [""])[0]
         return self._clean_text(match.group(1) if match else query_id)
 
-    def _clean_text(self, value: str) -> str:
+    def _clean_text(self, value: object) -> str:
         return clean_text(value)

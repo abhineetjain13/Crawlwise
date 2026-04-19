@@ -6,22 +6,18 @@ from typing import Any
 
 import httpx
 
-from app.services.crawl_engine import fetch_page, is_blocked_html
+from app.services.acquisition_plan import AcquisitionPlan
+from app.services.acquisition.runtime import fetch_page
 from app.services.exceptions import ProxyPoolExhaustedError
-from app.services.platform_policy import detect_platform_family, resolve_platform_runtime_policy
-from app.services.platform_url_normalizers import normalize_adp_detail_url
+from app.services.platform_policy import resolve_platform_runtime_policy
+from app.services.platform_url_normalizers import normalize_platform_acquisition_url
 
 
 @dataclass(slots=True)
 class AcquisitionRequest:
     run_id: int
     url: str
-    surface: str
-    proxy_list: list[str] = field(default_factory=list)
-    traversal_mode: str | None = None
-    max_pages: int = 1
-    max_scrolls: int = 1
-    sleep_ms: int = 0
+    plan: AcquisitionPlan
     requested_fields: list[str] = field(default_factory=list)
     requested_field_selectors: dict[str, list[dict[str, object]]] = field(
         default_factory=dict
@@ -34,6 +30,25 @@ class AcquisitionRequest:
         profile.update(updates)
         return replace(self, acquisition_profile=profile)
 
+    @property
+    def surface(self) -> str:
+        return self.plan.surface
+
+    @property
+    def proxy_list(self) -> list[str]:
+        return list(self.plan.proxy_list)
+
+    @property
+    def traversal_mode(self) -> str | None:
+        return self.plan.traversal_mode
+
+    @property
+    def max_pages(self) -> int:
+        return self.plan.max_pages
+
+    @property
+    def max_scrolls(self) -> int:
+        return self.plan.max_scrolls
 
 @dataclass(slots=True)
 class AcquisitionResult:
@@ -54,16 +69,12 @@ class AcquisitionResult:
     page_markdown: str = ""
 
 
-class ProxyPoolExhausted(ProxyPoolExhaustedError):
-    pass
+ProxyPoolExhausted = ProxyPoolExhaustedError
 
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     requested_url = str(request.url or "")
-    effective_url = requested_url
-    if detect_platform_family(requested_url) == "adp":
-        normalized_adp_url = normalize_adp_detail_url(requested_url)
-        effective_url = normalized_adp_url or requested_url
+    effective_url = normalize_platform_acquisition_url(requested_url) or requested_url
     runtime_policy = resolve_platform_runtime_policy(effective_url)
     prefer_browser = bool(request.acquisition_profile.get("prefer_browser")) or bool(
         runtime_policy.get("requires_browser")
@@ -77,7 +88,6 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             traversal_mode=request.traversal_mode,
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
-            sleep_ms=request.sleep_ms,
         )
     except (httpx.HTTPError, TimeoutError, OSError) as exc:
         if not request.proxy_list:
@@ -106,24 +116,3 @@ def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:
         str(key): str(value)
         for key, value in getattr(headers, "items", lambda: [])()
     }
-
-
-def scrub_network_payloads_for_storage(
-    payloads: list[dict[str, object]] | None,
-) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for payload in payloads or []:
-        if not isinstance(payload, dict):
-            continue
-        rows.append(
-            {
-                key: value
-                for key, value in payload.items()
-                if key in {"url", "method", "status", "content_type"}
-            }
-        )
-    return rows
-
-
-def detect_blocked_page(html: str, status_code: int = 200) -> bool:
-    return is_blocked_html(html, status_code)

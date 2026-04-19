@@ -11,10 +11,7 @@ from typing import Iterator
 
 from app.core.celery_app import celery_app, worker_process_init, worker_process_shutdown
 from app.core.database import SessionLocal
-from app.services.acquisition import (
-    prepare_browser_pool_for_worker_process,
-    shutdown_browser_pool_sync,
-)
+from app.services.acquisition import shutdown_browser_runtime_sync
 from app.services._batch_runtime import process_run as process_run_async
 
 logger = logging.getLogger(__name__)
@@ -34,12 +31,12 @@ _WORKER_TASK_STATE = _WorkerTaskState()
 
 @worker_process_init.connect
 def _worker_process_init(**_kwargs) -> None:
-    prepare_browser_pool_for_worker_process()
+    return None
 
 
 @worker_process_shutdown.connect
 def _worker_process_shutdown(**_kwargs) -> None:
-    shutdown_browser_pool_sync()
+    shutdown_browser_runtime_sync()
 
 
 async def _run_with_session(run_id: int) -> None:
@@ -86,7 +83,7 @@ def _run_task_in_worker_loop(run_id: int) -> None:
         loop.run_until_complete(task)
     except asyncio.CancelledError:
         if _WORKER_TASK_STATE.termination_requested:
-            shutdown_browser_pool_sync()
+            shutdown_browser_runtime_sync()
             raise SystemExit(0) from None
         raise
     finally:

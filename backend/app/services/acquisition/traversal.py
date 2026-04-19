@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from urllib.parse import urljoin, urlsplit
 
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -36,9 +39,30 @@ class TraversalResult:
         }
 
 
+def _set_stop_reason(
+    result: TraversalResult,
+    reason: str,
+    *,
+    surface: str,
+    traversal_mode: str | None = None,
+) -> None:
+    result.stop_reason = reason
+    logger.info(
+        "Traversal stop_reason=%s surface=%s requested_mode=%s selected_mode=%s iterations=%s progress_events=%s",
+        reason,
+        surface,
+        traversal_mode or result.requested_mode,
+        result.selected_mode,
+        result.iterations,
+        result.progress_events,
+    )
+
+
 def should_run_traversal(surface: str | None, traversal_mode: str | None) -> bool:
     normalized_surface = str(surface or "").strip().lower()
     normalized_mode = str(traversal_mode or "").strip().lower()
+    if normalized_mode in {"single", "sitemap", "crawl"}:
+        return False
     return "listing" in normalized_surface and normalized_mode in {
         "auto",
         "scroll",
@@ -58,7 +82,7 @@ async def execute_listing_traversal(
     normalized_mode = str(traversal_mode or "").strip().lower()
     result = TraversalResult(requested_mode=normalized_mode)
     if not should_run_traversal(surface, normalized_mode):
-        result.stop_reason = "not_listing_or_disabled"
+        _set_stop_reason(result, "not_listing_or_disabled", surface=surface, traversal_mode=normalized_mode)
         result.html_fragments = [await page.content()]
         return result
 
@@ -67,7 +91,7 @@ async def execute_listing_traversal(
         selected_mode = await _detect_auto_mode(page, surface=surface)
         result.selected_mode = selected_mode
         if not selected_mode:
-            result.stop_reason = "no_mode_detected"
+            _set_stop_reason(result, "no_mode_detected", surface=surface, traversal_mode=normalized_mode)
             result.card_count = (await _page_snapshot(page, surface=surface))["card_count"]
             result.html_fragments = [await page.content()]
             return result
@@ -97,7 +121,7 @@ async def execute_listing_traversal(
             result=result,
         )
     else:
-        result.stop_reason = "unsupported_mode"
+        _set_stop_reason(result, "unsupported_mode", surface=surface, traversal_mode=normalized_mode)
 
     if not result.html_fragments:
         result.html_fragments = [await page.content()]
@@ -150,10 +174,10 @@ async def _run_scroll_traversal(
             weak_progress_streak += 1
         previous = current
         if weak_progress_streak > int(crawler_runtime_settings.traversal_weak_progress_streak_max):
-            result.stop_reason = "no_scroll_progress"
+            _set_stop_reason(result, "no_scroll_progress", surface=surface)
             break
     else:
-        result.stop_reason = "scroll_limit_reached"
+        _set_stop_reason(result, "scroll_limit_reached", surface=surface)
     result.card_count = previous["card_count"]
 
 
@@ -173,7 +197,7 @@ async def _run_load_more_traversal(
     for _ in range(max_iterations):
         locator = await _find_actionable_locator(page, "load_more")
         if locator is None:
-            result.stop_reason = "load_more_not_found"
+            _set_stop_reason(result, "load_more_not_found", surface=surface)
             break
         result.iterations += 1
         result.load_more_clicks += 1
@@ -187,11 +211,11 @@ async def _run_load_more_traversal(
             await _append_html_fragment(page, result)
             previous = current
             continue
-        result.stop_reason = "load_more_no_progress"
+        _set_stop_reason(result, "load_more_no_progress", surface=surface)
         previous = current
         break
     else:
-        result.stop_reason = "load_more_limit_reached"
+        _set_stop_reason(result, "load_more_limit_reached", surface=surface)
     result.card_count = previous["card_count"]
 
 
@@ -209,15 +233,19 @@ async def _run_paginate_traversal(
     for _ in range(max(0, page_limit - 1)):
         locator = await _find_actionable_locator(page, "next_page")
         if locator is None:
-            result.stop_reason = "next_page_not_found"
+            _set_stop_reason(result, "next_page_not_found", surface=surface)
             break
         result.iterations += 1
         current_url = page.url
         href = await locator.get_attribute("href")
-        if href and not str(href).strip().lower().startswith("javascript:"):
+        normalized_href = str(href or "").strip().lower()
+        if normalized_href.startswith("#"):
+            _set_stop_reason(result, "paginate_fragment_only", surface=surface)
+            break
+        if href and not normalized_href.startswith("javascript:"):
             next_url = urljoin(current_url, href)
             if not _is_same_origin(current_url, next_url):
-                result.stop_reason = "paginate_off_domain"
+                _set_stop_reason(result, "paginate_off_domain", surface=surface)
                 break
             await page.goto(
                 next_url,
@@ -239,10 +267,10 @@ async def _run_paginate_traversal(
             result.pages_advanced += 1
             previous = current
             continue
-        result.stop_reason = "paginate_no_progress"
+        _set_stop_reason(result, "paginate_no_progress", surface=surface)
         break
     else:
-        result.stop_reason = "paginate_limit_reached"
+        _set_stop_reason(result, "paginate_limit_reached", surface=surface)
     result.card_count = previous["card_count"]
     result.html_fragments = html_fragments
 
@@ -260,6 +288,12 @@ async def _find_actionable_locator(page, selector_group: str):
                 continue
             return locator
         except Exception:
+            logger.debug(
+                "Traversal locator check failed for selector_group=%s selector=%s",
+                selector_group,
+                selector,
+                exc_info=True,
+            )
             continue
     return None
 
@@ -305,6 +339,12 @@ async def _card_count(page, *, surface: str) -> int:
         try:
             highest = max(highest, await page.locator(str(selector)).count())
         except Exception:
+            logger.debug(
+                "Traversal card counting failed for surface=%s selector=%s",
+                surface,
+                selector,
+                exc_info=True,
+            )
             continue
     return highest
 
@@ -392,6 +432,7 @@ async def _wait_for_domcontentloaded(page) -> None:
             ),
         )
     except Exception:
+        logger.debug("Traversal domcontentloaded wait failed", exc_info=True)
         return
 
 

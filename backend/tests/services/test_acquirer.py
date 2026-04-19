@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.services.acquisition.acquirer import AcquisitionRequest, acquire
+from app.services.acquisition_plan import AcquisitionPlan
 
 
 @pytest.mark.asyncio
@@ -37,7 +38,7 @@ async def test_acquire_returns_public_headers_as_plain_dict(
         AcquisitionRequest(
             run_id=1,
             url="https://example.com",
-            surface="ecommerce_detail",
+            plan=AcquisitionPlan(surface="ecommerce_detail"),
         )
     )
 

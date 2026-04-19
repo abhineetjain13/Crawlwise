@@ -14,7 +14,7 @@ from app.models.crawl import (
     ReviewPromotion,
 )
 from app.models.llm import LLMCostLog
-from app.services.acquisition.browser_client import reset_browser_pool_state
+from app.services.crawl_fetch_runtime import reset_fetch_runtime_state
 from app.services.acquisition.pacing import reset_pacing_state
 from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.robots_policy import reset_robots_policy_cache
@@ -121,7 +121,7 @@ async def reset_application_data(session: AsyncSession) -> dict:
         await session.rollback()
         raise
 
-    await reset_browser_pool_state()
+    await reset_fetch_runtime_state()
     await reset_pacing_state()
     reset_robots_policy_cache()
 

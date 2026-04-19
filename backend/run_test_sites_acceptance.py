@@ -21,10 +21,11 @@ from pathlib import Path
 from app.services.acquisition import (
     AcquisitionRequest,
     acquire,
-    detect_blocked_page,
 )
+from app.services.acquisition.runtime import is_blocked_html
+from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter
-from app.services.crawl_engine import extract_records
+from app.services.extraction_runtime import extract_records
 from app.services.platform_policy import detect_platform_family
 
 from harness_support import classify_failure_mode, infer_surface, parse_test_sites_markdown
@@ -48,16 +49,17 @@ async def _run_one(site: dict[str, str], run_id: int, timeout_seconds: int) -> d
                 AcquisitionRequest(
                     run_id=run_id,
                     url=url,
-                    surface=surface,
-                    max_pages=5,
-                    max_scrolls=5,
-                    sleep_ms=0,
+                    plan=AcquisitionPlan(
+                        surface=surface,
+                        max_pages=5,
+                        max_scrolls=5,
+                    ),
                 )
             ),
             timeout=timeout_seconds,
         )
         blocked = (
-            detect_blocked_page(acquisition.html or "", acquisition.status_code)
+            is_blocked_html(acquisition.html or "", acquisition.status_code)
             if acquisition.content_type.startswith("text/html")
             else False
         )

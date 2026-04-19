@@ -1,6 +1,7 @@
 # Review and promotion service.
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.models.crawl import CrawlRecord, CrawlRun, ReviewPromotion
@@ -10,7 +11,7 @@ from app.services.crawl_utils import normalize_committed_field_name
 from app.services.domain_utils import normalize_domain
 from app.services.normalizers import normalize_value
 from app.services.field_policy import normalize_review_target
-from app.services.schema_service import load_resolved_schema, persist_resolved_schema
+from app.services.schema_service import load_resolved_schema
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,35 +126,56 @@ async def save_review(
         *resolved_schema.fields,
         *list(mapping.values()),
     ]
-    updated_schema = await persist_resolved_schema(
-        session,
-        resolved_schema.__class__(
-            surface=resolved_schema.surface,
-            domain=resolved_schema.domain,
-            baseline_fields=list(resolved_schema.baseline_fields),
-            fields=list(dict.fromkeys(field for field in next_fields if field)),
-            new_fields=list(
-                dict.fromkeys(
-                    [
-                        *resolved_schema.new_fields,
-                        *[
-                            str(value or "").strip().lower()
-                            for value in mapping.values()
-                            if str(value or "").strip().lower()
-                            not in set(resolved_schema.baseline_fields)
-                        ],
-                    ]
-                )
-            ),
-            deprecated_fields=list(resolved_schema.deprecated_fields),
-            source="review",
-            saved_at=resolved_schema.saved_at,
-            stale=False,
+    normalized_baseline_fields = list(
+        dict.fromkeys(
+            normalized_field
+            for field in resolved_schema.baseline_fields
+            if (
+                normalized_field := normalize_review_target(run.surface, field)
+            )
+        )
+    )
+    normalized_new_fields = list(
+        dict.fromkeys(
+            normalized_field
+            for field in resolved_schema.new_fields
+            if (
+                normalized_field := normalize_review_target(run.surface, field)
+            )
+        )
+    )
+    normalized_baseline_field_set = set(normalized_baseline_fields)
+    updated_schema = resolved_schema.__class__(
+        surface=resolved_schema.surface,
+        domain=resolved_schema.domain,
+        baseline_fields=normalized_baseline_fields,
+        fields=list(dict.fromkeys(field for field in next_fields if field)),
+        new_fields=list(
+            dict.fromkeys(
+                [
+                    *normalized_new_fields,
+                    *[
+                        normalized_value
+                        for value in mapping.values()
+                        if (
+                            normalized_value := normalize_review_target(
+                                run.surface, value
+                            )
+                        )
+                        not in normalized_baseline_field_set
+                    ],
+                ]
+            )
         ),
+        deprecated_fields=list(resolved_schema.deprecated_fields),
+        source="review",
+        saved_at=None,
+        stale=False,
     )
     db_run = await session.get(CrawlRun, run.id)
     if db_run is None:
         raise RuntimeError(f"CrawlRun not found for review save: run_id={run.id}")
+    saved_at = datetime.now(UTC).isoformat()
     promotion = ReviewPromotion(
         run_id=db_run.id,
         domain=domain,
@@ -164,7 +186,7 @@ async def save_review(
             "new_fields": updated_schema.new_fields,
             "deprecated_fields": updated_schema.deprecated_fields,
             "source": updated_schema.source,
-            "saved_at": updated_schema.saved_at,
+            "saved_at": saved_at,
         },
         field_mapping=mapping,
     )

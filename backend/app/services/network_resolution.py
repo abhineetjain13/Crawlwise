@@ -55,8 +55,6 @@ def build_async_http_client(
     }
     if transport is not None:
         client_kwargs["transport"] = transport
-    elif proxy is not None:
-        client_kwargs["proxy"] = proxy
     return httpx.AsyncClient(**client_kwargs)
 
 

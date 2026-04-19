@@ -13,7 +13,7 @@ def html_to_text(value: str) -> str:
 def extract_job_sections(html: str) -> dict[str, str]:
     soup = BeautifulSoup(str(html or ""), "html.parser")
     sections: dict[str, str] = {}
-    for heading in soup.find_all(["h2", "h3", "strong"]):
+    for heading in list(soup.find_all(["h2", "h3", "strong"])):
         heading_text = " ".join(heading.get_text(" ", strip=True).split()).strip()
         if not heading_text:
             continue

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import asyncio
 from dataclasses import dataclass, field
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun
 from app.services.acquisition import AcquisitionRequest
 from app.services.acquisition.acquirer import acquire as _acquire
-from app.services.acquisition.policy import AcquisitionPlan
+from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
 from app.services.artifact_store import persist_html_artifact
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
@@ -36,7 +37,7 @@ from app.services.robots_policy import (
 )
 from app.services.selector_self_heal import apply_selector_self_heal
 from app.services.publish.metadata import refresh_record_commit_metadata
-from app.services.crawl_engine import extract_records
+from app.services.extraction_runtime import extract_records
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,18 +97,10 @@ class _ExtractedURLStage:
     records: list[dict[str, object]]
 
 
-def get_selector_defaults(_domain: str, _field_name: str) -> list[dict]:
-    return []
-
-
-def get_canonical_fields(surface: str) -> list[str]:
-    del surface
-    return []
-
-
 def _resolved_url_processing_config(
     config: URLProcessingConfig | None,
     *,
+    surface: str,
     proxy_list: list[str] | None,
     traversal_mode: str | None,
     max_pages: int,
@@ -119,13 +112,16 @@ def _resolved_url_processing_config(
 ) -> URLProcessingConfig:
     if config is not None:
         return config
-    return URLProcessingConfig(
-        proxy_list=list(proxy_list or []),
-        traversal_mode=traversal_mode,
-        max_pages=max_pages,
-        max_scrolls=max_scrolls,
-        max_records=max_records,
-        sleep_ms=sleep_ms,
+    return URLProcessingConfig.from_acquisition_plan(
+        AcquisitionPlan(
+            surface=surface,
+            proxy_list=tuple(list(proxy_list or [])),
+            traversal_mode=traversal_mode,
+            max_pages=max_pages,
+            max_scrolls=max_scrolls,
+            max_records=max_records,
+            sleep_ms=sleep_ms,
+        ),
         update_run_state=update_run_state,
         persist_logs=persist_logs,
     )
@@ -176,6 +172,11 @@ def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[s
             "source": str(record.get("_source") or "extraction"),
             "confidence": _mapping_or_empty(record.get("_confidence")),
             "self_heal": _mapping_or_empty(record.get("_self_heal")),
+            "manifest_trace": _mapping_or_empty(record.get("_manifest_trace")),
+            "review_bucket": list(record.get("_review_bucket") or [])
+            if isinstance(record.get("_review_bucket"), list)
+            else [],
+            "semantic": _mapping_or_empty(record.get("_semantic")),
         },
         "field_discovery": field_discovery,
     }
@@ -213,11 +214,18 @@ async def _persist_records(
             url_identity_key=identity_key,
             data=data,
             raw_data=dict(record),
-            discovered_data=(
-                {"confidence": _mapping_or_empty(record.get("_confidence"))}
-                if isinstance(record.get("_confidence"), dict)
-                else {}
-            ),
+            discovered_data={
+                key: value
+                for key, value in {
+                    "confidence": _mapping_or_empty(record.get("_confidence")),
+                    "manifest_trace": _mapping_or_empty(record.get("_manifest_trace")),
+                    "semantic": _mapping_or_empty(record.get("_semantic")),
+                    "review_bucket": list(record.get("_review_bucket") or [])
+                    if isinstance(record.get("_review_bucket"), list)
+                    else [],
+                }.items()
+                if value not in (None, "", [], {})
+            },
             source_trace=_build_source_trace(acquisition_result, record),
             raw_html_path=raw_html_path,
         )
@@ -260,6 +268,7 @@ async def _process_single_url(
         url=url,
         config=_resolved_url_processing_config(
             config,
+            surface=run.surface,
             proxy_list=proxy_list,
             traversal_mode=traversal_mode,
             max_pages=max_pages,
@@ -373,21 +382,13 @@ async def _run_robots_gate(
 
 
 def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionRequest:
+    plan = context.config.resolved_acquisition_plan(surface=context.surface)
     return AcquisitionRequest(
         run_id=context.run.id,
         url=context.url,
-        surface=context.surface,
-        proxy_list=list(context.config.proxy_list or []),
-        traversal_mode=context.config.traversal_mode,
-        max_pages=context.config.max_pages,
-        max_scrolls=context.config.max_scrolls,
-        sleep_ms=context.config.sleep_ms,
+        plan=plan,
         requested_fields=list(context.requested_fields),
-        requested_field_selectors={
-            field_name: get_selector_defaults(normalize_domain(context.url), field_name)
-            for field_name in list(context.requested_fields)
-            if field_name
-        },
+        requested_field_selectors={},
         acquisition_profile=dict(build_acquisition_profile(context.run.settings_view)),
     )
 
@@ -504,6 +505,12 @@ async def _extract_records_for_acquisition(
             acquisition_result.final_url,
             AcquisitionPlan(
                 surface=context.surface,
+                proxy_list=tuple(context.config.proxy_list or []),
+                traversal_mode=context.config.traversal_mode,
+                max_pages=context.config.max_pages,
+                max_scrolls=context.config.max_scrolls,
+                max_records=context.config.max_records,
+                sleep_ms=context.config.sleep_ms,
                 adapter_recovery_enabled=True,
             ),
             proxy_list=list(context.config.proxy_list or []),
@@ -582,7 +589,8 @@ async def _run_persistence_stage(
     extracted: _ExtractedURLStage,
 ) -> URLProcessingResult:
     acquisition_result = extracted.fetched.acquisition_result
-    raw_html_path = persist_html_artifact(
+    raw_html_path = await asyncio.to_thread(
+        persist_html_artifact,
         run_id=context.run.id,
         source_url=acquisition_result.final_url,
         html=acquisition_result.html,
@@ -640,7 +648,10 @@ async def _apply_llm_fallback(
             and next_record.get(field_name) in (None, "", [], {})
         ]
         raw_score = confidence.get("score", 1.0)
-        float_score = float(str(raw_score)) if raw_score is not None else 1.0
+        try:
+            float_score = float(str(raw_score)) if raw_score is not None else 1.0
+        except (TypeError, ValueError):
+            float_score = 1.0
         low_confidence = float_score < LLMFallbackConfig.CONFIDENCE_THRESHOLD
         selector_heal_rerun = str(self_heal.get("mode") or "").strip().lower() == "selector_synthesis"
         should_run = bool(missing_fields) or (
@@ -702,7 +713,7 @@ async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -
     try:
         await session.rollback()
     except SQLAlchemyError:
-        pass
+        logger.debug("Session rollback failed before failure persistence", exc_info=True)
     try:
         await _persist_failure_state(session, run_id, error_msg)
         return

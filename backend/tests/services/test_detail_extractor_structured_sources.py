@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services import crawl_engine
+from app.services.extraction_runtime import extract_records
 
 
 def test_extract_ecommerce_detail_from_microdata() -> None:
@@ -22,7 +22,7 @@ def test_extract_ecommerce_detail_from_microdata() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/products/microdata-widget",
         "ecommerce_detail",
@@ -55,7 +55,7 @@ def test_extract_ecommerce_detail_from_opengraph() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/products/og-widget",
         "ecommerce_detail",
@@ -95,7 +95,7 @@ def test_extract_ecommerce_detail_from_array_style_nuxt_payload() -> None:
     </html>
     """
 
-    rows = crawl_engine.extract_records(
+    rows = extract_records(
         html,
         "https://example.com/products/nuxt-payload-widget",
         "ecommerce_detail",

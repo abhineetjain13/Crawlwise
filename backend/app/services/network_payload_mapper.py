@@ -65,9 +65,7 @@ def _payload_priority(payload: dict[str, object], *, surface: str) -> int:
     elif endpoint_type == "generic_json":
         score += 5
 
-    if surface == "job_detail" and endpoint_family in {"greenhouse", "workday", "lever"}:
-        score += 20
-    if surface == "ecommerce_detail" and endpoint_family in {"shopify", "nextjs"}:
+    if endpoint_family and endpoint_family in _configured_endpoint_families(surface):
         score += 20
     if surface == "job_detail" and any(
         token in lowered_url for token in ("/jobs/", "/job_posts/", "/postings/")
@@ -78,6 +76,19 @@ def _payload_priority(payload: dict[str, object], *, surface: str) -> int:
     ):
         score += 10
     return score
+
+
+def _configured_endpoint_families(surface: str) -> set[str]:
+    families: set[str] = set()
+    for spec in NETWORK_PAYLOAD_SPECS.get(surface, ()):
+        raw_families = spec.get("endpoint_families", ())
+        if not isinstance(raw_families, tuple):
+            continue
+        for family in raw_families:
+            normalized = str(family or "").strip().lower()
+            if normalized:
+                families.add(normalized)
+    return families
 
 
 def _map_payload_body(

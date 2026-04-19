@@ -21,7 +21,7 @@ from sqlalchemy import func, select, text
 from app.core.database import SessionLocal, engine
 from app.core.redis import get_redis, redis_failure_total, redis_is_enabled
 from app.models.crawl import CrawlRun
-from app.services.acquisition import browser_pool_snapshot
+from app.services.acquisition import browser_runtime_snapshot
 
 
 class _NoopMetric:
@@ -179,14 +179,14 @@ async def check_redis() -> bool:
 
 
 def check_browser_pool() -> bool:
-    snapshot = browser_pool_snapshot()
+    snapshot = browser_runtime_snapshot()
     return bool(snapshot["size"] <= snapshot["max_size"])
 
 
 async def render_prometheus_metrics() -> tuple[bytes, str]:
     if _registry is None or generate_latest is None:
         lines = [
-            f"browser_pool_size {int(browser_pool_snapshot()['size'])}",
+            f"browser_pool_size {int(browser_runtime_snapshot()['size'])}",
             f"database_connections_active {_database_connections_checked_out()}",
             f"redis_failures_total {redis_failure_total()}",
         ]
@@ -202,7 +202,7 @@ async def render_prometheus_metrics() -> tuple[bytes, str]:
                 int(count or 0)
             )
 
-    browser_pool_size.set(int(browser_pool_snapshot()["size"]))
+    browser_pool_size.set(int(browser_runtime_snapshot()["size"]))
     database_connections_active.set(_database_connections_checked_out())
     redis_failures_total_metric.set(redis_failure_total())
     return generate_latest(_registry), CONTENT_TYPE_LATEST

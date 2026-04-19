@@ -21,7 +21,7 @@ from app.core import database as app_database
 from app.core.database import Base
 from app.core.security import hash_password
 from app.models.user import User
-from app.services.acquisition.browser_client import reset_browser_pool_state
+from app.services.crawl_fetch_runtime import reset_fetch_runtime_state
 from app.services.acquisition.pacing import reset_pacing_state
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -178,14 +178,14 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
 @pytest_asyncio.fixture(autouse=True)
 async def _reset_async_acquisition_state():
     yield
-    await reset_browser_pool_state()
+    await reset_fetch_runtime_state()
     await reset_pacing_state()
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def _dispose_global_app_engine():
     yield
-    await reset_browser_pool_state()
+    await reset_fetch_runtime_state()
     await app_database.engine.dispose()
 
 

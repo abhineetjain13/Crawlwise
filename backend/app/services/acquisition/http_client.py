@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Any
@@ -9,16 +10,15 @@ import re
 import httpx
 
 from app.core.config import settings
-from app.services.crawl_engine import (
-    close_shared_http_client as close_shared_http_client,
-    fetch_page,
-)
+from app.services.acquisition.runtime import fetch_page
 from app.services.network_resolution import (
     build_async_http_client,
     should_retry_with_forced_ipv4,
 )
 
 requests = httpx
+_SHARED_CLIENTS: dict[tuple[str | None, bool], httpx.AsyncClient] = {}
+_SHARED_CLIENTS_LOCK = asyncio.Lock()
 
 
 @dataclass(slots=True)
@@ -119,19 +119,52 @@ async def _request_with_httpx(
     timeout: float,
     force_ipv4: bool = False,
 ) -> httpx.Response:
-    async with build_async_http_client(
-        follow_redirects=True,
-        timeout=timeout,
+    client = await _get_shared_http_client(
         proxy=proxy,
         force_ipv4=force_ipv4,
-    ) as client:
-        return await client.request(
-            method.upper(),
-            url,
-            headers=headers,
-            json=json_body,
-            data=data,
+    )
+    return await client.request(
+        method.upper(),
+        url,
+        headers=headers,
+        json=json_body,
+        data=data,
+        timeout=timeout,
+    )
+
+
+async def _get_shared_http_client(
+    *,
+    proxy: str | None,
+    force_ipv4: bool,
+) -> httpx.AsyncClient:
+    key = (str(proxy or "").strip() or None, bool(force_ipv4))
+    client = _SHARED_CLIENTS.get(key)
+    if client is not None and not getattr(client, "is_closed", False):
+        return client
+    async with _SHARED_CLIENTS_LOCK:
+        client = _SHARED_CLIENTS.get(key)
+        if client is not None and not getattr(client, "is_closed", False):
+            return client
+        client = build_async_http_client(
+            follow_redirects=True,
+            timeout=settings.http_timeout_seconds,
+            proxy=key[0],
+            force_ipv4=force_ipv4,
         )
+        _SHARED_CLIENTS[key] = client
+        return client
+
+
+async def close_shared_http_client() -> None:
+    async with _SHARED_CLIENTS_LOCK:
+        clients = list(_SHARED_CLIENTS.values())
+        _SHARED_CLIENTS.clear()
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception:
+            continue
 
 
 def _copy_headers(headers: Any) -> httpx.Headers:

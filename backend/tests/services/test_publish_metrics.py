@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.services.publish.metadata import _stringify_value, refresh_record_commit_metadata
 from app.services.publish.metrics import build_url_metrics
 
 
@@ -38,3 +39,28 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
     assert metrics["pages_collected"] == 2
     assert metrics["pages_scrolled"] == 1
     assert metrics["network_payload_count"] == 1
+
+
+def test_stringify_value_preserves_falsy_scalars() -> None:
+    assert _stringify_value(0) == "0"
+    assert _stringify_value(False) == "False"
+    assert _stringify_value(0.0) == "0.0"
+    assert _stringify_value(None) == ""
+
+
+def test_refresh_record_commit_metadata_filters_empty_requested_fields() -> None:
+    record = SimpleNamespace(source_trace={}, discovered_data={})
+    run = SimpleNamespace(requested_fields=["title", "", None, "  "])
+
+    refresh_record_commit_metadata(
+        record,
+        run=run,
+        field_name="title",
+        value="Widget Prime",
+    )
+
+    assert record.discovered_data["requested_field_coverage"] == {
+        "requested": 1,
+        "found": 1,
+        "missing": [],
+    }

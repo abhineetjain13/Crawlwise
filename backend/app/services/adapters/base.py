@@ -70,9 +70,8 @@ class BaseAdapter(ABC):
         proxy: str | None = None,
         timeout_seconds: float | None = None,
     ) -> HttpFetchResult:
-        hostname = str(urlparse(str(url or "")).hostname or "").strip().lower()
-        if hostname:
-            await wait_for_host_slot(hostname)
+        if urlparse(str(url or "")).netloc:
+            await wait_for_host_slot(url)
         return await request_result(
             url,
             proxy=proxy,
@@ -144,9 +143,8 @@ class BaseAdapter(ABC):
         proxy: str | None = None,
         timeout_seconds: float | None = None,
     ) -> dict | list | None:
-        hostname = str(urlparse(str(url or "")).hostname or "").strip().lower()
-        if hostname:
-            await wait_for_host_slot(hostname)
+        if urlparse(str(url or "")).netloc:
+            await wait_for_host_slot(url)
         kwargs: dict[str, Any] = {}
         if headers:
             kwargs["headers"] = headers
