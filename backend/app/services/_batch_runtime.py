@@ -20,9 +20,20 @@ from app.services.pipeline.core import _mark_run_failed, _process_single_url
 from app.services.pipeline.runtime_helpers import STAGE_FETCH, log_event, set_stage
 from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
 from app.services.publish import VERDICT_ERROR, _aggregate_verdict
+from app.services.run_summary import as_int
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+def _record_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _metrics_map(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _ensure_url_processing_result(
@@ -33,9 +44,9 @@ def _ensure_url_processing_result(
     if isinstance(url_result, tuple) and len(url_result) == 3:
         records, verdict, metrics = url_result
         return URLProcessingResult(
-            records=list(records or []),
+            records=_record_list(records),
             verdict=str(verdict or ""),
-            url_metrics=dict(metrics or {}),
+            url_metrics=_metrics_map(metrics),
         )
     raise TypeError(f"Unexpected URL result type: {type(url_result)!r}")
 
@@ -86,8 +97,8 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
         run.update_summary(
             url_count=total_urls,
-            record_count=int(run.get_summary("record_count", 0) or 0),
-            progress=int(run.get_summary("progress", 0) or 0),
+            record_count=as_int(run.get_summary("record_count", 0)),
+            progress=as_int(run.get_summary("progress", 0)),
             current_stage=STAGE_FETCH,
             domain=normalize_domain(url_list[0]) if url_list else "",
             resolved_url_list=url_list,
@@ -96,7 +107,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
         verdicts: list[str] = []
         methods: dict[str, int] = {}
-        record_count = int(run.get_summary("record_count", 0) or 0)
+        record_count = as_int(run.get_summary("record_count", 0))
 
         for idx, url in enumerate(url_list, start=1):
             await session.refresh(run)
@@ -123,6 +134,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 current_url_index=idx,
                 total_urls=total_urls,
             )
+            await session.commit()
             remaining_records = max(max_records - record_count, 1)
             url_config = URLProcessingConfig(
                 proxy_list=proxy_list,

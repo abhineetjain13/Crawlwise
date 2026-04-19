@@ -7,9 +7,6 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.platform_url_normalizers import normalize_adp_detail_url
-
-
 def _text(node: object, *, separator: str = "") -> str:
     if node is None:
         return ""

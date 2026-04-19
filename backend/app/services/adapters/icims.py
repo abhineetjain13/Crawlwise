@@ -34,7 +34,7 @@ _ICIMS_PAGINATION_ERRORS: tuple[type[BaseException], ...] = (
 
 
 _ROW_RE = re.compile(
-    r'<(?:tr|div|li)\s[^>]*class=["\'][^"\']*(?:iCIMS_Job|job-?row|job-?card|listitem|search-result)[^"\']*["\'][^>]*>(.*?)</(?:tr|div|li)>',
+    r'<(?:tr|div|li)\s[^>]*class=["\'][^"\']*(?:iCIMS_Job|JobListingRow|job-?row|job-?card|listitem|search-result)[^"\']*["\'][^>]*>(.*?)</(?:tr|div|li)>',
     re.IGNORECASE | re.DOTALL,
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -186,7 +186,7 @@ class ICIMSAdapter(BaseAdapter):
     def _extract_from_listing_html(self, html: str, base_url: str) -> list[dict]:
         soup = BeautifulSoup(html, HTML_PARSER)
         rows = soup.select(
-            ".iCIMS_JobsTable > .row, .iCIMS_JobsTable tr, .iCIMS_Job, [class*='job-card'], [class*='job-listing'], [class*='search-result'], .listitem"
+            ".iCIMS_JobsTable .row, .iCIMS_JobsTable tr, .iCIMS_JobsTable .iCIMS_JobListingRow, .iCIMS_JobListingRow, .iCIMS_Job, [class*='job-card'], [class*='job-listing'], [class*='search-result'], .listitem"
         )
         records: list[dict] = []
         seen_urls: set[str] = set()

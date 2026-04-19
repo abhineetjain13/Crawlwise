@@ -37,7 +37,7 @@ function DomainBar({
   return (
     <div className="flex items-center gap-3 py-1.5">
       <span
-        className="min-w-0 flex-1 truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-secondary"
+        className="min-w-0 flex-1 truncate font-mono text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-secondary"
         title={domain}
       >
         {domain}
@@ -86,7 +86,7 @@ function RunActivityRow({ run }: Readonly<{ run: CrawlRun }>) {
       {/* Status dot */}
       <StatusDot tone={statusTone(run.status)} />
       {/* Domain */}
-      <span className="min-w-0 flex-1 truncate text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-primary transition-colors group-hover:text-accent">
+      <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium leading-[1.4] text-accent hover:text-accent-hover text-primary transition-colors group-hover:text-accent">
         {domain || `Run #${run.id}`}
       </span>
       {/* Record count */}

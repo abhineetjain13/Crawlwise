@@ -525,3 +525,93 @@ def test_extract_ecommerce_listing_preserves_functional_query_params() -> None:
     assert len(rows) == 1
     assert rows[0]["url"] == "https://example.com/products/widget-prime?variant=blue"
     assert rows[0]["source_url"] == "https://example.com/collections/widgets?sort=featured"
+
+
+def test_extract_detail_keeps_dom_stage_for_high_scoring_js_state_when_long_text_missing() -> None:
+    html = """
+    <html>
+      <body>
+        <script type="application/json" id="__NEXT_DATA__">
+        {
+          "props": {
+            "pageProps": {
+              "product": {
+                "title": "Trail Runner",
+                "vendor": "Acme Outdoors",
+                "handle": "trail-runner",
+                "price": "119.00",
+                "availability": "In Stock",
+                "images": [{"src": "https://cdn.example.com/trail.jpg"}],
+                "variants": [{"id": "v1", "sku": "TRAIL-1", "available": true}]
+              }
+            }
+          }
+        }
+        </script>
+        <h2>Description</h2>
+        <div>Stable all-terrain shoe for long trail runs.</div>
+        <h2>Specifications</h2>
+        <div>Rubber outsole, reinforced toe cap.</div>
+      </body>
+    </html>
+    """
+
+    rows = crawl_engine.extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["description", "specifications"],
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "Stable all-terrain shoe" in record["description"]
+    assert "Rubber outsole" in record["specifications"]
+    assert record["_extraction_tiers"]["current"] == "dom"
+    assert record["_extraction_tiers"]["early_exit"] is None
+
+
+def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record_is_complete() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Widget Prime",
+          "description": "A deterministic widget with enough detail to avoid DOM fallback.",
+          "brand": {"name": "Acme"},
+          "image": "https://example.com/images/widget-1.jpg",
+          "offers": {
+            "price": "19.99",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <div class="noise">No useful DOM selectors required</div>
+      </body>
+    </html>
+    """
+
+    rows = crawl_engine.extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=5,
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["_extraction_tiers"]["early_exit"] == "structured_data"
+    assert record["_extraction_tiers"]["current"] == "structured_data"

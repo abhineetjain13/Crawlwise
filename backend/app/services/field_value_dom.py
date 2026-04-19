@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import regex as regex_lib
 
 from bs4 import BeautifulSoup, Tag
+from lxml import etree
+from lxml import html as lxml_html
 
 from app.services.config.extraction_rules import EXTRACTION_RULES
 from app.services.field_policy import normalize_field_key, normalize_requested_field
@@ -19,8 +21,19 @@ from app.services.field_value_core import (
     surface_alias_lookup,
     surface_fields,
 )
+from app.services.xpath_service import validate_xpath_syntax
 
 logger = logging.getLogger(__name__)
+
+
+def _srcset_urls(value: object) -> list[str]:
+    urls: list[str] = []
+    for part in str(value or "").split(","):
+        token = " ".join(str(part or "").split()).strip()
+        if not token:
+            continue
+        urls.append(token.split(" ", 1)[0].strip())
+    return [url for url in urls if url]
 
 
 def safe_select(root: BeautifulSoup | Tag, selector: str) -> list[Tag]:
@@ -35,14 +48,21 @@ def safe_select(root: BeautifulSoup | Tag, selector: str) -> list[Tag]:
 
 def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | None:
     if field_name in IMAGE_FIELDS:
+        srcset = node.get("srcset")
+        image_candidates: object = (
+            _srcset_urls(srcset)
+            if srcset not in (None, "", [], {})
+            else (
+                node.get("content")
+                or node.get("src")
+                or node.get("data-src")
+                or node.get("data-image")
+                or node.get("href")
+                or ""
+            )
+        )
         urls = extract_urls(
-            node.get("content")
-            or node.get("src")
-            or node.get("data-src")
-            or node.get("data-image")
-            or node.get("href")
-            or node.get("srcset")
-            or "",
+            image_candidates,
             page_url,
         )
         if field_name == "additional_images":
@@ -75,6 +95,65 @@ def extract_selector_values(
         if value in (None, "", [], {}):
             continue
         values.append(value)
+    return values
+
+
+def extract_xpath_values(
+    root: BeautifulSoup | Tag,
+    xpath: str,
+    field_name: str,
+    page_url: str,
+) -> list[object]:
+    valid_xpath, _ = validate_xpath_syntax(xpath)
+    if not valid_xpath:
+        logger.warning("Skipping invalid xpath selector for %s: %s", field_name, xpath)
+        return []
+    try:
+        tree = lxml_html.fromstring(str(root))
+    except (etree.ParserError, ValueError):
+        return []
+    try:
+        matches = tree.xpath(xpath)
+    except etree.XPathError:
+        logger.warning("Failed to evaluate xpath selector for %s: %s", field_name, xpath)
+        return []
+    values: list[object] = []
+    for match in matches[:12]:
+        if hasattr(match, "text_content"):
+            raw_value = match.text_content()
+        else:
+            raw_value = str(match)
+        value = coerce_field_value(field_name, raw_value, page_url)
+        if value in (None, "", [], {}):
+            continue
+        values.append(value)
+    return values
+
+
+def extract_regex_values(
+    root: BeautifulSoup | Tag,
+    pattern: str,
+    field_name: str,
+    page_url: str,
+) -> list[object]:
+    html_text = str(root)
+    values: list[object] = []
+    try:
+        matches = regex_lib.finditer(pattern, html_text, regex_lib.DOTALL, timeout=0.05)
+        for match in matches:
+            raw_value = next((group for group in match.groups() if group), None)
+            if raw_value is None:
+                raw_value = match.group(0)
+            value = coerce_field_value(field_name, raw_value, page_url)
+            if value in (None, "", [], {}):
+                continue
+            values.append(value)
+            if len(values) >= 12:
+                break
+    except TimeoutError:
+        logger.warning("Timed out while evaluating selector regex for %s", field_name)
+    except regex_lib.error:
+        logger.warning("Failed to evaluate selector regex for %s", field_name)
     return values
 
 
@@ -180,7 +259,13 @@ def apply_selector_fallbacks(
             selector = str(row.get(selector_key) or "").strip()
             if not selector:
                 continue
-            for value in extract_selector_values(root, selector, field_name, page_url):
+            if selector_key == "css_selector":
+                values = extract_selector_values(root, selector, field_name, page_url)
+            elif selector_key == "xpath":
+                values = extract_xpath_values(root, selector, field_name, page_url)
+            else:
+                values = extract_regex_values(root, selector, field_name, page_url)
+            for value in values:
                 add_candidate(candidates, field_name, value)
     dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
     for field_name in fields:

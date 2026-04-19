@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from app.services.crawl_fetch_runtime import (
     _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES,
     _read_network_payload_body,

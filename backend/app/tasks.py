@@ -6,6 +6,8 @@ import signal
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from types import FrameType
+from typing import Iterator
 
 from app.core.celery_app import celery_app, worker_process_init, worker_process_shutdown
 from app.core.database import SessionLocal
@@ -16,7 +18,8 @@ from app.services.acquisition import (
 from app.services._batch_runtime import process_run as process_run_async
 
 logger = logging.getLogger(__name__)
-_SignalHandler = Callable[[int, object | None], object]
+_SignalHandler = Callable[[int, FrameType | None], object]
+_SignalPreviousHandler = _SignalHandler | int | None
 
 
 @dataclass
@@ -44,7 +47,7 @@ async def _run_with_session(run_id: int) -> None:
         await process_run_async(session, run_id)
 
 
-def _task_termination_handler(signum: int, _frame: object | None) -> None:
+def _task_termination_handler(signum: int, _frame: FrameType | None) -> None:
     _WORKER_TASK_STATE.termination_requested = True
     logger.warning(
         "Received signal %s while processing crawl task; cancelling async run", signum
@@ -57,8 +60,8 @@ def _task_termination_handler(signum: int, _frame: object | None) -> None:
 
 
 @contextmanager
-def _install_task_signal_handlers() -> dict[int, _SignalHandler | int | None]:
-    previous_handlers: dict[int, _SignalHandler | int | None] = {}
+def _install_task_signal_handlers() -> Iterator[dict[int, _SignalPreviousHandler]]:
+    previous_handlers: dict[int, _SignalPreviousHandler] = {}
     for signame in ("SIGTERM", "SIGINT"):
         signum = getattr(signal, signame, None)
         if signum is None:
@@ -69,7 +72,7 @@ def _install_task_signal_handlers() -> dict[int, _SignalHandler | int | None]:
         yield previous_handlers
     finally:
         for signum, previous in previous_handlers.items():
-            signal.signal(signum, previous)
+            signal.signal(signum, signal.SIG_DFL if previous is None else previous)
 
 
 def _run_task_in_worker_loop(run_id: int) -> None:

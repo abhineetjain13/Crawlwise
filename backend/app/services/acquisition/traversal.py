@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 from urllib.parse import urljoin
 
 from app.services.config.runtime_settings import crawler_runtime_settings
@@ -63,7 +62,7 @@ async def execute_listing_traversal(
         result.html_fragments = [await page.content()]
         return result
 
-    selected_mode = normalized_mode
+    selected_mode: str | None = normalized_mode
     if normalized_mode == "auto":
         selected_mode = await _detect_auto_mode(page, surface=surface)
         result.selected_mode = selected_mode

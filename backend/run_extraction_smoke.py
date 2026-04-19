@@ -17,22 +17,21 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.services.acquisition.acquirer import AcquisitionRequest, acquire
-from app.services.acquisition.blocked_detector import detect_blocked_page
-from app.services.extract.listing_extractor import extract_listing_records
-from app.services.extract.service import extract_candidates
+from app.services.acquisition import (
+    AcquisitionRequest,
+    acquire,
+    detect_blocked_page,
+)
+from app.services.adapters.registry import run_adapter
+from app.services.crawl_engine import extract_records
+from app.services.platform_policy import detect_platform_family
+
+from harness_support import infer_surface
 
 DEFAULT_CORPUS_PATH = (
     Path(__file__).resolve().parent / "corpora" / "acceptance_corpus.json"
 )
 DEFAULT_REPORT_DIR = Path("artifacts/extraction_smoke")
-
-
-def _resolve_effective_surface(surface: str, diagnostics: dict) -> str:
-    effective = str(diagnostics.get("surface_effective") or "").strip().lower()
-    if effective in {"job_listing", "job_detail", "ecommerce_listing", "ecommerce_detail"}:
-        return effective
-    return str(surface or "").strip().lower()
 
 
 def _value_present(value: object) -> bool:
@@ -96,7 +95,7 @@ def _coerce_max_elapsed_s(site: dict) -> float | None:
     if raw_value in (None, ""):
         return None
     try:
-        value = float(raw_value)
+        value = float(str(raw_value))
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
@@ -107,7 +106,7 @@ def _apply_elapsed_assertion(result: dict[str, object], site: dict) -> None:
     if max_elapsed_s is None:
         return
     result["max_elapsed_s"] = max_elapsed_s
-    elapsed_s = float(result.get("elapsed_s") or 0.0)
+    elapsed_s = float(str(result.get("elapsed_s") or 0.0))
     if elapsed_s <= max_elapsed_s:
         return
     result["ok"] = False
@@ -159,7 +158,7 @@ def _write_report(
 async def _run_one(site: dict, run_id: int, timeout_seconds: int) -> dict:
     name = str(site.get("name") or "").strip()
     url = str(site.get("url") or "").strip()
-    surface = str(site.get("surface") or "").strip().lower()
+    surface = infer_surface(url, explicit_surface=site.get("surface"))
     page_type = str(site.get("page_type") or "").strip().lower()
     started = time.perf_counter()
     result: dict[str, object] = {
@@ -188,47 +187,47 @@ async def _run_one(site: dict, run_id: int, timeout_seconds: int) -> dict:
             ),
             timeout=timeout_seconds,
         )
-        diagnostics = acquisition.diagnostics or {}
-        extractability = diagnostics.get("extractability") or {}
-        effective_surface = _resolve_effective_surface(surface, diagnostics)
+        blocked = (
+            detect_blocked_page(acquisition.html or "", acquisition.status_code)
+            if acquisition.content_type.startswith("text/html")
+            else False
+        )
+        adapter_result = None
+        if acquisition.content_type.startswith("text/html"):
+            adapter_result = await run_adapter(url, acquisition.html or "", surface)
 
         result.update(
             {
                 "method": acquisition.method,
+                "status_code": acquisition.status_code,
                 "content_type": acquisition.content_type,
-                "effective_surface": effective_surface,
-                "artifact_path": acquisition.artifact_path,
-                "diagnostics_path": acquisition.diagnostics_path,
+                "platform_family": detect_platform_family(url, acquisition.html or ""),
                 "html_len": len(acquisition.html or ""),
                 "network_payloads": len(acquisition.network_payloads or []),
-                "extractability_reason": extractability.get("reason"),
-                "extractability_escalated": extractability.get("escalated"),
-                "acquisition_runtime_reason": diagnostics.get(
-                    "acquisition_runtime_reason"
-                ),
-                "blocked": (
-                    detect_blocked_page(acquisition.html or "").as_dict()
-                    if acquisition.content_type == "html"
-                    else None
-                ),
+                "blocked": blocked,
+                "adapter_name": adapter_result.adapter_name if adapter_result else None,
+                "adapter_records": len(adapter_result.records) if adapter_result else 0,
+                "browser_diagnostics": dict(acquisition.browser_diagnostics or {}),
             }
         )
 
-        if acquisition.content_type == "json":
+        if acquisition.content_type.startswith("application/json"):
             result["ok"] = True
             result["note"] = "JSON response; extraction corpus checks skipped"
             return result
 
-        html = acquisition.html or ""
-        if "listing" in effective_surface:
-            records = extract_listing_records(
-                html,
-                effective_surface,
-                set(),
-                page_url=url,
-                max_records=int(site.get("max_records") or 50),
-                xhr_payloads=acquisition.network_payloads or [],
-            )
+        records = extract_records(
+            acquisition.html or "",
+            url,
+            surface,
+            max_records=int(site.get("max_records") or 50),
+            requested_fields=[str(field) for field in site.get("expect_fields") or []] or None,
+            adapter_records=list(adapter_result.records or []) if adapter_result else None,
+            network_payloads=acquisition.network_payloads or [],
+            selector_rules=None,
+        )
+
+        if "listing" in surface:
             required_fields = [str(field) for field in site.get("required_record_fields") or []]
             coverage = _listing_field_coverage(
                 records,
@@ -267,19 +266,15 @@ async def _run_one(site: dict, run_id: int, timeout_seconds: int) -> dict:
                 result["issue"] = f"Coverage below threshold for: {sorted(failing_fields)}"
         else:
             expected_fields = [str(field) for field in site.get("expect_fields") or []]
-            candidates, _trace = extract_candidates(
-                url,
-                effective_surface,
-                html,
-                acquisition.network_payloads or [],
-                additional_fields=[],
-                resolved_fields=expected_fields or None,
-            )
-            found_fields = [field for field in expected_fields if candidates.get(field)]
+            found_fields = [
+                field
+                for field in expected_fields
+                if records and field in records[0] and _value_present(records[0].get(field))
+            ]
             missing_fields = [field for field in expected_fields if field not in found_fields]
             result.update(
                 {
-                    "candidate_fields": sorted(candidates.keys()),
+                    "candidate_fields": sorted(records[0].keys()) if records else [],
                     "found_fields": found_fields,
                     "missing_fields": missing_fields,
                 }
@@ -299,7 +294,7 @@ async def _run_one(site: dict, run_id: int, timeout_seconds: int) -> dict:
 
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Run the artifact-backed acceptance corpus for acquisition + extraction."
+        description="Run the acceptance corpus against the current acquisition/extraction facades."
     )
     parser.add_argument(
         "--corpus",
@@ -347,7 +342,7 @@ async def main(argv: list[str]) -> int:
         print(f"  Status: {status}")
         print(
             f"  Method: {result.get('method', '?')}, "
-            f"Reason: {result.get('extractability_reason', '?')}"
+            f"Platform: {result.get('platform_family', '?')}"
         )
         if result.get("records") is not None:
             print(f"  Records: {result.get('records')}")

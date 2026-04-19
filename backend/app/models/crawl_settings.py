@@ -21,7 +21,7 @@ def _coerce_int(
     value: object, default: int, minimum: int, maximum: int | None = None
 ) -> int:
     try:
-        result = max(minimum, int(value))
+        result = max(minimum, int(str(value)))
         if maximum is not None:
             result = min(result, maximum)
         return result
@@ -94,6 +94,11 @@ class CrawlRunSettings:
             self.data.get("max_scrolls", DEFAULT_MAX_SCROLLS), DEFAULT_MAX_SCROLLS, 1
         )
 
+    def respect_robots_txt(self) -> bool:
+        if "respect_robots_txt" not in self.data:
+            return False
+        return bool(self.data.get("respect_robots_txt"))
+
     def sleep_ms(self) -> int:
         return _coerce_int(
             self.data.get("sleep_ms", MIN_REQUEST_DELAY_MS),
@@ -152,6 +157,7 @@ class CrawlRunSettings:
         normalized["max_records"] = self.max_records()
         normalized["max_scrolls"] = self.max_scrolls()
         normalized["sleep_ms"] = self.sleep_ms()
+        normalized["respect_robots_txt"] = self.respect_robots_txt()
         normalized["traversal_mode"] = self.traversal_mode()
         normalized["advanced_mode"] = (
             normalized["traversal_mode"] if self.advanced_enabled() else None

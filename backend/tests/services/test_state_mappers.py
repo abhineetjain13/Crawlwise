@@ -148,6 +148,82 @@ def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None
     ]
 
 
+def test_map_js_state_to_fields_recovers_generic_nextjs_product_payload_without_schema_bleed() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NEXT_DATA__": {
+                "props": {
+                    "pageProps": {
+                        "initialData": {
+                            "product": {
+                                "id": "prod_42",
+                                "name": "Commuter Backpack",
+                                "vendor": "Urban Carry",
+                                "handle": "commuter-backpack",
+                                "description": "Weather resistant pack",
+                                "category": "Travel Gear",
+                                "type": "Backpacks",
+                                "price": "89.50",
+                                "sku": "CB-001",
+                                "availability": "In Stock",
+                                "image": [
+                                    "/images/commuter-1.jpg",
+                                    "/images/commuter-2.jpg",
+                                ],
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/commuter-backpack",
+    )
+
+    assert mapped["title"] == "Commuter Backpack"
+    assert mapped["category"] == "Travel Gear"
+    assert mapped["product_type"] == "Backpacks"
+    assert mapped["sku"] == "CB-001"
+    assert mapped["image_url"] == "https://store.example.com/images/commuter-1.jpg"
+
+
+def test_map_js_state_to_fields_recovers_nuxt_array_payload_variant() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__NUXT_DATA__": [
+                {
+                    "data": {
+                        "product": {
+                            "id": "sku-123",
+                            "name": "Commuter Backpack",
+                            "vendor": {"name": "Urban Carry"},
+                            "handle": "commuter-backpack",
+                            "description": "Weather resistant pack",
+                            "category": "Travel Gear",
+                            "product_type": "Backpacks",
+                            "price": "89.50",
+                            "sku": "CB-001",
+                            "availability": "In Stock",
+                            "image": [
+                                "/images/commuter-1.jpg",
+                                "/images/commuter-2.jpg",
+                            ],
+                        }
+                    }
+                }
+            ]
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/commuter-backpack",
+    )
+
+    assert mapped["title"] == "Commuter Backpack"
+    assert mapped["category"] == "Travel Gear"
+    assert mapped["product_type"] == "Backpacks"
+    assert mapped["availability"] == "in_stock"
+    assert mapped["image_url"] == "https://store.example.com/images/commuter-1.jpg"
+
+
 def test_map_js_state_to_fields_replaces_existing_variant_query_parameter() -> None:
     mapped = map_js_state_to_fields(
         {

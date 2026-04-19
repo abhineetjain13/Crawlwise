@@ -18,6 +18,7 @@ function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
     max_records: 100,
     max_pages: 5,
     max_scrolls: 10,
+    respect_robots_txt: true,
     proxy_enabled: false,
     proxy_lines: [],
     additional_fields: [],
@@ -76,6 +77,16 @@ describe("buildDispatch", () => {
     );
 
     expect(dispatch.settings.advanced_mode).toBe("view_all");
+  });
+
+  it("persists the robots toggle in settings", () => {
+    const dispatch = buildDispatch(
+      baseConfig({
+        respect_robots_txt: false,
+      }),
+    );
+
+    expect(dispatch.settings.respect_robots_txt).toBe(false);
   });
 
   it("submits pdp batch as ecommerce detail with URL list", () => {

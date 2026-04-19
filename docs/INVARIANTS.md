@@ -1,56 +1,43 @@
-# Architecture Invariants
+# Invariants
 
-> **Canonical reference.** These MUST be preserved across all changes.
-> Violations should be caught in code review before merge.
-> See also: `docs/backend-architecture.md` § 12 for architecture-level invariants.
+These rules are the backend contract. Refactors may change structure, not these outcomes.
 
----
+## 1. User control ownership
 
-## Configuration & Code Hygiene
+1. User-selected crawl controls are authoritative. Do not silently rewrite `surface`, traversal intent, `proxy_list`, or `llm_enabled`.
+2. Surface remains explicit and user-owned even when heuristics or adapters suggest something else.
+3. Browser rendering escalation and traversal authorization are separate decisions. Rendering may escalate automatically; traversal only runs when settings allow it.
 
-1. **No magic values in service code.** Shared tunables live in typed config modules imported through `pipeline_config.py`. Do not duplicate them in service code.
-2. **Async-safe adapters.** All HTTP calls in async adapter methods MUST use `asyncio.to_thread()` for synchronous libraries (curl_cffi). Blocking the event loop causes visible user-facing latency.
-3. **Pipeline config is the single source of truth** for: field aliases, collection keys, DOM patterns, card selectors, block signatures, consent selectors, verdict core fields, normalization rules.
-4. **Pipeline boundaries must use typed objects.** `_process_single_url` and its sub-functions return `URLProcessingResult`, not raw tuples. New pipeline config parameters should be added to `URLProcessingConfig`, not as additional positional arguments.
-5. **CPU-bound parsing stays off the event loop.** Shared BeautifulSoup parsing in async hot paths must go through the off-thread helpers rather than inline DOM construction.
+## 2. Acquisition and runtime
 
-## Extraction & Field Resolution
+4. Acquisition returns observational facts only: URL, final URL, status, method, headers, blocked state, network/browser diagnostics, and artifacts. Do not fabricate blocker causes or hidden retries.
+5. Preserve usable content over brittle anti-bot heuristics. Vendor markers alone are not enough to classify a page as blocked.
+6. Respect safety and policy boundaries: SSRF/public-target checks, robots handling when enabled, and policy-driven cookie reuse.
+7. Shared runtime behavior must remain config-driven. Tunables belong in `app/services/config/*`, not hardcoded service constants.
 
-6. **Field values are backfilled and quality-scored, not first-match.** For each canonical field, extraction gathers candidates from every active source (adapter → XHR/JSON → JSON-LD → hydrated state → DOM → LLM). A quality scorer picks the winning candidate; the declared source hierarchy breaks ties when scores are equal. If the winning candidate is incomplete — empty string, sentinel value, or missing sub-fields — the pipeline backfills from the next-best candidate before emitting a partial record. When sources disagree and no single winner is obvious, competing values are preserved in `source_trace.field_discovery` so the client can disambiguate rather than being silently collapsed. Noise filters run before scoring so low-quality candidates cannot win by attrition. **Transition:** current code is first-match; backfill behavior is gated on the canonical-field quality scorer (Simplification Roadmap Phase 5, per `EXTRACTION_ENHANCEMENT_SPEC.md` §4.1).
-7. **Verdict based on core fields only.** `_compute_verdict()` determines success/partial based on VERDICT_CORE_FIELDS presence. Requested field coverage is metadata, not a verdict input.
-8. **Listing fallback guard.** Listing pages with 0 item records MUST get `listing_detection_failed` verdict. Never fall back to detail-style single-record extraction for listings.
-9. **Dynamic field names must pass quality gates.** Single-char keys, JSON-LD type names, day-of-week patterns, and sentence-like labels (5+ underscores) are filtered from `record.data`. Zero-quality candidates are filtered from dynamic/intelligence fields. Candidate rows per field are capped at 5. New noise patterns should be added to config, not hardcoded.
-10. **JSON-LD structural keys must not produce candidates.** `@type`, `@context`, `@id`, `@graph` are metadata, not data fields. Network payload noise (geo, tracking, widget APIs) must be filtered by URL pattern before entering the candidate pipeline.
-11. **Listing outputs stay canonical.** Listing extraction must emit canonical item URLs plus whatever canonical fields are naturally exposed on the listing surface. Canonical product URLs are the non-optional floor for listing success: when titles, prices, or images are missing, the pipeline should still return URL-bearing partial records rather than collapsing to zero output. Listing outputs must not be back-filled with detail-only fields, variant payloads, or synthetic schema spillover.
-12. **Detail outputs preserve page-native field identity.** Fields exposed on the source page must retain their native labels (normalized to snake_case) in `record.data`. Canonical schemas apply only when the page genuinely exposes those concepts — canonical fields must not be invented when the page does not expose them, and page-native fields must not be force-fitted into canonical slots that happen to sound similar. Residual buckets (`description`, `features`, `specifications`) hold only content the page itself groups as prose or attribute lists; they are not overflow bins for failed canonicalization. Variant structures remain populated when the page exposes them.
-13. **Commerce/job schema pollution is forbidden.** Footer/legal/contact/share/app-store/UI-chrome text, raw structured-data container keys, and cross-surface field pollution must be filtered before persistence. Users should see logical data only.
+## 3. Extraction and records
 
-## Record & API Contract
+8. Listing and detail extraction stay separate. Listing pages do not fall back into synthetic single-record detail behavior.
+9. A listing run with zero records produces `listing_detection_failed`, not a false success.
+10. Persisted `record.data` contains only populated logical fields. Empty values, `_` internals, and raw manifest containers do not belong in the user-facing payload.
+11. `source_trace` and `discovered_data` must preserve provenance and reviewable metadata without leaking obsolete raw-container noise into normal API responses.
+12. Commerce/job extraction must filter page chrome and metadata noise before persistence.
 
-14. **Clean record API responses.** `CrawlRecordResponse.data` strips empty/null values and `_`-prefixed internal keys. `discovered_data` strips raw manifest containers. Users see only populated logical fields.
-15. **Review shows only actionable fields.** `discovered_fields` in review payloads excludes container keys and empty-valued fields.
+## 4. Selectors, review, and memory
 
-## User Control Ownership
+13. Domain memory is scoped by normalized `(domain, surface)`. Generic fallback may supplement a surface-specific rule set, not override the scoping model.
+14. Selector CRUD, review saves, and selector self-heal may improve future extraction, but they must remain explicit, diagnosable flows.
+15. Automatically synthesized selectors must be validated before they are saved or reused.
 
-16. **User-owned crawl controls are never rewritten by the backend.** Do not normalize or reclassify page type, auto-enable LLM, auto-enable traversal, or auto-switch hidden proxy policy. If the user chose poorly, fail visibly instead of mutating the request.
-17. **Surface selection remains explicit and user-owned.** Commerce vs. jobs identification may be strengthened with explicit UI controls or diagnostics, but the backend must honor the submitted surface/page-type choice rather than silently overriding it.
-18. **JS-shell detection may trigger Playwright rendering, not traversal.** Browser escalation is allowed for rendering blocked/empty/JS-shell pages, but pagination, infinite scroll, and load-more remain explicit `advanced_mode` actions only.
-19. **Playwright expansion is generic, not field-routed.** No code path may use requested field names to decide what to click before capture; the browser path runs the same interactive expansion pass on every session.
+## 5. LLM and snapshots
 
-## Acquisition Safety
+16. LLM use is opt-in at run time through settings and active config. It must not silently activate itself.
+17. Run snapshots are stable within a run. `llm_config_snapshot` and `extraction_runtime_snapshot` should prevent mid-run config drift.
+18. LLM failures should degrade gracefully and remain visible in diagnostics rather than corrupting extraction state.
 
-20. **Preserve usable content over brittle anti-bot heuristics.** Anti-bot signatures should only block when the page actually behaves like a challenge page, not merely because vendor markup exists in otherwise rich HTML.
-21. **HTTP pinning must not break TLS identity.** Preserve the original hostname URL whenever using DNS pinning or SSRF hardening.
-22. **Acquisition regressions must be diagnosable from artifacts.** Successful phase-1 runs should emit HTML/JSON artifacts plus per-URL diagnostics and smoke-run summaries so failures can be compared across batches without relying on transient logs.
-23. **Cookie reuse must be policy-driven.** Do not commit site cookies. Persist only policy-approved cookies via `cookie_policy.json`, and treat challenge/session cookies as ephemeral unless explicitly allowed.
-24. **Diagnostics must be observational.** Acquisition diagnostics should report only what actually happened during the fetch/render path; do not fabricate blocker causes, fallback reasons, or retry metadata.
+## 6. Codebase shape
 
-## Runtime & Infrastructure
-
-25. **Database pool must be pre-ping enabled for Postgres.** `pool_pre_ping=True` catches stale connections before use. Engine must be disposed on application shutdown via `dispose_engine()`.
-26. **LLM config must be snapshot-stable within a run.** Once a run starts, `llm_config_snapshot` is stamped into `run.settings`. Mid-run config changes must not affect in-flight extraction.
-27. **LLM calls must fail fast on rate limits.** No retry/backoff on 429 errors — let the free API tier fail gracefully rather than blocking the pipeline with sleeps. The per-provider circuit breaker handles repeated non-rate-limit failures separately.
-
-## Deletion Policy
-
-29. **Generic crawler paths stay generic.** No tenant/site hardcodes; platform behavior is family-based and minimized to the required families.
+19. Generic crawler paths stay generic. Do not hardcode tenant- or site-specific behavior in shared runtime or extraction code.
+20. Pipeline boundaries should use typed objects and explicit contracts rather than growing positional argument sprawl.
+21. CPU-bound parsing and sync third-party calls must not block async hot paths.
+22. If a rule is important enough to preserve, it should have a clear owning test.

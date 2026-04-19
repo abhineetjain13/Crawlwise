@@ -8,7 +8,7 @@ import time
 import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from bs4 import BeautifulSoup
@@ -19,6 +19,7 @@ from app.services.acquisition.traversal import (
     execute_listing_traversal,
     should_run_traversal,
 )
+from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_utils import clean_text, hostname
 from app.services.platform_policy import resolve_platform_runtime_policy
@@ -35,22 +36,47 @@ _NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
     re.I,
 )
 
-BLOCKED_TERMS = (
-    "access denied",
-    "are you human",
-    "bot detection",
-    "captcha",
-    "cf-chl",
-    "cloudflare",
-    "forbidden",
-    "temporarily unavailable",
-)
 _BROWSER_PREFERRED_HOST_TTL_SECONDS = 1800.0
 _BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
 _SHARED_HTTP_CLIENT: httpx.AsyncClient | None = None
 _SHARED_HTTP_CLIENT_LOCK = asyncio.Lock()
-_BROWSER_RUNTIME = None
+_BROWSER_RUNTIME: SharedBrowserRuntime | None = None
 _BROWSER_RUNTIME_LOCK = asyncio.Lock()
+_DETAIL_EXPAND_SELECTORS = (
+    "button, summary, details summary, "
+    "[role='button'], [aria-expanded='false'], "
+    "[data-testid*='expand'], [data-testid*='accordion']"
+)
+_DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "ecommerce": (
+        "about",
+        "compatibility",
+        "description",
+        "details",
+        "dimensions",
+        "more",
+        "product",
+        "read more",
+        "show more",
+        "spec",
+        "view more",
+    ),
+    "job": (
+        "benefits",
+        "compensation",
+        "description",
+        "more",
+        "qualifications",
+        "requirements",
+        "responsibilities",
+        "salary",
+        "see more",
+        "show all",
+    ),
+}
+
+if TYPE_CHECKING:
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
 
 @dataclass(slots=True)
@@ -62,7 +88,7 @@ class PageFetchResult:
     method: str
     content_type: str = "text/html"
     blocked: bool = False
-    headers: dict[str, str] = field(default_factory=dict)
+    headers: httpx.Headers = field(default_factory=httpx.Headers)
     network_payloads: list[dict[str, object]] = field(default_factory=list)
     browser_diagnostics: dict[str, object] = field(default_factory=dict)
 
@@ -70,8 +96,8 @@ class PageFetchResult:
 class SharedBrowserRuntime:
     def __init__(self, *, max_contexts: int) -> None:
         self.max_contexts = max(1, int(max_contexts))
-        self._playwright = None
-        self._browser = None
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
         self._semaphore = asyncio.Semaphore(self.max_contexts)
         self._lock = asyncio.Lock()
         self._active_contexts = 0
@@ -101,8 +127,11 @@ class SharedBrowserRuntime:
     async def page(self):
         await self._ensure()
         await self._semaphore.acquire()
-        context = None
-        page = None
+        if self._browser is None:
+            self._semaphore.release()
+            raise RuntimeError("Browser runtime failed to initialize")
+        context: BrowserContext | None = None
+        page: Page | None = None
         self._active_contexts += 1
         try:
             context = await self._browser.new_context(
@@ -149,8 +178,60 @@ class SharedBrowserRuntime:
 def is_blocked_html(html: str, status_code: int) -> bool:
     if status_code in {401, 403, 429, 503}:
         return True
-    lowered = html.lower()
-    return any(term in lowered for term in BLOCKED_TERMS)
+    lowered = str(html or "").lower()
+    if not lowered.strip():
+        return False
+
+    for item in _mapping_sequence(BLOCK_SIGNATURES.get("active_provider_markers")):
+        marker = str(item.get("marker") or "").strip().lower()
+        if marker and marker in lowered:
+            return True
+
+    soup = BeautifulSoup(html, "html.parser")
+    for node in soup(["script", "style", "noscript"]):
+        node.decompose()
+    visible_text = clean_text(soup.get_text(" ", strip=True)).lower()
+    title_text = clean_text(soup.title.get_text(" ", strip=True) if soup.title else "").lower()
+
+    title_patterns = _string_sequence(BLOCK_SIGNATURES.get("title_regexes"))
+    for pattern in title_patterns:
+        raw_pattern = str(pattern or "").strip()
+        if raw_pattern and re.search(raw_pattern, title_text, re.IGNORECASE):
+            return True
+
+    strong_markers = [
+        str(marker or "").strip().lower()
+        for marker in _mapping_or_empty(
+            BLOCK_SIGNATURES.get("browser_challenge_strong_markers")
+        ).keys()
+        if str(marker or "").strip()
+    ]
+    weak_markers = [
+        str(marker or "").strip().lower()
+        for marker in _mapping_or_empty(
+            BLOCK_SIGNATURES.get("browser_challenge_weak_markers")
+        ).keys()
+        if str(marker or "").strip()
+    ]
+    provider_markers = [
+        str(marker or "").strip().lower()
+        for marker in _string_sequence(BLOCK_SIGNATURES.get("provider_markers"))
+        if str(marker or "").strip()
+    ]
+
+    strong_hits = {marker for marker in strong_markers if marker in visible_text or marker in title_text}
+    weak_hits = {marker for marker in weak_markers if marker in visible_text or marker in title_text}
+    provider_hits = {marker for marker in provider_markers if marker in lowered}
+
+    if len(strong_hits) >= 2:
+        return True
+    if strong_hits and provider_hits:
+        return True
+    if "access denied" in strong_hits:
+        return True
+    if "just a moment" in strong_hits and ("cloudflare" in provider_hits or "cf-challenge" in lowered):
+        return True
+    return bool(strong_hits and weak_hits and provider_hits)
 
 
 def _looks_like_js_shell(html: str) -> bool:
@@ -319,7 +400,7 @@ async def _http_fetch(url: str, timeout_seconds: float) -> PageFetchResult:
         method="httpx",
         content_type=response.headers.get("content-type", "text/html"),
         blocked=is_blocked_html(html, response.status_code),
-        headers=dict(response.headers),
+        headers=_copy_headers(response.headers),
     )
 
 
@@ -341,7 +422,7 @@ def _curl_fetch_sync(url: str, timeout_seconds: float) -> PageFetchResult:
         method="curl_cffi",
         content_type=response.headers.get("content-type", "text/html"),
         blocked=is_blocked_html(html, response.status_code),
-        headers=dict(response.headers),
+        headers=_copy_headers(response.headers),
     )
 
 
@@ -361,8 +442,10 @@ async def _browser_fetch(
     runtime = await _get_browser_runtime()
     async with runtime.page() as page:
         network_payloads: list[dict[str, object]] = []
+        network_payload_lock = asyncio.Lock()
         capture_tasks: list[asyncio.Task[None]] = []
         malformed_payloads = 0
+        normalized_surface = str(surface or "")
 
         async def _capture_response(response) -> None:
             content_type = str(response.headers.get("content-type", "") or "").lower()
@@ -395,15 +478,29 @@ async def _browser_fetch(
                     exc_info=True,
                 )
                 return
-            network_payloads.append(
-                {
-                    "url": response.url,
-                    "method": getattr(response.request, "method", "GET"),
-                    "status": int(getattr(response, "status", 0) or 0),
-                    "content_type": content_type,
-                    "body": payload,
-                }
+            endpoint_info = _classify_network_endpoint(
+                response_url=response.url,
+                surface=normalized_surface,
             )
+            async with network_payload_lock:
+                if not _should_capture_network_payload(
+                    url=response.url,
+                    content_type=content_type,
+                    headers=response.headers,
+                    captured_count=len(network_payloads),
+                ):
+                    return
+                network_payloads.append(
+                    {
+                        "url": response.url,
+                        "method": getattr(response.request, "method", "GET"),
+                        "status": int(getattr(response, "status", 0) or 0),
+                        "content_type": content_type,
+                        "endpoint_type": endpoint_info["type"],
+                        "endpoint_family": endpoint_info["family"],
+                        "body": payload,
+                    }
+                )
 
         def _schedule_capture(response) -> None:
             capture_tasks.append(asyncio.create_task(_capture_response(response)))
@@ -449,6 +546,12 @@ async def _browser_fetch(
             )
         except Exception:
             networkidle_timed_out = True
+        expansion_diagnostics: dict[str, object] = {}
+        if surface and "detail" in str(surface).lower():
+            expansion_diagnostics = await expand_all_interactive_elements(
+                page,
+                surface=str(surface or ""),
+            )
         traversal_result = None
         html_fragments: list[str]
         if should_run_traversal(surface, traversal_mode):
@@ -471,6 +574,7 @@ async def _browser_fetch(
             "networkidle_timed_out": networkidle_timed_out,
             "network_payload_count": len(network_payloads),
             "malformed_network_payloads": malformed_payloads,
+            "detail_expansion": expansion_diagnostics,
         }
         if traversal_result is not None:
             diagnostics.update(traversal_result.diagnostics())
@@ -486,6 +590,11 @@ async def _browser_fetch(
                 else "text/html"
             ),
             blocked=is_blocked_html(html, status_code),
+            headers=(
+                _copy_headers(response.headers)
+                if response is not None
+                else httpx.Headers()
+            ),
             network_payloads=network_payloads[:_MAX_CAPTURED_NETWORK_PAYLOADS],
             browser_diagnostics=diagnostics,
         )
@@ -530,10 +639,36 @@ async def _call_browser_fetch(
 
 def _is_browser_fetch_signature_error(exc: TypeError) -> bool:
     frames = traceback.extract_tb(exc.__traceback__)
-    if not frames:
-        return False
-    last_frame = frames[-1]
-    return last_frame.name == "_call_browser_fetch"
+    return any(
+        frame.name in {"_call_browser_fetch", "_browser_fetch"}
+        for frame in frames
+    )
+
+
+def _copy_headers(headers: Any) -> httpx.Headers:
+    if isinstance(headers, httpx.Headers):
+        return httpx.Headers(list(headers.multi_items()))
+    if hasattr(headers, "multi_items"):
+        return httpx.Headers(list(headers.multi_items()))
+    if isinstance(headers, dict):
+        return httpx.Headers(headers)
+    return httpx.Headers(list(getattr(headers, "items", lambda: [])()))
+
+
+def _mapping_or_empty(value: object) -> dict[object, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _mapping_sequence(value: object) -> list[dict[object, object]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _string_sequence(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
 
 
 def _should_capture_network_payload(
@@ -557,6 +692,140 @@ def _should_capture_network_payload(
     ):
         return False
     return True
+
+
+def _classify_network_endpoint(
+    *,
+    response_url: str,
+    surface: str,
+) -> dict[str, str]:
+    lowered_url = str(response_url or "").strip().lower()
+    normalized_surface = str(surface or "").strip().lower()
+    family = "generic"
+    if "greenhouse" in lowered_url:
+        family = "greenhouse"
+    elif "workday" in lowered_url:
+        family = "workday"
+    elif "lever.co" in lowered_url or "/lever/" in lowered_url:
+        family = "lever"
+    elif "shopify" in lowered_url:
+        family = "shopify"
+    elif "__next" in lowered_url or "_next/data" in lowered_url:
+        family = "nextjs"
+
+    endpoint_type = "generic_json"
+    if "/graphql" in lowered_url or "graphql?" in lowered_url:
+        endpoint_type = "graphql"
+    elif normalized_surface == "job_detail" and any(
+        token in lowered_url
+        for token in (
+            "/jobs/",
+            "/job_posts/",
+            "/postings/",
+            "/positions/",
+            "/requisition/",
+            "/careers/",
+        )
+    ):
+        endpoint_type = "job_api"
+    elif normalized_surface == "ecommerce_detail" and any(
+        token in lowered_url
+        for token in (
+            "/products/",
+            "/product/",
+            "product.js",
+            "/variants/",
+            "/cart.js",
+        )
+    ):
+        endpoint_type = "product_api"
+    return {"type": endpoint_type, "family": family}
+
+
+async def expand_all_interactive_elements(
+    page: Any,
+    *,
+    surface: str = "",
+    checkpoint: Any = None,
+) -> dict[str, object]:
+    del checkpoint
+    diagnostics: dict[str, object] = {
+        "buttons_found": 0,
+        "clicked_count": 0,
+        "expanded_elements": [],
+        "interaction_failures": [],
+        "limit": int(crawler_runtime_settings.detail_expand_max_interactions),
+    }
+    try:
+        candidates = await page.locator(_DETAIL_EXPAND_SELECTORS).element_handles()
+    except Exception as exc:
+        diagnostics["interaction_failures"] = [f"locator_failed:{exc}"]
+        return diagnostics
+
+    keywords = _detail_expansion_keywords(surface)
+    expanded_elements: list[str] = []
+    interaction_failures: list[str] = []
+    diagnostics["buttons_found"] = len(candidates)
+    max_interactions = max(
+        0,
+        min(
+            int(crawler_runtime_settings.detail_expand_max_interactions),
+            int(crawler_runtime_settings.accordion_expand_max),
+        ),
+    )
+    clicked_count = 0
+    for handle in candidates:
+        if clicked_count >= max_interactions:
+            break
+        try:
+            label = await _interactive_label(handle)
+            if keywords and label and not any(keyword in label for keyword in keywords):
+                continue
+            await handle.scroll_into_view_if_needed()
+            try:
+                await handle.click(timeout=1_000)
+            except Exception:
+                await handle.evaluate(
+                    "(node) => node instanceof HTMLElement && node.click()"
+                )
+            if int(crawler_runtime_settings.accordion_expand_wait_ms) > 0:
+                await page.wait_for_timeout(
+                    int(crawler_runtime_settings.accordion_expand_wait_ms)
+                )
+            clicked_count += 1
+            if label:
+                expanded_elements.append(label)
+        except Exception as exc:
+            interaction_failures.append(str(exc))
+    diagnostics["clicked_count"] = clicked_count
+    diagnostics["expanded_elements"] = expanded_elements
+    diagnostics["interaction_failures"] = interaction_failures
+    return diagnostics
+
+
+def _detail_expansion_keywords(surface: str) -> tuple[str, ...]:
+    lowered = str(surface or "").strip().lower()
+    if "ecommerce" in lowered:
+        return _DETAIL_EXPAND_KEYWORDS["ecommerce"]
+    if "job" in lowered:
+        return _DETAIL_EXPAND_KEYWORDS["job"]
+    return ()
+
+
+async def _interactive_label(handle: Any) -> str:
+    value = await handle.evaluate(
+        """(node) => {
+            const pieces = [
+                node.innerText,
+                node.textContent,
+                node.getAttribute('aria-label'),
+                node.getAttribute('title'),
+                node.getAttribute('data-testid'),
+            ];
+            return pieces.find((item) => item && item.trim()) || '';
+        }"""
+    )
+    return " ".join(str(value or "").split()).strip().lower()
 
 
 def _coerce_content_length(headers: dict[str, object] | Any) -> int | None:

@@ -131,3 +131,78 @@ def test_map_network_payloads_to_fields_maps_generic_ecommerce_first_non_empty_p
             "url": "https://store.example.com/products/commuter-backpack",
         }
     ]
+
+
+def test_map_network_payloads_to_fields_prioritizes_late_high_signal_job_payloads() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://jobs.example.com/api/bootstrap.json",
+                "endpoint_type": "generic_json",
+                "endpoint_family": "generic",
+                "body": {
+                    "posting": {
+                        "title": "Fallback Platform Engineer",
+                        "description": "<p>Fallback description.</p>",
+                    }
+                },
+            },
+            {
+                "url": "https://boards.greenhouse.io/v1/boards/acme/jobs/1234",
+                "endpoint_type": "job_api",
+                "endpoint_family": "greenhouse",
+                "body": {
+                    "title": "Senior Platform Engineer",
+                    "company_name": "Acme Hiring",
+                    "location": {"name": "Remote - India"},
+                    "absolute_url": "https://jobs.example.com/platform-engineer",
+                    "first_published": "2026-04-18",
+                    "content": "<p>Build platform systems.</p>",
+                },
+            },
+        ],
+        surface="job_detail",
+        page_url="https://jobs.example.com/platform-engineer",
+    )
+
+    assert rows[0]["title"] == "Senior Platform Engineer"
+    assert rows[0]["company"] == "Acme Hiring"
+
+
+def test_map_network_payloads_to_fields_prioritizes_late_high_signal_product_payloads() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://store.example.com/bootstrap.json",
+                "endpoint_type": "generic_json",
+                "endpoint_family": "generic",
+                "body": {
+                    "item": {
+                        "name": "Fallback Backpack",
+                        "price": {"current": "79.50"},
+                    }
+                },
+            },
+            {
+                "url": "https://store.example.com/products/commuter-backpack.js",
+                "endpoint_type": "product_api",
+                "endpoint_family": "shopify",
+                "body": {
+                    "product": {
+                        "title": "Commuter Backpack",
+                        "brand": {"name": "Urban Carry"},
+                        "vendor": {"name": "Urban Carry Direct"},
+                        "sku": "CB-001",
+                        "price": {"current": "89.50", "currency": "USD"},
+                        "availability": "In Stock",
+                        "images": [{"src": "https://cdn.example.com/bag-1.jpg"}],
+                    }
+                },
+            },
+        ],
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/commuter-backpack",
+    )
+
+    assert rows[0]["title"] == "Commuter Backpack"
+    assert rows[0]["price"] == "89.50"

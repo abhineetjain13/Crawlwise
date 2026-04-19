@@ -2,8 +2,26 @@ from __future__ import annotations
 
 
 def as_int(value: object) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (int, bool)):
+        return int(value)
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, (str, bytes)):
+        raw_value = value.decode() if isinstance(value, bytes) else value
+        raw_value = raw_value.strip()
+        if not raw_value:
+            return 0
+        try:
+            return int(raw_value)
+        except ValueError:
+            try:
+                return int(float(raw_value))
+            except ValueError:
+                return 0
     try:
-        return int(value or 0)
+        return int(value)
     except (TypeError, ValueError):
         return 0
 

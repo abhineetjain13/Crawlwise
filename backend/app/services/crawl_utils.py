@@ -60,11 +60,14 @@ async def parse_csv_urls_async(csv_content: str) -> list[str]:
 
 
 def normalize_target_url(value: object) -> str:
-    """Normalize a target URL by removing whitespace and unescaping HTML entities."""
+    """Normalize a target URL while rejecting pasted multi-value inputs."""
     text = unescape(str(value or "")).strip()
     if not text:
         return ""
-    return re.sub(r"\s+", "", text)
+    if re.search(r"\s", text):
+        logger.warning("Rejected target URL containing internal whitespace: %r", text)
+        return ""
+    return text
 
 
 def _settings_view(settings: object) -> _SettingsViewLike | dict:

@@ -286,6 +286,12 @@ a.no-underline:focus-visible {
   text-decoration: none;
 }
 
+a[href^="http://"],
+a[href^="https://"],
+.tabular-nums {
+  font-family: var(--font-jetbrains-mono);
+}
+
 .link-accent:hover,
 .link-accent:focus-visible {
   color: var(--accent-hover);
@@ -873,6 +879,18 @@ select.control-select:focus {
   line-height: 1.4;
 }
 
+.text-mono-body,
+.input.text-mono-body,
+.textarea.text-mono-body {
+  font-family: var(--font-jetbrains-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.input.text-mono-body::placeholder,
+.textarea.text-mono-body::placeholder {
+  font-family: var(--font-jetbrains-mono);
+}
+
 .filter-toolbar {
   display: flex;
   flex-direction: column;
@@ -932,6 +950,7 @@ select.control-select:focus {
 }
 
 .metric-value {
+  font-family: var(--font-jetbrains-mono);
   font-size: 28px;
   font-weight: 650;
   letter-spacing: -0.03em;
@@ -980,6 +999,11 @@ select.control-select:focus {
   text-transform: uppercase;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+.compact-data-table th.text-right,
+.compact-data-table td.text-right {
+  text-align: right;
 }
 
 .compact-data-table td {

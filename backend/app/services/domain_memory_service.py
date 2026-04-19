@@ -96,7 +96,7 @@ def selector_payload_from_rules(rules: list[dict[str, object]]) -> dict[str, obj
         if not isinstance(row, dict):
             continue
         try:
-            row_id = int(row.get("id") or 0)
+            row_id = int(str(row.get("id") or 0))
         except (TypeError, ValueError):
             row_id = 0
         max_id = max(max_id, row_id)

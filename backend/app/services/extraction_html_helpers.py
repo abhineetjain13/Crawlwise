@@ -37,6 +37,11 @@ def extract_job_sections(html: str) -> dict[str, str]:
     for label, value in sections.items():
         for section, patterns in SECTION_PATTERNS.items():
             if any(pattern in label for pattern in patterns):
-                mapped[section] = value
+                combined = " ".join(
+                    piece
+                    for piece in (mapped.get(section), value)
+                    if str(piece or "").strip()
+                )
+                mapped[section] = " ".join(combined.split()).strip()
                 break
     return mapped

@@ -59,8 +59,10 @@ def create_browser_identity() -> BrowserIdentity:
     )
 
 
-def build_playwright_context_options() -> dict[str, Any]:
-    identity = create_browser_identity()
+def build_playwright_context_options(
+    identity: BrowserIdentity | None = None,
+) -> dict[str, Any]:
+    identity = identity or create_browser_identity()
     return {
         "user_agent": identity.user_agent,
         "viewport": dict(identity.viewport),

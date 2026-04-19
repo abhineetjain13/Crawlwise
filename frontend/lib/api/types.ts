@@ -315,6 +315,7 @@ export type CrawlConfig = {
   max_records: number;
   max_pages: number;
   max_scrolls: number;
+  respect_robots_txt: boolean;
   proxy_enabled: boolean;
   proxy_lines: string[];
   additional_fields: string[];

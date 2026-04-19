@@ -9,7 +9,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.services.acquisition import HttpFetchResult, request_result, wait_for_host_slot
-from app.services.config.crawl_runtime import ACQUIRE_HOST_MIN_INTERVAL_MS
 from app.services.platform_policy import detect_platform_family
 
 from .types import AdapterRecords
@@ -72,7 +71,7 @@ class BaseAdapter(ABC):
     ) -> HttpFetchResult:
         hostname = str(urlparse(str(url or "")).hostname or "").strip().lower()
         if hostname:
-            await wait_for_host_slot(hostname, ACQUIRE_HOST_MIN_INTERVAL_MS)
+            await wait_for_host_slot(hostname)
         return await request_result(
             url,
             proxy=proxy,
@@ -144,7 +143,7 @@ class BaseAdapter(ABC):
     ) -> dict | list | None:
         hostname = str(urlparse(str(url or "")).hostname or "").strip().lower()
         if hostname:
-            await wait_for_host_slot(hostname, ACQUIRE_HOST_MIN_INTERVAL_MS)
+            await wait_for_host_slot(hostname)
         kwargs: dict[str, Any] = {}
         if headers:
             kwargs["headers"] = headers

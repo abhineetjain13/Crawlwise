@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated, NoReturn
+from collections.abc import Callable
+from typing import Annotated, Any, NoReturn, cast
 
 from app.core.database import SessionLocal
 from app.core.dependencies import get_current_user, get_db
 from app.core.security import decode_access_token
+from app.models.crawl import CrawlRun, CrawlLog
 from app.models.user import User
 from app.schemas.common import LogEntryResponse, PaginatedResponse, PaginationMeta
 from app.schemas.crawl import (
@@ -58,10 +60,12 @@ router = APIRouter(prefix="/api/crawls", tags=["crawls"])
 logger = logging.getLogger("app.api.crawls")
 
 RUN_CONFLICT_DETAIL = "Run cannot be cancelled in its current state"
-RUN_NOT_FOUND_RESPONSE = {
+ResponseSpec = dict[int | str, dict[str, Any]]
+
+RUN_NOT_FOUND_RESPONSE: ResponseSpec = {
     status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
 }
-RUN_CONFLICT_RESPONSE = {
+RUN_CONFLICT_RESPONSE: ResponseSpec = {
     **RUN_NOT_FOUND_RESPONSE,
     status.HTTP_409_CONFLICT: {"description": RUN_CONFLICT_DETAIL},
 }
@@ -103,7 +107,7 @@ async def _get_accessible_run_or_404(
     *,
     run_id: int,
     user: User,
-):
+) -> CrawlRun:
     try:
         return await _require_accessible_run(session, run_id=run_id, user=user)
     except ValueError as exc:
@@ -118,7 +122,7 @@ async def _mutate_run_status(
     *,
     run_id: int,
     user: User,
-    action,
+    action: Callable[[AsyncSession, CrawlRun], Any],
 ) -> dict[str, object]:
     run = await _get_accessible_run_or_404(session, run_id=run_id, user=user)
     try:
@@ -190,7 +194,7 @@ async def _require_accessible_run(
     *,
     run_id: int,
     user: User,
-):
+) -> CrawlRun:
     run = await get_run(session, run_id)
     if run is None or not user_can_access_run(user=user, run=run):
         raise ValueError(RUN_NOT_FOUND_DETAIL)
@@ -201,7 +205,7 @@ async def _load_log_stream_snapshot(
     *,
     run_id: int,
     after_id: int | None,
-) -> tuple[list, object | None]:
+) -> tuple[list[CrawlLog], CrawlRun | None]:
     async with SessionLocal() as session:
         rows = await get_run_logs(session, run_id, after_id=after_id, limit=500)
         run = await get_run(session, run_id)
@@ -369,12 +373,12 @@ async def crawls_resume(
 
 @router.post(
     "/{run_id}/kill",
-    responses={
+    responses=cast(ResponseSpec, {
         status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
         status.HTTP_409_CONFLICT: {
             "description": "Run cannot be killed in its current state"
         },
-    },
+    }),
 )
 async def crawls_kill(
     run_id: int,
@@ -391,10 +395,10 @@ async def crawls_kill(
 
 @router.post(
     "/{run_id}/cancel",
-    responses={
+    responses=cast(ResponseSpec, {
         status.HTTP_404_NOT_FOUND: {"description": RUN_NOT_FOUND_DETAIL},
         status.HTTP_409_CONFLICT: {"description": RUN_CONFLICT_DETAIL},
-    },
+    }),
 )
 async def crawls_cancel(
     run_id: int,
@@ -445,7 +449,7 @@ async def crawls_logs_ws(
         cursor = after_id
         try:
             while True:
-                rows, run = await _load_log_stream_snapshot(
+                rows, next_run = await _load_log_stream_snapshot(
                     run_id=run_id,
                     after_id=cursor,
                 )
@@ -454,9 +458,10 @@ async def crawls_logs_ws(
                     await websocket.send_json(serialize_log_event(row))
                     cursor = row.id
 
-                if run is None:
+                if next_run is None:
                     await websocket.close(code=1008, reason=RUN_NOT_FOUND_DETAIL)
                     return
+                run = next_run
                 if run.status_value in TERMINAL_STATUSES and not rows:
                     await websocket.close(code=1000, reason="Run completed")
                     return

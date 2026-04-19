@@ -1,12 +1,18 @@
 # Shared test fixtures.
+# ruff: noqa: E402
 from __future__ import annotations
 
 import itertools
 import os
 import re
+import sys
 import tempfile
 from fnmatch import fnmatch
 from pathlib import Path
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
 
 import pytest
 import pytest_asyncio
@@ -21,7 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _TMP_COUNTER = itertools.count()
-_WORKSPACE_TMP_ROOT = Path(__file__).resolve().parents[1] / ".pytest-tmp"
+_WORKSPACE_TMP_ROOT = _BACKEND_ROOT / ".pytest-tmp"
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db",

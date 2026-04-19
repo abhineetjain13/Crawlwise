@@ -1,5 +1,5 @@
-"""
-Small acquire-only smoke runner for representative TEST_SITES batches.
+r"""
+Acquire-only smoke runner aligned to the current acquisition facade.
 
 Usage:
     cd backend
@@ -18,8 +18,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.config import settings
-from app.services.acquisition.acquirer import AcquisitionRequest, acquire
-from app.services.acquisition.blocked_detector import detect_blocked_page
+from app.services.acquisition import (
+    AcquisitionRequest,
+    acquire,
+    detect_blocked_page,
+)
+from app.services.platform_policy import detect_platform_family
+
+from harness_support import infer_surface
 
 BATCHES: dict[str, list[tuple[str, str]]] = {
     "api": [
@@ -66,35 +72,47 @@ BATCHES: dict[str, list[tuple[str, str]]] = {
 
 async def _run_one(run_id: int, name: str, url: str, timeout_seconds: int) -> dict:
     started = time.perf_counter()
+    surface = infer_surface(url)
     try:
         result = await asyncio.wait_for(
             acquire(
                 AcquisitionRequest(
                     run_id=run_id,
                     url=url,
+                    surface=surface,
+                    max_pages=3,
+                    max_scrolls=3,
+                    sleep_ms=0,
                 )
             ),
             timeout=timeout_seconds,
         )
-        blocked = detect_blocked_page(result.html or "").as_dict() if result.content_type == "html" else None
+        blocked = (
+            detect_blocked_page(result.html or "", result.status_code)
+            if result.content_type and result.content_type.startswith("text/html")
+            else False
+        )
         return {
             "name": name,
             "url": url,
+            "surface": surface,
+            "platform_family": detect_platform_family(url, result.html or ""),
             "ok": True,
             "method": result.method,
+            "status_code": result.status_code,
             "content_type": result.content_type,
             "html_len": len(result.html or ""),
-            "json_kind": type(result.json_data).__name__ if result.json_data is not None else None,
             "network_payloads": len(result.network_payloads or []),
             "blocked": blocked,
-            "artifact_path": result.artifact_path,
-            "diagnostics_path": result.diagnostics_path,
+            "browser_diagnostics": dict(result.browser_diagnostics or {}),
             "seconds": round(time.perf_counter() - started, 2),
         }
     except Exception as exc:
         return {
             "name": name,
             "url": url,
+            "surface": surface,
+            "platform_family": detect_platform_family(url),
             "ok": False,
             "error": f"{type(exc).__name__}: {exc}",
             "seconds": round(time.perf_counter() - started, 2),
@@ -151,7 +169,16 @@ async def main(argv: list[str]) -> int:
         run_id_base += len(BATCHES[batch_name])
 
     report_path = _write_report(overall, selected, args.timeout)
-    print(json.dumps({"summary": _build_summary(overall), "report_path": str(report_path), "results": overall}, indent=2))
+    print(
+        json.dumps(
+            {
+                "summary": _build_summary(overall),
+                "report_path": str(report_path),
+                "results": overall,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

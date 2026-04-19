@@ -35,6 +35,52 @@ NEXT_DATA_ECOMMERCE_SPEC = {
         default=None,
     ),
 }
+GENERIC_PRODUCT_SPEC = {
+    "title": Coalesce("title", "name", default=None),
+    "brand": Coalesce("vendor", "brand.name", "brand", default=None),
+    "vendor": Coalesce("vendor.name", "vendor", default=None),
+    "handle": Coalesce("handle", "slug", default=None),
+    "description": Coalesce("description", "body_html", default=None),
+    "product_id": Coalesce("id", "product_id", default=None),
+    "category": Coalesce("category", default=None),
+    "product_type": Coalesce("product_type", "type", default=None),
+    "sku": Coalesce("sku", default=None),
+    "availability": Coalesce("availability", "inventory.status", default=None),
+}
+_DECLARATIVE_PRODUCT_ROOTS: dict[str, tuple[str, ...]] = {
+    "__NEXT_DATA__": (
+        "props.pageProps.product",
+        "props.pageProps.productData",
+        "props.pageProps.initialData.product",
+        "props.pageProps.initialData",
+        "query.product",
+        "apollo.product",
+    ),
+    "__INITIAL_STATE__": (
+        "catalog.selected.product",
+        "product.current",
+        "product",
+        "pdp.product",
+        "state.product",
+    ),
+    "__PRELOADED_STATE__": (
+        "product.current",
+        "product",
+        "catalog.selected.product",
+        "state.product",
+    ),
+    "__NUXT__": (
+        "data[0].product",
+        "data.product",
+        "state.product",
+        "product",
+    ),
+    "__NUXT_DATA__": (
+        "data[0].product",
+        "state.product",
+        "product",
+    ),
+}
 
 REMIX_GREENHOUSE_SPEC = {
     "title": Coalesce(
@@ -123,43 +169,97 @@ def _map_ecommerce_detail_state(
     next_data = js_state_objects.get("__NEXT_DATA__")
     if isinstance(next_data, dict):
         mapped = _compact_dict(glom(next_data, NEXT_DATA_ECOMMERCE_SPEC, default={}))
-        product = _find_product_payload(next_data)
+        product = _extract_product_payload("__NEXT_DATA__", next_data)
         if isinstance(product, dict):
             mapped = _merge_missing(
                 mapped,
-                _map_product_payload(product, page_url=page_url),
+                _map_product_payload(
+                    product,
+                    page_url=page_url,
+                    category_fallback_from_type=False,
+                ),
             )
         if mapped:
             return mapped
 
-    for key in ("__NUXT__", "__NUXT_DATA__", "__INITIAL_STATE__", "__PRELOADED_STATE__"):
-        payload = js_state_objects.get(key)
-        product = _find_product_payload(payload)
+    for key in ("__INITIAL_STATE__", "__PRELOADED_STATE__", "__NUXT__", "__NUXT_DATA__"):
+        payload = _normalized_state_payload(key, js_state_objects.get(key))
+        product = _extract_product_payload(key, payload)
         if not isinstance(product, dict):
             continue
-        return _map_product_payload(product, page_url=page_url)
+        return _map_product_payload(
+            product,
+            page_url=page_url,
+            category_fallback_from_type=(key == "__NUXT_DATA__"),
+        )
     return {}
+
+
+def _extract_product_payload(state_key: str, payload: Any) -> dict[str, Any] | None:
+    normalized_payload = _normalized_state_payload(state_key, payload)
+    root_paths = _DECLARATIVE_PRODUCT_ROOTS.get(state_key, ())
+    for path in root_paths:
+        candidate = glom(normalized_payload, path, default=None)
+        if _looks_like_product_payload(candidate):
+            return dict(candidate)
+    return _find_product_payload(normalized_payload)
+
+
+def _normalized_state_payload(state_key: str, payload: Any) -> Any:
+    if state_key == "__NUXT_DATA__":
+        revived = _revive_nuxt_data_array(payload)
+        if revived is not None:
+            return revived
+    return payload
+
+
+def _revive_nuxt_data_array(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, list):
+        return payload if isinstance(payload, dict) else None
+    data_rows: list[dict[str, Any]] = []
+    state: dict[str, Any] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("state"), dict):
+            state.update(item.get("state") or {})
+        if isinstance(item.get("data"), dict):
+            data_rows.append(item["data"])
+        elif "product" in item and isinstance(item.get("product"), dict):
+            data_rows.append({"product": item["product"]})
+    revived: dict[str, Any] = {}
+    if data_rows:
+        revived["data"] = data_rows
+    if state:
+        revived["state"] = state
+    return revived or None
+
+
+def _looks_like_product_payload(value: Any) -> bool:
+    return isinstance(value, dict) and any(
+        key in value
+        for key in (
+            "variants",
+            "product_type",
+            "vendor",
+            "handle",
+            "price",
+            "sku",
+            "images",
+            "image",
+            "availability",
+            "category",
+            "type",
+        )
+    ) and any(key in value for key in ("title", "name"))
 
 
 def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict[str, Any] | None:
     if depth > limit:
         return None
+    if _looks_like_product_payload(value):
+        return dict(value)
     if isinstance(value, dict):
-        if any(
-            key in value
-            for key in (
-                "variants",
-                "product_type",
-                "vendor",
-                "handle",
-                "price",
-                "sku",
-                "images",
-                "image",
-                "availability",
-            )
-        ) and any(key in value for key in ("title", "name")):
-            return value
         for item in value.values():
             found = _find_product_payload(item, depth=depth + 1, limit=limit)
             if found is not None:
@@ -172,7 +272,12 @@ def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict
     return None
 
 
-def _map_product_payload(product: dict[str, Any], *, page_url: str) -> dict[str, Any]:
+def _map_product_payload(
+    product: dict[str, Any],
+    *,
+    page_url: str,
+    category_fallback_from_type: bool,
+) -> dict[str, Any]:
     images = _extract_product_images(product, page_url=page_url)
     shopify_like = _looks_like_shopify_product(product)
     option_names = _option_names(product.get("options"))
@@ -249,7 +354,14 @@ def _map_product_payload(product: dict[str, Any], *, page_url: str) -> dict[str,
             "handle": product.get("handle"),
             "description": product.get("description") or product.get("body_html"),
             "product_id": product.get("id"),
-            "category": product.get("category"),
+            "category": (
+                product.get("category")
+                or (
+                    product.get("product_type") or product.get("type")
+                    if category_fallback_from_type
+                    else None
+                )
+            ),
             "product_type": product.get("product_type") or product.get("type"),
             "price": price,
             "original_price": original_price,

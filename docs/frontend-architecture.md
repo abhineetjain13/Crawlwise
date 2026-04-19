@@ -1,349 +1,257 @@
 # Frontend Architecture
 
-> **Last Updated:** 2026-04-11
+> Last updated: 2026-04-19
 
-This document describes the current state of the frontend - where each piece of logic lives and how it connects.
+This document describes the live frontend structure, what it actually calls in the backend, and the remaining client/backend drift that should stay visible.
 
----
+## 1. Stack and Role
 
-## 1. Directory Structure
+Frontend is a Next.js App Router UI for:
 
-```
-frontend/
-├── app/                        # Next.js App Router pages
-│   ├── page.tsx               # Landing → redirect to /dashboard
-│   ├── layout.tsx             # Root layout + providers
-│   ├── login/page.tsx         # Login form
-│   ├── register/page.tsx      # Registration form  
-│   ├── dashboard/page.tsx    # Dashboard overview
-│   ├── crawl/
-│   │   ├── page.tsx          # Main crawl entry (switches config/run)
-│   │   ├── category/page.tsx  # Category listing mode
-│   │   ├── pdp/page.tsx      # Product detail mode
-│   │   └── bulk/page.tsx     # Bulk URL mode
-│   ├── runs/
-│   │   ├── page.tsx         # Run list view
-│   │   └── [run_id]/
-│   │       ├── page.tsx     # Run detail (alias for /crawl?run_id=)
-│   │       └── loading.tsx
-│   ├── jobs/page.tsx         # Active jobs view
-│   ├── selectors/page.tsx   # Selector management (calls non-existent API)
-│   └── admin/
-│       ├── users/page.tsx   # User admin
-│       └── llm/page.tsx    # LLM config (calls non-existent API)
-│
-├── components/
-│   ├── layout/
-│   │   ├── app-shell.tsx       # Authenticated layout shell
-│   │   ├── auth-session-query.ts  # Session fetching
-│   │   └── top-bar-context.tsx  # Header state
-│   ├── crawl/
-│   │   ├── crawl-config-screen.tsx   # Crawl form UI
-│   │   ├── crawl-run-screen.tsx       # Run workspace UI
-│   │   ├── shared.tsx             # Shared helpers, RecordsTable, LogTerminal
-│   │   └── use-run-polling.ts     # Run polling logic
-│   └── ui/
-│       ├── primitives.tsx      # Button, Card, Input, etc.
-│       ├── patterns.tsx       # PageHeader, SectionHeader, etc.
-│       ├── query-provider.tsx  # React Query provider
-│       ├── theme-toggle.tsx    # Dark mode toggle
-│       └── status.ts         # Status display helpers
-│
-├── lib/
-│   ├── api/
-│   │   ├── index.ts       # API exports (everything goes through here)
-│   │   ├── client.ts    # fetch wrapper with auth
-│   │   └── types.ts    # TypeScript types for API
-│   ├── constants/
-│   │   ├── timing.ts        # Polling intervals
-│   │   ├── crawl-defaults.ts  # Default settings
-│   │   ├── storage-keys.ts   # LocalStorage keys
-│   │   └── crawl-statuses.ts  # Status mappings
-│   ├── format/
-│   │   ├── domain.ts    # Domain formatting
-│   │   └── date.ts    # Date formatting
-│   ├── telemetry/
-│   │   └── events.ts  # Analytics events
-│   └── utils.ts       # Utility functions (cn, etc.)
-│
-├── e2e/
-│   └── smoke.spec.ts   # Playwright e2e tests
-│
-├── playwright.config.ts
-├── vitest.config.ts
-├── vitest.setup.ts
-└── next.config.ts
-```
+- auth/session handling
+- crawl configuration and launch
+- run monitoring and record inspection
+- selectors workflow
+- dashboard/history/jobs operations
+- admin users and LLM configuration
 
----
+Key client libraries:
 
-## 2. How Pages Connect
+- Next.js App Router
+- React Query
+- Lucide icons
+- React Markdown
 
-### Main Entry
-```
-/ → page.tsx 
-  → redirect to /dashboard
+## 2. Route Map
 
-/dashboard → dashboard/page.tsx
-  → api.dashboard()
+App routes under `frontend/app`:
 
-/login → login/page.tsx  
-  → api.login()
+- `/` -> redirect-style entry page
+- `/login`
+- `/register`
+- `/dashboard`
+- `/crawl`
+- `/crawl/category`
+- `/crawl/pdp`
+- `/crawl/bulk`
+- `/runs`
+- `/runs/[run_id]`
+- `/jobs`
+- `/selectors`
+- `/admin/users`
+- `/admin/llm`
 
-/register → register/page.tsx
+Important route behavior:
 
-/crawl → crawl/page.tsx
-  ├── No run_id → CrawlConfigScreen
-  └── Has run_id → CrawlRunScreen
+- `/crawl` switches between config mode and run workspace based on `run_id`
+- `/crawl/category`, `/crawl/pdp`, and `/crawl/bulk` are route shims into `/crawl?...`
+- `/runs/[run_id]` routes back into the crawl workspace
 
-/crawl/category → crawl/category/page.tsx
-  → Redirects to /crawl?mode=category
+## 3. Main Frontend Subsystems
 
-/crawl/pdp �� crawl/pdp/page.tsx
-  → Redirects to /crawl?mode=pdp
+### 3.1 App shell and auth
 
-/crawl/bulk → crawl/bulk/page.tsx
-  → Redirects to /crawl?mode=bulk
+Primary files:
 
-/runs → runs/page.tsx
-  → api.listCrawls()
+- `components/layout/app-shell.tsx`
+- `components/layout/auth-session-query.ts`
+- `components/layout/top-bar-context.tsx`
+- `app/layout.tsx`
 
-/runs/{run_id} → runs/[run_id]/page.tsx
-  → Redirects to /crawl?run_id={run_id}
+Responsibilities:
 
-/jobs → jobs/page.tsx
-  → api.listJobs()
+- session gating
+- shell layout and nav
+- auth-route vs app-route split
+- header state
+- theme toggle and common shell framing
 
-/selectors → selectors/page.tsx
-  → api.suggestSelectors() ← DOESN'T WORK (backend missing)
+### 3.2 API contract layer
 
-/admin/users → admin/users/page.tsx
-  → api.listUsers(), api.updateUser()
+Primary files:
 
-/admin/llm → admin/llm/page.tsx  
-  → api.listLLMConfigs() ← DOESN'T WORK (backend missing)
-```
+- `lib/api/client.ts`
+- `lib/api/index.ts`
+- `lib/api/types.ts`
 
----
+Responsibilities:
 
-## 3. Component Hierarchy
+- all backend HTTP calls
+- API typing
+- auth-aware fetch wrapper
+- URL helpers for review HTML and selector preview HTML
 
-```
-AppShell (layout/app-shell.tsx)
-├── AuthSessionQuery
-│   └── Session gating
-├── TopBarContext
-│   └── PageHeader projection
-└── Children (page content)
+This layer is the frontend/backend contract chokepoint.
 
-CrawlConfigScreen (components/crawl/crawl-config-screen.tsx)
-├── TabBar (category/pdp)
-├── UrlInput
-├── SettingsForm
-│   ├── ModeSelector
-│   ├── AdvancedOptions
-│   └── FieldSelector
-└── SubmitButton → api.createCrawl() → navigate /crawl?run_id=
+### 3.3 Crawl config and dispatch
 
-CrawlRunScreen (components/crawl/crawl-run-screen.tsx)
-├── RunHeader (status, url, surface)
-├── ProgressBar
-├── TabPanel
-│   ├── TableTab → RecordsTable
-│   ├── JsonTab → JSON preview
-│   ├── MarkdownTab → Markdown preview
-│   └── LogsTab → LogTerminal
-└── ActionBar → pause/resume/kill
+Primary files:
 
-RecordsTable (components/crawl/shared.tsx)
-├── Virtualized rows
-├── Column headers
-└── Pagination
+- `components/crawl/crawl-config-screen.tsx`
+- `components/crawl/shared.tsx`
+- `lib/constants/crawl-defaults.ts`
 
-LogTerminal (components/crawl/shared.tsx)
-├── Log entries
-└── Terminal-like styling
+Responsibilities:
 
-SelectorsPage (app/selectors/page.tsx)
-├── UrlInput
-├── ExpectedColumnsInput
-├── Preview iframe
-├── FieldRows
-│   ├── FieldName
-│   ├── SelectorValue
-│   ├── TestButton → api.testSelector()
-│   ├── AutoDetect → api.suggestSelectors()
-│   └── Accept/Save
-└── SaveButton → api.createSelector()
-```
+- choose module/domain/mode
+- derive surface from domain + module
+- build dispatch payload
+- collect advanced settings and additional fields
+- submit crawl or CSV run
 
----
+Current UI settings behavior reflects the backend contract:
 
-## 4. API Layer (lib/api/index.ts)
+- `advanced_enabled`
+- `advanced_mode`
+- `request_delay_ms`
+- `max_records`
+- `max_pages`
+- `max_scrolls`
+- `respect_robots_txt`
+- proxy input
+- additional fields
 
-All frontend access goes through here:
+### 3.4 Run workspace
 
-```typescript
-export const api = {
-  // Auth
-  register(email, password) → POST /api/auth/register
-  login(email, password) → POST /api/auth/login
-  me() → GET /api/auth/me
-  
-  // Dashboard
-  dashboard() → GET /api/dashboard
-  resetApplicationData() → POST /api/dashboard/reset-data
-  
-  // Crawls
-  createCrawl(payload) → POST /api/crawls
-  createCsvCrawl(formData) → POST /api/crawls/csv
-  listCrawls(params) → GET /api/crawls
-  getCrawl(runId) → GET /api/crawls/{id}
-  deleteCrawl(runId) → DELETE /api/crawls/{id}
-  pauseCrawl(runId) → POST /api/crawls/{id}/pause
-  resumeCrawl(runId) → POST /api/crawls/{id}/resume
-  killCrawl(runId) → POST /api/crawls/{id}/kill
-  commitSelectedFields(runId, items) → POST /api/crawls/{id}/commit-fields
-  
-  // Records
-  getRecords(runId, params) → GET /api/crawls/{id}/records
-  getRecordProvenance(recordId) → GET /api/records/{id}/provenance
-  getCrawlLogs(runId, params) → GET /api/crawls/{id}/logs
-  
-  // Exports
-  getMarkdown(runId) → GET /api/crawls/{id}/export/markdown
-  downloadCsv(runId) → GET /api/crawls/{id}/export/csv
-  downloadJson(runId) → GET /api/crawls/{id}/export/json
-  exportCsv/Json/Markdown(runId) → URL string
-  
-  // Review
-  getReview(runId) → GET /api/review/{id}
-  reviewHtml(runId) → URL string
-  saveReview(runId, payload) → POST /api/review/{id}/save
-  previewSelectors(runId, payload) → POST /api/review/{id}/selector-preview
-  
-  // Users (admin)
-  listUsers(params) → GET /api/users
-  updateUser(userId, payload) → PATCH /api/users/{id}
-  
-  // SELECTORS - DOESN'T EXIST IN BACKEND
-  listSelectors(params) → GET /api/selectors
-  suggestSelectors(payload) → POST /api/selectors/suggest
-  createSelector(payload) → POST /api/selectors
-  updateSelector(id, payload) → PUT /api/selectors/{id}
-  deleteSelector(id) → DELETE /api/selectors/{id}
-  deleteSelectorsByDomain(domain) → DELETE /api/selectors/domain/{domain}
-  testSelector(payload) → POST /api/selectors/test
-  
-  // JOBS
-  listJobs() → GET /api/jobs/active
-  
-  // LLM CONFIG - DOESN'T EXIST IN BACKEND  
-  listLLMConfigs() → GET /api/llm/configs
-  createLLMConfig(payload) → POST /api/llm/configs
-  updateLLMConfig(id, payload) → PUT /api/llm/configs/{id}
-  deleteLLMConfig(id) → DELETE /api/llm/configs/{id}
-}
-```
+Primary files:
 
----
+- `components/crawl/crawl-run-screen.tsx`
+- `components/crawl/use-run-polling.ts`
+- `components/crawl/shared.tsx`
 
-## 5. Data Flow in Run Workspace
+Responsibilities:
 
-```
-Initial load (run_id in URL)
-  → use-run-polling.ts hook
-  → poll every 2s while active
-  → api.getCrawl(runId)
-  → update React Query cache
+- poll run state while active
+- show records, JSON, markdown, and logs
+- consume websocket logs when available
+- show quality/verdict/progress signals
+- expose pause/resume/kill and export actions
 
-Table tab selected
-  → api.getRecords(runId, {page, limit})
-  → RecordsTable with virtualization
+Important live data features:
 
-JSON tab selected
-  → api.downloadJson(runId)
-  → parse + display
+- run records use cleaned `data`, `review_bucket`, and `source_trace`
+- provenance API is typed and available through `getRecordProvenance`
+- log websocket fallback is built into the screen
 
-Markdown tab selected  
-  → api.getMarkdown(runId)
+### 3.5 Operator surfaces
 
-Logs tab selected
-  → api.getCrawlLogs(runId, {after_id})
-  → LogTerminal with append
+Primary files:
 
-WebSocket available
-  → connect /api/crawls/{id}/logs/ws
-  → stream live
-  → fallback to polling if unavailable
-```
+- `app/dashboard/page.tsx`
+- `app/runs/page.tsx`
+- `app/jobs/page.tsx`
+- `app/selectors/page.tsx`
+- `app/admin/users/page.tsx`
+- `app/admin/llm/page.tsx`
 
----
+Responsibilities:
 
-## 6. What each component does
+- dashboard metrics and recent runs
+- run history
+- active jobs view
+- selector suggestion/test/save workflow
+- admin user management
+- LLM provider/config/cost-log management
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| AppShell | layout/app-shell.tsx | Full-page layout, session check |
-| CrawlConfigScreen | crawl/crawl-config-screen.tsx | Crawl form with all options |
-| CrawlRunScreen | crawl/crawl-run-screen.tsx | Run results workspace |
-| RecordsTable | crawl/shared.tsx | Virtualized record display |
-| LogTerminal | crawl/shared.tsx | Terminal-style logs |
-| use-run-polling | crawl/use-run-polling.ts | Run status polling |
-| SelectorsPage | app/selectors/page.tsx | Selector CRUD UI |
-| primitives | ui/primitives.tsx | Button, Card, Input, etc. |
-| patterns | ui/patterns.tsx | PageHeader, Section, Alert |
-| api client | lib/api/client.ts | fetch wrapper |
-| api types | lib/api/types.ts | All TypeScript types |
+## 4. Live Backend API Usage
 
----
+The frontend currently uses live backend routes for:
 
-## 7. Key Hooks and State
+- auth: `/api/auth/*`
+- dashboard: `/api/dashboard`
+- crawls: `/api/crawls/*`
+- records: `/api/crawls/{id}/records`
+- provenance: `/api/records/{id}/provenance`
+- exports: `/api/crawls/{id}/export/*`
+- logs + websocket: `/api/crawls/{id}/logs`, `/api/crawls/{id}/logs/ws`
+- review: `/api/review/{id}`, `/api/review/{id}/artifact-html`, `/api/review/{id}/save`
+- selectors: `/api/selectors`, `/api/selectors/suggest`, `/api/selectors/test`, `/api/selectors/preview-html`
+- users: `/api/users`
+- llm: `/api/llm/providers`, `/api/llm/configs`, `/api/llm/test-connection`, `/api/llm/cost-log`
+- jobs: `/api/jobs/active`
 
-```typescript
-// use-run-polling.ts
-useRunPolling(runId: number) → {
-  run: CrawlRun | null
-  isActive: boolean
-  shouldPoll: boolean
-  error: Error | null
-}
+## 5. Known Client/Backend Drift
 
-// crawl-config-screen.tsx
-useCrawlForm() → {
-  url, setUrl()
-  surface, setSurface()
-  mode, setMode()
-  settings, updateSettings()
-  isSubmitting, submit()
-}
+There is still some API-surface drift and it should remain documented:
 
-// crawl-run-screen.tsx  
-useRunWorkspace(runId: number) → {
-  run: CrawlRun | null
-  activeTab: 'table' | 'json' | 'markdown' | 'logs'
-  setTab()
-  refresh()
-  actions: { pause, resume, kill }
-}
-```
+- `frontend/lib/api/index.ts` exposes `previewSelectors()` for `/api/review/{run_id}/selector-preview`, but that backend route does not exist.
+- `ReviewPayload` types in the frontend still include `selector_memory` and `selector_suggestions`, while the current backend review response is centered on run, canonical/discovered fields, mapping, and records.
+- The selectors and LLM pages are no longer “missing backend”; older docs claiming that are stale.
 
----
+## 6. Current Data Contracts That Matter To Frontend
 
-## 8. Frontend expects these backend endpoints
+### CrawlRun
 
-| Frontend uses | Backend status |
-|--------------|-------------|
-| /api/auth/* | EXISTS |
-| /api/crawls/* | EXISTS |
-| /api/crawls/{id}/records | EXISTS |
-| /api/crawls/{id}/logs | EXISTS |
-| /api/crawls/{id}/logs/ws | EXISTS |
-| /api/review/* | EXISTS |
-| /api/dashboard | EXISTS |
-| /api/users | EXISTS |
-| /api/jobs | EXISTS |
-| /api/selectors | MISSING |
-| /api/selectors/suggest | MISSING |
-| /api/selectors/test | MISSING |
-| /api/llm/configs | MISSING |
+The frontend expects:
+
+- `status`
+- `surface`
+- `settings`
+- `requested_fields`
+- `result_summary`
+
+### CrawlRecord
+
+The frontend expects:
+
+- `data`
+- `raw_data`
+- `discovered_data`
+- `source_trace`
+- optional `review_bucket`
+- optional `provenance_available`
+
+### Provenance
+
+The frontend has a typed provenance object:
+
+- `raw_data`
+- `discovered_data`
+- `source_trace`
+- `manifest_trace`
+- `raw_html_path`
+
+### Selectors
+
+The selectors UI is built on:
+
+- suggestion response grouped by field
+- test response with count and matched value
+- saved selector records scoped by domain/surface
+- preview HTML URL helper
+
+### LLM Admin
+
+The admin LLM UI is built on:
+
+- provider catalog
+- config CRUD
+- connection tests
+- cost log listing
+
+## 7. Testing Surface
+
+Frontend tests currently cover:
+
+- auth session query
+- API client behavior
+- crawl config screen
+- crawl run screen
+- shared crawl helpers
+- run polling
+
+There is also Playwright e2e coverage under `frontend/e2e`.
+
+## 8. Architectural Notes
+
+- The frontend is intentionally thin on domain logic; the backend owns crawl semantics.
+- `lib/api/index.ts` should remain the single access layer for backend calls.
+- `components/crawl/shared.tsx` is a real shared hub and should not quietly become a second application framework.
+- When backend record contracts change, update `lib/api/types.ts` and this doc together.
+
+## 9. Companion Docs
+
+- [../CLAUDE.md](../CLAUDE.md)
+- [backend-architecture.md](backend-architecture.md)
+- [ENGINEERING_STRATEGY.md](ENGINEERING_STRATEGY.md)
+- [INVARIANTS.md](INVARIANTS.md)

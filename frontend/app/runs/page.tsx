@@ -46,7 +46,7 @@ function RunRow({
             <Tooltip content={run.url}>
               <Link
                 href={`/crawl?run_id=${run.id}`}
-                className="link-accent no-underline block max-w-[280px] truncate text-xs font-medium leading-[1.4] text-primary transition-colors"
+                className="link-accent no-underline block max-w-[280px] truncate font-mono text-xs font-medium leading-[1.4] text-primary transition-colors"
               >
                 {domain || `Run #${run.id}`}
               </Link>
@@ -93,14 +93,14 @@ function RunRow({
 
       {/* Records */}
       <td className="text-right">
-        <span className={cn("text-sm font-medium leading-[1.45] text-foreground tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
+        <span className={cn("font-mono text-sm font-medium leading-[1.45] text-foreground tabular-nums", recordCount > 0 ? "text-primary" : "text-muted")}>
           {recordCount > 0 ? recordCount.toLocaleString() : "—"}
         </span>
       </td>
 
       {/* Date */}
       <td className="text-right">
-        <span className="text-[11px] leading-[1.45] text-muted">{formatDate(run.created_at)}</span>
+        <span className="font-mono text-[11px] leading-[1.45] text-muted tabular-nums">{formatDate(run.created_at)}</span>
       </td>
 
       {/* Actions */}
@@ -204,6 +204,7 @@ export default function RunsPage() {
               value={domainFilter}
               onChange={(e) => setDomainFilter(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") applyFilters(); }}
+              className="text-mono-body"
             />
           </div>
           <Select
@@ -247,9 +248,9 @@ export default function RunsPage() {
                   <th className="min-w-[200px] text-left font-semibold text-[var(--text-secondary)]">Run</th>
                   <th className="text-left font-semibold text-[var(--text-secondary)]">Type</th>
                   <th className="text-left font-semibold text-[var(--text-secondary)]">Status</th>
-                  <th className="text-right font-semibold text-[var(--text-secondary)]">Records</th>
-                  <th className="whitespace-nowrap text-right font-semibold text-[var(--text-secondary)]">Started</th>
-                  <th className="text-right font-semibold text-[var(--text-secondary)]">Actions</th>
+                  <th className="w-[110px] text-right font-semibold text-[var(--text-secondary)]">Records</th>
+                  <th className="w-[180px] whitespace-nowrap text-right font-semibold text-[var(--text-secondary)]">Started</th>
+                  <th className="w-[170px] text-right font-semibold text-[var(--text-secondary)]">Actions</th>
                 </tr>
               </thead>
               <tbody>

@@ -20,7 +20,7 @@ def map_network_payloads_to_fields(
     if not surface_specs:
         return []
     rows: list[dict[str, Any]] = []
-    for payload in payloads or []:
+    for payload in _ordered_payloads(payloads, surface=normalized_surface):
         if not isinstance(payload, dict):
             continue
         body = payload.get("body")
@@ -30,6 +30,54 @@ def map_network_payloads_to_fields(
         if mapped:
             rows.append(mapped)
     return rows
+
+
+def _ordered_payloads(
+    payloads: list[dict[str, object]] | None,
+    *,
+    surface: str,
+) -> list[dict[str, object]]:
+    indexed = [
+        (index, payload)
+        for index, payload in enumerate(list(payloads or []))
+        if isinstance(payload, dict)
+    ]
+    indexed.sort(
+        key=lambda item: (
+            -_payload_priority(item[1], surface=surface),
+            item[0],
+        )
+    )
+    return [payload for _, payload in indexed]
+
+
+def _payload_priority(payload: dict[str, object], *, surface: str) -> int:
+    endpoint_type = str(payload.get("endpoint_type") or "").strip().lower()
+    endpoint_family = str(payload.get("endpoint_family") or "").strip().lower()
+    lowered_url = str(payload.get("url") or "").strip().lower()
+    score = 0
+    if endpoint_type == "graphql":
+        score += 30
+    elif endpoint_type == "job_api":
+        score += 28
+    elif endpoint_type == "product_api":
+        score += 28
+    elif endpoint_type == "generic_json":
+        score += 5
+
+    if surface == "job_detail" and endpoint_family in {"greenhouse", "workday", "lever"}:
+        score += 20
+    if surface == "ecommerce_detail" and endpoint_family in {"shopify", "nextjs"}:
+        score += 20
+    if surface == "job_detail" and any(
+        token in lowered_url for token in ("/jobs/", "/job_posts/", "/postings/")
+    ):
+        score += 10
+    if surface == "ecommerce_detail" and any(
+        token in lowered_url for token in ("/products/", "/product/", "product.js")
+    ):
+        score += 10
+    return score
 
 
 def _map_payload_body(

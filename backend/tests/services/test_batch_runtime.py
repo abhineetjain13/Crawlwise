@@ -126,6 +126,7 @@ async def test_process_run_blocks_disallowed_url_before_acquire(
             "run_type": "crawl",
             "url": "https://example.com/private/widget-prime",
             "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": True},
         },
     )
 
@@ -152,6 +153,56 @@ async def test_process_run_blocks_disallowed_url_before_acquire(
     assert run.result_summary["url_verdicts"] == ["blocked"]
     assert total == 0
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_process_run_ignores_robots_when_disabled_in_settings(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/private/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    acquire_calls: list[str] = []
+
+    async def _disallow(url: str, *, user_agent: str = "*") -> RobotsPolicyResult:
+        del user_agent
+        return RobotsPolicyResult(
+            allowed=False,
+            outcome="disallowed",
+            robots_url="https://example.com/robots.txt",
+        )
+
+    async def _fake_acquire(request):
+        acquire_calls.append(request.url)
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.check_url_crawlability", _disallow)
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert acquire_calls == ["https://example.com/private/widget-prime"]
+    assert run.status == "completed"
+    assert run.result_summary["extraction_verdict"] == "success"
+    assert total == 1
+    assert rows[0].data["title"] == "Widget Prime"
 
 
 @pytest.mark.asyncio

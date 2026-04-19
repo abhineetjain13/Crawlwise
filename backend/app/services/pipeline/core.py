@@ -32,6 +32,7 @@ from app.services.robots_policy import (
     ROBOTS_MISSING,
     check_url_crawlability,
 )
+from app.services.selector_self_heal import apply_selector_self_heal
 from app.services.publish.metadata import refresh_record_commit_metadata
 from app.services.crawl_engine import extract_records
 from sqlalchemy.exc import SQLAlchemyError
@@ -94,20 +95,28 @@ def _record_identity_key(source_url: str) -> str | None:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _mapping_or_empty(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
 def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[str, object]:
     field_discovery = {}
-    field_sources = (
-        dict(record.get("_field_sources") or {})
-        if isinstance(record.get("_field_sources"), dict)
-        else {}
-    )
+    field_sources = _mapping_or_empty(record.get("_field_sources"))
     for key, value in record.items():
         if str(key).startswith("_"):
             continue
         field_discovery[str(key)] = {
             "status": "found",
             "value": str(value),
-            "sources": list(field_sources.get(str(key), [str(record.get("_source") or "extraction")])),
+            "sources": _string_list(
+                field_sources.get(str(key), [str(record.get("_source") or "extraction")])
+            ),
         }
     return {
         "acquisition": {
@@ -118,12 +127,12 @@ def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[s
             "adapter_name": acquisition_result.adapter_name,
             "adapter_source_type": acquisition_result.adapter_source_type,
             "network_payload_count": len(list(acquisition_result.network_payloads or [])),
-            "browser_diagnostics": dict(acquisition_result.browser_diagnostics or {}),
+            "browser_diagnostics": _mapping_or_empty(acquisition_result.browser_diagnostics),
         },
         "extraction": {
             "source": str(record.get("_source") or "extraction"),
-            "confidence": dict(record.get("_confidence") or {}),
-            "self_heal": dict(record.get("_self_heal") or {}),
+            "confidence": _mapping_or_empty(record.get("_confidence")),
+            "self_heal": _mapping_or_empty(record.get("_self_heal")),
         },
         "field_discovery": field_discovery,
     }
@@ -162,7 +171,7 @@ async def _persist_records(
             data=data,
             raw_data=dict(record),
             discovered_data=(
-                {"confidence": dict(record.get("_confidence") or {})}
+                {"confidence": _mapping_or_empty(record.get("_confidence"))}
                 if isinstance(record.get("_confidence"), dict)
                 else {}
             ),
@@ -214,49 +223,59 @@ async def _process_single_url(
     )
     if resolved_config.update_run_state:
         await set_stage(session, run, STAGE_FETCH, current_url=url)
-    robots_result = await check_url_crawlability(url)
-    if not robots_result.allowed:
-        if resolved_config.persist_logs:
+        await session.commit()
+    robots_result = None
+    if run.settings_view.respect_robots_txt():
+        robots_result = await check_url_crawlability(url)
+        if not robots_result.allowed:
+            if resolved_config.persist_logs:
+                await log_event(
+                    session,
+                    run.id,
+                    "warning",
+                    f"[ROBOTS] Blocked by robots.txt: {url}",
+                )
+                await session.commit()
+            return URLProcessingResult(
+                records=[],
+                verdict=VERDICT_BLOCKED,
+                url_metrics=finalize_url_metrics(
+                    {
+                        "blocked": True,
+                        "final_url": url,
+                        "method": "",
+                        "requested_fields": list(run.requested_fields or []),
+                        "robots": {
+                            "allowed": False,
+                            "outcome": robots_result.outcome,
+                            "robots_url": robots_result.robots_url,
+                        },
+                    },
+                    record_count=0,
+                ),
+            )
+        if resolved_config.persist_logs and robots_result.outcome == ROBOTS_MISSING:
+            await log_event(
+                session,
+                run.id,
+                "info",
+                f"[ROBOTS] No robots.txt found for {url}; continuing",
+            )
+            await session.commit()
+        if resolved_config.persist_logs and robots_result.outcome == ROBOTS_FETCH_FAILURE:
             await log_event(
                 session,
                 run.id,
                 "warning",
-                f"[ROBOTS] Blocked by robots.txt: {url}",
+                f"[ROBOTS] robots.txt check failed for {url}; continuing",
             )
-        return URLProcessingResult(
-            records=[],
-            verdict=VERDICT_BLOCKED,
-            url_metrics=finalize_url_metrics(
-                {
-                    "blocked": True,
-                    "final_url": url,
-                    "method": "",
-                    "requested_fields": list(run.requested_fields or []),
-                    "robots": {
-                        "allowed": False,
-                        "outcome": robots_result.outcome,
-                        "robots_url": robots_result.robots_url,
-                    },
-                },
-                record_count=0,
-            ),
-        )
-    if resolved_config.persist_logs and robots_result.outcome == ROBOTS_MISSING:
-        await log_event(
-            session,
-            run.id,
-            "info",
-            f"[ROBOTS] No robots.txt found for {url}; continuing",
-        )
-    if resolved_config.persist_logs and robots_result.outcome == ROBOTS_FETCH_FAILURE:
-        await log_event(
-            session,
-            run.id,
-            "warning",
-            f"[ROBOTS] robots.txt check failed for {url}; continuing",
-        )
+            await session.commit()
+    elif resolved_config.persist_logs:
+        await log_event(session, run.id, "info", f"[ROBOTS] Ignoring robots.txt for {url}")
+        await session.commit()
     if resolved_config.persist_logs:
         await log_event(session, run.id, "info", f"[FETCH] Fetching {url}")
+        await session.commit()
 
     acquisition_request = AcquisitionRequest(
         run_id=run.id,
@@ -294,6 +313,7 @@ async def _process_single_url(
 
     if resolved_config.update_run_state:
         await set_stage(session, run, STAGE_ANALYZE, current_url=url)
+        await session.commit()
     adapter_result = await run_adapter(
         acquisition_result.final_url,
         acquisition_result.html,
@@ -344,6 +364,17 @@ async def _process_single_url(
         selector_rules=selector_rules,
         extraction_runtime_snapshot=run.settings_view.extraction_runtime_snapshot(),
     )
+    if "detail" in run.surface and records:
+        records, selector_rules = await apply_selector_self_heal(
+            session,
+            run=run,
+            page_url=acquisition_result.final_url,
+            html=acquisition_result.html,
+            records=records,
+            adapter_records=acquisition_result.adapter_records,
+            network_payloads=acquisition_result.network_payloads,
+            selector_rules=selector_rules,
+        )
     if run.settings_view.llm_enabled() and "detail" in run.surface and records:
         records = await _apply_llm_fallback(
             session,
@@ -359,6 +390,7 @@ async def _process_single_url(
     )
     if resolved_config.update_run_state:
         await set_stage(session, run, STAGE_SAVE, current_url=url)
+        await session.commit()
     persisted_count = await _persist_records(
         session,
         run,
@@ -400,20 +432,21 @@ async def _apply_llm_fallback(
     requested_fields = list(run.requested_fields or [])
     for record in records:
         next_record = dict(record)
-        confidence = (
-            dict(next_record.get("_confidence") or {})
-            if isinstance(next_record.get("_confidence"), dict)
-            else {}
-        )
+        confidence = _mapping_or_empty(next_record.get("_confidence"))
+        self_heal = _mapping_or_empty(next_record.get("_self_heal"))
         missing_fields = [
             field_name
             for field_name in requested_fields
             if field_allowed_for_surface(run.surface, field_name)
             and next_record.get(field_name) in (None, "", [], {})
         ]
-        should_run = bool(missing_fields) or float(
-            confidence.get("score", 1.0) or 1.0
-        ) < LLMFallbackConfig.CONFIDENCE_THRESHOLD
+        raw_score = confidence.get("score", 1.0)
+        float_score = float(str(raw_score)) if raw_score is not None else 1.0
+        low_confidence = float_score < LLMFallbackConfig.CONFIDENCE_THRESHOLD
+        selector_heal_rerun = str(self_heal.get("mode") or "").strip().lower() == "selector_synthesis"
+        should_run = bool(missing_fields) or (
+            low_confidence and not selector_heal_rerun
+        )
         if not should_run:
             updated_records.append(next_record)
             continue
@@ -430,7 +463,7 @@ async def _apply_llm_fallback(
                 if not str(key).startswith("_")
             },
         )
-        field_sources = dict(next_record.get("_field_sources") or {})
+        field_sources = _mapping_or_empty(next_record.get("_field_sources"))
         if isinstance(payload, dict):
             for field_name, value in payload.items():
                 normalized_field = str(field_name or "").strip().lower()
@@ -445,9 +478,10 @@ async def _apply_llm_fallback(
                     value,
                     page_url,
                 )
-                field_sources.setdefault(normalized_field, [])
-                if "llm_missing_field_extraction" not in field_sources[normalized_field]:
-                    field_sources[normalized_field].append("llm_missing_field_extraction")
+                current_sources = _string_list(field_sources.get(normalized_field))
+                if "llm_missing_field_extraction" not in current_sources:
+                    current_sources.append("llm_missing_field_extraction")
+                field_sources[normalized_field] = current_sources
         next_record["_field_sources"] = field_sources
         next_record["_confidence"] = score_record_confidence(
             next_record,

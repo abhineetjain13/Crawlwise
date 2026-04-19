@@ -239,17 +239,16 @@ async def stream_export_json(session: AsyncSession, run_id: int):
 
 
 async def stream_export_csv(session: AsyncSession, run_id: int):
-    rows, _ = await collect_export_rows(session, run_id)
-    cleaned_records = [
-        clean_export_data(row.data if isinstance(row.data, dict) else {})
-        for row in rows
-    ]
-    structured_rows = [row for row in cleaned_records if row]
+    structured_rows: list[dict] = []
+    fieldnames: set[str] = set()
+    async for row in _stream_export_rows(session, run_id):
+        cleaned = clean_export_data(row.data if isinstance(row.data, dict) else {})
+        if not cleaned:
+            continue
+        structured_rows.append(cleaned)
+        fieldnames.update(cleaned.keys())
     if not structured_rows:
         return
-    fieldnames: set[str] = set()
-    for row in structured_rows:
-        fieldnames.update(row.keys())
     ordered_fieldnames = sorted(fieldnames)
     buffer = StringIO()
     writer = csv.DictWriter(
@@ -267,8 +266,10 @@ async def stream_export_csv(session: AsyncSession, run_id: int):
 
 
 async def stream_export_tables_csv(session: AsyncSession, run_id: int):
-    rows, _ = await collect_export_rows(session, run_id)
-    async for chunk in stream_table_rows_csv(collect_table_export_rows(rows)):
+    table_rows: list[dict] = []
+    async for row in _stream_export_rows(session, run_id):
+        table_rows.extend(artifact_table_rows(row))
+    async for chunk in stream_table_rows_csv(table_rows):
         yield chunk
 
 
@@ -324,9 +325,14 @@ async def stream_export_markdown(session: AsyncSession, run_id: int):
 
 
 async def stream_export_artifacts_json(session: AsyncSession, run_id: int):
-    rows, _ = await collect_export_rows(session, run_id)
-    bundles = [record_artifact_bundle(row) for row in rows]
-    yield json.dumps(bundles, indent=2)
+    yield "[\n"
+    first = True
+    async for row in _stream_export_rows(session, run_id):
+        if not first:
+            yield ",\n"
+        yield json.dumps(record_artifact_bundle(row), indent=2)
+        first = False
+    yield "\n]"
 
 
 def clean_export_data(data: dict) -> dict:
@@ -352,18 +358,12 @@ def collect_table_export_rows(rows: list[CrawlRecord]) -> list[dict]:
 
 def artifact_table_rows(row: CrawlRecord) -> list[dict]:
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
-    manifest_trace = (
-        source_trace.get("manifest_trace")
-        if isinstance(source_trace.get("manifest_trace"), dict)
-        else {}
-    )
-    tables = (
-        manifest_trace.get("tables")
-        if isinstance(manifest_trace.get("tables"), list)
-        else []
-    )
+    manifest_trace = source_trace.get("manifest_trace")
+    manifest_trace_map = manifest_trace if isinstance(manifest_trace, dict) else {}
+    tables = manifest_trace_map.get("tables")
+    table_list = tables if isinstance(tables, list) else []
     flattened: list[dict] = []
-    for table in tables:
+    for table in table_list:
         if not isinstance(table, dict):
             continue
         headers = table.get("headers") if isinstance(table.get("headers"), list) else []

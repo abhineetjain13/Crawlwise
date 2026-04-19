@@ -6,9 +6,18 @@ import shutil
 from pathlib import Path
 
 from app.core.config import PROJECT_ROOT, settings
-from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun, ReviewPromotion
+from app.models.crawl import (
+    CrawlLog,
+    CrawlRecord,
+    CrawlRun,
+    DomainMemory,
+    ReviewPromotion,
+)
 from app.models.llm import LLMCostLog
+from app.services.acquisition.browser_client import reset_browser_pool_state
+from app.services.acquisition.pacing import reset_pacing_state
 from app.services.crawl_state import ACTIVE_STATUSES
+from app.services.robots_policy import reset_robots_policy_cache
 from app.services.config.crawl_runtime import (
     LONG_RUN_THRESHOLD_SECONDS,
     MAX_DURATION_SAMPLE_SIZE,
@@ -16,7 +25,7 @@ from app.services.config.crawl_runtime import (
 )
 from app.services.domain_utils import normalize_domain
 from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -97,16 +106,24 @@ async def build_dashboard(session: AsyncSession, *, user_id: int | None = None) 
 
 
 async def reset_application_data(session: AsyncSession) -> dict:
+    counts = {
+        "crawl_runs_deleted": await _count_rows(session, CrawlRun),
+        "crawl_records_deleted": await _count_rows(session, CrawlRecord),
+        "crawl_logs_deleted": await _count_rows(session, CrawlLog),
+        "review_promotions_deleted": await _count_rows(session, ReviewPromotion),
+        "llm_cost_logs_deleted": await _count_rows(session, LLMCostLog),
+        "domain_memory_deleted": await _count_rows(session, DomainMemory),
+    }
     try:
-        crawl_logs_deleted = await session.execute(delete(CrawlLog))
-        crawl_records_deleted = await session.execute(delete(CrawlRecord))
-        promotions_deleted = await session.execute(delete(ReviewPromotion))
-        llm_cost_deleted = await session.execute(delete(LLMCostLog))
-        crawl_runs_deleted = await session.execute(delete(CrawlRun))
+        await _reset_database_tables(session)
         await session.commit()
     except Exception:
         await session.rollback()
         raise
+
+    await reset_browser_pool_state()
+    await reset_pacing_state()
+    reset_robots_policy_cache()
 
     artifacts_removed = _reset_directory(settings.artifacts_dir)
     cookies_removed = _reset_directory(settings.cookie_store_dir)
@@ -115,16 +132,59 @@ async def reset_application_data(session: AsyncSession) -> dict:
         for path in _legacy_artifact_paths()
     )
     return {
-        "crawl_runs_deleted": crawl_runs_deleted.rowcount or 0,
-        "crawl_records_deleted": crawl_records_deleted.rowcount or 0,
-        "crawl_logs_deleted": crawl_logs_deleted.rowcount or 0,
-        "review_promotions_deleted": promotions_deleted.rowcount or 0,
-        "llm_cost_logs_deleted": llm_cost_deleted.rowcount or 0,
+        **counts,
         "artifacts_removed": artifacts_removed,
         "legacy_artifacts_removed": legacy_artifacts_removed,
         "cookies_removed": cookies_removed,
         "knowledge_base_reset": False,
     }
+
+
+async def _count_rows(session: AsyncSession, model: type) -> int:
+    return int(
+        (await session.execute(select(func.count()).select_from(model))).scalar() or 0
+    )
+
+
+async def _reset_database_tables(session: AsyncSession) -> None:
+    bind = session.get_bind()
+    dialect_name = bind.dialect.name if bind is not None else ""
+    if dialect_name == "postgresql":
+        await session.execute(
+            text(
+                "TRUNCATE TABLE "
+                "crawl_logs, crawl_records, review_promotions, "
+                "llm_cost_log, domain_memory, crawl_runs "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+        return
+
+    await session.execute(delete(CrawlLog))
+    await session.execute(delete(CrawlRecord))
+    await session.execute(delete(ReviewPromotion))
+    await session.execute(delete(LLMCostLog))
+    await session.execute(delete(DomainMemory))
+    await session.execute(delete(CrawlRun))
+    if dialect_name == "sqlite":
+        sqlite_sequence_exists = (
+            await session.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'sqlite_sequence'"
+                )
+            )
+        ).scalar()
+        if sqlite_sequence_exists:
+            await session.execute(
+                text(
+                    "DELETE FROM sqlite_sequence "
+                    "WHERE name IN ("
+                    "'crawl_logs', 'crawl_records', 'review_promotions', "
+                    "'llm_cost_log', 'domain_memory', 'crawl_runs'"
+                    ")"
+                )
+            )
 
 
 def _reset_directory(path, *, create_if_missing: bool = True) -> int:

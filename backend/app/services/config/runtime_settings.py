@@ -85,6 +85,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     dynamic_field_name_max_tokens: int = 7
     accordion_expand_max: int = 20
     accordion_expand_wait_ms: int = 500
+    detail_expand_max_interactions: int = 6
     block_min_html_length: int = 100
     block_low_content_text_max: int = 500
     block_low_content_script_min: int = 3
@@ -223,7 +224,7 @@ class CrawlerRuntimeSettings(BaseSettings):
 
     def coerce_url_timeout_seconds(self, value: object) -> float:
         try:
-            timeout = float(value)
+            timeout = float(str(value))
         except (TypeError, ValueError):
             return float(self.url_process_timeout_seconds)
         if timeout <= 0:

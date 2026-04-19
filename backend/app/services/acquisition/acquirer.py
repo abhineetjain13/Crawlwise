@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+import httpx
+
 from app.services.crawl_engine import fetch_page, is_blocked_html
+from app.services.exceptions import ProxyPoolExhaustedError
 from app.services.platform_policy import detect_platform_family, resolve_platform_runtime_policy
 from app.services.platform_url_normalizers import normalize_adp_detail_url
 
@@ -50,28 +54,35 @@ class AcquisitionResult:
     page_markdown: str = ""
 
 
-class ProxyPoolExhausted(RuntimeError):
+class ProxyPoolExhausted(ProxyPoolExhaustedError):
     pass
 
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
-    effective_url = str(request.url or "")
-    if detect_platform_family(effective_url) == "adp":
-        effective_url = normalize_adp_detail_url(effective_url)
+    requested_url = str(request.url or "")
+    effective_url = requested_url
+    if detect_platform_family(requested_url) == "adp":
+        normalized_adp_url = normalize_adp_detail_url(requested_url)
+        effective_url = normalized_adp_url or requested_url
     runtime_policy = resolve_platform_runtime_policy(effective_url)
     prefer_browser = bool(request.acquisition_profile.get("prefer_browser")) or bool(
         runtime_policy.get("requires_browser")
     )
-    result = await fetch_page(
-        effective_url,
-        proxy_list=request.proxy_list,
-        prefer_browser=prefer_browser,
-        surface=request.surface,
-        traversal_mode=request.traversal_mode,
-        max_pages=request.max_pages,
-        max_scrolls=request.max_scrolls,
-        sleep_ms=request.sleep_ms,
-    )
+    try:
+        result = await fetch_page(
+            effective_url,
+            proxy_list=request.proxy_list,
+            prefer_browser=prefer_browser,
+            surface=request.surface,
+            traversal_mode=request.traversal_mode,
+            max_pages=request.max_pages,
+            max_scrolls=request.max_scrolls,
+            sleep_ms=request.sleep_ms,
+        )
+    except (httpx.HTTPError, TimeoutError, OSError) as exc:
+        if not request.proxy_list:
+            raise
+        raise ProxyPoolExhausted("No usable proxies remained for acquisition") from exc
     return AcquisitionResult(
         request=request,
         final_url=result.final_url,
@@ -80,10 +91,21 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         status_code=result.status_code,
         content_type=result.content_type,
         blocked=result.blocked,
-        headers=result.headers,
+        headers=_headers_to_dict(result.headers),
         network_payloads=list(result.network_payloads or []),
         browser_diagnostics=dict(result.browser_diagnostics or {}),
     )
+
+
+def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:
+    if isinstance(headers, httpx.Headers):
+        return {str(key): str(value) for key, value in headers.items()}
+    if isinstance(headers, Mapping):
+        return {str(key): str(value) for key, value in headers.items()}
+    return {
+        str(key): str(value)
+        for key, value in getattr(headers, "items", lambda: [])()
+    }
 
 
 def scrub_network_payloads_for_storage(

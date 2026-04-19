@@ -14,6 +14,27 @@
 python -c "import secrets; print(secrets.token_urlsafe(64))"
 ```
 
+## Backend bootstrap
+
+- The backend has a repo-local bootstrap command now, so new chats or fresh shells should not require manual dependency explanation.
+- Run this from the repo root when `pytest`, `mypy`, or backend imports fail because packages are missing:
+
+```powershell
+.\backend\bootstrap-dev.ps1
+```
+
+- What it does:
+  - installs the backend package in editable mode
+  - installs the full `dev` extra from [pyproject.toml](</c:/Projects/pre_poc_ai_crawler/backend/pyproject.toml>)
+  - includes runtime-only imports that had been missing from the declared dependency set, plus type-stub packages used by `mypy`
+
+- After bootstrap, the standard backend checks are:
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m pytest backend\tests --ignore=backend/tests/e2e -q
+.\backend\.venv\Scripts\python.exe -m mypy backend\app backend\harness_support.py backend\run_acquire_smoke.py backend\run_browser_surface_probe.py backend\run_extraction_smoke.py backend\run_test_sites_acceptance.py
+```
+
 ## Admin bootstrap
 
 - `BOOTSTRAP_ADMIN_ONCE=false` is the safe default.

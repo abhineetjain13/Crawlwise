@@ -55,14 +55,15 @@ export function CrawlConfigScreen({
   const [targetUrl, setTargetUrl] = useState("");
   const [bulkUrls, setBulkUrls] = useState("");
   const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [smartExtraction, setSmartExtraction] = useState(false);
-  const [advancedEnabled, setAdvancedEnabled] = useState(false);
+  const [smartExtraction, setSmartExtraction] = useState<boolean>(false);
+  const [advancedEnabled, setAdvancedEnabled] = useState<boolean>(false);
   const [advancedMode, setAdvancedMode] = useState<AdvancedCrawlMode>("auto");
   const [requestDelay, setRequestDelay] = useState(String(CRAWL_DEFAULTS.REQUEST_DELAY_MS));
   const [maxRecords, setMaxRecords] = useState(String(CRAWL_DEFAULTS.MAX_RECORDS));
   const [maxPages, setMaxPages] = useState(String(CRAWL_DEFAULTS.MAX_PAGES));
   const [maxScrolls, setMaxScrolls] = useState(String(CRAWL_DEFAULTS.MAX_SCROLLS));
-  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [respectRobotsTxt, setRespectRobotsTxt] = useState<boolean>(CRAWL_DEFAULTS.RESPECT_ROBOTS_TXT);
+  const [proxyEnabled, setProxyEnabled] = useState<boolean>(false);
   const [proxyInput, setProxyInput] = useState("");
   const [additionalDraft, setAdditionalDraft] = useState("");
   const [additionalFields, setAdditionalFields] = useState<string[]>([]);
@@ -157,6 +158,7 @@ export function CrawlConfigScreen({
       max_records: clampNumber(maxRecords, CRAWL_LIMITS.MIN_RECORDS, CRAWL_LIMITS.MAX_RECORDS, CRAWL_DEFAULTS.MAX_RECORDS),
       max_pages: clampNumber(maxPages, CRAWL_LIMITS.MIN_PAGES, CRAWL_LIMITS.MAX_PAGES, CRAWL_DEFAULTS.MAX_PAGES),
       max_scrolls: clampNumber(maxScrolls, CRAWL_LIMITS.MIN_SCROLLS, CRAWL_LIMITS.MAX_SCROLLS, CRAWL_DEFAULTS.MAX_SCROLLS),
+      respect_robots_txt: respectRobotsTxt,
       proxy_enabled: proxyEnabled,
       proxy_lines: proxyEnabled ? parseLines(proxyInput) : [],
       additional_fields: additionalFields,
@@ -176,6 +178,7 @@ export function CrawlConfigScreen({
       pdpMode,
       proxyEnabled,
       proxyInput,
+      respectRobotsTxt,
       requestDelay,
       smartExtraction,
       targetUrl,
@@ -519,6 +522,13 @@ export function CrawlConfigScreen({
                   </div>
                 </SettingSection>
                 <SettingSection
+                  label="Respect robots.txt"
+                  description="Skip disallowed paths and honor crawl-delay."
+                  icon={<Shield className="size-4" />}
+                  checked={respectRobotsTxt}
+                  onChange={setRespectRobotsTxt}
+                />
+                <SettingSection
                   label="Proxy"
                   description="Use a proxy pool."
                   icon={<Shield className="size-4" />}
@@ -600,6 +610,7 @@ export function buildDispatch(config: CrawlConfig, fieldRows: FieldRow[] = []): 
     max_records: config.max_records,
     max_pages: config.max_pages,
     max_scrolls: config.max_scrolls,
+    respect_robots_txt: config.respect_robots_txt,
     proxy_enabled: config.proxy_enabled,
     proxy_list: config.proxy_enabled ? config.proxy_lines : [],
     additional_fields: additionalFields,

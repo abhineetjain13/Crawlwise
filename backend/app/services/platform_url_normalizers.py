@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
-def normalize_adp_detail_url(url: str) -> str:
+def normalize_adp_detail_url(url: str | None) -> str | None:
     parsed = urlparse(str(url or "").strip())
     hostname = str(parsed.hostname or "").lower()
     if hostname not in {

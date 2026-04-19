@@ -179,6 +179,10 @@ def coerce_text(value: object) -> str | None:
 def coerce_location(value: object) -> str | None:
     if isinstance(value, dict):
         address = value.get("address")
+        if isinstance(address, str):
+            address_text = text_or_none(address)
+            if address_text:
+                return address_text
         if isinstance(address, dict):
             parts = [
                 text_or_none(address.get("streetAddress")),
@@ -199,6 +203,7 @@ def coerce_location(value: object) -> str | None:
         cleaned_parts = [part for part in parts if part]
         if cleaned_parts:
             return ", ".join(cleaned_parts)
+        return None
     if isinstance(value, list):
         parts = [coerce_location(item) for item in value]
         cleaned_parts = [part for part in parts if part]
@@ -289,22 +294,27 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         ):
             if value.get(key) not in (None, "", [], {}):
                 return coerce_text(value.get(key))
+        return None
     if field_name in {"currency", "salary_currency"} and isinstance(value, dict):
         for key in ("currency", "currencyCode", "priceCurrency", "salaryCurrency"):
             if value.get(key) not in (None, "", [], {}):
                 return coerce_text(value.get(key))
+        return None
     if field_name == "rating" and isinstance(value, dict):
         for key in ("ratingValue", "value", "rating", "score"):
             if value.get(key) not in (None, "", [], {}):
                 return coerce_text(value.get(key))
+        return None
     if field_name == "review_count" and isinstance(value, dict):
         for key in ("reviewCount", "ratingCount", "count", "totalCount", "numberOfReviews"):
             if value.get(key) not in (None, "", [], {}):
                 return coerce_text(value.get(key))
+        return None
     if field_name == "availability" and isinstance(value, dict):
         for key in ("availability", "availabilityStatus", "status", "name", "value"):
             if value.get(key) not in (None, "", [], {}):
                 return coerce_text(value.get(key))
+        return None
     if field_name in URL_FIELDS:
         urls = extract_urls(value, page_url)
         return urls[0] if urls else None

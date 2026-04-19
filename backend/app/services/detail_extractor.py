@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -7,7 +8,8 @@ from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.confidence import score_record_confidence
-from app.services.config.extraction_rules import NOISE_CONTAINER_REMOVAL_SELECTOR
+from app.services.config.extraction_rules import EXTRACTION_RULES, NOISE_CONTAINER_REMOVAL_SELECTOR
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_utils import (
     PERCENT_RE,
     PRICE_RE,
@@ -16,6 +18,8 @@ from app.services.field_value_utils import (
     add_candidate,
     apply_selector_fallbacks,
     clean_text,
+    coerce_field_value,
+    collect_structured_candidates,
     extract_heading_sections,
     extract_page_images,
     finalize_candidate_value,
@@ -27,22 +31,50 @@ from app.services.field_value_utils import (
 )
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
-from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.structured_sources import (
     harvest_js_state_objects,
-    parse_microdata,
-    parse_opengraph,
     parse_embedded_json,
     parse_json_ld,
+    parse_microdata,
+    parse_opengraph,
 )
-from app.services.field_value_utils import collect_structured_candidates, coerce_field_value
-
-
-def _prepare_detail_dom(html: str) -> tuple[LexborHTMLParser, str]:
-    parser = LexborHTMLParser(html)
-import logging
 
 logger = logging.getLogger(__name__)
+
+_SOURCE_PRIORITY = (
+    "adapter",
+    "network_payload",
+    "js_state",
+    "json_ld",
+    "microdata",
+    "opengraph",
+    "embedded_json",
+    "dom_h1",
+    "dom_selector",
+    "dom_sections",
+    "dom_images",
+    "dom_text",
+)
+_DOM_HIGH_VALUE_FIELDS: dict[str, frozenset[str]] = {
+    "ecommerce_detail": frozenset(
+        {
+            "description",
+            "specifications",
+        }
+    ),
+    "job_detail": frozenset(
+        {
+            "description",
+            "responsibilities",
+            "qualifications",
+        }
+    ),
+}
+_DOM_OPTIONAL_CUE_FIELDS: dict[str, frozenset[str]] = {
+    "ecommerce_detail": frozenset({"features", "materials", "care", "dimensions"}),
+    "job_detail": frozenset({"benefits", "skills", "requirements"}),
+}
+
 
 def _prepare_detail_dom(html: str) -> tuple[LexborHTMLParser, str]:
     parser = LexborHTMLParser(html)
@@ -50,8 +82,11 @@ def _prepare_detail_dom(html: str) -> tuple[LexborHTMLParser, str]:
         for node in parser.css(NOISE_CONTAINER_REMOVAL_SELECTOR):
             node.decompose()
     except Exception as exc:
-        logger.debug("noise_removal_failed selector=%s error=%s", NOISE_CONTAINER_REMOVAL_SELECTOR, exc)
-    return parser, parser.html
+        logger.debug(
+            "noise_removal_failed selector=%s error=%s",
+            NOISE_CONTAINER_REMOVAL_SELECTOR,
+            exc,
+        )
     return parser, parser.html
 
 
@@ -80,7 +115,9 @@ def _apply_dom_fallbacks(
             title,
             source="dom_h1",
         )
-    prior_lengths = {field_name: len(values) for field_name, values in candidates.items()}
+    prior_lengths = {
+        field_name: len(values) for field_name, values in candidates.items()
+    }
     apply_selector_fallbacks(
         soup,
         page_url,
@@ -135,7 +172,9 @@ def _apply_dom_fallbacks(
                 source="dom_sections",
             )
     body_node = dom_parser.body
-    body_text = clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
+    body_text = (
+        clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
+    )
     if "price" in fields and not candidates.get("price"):
         price_match = PRICE_RE.search(body_text)
         if price_match:
@@ -176,7 +215,9 @@ def _apply_dom_fallbacks(
                 rating_match.group(1),
                 source="dom_text",
             )
-    if surface.startswith("job_") and "remote" in fields and not candidates.get("remote"):
+    if surface.startswith("job_") and "remote" in fields and not candidates.get(
+        "remote"
+    ):
         lowered = body_text.lower()
         if "remote" in lowered or "work from home" in lowered:
             _add_sourced_candidate(
@@ -243,7 +284,12 @@ def _collect_structured_payload_candidates(
     source: str,
 ) -> None:
     structured_candidates: dict[str, list[object]] = {}
-    collect_structured_candidates(payload, alias_lookup, page_url, structured_candidates)
+    collect_structured_candidates(
+        payload,
+        alias_lookup,
+        page_url,
+        structured_candidates,
+    )
     for field_name, values in structured_candidates.items():
         for value in values:
             _add_sourced_candidate(
@@ -253,6 +299,171 @@ def _collect_structured_payload_candidates(
                 value,
                 source=source,
             )
+
+
+def _primary_source_for_record(
+    record: dict[str, Any],
+    candidates: dict[str, list[object]],
+    field_sources: dict[str, list[str]],
+) -> str:
+    for source_name in _SOURCE_PRIORITY:
+        for field_name, source_list in field_sources.items():
+            if field_name in record and field_name in candidates and source_name in source_list:
+                return source_name
+    return "structured_dom"
+
+
+def _selector_self_heal_config(
+    extraction_runtime_snapshot: dict[str, object] | None,
+) -> dict[str, object]:
+    selector_self_heal = (
+        extraction_runtime_snapshot.get("selector_self_heal")
+        if isinstance(extraction_runtime_snapshot, dict)
+        else None
+    )
+    return {
+        "enabled": bool(
+            selector_self_heal.get("enabled")
+            if isinstance(selector_self_heal, dict)
+            else crawler_runtime_settings.selector_self_heal_enabled
+        ),
+        "threshold": float(
+            selector_self_heal.get("min_confidence")
+            if isinstance(selector_self_heal, dict)
+            and selector_self_heal.get("min_confidence") is not None
+            else crawler_runtime_settings.selector_self_heal_min_confidence
+        ),
+    }
+
+
+def _materialize_record(
+    *,
+    page_url: str,
+    surface: str,
+    requested_fields: list[str] | None,
+    fields: list[str],
+    candidates: dict[str, list[object]],
+    field_sources: dict[str, list[str]],
+    extraction_runtime_snapshot: dict[str, object] | None,
+    tier_name: str,
+    completed_tiers: list[str],
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "source_url": page_url,
+        "url": page_url,
+    }
+    for field_name in fields:
+        finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
+        if finalized not in (None, "", [], {}):
+            record[field_name] = finalized
+    record["_field_sources"] = {
+        field_name: list(source_list)
+        for field_name, source_list in field_sources.items()
+        if field_name in record
+    }
+    record["_source"] = _primary_source_for_record(record, candidates, field_sources)
+    _dedupe_primary_and_additional_images(record)
+    confidence = score_record_confidence(
+        record,
+        surface=surface,
+        requested_fields=requested_fields,
+    )
+    selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
+    record["_confidence"] = confidence
+    record["_extraction_tiers"] = {
+        "completed": list(completed_tiers),
+        "current": tier_name,
+    }
+    record["_self_heal"] = {
+        "enabled": bool(selector_self_heal["enabled"]),
+        "triggered": False,
+        "threshold": float(selector_self_heal["threshold"]),
+    }
+    return finalize_record(record, surface=surface)
+
+
+def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
+    primary_image = text_or_none(record.get("image_url"))
+    additional_images = text_or_none(record.get("additional_images"))
+    if not primary_image or not additional_images:
+        return
+    filtered = [
+        image
+        for image in [part.strip() for part in additional_images.split(",")]
+        if image and image != primary_image
+    ]
+    if filtered:
+        record["additional_images"] = ", ".join(filtered)
+        return
+    record.pop("additional_images", None)
+
+
+def _missing_requested_fields(
+    record: dict[str, Any],
+    requested_fields: list[str] | None,
+) -> set[str]:
+    missing: set[str] = set()
+    for field_name in list(requested_fields or []):
+        normalized = str(field_name or "").strip().lower()
+        if normalized and record.get(normalized) in (None, "", [], {}):
+            missing.add(normalized)
+    return missing
+
+
+def _requires_dom_completion(
+    *,
+    record: dict[str, Any],
+    surface: str,
+    requested_fields: list[str] | None,
+    selector_rules: list[dict[str, object]] | None,
+    soup: BeautifulSoup,
+) -> bool:
+    normalized_surface = str(surface or "").strip().lower()
+    alias_lookup = surface_alias_lookup(surface, requested_fields)
+    high_value_fields = set(_DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
+    advertised_dom_sections = {
+        normalized
+        for label in extract_heading_sections(soup).keys()
+        for normalized in [alias_lookup.get(label.lower())]
+        if normalized in high_value_fields
+    }
+    missing_high_value_fields = {
+        field_name
+        for field_name in advertised_dom_sections
+        if record.get(field_name) in (None, "", [], {})
+    }
+    missing_high_value_fields.update(
+        {
+            field_name
+            for field_name in high_value_fields
+            if field_name in _missing_requested_fields(record, requested_fields)
+        }
+    )
+    requested_missing_fields = _missing_requested_fields(record, requested_fields)
+    if missing_high_value_fields or requested_missing_fields & high_value_fields:
+        return True
+    optional_cue_fields = {
+        field_name
+        for field_name in set(_DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ())
+        if record.get(field_name) in (None, "", [], {})
+    }
+    dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
+    for field_name in optional_cue_fields:
+        selector = str(dom_patterns.get(field_name) or "").strip()
+        if selector and soup.select(selector):
+            return True
+    selector_backed_fields = {
+        str(row.get("field_name") or "").strip().lower()
+        for row in list(selector_rules or [])
+        if isinstance(row, dict)
+        and bool(row.get("is_active", True))
+        and (
+            str(row.get("css_selector") or "").strip()
+            or str(row.get("xpath") or "").strip()
+            or str(row.get("regex") or "").strip()
+        )
+    }
+    return bool(requested_missing_fields & selector_backed_fields)
 
 
 def build_detail_record(
@@ -272,6 +483,8 @@ def build_detail_record(
     candidates: dict[str, list[object]] = {}
     field_sources: dict[str, list[str]] = {}
     fields = surface_fields(surface, requested_fields)
+    selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
+    completed_tiers: list[str] = []
 
     for adapter_record in list(adapter_records or []):
         if isinstance(adapter_record, dict):
@@ -283,7 +496,6 @@ def build_detail_record(
                 field_sources=field_sources,
                 source="adapter",
             )
-
     for mapped_payload in map_network_payloads_to_fields(
         network_payloads,
         surface=surface,
@@ -297,6 +509,18 @@ def build_detail_record(
             field_sources=field_sources,
             source="network_payload",
         )
+    completed_tiers.append("authoritative")
+    record = _materialize_record(
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="authoritative",
+        completed_tiers=completed_tiers,
+    )
 
     js_state_objects = harvest_js_state_objects(soup, html)
     mapped_js_fields = map_js_state_to_fields(
@@ -311,6 +535,18 @@ def build_detail_record(
         candidates=candidates,
         field_sources=field_sources,
         source="js_state",
+    )
+    completed_tiers.append("js_state")
+    record = _materialize_record(
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="js_state",
+        completed_tiers=completed_tiers,
     )
 
     for payload in parse_json_ld(soup):
@@ -349,6 +585,32 @@ def build_detail_record(
             field_sources=field_sources,
             source="embedded_json",
         )
+    completed_tiers.append("structured_data")
+    record = _materialize_record(
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="structured_data",
+        completed_tiers=completed_tiers,
+    )
+
+    if (
+        float(record["_confidence"]["score"]) >= float(selector_self_heal["threshold"])
+        and not _requires_dom_completion(
+            record=record,
+            surface=surface,
+            requested_fields=requested_fields,
+            selector_rules=selector_rules,
+            soup=soup,
+        )
+    ):
+        record["_extraction_tiers"]["early_exit"] = "structured_data"
+        return record
+
     _apply_dom_fallbacks(
         dom_parser,
         soup,
@@ -359,79 +621,20 @@ def build_detail_record(
         field_sources,
         selector_rules=selector_rules,
     )
-    record: dict[str, Any] = {
-        "source_url": page_url,
-        "url": page_url,
-        "_source": next(
-            (
-                source
-                for source_name in (
-                    "adapter",
-                    "network_payload",
-                    "js_state",
-                    "json_ld",
-                    "microdata",
-                    "opengraph",
-                    "embedded_json",
-                    "dom_h1",
-                    "dom_selector",
-                    "dom_sections",
-                    "dom_text",
-                )
-                for field_name, source_list in field_sources.items()
-                if field_name in candidates and source_name in source_list
-                for source in [source_name]
-            ),
-            "structured_dom",
-        ),
-    }
-    for field_name in fields:
-        finalized = finalize_candidate_value(field_name, candidates.get(field_name, []))
-        if finalized not in (None, "", [], {}):
-            record[field_name] = finalized
-    record["_field_sources"] = {
-        field_name: list(source_list)
-        for field_name, source_list in field_sources.items()
-        if field_name in record
-    }
-    primary_image = text_or_none(record.get("image_url"))
-    additional_images = text_or_none(record.get("additional_images"))
-    if primary_image and additional_images:
-        filtered = [
-            image
-            for image in [part.strip() for part in additional_images.split(",")]
-            if image and image != primary_image
-        ]
-        if filtered:
-            record["additional_images"] = ", ".join(filtered)
-        else:
-            record.pop("additional_images", None)
-    confidence = score_record_confidence(
-        record,
+    completed_tiers.append("dom")
+    record = _materialize_record(
+        page_url=page_url,
         surface=surface,
         requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="dom",
+        completed_tiers=completed_tiers,
     )
-    record["_confidence"] = confidence
-    selector_self_heal = (
-        extraction_runtime_snapshot.get("selector_self_heal")
-        if isinstance(extraction_runtime_snapshot, dict)
-        else None
-    )
-    record["_self_heal"] = {
-        "enabled": bool(
-            selector_self_heal.get("enabled")
-            if isinstance(selector_self_heal, dict)
-            else crawler_runtime_settings.selector_self_heal_enabled
-        ),
-        "triggered": False,
-        "threshold": float(
-            selector_self_heal.get("min_confidence")
-            if isinstance(selector_self_heal, dict)
-            and selector_self_heal.get("min_confidence") is not None
-            else crawler_runtime_settings.selector_self_heal_min_confidence
-        ),
-    }
-    return finalize_record(record, surface=surface)
+    record["_extraction_tiers"]["early_exit"] = None
+    return record
 
 
 def extract_detail_records(

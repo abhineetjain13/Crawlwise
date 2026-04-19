@@ -2,191 +2,166 @@
 
 ## Purpose
 
-CrawlerAI is a web crawler. The backend should stay small, explicit, and easy to debug.
+This is the engineering constraints doc for the repo.
 
-This document defines the active engineering rules for backend work:
+`CLAUDE.md` is the short operator guide.
+`INVARIANTS.md` is the hard runtime contract.
+`backend-architecture.md` and `frontend-architecture.md` describe the live system.
 
-- keep API behavior stable for the current frontend
-- keep `EXTRACTION_ENHANCEMENT_SPEC.md` unchanged until feature work starts
-- prefer deletion over abstraction
-- give every concern one obvious home
-- keep tests focused on contracts and behavior
+This file defines how code should be shaped and how agents and humans should change it without reintroducing bloat.
 
-## Backend Shape
-
-The backend is organized around seven responsibilities:
-
-1. crawl orchestration
-2. acquisition
-3. extraction
-4. normalization
-5. persistence and review mapping
-6. export
-7. LLM and admin support
-
-Anything that does not clearly belong to one of those areas is candidate debt.
-
-## Current Module Ownership
-
-### Crawl orchestration
-
-- `backend/app/services/crawl_crud.py`
-- `backend/app/services/pipeline/core.py`
-- `backend/app/services/_batch_runtime.py`
-
-These modules create runs, process URLs, persist records, and keep run state moving.
-
-### Acquisition
-
-- `backend/app/services/acquisition/acquirer.py`
-- `backend/app/services/acquisition/http_client.py`
-- `backend/app/services/acquisition/browser_client.py`
-- `backend/app/services/acquisition/browser_pool.py`
-- `backend/app/services/crawl_fetch_runtime.py`
-
-Rules:
-
-- fetch logic lives here
-- browser escalation lives here
-- extraction logic does not live here
-
-### Extraction
-
-- `backend/app/services/crawl_engine.py`
-- `backend/app/services/detail_extractor.py`
-- `backend/app/services/listing_extractor.py`
-- `backend/app/services/structured_sources.py`
-- `backend/app/services/field_value_utils.py`
-
-Rules:
-
-- `crawl_engine.py` is the public extraction facade
-- detail and listing extraction stay separate
-- structured-source parsing stays separate from DOM extraction
-- extraction produces candidate records, not schema mutations
-
-### Normalization
-
-- `backend/app/services/normalizers/__init__.py`
-
-Rules:
-
-- normalization shapes values after extraction
-- normalization does not decide what fields are allowed
-
-### Field policy and schema persistence
-
-- `backend/app/services/field_policy.py`
-- `backend/app/services/schema_service.py`
-- `backend/app/services/review/__init__.py`
-
-Rules:
-
-- `field_policy.py` is the single field-rule entrypoint
-- canonical fields, aliases, requested-field expansion, and review-target validation belong there
-- `schema_service.py` is persistence-oriented and narrow
-- extraction and LLM code must not mutate schema state
-
-### Export
-
-- `backend/app/services/record_export_service.py`
-
-Rules:
-
-- export is formatting over stored records
-- export does not re-interpret extraction semantics
-
-### LLM support
-
-- `backend/app/services/llm_runtime.py`
-- `backend/app/services/llm_config_service.py`
-- `backend/app/services/llm_provider_client.py`
-- `backend/app/services/llm_cache.py`
-- `backend/app/services/llm_circuit_breaker.py`
-- `backend/app/services/llm_tasks.py`
-- `backend/app/services/llm_types.py`
-
-Rules:
-
-- `llm_runtime.py` stays a thin facade
-- provider transport, cache, config lookup, retries, and task validation stay separate
-- LLM code must not sit in the extraction path
-
-## Non-Negotiable Design Rules
+## Core Principles
 
 ### KISS
 
-- prefer plain data flow over pipelines of hooks and policies
-- prefer explicit modules over generic frameworks
-- prefer a few clear conditionals over hidden indirection
+- Prefer explicit data flow over hidden indirection.
+- Prefer a few local conditionals over framework-like abstraction layers.
+- Prefer code that is easy to trace in one grep session.
 
 ### DRY
 
-- deduplicate rules only when the duplicated logic is truly the same rule
-- do not create “shared” helpers that mix unrelated concerns
+- Deduplicate only when the duplicated logic is genuinely the same rule.
+- Do not create fake “shared” helpers that mix unrelated concerns.
+- If two docs repeat the same architecture description, collapse them.
 
-### SOLID in practice
+### SOLID, practically
 
-- single responsibility per module
-- stable facades at subsystem boundaries
-- downstream modules consume data contracts, not upstream internals
+- One subsystem should have one obvious owner.
+- Facades should stay small and stable.
+- Downstream code should depend on contracts, not upstream internals.
 
 ### YAGNI
 
-- do not add speculative adapters, ranking layers, plugin points, or schema engines
-- build only what the current frontend and the extraction enhancement work will actually need
+- Do not add speculative plugin systems, ranking layers, policy engines, or adapter frameworks.
+- Build only what the active product surface and current extraction roadmap require.
 
-## File Size Guardrail
+## Backend Ownership Model
 
-Backend service files should stay under 1000 lines.
+1. API and platform bootstrap
+   Files: `app/main.py`, `app/api/*`, `app/core/*`
+2. Crawl ingestion and orchestration
+   Files: `crawl_ingestion_service.py`, `crawl_service.py`, `crawl_crud.py`, `_batch_runtime.py`, `pipeline/*`
+3. Acquisition and browser runtime
+   Files: `acquisition/*`, `crawl_fetch_runtime.py`, `robots_policy.py`, `url_safety.py`
+4. Extraction
+   Files: `crawl_engine.py`, `detail_extractor.py`, `listing_extractor.py`, `structured_sources.py`, `js_state_mapper.py`, `network_payload_mapper.py`
+5. Publish and persistence
+   Files: `publish/*`, `artifact_store.py`, persistence in `pipeline/core.py`
+6. Review, selectors, and domain memory
+   Files: `review/__init__.py`, `selectors_runtime.py`, `selector_self_heal.py`, `domain_memory_service.py`
+7. LLM admin and runtime
+   Files: `llm_runtime.py`, `llm_provider_client.py`, `llm_config_service.py`, `llm_cache.py`, `llm_circuit_breaker.py`, `llm_tasks.py`
 
-If a file approaches that limit:
+If new code does not clearly belong to one of these, stop and place it deliberately.
 
-- split by responsibility before adding more behavior
-- keep the public facade file small
-- move helpers into explicitly named modules
+## Frontend Ownership Model
+
+1. App shell, auth session, navigation
+   Files: `components/layout/*`, `app/layout.tsx`
+2. API client and contract types
+   Files: `lib/api/*`
+3. Crawl config and dispatch
+   Files: `components/crawl/crawl-config-screen.tsx`, `components/crawl/shared.tsx`
+4. Run workspace and live polling
+   Files: `components/crawl/crawl-run-screen.tsx`, `use-run-polling.ts`
+5. Operator tools and admin
+   Files: `app/selectors/page.tsx`, `app/admin/*`, `app/jobs/page.tsx`, `app/runs/page.tsx`, `app/dashboard/page.tsx`
+
+## Non-Negotiable Design Rules
+
+### 1. One obvious home per concern
+
+- `pipeline/core.py` owns per-URL orchestration, not extraction internals.
+- `crawl_fetch_runtime.py` owns fetch/runtime behavior, not record semantics.
+- `crawl_engine.py` is the extraction facade.
+- `publish/*` owns verdict, metrics, and commit metadata.
+- `field_policy.py` owns field naming and eligibility rules.
+- `selectors_runtime.py` and `domain_memory_service.py` own selector persistence and reuse.
+- LLM transport/config/cache belongs in LLM modules, not in extraction modules.
+
+### 2. Generic code stays generic
+
+- Do not bury site- or tenant-specific hacks in generic runtime, routing, or utility modules when adapters or config can own them.
+- Specs and tunables go in `app/services/config/*` when they are configuration, not in service bodies.
+
+### 3. Architecture should stay grep-friendly
+
+- A failure should be traceable quickly to one subsystem.
+- Avoid new layers whose main effect is hiding the call path.
+- Avoid alias wrappers and compatibility shims that outlive their migration window.
+
+### 4. Strong contracts beat clever internals
+
+- Preserve route-level and record-level contracts unless the user explicitly wants them changed.
+- Prefer typed boundaries and named objects over tuple returns and positional argument growth.
+
+## Agent Behavior In This Repo
+
+- Read the owning module and nearby tests before changing behavior.
+- Update the canonical doc when you change architecture, ownership, or user-facing contracts.
+- Do not create parallel systems because an existing module is awkward; refactor the owner instead.
+- Avoid turning docs into changelogs. Capture stable knowledge, not every edit.
+- When an audit or plan doc conflicts with code, trust code first and then update the docs.
+
+## File Shape Guidance
+
+- Facade files may orchestrate multiple steps, but helpers should move out once responsibilities diverge.
+- Split by responsibility, not by arbitrary suffixes such as `_misc`, `_helpers2`, or `_v2`.
+- Large files are acceptable only when they remain coherent, searchable, and clearly owned.
+- If a file becomes hard to summarize in one paragraph, it probably needs a structural split.
 
 ## Testing Rules
 
-Tests should verify behavior and contracts.
+Test contracts and invariants, not implementation trivia.
 
-Good tests:
+High-value tests:
 
-- requested fields expand correctly
-- fetch runtime escalates to browser when needed
-- extraction returns normalized records
-- review save persists mappings and promotes values
-- export serializes stored records cleanly
-- LLM task execution validates payloads and handles provider failures safely
+- crawl creation and settings normalization
+- fetch/runtime escalation, traversal, robots, diagnostics, browser identity
+- detail/listing extraction behavior
+- structured-source mapping and payload mapping
+- selector CRUD, selector self-heal, and domain-memory reuse
+- review save/promote behavior
+- provenance and export behavior
+- LLM config/runtime boundaries and failure handling
 
-Bad tests:
+Low-value tests:
 
-- private helper imports with no user-facing contract
-- assertions about call order inside a module
-- tests that only lock implementation details
+- private helper call order
+- mocks that just restate implementation
+- assertions that freeze harmless refactors
+
+If a rule matters, a focused test should defend it.
+
+## Documentation Rules
+
+- `CLAUDE.md`: short entrypoint and agent guardrails
+- `ENGINEERING_STRATEGY.md`: engineering constraints, principles, ownership, workflow
+- `INVARIANTS.md`: must-preserve runtime behavior
+- `backend-architecture.md`: detailed backend map and live feature inventory
+- `frontend-architecture.md`: detailed frontend map and frontend/backend contract notes
+
+Do not let multiple docs compete for the same job.
+
+## Current Architectural Takeaways
+
+The recent refactor added real capability:
+
+- extruct-backed structured sources
+- declarative network payload specs
+- browserforge identity restoration
+- URL tracking-param stripping
+- selector self-heal + domain memory
+- provenance/review-bucket-aware responses
+- live selectors and LLM admin surfaces
+
+Those gains should not be followed by uncontrolled subsystem growth. The right move now is disciplined consolidation, not another wave of abstraction.
 
 ## Change Workflow
 
-When changing backend behavior:
-
-1. identify the owning subsystem
-2. edit the smallest responsible file set
-3. keep names explicit
-4. add or update contract tests
-5. run the backend test suite
-
-## Active Simplification Target
-
-The backend should remain easy to inspect under pressure.
-
-A bug should be traceable quickly to one of these places:
-
-- fetch/runtime
-- extraction
-- normalization
-- review/schema persistence
-- export
-- LLM support
-- pipeline/orchestration
-
-If a change makes that harder, it is moving in the wrong direction.
+1. Identify the owning subsystem.
+2. Read the local code and nearby tests first.
+3. Make the smallest responsible change set.
+4. Add or adjust focused tests.
+5. Update the canonical doc if behavior, ownership, or contracts changed.
+6. Verify with focused checks before widening scope.
