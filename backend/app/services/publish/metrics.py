@@ -34,6 +34,14 @@ def build_url_metrics(
             collected_pages = max(1, pages_advanced + 1)
         else:
             collected_pages = max(1, progress_events + 1)
+    phase_timings_ms = (
+        dict(browser_diagnostics.get("phase_timings_ms") or {})
+        if isinstance(browser_diagnostics.get("phase_timings_ms"), dict)
+        else {}
+    )
+    browser_attempted = bool(browser_diagnostics.get("browser_attempted")) or (
+        acquisition_result.method == "browser"
+    )
     return {
         "method": acquisition_result.method,
         "status_code": acquisition_result.status_code,
@@ -41,7 +49,11 @@ def build_url_metrics(
         "final_url": acquisition_result.final_url,
         "requested_fields": list(requested_fields or []),
         "browser_used": acquisition_result.method == "browser",
-        "browser_attempted": acquisition_result.method == "browser",
+        "browser_attempted": browser_attempted,
+        "browser_reason": browser_diagnostics.get("browser_reason"),
+        "browser_outcome": browser_diagnostics.get("browser_outcome"),
+        "html_bytes": int(browser_diagnostics.get("html_bytes", 0) or 0),
+        "browser_phase_timings_ms": phase_timings_ms,
         "network_payloads": len(list(acquisition_result.network_payloads or [])),
         "adapter_name": acquisition_result.adapter_name,
         "platform_family": acquisition_result.adapter_name,

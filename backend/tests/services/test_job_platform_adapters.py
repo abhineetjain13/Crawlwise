@@ -156,13 +156,17 @@ async def test_request_result_uses_direct_http_for_expected_json(
             del method, url, headers, json, data, timeout
             return _FakeResponse()
 
+    async def _fake_get_shared(*, proxy=None, force_ipv4=False):
+        del proxy, force_ipv4
+        return _FakeClient()
+
     monkeypatch.setattr(
-        "app.services.acquisition.http_client.fetch_page",
+        "app.services.crawl_fetch_runtime.fetch_page",
         _fake_fetch_page,
     )
     monkeypatch.setattr(
-        "app.services.acquisition.http_client.build_async_http_client",
-        lambda **kwargs: _FakeClient(),
+        "app.services.acquisition.http_client.get_shared_http_client",
+        _fake_get_shared,
     )
 
     result = await request_result(
@@ -178,7 +182,7 @@ async def test_request_result_uses_direct_http_for_expected_json(
 async def test_request_result_applies_per_request_timeout_with_shared_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.acquisition import http_client as http_client_module
+    from app.services.acquisition import runtime as runtime_module
 
     observed_timeouts: list[float] = []
 
@@ -204,11 +208,14 @@ async def test_request_result_applies_per_request_timeout_with_shared_client(
             observed_timeouts.append(float(timeout))
             return _FakeResponse()
 
+        async def aclose(self) -> None:
+            self.is_closed = True
+
     monkeypatch.setattr(
-        "app.services.acquisition.http_client.build_async_http_client",
+        "app.services.acquisition.runtime.build_async_http_client",
         lambda **kwargs: _FakeClient(),
     )
-    http_client_module._SHARED_CLIENTS.clear()
+    runtime_module._SHARED_HTTP_CLIENTS.clear()
 
     await request_result(
         "https://example.com/api/jobs",
@@ -228,7 +235,7 @@ async def test_request_result_applies_per_request_timeout_with_shared_client(
 async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.acquisition import http_client as http_client_module
+    from app.services.acquisition import runtime as runtime_module
 
     client_builds: list[bool] = []
 
@@ -241,6 +248,7 @@ async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
     class _FakeClient:
         def __init__(self, *, force_ipv4: bool) -> None:
             self._force_ipv4 = force_ipv4
+            self.is_closed = False
 
         async def __aenter__(self):
             return self
@@ -262,16 +270,19 @@ async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
                 raise OSError(11001, "getaddrinfo failed")
             return _FakeResponse()
 
+        async def aclose(self) -> None:
+            self.is_closed = True
+
     def _fake_build_async_http_client(**kwargs):
         force_ipv4 = bool(kwargs.get("force_ipv4"))
         client_builds.append(force_ipv4)
         return _FakeClient(force_ipv4=force_ipv4)
 
     monkeypatch.setattr(
-        "app.services.acquisition.http_client.build_async_http_client",
+        "app.services.acquisition.runtime.build_async_http_client",
         _fake_build_async_http_client,
     )
-    http_client_module._SHARED_CLIENTS.clear()
+    runtime_module._SHARED_HTTP_CLIENTS.clear()
 
     result = await request_result(
         "https://example.com/api/jobs",

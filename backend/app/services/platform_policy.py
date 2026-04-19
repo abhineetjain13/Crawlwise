@@ -344,6 +344,25 @@ def resolve_listing_readiness_override(url: str) -> dict[str, Any] | None:
     }
 
 
+def resolve_browser_readiness_policy(
+    url: str,
+    *,
+    traversal_active: bool = False,
+) -> dict[str, Any]:
+    listing_override = resolve_listing_readiness_override(url)
+    if traversal_active:
+        networkidle_reason = "traversal"
+    elif listing_override is not None:
+        networkidle_reason = "platform-readiness"
+    else:
+        networkidle_reason = None
+    return {
+        "listing_override": listing_override,
+        "require_networkidle": bool(traversal_active or listing_override is not None),
+        "networkidle_reason": networkidle_reason,
+    }
+
+
 def listing_readiness_domains() -> dict[str, list[str]]:
     mapping: dict[str, list[str]] = {}
     for config in platform_configs():

@@ -7,11 +7,16 @@ from dataclasses import dataclass, field
 
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRecord, CrawlRun
-from app.services.acquisition import AcquisitionRequest
+from app.services.acquisition.acquirer import AcquisitionRequest
 from app.services.acquisition.acquirer import acquire as _acquire
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
-from app.services.artifact_store import persist_html_artifact
+from app.services.acquisition.browser_runtime import build_failed_browser_diagnostics
+from app.services.artifact_store import (
+    persist_html_artifact,
+    persist_json_artifact,
+    persist_png_artifact,
+)
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
 from app.services.domain_memory_service import load_domain_selector_rules
 from app.services.domain_utils import normalize_domain
@@ -142,6 +147,39 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _browser_attempted(acquisition_result) -> bool:
+    diagnostics = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    return bool(diagnostics.get("browser_attempted")) or getattr(
+        acquisition_result,
+        "method",
+        "",
+    ) == "browser"
+
+
+def _browser_outcome(acquisition_result) -> str:
+    diagnostics = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    return str(diagnostics.get("browser_outcome") or "").strip().lower()
+
+
+def _screenshot_required(browser_outcome: str) -> bool:
+    return browser_outcome in {
+        "challenge_page",
+        "low_content_shell",
+        "navigation_failed",
+        "traversal_failed",
+        "render_timeout",
+    }
+
+
+def _merge_browser_diagnostics(
+    acquisition_result,
+    diagnostics: dict[str, object],
+) -> None:
+    merged = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    merged.update(dict(diagnostics or {}))
+    acquisition_result.browser_diagnostics = merged
 
 
 def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[str, object]:
@@ -436,7 +474,11 @@ async def _run_extraction_stage(
         context,
         fetched,
     )
-    if _should_retry_browser_after_empty(acquisition_result, records):
+    retry_decision = _empty_extraction_browser_retry_decision(
+        acquisition_result,
+        records,
+    )
+    if retry_decision["should_retry"]:
         await _log_pipeline_event(
             context,
             "info",
@@ -449,6 +491,17 @@ async def _run_extraction_stage(
         try:
             browser_result = await acquire(retry_request)
         except (RuntimeError, ValueError, TypeError, OSError) as exc:
+            _merge_browser_diagnostics(
+                acquisition_result,
+                build_failed_browser_diagnostics(
+                    browser_reason="empty-extraction retry",
+                    exc=exc,
+                ),
+            )
+            fetched.url_metrics = build_url_metrics(
+                acquisition_result,
+                requested_fields=list(context.requested_fields),
+            )
             await _log_pipeline_event(
                 context,
                 "warning",
@@ -546,16 +599,38 @@ async def _extract_records_for_acquisition(
     return records, selector_rules
 
 
+def _empty_extraction_browser_retry_decision(
+    acquisition_result,
+    records: list[dict[str, object]],
+) -> dict[str, object]:
+    if records:
+        return {"should_retry": False, "reason": "records_present"}
+    browser_attempted = _browser_attempted(acquisition_result)
+    browser_outcome = _browser_outcome(acquisition_result)
+    if browser_attempted:
+        return {
+            "should_retry": False,
+            "reason": "browser_already_attempted",
+            "browser_outcome": browser_outcome or None,
+        }
+    if acquisition_result.blocked:
+        return {"should_retry": False, "reason": "blocked"}
+    content_type = str(getattr(acquisition_result, "content_type", "") or "").lower()
+    if "json" in content_type:
+        return {"should_retry": False, "reason": "json_response"}
+    return {"should_retry": True, "reason": "empty_non_browser_html"}
+
+
 def _should_retry_browser_after_empty(
     acquisition_result,
     records: list[dict[str, object]],
 ) -> bool:
-    if records:
-        return False
-    if acquisition_result.blocked or acquisition_result.method == "browser":
-        return False
-    content_type = str(getattr(acquisition_result, "content_type", "") or "").lower()
-    return "json" not in content_type
+    return bool(
+        _empty_extraction_browser_retry_decision(
+            acquisition_result,
+            records,
+        )["should_retry"]
+    )
 
 
 async def _load_selector_rules(
@@ -595,6 +670,11 @@ async def _run_persistence_stage(
         source_url=acquisition_result.final_url,
         html=acquisition_result.html,
     )
+    await _persist_browser_artifacts(
+        context,
+        acquisition_result=acquisition_result,
+        raw_html_path=raw_html_path,
+    )
     await _enter_save_stage(context)
     persisted_count = await _persist_records(
         context.session,
@@ -623,6 +703,56 @@ async def _run_persistence_stage(
             extracted.fetched.url_metrics,
             record_count=persisted_count,
         ),
+    )
+
+
+async def _persist_browser_artifacts(
+    context: _URLProcessingContext,
+    *,
+    acquisition_result,
+    raw_html_path: str,
+) -> None:
+    if not _browser_attempted(acquisition_result):
+        return
+    diagnostics = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    browser_outcome = str(diagnostics.get("browser_outcome") or "").strip().lower()
+    screenshot_bytes = getattr(acquisition_result, "artifacts", {}).get(
+        "browser_screenshot_png",
+        b"",
+    )
+    screenshot_path = ""
+    if _screenshot_required(browser_outcome) and isinstance(
+        screenshot_bytes,
+        (bytes, bytearray),
+    ):
+        screenshot_path = await asyncio.to_thread(
+            persist_png_artifact,
+            run_id=context.run.id,
+            source_url=acquisition_result.final_url,
+            suffix="browser",
+            content=bytes(screenshot_bytes),
+        )
+    diagnostics_payload = dict(diagnostics)
+    diagnostics_payload["artifact_paths"] = {
+        "html": raw_html_path or None,
+        "screenshot": screenshot_path or None,
+    }
+    diagnostics_path = await asyncio.to_thread(
+        persist_json_artifact,
+        run_id=context.run.id,
+        source_url=acquisition_result.final_url,
+        suffix="browser",
+        payload=diagnostics_payload,
+    )
+    _merge_browser_diagnostics(
+        acquisition_result,
+        {
+            "artifact_paths": {
+                "html": raw_html_path or None,
+                "diagnostics": diagnostics_path or None,
+                "screenshot": screenshot_path or None,
+            }
+        },
     )
 
 

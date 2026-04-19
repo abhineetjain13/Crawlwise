@@ -39,7 +39,8 @@ async def test_fetch_page_uses_browser_after_js_shell_detection(
 
     browser_calls: list[str] = []
 
-    async def fake_browser(url: str, timeout_seconds: float):
+    async def fake_browser(url: str, timeout_seconds: float, **kwargs):
+        del timeout_seconds, kwargs
         browser_calls.append(url)
         return crawl_fetch_runtime.PageFetchResult(
             url=url,
@@ -96,8 +97,8 @@ async def test_fetch_page_keeps_http_for_structured_shopify_detail(
             method="curl_cffi",
         )
 
-    async def unexpected_browser(url: str, timeout_seconds: float):
-        raise AssertionError(f"browser fallback should not run for {url} {timeout_seconds}")
+    async def unexpected_browser(url: str, timeout_seconds: float, **kwargs):
+        raise AssertionError(f"browser fallback should not run for {url} {timeout_seconds} {kwargs}")
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", fake_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", unexpected_browser)
@@ -119,7 +120,8 @@ async def test_fetch_page_uses_browser_first_for_requires_browser_platform(
     async def unexpected_http(url: str, timeout_seconds: float):
         raise AssertionError(f"http fallback should not run for browser-first platform {url} {timeout_seconds}")
 
-    async def fake_browser(url: str, timeout_seconds: float):
+    async def fake_browser(url: str, timeout_seconds: float, **kwargs):
+        del timeout_seconds, kwargs
         return crawl_fetch_runtime.PageFetchResult(
             url=url,
             final_url=url,

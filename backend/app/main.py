@@ -20,7 +20,6 @@ from app.api.review import router as review_router
 from app.api.selectors import router as selectors_router
 from app.api.users import router as users_router
 from app.core.config import get_frontend_origins, settings
-from app.core.migrations import apply_pending_migrations_async
 from app.core.metrics import (
     check_browser_pool,
     check_database,
@@ -49,7 +48,6 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    await apply_pending_migrations_async()
     validate_cookie_policy_config()
     async with SessionLocal() as session:
         await bootstrap_admin_user(session)

@@ -281,6 +281,13 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         dict,
     ):
         return coerce_text(value.get("name") or value.get("title") or value.get("value"))
+    if field_name == "category" and isinstance(value, dict):
+        return coerce_text(
+            value.get("name")
+            or value.get("title")
+            or value.get("slug")
+            or value.get("value")
+        )
     if field_name in {"price", "sale_price", "original_price", "discount_amount"} and isinstance(value, dict):
         for key in (
             "price",

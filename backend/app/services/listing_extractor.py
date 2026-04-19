@@ -56,6 +56,9 @@ def _prepare_listing_dom(html: str) -> tuple[LexborHTMLParser, str]:
     parser = LexborHTMLParser(html)
     try:
         for node in parser.css(NOISE_CONTAINER_REMOVAL_SELECTOR):
+            tag = str(getattr(node, "tag", "") or "").strip().lower()
+            if tag in {"html", "body"}:
+                continue
             node.decompose()
     except Exception:
         logger.debug("listing_noise_removal_failed", exc_info=True)

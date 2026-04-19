@@ -56,11 +56,12 @@ class CrawlerRuntimeSettings(BaseSettings):
     performance_profile: Literal["ULTRA_FAST", "BALANCED", "STEALTH"] = "BALANCED"
     http_timeout_seconds: int = 20
     acquisition_attempt_timeout_seconds: int = 60
-    impersonation_target: str = "chrome131"
-    http_impersonation_profiles: list[str] = Field(
-        default_factory=lambda: ["chrome110", "chrome116", "chrome123", "chrome131"]
+    curl_impersonate_target: str = "chrome131"
+    http_user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
     )
-    http_stealth_impersonation_profile: str = "chrome131"
     browser_fallback_visible_text_min: int | None = 500
     browser_fallback_visible_text_ratio_max: float = 0.02
     browser_fallback_html_size_threshold: int = 200000
@@ -129,6 +130,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_navigation_optimistic_wait_ms: int = 3000
     browser_navigation_min_commit_wait_ms: int = 8000
     browser_navigation_min_final_commit_timeout_ms: int = 15000
+    browser_readiness_visible_text_min: int = 120
     interruptible_wait_poll_ms: int = 250
     cooperative_sleep_poll_ms: int = 250
     pagination_navigation_timeout_ms: int = 20000
@@ -139,9 +141,13 @@ class CrawlerRuntimeSettings(BaseSettings):
     pagination_post_click_settle_timeout_ms: int = 3000
     listing_readiness_max_wait_ms: int = 6000
     listing_readiness_poll_ms: int = 500
+    detail_expand_max_elapsed_ms: int = 2500
+    detail_aom_expand_max_interactions: int = 3
+    detail_aom_expand_max_elapsed_ms: int = 1500
     scroll_wait_min_ms: int = 1500
     load_more_wait_min_ms: int = 2000
     traversal_max_iterations_cap: int = 50
+    traversal_fragment_max_bytes: int = 200000
     traversal_min_settle_wait_ms: int = 500
     traversal_weak_progress_streak_max: int = 2
     traversal_active_scrollable_threshold_px: int = 150

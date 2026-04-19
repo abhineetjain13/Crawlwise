@@ -26,6 +26,7 @@ async def test_acquire_returns_public_headers_as_plain_dict(
                 "headers": httpx.Headers({"content-type": "text/html"}),
                 "network_payloads": [],
                 "browser_diagnostics": {},
+                "artifacts": {},
             },
         )()
 

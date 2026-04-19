@@ -88,6 +88,71 @@ def test_listing_extractor_preserves_css_card_field_output() -> None:
     assert rows[0]["review_count"] == 128
 
 
+def test_listing_extractor_does_not_remove_body_for_sidebar_layouts() -> None:
+    html = """
+    <html>
+      <body class="right-sidebar woocommerce-active">
+        <main>
+          <ul class="products columns-4">
+            <li class="product">
+              <a href="https://www.scrapingcourse.com/ecommerce/product/abominable-hoodie/" class="woocommerce-LoopProduct-link woocommerce-loop-product__link">
+                <img src="https://www.scrapingcourse.com/ecommerce/wp-content/uploads/2024/03/mh09-blue_main.jpg" alt="">
+                <h2 class="woocommerce-loop-product__title">Abominable Hoodie</h2>
+                <span class="price">$69.00</span>
+              </a>
+            </li>
+          </ul>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://www.scrapingcourse.com/ecommerce/",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.scrapingcourse.com/ecommerce/",
+            "_source": "dom_listing",
+            "title": "Abominable Hoodie",
+            "price": "69.00",
+            "image_url": "https://www.scrapingcourse.com/ecommerce/wp-content/uploads/2024/03/mh09-blue_main.jpg",
+            "url": "https://www.scrapingcourse.com/ecommerce/product/abominable-hoodie/",
+        }
+    ]
+
+
+def test_detail_extractor_normalizes_category_objects_from_network_payloads() -> None:
+    record = build_detail_record(
+        "<html><body><h1>Combination Pliers</h1></body></html>",
+        "https://practicesoftwaretesting.com/product/01KPJ56NBS8K3WVA5E9F7GX94R",
+        "ecommerce_detail",
+        ["title", "category"],
+        network_payloads=[
+            {
+                "body": {
+                    "product": {
+                        "title": "Combination Pliers",
+                        "price": "14.15",
+                        "category": {
+                            "id": "01KPJ56NAAWFTC0M9X80YZJ3F5",
+                            "name": "Pliers",
+                            "slug": "pliers",
+                        },
+                    }
+                }
+            }
+        ],
+    )
+
+    assert record["title"] == "Combination Pliers"
+    assert record["category"] == "Pliers"
+
+
 def test_listing_extractor_prefers_structured_name_over_item_position_for_title() -> None:
     html = """
     <html>

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import pytest
 
+from app.services import crawl_fetch_runtime
 from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     read_network_payload_body,
     should_capture_network_payload,
 )
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.acquisition.runtime import PageFetchResult, should_escalate_to_browser_async
 
 
@@ -59,6 +61,7 @@ def test_classify_network_endpoint_uses_platform_config_family_signatures() -> N
     ) == {"type": "generic_json", "family": "nextjs"}
 
 
+@pytest.mark.asyncio
 async def test_read_network_payload_body_rejects_oversized_body_before_decode() -> None:
     response = _FakeResponse(b"x" * 600_000)
 
@@ -174,7 +177,7 @@ async def test_fetch_page_falls_back_to_browser_after_http_transport_errors(
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _failing_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _failing_http)
-    monkeypatch.setattr(crawl_fetch_runtime, "_call_browser_fetch", _fake_browser)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
 
     result = await crawl_fetch_runtime.fetch_page(
         "https://ar.puma.com/pd/widget.html",
@@ -215,6 +218,51 @@ async def test_fetch_page_returns_non_retryable_404_without_browser_fallback(
 
     assert result.status_code == 404
     assert result.method == "curl_cffi"
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_stops_http_waterfall_after_vendor_confirmed_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import crawl_fetch_runtime
+
+    curl_proxies: list[str | None] = []
+    browser_proxies: list[str | None] = []
+
+    async def _vendor_blocked_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del timeout
+        curl_proxies.append(proxy)
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body>blocked</body></html>",
+            status_code=403,
+            method="curl_cffi",
+            blocked=True,
+            headers={"x-datadome": "blocked"},
+        )
+
+    async def _unexpected_http(url: str, timeout: float, *, proxy: str | None = None):
+        raise AssertionError(f"http fallback should not run after vendor-confirmed block: {url} {timeout} {proxy}")
+
+    async def _failing_browser(url, timeout, **kwargs):
+        del timeout
+        browser_proxies.append(kwargs.get("proxy"))
+        raise RuntimeError(f"browser failed for {url}")
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _vendor_blocked_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _unexpected_http)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _failing_browser)
+
+    with pytest.raises(RuntimeError, match="browser failed"):
+        await crawl_fetch_runtime.fetch_page(
+            "https://example.com/products/widget",
+            proxy_list=["http://proxy-a", "http://proxy-b"],
+            surface="ecommerce_detail",
+        )
+
+    assert len(curl_proxies) == 1
+    assert browser_proxies == curl_proxies
 
 
 @pytest.mark.asyncio
@@ -293,10 +341,146 @@ async def test_fetch_page_reraises_original_transport_error_when_browser_also_fa
 
     monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _failing_curl)
     monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _failing_http)
-    monkeypatch.setattr(crawl_fetch_runtime, "_call_browser_fetch", _failing_browser)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _failing_browser)
 
     with pytest.raises(httpx.ConnectError):
         await crawl_fetch_runtime.fetch_page("https://paycomonline.net/career-page")
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_host_preference_requires_repeated_good_browser_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    original_threshold = crawler_runtime_settings.browser_preference_min_successes
+    crawler_runtime_settings.browser_preference_min_successes = 2
+    try:
+        curl_calls: list[str] = []
+        browser_calls: list[str] = []
+        should_escalate_values = iter([True, True, False])
+
+        async def _fake_curl(url: str, timeout: float, *, proxy: str | None = None):
+            del timeout, proxy
+            curl_calls.append(url)
+            return PageFetchResult(
+                url=url,
+                final_url=url,
+                html="<html><body>http</body></html>",
+                status_code=200,
+                method="curl_cffi",
+                blocked=False,
+            )
+
+        async def _unexpected_http(url: str, timeout: float, *, proxy: str | None = None):
+            raise AssertionError(f"http fallback should not run for {url} {timeout} {proxy}")
+
+        async def _fake_should_escalate(result: PageFetchResult, *, surface: str | None = None) -> bool:
+            del result, surface
+            return next(should_escalate_values)
+
+        async def _fake_browser(url, timeout, **kwargs):
+            del timeout, kwargs
+            browser_calls.append(url)
+            return PageFetchResult(
+                url=url,
+                final_url=url,
+                html="<html><body>browser</body></html>",
+                status_code=200,
+                method="browser",
+                blocked=False,
+                browser_diagnostics={"browser_outcome": "usable_content"},
+            )
+
+        monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+        monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _unexpected_http)
+        monkeypatch.setattr(
+            crawl_fetch_runtime,
+            "_should_escalate_to_browser_async",
+            _fake_should_escalate,
+        )
+        monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
+
+        first = await crawl_fetch_runtime.fetch_page("https://example.com/products/1")
+        second = await crawl_fetch_runtime.fetch_page("https://example.com/products/2")
+        third = await crawl_fetch_runtime.fetch_page("https://example.com/products/3")
+
+        assert first.method == "browser"
+        assert second.method == "browser"
+        assert third.method == "browser"
+        assert curl_calls == [
+            "https://example.com/products/1",
+            "https://example.com/products/2",
+        ]
+        assert browser_calls == [
+            "https://example.com/products/1",
+            "https://example.com/products/2",
+            "https://example.com/products/3",
+        ]
+    finally:
+        crawler_runtime_settings.browser_preference_min_successes = original_threshold
+        await crawl_fetch_runtime.reset_fetch_runtime_state()
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_does_not_prefer_host_after_bad_browser_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    curl_calls: list[str] = []
+    browser_calls: list[str] = []
+    should_escalate_values = iter([True, False])
+
+    async def _fake_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del timeout, proxy
+        curl_calls.append(url)
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body>http</body></html>",
+            status_code=200,
+            method="curl_cffi",
+            blocked=False,
+        )
+
+    async def _unexpected_http(url: str, timeout: float, *, proxy: str | None = None):
+        raise AssertionError(f"http fallback should not run for {url} {timeout} {proxy}")
+
+    async def _fake_should_escalate(result: PageFetchResult, *, surface: str | None = None) -> bool:
+        del result, surface
+        return next(should_escalate_values)
+
+    async def _fake_browser(url, timeout, **kwargs):
+        del timeout, kwargs
+        browser_calls.append(url)
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body>challenge</body></html>",
+            status_code=200,
+            method="browser",
+            blocked=False,
+            browser_diagnostics={"browser_outcome": "challenge_page"},
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _unexpected_http)
+    monkeypatch.setattr(
+        crawl_fetch_runtime,
+        "_should_escalate_to_browser_async",
+        _fake_should_escalate,
+    )
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
+
+    first = await crawl_fetch_runtime.fetch_page("https://example.com/products/1")
+    second = await crawl_fetch_runtime.fetch_page("https://example.com/products/2")
+
+    assert first.method == "browser"
+    assert second.method == "curl_cffi"
+    assert curl_calls == [
+        "https://example.com/products/1",
+        "https://example.com/products/2",
+    ]
+    assert browser_calls == ["https://example.com/products/1"]
 
 
 @pytest.mark.asyncio

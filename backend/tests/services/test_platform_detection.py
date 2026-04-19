@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.services.platform_policy import (
     detect_platform_family,
     is_job_platform_signal,
+    resolve_browser_readiness_policy,
     resolve_listing_readiness_override,
 )
 
@@ -92,3 +93,24 @@ def test_detect_platform_family_ignores_html_marker_matches_on_unrelated_domains
 def test_platform_registry_does_not_treat_detection_only_families_as_job_adapters() -> None:
     assert detect_platform_family("https://ats.rippling.com/en-GB/acme/jobs") == "rippling"
     assert is_job_platform_signal(platform_family="rippling") is False
+
+
+def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_or_traversal() -> None:
+    platform_policy = resolve_browser_readiness_policy(
+        "https://smithnephew.wd5.myworkdayjobs.com/External",
+    )
+    traversal_policy = resolve_browser_readiness_policy(
+        "https://example.com/collections/widgets",
+        traversal_active=True,
+    )
+    default_policy = resolve_browser_readiness_policy(
+        "https://example.com/products/widget-prime",
+    )
+
+    assert platform_policy["require_networkidle"] is True
+    assert platform_policy["networkidle_reason"] == "platform-readiness"
+    assert platform_policy["listing_override"]["platform"] == "workday"
+    assert traversal_policy["require_networkidle"] is True
+    assert traversal_policy["networkidle_reason"] == "traversal"
+    assert default_policy["require_networkidle"] is False
+    assert default_policy["networkidle_reason"] is None

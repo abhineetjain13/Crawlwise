@@ -162,7 +162,7 @@ async def save_review(
                                 run.surface, value
                             )
                         )
-                        not in normalized_baseline_field_set
+                        and normalized_value not in normalized_baseline_field_set
                     ],
                 ]
             )

@@ -43,15 +43,24 @@ def build_async_http_client(
     proxy: str | None = None,
     limits: httpx.Limits | None = None,
     force_ipv4: bool = False,
+    headers: dict[str, str] | None = None,
 ) -> httpx.AsyncClient:
     transport = _build_async_http_transport(
         proxy=proxy,
         limits=limits,
         force_ipv4=force_ipv4,
     )
+    merged_headers = {
+        "User-Agent": crawler_runtime_settings.http_user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if headers:
+        merged_headers.update({str(k): str(v) for k, v in headers.items()})
     client_kwargs: dict[str, object] = {
         "follow_redirects": follow_redirects,
         "timeout": timeout,
+        "headers": merged_headers,
     }
     if transport is not None:
         client_kwargs["transport"] = transport

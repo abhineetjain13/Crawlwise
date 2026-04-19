@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.acquisition.runtime import fetch_page
+from app.services.crawl_fetch_runtime import fetch_page
 from app.services.config.extraction_rules import EXTRACTION_RULES
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_memory_service import (

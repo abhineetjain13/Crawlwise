@@ -210,5 +210,5 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             f"Pipeline finished. {record_count} records. verdict={aggregate_verdict}",
         )
         await session.commit()
-    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+    except (RuntimeError, ValueError, TypeError) as exc:
         await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")

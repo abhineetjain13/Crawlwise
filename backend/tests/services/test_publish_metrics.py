@@ -41,6 +41,33 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
     assert metrics["network_payload_count"] == 1
 
 
+def test_build_url_metrics_keeps_failed_browser_attempts_when_final_method_is_http() -> None:
+    acquisition_result = SimpleNamespace(
+        method="curl_cffi",
+        status_code=200,
+        blocked=False,
+        final_url="https://example.com/category/widgets",
+        network_payloads=[],
+        adapter_name=None,
+        browser_diagnostics={
+            "browser_attempted": True,
+            "browser_reason": "empty-extraction retry",
+            "browser_outcome": "navigation_failed",
+            "html_bytes": 49,
+            "phase_timings_ms": {"navigation": 1200},
+        },
+    )
+
+    metrics = build_url_metrics(acquisition_result, requested_fields=["title"])
+
+    assert metrics["browser_used"] is False
+    assert metrics["browser_attempted"] is True
+    assert metrics["browser_reason"] == "empty-extraction retry"
+    assert metrics["browser_outcome"] == "navigation_failed"
+    assert metrics["html_bytes"] == 49
+    assert metrics["browser_phase_timings_ms"] == {"navigation": 1200}
+
+
 def test_stringify_value_preserves_falsy_scalars() -> None:
     assert _stringify_value(0) == "0"
     assert _stringify_value(False) == "False"

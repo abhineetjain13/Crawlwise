@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Pattern
 
-from parsel import Selector
+from selectolax.lexbor import LexborHTMLParser
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,15 +16,17 @@ class ScriptTextNode:
 
 
 def iter_script_text_nodes(html: str) -> list[ScriptTextNode]:
+    parser = LexborHTMLParser(str(html or ""))
     nodes: list[ScriptTextNode] = []
-    for node in Selector(text=str(html or "")).xpath("//script"):
-        text = "".join(node.xpath("text()").getall()).strip()
+    for node in parser.css("script"):
+        attributes = getattr(node, "attributes", {}) or {}
+        text = str(node.text(strip=True) or "")
         if not text:
             continue
         nodes.append(
             ScriptTextNode(
-                script_id=str(node.attrib.get("id") or "").strip(),
-                script_type=str(node.attrib.get("type") or "").strip(),
+                script_id=str(attributes.get("id") or "").strip(),
+                script_type=str(attributes.get("type") or "").strip(),
                 text=text,
             )
         )

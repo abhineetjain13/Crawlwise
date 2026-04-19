@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from app.services.acquisition_plan import AcquisitionPlan
@@ -397,3 +400,245 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
     assert result.records[0]["price"] == "19.99"
     assert total == 1
     assert rows[0].data["price"] == "19.99"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_persists_browser_diagnostics_and_screenshot_artifacts(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr("app.services.artifact_store.settings.artifacts_dir", artifacts_dir)
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><head><title>Access denied</title></head><body>captcha datadome</body></html>",
+            method="browser",
+            status_code=403,
+            blocked=True,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_reason": "http-escalation",
+                "browser_outcome": "challenge_page",
+                "html_bytes": 82,
+                "phase_timings_ms": {"navigation": 1200},
+                "challenge_evidence": ["captcha", "datadome"],
+            },
+            artifacts={"browser_screenshot_png": b"fake-png"},
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
+
+    await _process_single_url(db_session, run, run.url)
+
+    artifact_dir = artifacts_dir / "runs" / str(run.id) / "pages"
+    diagnostics_files = list(artifact_dir.glob("*.browser.json"))
+    screenshot_files = list(artifact_dir.glob("*.browser.png"))
+
+    assert len(diagnostics_files) == 1
+    assert len(screenshot_files) == 1
+
+    diagnostics_payload = json.loads(diagnostics_files[0].read_text(encoding="utf-8"))
+    assert diagnostics_payload["browser_outcome"] == "challenge_page"
+    assert diagnostics_payload["browser_reason"] == "http-escalation"
+    assert diagnostics_payload["artifact_paths"]["html"].endswith(".html")
+    assert diagnostics_payload["artifact_paths"]["screenshot"].endswith(".png")
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_does_not_retry_browser_after_empty_browser_acquisition(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    acquire_calls: list[dict[str, object]] = []
+
+    async def _fake_acquire(request):
+        acquire_calls.append(dict(request.acquisition_profile))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>browser</body></html>",
+            method="browser",
+            status_code=200,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_reason": "http-escalation",
+                "browser_outcome": "low_content_shell",
+            },
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_html_artifact",
+        lambda **kwargs: "artifacts/widgets.html",
+    )
+
+    result = await _process_single_url(db_session, run, run.url)
+
+    assert len(acquire_calls) == 1
+    assert result.url_metrics["browser_attempted"] is True
+    assert result.url_metrics["browser_outcome"] == "low_content_shell"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_does_not_retry_browser_after_prior_challenge_attempt(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    acquire_calls: list[dict[str, object]] = []
+
+    async def _fake_acquire(request):
+        acquire_calls.append(dict(request.acquisition_profile))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>http</body></html>",
+            method="curl_cffi",
+            status_code=200,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_reason": "http-escalation",
+                "browser_outcome": "challenge_page",
+            },
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_html_artifact",
+        lambda **kwargs: "artifacts/widgets.html",
+    )
+
+    result = await _process_single_url(db_session, run, run.url)
+
+    assert len(acquire_calls) == 1
+    assert result.url_metrics["method"] == "curl_cffi"
+    assert result.url_metrics["browser_attempted"] is True
+    assert result.url_metrics["browser_outcome"] == "challenge_page"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_keeps_browser_retry_failure_metrics_when_final_method_is_http(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setattr("app.services.artifact_store.settings.artifacts_dir", artifacts_dir)
+    acquire_calls: list[dict[str, object]] = []
+
+    async def _fake_acquire(request):
+        acquire_calls.append(dict(request.acquisition_profile))
+        if request.acquisition_profile.get("prefer_browser"):
+            raise TimeoutError("browser retry timed out")
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>http</body></html>",
+            method="curl_cffi",
+            status_code=200,
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
+
+    result = await _process_single_url(db_session, run, run.url)
+
+    artifact_dir = artifacts_dir / "runs" / str(run.id) / "pages"
+    diagnostics_files = list(artifact_dir.glob("*.browser.json"))
+
+    assert len(acquire_calls) == 2
+    assert result.url_metrics["method"] == "curl_cffi"
+    assert result.url_metrics["browser_attempted"] is True
+    assert result.url_metrics["browser_reason"] == "empty-extraction retry"
+    assert result.url_metrics["browser_outcome"] == "render_timeout"
+    assert len(diagnostics_files) == 1

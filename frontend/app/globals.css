@@ -68,11 +68,11 @@
   --status-paused-bg: var(--warning-bg);
   --status-neutral-bg: rgba(10, 18, 32, 0.04);
 
-  --shadow-xs: 0 1px 0 rgba(10, 18, 32, 0.04);
-  --shadow-sm: 0 1px 2px rgba(10, 18, 32, 0.06);
-  --shadow-md: 0 2px 6px rgba(10, 18, 32, 0.06), 0 0 0 1px rgba(10, 18, 32, 0.03);
-  --shadow-lg: 0 10px 24px rgba(10, 18, 32, 0.08), 0 0 0 1px rgba(10, 18, 32, 0.04);
-  --shadow-modal: 0 24px 48px rgba(10, 18, 32, 0.16);
+  --shadow-xs: 0 1px 1px rgba(10, 18, 32, 0.04), 0 0 0 1px rgba(10, 18, 32, 0.03);
+  --shadow-sm: 0 1px 2px rgba(10, 18, 32, 0.04), 0 2px 5px rgba(10, 18, 32, 0.03), 0 0 0 1px rgba(10, 18, 32, 0.04);
+  --shadow-md: 0 2px 6px rgba(10, 18, 32, 0.04), 0 6px 14px rgba(10, 18, 32, 0.05), 0 0 0 1px rgba(10, 18, 32, 0.03);
+  --shadow-lg: 0 4px 10px rgba(10, 18, 32, 0.04), 0 14px 28px rgba(10, 18, 32, 0.08), 0 0 0 1px rgba(10, 18, 32, 0.04);
+  --shadow-modal: 0 8px 16px rgba(10, 18, 32, 0.04), 0 32px 64px rgba(10, 18, 32, 0.12), 0 0 0 1px rgba(10, 18, 32, 0.05);
   --shadow-card-value: var(--shadow-sm);
   --shadow-elevated-value: var(--shadow-md);
 
@@ -125,9 +125,9 @@
   --radius-xl: 14px;
   --radius-2xl: 20px;
 
-  --transition-fast: 80ms ease;
-  --transition-base: 140ms ease;
-  --transition-slow: 220ms ease;
+  --transition-fast: 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-base: 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-slow: 350ms cubic-bezier(0.16, 1, 0.3, 1);
 
   --metric-runs-color: #1f6fd6;
   --metric-active-color: #15803d;
@@ -261,9 +261,9 @@ body::before {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 10%, transparent), transparent 32%),
-    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30%);
-  opacity: 0.55;
+    radial-gradient(circle at 15% 15%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 45%),
+    radial-gradient(circle at 85% 85%, color-mix(in srgb, var(--accent) 10%, transparent) 0%, transparent 40%);
+  opacity: 0.65;
   z-index: -1;
 }
 
@@ -411,6 +411,7 @@ select:focus-visible:not(.focus-ring) {
   padding: 12px 16px;
   overflow-y: auto;
   max-height: 320px;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 .crawl-terminal-json {
@@ -693,7 +694,8 @@ select:focus-visible:not(.focus-ring) {
     color var(--transition-fast),
     border-color var(--transition-fast),
     box-shadow var(--transition-base),
-    opacity var(--transition-fast);
+    opacity var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .btn-sm,
@@ -720,28 +722,32 @@ select:focus-visible:not(.focus-ring) {
 .btn-primary,
 .btn-link-primary {
   background: var(--accent);
+  background-image: linear-gradient(180deg, color-mix(in srgb, white 12%, transparent), transparent);
   color: var(--accent-fg) !important;
-  border-color: var(--accent);
-  box-shadow: var(--shadow-xs), 0 0 0 1px color-mix(in srgb, var(--accent-hover) 80%, transparent) inset;
+  border-color: color-mix(in srgb, black 15%, var(--accent));
+  box-shadow: 0 1px 2px rgba(10, 18, 32, 0.1), 0 1px 0 rgba(255, 255, 255, 0.15) inset, 0 0 0 1px color-mix(in srgb, var(--accent-hover) 50%, transparent) inset;
 }
 
 .btn-primary:hover,
 .btn-link-primary:hover {
   background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background-image: linear-gradient(180deg, color-mix(in srgb, white 16%, transparent), transparent);
+  border-color: color-mix(in srgb, black 25%, var(--accent-hover));
   color: var(--accent-fg) !important;
   text-decoration: none;
 }
 
 .btn-secondary {
   background: var(--bg-elevated);
+  background-image: linear-gradient(180deg, #ffffff, var(--bg-elevated));
   color: var(--text-primary);
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-xs), 0 1px 0 rgba(255, 255, 255, 0.5) inset;
 }
 
 .btn-secondary:hover {
   background: var(--subtle-panel-bg);
+  background-image: linear-gradient(180deg, var(--bg-elevated), var(--subtle-panel-bg));
 }
 
 .btn-ghost {

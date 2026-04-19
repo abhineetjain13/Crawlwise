@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from app.services.acquisition_plan import AcquisitionPlan
-from app.services.acquisition.runtime import fetch_page
+from app.services.crawl_fetch_runtime import fetch_page
 from app.services.exceptions import ProxyPoolExhaustedError
 from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.platform_url_normalizers import normalize_platform_acquisition_url
@@ -66,6 +66,7 @@ class AcquisitionResult:
     adapter_source_type: str | None = None
     network_payloads: list[dict[str, object]] = field(default_factory=list)
     browser_diagnostics: dict[str, object] = field(default_factory=dict)
+    artifacts: dict[str, object] = field(default_factory=dict)
     page_markdown: str = ""
 
 
@@ -79,6 +80,10 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     prefer_browser = bool(request.acquisition_profile.get("prefer_browser")) or bool(
         runtime_policy.get("requires_browser")
     )
+    browser_reason = _resolve_browser_reason(
+        request=request,
+        requires_browser=bool(runtime_policy.get("requires_browser")),
+    )
     try:
         result = await fetch_page(
             effective_url,
@@ -88,6 +93,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             traversal_mode=request.traversal_mode,
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
+            browser_reason=browser_reason,
         )
     except (httpx.HTTPError, TimeoutError, OSError) as exc:
         if not request.proxy_list:
@@ -104,6 +110,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         headers=_headers_to_dict(result.headers),
         network_payloads=list(result.network_payloads or []),
         browser_diagnostics=dict(result.browser_diagnostics or {}),
+        artifacts=dict(result.artifacts or {}),
     )
 
 
@@ -116,3 +123,16 @@ def _headers_to_dict(headers: Mapping[str, object] | Any) -> dict[str, str]:
         str(key): str(value)
         for key, value in getattr(headers, "items", lambda: [])()
     }
+
+
+def _resolve_browser_reason(
+    *,
+    request: AcquisitionRequest,
+    requires_browser: bool,
+) -> str | None:
+    retry_reason = str(request.acquisition_profile.get("retry_reason") or "").strip().lower()
+    if retry_reason == "empty_extraction":
+        return "empty-extraction retry"
+    if requires_browser:
+        return "platform-required"
+    return None

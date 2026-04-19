@@ -51,10 +51,13 @@ async def reset_pacing_state() -> None:
 
 
 def _prune_expired_hosts(*, now: float, ttl_seconds: int) -> None:
+    # allowed_at is a future timestamp; an entry is stale when the scheduled
+    # window *plus* the TTL has elapsed (i.e., the host hasn't been paced for
+    # longer than ttl_seconds since its last allowed_at).
     expired_hosts = [
         host
         for host, allowed_at in _HOST_NEXT_ALLOWED_AT.items()
-        if now - allowed_at > ttl_seconds
+        if now > allowed_at + ttl_seconds
     ]
     for host in expired_hosts:
         _HOST_NEXT_ALLOWED_AT.pop(host, None)

@@ -108,6 +108,8 @@
           "items": [
             "[data-component-type='s-search-result']",
             ".s-item",
+            "a.card[data-test^='product-']",
+            "a.card[href*='/product/']",
             ".product-card",
             ".product-item",
             ".product-tile",

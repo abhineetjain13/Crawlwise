@@ -201,7 +201,7 @@ async def test_paginate_traversal_does_not_append_duplicate_html_without_progres
     )
 
     assert result.stop_reason == "paginate_no_progress"
-    assert result.html_fragments == ["<div>page-1</div>"]
+    assert [f for f, _ in result.html_fragments] == ["<div>page-1</div>"]
 
 
 @pytest.mark.asyncio
@@ -226,7 +226,7 @@ async def test_paginate_traversal_blocks_off_domain_links() -> None:
     )
 
     assert result.stop_reason == "paginate_off_domain"
-    assert result.html_fragments == ["<div>page-1</div>"]
+    assert [f for f, _ in result.html_fragments] == ["<div>page-1</div>"]
     assert page.goto_calls == []
 
 
@@ -327,7 +327,7 @@ async def test_auto_traversal_chooses_load_more_when_button_present() -> None:
     assert result.load_more_clicks == 1
     assert result.progress_events == 1
     assert result.card_count == 5
-    assert result.html_fragments == ["<div>before</div>", "<div>after</div>"]
+    assert [f for f, _ in result.html_fragments] == ["<div>before</div>", "<div>after</div>"]
     assert "networkidle" in page.load_state_calls
 
 
@@ -361,4 +361,4 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
     assert result.scroll_iterations >= 1
     assert result.progress_events >= 1
     assert result.card_count == 6
-    assert result.html_fragments == ["<div>jobs</div>", "<div>jobs more</div>"]
+    assert [f for f, _ in result.html_fragments] == ["<div>jobs</div>", "<div>jobs more</div>"]

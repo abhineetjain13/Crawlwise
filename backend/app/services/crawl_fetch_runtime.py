@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import traceback
 
 from app.core.config import settings
 from app.services.acquisition.browser_identity import build_playwright_context_options
 from app.services.acquisition.browser_runtime import (
     SharedBrowserRuntime as _SharedBrowserRuntime,
     _BROWSER_PREFERRED_HOSTS,
+    _BROWSER_PREFERRED_HOST_SUCCESSES,
     _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES,
+    build_failed_browser_diagnostics,
     browser_fetch,
     browser_runtime_snapshot,
     classify_network_endpoint,
@@ -18,7 +19,7 @@ from app.services.acquisition.browser_runtime import (
     host_prefers_browser,
     prune_browser_preferred_hosts,
     read_network_payload_body,
-    remember_browser_host,
+    remember_browser_host_if_good,
     should_capture_network_payload,
     shutdown_browser_runtime,
     temporary_browser_page,
@@ -29,6 +30,7 @@ from app.services.acquisition.http_client import (
 from app.services.acquisition.runtime import (
     NetworkPayloadReadResult,
     PageFetchResult,
+    classify_block_from_headers,
     close_shared_http_client,
     copy_headers,
     curl_fetch,
@@ -98,6 +100,7 @@ async def _browser_fetch(
     timeout_seconds: float,
     *,
     proxy: str | None = None,
+    browser_reason: str | None = None,
     surface: str | None = None,
     traversal_mode: str | None = None,
     max_pages: int = 1,
@@ -107,6 +110,7 @@ async def _browser_fetch(
         url,
         timeout_seconds,
         proxy=proxy,
+        browser_reason=browser_reason,
         surface=surface,
         traversal_mode=traversal_mode,
         max_pages=max_pages,
@@ -115,50 +119,6 @@ async def _browser_fetch(
         proxied_page_factory=temporary_browser_page,
         blocked_html_checker=_is_blocked_html_async,
     )
-
-
-async def _call_browser_fetch(
-    url: str,
-    timeout_seconds: float,
-    *,
-    proxy: str | None = None,
-    surface: str | None = None,
-    traversal_mode: str | None = None,
-    max_pages: int = 1,
-    max_scrolls: int = 1,
-) -> PageFetchResult:
-    browser_kwargs = {
-        "surface": surface,
-        "traversal_mode": traversal_mode,
-        "max_pages": max_pages,
-        "max_scrolls": max_scrolls,
-    }
-    if proxy is not None:
-        browser_kwargs["proxy"] = proxy
-    try:
-        return await _browser_fetch(url, timeout_seconds, **browser_kwargs)
-    except TypeError as exc:
-        message = str(exc)
-        if "unexpected keyword argument" not in message or not _is_browser_fetch_signature_error(exc):
-            raise
-        logger.info(
-            "Falling back to legacy _browser_fetch signature without traversal parameters for %s; dropped proxy=%r surface=%r traversal_mode=%r max_pages=%r max_scrolls=%r; error=%s",
-            url,
-            proxy,
-            surface,
-            traversal_mode,
-            max_pages,
-            max_scrolls,
-            message,
-        )
-        if proxy is not None:
-            return await _browser_fetch(url, timeout_seconds, proxy=proxy)
-        return await _browser_fetch(url, timeout_seconds)
-
-
-def _is_browser_fetch_signature_error(exc: TypeError) -> bool:
-    frames = traceback.extract_tb(exc.__traceback__)
-    return any(frame.name in {"_call_browser_fetch", "_browser_fetch"} for frame in frames)
 
 
 async def _is_blocked_html_async(html: str, status_code: int) -> bool:
@@ -190,16 +150,33 @@ async def _read_network_payload_body(response) -> NetworkPayloadReadResult:
     return await read_network_payload_body(response)
 
 
-def _remember_browser_host(url: str) -> None:
-    remember_browser_host(url)
-
-
 def _host_prefers_browser(url: str) -> bool:
     return host_prefers_browser(url)
 
 
+def _vendor_confirmed_block(result: PageFetchResult) -> str | None:
+    if not result.blocked:
+        return None
+    return classify_block_from_headers(result.headers)
+
+
+def _remember_browser_host_if_good(result: PageFetchResult) -> bool:
+    diagnostics = (
+        dict(result.browser_diagnostics or {})
+        if isinstance(result.browser_diagnostics, dict)
+        else {}
+    )
+    return remember_browser_host_if_good(
+        result.final_url,
+        browser_outcome=str(diagnostics.get("browser_outcome") or "").strip().lower()
+        or None,
+        blocked=bool(result.blocked),
+    )
+
+
 async def reset_fetch_runtime_state() -> None:
     _BROWSER_PREFERRED_HOSTS.clear()
+    _BROWSER_PREFERRED_HOST_SUCCESSES.clear()
     await shutdown_browser_runtime()
     await close_shared_http_client()
     await close_adapter_shared_http_client()
@@ -211,6 +188,7 @@ async def fetch_page(
     timeout_seconds: float | None = None,
     proxy_list: list[str] | None = None,
     prefer_browser: bool = False,
+    browser_reason: str | None = None,
     surface: str | None = None,
     traversal_mode: str | None = None,
     max_pages: int = 1,
@@ -228,30 +206,44 @@ async def fetch_page(
         if value
     ]
     prune_browser_preferred_hosts()
+    host_preference_enabled = _host_prefers_browser(url)
+    traversal_required = should_run_traversal(surface, traversal_mode)
     browser_first = (
         prefer_browser
-        or _host_prefers_browser(url)
+        or host_preference_enabled
         or bool(runtime_policy.get("requires_browser"))
-        or should_run_traversal(surface, traversal_mode)
+        or traversal_required
     )
+    last_browser_attempt_diagnostics: dict[str, object] = {}
     if browser_first:
+        resolved_browser_reason = _resolve_browser_reason(
+            browser_reason=browser_reason,
+            requires_browser=bool(runtime_policy.get("requires_browser")),
+            traversal_required=traversal_required,
+            host_preference_enabled=host_preference_enabled,
+        )
         proxy_attempts = proxies or [None]
         last_browser_error: Exception | None = None
         for proxy in proxy_attempts:
             try:
-                browser_result = await _call_browser_fetch(
+                browser_result = await _browser_fetch(
                     url,
                     resolved_timeout,
                     proxy=proxy,
+                    browser_reason=resolved_browser_reason,
                     surface=surface,
                     traversal_mode=traversal_mode,
                     max_pages=max_pages,
                     max_scrolls=max_scrolls,
                 )
-                _remember_browser_host(browser_result.final_url)
+                _remember_browser_host_if_good(browser_result)
                 return browser_result
             except Exception as exc:
                 last_browser_error = exc
+                last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
+                    browser_reason=resolved_browser_reason,
+                    exc=exc,
+                )
                 logger.debug(
                     "Browser fetch failed for %s via %s",
                     url,
@@ -263,8 +255,12 @@ async def fetch_page(
 
     last_error: Exception | None = None
     proxy_attempts = proxies or [None]
+    vendor_block_confirmed = False
     for proxy in proxy_attempts:
+        if vendor_block_confirmed:
+            break
         for fetcher in (_curl_fetch, _http_fetch):
+            resolved_browser_reason: str | None = None
             try:
                 if proxy is not None:
                     result = await fetcher(url, resolved_timeout, proxy=proxy)
@@ -277,21 +273,39 @@ async def fetch_page(
                         url,
                     )
                     return result
-                if await _should_escalate_to_browser_async(result, surface=surface):
-                    browser_result = await _call_browser_fetch(
+                vendor = _vendor_confirmed_block(result)
+                if vendor:
+                    vendor_block_confirmed = True
+
+                if vendor or await _should_escalate_to_browser_async(result, surface=surface):
+                    resolved_browser_reason = (
+                        browser_reason
+                        or (f"vendor-block:{vendor}" if vendor else "http-escalation")
+                    )
+                    browser_result = await _browser_fetch(
                         url,
                         resolved_timeout,
                         proxy=proxy,
+                        browser_reason=resolved_browser_reason,
                         surface=surface,
                         traversal_mode=traversal_mode,
                         max_pages=max_pages,
                         max_scrolls=max_scrolls,
                     )
-                    _remember_browser_host(browser_result.final_url)
+                    _remember_browser_host_if_good(browser_result)
                     return browser_result
+                _attach_browser_attempt_diagnostics(
+                    result,
+                    diagnostics=last_browser_attempt_diagnostics,
+                )
                 return result
             except Exception as exc:
                 last_error = exc
+                if resolved_browser_reason is not None:
+                    last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
+                        browser_reason=resolved_browser_reason,
+                        exc=exc,
+                    )
                 logger.debug(
                     "Fetch failed for %s via %s (%s)",
                     url,
@@ -299,6 +313,10 @@ async def fetch_page(
                     proxy or "direct",
                     exc_info=True,
                 )
+                if vendor_block_confirmed:
+                    break
+    if vendor_block_confirmed and last_error is not None:
+        raise last_error
     if last_error is not None:
         logger.info(
             "HTTP fetchers exhausted for %s (%s); attempting browser fallback",
@@ -308,19 +326,25 @@ async def fetch_page(
         last_browser_error: Exception | None = None
         for proxy in proxy_attempts:
             try:
-                browser_result = await _call_browser_fetch(
+                resolved_browser_reason = browser_reason or "http-escalation"
+                browser_result = await _browser_fetch(
                     url,
                     resolved_timeout,
                     proxy=proxy,
+                    browser_reason=resolved_browser_reason,
                     surface=surface,
                     traversal_mode=traversal_mode,
                     max_pages=max_pages,
                     max_scrolls=max_scrolls,
                 )
-                _remember_browser_host(browser_result.final_url)
+                _remember_browser_host_if_good(browser_result)
                 return browser_result
             except Exception as exc:
                 last_browser_error = exc
+                last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
+                    browser_reason=resolved_browser_reason,
+                    exc=exc,
+                )
                 logger.debug(
                     "Browser fallback failed for %s via %s after HTTP transport errors",
                     url,
@@ -333,6 +357,36 @@ async def fetch_page(
             ) from last_browser_error
         raise last_error
     raise RuntimeError(f"Failed to fetch {url}")
+
+
+def _attach_browser_attempt_diagnostics(
+    result: PageFetchResult,
+    *,
+    diagnostics: dict[str, object] | None,
+) -> None:
+    if not diagnostics:
+        return
+    merged = dict(result.browser_diagnostics or {})
+    merged.update(dict(diagnostics))
+    result.browser_diagnostics = merged
+
+
+def _resolve_browser_reason(
+    *,
+    browser_reason: str | None,
+    requires_browser: bool,
+    traversal_required: bool,
+    host_preference_enabled: bool,
+) -> str:
+    if str(browser_reason or "").strip():
+        return str(browser_reason).strip().lower()
+    if requires_browser:
+        return "platform-required"
+    if traversal_required:
+        return "traversal-required"
+    if host_preference_enabled:
+        return "host-preference"
+    return "http-escalation"
 
 
 __all__ = [

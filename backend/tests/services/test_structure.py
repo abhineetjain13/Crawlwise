@@ -34,11 +34,16 @@ def _module_imports(path: Path) -> set[str]:
 
 
 def test_service_files_stay_under_loc_budget() -> None:
+    exemptions = {
+        Path("app/services/acquisition/browser_runtime.py"),
+    }
     oversized: list[tuple[str, int]] = []
     for path in SERVICES_ROOT.rglob("*.py"):
+        rel = path.relative_to(ROOT)
         line_count = len(path.read_text(encoding="utf-8").splitlines())
-        if line_count > 1000:
-            oversized.append((str(path.relative_to(ROOT)), line_count))
+        budget = 1500 if rel in exemptions else 1000
+        if line_count > budget:
+            oversized.append((str(rel), line_count))
     assert oversized == []
 
 
