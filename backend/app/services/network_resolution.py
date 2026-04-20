@@ -42,13 +42,11 @@ def build_async_http_client(
     timeout: float | httpx.Timeout,
     proxy: str | None = None,
     limits: httpx.Limits | None = None,
-    force_ipv4: bool = False,
     headers: dict[str, str] | None = None,
 ) -> httpx.AsyncClient:
     transport = _build_async_http_transport(
         proxy=proxy,
         limits=limits,
-        force_ipv4=force_ipv4,
     )
     merged_headers = {
         "User-Agent": crawler_runtime_settings.http_user_agent,
@@ -67,34 +65,12 @@ def build_async_http_client(
     return httpx.AsyncClient(**client_kwargs)
 
 
-def should_retry_with_forced_ipv4(exc: BaseException) -> bool:
-    if address_family_preference() != "auto":
-        return False
-    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError)):
-        return True
-    if isinstance(exc, OSError):
-        return True
-    lowered = str(exc or "").lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "getaddrinfo failed",
-            "name or service not known",
-            "nodename nor servname provided",
-            "temporary failure in name resolution",
-            "network is unreachable",
-            "no route to host",
-        )
-    )
-
-
 def _build_async_http_transport(
     *,
     proxy: str | None,
     limits: httpx.Limits | None,
-    force_ipv4: bool,
 ) -> httpx.AsyncHTTPTransport | None:
-    local_address = _local_address_for_http(force_ipv4=force_ipv4)
+    local_address = _local_address_for_http()
     if local_address is None and proxy is None and limits is None:
         return None
     return httpx.AsyncHTTPTransport(
@@ -104,9 +80,7 @@ def _build_async_http_transport(
     )
 
 
-def _local_address_for_http(*, force_ipv4: bool) -> str | None:
-    if force_ipv4:
-        return _IPV4_LOCAL_ADDRESS
+def _local_address_for_http() -> str | None:
     preference = address_family_preference()
     if preference == "ipv4":
         return _IPV4_LOCAL_ADDRESS

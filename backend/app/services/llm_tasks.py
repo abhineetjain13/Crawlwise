@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from json import loads as parse_json
 from string import Template
@@ -24,6 +25,7 @@ from app.services.llm_config_service import (
 )
 from app.services.llm_provider_client import call_provider_with_retry, estimate_cost_usd
 from app.services.llm_types import LLMTaskResult
+from bs4 import BeautifulSoup, Comment, Tag
 from app.services.record_export_service import render_markdown_block
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,7 +68,8 @@ _SchemaFieldName = Annotated[str, AfterValidator(_require_schema_field_name)]
 
 class _XPathSelector(TypedDict):
     field_name: _NonEmptyText
-    xpath: _NonEmptyText
+    xpath: NotRequired[str]
+    css_selector: NotRequired[str]
 
 
 class _CanonicalFieldReview(TypedDict):
@@ -285,6 +288,11 @@ async def discover_xpath_candidates(
     missing_fields: list[str],
     existing_values: dict[str, object],
 ) -> tuple[list[dict], str | None]:
+    structured_data = _extract_structured_data(html_text)
+    structured_data_json = _truncate_json_literal(
+        structured_data,
+        llm_runtime_settings.existing_values_max_chars * 2,
+    )
     result = await run_prompt_task(
         session,
         task_type="xpath_discovery",
@@ -297,6 +305,7 @@ async def discover_xpath_candidates(
                 existing_values,
                 llm_runtime_settings.existing_values_max_chars,
             ),
+            "structured_data_json": structured_data_json,
             "html_snippet": _truncate_html(
                 html_text,
                 llm_runtime_settings.html_snippet_max_chars,
@@ -455,6 +464,109 @@ def _parse_json_array(raw_text: str) -> list | None:
     return payload if isinstance(payload, list) else None
 
 
+def _load_prune_stripped_tags() -> frozenset[str]:
+    return frozenset(
+        tag.strip()
+        for tag in llm_runtime_settings.html_prune_stripped_tags.split(",")
+        if tag.strip()
+    )
+
+
+def _load_prune_preserved_script_types() -> frozenset[str]:
+    return frozenset(
+        t.strip().lower()
+        for t in llm_runtime_settings.html_prune_preserved_script_types.split(",")
+        if t.strip()
+    )
+
+
+def _load_prune_preserved_attrs() -> frozenset[str]:
+    return frozenset(
+        attr.strip()
+        for attr in llm_runtime_settings.html_prune_preserved_attrs.split(",")
+        if attr.strip()
+    )
+
+
+def _load_prune_preserved_script_ids() -> frozenset[str]:
+    return frozenset(
+        sid.strip()
+        for sid in llm_runtime_settings.html_prune_preserved_script_ids.split(",")
+        if sid.strip()
+    )
+
+
+_STRIP_ATTR_PATTERNS = (
+    re.compile(r"^on"),
+    re.compile(r"^data-(?!test|qa|sku|product|price|avail|component|section|field)"),
+)
+
+
+def _prune_html_for_llm(html_text: str) -> str:
+    stripped_tags = _load_prune_stripped_tags()
+    preserved_script_types = _load_prune_preserved_script_types()
+    preserved_attrs = _load_prune_preserved_attrs()
+    preserved_script_ids = _load_prune_preserved_script_ids()
+    soup = BeautifulSoup(html_text, "html.parser")
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        comment.extract()
+    for tag in list(soup.find_all(stripped_tags)):
+        if tag.name == "script":
+            script_type = str(tag.get("type") or "").strip().lower()
+            if script_type in preserved_script_types:
+                continue
+            if str(tag.get("id") or "") in preserved_script_ids:
+                continue
+        tag.decompose()
+    for tag in soup.find_all(True):
+        if not isinstance(tag, Tag):
+            continue
+        tag.attrs = {
+            key: value
+            for key, value in tag.attrs.items()
+            if key in preserved_attrs
+            or not any(pat.match(key) for pat in _STRIP_ATTR_PATTERNS)
+        }
+        style = tag.get("style")
+        if style:
+            del tag["style"]
+    return str(soup)
+
+
+def _extract_structured_data(html_text: str) -> dict[str, object]:
+    soup = BeautifulSoup(html_text, "html.parser")
+    structured: dict[str, object] = {}
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = parse_json(script.string or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(data, dict):
+            graph = data.get("@graph")
+            if isinstance(graph, list):
+                for item in graph:
+                    if isinstance(item, dict) and item.get("@type"):
+                        type_name = str(item["@type"]).split("/")[-1]
+                        structured.setdefault(type_name, []).append(item)
+            elif data.get("@type"):
+                type_name = str(data["@type"]).split("/")[-1]
+                structured.setdefault(type_name, []).append(data)
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and item.get("@type"):
+                    type_name = str(item["@type"]).split("/")[-1]
+                    structured.setdefault(type_name, []).append(item)
+    next_data_script = soup.find("script", id="__NEXT_DATA__")
+    if next_data_script:
+        try:
+            next_data = parse_json(next_data_script.string or "")
+            if isinstance(next_data, dict):
+                structured["__NEXT_DATA__"] = next_data
+        except (json.JSONDecodeError, TypeError):
+            logger.debug("Failed to parse __NEXT_DATA__ script tag as JSON")
+    return structured
+
+
 def _truncate_html(
     html_text: str,
     limit: int,
@@ -463,11 +575,33 @@ def _truncate_html(
 ) -> str:
     if limit <= 0:
         return ""
-    rendered = render_markdown_block(html_text).strip()
-    if len(rendered) <= limit:
-        return rendered
-    focused = _focus_markdown_context(rendered, anchors or [])
-    return (focused or rendered)[:limit]
+    pruned = _prune_html_for_llm(html_text)
+    if len(pruned) <= limit:
+        return pruned
+    focused = _focus_html_context(pruned, anchors or [])
+    return (focused or pruned)[:limit]
+
+
+def _focus_html_context(html_text: str, anchors: list[str]) -> str:
+    normalized_anchors = _normalize_html_anchor_terms(anchors)
+    if not normalized_anchors:
+        return ""
+    focused_lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in html_text.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if any(anchor in lowered for anchor in normalized_anchors):
+            if line not in seen:
+                focused_lines.append(line)
+                seen.add(line)
+            continue
+        if focused_lines and line not in seen:
+            focused_lines.append(line)
+            seen.add(line)
+    return "\n".join(focused_lines)
 
 
 def _focus_markdown_context(markdown_text: str, anchors: list[str]) -> str:

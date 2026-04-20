@@ -18,7 +18,7 @@
       },
       {
         "key": "brand",
-        "value": "[itemprop='brand'], .brand, .product-brand"
+        "value": "[itemprop='brand'], .brand, .product-brand, [data-testid*='brand'], [aria-label*='brand'], [class*='Brand']"
       },
       {
         "key": "category",
@@ -38,7 +38,7 @@
       },
       {
         "key": "image_url",
-        "value": "[itemprop='image'], meta[property='og:image']"
+        "value": "[itemprop='image'], meta[property='og:image'], [data-testid*='image'], [class*='product-image'], [class*='ProductImage'], img[itemprop='image']"
       },
       {
         "key": "job_type",
@@ -50,11 +50,11 @@
       },
       {
         "key": "original_price",
-        "value": ".original-price, .compare-price, [data-original-price]"
+        "value": ".original-price, .compare-price, [data-original-price], [data-testid*='original-price'], [class*='OriginalPrice'], [class*='compare-price'], [aria-label*='original price']"
       },
       {
         "key": "price",
-        "value": "[itemprop='price'], .price, .product-price"
+        "value": "[itemprop='price'], .price, .product-price, [data-testid*='price'], [data-test*='price'], [class*='Price'], [class*='price-'], [aria-label*='price'], [data-price]"
       },
       {
         "key": "qualifications",
@@ -62,7 +62,7 @@
       },
       {
         "key": "rating",
-        "value": "[itemprop='ratingValue']"
+        "value": "[itemprop='ratingValue'], [data-testid*='rating'], [class*='Rating'], [class*='rating'], [aria-label*='rating'], [class*='stars']"
       },
       {
         "key": "responsibilities",
@@ -70,7 +70,7 @@
       },
       {
         "key": "review_count",
-        "value": "[itemprop='reviewCount']"
+        "value": "[itemprop='reviewCount'], [data-testid*='review'], [class*='review-count'], [class*='ReviewCount'], [aria-label*='review']"
       },
       {
         "key": "salary",
@@ -78,7 +78,7 @@
       },
       {
         "key": "sale_price",
-        "value": ".sale-price, .discount-price, [data-sale-price]"
+        "value": ".sale-price, .discount-price, [data-sale-price], [data-testid*='sale-price'], [class*='SalePrice'], [class*='sale-price'], [aria-label*='sale price']"
       },
       {
         "key": "skills",
@@ -94,7 +94,7 @@
       },
       {
         "key": "title",
-        "value": "h1, [itemprop='name'], meta[property='og:title'], title"
+        "value": "h1, [itemprop='name'], meta[property='og:title'], title, [data-testid*='title'], [data-testid*='product-name'], [class*='ProductTitle'], [class*='product-title'], [aria-label*='product name']"
       }
     ]
   },
@@ -135,7 +135,22 @@
             "[class*='product-tile']",
             "[class*='SearchResultTile']",
             "[class*='AllEditionsItem-tile']",
-            "[class*='search-result-item']"
+            "[class*='search-result-item']",
+            "[data-testid*='product' i]",
+            "[data-test*='product' i]",
+            "[data-component*='product' i]",
+            "[data-automation*='product' i]",
+            "[class*='product-brief' i]",
+            "[class*='ProductPod' i]",
+            "[class*='item-tile' i]",
+            "[class*='product-card--loaded']",
+            "[class*='product-card--hydrated']",
+            "[class*='product-item--loaded']",
+            "[class*='product-item--hydrated']",
+            "[class*='grid-item--loaded']",
+            "[data-hydrated='true'][class*='product' i]",
+            "[data-loaded='true'][class*='product' i]",
+            "[data-lazy-loaded][class*='product' i]"
           ]
         }
       },

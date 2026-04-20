@@ -12,7 +12,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.services.acquisition.browser_capture import BrowserNetworkCapture
-from app.services.acquisition import browser_runtime
+from app.services.acquisition import browser_page_flow, browser_runtime
 from app.services.acquisition.traversal import TraversalResult
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
@@ -120,9 +120,11 @@ class _FakeExpansionPage:
         goto_failures: dict[str, Exception] | None = None,
         response_events: list[Any] | None = None,
         wait_for_selector_error: Exception | None = None,
+        shadow_html: str | None = None,
     ) -> None:
         self.base_html = base_html
         self.expanded_html = expanded_html or base_html
+        self.shadow_html = shadow_html
         self.labels = list(labels or [])
         self.selector_counts = dict(selector_counts or {})
         self.card_count = int(card_count)
@@ -142,6 +144,7 @@ class _FakeExpansionPage:
             snapshot=self._snapshot if accessibility_snapshot is not None else None
         )
         self._accessibility_snapshot = accessibility_snapshot
+        self.shadow_flattened = False
 
     async def _snapshot(self) -> dict[str, object] | None:
         return self._accessibility_snapshot
@@ -174,6 +177,23 @@ class _FakeExpansionPage:
                 callback(response)
         return SimpleNamespace(status=200, headers={"content-type": "text/html"})
 
+    async def evaluate(self, script: str, arg: Any | None = None) -> Any:
+        if "document.querySelectorAll('*')" in script and self.shadow_html is not None:
+            self.shadow_flattened = True
+            return 1
+        if "querySelectorAll(selector).length" in script:
+            selectors = list(arg or [])
+            return max(
+                (
+                    int(self.selector_counts.get(selector, 0))
+                    for selector in selectors
+                ),
+                default=0,
+            )
+        if "MutationObserver" in script:
+            return {"observed": True}
+        return None
+
     async def wait_for_timeout(self, timeout_ms: int) -> None:
         self.wait_timeout_calls.append(timeout_ms)
 
@@ -204,7 +224,10 @@ class _FakeExpansionPage:
         return _FakeRoleLocator(self, role, name)
 
     async def content(self) -> str:
-        return self.expanded_html if self.expanded else self.base_html
+        html = self.expanded_html if self.expanded else self.base_html
+        if self.shadow_flattened and self.shadow_html is not None:
+            return self.shadow_html
+        return html
 
     async def screenshot(self, *, path: str | Path | None = None, **kwargs) -> bytes:
         del kwargs
@@ -219,7 +242,7 @@ class _FakeRuntime:
         self._page = page
 
     @asynccontextmanager
-    async def page(self):
+    async def page(self, **_kwargs):
         yield self._page
 
 
@@ -284,6 +307,114 @@ async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle(
     assert result.browser_diagnostics["detail_expansion"]["reason"] == "non_detail_surface"
     assert page.wait_timeout_calls == []
     assert page.load_state_calls == []
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_attempts_implicit_networkidle_for_unmatched_spa_listing() -> None:
+    original_optimistic_wait_ms = (
+        crawler_runtime_settings.browser_navigation_optimistic_wait_ms
+    )
+    original_implicit_networkidle_timeout_ms = (
+        crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms
+    )
+    try:
+        crawler_runtime_settings.browser_navigation_optimistic_wait_ms = 25
+        crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms = 250
+        page = _FakeExpansionPage(base_html="<html><body>Loading</body></html>")
+
+        probe_results = iter(
+            [
+                {
+                    "url": "https://example.com/spa/listing",
+                    "surface": "ecommerce_listing",
+                    "is_ready": False,
+                    "detail_like": False,
+                    "structured_data_present": False,
+                    "visible_text_length": 20,
+                    "detail_hint_count": 0,
+                    "listing_card_count": 0,
+                    "matched_listing_selectors": 0,
+                    "h1_present": False,
+                },
+                {
+                    "url": "https://example.com/spa/listing",
+                    "surface": "ecommerce_listing",
+                    "is_ready": False,
+                    "detail_like": False,
+                    "structured_data_present": False,
+                    "visible_text_length": 24,
+                    "detail_hint_count": 0,
+                    "listing_card_count": 0,
+                    "matched_listing_selectors": 0,
+                    "h1_present": False,
+                },
+                {
+                    "url": "https://example.com/spa/listing",
+                    "surface": "ecommerce_listing",
+                    "is_ready": True,
+                    "detail_like": False,
+                    "structured_data_present": False,
+                    "visible_text_length": 260,
+                    "detail_hint_count": 0,
+                    "listing_card_count": 0,
+                    "matched_listing_selectors": 0,
+                    "h1_present": False,
+                },
+            ]
+        )
+
+        async def _fake_runtime():
+            return _FakeRuntime(page)
+
+        original_probe_browser_readiness = browser_runtime.probe_browser_readiness
+        try:
+            async def _fake_probe_browser_readiness(*args, **kwargs):
+                del args, kwargs
+                return next(probe_results)
+
+            browser_runtime.probe_browser_readiness = _fake_probe_browser_readiness
+            result = await browser_runtime.browser_fetch(
+                "https://example.com/spa/listing",
+                5,
+                surface="ecommerce_listing",
+                runtime_provider=_fake_runtime,
+            )
+        finally:
+            browser_runtime.probe_browser_readiness = original_probe_browser_readiness
+
+        assert result.browser_diagnostics["phase_timings_ms"]["optimistic_wait"] >= 0
+        assert result.browser_diagnostics["phase_timings_ms"]["networkidle_wait"] >= 0
+        assert page.wait_timeout_calls == [25]
+        assert page.load_state_calls == ["networkidle"]
+        assert result.browser_diagnostics["networkidle_skip_reason"] is None
+    finally:
+        crawler_runtime_settings.browser_navigation_optimistic_wait_ms = (
+            original_optimistic_wait_ms
+        )
+        crawler_runtime_settings.browser_spa_implicit_networkidle_timeout_ms = (
+            original_implicit_networkidle_timeout_ms
+        )
+
+
+@pytest.mark.asyncio
+async def test_probe_browser_readiness_uses_visible_text_fallback_for_unmatched_listing() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body>" + ("Catalog entry " * 40) + "</body></html>",
+    )
+
+    probe = await browser_runtime.probe_browser_readiness(
+        page,
+        url="https://example.com/catalog",
+        surface="ecommerce_listing",
+        listing_override=None,
+    )
+
+    assert probe["listing_card_count"] == 0
+    assert probe["matched_listing_selectors"] == 0
+    assert probe["visible_text_length"] >= (
+        int(crawler_runtime_settings.browser_readiness_visible_text_min) * 2
+    )
+    assert probe["is_ready"] is True
 
 
 @pytest.mark.asyncio
@@ -380,6 +511,31 @@ async def test_browser_fetch_expands_detail_accordions_before_collecting_html() 
     assert result.browser_diagnostics["detail_expansion"]["expanded_elements"] == [
         "product specifications"
     ]
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_flattens_shadow_dom_before_serializing_html() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><shop-product></shop-product></body></html>",
+        shadow_html=(
+            "<html><body><shop-product></shop-product>"
+            "<section class='specifications'>Shadow DOM specifications</section>"
+            "</body></html>"
+        ),
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert page.shadow_flattened is True
+    assert "Shadow DOM specifications" in result.html
 
 
 @pytest.mark.asyncio
@@ -558,6 +714,70 @@ async def test_browser_capture_close_drains_inflight_response_callbacks() -> Non
 
 
 @pytest.mark.asyncio
+async def test_browser_capture_decodes_react_server_component_payloads() -> None:
+    class _RscResponse:
+        def __init__(self) -> None:
+            self.url = "https://example.com/products/widget"
+            self.status = 200
+            self.headers = {"content-type": "text/x-component"}
+            self.request = SimpleNamespace(method="GET")
+
+        async def body(self) -> bytes:
+            return (
+                b'0:["$","$L1",null,{"title":"Trail Runner","price":"109.00"}]\n'
+                b'1:{"product":{"title":"Trail Runner","sku":"TRAIL-1"}}\n'
+            )
+
+    page = _FakeExpansionPage(base_html="<html><body></body></html>")
+    capture = BrowserNetworkCapture(surface="ecommerce_detail")
+    capture.attach(page)
+
+    listeners = page.listeners.get("response") or []
+    assert listeners
+    listeners[0](_RscResponse())
+
+    summary = await capture.close(page)
+
+    assert summary.network_payload_count == 1
+    assert summary.malformed_network_payloads == 0
+    assert isinstance(summary.payloads[0]["body"], list)
+    assert summary.payloads[0]["body"][0][3]["title"] == "Trail Runner"
+    assert summary.payloads[0]["body"][1]["product"]["sku"] == "TRAIL-1"
+
+
+@pytest.mark.asyncio
+async def test_browser_capture_close_uses_bounded_queue_join_timeout() -> None:
+    original_timeout_ms = crawler_runtime_settings.browser_capture_queue_join_timeout_ms
+    crawler_runtime_settings.browser_capture_queue_join_timeout_ms = 50
+    try:
+        capture = BrowserNetworkCapture(
+            surface="ecommerce_detail",
+            should_capture_payload=lambda **_kwargs: True,
+            classify_endpoint=lambda **_kwargs: {"type": "api", "family": "generic"},
+            read_payload_body=lambda *_args, **_kwargs: browser_runtime.NetworkPayloadReadResult(
+                body=b'{"id":"captured"}',
+                outcome="ok",
+            ),
+        )
+        page = _FakeExpansionPage(base_html="<html><body></body></html>")
+        capture.attach(page)
+
+        async def _stalled_join() -> None:
+            await asyncio.sleep(1)
+
+        capture._queue.join = _stalled_join  # type: ignore[method-assign]
+
+        started_at = asyncio.get_running_loop().time()
+        summary = await capture.close(page)
+        elapsed = asyncio.get_running_loop().time() - started_at
+
+        assert summary.network_payload_count == 0
+        assert elapsed < 0.5
+    finally:
+        crawler_runtime_settings.browser_capture_queue_join_timeout_ms = original_timeout_ms
+
+
+@pytest.mark.asyncio
 async def test_expand_all_interactive_elements_respects_small_interaction_cap() -> None:
     original_limit = crawler_runtime_settings.detail_expand_max_interactions
     crawler_runtime_settings.detail_expand_max_interactions = 1
@@ -638,6 +858,29 @@ def test_build_failed_browser_diagnostics_marks_timeout_explicitly() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browser_fetch_logs_non_usable_outcomes(caplog: pytest.LogCaptureFixture) -> None:
+    page = _FakeExpansionPage(base_html="<html><body><h1>Empty category</h1></body></html>")
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    with caplog.at_level("WARNING", logger=browser_page_flow.logger.name):
+        result = await browser_runtime.browser_fetch(
+            "https://example.com/empty",
+            5,
+            surface="ecommerce_listing",
+            runtime_provider=_fake_runtime,
+        )
+
+    assert result.browser_diagnostics["browser_outcome"] == "low_content_shell"
+    assert any(
+        "Browser acquisition outcome=low_content_shell url=https://example.com/empty"
+        in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_wait_for_listing_readiness_treats_only_playwright_timeout_as_recoverable() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
@@ -682,7 +925,8 @@ async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_
     page = _FakeExpansionPage(
         base_html="<html><body>Widget</body></html>",
         goto_failures={
-            "domcontentloaded": PlaywrightTimeoutError("primary timeout"),
+            "networkidle": PlaywrightTimeoutError("primary timeout"),
+            "domcontentloaded": PlaywrightError("secondary fallback failed"),
             "commit": PlaywrightError("fallback failed"),
         },
     )
@@ -704,7 +948,7 @@ async def test_browser_fetch_records_navigation_timing_when_fallback_navigation_
         exc=excinfo.value,
     )
 
-    assert page.goto_calls == ["domcontentloaded", "commit"]
+    assert page.goto_calls == ["networkidle", "domcontentloaded", "commit"]
     assert diagnostics["navigation_strategy"] == "commit"
     assert diagnostics["phase_timings_ms"]["navigation"] >= 0
 

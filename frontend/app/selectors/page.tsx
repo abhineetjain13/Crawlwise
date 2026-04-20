@@ -6,7 +6,12 @@ import { useState } from "react";
 import { EmptyPanel, InlineAlert, PageHeader, SectionHeader } from "../../components/ui/patterns";
 import { Badge, Button, Card, Input, Select, Textarea } from "../../components/ui/primitives";
 import { api } from "../../lib/api";
-import type { SelectorCreatePayload, SelectorSuggestion } from "../../lib/api/types";
+import { httpErrorStatus } from "../../lib/api/client";
+import type {
+  SelectorCreatePayload,
+  SelectorRecord,
+  SelectorSuggestion,
+} from "../../lib/api/types";
 import { getNormalizedDomain } from "../../lib/format/domain";
 import { cn } from "../../lib/utils";
 
@@ -16,6 +21,8 @@ type StatusTone = "success" | "warning" | "danger";
 
 type SelectorRow = {
   key: string;
+  selectorId: number | null;
+  surface: string | null;
   fieldName: string;
   kind: SelectorKind;
   selectorValue: string;
@@ -64,16 +71,25 @@ export default function SelectorsPage() {
         url: targetUrl,
         expected_columns: parsedColumns,
       });
-      setLoadedUrl(response.preview_url || targetUrl);
-      setPreviewUrl(api.selectorPreviewHtml(response.preview_url || targetUrl));
-      setResolvedSurface(response.surface || inferSelectorSurface(parsedColumns, targetUrl));
-      setIframePromoted(Boolean(response.iframe_promoted));
-      setRows(
-        parsedColumns.map((field) => {
-          const suggestion = response.suggestions[field]?.[0];
-          return buildRowFromSuggestion(field, suggestion);
-        }),
+      const previewTargetUrl = response.preview_url || targetUrl;
+      const nextSurface = response.surface || inferSelectorSurface(parsedColumns, targetUrl);
+      const selectorDomain =
+        getNormalizedDomain(previewTargetUrl) || getNormalizedDomain(targetUrl);
+      const savedRecords = selectorDomain
+        ? await api.listSelectors({ domain: selectorDomain, surface: nextSurface })
+        : [];
+      const savedRows = selectRelevantSelectorRecords(savedRecords, nextSurface).map(
+        buildRowFromSelectorRecord,
       );
+      const suggestedRows = parsedColumns.map((field) => {
+        const suggestion = response.suggestions[field]?.[0];
+        return buildRowFromSuggestion(field, suggestion, nextSurface);
+      });
+      setLoadedUrl(previewTargetUrl);
+      setPreviewUrl(api.selectorPreviewHtml(previewTargetUrl));
+      setResolvedSurface(nextSurface);
+      setIframePromoted(Boolean(response.iframe_promoted));
+      setRows(mergeSelectorRows(savedRows, suggestedRows));
       setRowMessages({});
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Unable to load selector suggestions.");
@@ -121,7 +137,7 @@ export default function SelectorsPage() {
         }));
         return;
       }
-      const next = buildRowFromSuggestion(row.fieldName, suggestion);
+      const next = buildRowFromSuggestion(row.fieldName, suggestion, row.surface ?? resolvedSurface);
       updateRow(row.key, {
         kind: next.kind,
         selectorValue: next.selectorValue,
@@ -129,8 +145,7 @@ export default function SelectorsPage() {
         source: next.source,
         state: "idle",
       });
-      setRowMessages((current) => ({
-        ...current,
+      setRowMessages((current) => ({        ...current,
         [row.key]: { tone: "success", message: "Suggested selector refreshed." },
       }));
     } catch (error) {
@@ -189,12 +204,20 @@ export default function SelectorsPage() {
     setLoadError("");
     const failedFields: string[] = [];
     try {
+      const existingRecords = selectRelevantSelectorRecords(
+        await api.listSelectors({ domain, surface: resolvedSurface }),
+        resolvedSurface,
+      );
+      const existingByField = new Map(
+        existingRecords.map((record) => [normalizeField(record.field_name), record] as const),
+      );
       const settled = await Promise.allSettled(
         acceptedRows.map(async (row) => {
+          const fieldName = normalizeField(row.fieldName);
           const payload: SelectorCreatePayload = {
             domain,
             surface: resolvedSurface,
-            field_name: normalizeField(row.fieldName),
+            field_name: fieldName,
             xpath: row.kind === "xpath" ? row.selectorValue.trim() : undefined,
             css_selector: row.kind === "css_selector" ? row.selectorValue.trim() : undefined,
             regex: row.kind === "regex" ? row.selectorValue.trim() : undefined,
@@ -203,16 +226,40 @@ export default function SelectorsPage() {
             status: "validated",
             is_active: true,
           };
-          await api.createSelector(payload);
-          return row;
+          const existing = row.selectorId ? { id: row.selectorId } : existingByField.get(fieldName);
+          if (existing) {
+            const updated = await api.updateSelector(existing.id, payload);
+            return { key: row.key, selectorId: updated.id };
+          }
+          try {
+            const created = await api.createSelector(payload);
+            existingByField.set(fieldName, created);
+            return { key: row.key, selectorId: created.id };
+          } catch (error) {
+            if (!isDuplicateSelectorError(error)) {
+              throw error;
+            }
+            const duplicateRecord =
+              existingByField.get(fieldName)
+              ?? selectRelevantSelectorRecords(
+                await api.listSelectors({ domain, surface: resolvedSurface }),
+                resolvedSurface,
+              ).find((record) => normalizeField(record.field_name) === fieldName);
+            if (!duplicateRecord) {
+              throw error;
+            }
+            existingByField.set(fieldName, duplicateRecord);
+            const updated = await api.updateSelector(duplicateRecord.id, payload);
+            return { key: row.key, selectorId: updated.id };
+          }
         }),
       );
-      const savedKeys = new Set<string>();
+      const savedRows = new Map<string, number>();
       const nextMessages: Record<string, RowMessage> = {};
       settled.forEach((result, index) => {
         const row = acceptedRows[index];
         if (result.status === "fulfilled") {
-          savedKeys.add(row.key);
+          savedRows.set(result.value.key, result.value.selectorId);
           return;
         }
         failedFields.push(row.fieldName.trim() || row.key);
@@ -221,14 +268,23 @@ export default function SelectorsPage() {
           message: result.reason instanceof Error ? result.reason.message : "Unable to save selector.",
         };
       });
-      if (savedKeys.size) {
+      if (savedRows.size) {
         setRows((current) =>
-          current.map((entry) => (savedKeys.has(entry.key) ? { ...entry, state: "saved" } : entry)),
+          current.map((entry) =>
+            savedRows.has(entry.key)
+              ? {
+                  ...entry,
+                  selectorId: savedRows.get(entry.key) ?? entry.selectorId,
+                  surface: resolvedSurface,
+                  state: "saved",
+                }
+              : entry,
+          ),
         );
       }
       setRowMessages((current) => {
         const remainingMessages = Object.fromEntries(
-          Object.entries(current).filter(([key]) => !savedKeys.has(key)),
+          Object.entries(current).filter(([key]) => !savedRows.has(key)),
         ) as Record<string, RowMessage>;
         return {
           ...remainingMessages,
@@ -502,10 +558,78 @@ function nextEditedState(state: RowState): RowState {
   return state;
 }
 
-function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggestion): SelectorRow {
+export function selectRelevantSelectorRecords(
+  records: SelectorRecord[],
+  surface: string,
+) {
+  return records
+    .filter(
+      (record) =>
+        record.is_active &&
+        (record.surface === surface || record.surface === "generic"),
+    )
+    .sort((left, right) => {
+      const leftPriority = left.surface === surface ? 0 : 1;
+      const rightPriority = right.surface === surface ? 0 : 1;
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+      }
+      return `${left.field_name}:${left.id}`.localeCompare(
+        `${right.field_name}:${right.id}`,
+      );
+    });
+}
+
+function buildRowFromSelectorRecord(record: SelectorRecord): SelectorRow {
+  if (record.xpath) {
+    return {
+      key: `selector:${record.id}`,
+      selectorId: record.id,
+      surface: record.surface,
+      fieldName: record.field_name,
+      kind: "xpath",
+      selectorValue: record.xpath,
+      extractedValue: record.sample_value || "",
+      source: record.source || "domain_memory",
+      state: "saved",
+    };
+  }
+  if (record.css_selector) {
+    return {
+      key: `selector:${record.id}`,
+      selectorId: record.id,
+      surface: record.surface,
+      fieldName: record.field_name,
+      kind: "css_selector",
+      selectorValue: record.css_selector,
+      extractedValue: record.sample_value || "",
+      source: record.source || "domain_memory",
+      state: "saved",
+    };
+  }
+  return {
+    key: `selector:${record.id}`,
+    selectorId: record.id,
+    surface: record.surface,
+    fieldName: record.field_name,
+    kind: "regex",
+    selectorValue: record.regex || "",
+    extractedValue: record.sample_value || "",
+    source: record.source || "domain_memory",
+    state: "saved",
+  };
+}
+
+function buildRowFromSuggestion(
+  fieldName: string,
+  suggestion?: SelectorSuggestion,
+  surface?: string | null,
+): SelectorRow {
   if (suggestion?.xpath) {
     return {
       key: createRowKey(),
+      selectorId: null,
+      surface: surface ?? null,
       fieldName,
       kind: "xpath",
       selectorValue: suggestion.xpath,
@@ -517,6 +641,8 @@ function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggesti
   if (suggestion?.css_selector) {
     return {
       key: createRowKey(),
+      selectorId: null,
+      surface: surface ?? null,
       fieldName,
       kind: "css_selector",
       selectorValue: suggestion.css_selector,
@@ -528,6 +654,8 @@ function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggesti
   if (suggestion?.regex) {
     return {
       key: createRowKey(),
+      selectorId: null,
+      surface: surface ?? null,
       fieldName,
       kind: "regex",
       selectorValue: suggestion.regex,
@@ -538,6 +666,8 @@ function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggesti
   }
   return {
     key: createRowKey(),
+    selectorId: null,
+    surface: surface ?? null,
     fieldName,
     kind: "xpath",
     selectorValue: "",
@@ -550,6 +680,8 @@ function buildRowFromSuggestion(fieldName: string, suggestion?: SelectorSuggesti
 function createEmptyRow(): SelectorRow {
   return {
     key: createRowKey(),
+    selectorId: null,
+    surface: null,
     fieldName: "",
     kind: "xpath",
     selectorValue: "",
@@ -567,7 +699,7 @@ function normalizeField(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "_");
 }
 
-function inferSelectorSurface(fields: string[], url: string) {
+export function inferSelectorSurface(fields: string[], url: string) {
   const normalized = new Set(fields.map((field) => normalizeField(field)));
   if (["company", "location", "apply_url", "salary", "remote"].some((field) => normalized.has(field))) {
     return "job_detail";
@@ -576,4 +708,111 @@ function inferSelectorSurface(fields: string[], url: string) {
     return "job_detail";
   }
   return "ecommerce_detail";
+}
+
+export function mergeSelectorRows(
+  currentRows: SelectorRow[],
+  incomingRows: SelectorRow[],
+  options?: { preferIncoming?: boolean },
+) {
+  const merged = new Map<string, SelectorRow>();
+  const preferIncoming = Boolean(options?.preferIncoming);
+  for (const row of currentRows) {
+    merged.set(normalizeField(row.fieldName || row.key), row);
+  }
+  for (const row of incomingRows) {
+    const key = normalizeField(row.fieldName || row.key);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, row);
+      continue;
+    }
+    merged.set(key, {
+      ...existing,
+      selectorId: existing.selectorId ?? row.selectorId,
+      surface: existing.surface ?? row.surface,
+      fieldName: existing.fieldName || row.fieldName,
+      kind: preferIncoming
+        ? row.kind
+        : existing.selectorValue
+          ? existing.kind
+          : row.kind,
+      selectorValue: preferIncoming
+        ? row.selectorValue
+        : existing.selectorValue || row.selectorValue,
+      extractedValue: preferIncoming
+        ? row.extractedValue
+        : existing.extractedValue || row.extractedValue,
+      source: preferIncoming ? row.source : existing.source || row.source,
+      state: preferIncoming
+        ? row.state
+        : existing.state === "saved"
+          ? "saved"
+          : row.state,
+    });
+  }
+  return Array.from(merged.values());
+}
+
+export function buildXPathForElement(element: Element): string {
+  const segments: string[] = [];
+  let current: Element | null = element;
+  while (current && current.nodeType === Node.ELEMENT_NODE) {
+    const tagName = current.tagName.toLowerCase();
+    const testId = current.getAttribute("data-testid");
+    if (testId) {
+      segments.unshift(`//${tagName}[@data-testid=${xpathLiteral(testId)}]`);
+      return segments.join("");
+    }
+    const id = current.getAttribute("id");
+    if (id) {
+      segments.unshift(`//${tagName}[@id=${xpathLiteral(id)}]`);
+      return segments.join("");
+    }
+    const siblings = current.parentElement
+      ? Array.from(current.parentElement.children).filter(
+          (sibling) => sibling.tagName.toLowerCase() === tagName,
+        )
+      : [current];
+    const index = siblings.indexOf(current) + 1;
+    segments.unshift(`/${tagName}[${index}]`);
+    current = current.parentElement;
+  }
+  return segments.join("") || "//*";
+}
+
+export function xpathLiteral(value: string): string {
+  if (!value.includes("'")) {
+    return `'${value}'`;
+  }
+  if (!value.includes('"')) {
+    return `"${value}"`;
+  }
+  const parts = value.split("'");
+  const args: string[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    args.push(`'${parts[index]}'`);
+    if (index < parts.length - 1) {
+      args.push(`"'"`);
+    }
+  }
+  return `concat(${args.join(", ")})`;
+}
+
+function isDuplicateSelectorError(error: unknown): boolean {
+  if (httpErrorStatus(error) === 409) {
+    return true;
+  }
+  const fragments = [];
+  if (error instanceof Error) {
+    fragments.push(error.message);
+  }
+  if (typeof error === "object" && error !== null && "body" in error) {
+    const body = (error as { body?: unknown }).body;
+    if (typeof body === "string") {
+      fragments.push(body);
+    }
+  }
+  const message = fragments.join(" ").toLowerCase();
+  return message.includes("already exists") || message.includes("duplicate");
 }

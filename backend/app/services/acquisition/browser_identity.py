@@ -116,6 +116,7 @@ def clear_browser_identity_cache() -> None:
 
 
 _UA_VERSION_RE = _re.compile(r"Chrome/(\d+)\.")
+_MOBILE_UA_RE = _re.compile(r"\bmobile\b", _re.I)
 
 
 def _is_version_coherent(fingerprint) -> bool:
@@ -169,45 +170,57 @@ def _generate_coherent_fingerprint():
         if expected_token in ua and _is_version_coherent(fingerprint):
             return fingerprint
     _logger.warning(
-        "Failed to generate coherent fingerprint after 3 attempts, normalizing client hints"
+        "Failed to generate coherent fingerprint after 3 attempts, repairing client hints from fallback fingerprint"
     )
     if fallback_fingerprint is None:
         raise RuntimeError("Fingerprint generator returned no candidates")
-    return _normalize_incoherent_fingerprint(fallback_fingerprint)
+    return _repair_incoherent_client_hints(fallback_fingerprint)
 
 
-def _normalize_incoherent_fingerprint(fingerprint):
-    user_agent = str(getattr(fingerprint.navigator, "userAgent", "") or "")
-    match = _UA_VERSION_RE.search(user_agent)
-    if not match:
-        return fingerprint
-    ua_major = int(match.group(1))
+def _repair_incoherent_client_hints(fingerprint):
+    original_user_agent_data = getattr(fingerprint.navigator, "userAgentData", None)
+    user_agent = str(getattr(fingerprint.navigator, "userAgent", "") or "").strip()
+    original_mobile = (
+        bool(original_user_agent_data.get("mobile"))
+        if isinstance(original_user_agent_data, dict)
+        else None
+    )
+    repaired_client_hints = _coherent_client_hints_from_user_agent(
+        user_agent,
+        mobile=original_mobile,
+    )
+    if repaired_client_hints is None:
+        return _strip_incoherent_client_hints(fingerprint)
+    headers = dict(getattr(fingerprint, "headers", {}) or {})
+    for key in tuple(headers.keys()):
+        if str(key).lower().startswith("sec-ch-ua"):
+            headers.pop(key, None)
+    headers.update(_coherent_sec_ch_headers(repaired_client_hints))
+
+    navigator_payload = dict(vars(fingerprint.navigator))
+    navigator_payload["userAgentData"] = repaired_client_hints
+    navigator = _SimpleNamespace(**navigator_payload)
+    return _SimpleNamespace(
+        screen=fingerprint.screen,
+        navigator=navigator,
+        headers=headers,
+    )
+
+
+def _strip_incoherent_client_hints(fingerprint):
     original_user_agent_data = getattr(fingerprint.navigator, "userAgentData", None)
     user_agent_data = (
         dict(original_user_agent_data)
         if isinstance(original_user_agent_data, dict)
         else {}
     )
-    user_agent_data["brands"] = [
-        {"brand": "Not/A)Brand", "version": "99"},
-        {"brand": "Chromium", "version": str(ua_major)},
-        {"brand": "Google Chrome", "version": str(ua_major)},
-    ]
-    user_agent_data["fullVersionList"] = [
-        {"brand": "Not/A)Brand", "version": "99.0.0.0"},
-        {"brand": "Chromium", "version": f"{ua_major}.0.0.0"},
-        {"brand": "Google Chrome", "version": f"{ua_major}.0.0.0"},
-    ]
-    user_agent_data["uaFullVersion"] = f"{ua_major}.0.0.0"
-    user_agent_data.setdefault("mobile", False)
-    user_agent_data["platform"] = _HOST_OS_PLATFORM_LABELS[_HOST_OS]
+    for key in ("brands", "fullVersionList", "platform", "uaFullVersion"):
+        user_agent_data.pop(key, None)
 
     headers = dict(getattr(fingerprint, "headers", {}) or {})
-    headers["sec-ch-ua"] = (
-        f'"Not/A)Brand";v="99", "Chromium";v="{ua_major}", "Google Chrome";v="{ua_major}"'
-    )
-    headers["sec-ch-ua-mobile"] = "?1" if bool(user_agent_data.get("mobile")) else "?0"
-    headers["sec-ch-ua-platform"] = f'"{_HOST_OS_PLATFORM_LABELS[_HOST_OS]}"'
+    for key in tuple(headers.keys()):
+        if str(key).lower().startswith("sec-ch-ua"):
+            headers.pop(key, None)
 
     navigator_payload = dict(vars(fingerprint.navigator))
     navigator_payload["userAgentData"] = user_agent_data
@@ -217,6 +230,59 @@ def _normalize_incoherent_fingerprint(fingerprint):
         navigator=navigator,
         headers=headers,
     )
+
+
+def _coherent_client_hints_from_user_agent(
+    user_agent: str,
+    *,
+    mobile: bool | None,
+) -> dict[str, object] | None:
+    major_version = _chrome_major_version(user_agent)
+    if major_version is None:
+        return None
+    resolved_mobile = bool(mobile) if mobile is not None else bool(_MOBILE_UA_RE.search(user_agent))
+    full_version = f"{major_version}.0.0.0"
+    return {
+        "brands": [
+            {"brand": "Not.A/Brand", "version": "24"},
+            {"brand": "Chromium", "version": str(major_version)},
+            {"brand": "Google Chrome", "version": str(major_version)},
+        ],
+        "fullVersionList": [
+            {"brand": "Not.A/Brand", "version": "24.0.0.0"},
+            {"brand": "Chromium", "version": full_version},
+            {"brand": "Google Chrome", "version": full_version},
+        ],
+        "mobile": resolved_mobile,
+        "platform": _HOST_OS_PLATFORM_LABELS[_HOST_OS],
+        "uaFullVersion": full_version,
+    }
+
+
+def _coherent_sec_ch_headers(user_agent_data: dict[str, object]) -> dict[str, str]:
+    brands = user_agent_data.get("brands") or []
+    sec_ch_ua = ", ".join(
+        f'"{str(item.get("brand") or "").replace("\"", "")}";v="{str(item.get("version") or "").replace("\"", "")}"'
+        for item in brands
+        if isinstance(item, dict) and item.get("brand") and item.get("version")
+    )
+    if not sec_ch_ua:
+        return {}
+    return {
+        "sec-ch-ua": sec_ch_ua,
+        "sec-ch-ua-mobile": "?1" if bool(user_agent_data.get("mobile")) else "?0",
+        "sec-ch-ua-platform": f'"{user_agent_data.get("platform") or _HOST_OS_PLATFORM_LABELS[_HOST_OS]}"',
+    }
+
+
+def _chrome_major_version(user_agent: str) -> int | None:
+    match = _UA_VERSION_RE.search(str(user_agent or ""))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 def build_playwright_context_options(

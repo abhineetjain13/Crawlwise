@@ -8,7 +8,7 @@ import pytest
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
-from app.services.pipeline.core import _apply_llm_fallback, _process_single_url
+from app.services.pipeline.core import apply_llm_fallback, process_single_url
 from app.services.pipeline.persistence import persist_acquisition_artifacts
 from app.services.pipeline.types import URLProcessingConfig
 from app.services.robots_policy import RobotsPolicyResult
@@ -54,7 +54,7 @@ async def test_process_single_url_blocks_before_acquire_when_robots_disallows(
     monkeypatch.setattr("app.services.pipeline.core.check_url_crawlability", _disallow)
     monkeypatch.setattr("app.services.pipeline.core.acquire", _unexpected_acquire)
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
     logs = await get_run_logs(db_session, run.id)
 
     assert result.records == []
@@ -94,7 +94,7 @@ async def test_process_single_url_prefetch_only_returns_metrics_without_persisti
 
     monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
 
-    result = await _process_single_url(
+    result = await process_single_url(
         db_session,
         run,
         run.url,
@@ -170,7 +170,7 @@ async def test_process_single_url_marks_empty_listing_as_listing_detection_faile
     monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
     assert result.records == []
@@ -236,7 +236,7 @@ async def test_process_single_url_persists_detail_records_after_self_heal_and_ll
         lambda *args, **kwargs: [{"title": "Widget Prime", "_source": "extraction"}],
     )
     monkeypatch.setattr("app.services.pipeline.core.apply_selector_self_heal", _fake_self_heal)
-    monkeypatch.setattr("app.services.pipeline.core._apply_llm_fallback", _fake_llm)
+    monkeypatch.setattr("app.services.pipeline.core.apply_llm_fallback", _fake_llm)
 
     async def _persist_artifacts(**kwargs):
         del kwargs
@@ -247,7 +247,7 @@ async def test_process_single_url_persists_detail_records_after_self_heal_and_ll
         _persist_artifacts,
     )
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
     await db_session.refresh(run)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
@@ -329,7 +329,7 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
         _persist_artifacts,
     )
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
     assert len(acquire_calls) == 2
@@ -384,7 +384,7 @@ async def test_process_single_url_offloads_extract_records_to_thread(
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.asyncio.to_thread", _fake_to_thread)
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
 
     assert result.verdict == "success"
     assert "extract_records" in to_thread_calls
@@ -441,7 +441,7 @@ async def test_process_single_url_keeps_platform_family_separate_from_adapter_pr
         _persist_artifacts,
     )
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
 
     assert result.url_metrics["adapter_name"] is None
     assert result.url_metrics["platform_family"] == "shopify"
@@ -481,7 +481,7 @@ async def test_apply_llm_fallback_re_normalizes_llm_values_before_return(
         _fake_extract_missing_fields,
     )
 
-    rows = await _apply_llm_fallback(
+    rows = await apply_llm_fallback(
         db_session,
         run=run,
         page_url="https://example.com/products/widget-prime?utm_source=mail",
@@ -575,7 +575,7 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
         _persist_artifacts,
     )
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
     assert result.records[0]["price"] == "19.99"
@@ -637,7 +637,7 @@ async def test_process_single_url_persists_browser_diagnostics_and_screenshot_ar
     monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
     monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
 
-    await _process_single_url(db_session, run, run.url)
+    await process_single_url(db_session, run, run.url)
 
     artifact_dir = artifacts_dir / "runs" / str(run.id) / "pages"
     diagnostics_files = list(artifact_dir.glob("*.browser.json"))
@@ -741,7 +741,7 @@ async def test_process_single_url_does_not_retry_browser_after_empty_browser_acq
         _persist_artifacts,
     )
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
 
     assert len(acquire_calls) == 1
     assert result.url_metrics["browser_attempted"] is True
@@ -803,7 +803,7 @@ async def test_process_single_url_ignores_extracted_placeholder_records_from_low
         _persist_artifacts,
     )
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
     assert result.records == []
@@ -867,7 +867,7 @@ async def test_process_single_url_does_not_retry_browser_after_prior_challenge_a
         _persist_artifacts,
     )
 
-    result = await _process_single_url(db_session, run, run.url)
+    result = await process_single_url(db_session, run, run.url)
 
     assert len(acquire_calls) == 1
     assert result.url_metrics["method"] == "curl_cffi"
@@ -922,7 +922,7 @@ async def test_process_single_url_raises_when_browser_retry_fails(
     monkeypatch.setattr("app.services.pipeline.core.extract_records", lambda *args, **kwargs: [])
 
     with pytest.raises(TimeoutError, match="browser retry timed out"):
-        await _process_single_url(db_session, run, run.url)
+        await process_single_url(db_session, run, run.url)
 
     logs = await get_run_logs(db_session, run.id)
     artifact_dir = artifacts_dir / "runs" / str(run.id) / "pages"
@@ -993,7 +993,7 @@ async def test_process_single_url_persists_live_acquisition_events(
         _persist_artifacts,
     )
 
-    await _process_single_url(db_session, run, run.url)
+    await process_single_url(db_session, run, run.url)
     logs = await get_run_logs(db_session, run.id)
 
     assert [log.message for log in logs] == [
@@ -1077,3 +1077,88 @@ async def test_extract_records_for_acquisition_keeps_adapter_fields_empty_when_n
     assert records
     assert acquisition.adapter_name is None
     assert acquisition.adapter_source_type is None
+
+
+@pytest.mark.asyncio
+async def test_extract_records_for_acquisition_recovers_from_zero_record_traversal_using_full_rendered_html(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.pipeline.core import (
+        _FetchedURLStage,
+        _URLProcessingContext,
+        _extract_records_for_acquisition,
+    )
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    context = _URLProcessingContext.build(
+        session=db_session,
+        run=run,
+        url=run.url,
+        config=URLProcessingConfig(),
+    )
+    acquisition = AcquisitionResult(
+        request=AcquisitionRequest(
+            run_id=run.id,
+            url=run.url,
+            plan=AcquisitionPlan(surface="ecommerce_listing"),
+        ),
+        final_url=run.url,
+        html="<html><body>traversal fragment</body></html>",
+        method="browser",
+        status_code=200,
+        artifacts={"full_rendered_html": "<html><body>full rendered listing</body></html>"},
+        browser_diagnostics={
+            "browser_attempted": True,
+            "requested_traversal_mode": "paginate",
+            "selected_traversal_mode": "paginate",
+            "traversal_activated": True,
+            "pages_advanced": 1,
+            "traversal_progress_events": 1,
+            "traversal_stop_reason": "paginate_no_progress",
+        },
+    )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    def _extract_records(html, *args, **kwargs):
+        del args, kwargs
+        if "full rendered listing" in html:
+            return [{"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}]
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+
+    fetched = _FetchedURLStage(
+        context=context,
+        acquisition_result=acquisition,
+        url_metrics={},
+    )
+    records, _selector_rules = await _extract_records_for_acquisition(context, fetched)
+
+    assert records == [
+        {"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}
+    ]
+    assert acquisition.html == "<html><body>full rendered listing</body></html>"
+    assert acquisition.artifacts["traversal_composed_html"] == "<html><body>traversal fragment</body></html>"
+    assert fetched.url_metrics["traversal_fallback_used"] is True
+    assert fetched.url_metrics["traversal_fallback_recovered"] is True
+    assert fetched.url_metrics["traversal_fallback_record_count"] == 1

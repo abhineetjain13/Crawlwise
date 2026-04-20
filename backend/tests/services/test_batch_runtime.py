@@ -282,7 +282,7 @@ async def test_process_run_enforces_url_timeout_from_settings(
         raise AssertionError("timeout should fire before this returns")
 
     monkeypatch.setattr(
-        "app.services._batch_runtime._process_single_url",
+        "app.services._batch_runtime.process_single_url",
         _slow_process_single_url,
     )
 

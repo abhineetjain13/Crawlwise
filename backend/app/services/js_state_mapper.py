@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any
 
+import jmespath
 from glom import Coalesce, glom
 
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
@@ -22,7 +23,7 @@ from app.services.js_state_helpers import (
     variant_attribute,
     variant_axes,
 )
-from app.services.platform_policy import platform_js_state_extractors
+from app.services.platform_policy import JSStateExtractorConfig, platform_js_state_extractors
 
 
 _SKIP = ("", [], {})
@@ -47,14 +48,6 @@ PRODUCT_FIELD_SPEC = {
     "updated_at": Coalesce("updated_at", default=None, skip=_SKIP),
     "published_at": Coalesce("published_at", default=None, skip=_SKIP),
 }
-_DECLARATIVE_PRODUCT_ROOTS: dict[str, tuple[str, ...]] = {
-    "__NEXT_DATA__": ("props.pageProps.product", "props.pageProps.productData", "props.pageProps.initialData.product", "props.pageProps.initialData", "query.product", "apollo.product"),
-    "__INITIAL_STATE__": ("catalog.selected.product", "product.current", "product", "pdp.product", "state.product"),
-    "__PRELOADED_STATE__": ("product.current", "product", "catalog.selected.product", "state.product"),
-    "__NUXT__": ("data[0].product", "data.product", "state.product", "product"),
-    "__NUXT_DATA__": ("data[0].product", "state.product", "product"),
-}
-
 def map_js_state_to_fields(
     js_state_objects: dict[str, Any],
     *,
@@ -96,7 +89,7 @@ def _map_platform_job_detail_state(js_state_objects: dict[str, Any]) -> dict[str
         for extractor in extractors:
             mapped = _map_configured_state_payload(
                 payload,
-                root_paths=extractor.root_paths,
+                root_paths=extractor.root_paths.get(state_key, []),
                 field_paths=extractor.field_paths,
             )
             if mapped:
@@ -136,9 +129,16 @@ def _first_path_value(payload: dict[str, Any], paths: list[list[str]]) -> Any:
 def _path_value(payload: Any, path: list[str]) -> Any:
     current = payload
     for segment in path:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(segment)
+        if isinstance(current, dict):
+            current = current.get(segment)
+            continue
+        if isinstance(current, list):
+            try:
+                current = current[int(segment)]
+            except (TypeError, ValueError, IndexError):
+                return None
+            continue
+        return None
     return current
 
 
@@ -149,26 +149,38 @@ def _map_ecommerce_detail_state(
 ) -> dict[str, Any]:
     for state_key, payload in js_state_objects.items():
         normalized_payload = _normalized_state_payload(state_key, payload)
-        product = _extract_product_payload_from_normalized(state_key, normalized_payload)
+        product, extractor = _extract_product_payload_from_normalized(
+            state_key,
+            normalized_payload,
+        )
         if not isinstance(product, dict):
             continue
         mapped = _map_product_payload(
             product,
             page_url=page_url,
             category_fallback_from_type=(state_key == "__NUXT_DATA__"),
+            field_jmespaths=(
+                extractor.field_jmespaths if extractor is not None else None
+            ),
         )
         if mapped:
             return mapped
     return {}
 
 
-def _extract_product_payload_from_normalized(state_key: str, normalized_payload: Any) -> dict[str, Any] | None:
-    root_paths = _DECLARATIVE_PRODUCT_ROOTS.get(state_key, ())
-    for path in root_paths:
-        candidate = glom(normalized_payload, path, default=None)
-        if _looks_like_product_payload(candidate):
-            return dict(candidate)
-    return _find_product_payload(normalized_payload)
+def _extract_product_payload_from_normalized(
+    state_key: str,
+    normalized_payload: Any,
+) -> tuple[dict[str, Any] | None, JSStateExtractorConfig | None]:
+    for extractor in platform_js_state_extractors(
+        surface="ecommerce_detail",
+        state_key=state_key,
+    ):
+        for root_path in extractor.root_paths.get(state_key, []):
+            candidate = _path_value(normalized_payload, root_path)
+            if _looks_like_product_payload(candidate):
+                return dict(candidate), extractor
+    return _find_product_payload(normalized_payload), None
 
 
 def _normalized_state_payload(state_key: str, payload: Any) -> Any:
@@ -243,13 +255,9 @@ def _map_product_payload(
     *,
     page_url: str,
     category_fallback_from_type: bool,
+    field_jmespaths: dict[str, str | list[str]] | None = None,
 ) -> dict[str, Any]:
-    try:
-        base = glom(product, PRODUCT_FIELD_SPEC, default=None)
-    except Exception:
-        base = {}
-    if not isinstance(base, dict):
-        base = {}
+    base = _product_base_fields(product, field_jmespaths=field_jmespaths)
     images = _extract_product_images(product, page_url=page_url)
     shopify_like = _looks_like_shopify_product(product)
     option_names = _option_names(product.get("options"))
@@ -355,6 +363,65 @@ def _map_product_payload(
         record["option2_name"] = ordered[1][0]
         record["option2_values"] = ordered[1][1]
     return record
+
+
+def _product_base_fields(
+    product: dict[str, Any],
+    *,
+    field_jmespaths: dict[str, str | list[str]] | None,
+) -> dict[str, Any]:
+    base = _glom_product_base_fields(product)
+    mapped = _map_jmespath_fields(product, field_jmespaths=field_jmespaths)
+    if not mapped:
+        return base
+    merged = dict(mapped)
+    for field_name, value in base.items():
+        if field_name not in merged or merged[field_name] in (None, "", [], {}):
+            merged[field_name] = value
+    return compact_dict(merged)
+
+
+def _glom_product_base_fields(product: dict[str, Any]) -> dict[str, Any]:
+    try:
+        base = glom(product, PRODUCT_FIELD_SPEC, default=None)
+    except Exception:
+        base = {}
+    if not isinstance(base, dict):
+        return {}
+    return compact_dict(base)
+
+
+def _map_jmespath_fields(
+    product: dict[str, Any],
+    *,
+    field_jmespaths: dict[str, str | list[str]] | None,
+) -> dict[str, Any]:
+    if not isinstance(field_jmespaths, dict) or not field_jmespaths:
+        return {}
+    mapped: dict[str, Any] = {}
+    for field_name, expressions in field_jmespaths.items():
+        if not isinstance(field_name, str) or not field_name.strip():
+            continue
+        value = _first_non_empty_jmespath(product, expressions)
+        if value not in (None, "", [], {}):
+            mapped[field_name] = value
+    return compact_dict(mapped)
+
+
+def _first_non_empty_jmespath(
+    payload: dict[str, Any],
+    expressions: str | list[str],
+) -> Any:
+    candidates = [expressions] if isinstance(expressions, str) else expressions
+    if not isinstance(candidates, list):
+        return None
+    for expression in candidates:
+        if not isinstance(expression, str) or not expression.strip():
+            continue
+        value = jmespath.search(expression, payload)
+        if value not in (None, "", [], {}):
+            return value
+    return None
 
 
 def _extract_product_images(product: dict[str, Any], *, page_url: str) -> list[str]:
@@ -507,6 +574,17 @@ def _variant_option_values(
         cleaned = text_or_none(value)
         if cleaned:
             option_values[axis_key] = cleaned
+
+    # Fallback: non-Shopify sites use direct axis keys (Magento, SFCC, custom React, etc.)
+    if not option_values:
+        for possible_axis in (
+            "color", "size", "style", "material", "flavor",
+            "scent", "capacity", "length", "width",
+        ):
+            val = variant.get(possible_axis)
+            if val and isinstance(val, (str, int, float)):
+                option_values[possible_axis] = str(val).strip()
+
     return option_values
 
 

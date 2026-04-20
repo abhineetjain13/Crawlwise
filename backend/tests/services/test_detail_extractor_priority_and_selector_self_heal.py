@@ -215,6 +215,73 @@ def test_reduce_html_for_selector_synthesis_keeps_valid_content_focused_html() -
     assert "Rubber outsole, reinforced toe cap." in main.get_text(" ", strip=True)
 
 
+def test_reduce_html_for_selector_synthesis_preserves_shadow_root_boundaries() -> None:
+    reduced = reduce_html_for_selector_synthesis(
+        """
+        <html>
+          <body>
+            <product-shell>
+              <template shadowrootmode="open">
+                <section class="details">
+                  <h2>Specs</h2>
+                  <div slot="content">Waterproof membrane</div>
+                </section>
+              </template>
+            </product-shell>
+          </body>
+        </html>
+        """
+    )
+
+    assert "template" in reduced
+    assert "shadowrootmode=\"open\"" in reduced
+    assert "Waterproof membrane" in reduced
+
+
+def test_extract_records_deep_merges_structured_variant_fields_across_tiers() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Trail Runner</h1>
+        <label>
+          Color
+          <select name="color">
+            <option value="">Choose color</option>
+            <option value="black">Black</option>
+            <option value="olive">Olive</option>
+          </select>
+        </label>
+      </body>
+    </html>
+    """
+
+    record = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["variant_axes", "selected_variant"],
+        adapter_records=[
+            {
+                "variant_axes": {"size": ["S", "M"]},
+                "selected_variant": {
+                    "sku": "TRAIL-S",
+                    "option_values": {"size": "S"},
+                },
+            }
+        ],
+    )[0]
+
+    assert record["variant_axes"] == {
+        "size": ["S", "M"],
+        "color": ["Black", "Olive"],
+    }
+    assert record["selected_variant"] == {
+        "sku": "TRAIL-S",
+        "option_values": {"size": "S"},
+    }
+
+
 def test_selector_self_heal_requires_field_level_improvement_before_persisting() -> None:
     assert _selector_heal_improved_record(
         before_record={"title": "Widget Prime", "price": ""},

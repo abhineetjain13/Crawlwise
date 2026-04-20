@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
@@ -35,7 +36,9 @@ VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = (
 )
 CELERY_TASK_ID_KEY = "celery_task_id"
 logger = logging.getLogger(__name__)
-_local_run_tasks: dict[int, asyncio.Task[None]] = {}
+_local_run_tasks: weakref.WeakValueDictionary[int, asyncio.Task[None]] = (
+    weakref.WeakValueDictionary()
+)
 _log = log_event
 
 

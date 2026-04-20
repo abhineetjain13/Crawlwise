@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import httpx
 
@@ -10,8 +12,6 @@ from app.core.config import settings
 from app.services.acquisition.browser_identity import build_playwright_context_options
 from app.services.acquisition.browser_runtime import (
     SharedBrowserRuntime as _SharedBrowserRuntime,
-    _BROWSER_PREFERRED_HOSTS,
-    _BROWSER_PREFERRED_HOST_SUCCESSES,
     _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES,
     build_failed_browser_diagnostics,
     browser_fetch,
@@ -19,10 +19,7 @@ from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     expand_all_interactive_elements,
     get_browser_runtime,
-    host_prefers_browser,
-    prune_browser_preferred_hosts,
     read_network_payload_body,
-    remember_browser_host_if_good,
     should_capture_network_payload,
     shutdown_browser_runtime,
     temporary_browser_page,
@@ -51,6 +48,43 @@ from app.services.network_resolution import build_async_http_client
 from app.services.platform_policy import resolve_platform_runtime_policy
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _FetchRuntimeContext:
+    url: str
+    resolved_timeout: float
+    run_id: int | None
+    surface: str | None
+    traversal_mode: str | None
+    max_pages: int
+    max_scrolls: int
+    on_event: object | None
+    browser_reason: str | None
+    proxies: list[str | None]
+    traversal_required: bool
+    runtime_policy: dict[str, object]
+    last_browser_attempt_diagnostics: dict[str, object] = field(default_factory=dict)
+    last_error: Exception | None = None
+
+
+def _ensure_scheme(url: str) -> str:
+    """Prepend ``https://`` when *url* has no scheme.
+
+    Inputs that already include a scheme are returned unchanged. Inputs that
+    start with ``/``, ``#``, or ``javascript:`` are also returned unchanged;
+    callers must validate or reject those values separately because this helper
+    does not guarantee an absolute URL.
+    """
+    stripped = str(url or "").strip()
+    if not stripped:
+        return stripped
+    parsed = urlparse(stripped)
+    if parsed.scheme:
+        return stripped
+    if stripped.startswith(("/", "#", "javascript:")):
+        return stripped
+    return f"https://{stripped}"
 
 
 class SharedBrowserRuntime(_SharedBrowserRuntime):
@@ -169,33 +203,13 @@ async def _read_network_payload_body(response) -> NetworkPayloadReadResult:
     return await read_network_payload_body(response)
 
 
-def _host_prefers_browser(url: str) -> bool:
-    return host_prefers_browser(url)
-
-
 def _vendor_confirmed_block(result: PageFetchResult) -> str | None:
     if not result.blocked:
         return None
     return classify_block_from_headers(result.headers)
 
 
-def _remember_browser_host_if_good(result: PageFetchResult) -> bool:
-    diagnostics = (
-        dict(result.browser_diagnostics or {})
-        if isinstance(result.browser_diagnostics, dict)
-        else {}
-    )
-    return remember_browser_host_if_good(
-        result.final_url,
-        browser_outcome=str(diagnostics.get("browser_outcome") or "").strip().lower()
-        or None,
-        blocked=bool(result.blocked),
-    )
-
-
 async def reset_fetch_runtime_state() -> None:
-    _BROWSER_PREFERRED_HOSTS.clear()
-    _BROWSER_PREFERRED_HOST_SUCCESSES.clear()
     await shutdown_browser_runtime()
     await close_shared_http_client()
     await close_adapter_shared_http_client()
@@ -215,8 +229,59 @@ async def fetch_page(
     max_scrolls: int = 1,
     on_event=None,
 ) -> PageFetchResult:
-    resolved_timeout = float(timeout_seconds or settings.http_timeout_seconds)
-    runtime_policy = resolve_platform_runtime_policy(url, surface=surface)
+    url = _ensure_scheme(url)
+    context = _FetchRuntimeContext(
+        url=url,
+        resolved_timeout=float(timeout_seconds or settings.http_timeout_seconds),
+        run_id=run_id,
+        surface=surface,
+        traversal_mode=traversal_mode,
+        max_pages=max_pages,
+        max_scrolls=max_scrolls,
+        on_event=on_event,
+        browser_reason=browser_reason,
+        proxies=_resolve_proxy_attempts(proxy_list),
+        traversal_required=should_run_traversal(surface, traversal_mode),
+        runtime_policy=resolve_platform_runtime_policy(url, surface=surface),
+    )
+    browser_first = (
+        prefer_browser
+        or bool(context.runtime_policy.get("requires_browser"))
+        or context.traversal_required
+    )
+    if browser_first:
+        return await _run_browser_attempts(
+            context,
+            reason=_resolve_browser_reason(
+                browser_reason=browser_reason,
+                requires_browser=bool(context.runtime_policy.get("requires_browser")),
+                traversal_required=context.traversal_required,
+                host_preference_enabled=False,
+            ),
+        )
+
+    http_result, vendor_block_confirmed = await _run_http_fetch_chain(context)
+    if http_result is not None:
+        return http_result
+    if vendor_block_confirmed and context.last_error is not None:
+        raise context.last_error
+    if context.last_error is not None:
+        logger.info(
+            "HTTP fetchers exhausted for %s (%s); attempting browser fallback",
+            context.url,
+            type(context.last_error).__name__,
+        )
+        try:
+            return await _run_browser_attempts(
+                context,
+                reason=browser_reason or "http-escalation",
+            )
+        except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
+            raise context.last_error from exc
+    raise RuntimeError(f"Failed to fetch {url}")
+
+
+def _resolve_proxy_attempts(proxy_list: list[str] | None) -> list[str | None]:
     proxies = [
         value
         for value in {
@@ -226,192 +291,188 @@ async def fetch_page(
         }
         if value
     ]
-    prune_browser_preferred_hosts()
-    host_preference_enabled = _host_prefers_browser(url)
-    traversal_required = should_run_traversal(surface, traversal_mode)
-    browser_first = (
-        prefer_browser
-        or host_preference_enabled
-        or bool(runtime_policy.get("requires_browser"))
-        or traversal_required
-    )
-    last_browser_attempt_diagnostics: dict[str, object] = {}
-    if browser_first:
-        resolved_browser_reason = _resolve_browser_reason(
-            browser_reason=browser_reason,
-            requires_browser=bool(runtime_policy.get("requires_browser")),
-            traversal_required=traversal_required,
-            host_preference_enabled=host_preference_enabled,
-        )
-        proxy_attempts = proxies or [None]
-        last_browser_error: Exception | None = None
-        for proxy in proxy_attempts:
-            try:
-                browser_result = await _browser_fetch(
-                    url,
-                    resolved_timeout,
-                    run_id=run_id,
-                    proxy=proxy,
-                    browser_reason=resolved_browser_reason,
-                    surface=surface,
-                    traversal_mode=traversal_mode,
-                    max_pages=max_pages,
-                    max_scrolls=max_scrolls,
-                    on_event=on_event,
-                )
-                _remember_browser_host_if_good(browser_result)
-                return browser_result
-            except Exception as exc:
-                last_browser_error = exc
-                last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
-                    browser_reason=resolved_browser_reason,
-                    exc=exc,
-                )
-                logger.debug(
-                    "Browser fetch failed for %s via %s",
-                    url,
-                    proxy or "direct",
-                    exc_info=True,
-                )
-        if last_browser_error is not None:
-            raise last_browser_error
+    return proxies or [None]
 
-    last_error: Exception | None = None
-    proxy_attempts = proxies or [None]
+
+async def _run_browser_attempts(
+    context: _FetchRuntimeContext,
+    *,
+    reason: str,
+    proxies: list[str | None] | None = None,
+) -> PageFetchResult:
+    last_browser_error: Exception | None = None
+    for proxy in list(proxies or context.proxies):
+        try:
+            return await _browser_fetch(
+                context.url,
+                context.resolved_timeout,
+                run_id=context.run_id,
+                proxy=proxy,
+                browser_reason=reason,
+                surface=context.surface,
+                traversal_mode=context.traversal_mode,
+                max_pages=context.max_pages,
+                max_scrolls=context.max_scrolls,
+                on_event=context.on_event,
+            )
+        except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
+            last_browser_error = exc
+            context.last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
+                browser_reason=reason,
+                exc=exc,
+            )
+            logger.debug(
+                "Browser fetch failed for %s via %s",
+                context.url,
+                proxy or "direct",
+                exc_info=True,
+            )
+    if last_browser_error is not None:
+        raise last_browser_error
+    raise RuntimeError(f"Failed to fetch {context.url} in browser")
+
+
+async def _run_http_fetch_chain(
+    context: _FetchRuntimeContext,
+) -> tuple[PageFetchResult | None, bool]:
     vendor_block_confirmed = False
-    max_attempts = max(1, int(crawler_runtime_settings.http_max_retries) + 1)
-    for proxy in proxy_attempts:
+    fetcher = _select_http_fetcher(context)
+    for proxy in context.proxies:
         if vendor_block_confirmed:
             break
-        for fetcher in (_curl_fetch, _http_fetch):
-            resolved_browser_reason: str | None = None
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    if proxy is not None:
-                        result = await fetcher(url, resolved_timeout, proxy=proxy)
-                    else:
-                        result = await fetcher(url, resolved_timeout)
-                except (httpx.HTTPError, OSError, TimeoutError) as exc:
-                    last_error = exc
-                    logger.debug(
-                        "Retryable fetch failure for %s via %s (%s attempt=%s/%s)",
-                        url,
-                        fetcher.__name__,
-                        proxy or "direct",
-                        attempt,
-                        max_attempts,
-                        exc_info=True,
-                    )
-                    if attempt < max_attempts:
-                        await _sleep_before_retry(attempt)
-                        continue
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    logger.debug(
-                        "Fetch failed for %s via %s (%s)",
-                        url,
-                        fetcher.__name__,
-                        proxy or "direct",
-                        exc_info=True,
-                    )
-                    break
-                vendor = _vendor_confirmed_block(result)
-                if vendor:
-                    vendor_block_confirmed = True
-                result_runtime_policy = resolve_platform_runtime_policy(
-                    result.final_url or result.url,
-                    result.html,
-                    surface=surface,
-                )
-                should_browser_escalate = vendor or await _should_escalate_to_browser_async(
-                    result,
-                    surface=surface,
-                    runtime_policy=result_runtime_policy,
-                )
-                if (
-                    _retryable_status_for_http_fetch(result.status_code)
-                    and not vendor
-                    and not should_browser_escalate
-                    and attempt < max_attempts
-                ):
-                    await _sleep_before_retry(attempt)
-                    continue
-                if should_browser_escalate:
-                    resolved_browser_reason = (
-                        browser_reason
-                        or (f"vendor-block:{vendor}" if vendor else "http-escalation")
-                    )
-                    browser_result = await _browser_fetch(
-                        url,
-                        resolved_timeout,
-                        run_id=run_id,
-                        proxy=proxy,
-                        browser_reason=resolved_browser_reason,
-                        surface=surface,
-                        traversal_mode=traversal_mode,
-                        max_pages=max_pages,
-                        max_scrolls=max_scrolls,
-                        on_event=on_event,
-                    )
-                    _remember_browser_host_if_good(browser_result)
-                    return browser_result
-                if is_non_retryable_http_status(result.status_code):
-                    logger.info(
-                        "Returning non-retryable HTTP status %s for %s without browser fallback",
-                        result.status_code,
-                        url,
-                    )
-                    return result
-                _attach_browser_attempt_diagnostics(
-                    result,
-                    diagnostics=last_browser_attempt_diagnostics,
-                )
-                return result
-            if vendor_block_confirmed:
-                break
-    if vendor_block_confirmed and last_error is not None:
-        raise last_error
-    if last_error is not None:
-        logger.info(
-            "HTTP fetchers exhausted for %s (%s); attempting browser fallback",
-            url,
-            type(last_error).__name__,
+        result, vendor_block_confirmed = await _run_http_fetcher_attempts(
+            context,
+            fetcher=fetcher,
+            proxy=proxy,
         )
-        last_browser_error: Exception | None = None
-        for proxy in proxy_attempts:
-            try:
-                resolved_browser_reason = browser_reason or "http-escalation"
-                browser_result = await _browser_fetch(
-                    url,
-                    resolved_timeout,
-                    run_id=run_id,
-                    proxy=proxy,
-                    browser_reason=resolved_browser_reason,
-                    surface=surface,
-                    traversal_mode=traversal_mode,
-                    max_pages=max_pages,
-                    max_scrolls=max_scrolls,
-                    on_event=on_event,
-                )
-                _remember_browser_host_if_good(browser_result)
-                return browser_result
-            except Exception as exc:
-                last_browser_error = exc
-                last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
-                    browser_reason=resolved_browser_reason,
-                    exc=exc,
-                )
-                logger.debug(
-                    "Browser fallback failed for %s via %s after HTTP transport errors",
-                    url,
-                    proxy or "direct",
-                    exc_info=True,
-                )
-        if last_browser_error is not None:
-            raise last_error from last_browser_error
-        raise last_error
-    raise RuntimeError(f"Failed to fetch {url}")
+        if result is not None:
+            return result, vendor_block_confirmed
+    return None, vendor_block_confirmed
+
+
+def _select_http_fetcher(context: _FetchRuntimeContext):
+    del context
+    return _curl_fetch
+
+
+async def _run_http_fetcher_attempts(
+    context: _FetchRuntimeContext,
+    *,
+    fetcher,
+    proxy: str | None,
+) -> tuple[PageFetchResult | None, bool]:
+    max_attempts = max(1, int(crawler_runtime_settings.http_max_retries) + 1)
+    for attempt in range(1, max_attempts + 1):
+        result = await _attempt_http_fetch(context, fetcher=fetcher, proxy=proxy, attempt=attempt, max_attempts=max_attempts)
+        if result is _HTTP_ATTEMPT_FAILED:
+            if attempt < max_attempts:
+                continue
+            break
+        handled_result, vendor_block_confirmed = await _handle_http_result(
+            context,
+            result=result,
+            proxy=proxy,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        if handled_result is _RETRY_SENTINEL:
+            continue
+        return handled_result, vendor_block_confirmed
+    return None, False
+
+
+_RETRY_SENTINEL = object()
+_HTTP_ATTEMPT_FAILED = object()
+
+
+async def _attempt_http_fetch(
+    context: _FetchRuntimeContext,
+    *,
+    fetcher,
+    proxy: str | None,
+    attempt: int,
+    max_attempts: int,
+) -> PageFetchResult | object:
+    try:
+        if proxy is not None:
+            return await fetcher(context.url, context.resolved_timeout, proxy=proxy)
+        return await fetcher(context.url, context.resolved_timeout)
+    except (httpx.HTTPError, OSError, TimeoutError) as exc:
+        context.last_error = exc
+        logger.debug(
+            "Retryable fetch failure for %s via %s (%s attempt=%s/%s)",
+            context.url,
+            fetcher.__name__,
+            proxy or "direct",
+            attempt,
+            max_attempts,
+            exc_info=True,
+        )
+        if attempt < max_attempts:
+            await _sleep_before_retry(attempt)
+        return _HTTP_ATTEMPT_FAILED
+    except RuntimeError as exc:
+        context.last_error = exc
+        logger.debug(
+            "Fetch failed for %s via %s (%s)",
+            context.url,
+            fetcher.__name__,
+            proxy or "direct",
+            exc_info=True,
+        )
+        return _HTTP_ATTEMPT_FAILED
+
+
+async def _handle_http_result(
+    context: _FetchRuntimeContext,
+    *,
+    result: PageFetchResult,
+    proxy: str | None,
+    attempt: int,
+    max_attempts: int,
+) -> tuple[PageFetchResult | object | None, bool]:
+    vendor = _vendor_confirmed_block(result)
+    result_runtime_policy = resolve_platform_runtime_policy(
+        result.final_url or result.url,
+        result.html,
+        surface=context.surface,
+    )
+    should_browser_escalate = bool(vendor) or await _should_escalate_to_browser_async(
+        result,
+        surface=context.surface,
+        runtime_policy=result_runtime_policy,
+    )
+    if (
+        _retryable_status_for_http_fetch(result.status_code)
+        and not vendor
+        and not should_browser_escalate
+        and attempt < max_attempts
+    ):
+        await _sleep_before_retry(attempt)
+        return _RETRY_SENTINEL, False
+    if should_browser_escalate:
+        browser_reason = (
+            context.browser_reason
+            or (f"vendor-block:{vendor}" if vendor else "http-escalation")
+        )
+        browser_result = await _run_browser_attempts(
+            context,
+            reason=browser_reason,
+            proxies=[proxy],
+        )
+        return browser_result, bool(vendor)
+    if is_non_retryable_http_status(result.status_code):
+        logger.info(
+            "Returning non-retryable HTTP status %s for %s without browser fallback",
+            result.status_code,
+            context.url,
+        )
+        return result, bool(vendor)
+    _attach_browser_attempt_diagnostics(
+        result,
+        diagnostics=context.last_browser_attempt_diagnostics,
+    )
+    return result, bool(vendor)
 
 
 def _attach_browser_attempt_diagnostics(
@@ -463,7 +524,6 @@ __all__ = [
     "PageFetchResult",
     "SharedBrowserRuntime",
     "_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES",
-    "_BROWSER_PREFERRED_HOSTS",
     "_classify_network_endpoint",
     "_curl_fetch",
     "_http_fetch",

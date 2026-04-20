@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
+from urllib.parse import urlparse
+
+import httpx
 
 from app.core.dependencies import get_current_user, get_db
 from app.models.user import User
@@ -24,11 +28,13 @@ from app.services.selectors_runtime import (
     test_selector,
     update_selector_record,
 )
+from app.services.url_safety import SecurityError, validate_public_target
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/selectors", tags=["selectors"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("")
@@ -113,12 +119,15 @@ async def selectors_suggest(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
 ) -> SelectorSuggestResponse:
-    result = await suggest_selectors(
-        session,
-        url=str(payload.url),
-        expected_columns=list(payload.expected_columns or []),
-        surface=payload.surface,
-    )
+    try:
+        result = await suggest_selectors(
+            session,
+            url=str(payload.url),
+            expected_columns=list(payload.expected_columns or []),
+            surface=payload.surface,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return SelectorSuggestResponse.model_validate(result)
 
 
@@ -141,7 +150,41 @@ async def selectors_preview_html(
     _: Annotated[User, Depends(get_current_user)],
     url: str,
 ) -> HTMLResponse:
-    document = await fetch_selector_document(url)
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Preview URL must use http:// or https://.",
+        )
+    try:
+        await validate_public_target(url)
+        document = await fetch_selector_document(url)
+    except (ValueError, SecurityError) as exc:
+        logger.info("Rejected selector preview URL", extra={"url": url}, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except TimeoutError as exc:
+        logger.warning(
+            "Timed out fetching selector preview HTML",
+            extra={"url": url},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Timed out fetching preview HTML from the upstream page.",
+        ) from exc
+    except (httpx.HTTPError, OSError, RuntimeError) as exc:
+        logger.warning(
+            "Failed fetching selector preview HTML",
+            extra={"url": url},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to fetch preview HTML from the upstream page.",
+        ) from exc
     return HTMLResponse(
         content=build_preview_html(
             source_url=str(document["url"]),

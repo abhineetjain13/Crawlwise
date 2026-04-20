@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+import app.services.acquisition.traversal as traversal_module
 
 from app.services.acquisition.traversal import (
     TraversalResult,
-    _dismiss_overlays_if_needed,
+    _click_with_retry,
     count_listing_cards,
+    dismiss_overlays_if_needed,
     execute_listing_traversal,
 )
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
@@ -111,6 +113,8 @@ class _FakePage:
         self.load_more_clicks = 0
         self.goto_calls: list[str] = []
         self.load_state_calls: list[str] = []
+        self.wait_timeout_calls: list[int] = []
+        self.mutation_settle_calls = 0
 
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator(self, selector)
@@ -119,11 +123,21 @@ class _FakePage:
         del role, name
         return _EmptyRoleLocator()
 
-    async def evaluate(self, script: str) -> Any:
+    async def evaluate(self, script: str, arg: Any | None = None) -> Any:
         if "scrollTo({" in script:
             self.scroll_index = min(self.scroll_index + 1, len(self.scroll_states) - 1)
             self.state = self.scroll_states[self.scroll_index]
             return None
+        if "querySelectorAll(selector).length" in script:
+            selectors = list(arg or [])
+            highest = 0
+            for selector in selectors:
+                if selector in _card_selectors(self.surface):
+                    highest = max(highest, int(self.state.card_count))
+            return highest
+        if "MutationObserver" in script:
+            self.mutation_settle_calls += 1
+            return {"observed": True}
         return {
             "scroll_height": self.state.scroll_height,
             "client_height": self.state.client_height,
@@ -131,7 +145,7 @@ class _FakePage:
         }
 
     async def wait_for_timeout(self, timeout_ms: int) -> None:
-        del timeout_ms
+        self.wait_timeout_calls.append(timeout_ms)
 
     async def wait_for_load_state(self, state: str, timeout: int | None = None) -> None:
         del timeout
@@ -549,6 +563,121 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auto_traversal_falls_back_to_scroll_when_auto_detection_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage(
+        surface="job_listing",
+        initial_state=_State(
+            html="<div>jobs</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls=set(),
+        ),
+        scroll_states=[
+            _State(html="<div>jobs</div>", card_count=2, scroll_height=2500, client_height=600, controls=set()),
+            _State(html="<div>jobs more</div>", card_count=6, scroll_height=3400, client_height=600, controls=set()),
+        ],
+    )
+
+    async def _detect_none(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _scroll_signals(*args, **kwargs):
+        del args, kwargs
+        return True
+
+    monkeypatch.setattr(traversal_module, "_detect_auto_mode", _detect_none)
+    monkeypatch.setattr(traversal_module, "_has_scroll_signals", _scroll_signals)
+
+    result = await execute_listing_traversal(
+        page,
+        surface="job_listing",
+        traversal_mode="auto",
+        max_pages=2,
+        max_scrolls=2,
+    )
+
+    assert result.selected_mode == "scroll"
+    assert result.stop_reason != "no_mode_detected"
+    assert result.scroll_iterations >= 1
+
+
+@pytest.mark.asyncio
+async def test_paginate_click_transition_uses_networkidle_settle_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls={"next_page"},
+            next_href="#",
+            next_control_state={
+                "raw_href": "#",
+                "has_click_handler": True,
+                "pagination_container": True,
+                "pagination_text": True,
+                "sibling_page_numbers": True,
+                "is_button_like": False,
+            },
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=2500,
+                client_height=600,
+                controls={"next_page"},
+                next_href="#",
+                next_control_state={
+                    "raw_href": "#",
+                    "has_click_handler": True,
+                    "pagination_container": True,
+                    "pagination_text": True,
+                    "sibling_page_numbers": True,
+                    "is_button_like": False,
+                },
+            ),
+            _State(
+                html="<div>page-2</div>",
+                card_count=5,
+                scroll_height=2800,
+                client_height=600,
+                controls=set(),
+            ),
+        ],
+    )
+    settle_timeouts: list[int] = []
+
+    async def _capture_settle(page_arg, *, quiet_window_ms: int, timeout_ms: int):
+        del page_arg, quiet_window_ms
+        settle_timeouts.append(timeout_ms)
+        return {"observed": True}
+
+    monkeypatch.setattr(traversal_module, "wait_for_dom_mutation_settle", _capture_settle)
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=2,
+        max_scrolls=1,
+    )
+
+    assert result.pages_advanced == 1
+    assert settle_timeouts
+    assert max(settle_timeouts) >= int(
+        traversal_module.crawler_runtime_settings.traversal_settle_networkidle_timeout_ms
+    )
+
+
+@pytest.mark.asyncio
 async def test_scroll_traversal_emits_live_events() -> None:
     emitted: list[tuple[str, str]] = []
     page = _FakePage(
@@ -653,6 +782,20 @@ async def test_is_same_origin_blocks_cross_tenant_paths() -> None:
 
 
 @pytest.mark.asyncio
+async def test_is_same_origin_blocks_cross_tenant_paths_for_workday_subdomains() -> None:
+    from app.services.acquisition.traversal import _is_same_origin
+
+    assert _is_same_origin(
+        "https://smithnephew.wd5.myworkdayjobs.com/TenantA/jobs?page=1",
+        "https://smithnephew.wd5.myworkdayjobs.com/TenantA/jobs?page=2",
+    )
+    assert not _is_same_origin(
+        "https://smithnephew.wd5.myworkdayjobs.com/TenantA/jobs?page=1",
+        "https://smithnephew.wd5.myworkdayjobs.com/TenantB/jobs?page=1",
+    )
+
+
+@pytest.mark.asyncio
 async def test_is_same_origin_allows_same_tenant_different_pages() -> None:
     from app.services.acquisition.traversal import _is_same_origin
 
@@ -682,7 +825,7 @@ async def test_dismiss_overlays_targets_interceptors_not_structural_tags() -> No
     locator = _OverlayTestLocator()
     result = TraversalResult(requested_mode="paginate")
 
-    await _dismiss_overlays_if_needed(page, locator=locator, result=result)
+    await dismiss_overlays_if_needed(page, locator=locator, result=result)
 
     assert result.overlays_dismissed is True
     assert locator.evaluate_calls
@@ -743,3 +886,60 @@ async def test_count_listing_cards_does_not_fallback_to_heuristics_when_selector
     count = await count_listing_cards(_SelectorPage(), surface="ecommerce_listing")
 
     assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_click_with_retry_uses_mutation_settle_after_js_fallback() -> None:
+    class _ClickPage:
+        def __init__(self) -> None:
+            self.load_state_calls: list[str] = []
+            self.wait_timeout_calls: list[int] = []
+            self.mutation_settle_calls = 0
+
+        def locator(self, selector: str):
+            del selector
+            return _OverlayCookieLocator()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> Any:
+            del arg
+            if "MutationObserver" in script:
+                self.mutation_settle_calls += 1
+                return {"observed": True}
+            return None
+
+        async def wait_for_load_state(
+            self,
+            state: str,
+            timeout: int | None = None,
+        ) -> None:
+            del timeout
+            self.load_state_calls.append(state)
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            self.wait_timeout_calls.append(timeout_ms)
+
+    class _ClickLocator:
+        async def scroll_into_view_if_needed(self, timeout: int | None = None) -> None:
+            del timeout
+
+        async def evaluate(self, script: str) -> Any:
+            if "scrollIntoView" in script:
+                return None
+            if "node.click()" in script:
+                return None
+            return 0
+
+        async def click(self, timeout: int | None = None, force: bool = False) -> None:
+            del timeout, force
+            raise RuntimeError("intercepted")
+
+    page = _ClickPage()
+    locator = _ClickLocator()
+    result = TraversalResult(requested_mode="load_more")
+
+    clicked = await _click_with_retry(page, locator, result=result)
+
+    assert clicked is True
+    assert result.click_retries == 2
+    assert page.mutation_settle_calls == 1
+    assert page.wait_timeout_calls == []

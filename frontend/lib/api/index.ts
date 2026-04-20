@@ -110,12 +110,13 @@ export const api = {
   },
   updateUser: (userId: number, payload: Partial<Pick<User, "role" | "is_active">>) =>
     apiClient.patch<User>(`/api/users/${userId}`, payload),
-  listSelectors: (params?: { domain?: string }) => {
+  listSelectors: (params?: { domain?: string; surface?: string }) => {
     const query = new URLSearchParams();
     if (params?.domain) query.set("domain", params.domain);
+    if (params?.surface) query.set("surface", params.surface);
     return apiClient.get<SelectorRecord[]>(withQuery("/api/selectors", query));
   },
-  suggestSelectors: (payload: { url: string; expected_columns: string[] }) =>
+  suggestSelectors: (payload: { url: string; expected_columns: string[]; surface?: string }) =>
     apiClient.post<SelectorSuggestResponse>("/api/selectors/suggest", payload),
   createSelector: (payload: SelectorCreatePayload) => apiClient.post<SelectorRecord>("/api/selectors", payload),
   updateSelector: (selectorId: number, payload: SelectorUpdatePayload) =>

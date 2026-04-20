@@ -301,30 +301,10 @@ async def test_request_result_applies_per_request_timeout_with_shared_client(
 
 
 @pytest.mark.asyncio
-async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
+async def test_request_result_surfaces_dns_failure_without_hidden_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.services.acquisition import runtime as runtime_module
-
-    client_builds: list[bool] = []
-
-    class _FakeResponse:
-        status_code = 200
-        url = "https://example.com/api/jobs"
-        headers = httpx.Headers({"content-type": "application/json"})
-        text = '{"jobs":[{"id":2}]}'
-
     class _FakeClient:
-        def __init__(self, *, force_ipv4: bool) -> None:
-            self._force_ipv4 = force_ipv4
-            self.is_closed = False
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
         async def request(
             self,
             method,
@@ -335,31 +315,22 @@ async def test_request_result_retries_with_forced_ipv4_after_dns_failure(
             timeout=None,
         ):
             del method, url, headers, json, data, timeout
-            if not self._force_ipv4:
-                raise OSError(11001, "getaddrinfo failed")
-            return _FakeResponse()
+            raise OSError(11001, "getaddrinfo failed")
 
-        async def aclose(self) -> None:
-            self.is_closed = True
-
-    def _fake_build_async_http_client(**kwargs):
-        force_ipv4 = bool(kwargs.get("force_ipv4"))
-        client_builds.append(force_ipv4)
-        return _FakeClient(force_ipv4=force_ipv4)
+    async def _fake_get_shared(*, proxy=None, force_ipv4=False):
+        del proxy, force_ipv4
+        return _FakeClient()
 
     monkeypatch.setattr(
-        "app.services.acquisition.runtime.build_async_http_client",
-        _fake_build_async_http_client,
-    )
-    runtime_module._SHARED_HTTP_CLIENTS.clear()
-
-    result = await request_result(
-        "https://example.com/api/jobs",
-        expect_json=True,
+        "app.services.acquisition.http_client.get_shared_http_client",
+        _fake_get_shared,
     )
 
-    assert client_builds == [False, True]
-    assert result.json_data == {"jobs": [{"id": 2}]}
+    with pytest.raises(OSError, match="getaddrinfo failed"):
+        await request_result(
+            "https://example.com/api/jobs",
+            expect_json=True,
+        )
 
 
 @pytest.mark.asyncio

@@ -2,70 +2,145 @@
   "platforms": [
     {
       "family": "icims",
-      "domain_patterns": ["icims.com"],
-      "url_contains": ["/jobs/search", "/jobs/", "/ajax/joblisting/"],
-      "html_contains": ["icims_jobstable", "icims_mainwrapper", "/ajax/joblisting/"],
-      "adapter_names": ["icims"],
+      "domain_patterns": [
+        "icims.com"
+      ],
+      "url_contains": [
+        "/jobs/search",
+        "/jobs/",
+        "/ajax/joblisting/"
+      ],
+      "html_contains": [
+        "icims_jobstable",
+        "icims_mainwrapper",
+        "/ajax/joblisting/"
+      ],
+      "adapter_names": [
+        "icims"
+      ],
       "job_platform": true,
       "requires_browser": false
     },
     {
       "family": "adp",
-      "domain_patterns": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com", "myworkforcenow.com"],
-      "url_contains": ["/recruitment/recruitment.html", "/srccar/public/", "/srccsh/public/"],
-      "html_contains": ["myjobs.adp.com", "recruitment/recruitment.html", "workforcenow.adp.com"],
-      "adapter_names": ["adp"],
+      "domain_patterns": [
+        "workforcenow.adp.com",
+        "myjobs.adp.com",
+        "recruiting.adp.com",
+        "myworkforcenow.com"
+      ],
+      "url_contains": [
+        "/recruitment/recruitment.html",
+        "/srccar/public/",
+        "/srccsh/public/"
+      ],
+      "html_contains": [
+        "myjobs.adp.com",
+        "recruitment/recruitment.html",
+        "workforcenow.adp.com"
+      ],
+      "adapter_names": [
+        "adp"
+      ],
       "job_platform": true,
       "requires_browser": true,
-      "readiness_domains": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com", "myworkforcenow.com"],
+      "readiness_domains": [
+        "workforcenow.adp.com",
+        "myjobs.adp.com",
+        "recruiting.adp.com",
+        "myworkforcenow.com"
+      ],
       "readiness_path_patterns": [
         "^/mascsr/default/mdf/recruitment/recruitment\\.html$",
         "^/srccar/public/.*$",
         "^/srccsh/public/.*$"
       ],
-      "readiness_selectors": [".current-openings-item", "[id^='lblTitle_']"],
+      "readiness_selectors": [
+        ".current-openings-item",
+        "[id^='lblTitle_']"
+      ],
       "readiness_max_wait_ms": 20000
     },
     {
       "family": "oracle_hcm",
-      "domain_patterns": ["fa.ocs.oraclecloud.com", "candidateexperience.oraclecloud.com"],
-      "url_contains": ["/hcmui/candidateexperience/", "/sites/cx_"],
-      "html_contains": ["var CX_CONFIG", "recruitingCEJobRequisitions"],
-      "adapter_names": ["oracle_hcm"],
+      "domain_patterns": [
+        "fa.ocs.oraclecloud.com",
+        "candidateexperience.oraclecloud.com"
+      ],
+      "url_contains": [
+        "/hcmui/candidateexperience/",
+        "/sites/cx_"
+      ],
+      "html_contains": [
+        "var CX_CONFIG",
+        "recruitingCEJobRequisitions"
+      ],
+      "adapter_names": [
+        "oracle_hcm"
+      ],
       "job_platform": true,
       "requires_browser": false,
-      "readiness_domains": ["fa.ocs.oraclecloud.com", "candidateexperience.oraclecloud.com"],
+      "readiness_domains": [
+        "fa.ocs.oraclecloud.com",
+        "candidateexperience.oraclecloud.com"
+      ],
       "readiness_path_patterns": [
         "^/hcmui/candidateexperience/[^/]*(?:/[^/]+)*/sites/cx_[^/]+/(?:jobs|requisitions)(?:/[^/]+)*/*$"
       ],
-      "readiness_selectors": ["a[href*='/job/']"],
+      "readiness_selectors": [
+        "a[href*='/job/']"
+      ],
       "readiness_max_wait_ms": 25000
     },
     {
       "family": "paycom",
-      "domain_patterns": ["paycomonline.net"],
-      "url_contains": ["/ats/web.php/portal/", "/career-page"],
-      "html_contains": ["paycomonline.net", "career-page"],
-      "adapter_names": ["paycom"],
+      "domain_patterns": [
+        "paycomonline.net"
+      ],
+      "url_contains": [
+        "/ats/web.php/portal/",
+        "/career-page"
+      ],
+      "html_contains": [
+        "paycomonline.net",
+        "career-page"
+      ],
+      "adapter_names": [
+        "paycom"
+      ],
       "job_platform": true,
       "requires_browser": false,
-      "readiness_domains": ["paycomonline.net"],
+      "readiness_domains": [
+        "paycomonline.net"
+      ],
       "readiness_path_patterns": [
         "^/v4/ats/web\\.php/portal/.+/career-page(?:/.*)?$",
         "^/v4/ats/web\\.php/portal/.+/jobs(?:/.*)?$"
       ],
-      "readiness_selectors": ["a[href*='/jobs/']"],
+      "readiness_selectors": [
+        "a[href*='/jobs/']"
+      ],
       "readiness_max_wait_ms": 20000
     },
     {
       "family": "ultipro_ukg",
-      "domain_patterns": ["recruiting.ultipro.com"],
-      "url_contains": ["/jobboard/"],
-      "html_contains": ["recruiting.ultipro.com"],
-      "adapter_names": ["ultipro_ukg"],
+      "domain_patterns": [
+        "recruiting.ultipro.com"
+      ],
+      "url_contains": [
+        "/jobboard/"
+      ],
+      "html_contains": [
+        "recruiting.ultipro.com"
+      ],
+      "adapter_names": [
+        "ultipro_ukg"
+      ],
       "job_platform": true,
       "requires_browser": false,
-      "readiness_domains": ["recruiting.ultipro.com"],
+      "readiness_domains": [
+        "recruiting.ultipro.com"
+      ],
       "readiness_path_patterns": [
         "^/jobboard(?:/.*)?$"
       ],
@@ -78,40 +153,100 @@
     },
     {
       "family": "greenhouse",
-      "domain_patterns": ["boards.greenhouse.io", "boards-api.greenhouse.io", "job-boards.greenhouse.io"],
-      "url_contains": ["/embed/job_board", "/jobs/"],
-      "html_regex": ["boards\\.greenhouse\\.io/embed/job_board\\?for=[a-z0-9_-]+"],
-      "adapter_names": ["greenhouse"],
+      "domain_patterns": [
+        "boards.greenhouse.io",
+        "boards-api.greenhouse.io",
+        "job-boards.greenhouse.io"
+      ],
+      "url_contains": [
+        "/embed/job_board",
+        "/jobs/"
+      ],
+      "html_regex": [
+        "boards\\.greenhouse\\.io/embed/job_board\\?for=[a-z0-9_-]+"
+      ],
+      "adapter_names": [
+        "greenhouse"
+      ],
       "job_platform": true,
       "requires_browser": false,
-      "network_signature_patterns": ["greenhouse"],
+      "network_signature_patterns": [
+        "greenhouse"
+      ],
       "js_state_extractors": [
         {
           "surface": "job_detail",
-          "state_key": "__remixContext",
-          "root_paths": [
-            ["state", "loaderData", "routes/$url_token_.jobs_.$job_post_id", "jobPost"]
-          ],
+          "root_paths": {
+            "__remixContext": [
+              [
+                "state",
+                "loaderData",
+                "routes/$url_token_.jobs_.$job_post_id",
+                "jobPost"
+              ]
+            ]
+          },
           "field_paths": {
-            "title": [["title"]],
-            "company": [["company_name"]],
-            "location": [["job_post_location"]],
-            "apply_url": [["public_url"]],
-            "posted_date": [["published_at"]],
-            "description_html": [["content"]]
-          }
+            "title": [
+              [
+                "title"
+              ]
+            ],
+            "company": [
+              [
+                "company_name"
+              ]
+            ],
+            "location": [
+              [
+                "job_post_location"
+              ]
+            ],
+            "apply_url": [
+              [
+                "public_url"
+              ]
+            ],
+            "posted_date": [
+              [
+                "published_at"
+              ]
+            ],
+            "description_html": [
+              [
+                "content"
+              ]
+            ]
+          },
+          "state_keys": [
+            "__remixContext"
+          ]
         }
       ]
     },
     {
       "family": "workday",
-      "domain_patterns": ["myworkdayjobs.com"],
-      "url_contains": ["/external", "/job/", "/jobs/"],
-      "html_contains": ["myworkdayjobs.com", "__next_data__", "workday"],
-      "adapter_names": ["workday"],
+      "domain_patterns": [
+        "myworkdayjobs.com"
+      ],
+      "url_contains": [
+        "/external",
+        "/job/",
+        "/jobs/"
+      ],
+      "html_contains": [
+        "myworkdayjobs.com",
+        "__next_data__",
+        "workday"
+      ],
+      "adapter_names": [
+        "workday"
+      ],
       "job_platform": true,
       "requires_browser": false,
-      "readiness_domains": ["myworkdayjobs.com"],
+      "readiness_domains": [
+        "myworkdayjobs.com"
+      ],
       "readiness_path_patterns": [
         "^/(?:[a-z]{2}(?:-[a-z]{2})?/)?external(?:/.*)?$"
       ],
@@ -121,60 +256,364 @@
         "[data-automation-id='jobTitle']"
       ],
       "readiness_max_wait_ms": 15000,
-      "network_signature_patterns": ["workday", "myworkdayjobs.com"],
+      "path_tenant_boundary": true,
+      "network_signature_patterns": [
+        "workday",
+        "myworkdayjobs.com"
+      ],
       "js_state_extractors": [
         {
           "surface": "job_detail",
-          "state_key": "__NEXT_DATA__",
-          "root_paths": [
-            ["props", "pageProps", "jobPostingInfo"],
-            ["props", "pageProps", "job"],
-            ["props", "pageProps"]
-          ],
+          "root_paths": {
+            "__NEXT_DATA__": [
+              [
+                "props",
+                "pageProps",
+                "jobPostingInfo"
+              ],
+              [
+                "props",
+                "pageProps",
+                "job"
+              ],
+              [
+                "props",
+                "pageProps"
+              ]
+            ]
+          },
           "field_paths": {
-            "title": [["title"]],
-            "company": [["hiringOrganization", "name"], ["company", "name"], ["company"]],
-            "location": [["location"]],
-            "apply_url": [["externalUrl"], ["applyUrl"]],
-            "posted_date": [["postedOn"], ["datePosted"]],
-            "job_type": [["timeType"]],
-            "job_id": [["jobReqId"], ["externalJobPath"]],
-            "country": [["country"]],
-            "description_html": [["jobDescription"], ["description"]]
-          }
+            "title": [
+              [
+                "title"
+              ]
+            ],
+            "company": [
+              [
+                "hiringOrganization",
+                "name"
+              ],
+              [
+                "company",
+                "name"
+              ],
+              [
+                "company"
+              ]
+            ],
+            "location": [
+              [
+                "location"
+              ]
+            ],
+            "apply_url": [
+              [
+                "externalUrl"
+              ],
+              [
+                "applyUrl"
+              ]
+            ],
+            "posted_date": [
+              [
+                "postedOn"
+              ],
+              [
+                "datePosted"
+              ]
+            ],
+            "job_type": [
+              [
+                "timeType"
+              ]
+            ],
+            "job_id": [
+              [
+                "jobReqId"
+              ],
+              [
+                "externalJobPath"
+              ]
+            ],
+            "country": [
+              [
+                "country"
+              ]
+            ],
+            "description_html": [
+              [
+                "jobDescription"
+              ],
+              [
+                "description"
+              ]
+            ]
+          },
+          "state_keys": [
+            "__NEXT_DATA__"
+          ]
         }
       ]
     },
     {
       "family": "lever",
-      "network_signature_patterns": ["lever.co", "/lever/"]
+      "network_signature_patterns": [
+        "lever.co",
+        "/lever/"
+      ]
     },
     {
       "family": "shopify",
-      "network_signature_patterns": ["shopify", "product.js", "/cart.js"]
+      "network_signature_patterns": [
+        "shopify",
+        "product.js",
+        "/cart.js"
+      ]
     },
     {
       "family": "myntra",
-      "domain_patterns": ["myntra.com"],
-      "html_contains": ["window.__myx", "product-base", "results-base"],
-      "adapter_names": ["myntra"],
+      "domain_patterns": [
+        "myntra.com"
+      ],
+      "html_contains": [
+        "window.__myx",
+        "product-base",
+        "results-base"
+      ],
+      "adapter_names": [
+        "myntra"
+      ],
       "job_platform": false,
       "requires_browser": false
     },
     {
       "family": "nextjs",
-      "network_signature_patterns": ["__next", "_next/data"]
+      "network_signature_patterns": [
+        "__next",
+        "_next/data"
+      ]
+    },
+    {
+      "family": "generic_ecommerce_state",
+      "js_state_extractors": [
+        {
+          "surface": "ecommerce_detail",
+          "state_keys": [
+            "__NEXT_DATA__",
+            "__INITIAL_STATE__",
+            "__PRELOADED_STATE__",
+            "__NUXT__",
+            "__NUXT_DATA__"
+          ],
+          "root_paths": {
+            "__NEXT_DATA__": [
+              [
+                "props",
+                "pageProps",
+                "product"
+              ],
+              [
+                "props",
+                "pageProps",
+                "productData"
+              ],
+              [
+                "props",
+                "pageProps",
+                "initialData",
+                "product"
+              ],
+              [
+                "props",
+                "pageProps",
+                "initialData"
+              ],
+              [
+                "query",
+                "product"
+              ],
+              [
+                "apollo",
+                "product"
+              ]
+            ],
+            "__INITIAL_STATE__": [
+              [
+                "catalog",
+                "selected",
+                "product"
+              ],
+              [
+                "product",
+                "current"
+              ],
+              [
+                "product"
+              ],
+              [
+                "pdp",
+                "product"
+              ],
+              [
+                "state",
+                "product"
+              ]
+            ],
+            "__PRELOADED_STATE__": [
+              [
+                "product",
+                "current"
+              ],
+              [
+                "product"
+              ],
+              [
+                "catalog",
+                "selected",
+                "product"
+              ],
+              [
+                "state",
+                "product"
+              ]
+            ],
+            "__NUXT__": [
+              [
+                "data",
+                "0",
+                "product"
+              ],
+              [
+                "data",
+                "product"
+              ],
+              [
+                "state",
+                "product"
+              ],
+              [
+                "product"
+              ]
+            ],
+            "__NUXT_DATA__": [
+              [
+                "data",
+                "0",
+                "product"
+              ],
+              [
+                "state",
+                "product"
+              ],
+              [
+                "product"
+              ]
+            ]
+          },
+          "field_jmespaths": {
+            "title": [
+              "title",
+              "name"
+            ],
+            "brand": [
+              "brand.name",
+              "brand",
+              "vendor.name",
+              "vendor"
+            ],
+            "vendor": [
+              "vendor.name",
+              "vendor"
+            ],
+            "handle": [
+              "handle",
+              "slug"
+            ],
+            "description": [
+              "description",
+              "body_html",
+              "descriptionHtml"
+            ],
+            "product_id": [
+              "id",
+              "product_id",
+              "legacyResourceId"
+            ],
+            "category": [
+              "category"
+            ],
+            "product_type": [
+              "product_type",
+              "type"
+            ],
+            "sku": [
+              "sku"
+            ],
+            "barcode": [
+              "barcode"
+            ],
+            "currency": [
+              "currency",
+              "currencyCode",
+              "priceCurrency",
+              "priceRange.minVariantPrice.currencyCode",
+              "priceRange.maxVariantPrice.currencyCode"
+            ],
+            "price": [
+              "price",
+              "amount",
+              "minPrice",
+              "maxPrice",
+              "formattedPrice",
+              "priceRange.minVariantPrice.amount",
+              "priceRange.maxVariantPrice.amount"
+            ],
+            "original_price": [
+              "compare_at_price",
+              "compareAtPrice",
+              "original_price",
+              "originalPrice",
+              "listPrice",
+              "compareAtPriceRange.minVariantPrice.amount",
+              "compareAtPriceRange.maxVariantPrice.amount"
+            ],
+            "availability": [
+              "availability",
+              "inventory.status",
+              "availableForSale"
+            ],
+            "tags": [
+              "tags"
+            ],
+            "created_at": [
+              "created_at"
+            ],
+            "updated_at": [
+              "updated_at"
+            ],
+            "published_at": [
+              "published_at"
+            ]
+          }
+        }
+      ]
     },
     {
       "family": "practicesoftwaretesting",
-      "domain_patterns": ["practicesoftwaretesting.com"],
+      "domain_patterns": [
+        "practicesoftwaretesting.com"
+      ],
       "requires_browser": true
     },
     {
       "family": "spree_commerce",
-      "domain_patterns": ["demo.spreecommerce.org"],
+      "domain_patterns": [
+        "demo.spreecommerce.org"
+      ],
       "requires_browser": true,
-      "readiness_domains": ["demo.spreecommerce.org"],
+      "readiness_domains": [
+        "demo.spreecommerce.org"
+      ],
       "readiness_path_patterns": [
         "^/products(?:/.*)?$"
       ],
@@ -187,61 +626,138 @@
     },
     {
       "family": "saleor",
-      "domain_patterns": ["demo.saleor.io"]
+      "domain_patterns": [
+        "demo.saleor.io"
+      ]
+    },
+    {
+      "family": "ulta",
+      "domain_patterns": [
+        "ulta.com"
+      ],
+      "requires_browser": true,
+      "readiness_domains": [
+        "ulta.com"
+      ],
+      "readiness_path_patterns": [
+        "^/shop(?:/.*)?$"
+      ],
+      "readiness_selectors": [
+        "li[data-test='products-list-item']",
+        ".ProductListingResults__productCard",
+        "[class*='ProductCard'] a[href*='/p/']"
+      ],
+      "readiness_max_wait_ms": 15000
     },
     {
       "family": "rippling",
-      "domain_patterns": ["ats.rippling.com"],
-      "url_contains": ["/jobs", "/job/"],
-      "html_contains": ["powered by rippling", "ats.rippling.com"],
+      "domain_patterns": [
+        "ats.rippling.com"
+      ],
+      "url_contains": [
+        "/jobs",
+        "/job/"
+      ],
+      "html_contains": [
+        "powered by rippling",
+        "ats.rippling.com"
+      ],
       "job_platform": false,
       "requires_browser": false
     },
     {
       "family": "saashr",
-      "domain_patterns": ["saashr.com"],
-      "html_contains": ["secure7.saashr.com", "inframeset=1"],
-      "adapter_names": ["saashr"],
+      "domain_patterns": [
+        "saashr.com"
+      ],
+      "html_contains": [
+        "secure7.saashr.com",
+        "inframeset=1"
+      ],
+      "adapter_names": [
+        "saashr"
+      ],
       "job_platform": true,
       "requires_browser": false
     },
     {
       "family": "jibe",
-      "domain_patterns": ["jibeapply.com"],
-      "html_contains": ["data-jibe-search-version", "window._jibe", "window.searchconfig", "/dist/js/search.common.js", "/api/jobs"],
-      "adapter_names": ["jibe"],
+      "domain_patterns": [
+        "jibeapply.com"
+      ],
+      "html_contains": [
+        "data-jibe-search-version",
+        "window._jibe",
+        "window.searchconfig",
+        "/dist/js/search.common.js",
+        "/api/jobs"
+      ],
+      "adapter_names": [
+        "jibe"
+      ],
       "job_platform": true,
       "requires_browser": false
     },
     {
       "family": "indeed",
-      "domain_patterns": ["indeed.com", "indeed.co.uk", "indeed.ca", "indeed.com.au", "indeed.co.in"],
-      "url_contains": ["/jobs", "/viewjob"],
-      "adapter_names": ["indeed"],
+      "domain_patterns": [
+        "indeed.com",
+        "indeed.co.uk",
+        "indeed.ca",
+        "indeed.com.au",
+        "indeed.co.in"
+      ],
+      "url_contains": [
+        "/jobs",
+        "/viewjob"
+      ],
+      "adapter_names": [
+        "indeed"
+      ],
       "job_platform": true,
       "requires_browser": false
     },
     {
       "family": "linkedin",
-      "domain_patterns": ["linkedin.com"],
-      "url_contains": ["/jobs/", "/job/"],
-      "adapter_names": ["linkedin"],
+      "domain_patterns": [
+        "linkedin.com"
+      ],
+      "url_contains": [
+        "/jobs/",
+        "/job/"
+      ],
+      "adapter_names": [
+        "linkedin"
+      ],
       "job_platform": true,
       "requires_browser": false
     },
     {
       "family": "remotive",
-      "domain_patterns": ["remotive.com"],
-      "url_contains": ["/api/remote-jobs", "/remote-jobs"],
-      "adapter_names": ["remotive"],
+      "domain_patterns": [
+        "remotive.com"
+      ],
+      "url_contains": [
+        "/api/remote-jobs",
+        "/remote-jobs"
+      ],
+      "adapter_names": [
+        "remotive"
+      ],
       "job_platform": true,
       "requires_browser": false
     },
     {
       "family": "remoteok",
-      "domain_patterns": ["remoteok.com"],
-      "url_contains": ["/api"],
-      "adapter_names": ["remoteok"],
+      "domain_patterns": [
+        "remoteok.com"
+      ],
+      "url_contains": [
+        "/api"
+      ],
+      "adapter_names": [
+        "remoteok"
+      ],
       "job_platform": true,
       "requires_browser": false
     }

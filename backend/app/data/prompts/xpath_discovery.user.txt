@@ -6,8 +6,13 @@ $missing_fields_json
 Already extracted values:
 $existing_values_json
 
-HTML snippet:
+Structured data (JSON-LD / __NEXT_DATA__):
+$structured_data_json
+
+HTML snippet (pruned, real markup):
 $html_snippet
 
 Return selectors only for the requested fields that are visibly supported by the page.
 Do not return selectors for filters, menus, related links, or repeated navigation lists.
+If this is a listing/category page, scope selectors to the first product card.
+If structured data contains values for a field, try to find the corresponding HTML element and derive a selector from it.

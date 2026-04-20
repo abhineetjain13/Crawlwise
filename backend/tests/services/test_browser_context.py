@@ -15,13 +15,24 @@ def test_build_playwright_context_options_uses_generated_identity(
     fingerprint = SimpleNamespace(
         screen=SimpleNamespace(width=1440, height=900, devicePixelRatio=2),
         navigator=SimpleNamespace(
-            userAgent="Mozilla/5.0 TestBrowser/145.0",
+            userAgent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
             language="en-US",
             maxTouchPoints=0,
-            userAgentData={"mobile": False},
+            userAgentData={
+                "brands": [{"brand": "Google Chrome", "version": "145"}],
+                "mobile": False,
+            },
         ),
         headers={
-            "User-Agent": "Mozilla/5.0 TestBrowser/145.0",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/145.0.0.0 Safari/537.36"
+            ),
             "Accept": "text/html",
             "Accept-Language": "en-US;q=1.0",
             "sec-ch-ua": '"Google Chrome";v="145"',
@@ -38,7 +49,7 @@ def test_build_playwright_context_options_uses_generated_identity(
 
     options = browser_identity.build_playwright_context_options()
 
-    assert options["user_agent"] == "Mozilla/5.0 TestBrowser/145.0"
+    assert options["user_agent"].endswith("Chrome/145.0.0.0 Safari/537.36")
     assert options["viewport"] == {"width": 1440, "height": 900}
     assert options["locale"] == "en-US"
     assert options["device_scale_factor"] == 2.0
@@ -79,7 +90,7 @@ def test_build_playwright_context_options_keeps_security_invariants(
     assert options["is_mobile"] is True
 
 
-def test_build_playwright_context_options_normalizes_incoherent_client_hints_after_retry_budget(
+def test_build_playwright_context_options_repairs_incoherent_client_hints_after_retry_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bad_fingerprint = SimpleNamespace(
@@ -128,9 +139,9 @@ def test_build_playwright_context_options_normalizes_incoherent_client_hints_aft
     assert attempts["count"] == 3
     assert options["user_agent"].endswith("Chrome/145.0.0.0 Safari/537.36")
     assert options["extra_http_headers"]["sec-ch-ua"] == (
-        '"Not/A)Brand";v="99", "Chromium";v="145", "Google Chrome";v="145"'
+        '"Not.A/Brand";v="24", "Chromium";v="145", "Google Chrome";v="145"'
     )
-    assert "Brave" not in options["extra_http_headers"]["sec-ch-ua"]
+    assert options["extra_http_headers"]["sec-ch-ua-mobile"] == "?0"
     assert options["extra_http_headers"]["sec-ch-ua-platform"] == '"Windows"'
 
 
@@ -140,8 +151,13 @@ async def test_shared_browser_runtime_passes_generated_context_options(
 ) -> None:
     captured_kwargs: list[dict[str, object]] = []
     created_pages: list[object] = []
+    routed_patterns: list[str] = []
 
     class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del handler
+            routed_patterns.append(pattern)
+
         async def new_page(self):
             page = object()
             created_pages.append(page)
@@ -162,7 +178,7 @@ async def test_shared_browser_runtime_passes_generated_context_options(
     monkeypatch.setattr(
         crawl_fetch_runtime,
         "build_playwright_context_options",
-        lambda: {
+        lambda **_: {
             "user_agent": "Mozilla/5.0 Runtime/145.0",
             "viewport": {"width": 1600, "height": 900},
             "extra_http_headers": {"Accept": "text/html"},
@@ -191,6 +207,7 @@ async def test_shared_browser_runtime_passes_generated_context_options(
             "bypass_csp": False,
         }
     ]
+    assert routed_patterns == ["**/*"]
 
 
 @pytest.mark.asyncio
@@ -201,6 +218,10 @@ async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_sema
     release = asyncio.Event()
 
     class FakeContext:
+        async def route(self, pattern: str, handler) -> None:
+            del pattern, handler
+            return None
+
         async def new_page(self):
             return object()
 
@@ -219,7 +240,7 @@ async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_sema
     monkeypatch.setattr(
         crawl_fetch_runtime,
         "build_playwright_context_options",
-        lambda: {},
+        lambda **_: {},
     )
 
     async def _hold_page() -> None:
@@ -240,14 +261,8 @@ async def test_shared_browser_runtime_snapshot_tracks_queue_without_private_sema
     release.set()
     await asyncio.gather(first, second)
 
-
-def test_browser_runtime_snapshot_prunes_expired_browser_host_preferences() -> None:
-    crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS.clear()
-    crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS["expired.example.com"] = 0.0
-    crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS["fresh.example.com"] = 999999999999.0
-
+def test_browser_runtime_snapshot_reports_runtime_capacity_without_host_cache() -> None:
     snapshot = crawl_fetch_runtime.browser_runtime_snapshot()
 
-    assert snapshot["preferred_hosts"] == 1
-    assert "expired.example.com" not in crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS
-    assert "fresh.example.com" in crawl_fetch_runtime._BROWSER_PREFERRED_HOSTS
+    assert "preferred_hosts" not in snapshot
+    assert "capacity" in snapshot

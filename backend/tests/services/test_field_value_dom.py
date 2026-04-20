@@ -97,3 +97,31 @@ def test_extract_page_images_preserves_non_resize_query_params_when_deduping() -
         "https://cdn.example.com/products/widget.jpg?variant=red&width=200",
         "https://cdn.example.com/products/widget.jpg?variant=blue&width=200",
     ]
+
+
+def test_extract_page_images_prefers_gallery_media_and_filters_tracking_assets() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <section class="product-gallery">
+              <picture>
+                <source srcset="https://cdn.example.com/products/widget-main.jpg?width=1200 1200w" />
+                <img src="https://cdn.example.com/products/widget-main.jpg?width=640" alt="Widget Prime front view" width="640" height="640" />
+              </picture>
+              <img src="https://cdn.example.com/products/widget-side.jpg?width=900" alt="Widget Prime side view" width="600" height="600" />
+            </section>
+            <img src="https://cdn.example.com/tracking/pixel.gif" alt="tracking pixel" width="1" height="1" />
+            <img src="https://cdn.example.com/assets/logo.png" alt="Brand logo" width="120" height="40" />
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    images = extract_page_images(soup, "https://example.com/products/widget-prime")
+
+    assert images == [
+        "https://cdn.example.com/products/widget-main.jpg?width=1200",
+        "https://cdn.example.com/products/widget-side.jpg?width=900",
+    ]

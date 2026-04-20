@@ -216,7 +216,7 @@ def _summary_value(summary: dict[str, object], key: str) -> str | None:
 async def _ensure_harness_user_id(session) -> int:
     if _is_production_environment():
         raise RuntimeError("Harness user access is disabled outside local/test environments")
-    harness_email = str(os.getenv("HARNESS_EMAIL") or "harness@example.invalid").strip().lower()
+    harness_email = str(os.getenv("HARNESS_EMAIL") or "").strip().lower()
     harness_password = str(os.getenv("HARNESS_PASSWORD") or "").strip()
     harness_role = str(os.getenv("HARNESS_ROLE") or "harness").strip().lower() or "harness"
     if not harness_email:

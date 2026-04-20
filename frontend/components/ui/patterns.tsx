@@ -103,20 +103,7 @@ export function TabBar({
   className?: string;
   variant?: "pill" | "underline";
 }>) {
-  const activeIndex = options.findIndex((o) => o.value === value);
   const padX = compact ? "px-2.5" : "px-3.5";
-  const pillStyle =
-    variant === "pill" && options.length > 0 && activeIndex >= 0
-      ? {
-          width: `calc((100% - 4px) / ${options.length})`,
-          left: `calc(2px + ((100% - 4px) / ${options.length}) * ${activeIndex})`,
-          opacity: 1,
-        }
-      : {
-          width: 0,
-          left: 0,
-          opacity: 0,
-        };
 
   if (variant === "underline") {
     return (
@@ -150,26 +137,21 @@ export function TabBar({
   return (
     <div
       className={cn(
-        "segmented-root relative grid h-[var(--control-height)] items-stretch rounded-[var(--radius-md)] p-0.5",
+        "segmented-root inline-flex h-[var(--control-height)] items-stretch rounded-[var(--radius-md)] p-0.5",
         className,
       )}
-      style={{ gridTemplateColumns: `repeat(${Math.max(options.length, 1)}, minmax(0, 1fr))` }}
     >
-      <span
-        aria-hidden="true"
-        className="tab-indicator-active pointer-events-none absolute inset-y-0.5 rounded-[4px] bg-[var(--accent)] transition-[left,width] duration-200 ease-out"
-        style={pillStyle}
-      />      {options.map((option) => (
+      {options.map((option) => (
         <button
           key={option.value}
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            "relative z-10 inline-flex min-w-0 items-center justify-center self-stretch whitespace-nowrap rounded-[4px] py-0 text-[11px] leading-[1.45] font-bold transition-all duration-200",
+            "relative z-10 inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-[4px] py-0 text-[11px] leading-[1.45] font-bold transition-all duration-200",
             padX,
             value === option.value
-              ? "text-white"
+              ? "bg-[var(--accent)] text-white"
               : "text-muted hover:text-primary",
           )}
         >

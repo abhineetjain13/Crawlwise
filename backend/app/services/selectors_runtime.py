@@ -9,8 +9,9 @@ from bs4 import BeautifulSoup, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.crawl_fetch_runtime import fetch_page
-from app.services.config.extraction_rules import EXTRACTION_RULES
+from app.services.config.extraction_rules import EXTRACTION_RULES, SELECTOR_NOISE_VALUES
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.selectors import CARD_SELECTORS
 from app.services.domain_memory_service import (
     load_domain_memory,
     save_domain_memory,
@@ -48,17 +49,28 @@ _JOB_FIELD_HINTS = {
     "responsibilities",
     "qualifications",
 }
+_LISTING_URL_HINTS = (
+    "/shop/", "/category/", "/collection/", "/search",
+    "/browse/", "/c/", "/catalog/", "/products",
+    "/makeup/", "/skincare/", "/hair/", "/fragrance/",
+    "?q=", "?query=", "?search=",
+    "/p/", "/plp/", "/clp/",
+)
 
 
 def infer_surface(*, url: str, expected_fields: Iterable[str] | None = None) -> str:
     normalized_fields = {
         normalize_field_key(value) for value in list(expected_fields or []) if value
     }
+    lowered_url = str(url or "").lower()
     if normalized_fields & _JOB_FIELD_HINTS:
         return "job_detail"
+    if any(hint in lowered_url for hint in _LISTING_URL_HINTS):
+        if normalized_fields & _COMMERCE_FIELD_HINTS:
+            return "ecommerce_listing"
+        return "ecommerce_listing"
     if normalized_fields & _COMMERCE_FIELD_HINTS:
         return "ecommerce_detail"
-    lowered_url = str(url or "").lower()
     detected_family = str(detect_platform_family(url) or "").strip().lower()
     if detected_family and detected_family in job_platform_families():
         return "job_detail"
@@ -118,13 +130,24 @@ async def list_selector_records(
     domain: str,
     surface: str = "generic",
 ) -> list[dict[str, object]]:
+    if not str(domain or "").strip():
+        records: list[dict[str, object]] = []
+        for memory in await _all_domain_memories(session):
+            for row in selector_rules_from_memory(memory):
+                records.append({
+                    **dict(row),
+                    "id": int(row.get("id") or 0),
+                    "domain": memory.domain,
+                    "surface": memory.surface,
+                })
+        return records
     memory = await load_domain_memory(session, domain=domain, surface=surface)
     return [
         {
+            **dict(row),
             "id": int(row.get("id") or 0),
             "domain": str(domain or "").strip().lower(),
             "surface": str(surface or "").strip().lower(),
-            **dict(row),
         }
         for row in selector_rules_from_memory(memory)
     ]
@@ -312,6 +335,17 @@ async def suggest_selectors(
             if not _suggestion_exists(suggestions[normalized_field], row):
                 suggestions[normalized_field].append(row)
 
+    if resolved_surface.endswith("_listing"):
+        for field_name in expected_columns:
+            normalized_field = normalize_field_key(field_name)
+            for row in _listing_card_suggestions(
+                soup,
+                html=html,
+                field_name=normalized_field,
+            ):
+                if not _suggestion_exists(suggestions[normalized_field], row):
+                    suggestions[normalized_field].append(row)
+
     llm_candidates, llm_error = await discover_xpath_candidates(
         session,
         run_id=0,
@@ -326,31 +360,53 @@ async def suggest_selectors(
             if not isinstance(row, dict):
                 continue
             field_name = normalize_field_key(str(row.get("field_name") or ""))
-            xpath = str(row.get("xpath") or "").strip()
-            if not field_name or not xpath:
+            if not field_name:
                 continue
-            validated_xpath, _ = validate_or_convert_xpath(xpath)
-            if not validated_xpath:
+            xpath = str(row.get("xpath") or "").strip() or None
+            css_selector = str(row.get("css_selector") or "").strip() or None
+            if not xpath and not css_selector:
                 continue
-            sample_value, _count, selector_used = extract_selector_value(
-                html,
-                xpath=validated_xpath,
-            )
-            candidate = {
-                "field_name": field_name,
-                "xpath": selector_used or validated_xpath,
-                "sample_value": sample_value,
-                "source": "llm_xpath",
-            }
-            if not _suggestion_exists(suggestions[field_name], candidate):
-                suggestions[field_name].append(candidate)
+            if xpath:
+                validated_xpath, _ = validate_or_convert_xpath(xpath)
+                if validated_xpath:
+                    sample_value, _count, selector_used = extract_selector_value(
+                        html,
+                        xpath=validated_xpath,
+                    )
+                    if _is_noise_value(sample_value, field_name):
+                        xpath = None
+                    elif sample_value or selector_used:
+                        candidate = {
+                            "field_name": field_name,
+                            "xpath": selector_used or validated_xpath,
+                            "sample_value": sample_value,
+                            "source": "llm_xpath",
+                        }
+                        if not _suggestion_exists(suggestions[field_name], candidate):
+                            suggestions[field_name].append(candidate)
+            if css_selector:
+                sample_value, _count, selector_used = extract_selector_value(
+                    html,
+                    css_selector=css_selector,
+                )
+                if _is_noise_value(sample_value, field_name):
+                    css_selector = None
+                elif sample_value or selector_used:
+                    candidate = {
+                        "field_name": field_name,
+                        "css_selector": selector_used or css_selector,
+                        "sample_value": sample_value,
+                        "source": "llm_css",
+                    }
+                    if not _suggestion_exists(suggestions[field_name], candidate):
+                        suggestions[field_name].append(candidate)
 
     return {
         "surface": resolved_surface,
         "preview_url": final_url,
         "iframe_promoted": bool(document.get("iframe_promoted")),
         "suggestions": {
-            normalize_field_key(field_name): values[:3]
+            normalize_field_key(field_name): values[:5]
             for field_name, values in suggestions.items()
         },
     }
@@ -495,6 +551,82 @@ def _deterministic_suggestions(
     return suggestions
 
 
+_LISTING_FIELD_SELECTORS: dict[str, list[str]] = {
+    "title": [
+        "[itemprop='name']", "[class*='title']", "[class*='Title']",
+        "[data-testid*='title']", "[data-testid*='name']", "a[href]",
+    ],
+    "price": [
+        "[itemprop='price']", "[class*='price']", "[class*='Price']",
+        "[data-testid*='price']", "[data-price]", "[aria-label*='price']",
+    ],
+    "brand": [
+        "[itemprop='brand']", "[class*='brand']", "[class*='Brand']",
+        "[data-testid*='brand']", "[aria-label*='brand']",
+    ],
+    "image_url": [
+        "[itemprop='image']", "img[src]", "[class*='image']",
+        "[class*='Image']", "[data-testid*='image']",
+    ],
+    "rating": [
+        "[itemprop='ratingValue']", "[class*='rating']", "[class*='Rating']",
+        "[class*='stars']", "[data-testid*='rating']",
+    ],
+    "review_count": [
+        "[itemprop='reviewCount']", "[class*='review-count']",
+        "[class*='ReviewCount']", "[data-testid*='review']",
+    ],
+    "availability": [
+        "[itemprop='availability']", "[class*='stock']",
+        "[data-availability]", "[data-testid*='avail']",
+    ],
+    "sku": [
+        "[itemprop='sku']", "[data-sku]", "[class*='sku']",
+    ],
+}
+
+
+def _listing_card_suggestions(
+    soup: BeautifulSoup,
+    *,
+    html: str,
+    field_name: str,
+) -> list[dict[str, object]]:
+    card_selectors = list(CARD_SELECTORS.get("ecommerce") or [])
+    first_card = None
+    for card_sel in card_selectors:
+        cards = soup.select(str(card_sel))
+        if cards:
+            first_card = cards[0]
+            break
+    if not first_card:
+        return []
+    field_selectors = _LISTING_FIELD_SELECTORS.get(field_name, [])
+    if not field_selectors:
+        return []
+    suggestions: list[dict[str, object]] = []
+    for sel in field_selectors:
+        nodes = first_card.select(sel)
+        if not nodes:
+            continue
+        node = nodes[0]
+        xpath = build_absolute_xpath(node)
+        if not xpath:
+            continue
+        sample_value, count, selector_used = extract_selector_value(html, xpath=xpath)
+        if count <= 0:
+            continue
+        suggestion = {
+            "field_name": field_name,
+            "xpath": selector_used or xpath,
+            "sample_value": sample_value,
+            "source": "listing_card_xpath",
+        }
+        if not _suggestion_exists(suggestions, suggestion):
+            suggestions.append(suggestion)
+    return suggestions
+
+
 def _candidate_nodes_for_field(soup: BeautifulSoup, field_name: str) -> list[Tag]:
     selectors_by_field = {
         "title": ["h1", "[itemprop='name']", "meta[property='og:title']"],
@@ -548,6 +680,22 @@ def _build_node_suggestion(
         "sample_value": sample_value,
         "source": "auto_xpath",
     }
+
+
+_SELECTOR_NOISE_FROZEN = frozenset(
+    str(v).strip().lower() for v in (SELECTOR_NOISE_VALUES or []) if str(v).strip()
+)
+
+
+def _is_noise_value(value: str | None, field_name: str) -> bool:
+    if not value:
+        return False
+    cleaned = " ".join(str(value).split()).strip().lower()
+    if len(cleaned) < 3:
+        return True
+    if cleaned in _SELECTOR_NOISE_FROZEN:
+        return True
+    return False
 
 
 def _suggestion_exists(

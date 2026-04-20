@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildDispatch } from "./crawl-config-screen";
+import type { FieldRow } from "./shared";
 import type { CrawlConfig } from "../../lib/api/types";
 
 function baseConfig(overrides: Partial<CrawlConfig> = {}): CrawlConfig {
@@ -130,5 +131,31 @@ describe("buildDispatch", () => {
         }),
       ),
     ).toThrow("Batch crawl needs at least one URL.");
+  });
+
+  it("includes CSS selectors in the extraction contract", () => {
+    const fieldRows: FieldRow[] = [
+      {
+        id: "field-1",
+        fieldName: "price",
+        cssSelector: ".product-price",
+        xpath: "",
+        regex: "",
+        cssState: "valid",
+        xpathState: "idle",
+        regexState: "idle",
+      },
+    ];
+
+    const dispatch = buildDispatch(baseConfig(), fieldRows);
+
+    expect(dispatch.settings.extraction_contract).toEqual([
+      {
+        field_name: "price",
+        css_selector: ".product-price",
+        xpath: undefined,
+        regex: undefined,
+      },
+    ]);
   });
 });

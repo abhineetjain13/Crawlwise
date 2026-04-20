@@ -102,7 +102,7 @@ class ICIMSAdapter(BaseAdapter):
                     exc,
                 )
                 break
-            except Exception as exc:
+            except (OSError, TimeoutError, ValueError, RuntimeError) as exc:
                 logger.exception(
                     "Unexpected error fetching iCIMS pagination URL %s (offset=%s, endpoint=%s): %s",
                     page_url,
@@ -171,7 +171,7 @@ class ICIMSAdapter(BaseAdapter):
                 url,
                 timeout_seconds=adapter_runtime_settings.icims_pagination_timeout_seconds,
             )
-        except Exception:
+        except (OSError, TimeoutError, ValueError, RuntimeError):
             logger.exception("Failed to fetch embedded iCIMS content URL: %s", url)
             return fallback_html
         return response_text or fallback_html

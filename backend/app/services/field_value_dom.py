@@ -67,6 +67,34 @@ _CROSS_LINK_CONTAINER_HINTS = (
     "upsell",
     "widget",
 )
+_PRODUCT_GALLERY_CONTEXT_HINTS = (
+    "carousel",
+    "gallery",
+    "media",
+    "pdp",
+    "photo",
+    "product",
+    "slider",
+    "thumb",
+    "zoom",
+)
+_NON_PRODUCT_IMAGE_HINTS = (
+    "avatar",
+    "badge",
+    "blog",
+    "brand",
+    "breadcrumb",
+    "flag",
+    "icon",
+    "logo",
+    "payment",
+    "placeholder",
+    "promo",
+    "rating",
+    "review",
+    "social",
+    "sprite",
+)
 _CDN_IMAGE_PATH_SUFFIX_RE = regex_lib.compile(
     r"_(?:\d+x\d+|pico|icon|thumb|small|compact|medium|large|grande|original)(?=\.[a-z0-9]+$)",
     regex_lib.I,
@@ -135,8 +163,10 @@ def _image_candidate_score(url: str) -> tuple[int, int, int]:
                 continue
         return 0
 
-    width = _int_param("width", "w")
-    height = _int_param("height", "h")
+    _WIDTH_NAMES = tuple(p for p in ("width", "w") if p in _CDN_IMAGE_QUERY_PARAMS)
+    _HEIGHT_NAMES = tuple(p for p in ("height", "h") if p in _CDN_IMAGE_QUERY_PARAMS)
+    width = _int_param(*_WIDTH_NAMES)
+    height = _int_param(*_HEIGHT_NAMES)
     area = width * height if width and height else max(width, height)
     return (area, width, height)
 
@@ -190,6 +220,63 @@ def _node_attr_text(node: Tag, *, max_depth: int = 6) -> str:
 def _is_non_primary_image_context(node: Tag) -> bool:
     context = _node_attr_text(node)
     return any(hint in context for hint in _NON_PRIMARY_IMAGE_SECTION_HINTS)
+
+
+def _image_node_context(node: Tag) -> str:
+    parts = [_node_attr_text(node)]
+    alt = node.get("alt")
+    if alt not in (None, "", [], {}):
+        parts.append(str(alt))
+    return " ".join(parts).lower()
+
+
+def _is_garbage_image_candidate(node: Tag, candidate_url: str) -> bool:
+    lowered = str(candidate_url or "").lower()
+    context = _image_node_context(node)
+    if any(token in lowered for token in _NON_PRODUCT_IMAGE_HINTS):
+        return True
+    return any(token in context for token in _NON_PRODUCT_IMAGE_HINTS)
+
+
+def _gallery_image_score(node: Tag, candidate_url: str) -> int:
+    context = _image_node_context(node)
+    score = 0
+    if any(hint in context for hint in _PRODUCT_GALLERY_CONTEXT_HINTS):
+        score += 4
+    width = str(node.get("width") or "").strip()
+    height = str(node.get("height") or "").strip()
+    try:
+        if int(width or "0") >= 120 or int(height or "0") >= 120:
+            score += 1
+    except ValueError:
+        pass
+    if "srcset" in node.attrs or "data-srcset" in node.attrs:
+        score += 1
+    if _looks_like_image_asset_url(candidate_url):
+        score += 1
+    if node.find_parent("picture") is not None:
+        score += 1
+    return score
+
+
+def _candidate_image_urls_from_node(node: Tag, page_url: str) -> list[str]:
+    candidates: list[str] = []
+    for raw_value in (
+        node.get("srcset"),
+        node.get("data-srcset"),
+    ):
+        if raw_value not in (None, "", [], {}):
+            candidates.extend(extract_urls(_srcset_urls(raw_value), page_url))
+    fallback = (
+        node.get("src")
+        or node.get("data-src")
+        or node.get("data-original")
+        or node.get("data-image")
+        or ""
+    )
+    if fallback:
+        candidates.extend(extract_urls(fallback, page_url))
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 def _is_other_detail_link(
@@ -399,8 +486,8 @@ def extract_page_images(
     exclude_linked_detail_images: bool = False,
     surface: str | None = None,
 ) -> list[str]:
-    values: list[str] = []
-    for node in root.find_all("img"):
+    scored_values: list[tuple[int, int, str]] = []
+    for index, node in enumerate(root.find_all(["img", "source"])):
         if _is_non_primary_image_context(node):
             continue
         if exclude_linked_detail_images:
@@ -412,31 +499,35 @@ def extract_page_images(
                 link_node=link,
             ):
                 continue
-        candidate = absolute_url(
-            page_url,
-            node.get("src") or node.get("data-src") or node.get("data-original") or "",
+        for candidate in _candidate_image_urls_from_node(node, page_url):
+            lowered = candidate.lower()
+            if lowered.startswith("data:"):
+                continue
+            if any(
+                token in lowered
+                for token in (
+                    "analytics",
+                    "tracking",
+                    "pixel",
+                    "spacer",
+                    "blank.gif",
+                    "doubleclick",
+                    "google-analytics",
+                    "googletagmanager",
+                )
+            ):
+                continue
+            if _is_garbage_image_candidate(node, candidate):
+                continue
+            scored_values.append((_gallery_image_score(node, candidate), index, candidate))
+    ordered = [
+        candidate
+        for _score, _index, candidate in sorted(
+            scored_values,
+            key=lambda row: (-int(row[0]), int(row[1]), str(row[2])),
         )
-        if not candidate:
-            continue
-        lowered = candidate.lower()
-        if lowered.startswith("data:"):
-            continue
-        if any(
-            token in lowered
-            for token in (
-                "analytics",
-                "tracking",
-                "pixel",
-                "spacer",
-                "blank.gif",
-                "doubleclick",
-                "google-analytics",
-                "googletagmanager",
-            )
-        ):
-            continue
-        values.append(candidate)
-    return _dedupe_image_urls(values)[:12]
+    ]
+    return _dedupe_image_urls(ordered)[:12]
 
 
 def extract_label_value_pairs(root: BeautifulSoup | Tag) -> list[tuple[str, str]]:

@@ -1,6 +1,6 @@
 # Backend Architecture
 
-> Last updated: 2026-04-19
+> Last updated: 2026-04-20
 >
 > Canonical detailed backend reference. This is the merged replacement for the older split architecture docs.
 
@@ -49,7 +49,7 @@ Important route groups:
 - `api/crawls.py`: create runs, CSV ingestion, logs, websocket updates, pause/resume/kill, commit fields, commit LLM suggestions
 - `api/records.py`: records list plus JSON/CSV/markdown/artifacts/discoverist exports and provenance
 - `api/review.py`: review payload, artifact HTML, save review mapping
-- `api/selectors.py`: selector CRUD, suggestion, test, preview HTML
+- `api/selectors.py`: selector CRUD, cross-surface listing by domain, suggestion, test, preview HTML
 - `api/llm.py`: provider catalog, config CRUD, connection test, cost log
 
 ## 4. Crawl Request and Settings Contract
@@ -185,6 +185,7 @@ Current live behavior:
 - blocked-page detection is evidence-based: anti-bot vendor markers alone do not block a page, but challenge-specific signals such as CAPTCHA-delivery elements and corroborating blocker text do
 - browser outcomes now distinguish challenge pages, low-content terminal shells, and explicit navigation/page-closed failures instead of collapsing them into generic browser HTML
 - listing traversal now captures bounded per-step listing snapshots for extraction instead of concatenating full rendered DOMs across page turns, and diagnostics expose traversal fragment count plus traversal HTML bytes
+- traversal-enabled browser fetches now retain both traversal-composed HTML and the full rendered HTML so the pipeline can retry extraction once when traversal fragments produce zero records
 - browser screenshots are staged to temp files inside the artifacts area and then persisted by the pipeline, avoiding large in-memory PNG handoffs on the hot path
 - a single shared HTTP client pool in `acquisition/runtime.py` is keyed on `(proxy, address-family preference, force_ipv4)`; `acquisition/http_client.py` no longer maintains a second pool and simply delegates to `get_shared_http_client`
 - curl_cffi impersonation target is now an actionable setting (`crawler_runtime_settings.curl_impersonate_target`, default `chrome131`) rather than dead config, and httpx clients ship with a matching default Chrome `User-Agent`/`Accept` header set so direct HTTP requests present a coherent identity
@@ -224,6 +225,8 @@ Important implemented features:
 - `network_payload_mapper.py` now uses declarative specs from `config/network_payload_specs.py`
 - tracking-parameter stripping is live in field-value normalization via `w3lib`
 - platform registry config in `config/platforms.json` now owns adapter registration metadata, network signatures, JS-state mappings, and listing-readiness selectors/waits
+- detail extraction now has a DOM variant fallback for `ecommerce_detail` pages when structured data and JS state leave variant axes empty
+- DOM image extraction now scores likely product-gallery media higher and filters obvious tracking, logo, and spacer assets before building `additional_images`
 
 ### 6.5 Publish and persistence
 
@@ -276,6 +279,7 @@ Current storage/runtime model:
 - selector/domain memory is stored by normalized `(domain, surface)`
 - selectors are persisted inside `DomainMemory`
 - runtime can layer surface-specific and generic rules
+- `GET /api/selectors` can now list all selector records for a domain across surfaces when `surface` is omitted, which is what the frontend uses for domain-memory management and crawl-config prefill
 - selector self-heal reuses stamped extraction runtime snapshot data
 - selector self-heal persists only validated improvements and reuses domain memory on later runs before attempting another synthesis pass
 - once reused domain-memory rules satisfy the requested fields for a record, the pipeline does not launch a second generic selector-synthesis round just because confidence remains low
@@ -369,6 +373,7 @@ Still worth treating as active engineering concerns:
 - generic-path hardcodes that should live in adapters/config
 - large utility/service modules that still own too many concerns
 - frontend/backend client-surface drift where unused client methods outlive removed routes
+- selector tool and Crawl Studio now share selector memory semantics, so future selector changes need tests in both surfaces instead of assuming one page is authoritative
 
 ## 10. Operational References
 

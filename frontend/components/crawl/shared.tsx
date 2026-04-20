@@ -24,11 +24,14 @@ export type ValidationState = "idle" | "valid" | "invalid";
 export type FieldRow = {
   id: string;
   fieldName: string;
+  cssSelector: string;
   xpath: string;
   regex: string;
+  cssState: ValidationState;
   xpathState: ValidationState;
   regexState: ValidationState;
 };
+export type FieldRowMessageTone = "success" | "warning" | "danger";
 export type PendingDispatch = {
   runType: "crawl" | "batch" | "csv";
   surface: CrawlSurface;
@@ -743,47 +746,155 @@ export function ManualFieldEditor({
   row,
   onChange,
   onDelete,
+  onTest,
+  testing = false,
+  testDisabled = false,
+  message,
+  messageTone = "warning",
+  showLabels = true,
 }: Readonly<{
   row: FieldRow;
   onChange: (patch: Partial<FieldRow>) => void;
   onDelete: () => void;
+  onTest?: () => void;
+  testing?: boolean;
+  testDisabled?: boolean;
+  message?: string;
+  messageTone?: FieldRowMessageTone;
+  showLabels?: boolean;
 }>) {
   return (
-    <div className="grid gap-2 rounded-md border border-border bg-background p-3 xl:grid-cols-[24px_minmax(160px,0.8fr)_minmax(240px,1fr)_minmax(200px,1fr)_auto]">
-      <div className="flex items-center justify-center text-muted">
-        <GripVertical className="size-4" />
+    <div className="space-y-2 rounded-md border border-border bg-background p-3">
+      <div className="grid gap-2 xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
+        <div className="hidden items-center justify-center text-muted xl:flex">
+          <GripVertical className="size-4" />
+        </div>
+        <label className="grid gap-1">
+          <span className={cn("field-label", !showLabels && "sr-only")}>Field</span>
+          <Input
+            aria-label="Field"
+            value={row.fieldName}
+            onChange={(event) => onChange({ fieldName: event.target.value })}
+            placeholder="price"
+            className="text-mono-body"
+          />
+        </label>
+        <ValidatedField
+          label="CSS"
+          value={row.cssSelector}
+          state={row.cssState}
+          placeholder=".price"
+          showLabel={showLabels}
+          onChange={(value) => onChange({ cssSelector: value })}
+          onBlur={(value) => onChange({ cssState: validateCssSelector(value) })}
+        />
+        <ValidatedField
+          label="XPath"
+          value={row.xpath}
+          state={row.xpathState}
+          placeholder="//span[@class='price']"
+          showLabel={showLabels}
+          onChange={(value) => onChange({ xpath: value })}
+          onBlur={(value) => onChange({ xpathState: validateXPath(value) })}
+        />
+        <ValidatedField
+          label="Regex"
+          value={row.regex}
+          state={row.regexState}
+          placeholder="\\$[\\d,.]+"
+          showLabel={showLabels}
+          onChange={(value) => onChange({ regex: value })}
+          onBlur={(value) => onChange({ regexState: validateRegex(value) })}
+        />
+        <div className="flex items-end justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {onTest ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={onTest}
+                disabled={testing || testDisabled}
+                className="min-w-[72px]"
+              >
+                {testing ? "Testing..." : "Test"}
+              </Button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onDelete}
+              aria-label={`Delete ${row.fieldName || "manual field"}`}
+              className="surface-muted inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
+            >
+              <Trash2 className="size-4" />
+            </button>
+          </div>
+        </div>
       </div>
-      <label className="grid gap-1">
-        <span className="field-label">Field</span>
-        <Input value={row.fieldName} onChange={(event) => onChange({ fieldName: event.target.value })} placeholder="price" className="text-mono-body" />
-      </label>
-      <ValidatedField
-        label="XPath"
-        value={row.xpath}
-        state={row.xpathState}
-        placeholder="//span[@class='price']"
-        onChange={(value) => onChange({ xpath: value })}
-        onBlur={(value) => onChange({ xpathState: validateXPath(value) })}
-      />
-      <ValidatedField
-        label="Regex"
-        value={row.regex}
-        state={row.regexState}
-        placeholder="\\$[\\d,.]+"
-        onChange={(value) => onChange({ regex: value })}
-        onBlur={(value) => onChange({ regexState: validateRegex(value) })}
-      />
-      <div className="flex items-end justify-end">
-        <button
-          type="button"
-          onClick={onDelete}
-          aria-label={`Delete ${row.fieldName || "manual field"}`}
-          className="surface-muted inline-flex size-8 items-center justify-center rounded-[var(--radius-md)] text-danger hover:bg-danger/10"
+      {message ? (
+        <div
+          className={cn(
+            "alert-surface px-3 py-2 text-xs leading-[1.45]",
+            messageTone === "success" && "alert-success",
+            messageTone === "warning" && "alert-warning",
+            messageTone === "danger" && "alert-danger",
+          )}
         >
-          <Trash2 className="size-4" />
-        </button>
-      </div>
+          {message}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+export function FieldEditorHeader() {
+  return (
+    <div className="hidden items-center gap-2 rounded-md border border-border/70 bg-background-elevated px-3 py-2 xl:grid xl:grid-cols-[24px_minmax(140px,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
+      <div />
+      <span className="field-label">Field</span>
+      <span className="field-label">CSS</span>
+      <span className="field-label">XPath</span>
+      <span className="field-label">Regex</span>
+      <span className="field-label text-right">Actions</span>
+    </div>
+  );
+}
+
+function ValidatedField({
+  label,
+  value,
+  state,
+  placeholder,
+  onChange,
+  onBlur,
+  showLabel = true,
+}: Readonly<{
+  label: string;
+  value: string;
+  state: ValidationState;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onBlur: (value: string) => void;
+  showLabel?: boolean;
+}>) {
+  return (
+    <label className="grid gap-1">
+      <span className={cn("field-label", !showLabel && "sr-only")}>{label}</span>
+      <div className="relative">
+        <Input
+          aria-label={label}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={(event) => onBlur(event.target.value)}
+          placeholder={placeholder}
+          className="pr-10 text-mono-body"
+        />
+        <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+          {state === "valid" ? <CheckCircle2 className="size-4 text-success" /> : null}
+          {state === "invalid" ? <CircleAlert className="size-4 text-danger" /> : null}
+        </div>
+      </div>
+    </label>
   );
 }
 
@@ -966,7 +1077,17 @@ function inferRunModule(run?: CrawlRun): CrawlTab | null {
 function validateXPath(value: string): ValidationState {
   if (!value.trim()) return "idle";
   try {
-    document.evaluate(value, document, null, XPathResult.ANY_TYPE, null);
+    globalThis.document?.evaluate(value, globalThis.document, null, XPathResult.ANY_TYPE, null);
+    return "valid";
+  } catch {
+    return "invalid";
+  }
+}
+
+function validateCssSelector(value: string): ValidationState {
+  if (!value.trim()) return "idle";
+  try {
+    globalThis.document?.querySelector(value);
     return "valid";
   } catch {
     return "invalid";
@@ -1015,37 +1136,3 @@ function useLogViewport(_logCount: number, ref?: RefObject<HTMLDivElement | null
   return targetRef;
 }
 
-function ValidatedField({
-  label,
-  value,
-  state,
-  placeholder,
-  onChange,
-  onBlur,
-}: Readonly<{
-  label: string;
-  value: string;
-  state: ValidationState;
-  placeholder: string;
-  onChange: (value: string) => void;
-  onBlur: (value: string) => void;
-}>) {
-  return (
-    <label className="grid gap-1">
-      <span className="field-label">{label}</span>
-      <div className="relative">
-        <Input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          onBlur={(event) => onBlur(event.target.value)}
-          placeholder={placeholder}
-          className="pr-10 text-mono-body"
-        />
-        <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
-          {state === "valid" ? <CheckCircle2 className="size-4 text-success" /> : null}
-          {state === "invalid" ? <CircleAlert className="size-4 text-danger" /> : null}
-        </div>
-      </div>
-    </label>
-  );
-}

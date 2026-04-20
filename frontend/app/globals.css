@@ -224,7 +224,10 @@ html[data-theme="dark"] body {
 }
 
 html[data-theme="dark"] body::before {
-  opacity: 0;
+  opacity: 1;
+  background:
+    radial-gradient(ellipse at 30% 20%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 60%),
+    radial-gradient(ellipse at 70% 80%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 65%);
 }
 
 /* RESET & BASE */
@@ -261,9 +264,9 @@ body::before {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at 15% 15%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 45%),
-    radial-gradient(circle at 85% 85%, color-mix(in srgb, var(--accent) 10%, transparent) 0%, transparent 40%);
-  opacity: 0.65;
+    radial-gradient(ellipse at 30% 20%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 55%),
+    radial-gradient(ellipse at 70% 80%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 60%);
+  opacity: 1;
   z-index: -1;
 }
 
@@ -597,11 +600,11 @@ select:focus-visible:not(.focus-ring) {
 
 /* COMPONENT STYLES */
 .panel {
-  background: var(--surface-card);
+  background: color-mix(in srgb, var(--surface-card) 85%, transparent);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: none;
-  backdrop-filter: none;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
 }
 
 .panel-raised {
@@ -914,9 +917,11 @@ select.control-select:focus {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--surface-card);
+  background: color-mix(in srgb, var(--surface-card) 85%, transparent);
   padding: 16px 18px;
-  transition: border-color var(--transition-base);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
+  transition: border-color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base);
 }
 
 .metric-card::before {
@@ -1057,7 +1062,7 @@ select.control-select:focus {
 /* APP SHELL */
 .app-shell-root {
   min-height: 100vh;
-  background: var(--bg-base);
+  background: transparent;
   color: var(--text-primary);
 }
 
@@ -1075,7 +1080,8 @@ select.control-select:focus {
 
 .app-sidebar {
   width: 224px;
-  background: var(--bg-sidebar);
+  background: color-mix(in srgb, var(--bg-sidebar) 75%, transparent);
+  backdrop-filter: blur(12px);
   border-right: 1px solid var(--border);
   display: none;
   flex-direction: column;
@@ -1258,8 +1264,8 @@ select.control-select:focus {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  background: var(--surface-header);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--surface-header) 75%, transparent);
+  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }

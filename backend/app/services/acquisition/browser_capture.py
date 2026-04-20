@@ -33,7 +33,19 @@ _MAX_TOTAL_CAPTURED_NETWORK_PAYLOAD_BYTES = (
 )
 _NETWORK_CAPTURE_QUEUE_SIZE = _MAX_CAPTURED_NETWORK_PAYLOADS * 2
 _NETWORK_CAPTURE_WORKERS = 4
-_QUEUE_JOIN_TIMEOUT_SECONDS = 30.0
+_NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES = (
+    "text/x-component",
+)
+_NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS = (
+    "application/json",
+    "application/trpc+json",
+    "application/graphql-response+json",
+)
+_NETWORK_PAYLOAD_URL_HINTS = (
+    ".json",
+    "__flight__",
+    "_rsc=",
+)
 
 
 @dataclass(slots=True)
@@ -109,17 +121,18 @@ class BrowserNetworkCapture:
         self._listener_attached = False
         if self._workers:
             await asyncio.sleep(0)
+            join_timeout_seconds = _queue_join_timeout_seconds()
             try:
                 await asyncio.wait_for(
                     self._queue.join(),
-                    timeout=_QUEUE_JOIN_TIMEOUT_SECONDS,
+                    timeout=join_timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 self._closing = True
                 logger.warning(
                     "Browser capture queue join timed out after %ss; "
                     "cancelling workers and draining queue",
-                    _QUEUE_JOIN_TIMEOUT_SECONDS,
+                    join_timeout_seconds,
                 )
                 for worker in self._workers:
                     worker.cancel()
@@ -213,9 +226,11 @@ class BrowserNetworkCapture:
         body_bytes = body_result.body
         if body_bytes is None:
             return
-        try:
-            payload = json.loads(body_bytes.decode("utf-8", errors="replace"))
-        except json.JSONDecodeError:
+        payload = _decode_network_payload(
+            body_bytes,
+            content_type=content_type,
+        )
+        if payload is None:
             async with self._lock:
                 self._malformed_payloads += 1
             return
@@ -261,7 +276,10 @@ def should_capture_network_payload(
     endpoint_info: dict[str, str] | None = None,
 ) -> bool:
     lowered_url = str(url or "").lower()
-    if "json" not in content_type and not lowered_url.endswith(".json"):
+    if not _is_supported_network_payload_content_type(
+        content_type=content_type,
+        lowered_url=lowered_url,
+    ):
         return False
     if captured_count >= _MAX_CAPTURED_NETWORK_PAYLOADS:
         return False
@@ -272,7 +290,9 @@ def should_capture_network_payload(
         surface=surface,
         endpoint_info=endpoint_info,
     )
-    content_length = coerce_content_length(headers)
+    content_length = (
+        None if has_chunked_transfer_encoding(headers) else coerce_content_length(headers)
+    )
     if content_length is not None and content_length > payload_budget:
         return False
     if (
@@ -283,6 +303,87 @@ def should_capture_network_payload(
     if captured_bytes >= _MAX_TOTAL_CAPTURED_NETWORK_PAYLOAD_BYTES:
         return False
     return True
+
+
+def _is_supported_network_payload_content_type(
+    *,
+    content_type: str,
+    lowered_url: str,
+) -> bool:
+    normalized_content_type = str(content_type or "").strip().lower()
+    if "json" in normalized_content_type:
+        return True
+    if any(token in normalized_content_type for token in _NETWORK_PAYLOAD_JSON_CONTENT_TYPE_HINTS):
+        return True
+    if any(token in lowered_url for token in _NETWORK_PAYLOAD_URL_HINTS):
+        return True
+    return any(
+        token in normalized_content_type
+        for token in _NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES
+    )
+
+
+def _decode_network_payload(
+    body_bytes: bytes,
+    *,
+    content_type: str,
+) -> object | None:
+    text = body_bytes.decode("utf-8", errors="replace")
+    normalized_content_type = str(content_type or "").strip().lower()
+    if any(
+        token in normalized_content_type
+        for token in _NETWORK_PAYLOAD_STREAMING_CONTENT_TYPES
+    ):
+        return _decode_rsc_payload(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _decode_rsc_payload(text: str) -> object | None:
+    decoder = json.JSONDecoder()
+    payloads: list[object] = []
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parsed = _decode_rsc_line(line, decoder=decoder)
+        if parsed is not None:
+            payloads.append(parsed)
+    if not payloads:
+        return None
+    if len(payloads) == 1:
+        return payloads[0]
+    return payloads
+
+
+def _decode_rsc_line(
+    line: str,
+    *,
+    decoder: json.JSONDecoder,
+) -> object | None:
+    candidates = [line]
+    colon_index = line.find(":")
+    if colon_index >= 0:
+        suffix = line[colon_index + 1 :].strip()
+        if suffix:
+            candidates.append(suffix)
+    for candidate in candidates:
+        start_index = next(
+            (index for index, char in enumerate(candidate) if char in "[{\""),
+            -1,
+        )
+        if start_index < 0:
+            continue
+        fragment = candidate[start_index:]
+        try:
+            parsed, _ = decoder.raw_decode(fragment)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return None
 
 
 def classify_network_endpoint(*, response_url: str, surface: str) -> dict[str, str]:
@@ -370,6 +471,23 @@ def coerce_content_length(headers: dict[str, object] | Any) -> int | None:
     return max(0, parsed)
 
 
+def has_chunked_transfer_encoding(headers: dict[str, object] | Any) -> bool:
+    if not headers:
+        return False
+    raw_value = headers.get("transfer-encoding")
+    normalized = str(raw_value or "").strip().lower()
+    if not normalized:
+        return False
+    return any(token.strip() == "chunked" for token in normalized.split(","))
+
+
+def _queue_join_timeout_seconds() -> float:
+    return max(
+        0.1,
+        float(crawler_runtime_settings.browser_capture_queue_join_timeout_ms) / 1000,
+    )
+
+
 def is_response_closed_error(exc: Exception) -> bool:
     class_name = type(exc).__name__.lower()
     message = str(exc or "").lower()
@@ -407,6 +525,7 @@ __all__ = [
     "capture_browser_screenshot",
     "classify_network_endpoint",
     "coerce_content_length",
+    "has_chunked_transfer_encoding",
     "read_network_payload_body",
     "should_capture_network_payload",
 ]

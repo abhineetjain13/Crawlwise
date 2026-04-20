@@ -28,6 +28,9 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
             "load_more_clicks": 0,
             "pages_advanced": 1,
             "traversal_progress_events": 1,
+            "traversal_fallback_used": True,
+            "traversal_fallback_recovered": True,
+            "traversal_fallback_record_count": 58,
         },
     )
 
@@ -36,6 +39,9 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
     assert metrics["traversal_attempted"] is True
     assert metrics["traversal_succeeded"] is True
     assert metrics["traversal_fell_back"] is False
+    assert metrics["traversal_fallback_used"] is True
+    assert metrics["traversal_fallback_recovered"] is True
+    assert metrics["traversal_fallback_record_count"] == 58
     assert metrics["traversal_mode_used"] == "paginate"
     assert metrics["pages_collected"] == 2
     assert metrics["pages_scrolled"] == 1

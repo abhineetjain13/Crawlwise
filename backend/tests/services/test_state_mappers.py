@@ -504,6 +504,41 @@ def test_map_product_payload_tolerates_product_glom_failures(
     assert mapped == {}
 
 
+def test_map_product_payload_uses_configured_jmespaths_when_glom_fails(
+    monkeypatch,
+) -> None:
+    original_glom = js_state_mapper.glom
+
+    def _fake_glom(target, spec, default=None):
+        if spec is js_state_mapper.PRODUCT_FIELD_SPEC:
+            raise RuntimeError("boom")
+        return original_glom(target, spec, default=default)
+
+    monkeypatch.setattr(js_state_mapper, "glom", _fake_glom)
+
+    mapped = js_state_mapper._map_product_payload(
+        {
+            "name": "Config Mapped Pack",
+            "vendor": {"name": "Urban Carry"},
+            "price": "89.50",
+            "variants": [],
+        },
+        page_url="https://store.example.com/products/config-mapped-pack",
+        category_fallback_from_type=False,
+        field_jmespaths={
+            "title": ["title", "name"],
+            "brand": ["brand.name", "brand", "vendor.name", "vendor"],
+            "price": ["price"],
+        },
+    )
+
+    assert mapped == {
+        "title": "Config Mapped Pack",
+        "brand": "Urban Carry",
+        "price": "89.50",
+    }
+
+
 def test_normalize_variant_tolerates_non_dict_glom_result(
     monkeypatch,
 ) -> None:

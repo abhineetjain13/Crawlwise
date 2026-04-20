@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
 from urllib.robotparser import RobotFileParser
 
 from cachetools import TTLCache
+import httpx
 
 from app.core.config import settings
 from app.services.pipeline.pipeline_config import PIPELINE_CONFIG
@@ -23,7 +22,6 @@ _ROBOTS_CACHE = TTLCache(
 )
 _ROBOTS_CACHE_LOCK: asyncio.Lock | None = None
 _ROBOTS_INFLIGHT_FETCHES: dict[str, asyncio.Task["_RobotsSnapshot"]] | None = None
-_ROBOTS_FETCH_ERRORS = (TimeoutError, URLError, OSError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,9 +107,7 @@ async def _load_robots_snapshot(base_url: str) -> _RobotsSnapshot:
         inflight = _get_inflight()
         fetch_task = inflight.get(base_url)
         if fetch_task is None:
-            fetch_task = asyncio.create_task(
-                asyncio.to_thread(_fetch_robots_snapshot, base_url)
-            )
+            fetch_task = asyncio.create_task(_fetch_robots_snapshot(base_url))
             inflight[base_url] = fetch_task
     try:
         snapshot = await fetch_task
@@ -128,22 +124,25 @@ async def _load_robots_snapshot(base_url: str) -> _RobotsSnapshot:
         return snapshot
 
 
-def _fetch_robots_snapshot(base_url: str) -> _RobotsSnapshot:
+async def _fetch_robots_snapshot(base_url: str) -> _RobotsSnapshot:
     robots_url = f"{base_url}/robots.txt"
-    request = _robots_request(robots_url)
     try:
-        with urlopen(request, timeout=settings.http_timeout_seconds) as response:
-            body = response.read().decode(_response_encoding(response), errors="replace")
-    except HTTPError as exc:
-        if exc.code in {404, 410}:
-            return _RobotsSnapshot(robots_url=robots_url, parser=None, missing=True)
-        if exc.code in {401, 403}:
-            return _disallow_all_snapshot(robots_url)
-        return _error_snapshot(robots_url, f"HTTP {exc.code}")
-    except _ROBOTS_FETCH_ERRORS as exc:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=settings.http_timeout_seconds,
+            headers={"User-Agent": PIPELINE_CONFIG.robots_fetch_user_agent},
+        ) as client:
+            response = await client.get(robots_url)
+    except httpx.RequestError as exc:
         return _error_snapshot(robots_url, str(exc))
 
-    return _parse_robots_snapshot(robots_url, body)
+    if response.status_code in {404, 410}:
+        return _RobotsSnapshot(robots_url=robots_url, parser=None, missing=True)
+    if response.status_code in {401, 403}:
+        return _disallow_all_snapshot(robots_url)
+    if response.status_code >= 400:
+        return _error_snapshot(robots_url, f"HTTP {response.status_code}")
+    return _parse_robots_snapshot(robots_url, response.text)
 
 
 def _base_url(url: str) -> str:
@@ -151,22 +150,6 @@ def _base_url(url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         raise ValueError(f"Invalid URL for robots policy: {url!r}")
     return f"{parsed.scheme}://{parsed.netloc}"
-
-
-def _response_encoding(response) -> str:
-    headers = getattr(response, "headers", None)
-    if headers is not None:
-        content_charset = headers.get_content_charset()
-        if content_charset:
-            return str(content_charset)
-    return "utf-8"
-
-
-def _robots_request(robots_url: str) -> Request:
-    return Request(
-        robots_url,
-        headers={"User-Agent": PIPELINE_CONFIG.robots_fetch_user_agent},
-    )
 
 
 def _parse_robots_snapshot(robots_url: str, body: str) -> _RobotsSnapshot:

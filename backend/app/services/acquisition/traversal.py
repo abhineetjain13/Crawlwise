@@ -7,6 +7,7 @@ import re
 import time
 from urllib.parse import urljoin, urlsplit
 
+from app.services.acquisition.dom_runtime import get_page_html, wait_for_dom_mutation_settle
 from app.services.acquisition.runtime import classify_blocked_page_async
 
 try:
@@ -20,12 +21,16 @@ from app.services.config.extraction_rules import (
     LISTING_STRUCTURE_NEGATIVE_HINTS,
     LISTING_STRUCTURE_POSITIVE_HINTS,
 )
+from app.services.platform_policy import (
+    path_tenant_boundary_family,
+    requires_path_tenant_boundary,
+    url_host_matches_platform_family,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
 from selectolax.lexbor import LexborHTMLParser
 
 logger = logging.getLogger(__name__)
-_PATH_TENANT_BOUNDARY_HOSTS = {"myworkdayjobs.com"}
 
 _STRUCTURED_SCRIPT_TYPES = {
     "application/hal+json",
@@ -158,18 +163,26 @@ async def execute_listing_traversal(
     result = TraversalResult(requested_mode=normalized_mode)
     if not should_run_traversal(surface, normalized_mode):
         _set_stop_reason(result, "not_listing_or_disabled", surface=surface, traversal_mode=normalized_mode)
-        result.html_fragments = [(await page.content(), True)]
+        result.html_fragments = [(await get_page_html(page), True)]
         return result
 
     selected_mode: str | None = normalized_mode
     if normalized_mode == "auto":
         selected_mode = await _detect_auto_mode(page, surface=surface)
-        result.selected_mode = selected_mode
         if not selected_mode:
-            _set_stop_reason(result, "no_mode_detected", surface=surface, traversal_mode=normalized_mode)
-            result.card_count = (await _page_snapshot(page, surface=surface))["card_count"]
-            result.html_fragments = [(await page.content(), True)]
-            return result
+            if await _has_scroll_signals(page, surface=surface):
+                selected_mode = "scroll"
+                logger.info(
+                    "auto mode: no controls found, falling back to scroll for surface=%s",
+                    surface,
+                )
+            else:
+                result.selected_mode = selected_mode
+                _set_stop_reason(result, "no_mode_detected", surface=surface, traversal_mode=normalized_mode)
+                result.card_count = (await _page_snapshot(page, surface=surface))["card_count"]
+                result.html_fragments = [(await get_page_html(page), True)]
+                return result
+        result.selected_mode = selected_mode
     else:
         result.selected_mode = normalized_mode
 
@@ -210,7 +223,7 @@ async def execute_listing_traversal(
         _set_stop_reason(result, "unsupported_mode", surface=surface, traversal_mode=normalized_mode)
 
     if not result.html_fragments:
-        result.html_fragments = [(await page.content(), True)]
+        result.html_fragments = [(await get_page_html(page), True)]
     return result
 
 
@@ -270,8 +283,7 @@ async def _run_scroll_traversal(
         if wait_ms <= 0:
             _set_stop_reason(result, "budget_exceeded", surface=surface)
             break
-        await page.wait_for_timeout(wait_ms)
-        await _settle_after_action(page, deadline_at=deadline_at)
+        await _settle_after_action(page, deadline_at=deadline_at, timeout_ms=wait_ms)
         current = await _page_snapshot(page, surface=surface)
         card_gain = max(
             0,
@@ -361,11 +373,11 @@ async def _run_load_more_traversal(
         if wait_ms <= 0:
             _set_stop_reason(result, "budget_exceeded", surface=surface)
             break
-        await page.wait_for_timeout(wait_ms)
         await _wait_for_transition(
             page,
             previous_url=current_url,
             deadline_at=deadline_at,
+            timeout_ms=wait_ms,
         )
         current = await _page_snapshot(page, surface=surface)
         card_gain = max(
@@ -453,6 +465,7 @@ async def _run_paginate_traversal(
             goto_timeout_ms = _remaining_timeout_ms(
                 deadline_at,
                 int(crawler_runtime_settings.pagination_navigation_timeout_ms),
+                min_ms=5000,
             )
             if goto_timeout_ms <= 0:
                 _set_stop_reason(result, "budget_exceeded", surface=surface)
@@ -482,6 +495,7 @@ async def _run_paginate_traversal(
                 page,
                 previous_url=current_url,
                 deadline_at=deadline_at,
+                timeout_ms=int(crawler_runtime_settings.traversal_settle_networkidle_timeout_ms),
             )
         if await _page_matches_block_challenge(page):
             _set_stop_reason(result, "paginate_blocked", surface=surface)
@@ -687,7 +701,7 @@ async def _click_with_retry(
         result.click_retries += 1
 
     # Step 3: Dismiss overlays then force-click (overlays are restored after)
-    await _dismiss_overlays_if_needed(page, locator=locator, result=result)
+    await dismiss_overlays_if_needed(page, locator=locator, result=result)
     force_exc = None
     try:
         await locator.click(timeout=click_timeout_ms, force=True)
@@ -707,8 +721,10 @@ async def _click_with_retry(
         await locator.evaluate(
             "(node) => node instanceof HTMLElement && node.click()"
         )
-        await page.wait_for_timeout(
-            min(500, max(1, click_timeout_ms // 4))
+        await wait_for_dom_mutation_settle(
+            page,
+            quiet_window_ms=min(500, max(100, click_timeout_ms // 5)),
+            timeout_ms=min(2000, click_timeout_ms),
         )
         return True
     except Exception as js_exc:
@@ -721,7 +737,7 @@ async def _click_with_retry(
         return False
 
 
-async def _dismiss_overlays_if_needed(
+async def dismiss_overlays_if_needed(
     page,
     *,
     locator,
@@ -808,7 +824,11 @@ async def _dismiss_overlays_if_needed(
             btn = page.locator(str(selector)).first
             if await btn.count() > 0 and await btn.is_visible(timeout=200):
                 await btn.click(timeout=1000, force=True)
-                await page.wait_for_timeout(300)
+                await wait_for_dom_mutation_settle(
+                    page,
+                    quiet_window_ms=150,
+                    timeout_ms=750,
+                )
                 dismissed_any = True
                 logger.info("Traversal dismissed cookie consent via %s", selector)
                 break
@@ -862,7 +882,7 @@ async def _append_html_fragment(
     *,
     surface: str,
 ) -> None:
-    html = await page.content()
+    html = await get_page_html(page)
     if not html:
         return
     fragment = _bounded_traversal_fragment_html(
@@ -994,7 +1014,7 @@ async def _looks_like_next_page_control(locator) -> bool:
 
 
 async def _page_matches_block_challenge(page) -> bool:
-    html = await page.content()
+    html = await get_page_html(page)
     if not html:
         return False
     classification = await classify_blocked_page_async(html, 200)
@@ -1392,10 +1412,15 @@ async def _has_scroll_signals(page, *, surface: str) -> bool:
     )
 
 
-async def _settle_after_action(page, *, deadline_at: float | None) -> None:
+async def _settle_after_action(
+    page,
+    *,
+    deadline_at: float | None,
+    timeout_ms: int | None = None,
+) -> None:
     wait_ms = _remaining_timeout_ms(
         deadline_at,
-        int(crawler_runtime_settings.traversal_min_settle_wait_ms),
+        int(timeout_ms or crawler_runtime_settings.traversal_min_settle_wait_ms),
     )
     if wait_ms <= 0:
         return
@@ -1407,7 +1432,11 @@ async def _settle_after_action(page, *, deadline_at: float | None) -> None:
         await page.wait_for_load_state("domcontentloaded", timeout=min(1500, wait_ms * 2))
     except Exception:
         pass
-    await page.wait_for_timeout(wait_ms)
+    await wait_for_dom_mutation_settle(
+        page,
+        quiet_window_ms=min(500, max(100, wait_ms // 4)),
+        timeout_ms=wait_ms,
+    )
 
 
 async def _wait_for_transition(
@@ -1416,6 +1445,7 @@ async def _wait_for_transition(
     previous_url: str,
     navigation_expected: bool = False,
     deadline_at: float | None = None,
+    timeout_ms: int | None = None,
 ) -> None:
     await _wait_for_navigation_if_changed(
         page,
@@ -1423,7 +1453,7 @@ async def _wait_for_transition(
         navigation_expected=navigation_expected,
         deadline_at=deadline_at,
     )
-    await _settle_after_action(page, deadline_at=deadline_at)
+    await _settle_after_action(page, deadline_at=deadline_at, timeout_ms=timeout_ms)
 
 
 async def _wait_for_navigation_if_changed(
@@ -1474,13 +1504,13 @@ def _deadline_reached(deadline_at: float | None) -> bool:
     return deadline_at is not None and time.monotonic() >= deadline_at
 
 
-def _remaining_timeout_ms(deadline_at: float | None, default_ms: int) -> int:
+def _remaining_timeout_ms(deadline_at: float | None, default_ms: int, *, min_ms: int = 500) -> int:
     if deadline_at is None:
-        return max(1, int(default_ms))
+        return max(min_ms, int(default_ms))
     remaining_ms = int((deadline_at - time.monotonic()) * 1000)
     if remaining_ms <= 0:
         return 0
-    return max(1, min(int(default_ms), remaining_ms))
+    return max(min_ms, min(int(default_ms), remaining_ms))
 
 
 async def _emit_event(on_event, level: str, message: str) -> None:
@@ -1509,7 +1539,7 @@ def _is_same_origin(current_url: str, next_url: str) -> bool:
         return False
     # Also compare the first path segment to prevent cross-tenant bleed
     # on path-based multi-tenant architectures (e.g. myworkdayjobs.com/TenantA).
-    if current_host in _PATH_TENANT_BOUNDARY_HOSTS:
+    if _requires_path_tenant_boundary(current_url, next_url):
         current_first = (str(current.path or "").strip("/").split("/") + [""])[0].lower()
         next_first = (str(next_value.path or "").strip("/").split("/") + [""])[0].lower()
         if current_first and next_first and current_first != next_first:
@@ -1519,3 +1549,16 @@ def _is_same_origin(current_url: str, next_url: str) -> bool:
 
 def _host_without_port(netloc: str) -> str:
     return str(netloc or "").split(":", 1)[0].lower()
+
+
+def _requires_path_tenant_boundary(current_url: str, next_url: str) -> bool:
+    current_family = path_tenant_boundary_family(current_url)
+    next_family = path_tenant_boundary_family(next_url)
+    if not current_family or current_family != next_family:
+        return False
+    return (
+        requires_path_tenant_boundary(current_url)
+        and requires_path_tenant_boundary(next_url)
+        and url_host_matches_platform_family(current_url, current_family)
+        and url_host_matches_platform_family(next_url, next_family)
+    )

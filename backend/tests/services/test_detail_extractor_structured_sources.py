@@ -470,3 +470,42 @@ async def test_myntra_adapter_allows_dom_description_fill_when_detail_payload_is
         record["description"]
         == "Soft cotton fabric with embroidered floral detailing."
     )
+
+
+def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_js_state_is_absent() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Trail Runner</h1>
+        <label>
+          Size
+          <select name="size">
+            <option value="">Choose size</option>
+            <option value="s">S</option>
+            <option value="m">M</option>
+            <option value="l">L</option>
+          </select>
+        </label>
+        <div class="color-swatch-group" aria-label="Color">
+          <button type="button" aria-label="Black"></button>
+          <button type="button" aria-label="Olive"></button>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["option1_name"] == "size"
+    assert record["option1_values"] == "S, M, L"
+    assert record["option2_name"] == "Color"
+    assert record["option2_values"] == "Black, Olive"
+    assert record["available_sizes"] == "S, M, L"
+    assert record["variant_axes"] == {"size": ["S", "M", "L"], "color": ["Black", "Olive"]}

@@ -45,21 +45,30 @@ class ValidatedTarget:
     dns_resolved: bool = True
 
 
-async def ensure_public_crawl_targets(urls: Iterable[str]) -> None:
+async def ensure_public_crawl_targets(urls: Iterable[str]) -> list[str]:
     seen: set[str] = set()
+    normalized: list[str] = []
     for raw_url in urls:
         candidate = str(raw_url or "").strip()
         if not candidate or candidate in seen:
             continue
         seen.add(candidate)
-        await validate_public_target(candidate)
+        result = await validate_public_target(candidate)
+        normalized.append(_rebuild_url(candidate, result))
+    return normalized
 
 
 async def validate_public_target(url: str) -> ValidatedTarget:
-    parsed = urlparse(str(url or "").strip())
+    raw = str(url or "").strip()
+    parsed = urlparse(raw)
     scheme = str(parsed.scheme or "").lower()
     if scheme not in _ALLOWED_SCHEMES:
-        raise ValueError("Only http:// and https:// targets are allowed")
+        if not scheme and raw and not raw.startswith(("/", "#")):
+            raw = f"https://{raw}"
+            parsed = urlparse(raw)
+            scheme = "https"
+        else:
+            raise ValueError("Only http:// and https:// targets are allowed")
 
     hostname = str(parsed.hostname or "").strip().lower()
     if not hostname:
@@ -224,6 +233,21 @@ def _raise_if_non_public_ip(
         f"Target host resolves to a non-public IP address: {host_label} -> {ip_value}"
     )
 
+
+def _rebuild_url(original: str, target: ValidatedTarget) -> str:
+    parsed = urlparse(original)
+    if parsed.scheme:
+        return original
+    reconstructed = f"{target.scheme}://{original}"
+    reparsed = urlparse(reconstructed)
+    port_suffix = ""
+    if reparsed.port is None and target.port != _default_port(target.scheme):
+        port_suffix = f":{target.port}"
+    hostname = reparsed.hostname or ""
+    if ":" in hostname:  # IPv6 address
+        hostname = f"[{hostname}]"
+    netloc = hostname + port_suffix
+    return reparsed._replace(scheme=target.scheme, netloc=netloc).geturl()
 
 def _target_port(parsed) -> int:
     return int(parsed.port or _default_port(parsed.scheme))

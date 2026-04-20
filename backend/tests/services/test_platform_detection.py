@@ -101,25 +101,37 @@ def test_detect_platform_family_for_stable_spa_canaries() -> None:
     assert detect_platform_family("https://demo.saleor.io/products") == "saleor"
 
 
-def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_or_traversal() -> None:
+def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_traversal_or_detail() -> None:
     platform_policy = resolve_browser_readiness_policy(
         "https://smithnephew.wd5.myworkdayjobs.com/External",
     )
+    detail_policy = resolve_browser_readiness_policy(
+        "https://example.com/products/widget-prime",
+        surface="ecommerce_detail",
+    )
     traversal_policy = resolve_browser_readiness_policy(
         "https://example.com/collections/widgets",
+        surface="ecommerce_listing",
         traversal_active=True,
     )
     default_policy = resolve_browser_readiness_policy(
         "https://example.com/products/widget-prime",
+        surface="ecommerce_listing",
     )
 
     assert platform_policy["require_networkidle"] is True
     assert platform_policy["networkidle_reason"] == "platform-readiness"
+    assert platform_policy["navigation_wait_until"] == "networkidle"
     assert platform_policy["listing_override"]["platform"] == "workday"
+    assert detail_policy["require_networkidle"] is True
+    assert detail_policy["networkidle_reason"] == "detail-surface"
+    assert detail_policy["navigation_wait_until"] == "networkidle"
     assert traversal_policy["require_networkidle"] is True
     assert traversal_policy["networkidle_reason"] == "traversal"
+    assert traversal_policy["navigation_wait_until"] == "networkidle"
     assert default_policy["require_networkidle"] is False
     assert default_policy["networkidle_reason"] is None
+    assert default_policy["navigation_wait_until"] == "domcontentloaded"
 
 
 def test_resolve_browser_readiness_policy_uses_spree_canary_override() -> None:
@@ -136,6 +148,21 @@ def test_resolve_browser_readiness_policy_uses_spree_canary_override() -> None:
             "[data-testid='product-card']",
             ".products .card",
             "a[href*='/products/']",
+        ],
+        "max_wait_ms": 15000,
+    }
+
+
+def test_resolve_listing_readiness_override_uses_ulta_listing_config() -> None:
+    assert resolve_listing_readiness_override(
+        "https://www.ulta.com/shop/makeup/makeup-palettes"
+    ) == {
+        "platform": "ulta",
+        "domain": "www.ulta.com",
+        "selectors": [
+            "li[data-test='products-list-item']",
+            ".ProductListingResults__productCard",
+            "[class*='ProductCard'] a[href*='/p/']",
         ],
         "max_wait_ms": 15000,
     }

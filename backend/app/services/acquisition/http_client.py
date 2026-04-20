@@ -13,7 +13,6 @@ from app.services.acquisition.runtime import (
     close_shared_http_client as close_runtime_shared_http_client,
     get_shared_http_client,
 )
-from app.services.network_resolution import should_retry_with_forced_ipv4
 
 requests = httpx
 
@@ -47,29 +46,15 @@ async def request_result(
     del prefer_browser
 
     timeout = timeout_seconds or settings.http_timeout_seconds
-    try:
-        response = await _request_with_httpx(
-            url,
-            method=method,
-            headers=headers,
-            json_body=json_body,
-            data=data,
-            proxy=proxy,
-            timeout=timeout,
-        )
-    except Exception as exc:
-        if not should_retry_with_forced_ipv4(exc):
-            raise
-        response = await _request_with_httpx(
-            url,
-            method=method,
-            headers=headers,
-            json_body=json_body,
-            data=data,
-            proxy=proxy,
-            timeout=timeout,
-            force_ipv4=True,
-        )
+    response = await _request_with_httpx(
+        url,
+        method=method,
+        headers=headers,
+        json_body=json_body,
+        data=data,
+        proxy=proxy,
+        timeout=timeout,
+    )
     text = response.text or ""
     return HttpFetchResult(
         url=url,
@@ -93,9 +78,8 @@ async def _request_with_httpx(
     data: Any | None,
     proxy: str | None,
     timeout: float,
-    force_ipv4: bool = False,
 ) -> httpx.Response:
-    client = await get_shared_http_client(proxy=proxy, force_ipv4=force_ipv4)
+    client = await get_shared_http_client(proxy=proxy)
     return await client.request(
         method.upper(),
         url,

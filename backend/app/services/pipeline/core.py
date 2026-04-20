@@ -191,15 +191,20 @@ def _sanitize_llm_existing_values(record: dict[str, object]) -> dict[str, object
     return sanitized
 
 
+_STRING_FIELDS = URL_FIELDS | IMAGE_FIELDS | LONG_TEXT_FIELDS
+_LIST_FIELDS = STRUCTURED_MULTI_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS
+_DICT_FIELDS = STRUCTURED_OBJECT_FIELDS
+
+
 def _validate_llm_field_type(field_name: str, value: object) -> bool:
     if value in (None, "", [], {}):
         return True
     normalized = str(field_name or "").strip().lower()
-    if normalized in URL_FIELDS | IMAGE_FIELDS | LONG_TEXT_FIELDS:
+    if normalized in _STRING_FIELDS:
         return isinstance(value, str)
-    if normalized in STRUCTURED_MULTI_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS:
+    if normalized in _LIST_FIELDS:
         return isinstance(value, list)
-    if normalized in STRUCTURED_OBJECT_FIELDS:
+    if normalized in _DICT_FIELDS:
         return isinstance(value, dict)
     return True
 
@@ -243,7 +248,7 @@ def _merge_browser_diagnostics(
     acquisition_result.browser_diagnostics = merged
 
 
-async def _process_single_url(
+async def process_single_url(
     session: AsyncSession,
     run: CrawlRun,
     url: str,
@@ -490,72 +495,20 @@ async def _run_extraction_stage(
         context,
         fetched,
     )
-    adapter = getattr(acquisition_result, "adapter_name", "generic") or "generic"
-    if records:
-        await _log_pipeline_event(context, "info", f"Extracted {len(records)} records using {adapter} adapter")
-    else:
-        await _log_pipeline_event(context, "warning", f"Extraction yielded 0 records (adapter: {adapter})")
-
-    retry_decision = _empty_extraction_browser_retry_decision(
-        acquisition_result,
-        records,
+    await _log_extraction_outcome(context, acquisition_result, records)
+    records, selector_rules = await _retry_empty_extraction_with_browser(
+        context,
+        fetched,
+        records=records,
+        selector_rules=selector_rules,
     )
-    if retry_decision["should_retry"]:
-        await _log_pipeline_event(
-            context,
-            "info",
-            f"No records via {acquisition_result.method}; retrying browser render for {context.url}",
-        )
-        retry_request = _build_acquisition_request(context).with_profile_updates(
-            prefer_browser=True,
-            retry_reason="empty_extraction",
-        )
-        try:
-            browser_result = await acquire(retry_request)
-        except (RuntimeError, ValueError, TypeError, OSError) as exc:
-            _merge_browser_diagnostics(
-                acquisition_result,
-                build_failed_browser_diagnostics(
-                    browser_reason="empty-extraction retry",
-                    exc=exc,
-                ),
-            )
-            fetched.url_metrics = build_url_metrics(
-                acquisition_result,
-                requested_fields=list(context.requested_fields),
-            )
-            await _log_pipeline_event(
-                context,
-                "warning",
-                f"Browser retry failed for {context.url}: {type(exc).__name__}: {exc}",
-            )
-            raise
-        else:
-            fetched.acquisition_result = browser_result
-            acquisition_result = browser_result
-            records, selector_rules = await _extract_records_for_acquisition(
-                context,
-                fetched,
-            )
-    if "detail" in context.surface and records:
-        records, selector_rules = await apply_selector_self_heal(
-            context.session,
-            run=context.run,
-            page_url=acquisition_result.final_url,
-            html=acquisition_result.html,
-            records=records,
-            adapter_records=acquisition_result.adapter_records,
-            network_payloads=acquisition_result.network_payloads,
-            selector_rules=selector_rules,
-        )
-    if context.run.settings_view.llm_enabled() and "detail" in context.surface and records:
-        records = await _apply_llm_fallback(
-            context.session,
-            run=context.run,
-            page_url=acquisition_result.final_url,
-            html=acquisition_result.html,
-            records=records,
-        )
+    acquisition_result = fetched.acquisition_result
+    records, selector_rules = await _apply_extraction_post_processing(
+        context,
+        acquisition_result=acquisition_result,
+        records=records,
+        selector_rules=selector_rules,
+    )
     return _ExtractedURLStage(fetched=fetched, records=records)
 
 
@@ -572,6 +525,112 @@ async def _run_normalization_stage(
     return extracted
 
 
+async def _log_extraction_outcome(
+    context: _URLProcessingContext,
+    acquisition_result,
+    records: list[dict[str, object]],
+) -> None:
+    adapter = getattr(acquisition_result, "adapter_name", "generic") or "generic"
+    if records:
+        await _log_pipeline_event(
+            context,
+            "info",
+            f"Extracted {len(records)} records using {adapter} adapter",
+        )
+        return
+    await _log_pipeline_event(
+        context,
+        "warning",
+        f"Extraction yielded 0 records (adapter: {adapter})",
+    )
+
+
+async def _retry_empty_extraction_with_browser(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+    *,
+    records: list[dict[str, object]],
+    selector_rules: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    acquisition_result = fetched.acquisition_result
+    retry_decision = _empty_extraction_browser_retry_decision(
+        acquisition_result,
+        records,
+    )
+    if not retry_decision["should_retry"]:
+        return records, selector_rules
+    await _log_pipeline_event(
+        context,
+        "info",
+        f"No records via {acquisition_result.method}; retrying browser render for {context.url}",
+    )
+    browser_result = await _acquire_browser_retry_result(context, fetched)
+    fetched.acquisition_result = browser_result
+    return await _extract_records_for_acquisition(context, fetched)
+
+
+async def _acquire_browser_retry_result(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+):
+    acquisition_result = fetched.acquisition_result
+    retry_request = _build_acquisition_request(context).with_profile_updates(
+        prefer_browser=True,
+        retry_reason="empty_extraction",
+    )
+    try:
+        return await acquire(retry_request)
+    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+        _merge_browser_diagnostics(
+            acquisition_result,
+            build_failed_browser_diagnostics(
+                browser_reason="empty-extraction retry",
+                exc=exc,
+            ),
+        )
+        fetched.url_metrics = build_url_metrics(
+            acquisition_result,
+            requested_fields=list(context.requested_fields),
+        )
+        await _log_pipeline_event(
+            context,
+            "warning",
+            f"Browser retry failed for {context.url}: {type(exc).__name__}: {exc}",
+        )
+        raise
+
+
+async def _apply_extraction_post_processing(
+    context: _URLProcessingContext,
+    *,
+    acquisition_result,
+    records: list[dict[str, object]],
+    selector_rules: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if "detail" not in context.surface or not records:
+        return records, selector_rules
+    records, selector_rules = await apply_selector_self_heal(
+        context.session,
+        run=context.run,
+        page_url=acquisition_result.final_url,
+        html=acquisition_result.html,
+        records=records,
+        adapter_records=acquisition_result.adapter_records,
+        network_payloads=acquisition_result.network_payloads,
+        selector_rules=selector_rules,
+    )
+    if not context.run.settings_view.llm_enabled() or not records:
+        return records, selector_rules
+    records = await apply_llm_fallback(
+        context.session,
+        run=context.run,
+        page_url=acquisition_result.final_url,
+        html=acquisition_result.html,
+        records=records,
+    )
+    return records, selector_rules
+
+
 async def _extract_records_for_acquisition(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -579,6 +638,38 @@ async def _extract_records_for_acquisition(
     acquisition_result = fetched.acquisition_result
     if not _browser_result_is_extractable(acquisition_result):
         return [], []
+    await _populate_adapter_records(context, acquisition_result)
+    _assign_platform_family(acquisition_result)
+
+    fetched.url_metrics = build_url_metrics(
+        acquisition_result,
+        requested_fields=list(context.requested_fields),
+    )
+    selector_rules = await _load_selector_rules(context, acquisition_result.final_url)
+    records = await _run_record_extraction(
+        context,
+        acquisition_result=acquisition_result,
+        selector_rules=selector_rules,
+    )
+    if (
+        not records
+        and "listing" in context.surface
+        and getattr(acquisition_result, "method", "") == "browser"
+    ):
+        fallback_records = await _extract_records_from_preserved_browser_html(
+            context,
+            fetched,
+            selector_rules=selector_rules,
+        )
+        if fallback_records:
+            records = fallback_records
+    return records, selector_rules
+
+
+async def _populate_adapter_records(
+    context: _URLProcessingContext,
+    acquisition_result,
+) -> None:
     acquisition_result.adapter_records = []
     acquisition_result.adapter_name = None
     acquisition_result.adapter_source_type = None
@@ -611,6 +702,8 @@ async def _extract_records_for_acquisition(
         acquisition_result.adapter_name = adapter_result.adapter_name or None
         acquisition_result.adapter_source_type = adapter_result.source_type or None
 
+
+def _assign_platform_family(acquisition_result) -> None:
     platform_family = detect_platform_family(
         acquisition_result.final_url,
         acquisition_result.html,
@@ -619,12 +712,14 @@ async def _extract_records_for_acquisition(
         platform_family = acquisition_result.adapter_name
     acquisition_result.platform_family = platform_family or None
 
-    fetched.url_metrics = build_url_metrics(
-        acquisition_result,
-        requested_fields=list(context.requested_fields),
-    )
-    selector_rules = await _load_selector_rules(context, acquisition_result.final_url)
-    records = await asyncio.to_thread(
+
+async def _run_record_extraction(
+    context: _URLProcessingContext,
+    *,
+    acquisition_result,
+    selector_rules: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return await asyncio.to_thread(
         extract_records,
         acquisition_result.html,
         acquisition_result.final_url,
@@ -633,11 +728,83 @@ async def _extract_records_for_acquisition(
         requested_fields=list(context.requested_fields),
         adapter_records=acquisition_result.adapter_records,
         network_payloads=acquisition_result.network_payloads,
+        artifacts=acquisition_result.artifacts,
         selector_rules=selector_rules,
         extraction_runtime_snapshot=context.run.settings_view.extraction_runtime_snapshot(),
         content_type=acquisition_result.content_type,
     )
-    return records, selector_rules
+
+
+async def _extract_records_from_preserved_browser_html(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+    *,
+    selector_rules: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    acquisition_result = fetched.acquisition_result
+    browser_diagnostics = _mapping_or_empty(
+        getattr(acquisition_result, "browser_diagnostics", {})
+    )
+    if not bool(browser_diagnostics.get("traversal_activated")):
+        return []
+    artifacts = _mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
+    rendered_html = str(artifacts.get("full_rendered_html") or "").strip()
+    if not rendered_html or rendered_html == str(acquisition_result.html or "").strip():
+        return []
+    fallback_records = await asyncio.to_thread(
+        extract_records,
+        rendered_html,
+        acquisition_result.final_url,
+        context.surface,
+        max_records=context.config.max_records,
+        requested_fields=list(context.requested_fields),
+        adapter_records=acquisition_result.adapter_records,
+        network_payloads=acquisition_result.network_payloads,
+        artifacts=acquisition_result.artifacts,
+        selector_rules=selector_rules,
+        extraction_runtime_snapshot=context.run.settings_view.extraction_runtime_snapshot(),
+        content_type=acquisition_result.content_type,
+    )
+    if not fallback_records:
+        await _log_pipeline_event(
+            context,
+            "warning",
+            "Traversal yielded no extractable listing records; fallback extraction on full rendered HTML also returned 0 records",
+        )
+        _merge_browser_diagnostics(
+            acquisition_result,
+            {
+                "traversal_fallback_used": True,
+                "traversal_fallback_recovered": False,
+                "traversal_fallback_record_count": 0,
+            },
+        )
+        fetched.url_metrics = build_url_metrics(
+            acquisition_result,
+            requested_fields=list(context.requested_fields),
+        )
+        return []
+    artifacts["traversal_composed_html"] = str(acquisition_result.html or "")
+    acquisition_result.artifacts = artifacts
+    acquisition_result.html = rendered_html
+    await _log_pipeline_event(
+        context,
+        "info",
+        f"Traversal yielded 0 extractable records; recovered {len(fallback_records)} record(s) from full rendered HTML",
+    )
+    _merge_browser_diagnostics(
+        acquisition_result,
+        {
+            "traversal_fallback_used": True,
+            "traversal_fallback_recovered": True,
+            "traversal_fallback_record_count": len(fallback_records),
+        },
+    )
+    fetched.url_metrics = build_url_metrics(
+        acquisition_result,
+        requested_fields=list(context.requested_fields),
+    )
+    return fallback_records
 
 
 def _empty_extraction_browser_retry_decision(
@@ -730,7 +897,7 @@ async def _run_persistence_stage(
     )
 
 
-async def _apply_llm_fallback(
+async def apply_llm_fallback(
     session: AsyncSession,
     *,
     run: CrawlRun,
@@ -854,7 +1021,7 @@ async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -
             error_msg,
             exc_info=True,
         )
-        raise
+        return
 
 
 async def _persist_failure_state(

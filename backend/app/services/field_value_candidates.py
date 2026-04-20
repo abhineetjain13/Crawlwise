@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.services.config.extraction_rules import (
+    INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS,
+    INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS,
+)
 from app.services.field_policy import normalize_field_key, normalize_requested_field
 
 from app.services.field_value_core import (
@@ -16,7 +20,7 @@ from app.services.field_value_core import (
     extract_urls,
     text_or_none,
 )
-from app.services.extract.shared_variant_logic import resolve_variants
+from app.services.extract.shared_variant_logic import normalized_variant_axis_key, resolve_variants
 from app.services.normalizers import normalize_decimal_price
 
 
@@ -85,11 +89,19 @@ def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, 
         variant_url = coerce_field_value("url", offer or item, page_url)
         if variant_url not in (None, "", [], {}):
             row["url"] = variant_url
-        option_values = {
-            key: value
-            for key, value in {"color": color, "size": size}.items()
-            if value not in (None, "", [], {})
-        }
+        option_values: dict[str, object] = {}
+        if color:
+            option_values["color"] = color
+        if size:
+            option_values["size"] = size
+        # Schema.org additionalProperty: captures material, style, scent, weight, etc.
+        additional_props = item.get("additionalProperty")
+        if isinstance(additional_props, list):
+            for prop in additional_props:
+                if isinstance(prop, dict) and prop.get("name") and prop.get("value"):
+                    axis_key = normalized_variant_axis_key(prop["name"])
+                    if axis_key:
+                        option_values[axis_key] = str(prop["value"]).strip()
         if option_values:
             row["option_values"] = option_values
         if row:
@@ -121,12 +133,14 @@ def _variant_axes_from_rows(variants: list[dict[str, object]]) -> dict[str, list
     return axes
 
 
-def _looks_like_shopify_price_payload(payload: object) -> bool:
+def _uses_integral_price_payload(payload: object) -> bool:
     if not isinstance(payload, dict):
         return False
+    payload_hint_fields = tuple(str(field) for field in INTEGRAL_PRICE_PAYLOAD_HINT_FIELDS)
+    variant_hint_fields = tuple(str(field) for field in INTEGRAL_PRICE_PAYLOAD_VARIANT_FIELDS)
     if any(
         key in payload
-        for key in ("handle", "body_html", "product_type", "compare_at_price")
+        for key in payload_hint_fields
     ):
         return True
     raw_variants = payload.get("variants")
@@ -135,11 +149,11 @@ def _looks_like_shopify_price_payload(payload: object) -> bool:
             isinstance(variant, dict)
             and any(
                 field in variant
-                for field in ("option1", "compare_at_price", "inventory_quantity")
+                for field in variant_hint_fields
             )
             for variant in raw_variants
         )
-    return any(field in payload for field in ("option1", "compare_at_price", "inventory_quantity"))
+    return any(field in payload for field in variant_hint_fields)
 
 
 def _coerce_structured_candidate_value(
@@ -149,7 +163,7 @@ def _coerce_structured_candidate_value(
     page_url: str,
     payload: object,
 ) -> object | None:
-    if canonical in {"price", "sale_price", "original_price"} and _looks_like_shopify_price_payload(payload):
+    if canonical in {"price", "sale_price", "original_price"} and _uses_integral_price_payload(payload):
         normalized = normalize_decimal_price(
             value,
             interpret_integral_as_cents=True,
@@ -285,9 +299,27 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
     if not values:
         return None
     if field_name in STRUCTURED_OBJECT_FIELDS:
-        return next((value for value in values if isinstance(value, dict)), None)
+        merged: dict[str, object] = {}
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            merged = _deep_merge_structured_dict(merged, value)
+        return merged or None
     if field_name in STRUCTURED_OBJECT_LIST_FIELDS:
-        return next((value for value in values if isinstance(value, list) and value), None)
+        merged_rows: list[dict[str, object]] = []
+        seen_rows: set[str] = set()
+        for value in values:
+            if not isinstance(value, list):
+                continue
+            for row in value:
+                if not isinstance(row, dict):
+                    continue
+                fingerprint = candidate_fingerprint(row)
+                if fingerprint in seen_rows:
+                    continue
+                seen_rows.add(fingerprint)
+                merged_rows.append(row)
+        return merged_rows or None
     if field_name in STRUCTURED_MULTI_FIELDS:
         rows: list[str] = []
         seen: set[str] = set()
@@ -319,6 +351,36 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
             rows.append(text)
         return "\n\n".join(rows) if rows else None
     return values[0]
+
+
+def _deep_merge_structured_dict(
+    base: dict[str, object],
+    incoming: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(base)
+    for key, value in incoming.items():
+        normalized_key = str(key)
+        existing = merged.get(normalized_key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[normalized_key] = _deep_merge_structured_dict(existing, value)
+            continue
+        if isinstance(existing, list) and isinstance(value, list):
+            combined: list[object] = []
+            seen: set[str] = set()
+            for item in [*existing, *value]:
+                fingerprint = candidate_fingerprint(item)
+                if fingerprint in seen:
+                    continue
+                seen.add(fingerprint)
+                combined.append(item)
+            merged[normalized_key] = combined
+            continue
+        if existing in (None, "", [], {}) and value not in (None, "", [], {}):
+            merged[normalized_key] = value
+            continue
+        if normalized_key not in merged:
+            merged[normalized_key] = value
+    return merged
 
 
 def record_score(record: dict[str, Any]) -> int:

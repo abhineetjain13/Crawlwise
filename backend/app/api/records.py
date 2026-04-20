@@ -1,6 +1,7 @@
 # Crawl record and export route handlers.
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from app.core.dependencies import get_current_user, get_db
@@ -49,8 +50,9 @@ async def records_list(
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_DETAIL) from exc
 
     rows, total = await get_run_records(session, run_id, page, limit)
+    serialized_rows = await asyncio.to_thread(serialize_crawl_record_responses, rows)
     return PaginatedResponse(
-        items=serialize_crawl_record_responses(rows),
+        items=serialized_rows,
         meta=PaginationMeta(page=page, limit=limit, total=total),
     )
 

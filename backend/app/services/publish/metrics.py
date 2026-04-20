@@ -70,6 +70,15 @@ def build_url_metrics(
         "traversal_attempted": bool(requested_traversal_mode),
         "traversal_succeeded": progress_events > 0,
         "traversal_fell_back": bool(requested_traversal_mode) and not traversal_activated,
+        "traversal_fallback_used": bool(
+            browser_diagnostics.get("traversal_fallback_used")
+        ),
+        "traversal_fallback_recovered": bool(
+            browser_diagnostics.get("traversal_fallback_recovered")
+        ),
+        "traversal_fallback_record_count": int(
+            browser_diagnostics.get("traversal_fallback_record_count", 0) or 0
+        ),
         "pages_collected": collected_pages,
         "pages_scrolled": pages_advanced,
         "scroll_iterations": int(browser_diagnostics.get("scroll_iterations", 0) or 0),

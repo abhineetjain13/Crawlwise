@@ -25,6 +25,8 @@ from app.services.field_value_core import (
     PRICE_RE,
     RATING_RE,
     REVIEW_COUNT_RE,
+    STRUCTURED_OBJECT_FIELDS,
+    STRUCTURED_OBJECT_LIST_FIELDS,
     clean_text,
     coerce_field_value,
     finalize_record,
@@ -45,6 +47,14 @@ from app.services.field_value_dom import (
 )
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
+from app.services.extract.detail_tiers import (
+    DetailTierState,
+    collect_authoritative_tier,
+    collect_dom_tier,
+    collect_js_state_tier,
+    collect_structured_data_tier,
+    materialize_detail_tier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +121,17 @@ _ECOMMERCE_DETAIL_JS_STATE_FIELDS = frozenset(
         "variants",
     }
 )
+_VARIANT_DOM_FIELD_NAMES = (
+    "available_sizes",
+    "option1_name",
+    "option1_values",
+    "option2_name",
+    "option2_values",
+    "variant_axes",
+    "variant_count",
+    "variants",
+)
+
 
 
 def _field_source_rank(surface: str, field_name: str, source: str | None) -> int:
@@ -401,6 +422,16 @@ def _winning_candidates_for_field(
     )
 
 
+def _merged_structured_field_value(
+    field_name: str,
+    ordered_candidates: list[tuple[str | None, object]],
+) -> object | None:
+    return finalize_candidate_value(
+        field_name,
+        [value for _, value in ordered_candidates],
+    )
+
+
 def _selector_self_heal_config(
     extraction_runtime_snapshot: dict[str, object] | None,
 ) -> dict[str, object]:
@@ -450,12 +481,11 @@ def _materialize_record(
             candidates,
             candidate_sources,
         )
-        winning_values, selected_source = _winning_candidates_for_field(
-            ordered_candidates,
-        )
-        finalized = finalize_candidate_value(
-            field_name,
-            winning_values,
+        winning_values, selected_source = _winning_candidates_for_field(ordered_candidates)
+        finalized = (
+            _merged_structured_field_value(field_name, ordered_candidates)
+            if field_name in STRUCTURED_OBJECT_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS
+            else finalize_candidate_value(field_name, winning_values)
         )
         if finalized not in (None, "", [], {}):
             record[field_name] = finalized
@@ -495,6 +525,8 @@ def _materialize_record(
     return finalize_record(record, surface=surface)
 
 
+
+
 def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
     primary_image = text_or_none(record.get("image_url"))
     raw_additional_images = record.get("additional_images")
@@ -522,6 +554,116 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
         record["additional_images"] = filtered
         return
     record.pop("additional_images", None)
+
+
+def _variant_fields_are_empty(candidates: dict[str, list[object]]) -> bool:
+    return not any(candidates.get(field_name) for field_name in _VARIANT_DOM_FIELD_NAMES)
+
+
+def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
+    option_groups: list[dict[str, object]] = []
+    for select in soup.select(
+        "select[name*='variant' i], select[name*='option' i], "
+        "select[name*='size' i], select[name*='color' i], "
+        "select[id*='variant' i], select[id*='option' i], "
+        "select[id*='size' i], select[id*='color' i], "
+        "select[aria-label*='size' i], select[aria-label*='color' i], "
+        "select[class*='variant' i], select[data-option], select[data-option-name]"
+    )[:4]:
+        raw_name = (
+            select.get("data-option-name")
+            or select.get("aria-label")
+            or select.get("name")
+            or select.get("id")
+            or ""
+        )
+        values = [
+            clean_text(option.get_text(" ", strip=True))
+            for option in select.find_all("option")
+            if clean_text(option.get_text(" ", strip=True))
+            and str(option.get("value") or "").strip().lower() not in {"", "select", "choose"}
+        ]
+        deduped_values = list(dict.fromkeys(values))
+        if len(deduped_values) >= 2:
+            option_groups.append(
+                {
+                    "name": clean_text(str(raw_name).replace("_", " ").replace("-", " ")),
+                    "values": deduped_values,
+                }
+            )
+
+    for container in soup.select(
+        "[data-option-name], [aria-label*='size' i], [aria-label*='color' i], "
+        "[class*='swatch' i], [class*='variant' i], [class*='option' i], "
+        "[data-testid*='swatch' i], [role='radiogroup']"
+    )[:8]:
+        raw_name = (
+            container.get("data-option-name")
+            or container.get("aria-label")
+            or container.get("data-testid")
+            or ""
+        )
+        values: list[str] = []
+        for node in container.select(
+            "[data-value], [data-option-value], [aria-label], button, label, span, input"
+        )[:24]:
+            raw_value = (
+                node.get("data-value")
+                or node.get("data-option-value")
+                or node.get("aria-label")
+                or node.get("value")
+                or node.get_text(" ", strip=True)
+            )
+            cleaned = clean_text(raw_value)
+            lowered = cleaned.lower()
+            if (
+                not cleaned
+                or lowered in {"select", "choose", "option", "size guide"}
+                or len(cleaned) > 60
+            ):
+                continue
+            values.append(cleaned)
+        deduped_values = list(dict.fromkeys(values))
+        if len(deduped_values) >= 2:
+            option_groups.append(
+                {
+                    "name": clean_text(str(raw_name).replace("_", " ").replace("-", " ")),
+                    "values": deduped_values,
+                }
+            )
+
+    deduped_groups: list[dict[str, object]] = []
+    seen_signatures: set[tuple[str, tuple[str, ...]]] = set()
+    for group in option_groups:
+        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
+        if len(values) < 2:
+            continue
+        name = clean_text(group.get("name"))
+        signature = (name.lower(), tuple(value.lower() for value in values))
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        deduped_groups.append({"name": name, "values": values})
+        if len(deduped_groups) >= 2:
+            break
+
+    if not deduped_groups:
+        return {}
+
+    record: dict[str, object] = {"variant_count": sum(len(group["values"]) for group in deduped_groups)}
+    variant_axes: dict[str, list[str]] = {}
+    for index, group in enumerate(deduped_groups, start=1):
+        name = clean_text(group.get("name"))
+        values = list(group.get("values") or [])
+        axis_key = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or f"option{index}"
+        record[f"option{index}_name"] = name or axis_key.replace("_", " ")
+        record[f"option{index}_values"] = values
+        variant_axes[axis_key] = values
+        if axis_key == "size" and not record.get("available_sizes"):
+            record["available_sizes"] = values
+    if variant_axes:
+        record["variant_axes"] = variant_axes
+    return record
 
 
 def _promote_detail_title(
@@ -686,35 +828,7 @@ def build_detail_record(
     field_sources: dict[str, list[str]] = {}
     fields = surface_fields(surface, requested_fields)
     selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
-    completed_tiers: list[str] = []
-
-    for adapter_record in list(adapter_records or []):
-        if isinstance(adapter_record, dict):
-            _collect_record_candidates(
-                adapter_record,
-                page_url=page_url,
-                fields=fields,
-                candidates=candidates,
-                candidate_sources=candidate_sources,
-                field_sources=field_sources,
-                source="adapter",
-            )
-    for mapped_payload in map_network_payloads_to_fields(
-        network_payloads,
-        surface=surface,
-        page_url=page_url,
-    ):
-        _collect_record_candidates(
-            mapped_payload,
-            page_url=page_url,
-            fields=fields,
-            candidates=candidates,
-            candidate_sources=candidate_sources,
-            field_sources=field_sources,
-            source="network_payload",
-        )
-    completed_tiers.append("authoritative")
-    record = _materialize_record(
+    state = DetailTierState(
         page_url=page_url,
         surface=surface,
         requested_fields=requested_fields,
@@ -723,38 +837,38 @@ def build_detail_record(
         candidate_sources=candidate_sources,
         field_sources=field_sources,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
-        tier_name="authoritative",
-        completed_tiers=completed_tiers,
+        completed_tiers=[],
+    )
+    js_state_record = map_js_state_to_fields(
+        harvest_js_state_objects(None, context.cleaned_html),
+        surface=surface,
+        page_url=page_url,
     )
 
-    for source_name, payloads in collect_structured_source_payloads(
-        context,
-        page_url=page_url,
-    ):
-        if source_name == "js_state":
-            continue
-        for payload in payloads:
-            _collect_structured_payload_candidates(
-                payload,
-                alias_lookup=alias_lookup,
-                page_url=page_url,
-                candidates=candidates,
-                candidate_sources=candidate_sources,
-                field_sources=field_sources,
-                source=source_name,
-            )
-    completed_tiers.append("structured_data")
-    record = _materialize_record(
-        page_url=page_url,
-        surface=surface,
-        requested_fields=requested_fields,
-        fields=fields,
-        candidates=candidates,
-        candidate_sources=candidate_sources,
-        field_sources=field_sources,
-        extraction_runtime_snapshot=extraction_runtime_snapshot,
+    collect_authoritative_tier(
+        state,
+        adapter_records=adapter_records,
+        network_payloads=network_payloads,
+        collect_record_candidates=_collect_record_candidates,
+        map_network_payloads_to_fields=map_network_payloads_to_fields,
+    )
+    record = materialize_detail_tier(
+        state,
+        tier_name="authoritative",
+        materialize_record=_materialize_record,
+    )
+
+    collect_structured_data_tier(
+        state,
+        context=context,
+        alias_lookup=alias_lookup,
+        collect_structured_source_payloads=collect_structured_source_payloads,
+        collect_structured_payload_candidates=_collect_structured_payload_candidates,
+    )
+    record = materialize_detail_tier(
+        state,
         tier_name="structured_data",
-        completed_tiers=completed_tiers,
+        materialize_record=_materialize_record,
     )
     if (
         float(record["_confidence"]["score"])
@@ -770,68 +884,36 @@ def build_detail_record(
         record["_extraction_tiers"]["early_exit"] = "structured_data"
         return record
 
-    _collect_record_candidates(
-        map_js_state_to_fields(
-            harvest_js_state_objects(None, context.cleaned_html),
-            surface=surface,
-            page_url=page_url,
-        ),
-        page_url=page_url,
-        fields=fields,
-        candidates=candidates,
-        candidate_sources=candidate_sources,
-        field_sources=field_sources,
-        source="js_state",
+    collect_js_state_tier(
+        state,
+        js_state_record=js_state_record,
+        collect_record_candidates=_collect_record_candidates,
     )
-    completed_tiers.append("js_state")
-    record = _materialize_record(
-        page_url=page_url,
-        surface=surface,
-        requested_fields=requested_fields,
-        fields=fields,
-        candidates=candidates,
-        candidate_sources=candidate_sources,
-        field_sources=field_sources,
-        extraction_runtime_snapshot=extraction_runtime_snapshot,
+    record = materialize_detail_tier(
+        state,
         tier_name="js_state",
-        completed_tiers=completed_tiers,
+        materialize_record=_materialize_record,
     )
 
-    _apply_dom_fallbacks(
-        dom_parser,
-        soup,
-        page_url,
-        surface,
-        requested_fields,
-        candidates,
-        candidate_sources,
-        field_sources,
+    collect_dom_tier(
+        state,
+        dom_parser=dom_parser,
+        soup=soup,
         selector_rules=selector_rules,
+        apply_dom_fallbacks=_apply_dom_fallbacks,
+        extract_variants_from_dom=_extract_variants_from_dom,
+        add_sourced_candidate=_add_sourced_candidate,
     )
-    completed_tiers.append("dom")
-    record = _materialize_record(
-        page_url=page_url,
-        surface=surface,
-        requested_fields=requested_fields,
-        fields=fields,
-        candidates=candidates,
-        candidate_sources=candidate_sources,
-        field_sources=field_sources,
-        extraction_runtime_snapshot=extraction_runtime_snapshot,
+    record = materialize_detail_tier(
+        state,
         tier_name="dom",
-        completed_tiers=completed_tiers,
+        materialize_record=_materialize_record,
     )
     if surface == "ecommerce_detail" and _title_needs_promotion(
         text_or_none(record.get("title")) or "",
         page_url=page_url,
     ):
-        preferred_title = text_or_none(
-            map_js_state_to_fields(
-                harvest_js_state_objects(None, context.cleaned_html),
-                surface=surface,
-                page_url=page_url,
-            ).get("title")
-        )
+        preferred_title = text_or_none(js_state_record.get("title"))
         if preferred_title:
             record["title"] = preferred_title
     record["_extraction_tiers"]["early_exit"] = None

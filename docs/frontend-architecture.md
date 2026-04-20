@@ -1,6 +1,6 @@
 # Frontend Architecture
 
-> Last updated: 2026-04-19
+> Last updated: 2026-04-20
 
 This document describes the live frontend structure, what it actually calls in the backend, and the remaining client/backend drift that should stay visible.
 
@@ -38,6 +38,7 @@ App routes under `frontend/app`:
 - `/runs/[run_id]`
 - `/jobs`
 - `/selectors`
+- `/selectors/manage`
 - `/admin/users`
 - `/admin/llm`
 
@@ -149,7 +150,8 @@ Responsibilities:
 - dashboard metrics and recent runs
 - run history
 - active jobs view
-- selector suggestion/test/save workflow
+- selector picker/test/save workflow
+- domain-memory management across domains and surfaces
 - admin user management
 - LLM provider/config/cost-log management
 
@@ -176,7 +178,7 @@ There is still some API-surface drift and it should remain documented:
 
 - `frontend/lib/api/index.ts` exposes `previewSelectors()` for `/api/review/{run_id}/selector-preview`, but that backend route does not exist.
 - `ReviewPayload` types in the frontend still include `selector_memory` and `selector_suggestions`, while the current backend review response is centered on run, canonical/discovered fields, mapping, and records.
-- The selectors and LLM pages are no longer “missing backend”; older docs claiming that are stale.
+- The main selector UX is no longer LLM-first on `/selectors`; older docs claiming “selectors page missing backend integration” are stale.
 
 ## 6. Current Data Contracts That Matter To Frontend
 
@@ -215,10 +217,11 @@ The frontend has a typed provenance object:
 
 The selectors UI is built on:
 
-- suggestion response grouped by field
-- test response with count and matched value
-- saved selector records scoped by domain/surface
-- preview HTML URL helper
+- selector CRUD records, now queryable across all surfaces for a domain when `surface` is omitted
+- preview HTML loaded into a same-origin iframe so the selector tool can compute XPath directly from the loaded DOM
+- manual test response with count and matched value
+- optional LLM suggestion flow from Crawl Studio field configuration, not from the selector tool page
+- a dedicated `/selectors/manage` domain-memory surface for edit/delete/toggle operations
 
 ### LLM Admin
 
@@ -236,6 +239,7 @@ Frontend tests currently cover:
 - auth session query
 - API client behavior
 - crawl config screen
+- selector helper logic
 - crawl run screen
 - shared crawl helpers
 - run polling

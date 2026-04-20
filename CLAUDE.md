@@ -118,7 +118,9 @@ These landed recently and should be assumed live unless code says otherwise:
 - extruct-backed microdata and Open Graph structured-source support
 - Nuxt `__NUXT_DATA__` revival in structured-source harvesting
 - declarative network payload specs for generic job/ecommerce detail mapping
+- declarative JMESPath-backed JS state mappings for ecommerce detail extraction
 - bounded browser network-payload capture and temp-file screenshot staging
+- browser-captured visual listing geometry fallback for flattened listing grids
 - browser identity generation via `browserforge`
 - URL tracking-parameter stripping in field-value normalization
 - selector self-heal with domain-memory persistence/reuse

@@ -53,14 +53,16 @@ class PlatformConfig(BaseModel):
     readiness_selectors: list[str] = Field(default_factory=list)
     readiness_max_wait_ms: int = 0
     network_signature_patterns: list[str] = Field(default_factory=list)
+    path_tenant_boundary: bool = False
     js_state_extractors: list["JSStateExtractorConfig"] = Field(default_factory=list)
 
 
 class JSStateExtractorConfig(BaseModel):
     surface: str
-    state_key: str
-    root_paths: list[list[str]] = Field(default_factory=list)
+    state_keys: list[str] = Field(default_factory=list)
+    root_paths: dict[str, list[list[str]]] = Field(default_factory=dict)
     field_paths: dict[str, list[list[str]]] = Field(default_factory=dict)
+    field_jmespaths: dict[str, str | list[str]] = Field(default_factory=dict)
 
 
 class PlatformRegistryDocument(BaseModel):
@@ -219,10 +221,10 @@ def platform_js_state_extractors(
     extractors: list[JSStateExtractorConfig] = []
     for config in platform_configs():
         for extractor in config.js_state_extractors:
-            if (
-                str(extractor.surface or "").strip().lower() == normalized_surface
-                and str(extractor.state_key or "").strip() == normalized_state_key
-            ):
+            if str(extractor.surface or "").strip().lower() != normalized_surface:
+                continue
+            extractor_state_keys = [str(k or "").strip() for k in extractor.state_keys]
+            if normalized_state_key in extractor_state_keys:
                 extractors.append(extractor)
     return extractors
 
@@ -339,6 +341,23 @@ def url_host_matches_platform_family(url: str | None, family: str | None) -> boo
     return any(_matches_domain(host, pattern) for pattern in platform_domain_patterns(family))
 
 
+def requires_path_tenant_boundary_for_family(family: str | None) -> bool:
+    config = platform_config_for_family(family)
+    return bool(config.path_tenant_boundary) if config is not None else False
+
+
+def requires_path_tenant_boundary(url: str | None) -> bool:
+    family = detect_platform_family(str(url or ""))
+    return requires_path_tenant_boundary_for_family(family)
+
+
+def path_tenant_boundary_family(url: str | None) -> str | None:
+    family = detect_platform_family(str(url or ""))
+    if not requires_path_tenant_boundary_for_family(family):
+        return None
+    return family
+
+
 def resolve_listing_readiness_override(url: str) -> dict[str, Any] | None:
     family = resolve_listing_readiness_platform(url)
     config = platform_config_for_family(family)
@@ -363,19 +382,28 @@ def resolve_listing_readiness_override(url: str) -> dict[str, Any] | None:
 def resolve_browser_readiness_policy(
     url: str,
     *,
+    surface: str | None = None,
     traversal_active: bool = False,
 ) -> dict[str, Any]:
     listing_override = resolve_listing_readiness_override(url)
+    normalized_surface = str(surface or "").strip().lower()
+    detail_surface = normalized_surface.endswith("_detail")
     if traversal_active:
         networkidle_reason = "traversal"
     elif listing_override is not None:
         networkidle_reason = "platform-readiness"
+    elif detail_surface:
+        networkidle_reason = "detail-surface"
     else:
         networkidle_reason = None
+    require_networkidle = bool(
+        listing_override is not None or traversal_active or detail_surface
+    )
     return {
         "listing_override": listing_override,
-        "require_networkidle": bool(listing_override is not None or traversal_active),
+        "require_networkidle": require_networkidle,
         "networkidle_reason": networkidle_reason,
+        "navigation_wait_until": "networkidle" if require_networkidle else "domcontentloaded",
     }
 
 

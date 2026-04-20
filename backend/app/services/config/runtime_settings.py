@@ -128,11 +128,13 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_navigation_load_timeout_ms: int = 15000
     browser_navigation_domcontentloaded_timeout_ms: int = 15000
     browser_navigation_optimistic_wait_ms: int = 3000
+    browser_spa_implicit_networkidle_timeout_ms: int = 6000
     browser_navigation_min_commit_wait_ms: int = 8000
     browser_navigation_min_final_commit_timeout_ms: int = 15000
     browser_capture_max_network_payloads: int = 25
     browser_capture_max_network_payload_bytes: int = 3000000
     browser_capture_total_network_payload_bytes: int = 12000000
+    browser_capture_queue_join_timeout_ms: int = 2000
     browser_readiness_visible_text_min: int = 120
     interruptible_wait_poll_ms: int = 250
     cooperative_sleep_poll_ms: int = 250
@@ -152,6 +154,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     traversal_max_iterations_cap: int = 50
     traversal_fragment_max_bytes: int = 200000
     traversal_min_settle_wait_ms: int = 500
+    traversal_settle_networkidle_timeout_ms: int = 4000
     traversal_weak_progress_streak_max: int = 2
     traversal_active_scrollable_threshold_px: int = 150
     traversal_active_scrollable_bonus: int = 10
@@ -231,6 +234,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("browser_capture_max_network_payload_bytes must be > 0")
         if self.browser_capture_total_network_payload_bytes <= 0:
             raise ValueError("browser_capture_total_network_payload_bytes must be > 0")
+        if self.browser_capture_queue_join_timeout_ms <= 0:
+            raise ValueError("browser_capture_queue_join_timeout_ms must be > 0")
         if (
             self.browser_capture_total_network_payload_bytes
             < self.browser_capture_max_network_payload_bytes

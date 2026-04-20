@@ -10,7 +10,7 @@ class LLMRuntimeSettings(BaseSettings):
 
     model_config = _settings_config(env_prefix="CRAWLER_LLM_")
 
-    html_snippet_max_chars: int = 12000
+    html_snippet_max_chars: int = 40000
     existing_values_max_chars: int = 2400
     candidate_evidence_max_chars: int = 16000
     discovered_sources_max_chars: int = 15000
@@ -31,6 +31,10 @@ class LLMRuntimeSettings(BaseSettings):
     prompt_compact_leaf_string_max_chars: int = 220
     html_anchor_min_length: int = 3
     schema_field_name_max_length: int = 40
+    html_prune_stripped_tags: str = "script,style,svg,noscript,iframe,nav,footer,header,aside,form,button,input,select,textarea"
+    html_prune_preserved_script_types: str = "application/ld+json,application/json"
+    html_prune_preserved_attrs: str = "id,class,data-testid,data-test,data-qa,data-sku,data-product-id,data-price,data-availability,itemprop,itemtype,itemscope,itemref,aria-label,aria-labelledby,role,name,type,content,property,href,src,alt,title,value,data-component,data-section,data-field"
+    html_prune_preserved_script_ids: str = "__NEXT_DATA__"
     groq_max_tokens: int = 1200
     groq_temperature: float = 0.1
     anthropic_max_tokens: int = 3000

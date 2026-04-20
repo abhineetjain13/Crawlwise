@@ -20,6 +20,10 @@ _PRODUCT_SIGNATURE: frozenset[str] = frozenset({"price", "sku", "name", "descrip
 _JOB_SIGNATURE: frozenset[str] = frozenset({"title", "description", "location", "company", "apply_url", "posted_date", "employment_type", "salary", "department", "qualifications", "responsibilities", "benefits", "remote", "date_posted", "datePosted", "applyUrl", "job_type", "content", "absolute_url", "company_name"})
 
 _SIGNATURE_MIN_MATCH = 3
+_GHOST_ROUTE_COMPATIBLE_SURFACES = {
+    "ecommerce_detail",
+    "job_detail",
+}
 
 
 def map_network_payloads_to_fields(
@@ -42,7 +46,11 @@ def map_network_payloads_to_fields(
             if mapped:
                 rows.append(mapped)
                 continue
-        ghost_mapped = _ghost_route_payload(body, page_url=page_url)
+        ghost_mapped = _ghost_route_payload(
+            body,
+            surface=normalized_surface,
+            page_url=page_url,
+        )
         if ghost_mapped:
             rows.append(ghost_mapped)
     return rows
@@ -221,10 +229,21 @@ def _infer_surface_from_body(body: object) -> str | None:
 def _ghost_route_payload(
     body: object,
     *,
+    surface: str,
     page_url: str,
 ) -> dict[str, Any] | None:
     inferred_surface = _infer_surface_from_body(body)
     if not inferred_surface:
+        return None
+    normalized_surface = str(surface or "").strip().lower()
+    if (
+        normalized_surface in _GHOST_ROUTE_COMPATIBLE_SURFACES
+        and inferred_surface != normalized_surface
+    ):
+        return None
+    if _looks_like_navigation_payload(body):
+        return None
+    if not _has_detail_anchor(body, inferred_surface=inferred_surface, page_url=page_url):
         return None
     alias_lookup = surface_alias_lookup(inferred_surface, None)
     candidates: dict[str, list[object]] = {}
@@ -247,6 +266,82 @@ def _matches_signature(
     depth: int = 2,
 ) -> bool:
     return isinstance(body, dict) and len(_collect_keys(body, limit=depth) & signature) >= _SIGNATURE_MIN_MATCH
+
+
+def _looks_like_navigation_payload(body: object) -> bool:
+    if not isinstance(body, dict):
+        return False
+    keys = {str(key or "").strip().lower() for key in _collect_keys(body)}
+    if not keys:
+        return False
+    navigation_hits = len(
+        keys
+        & {
+            "children",
+            "footer",
+            "href",
+            "items",
+            "label",
+            "links",
+            "menu",
+            "menus",
+            "navigation",
+            "slug",
+        }
+    )
+    if navigation_hits < 3:
+        return False
+    return not _has_minimum_descriptive_text(body)
+
+
+def _has_minimum_descriptive_text(body: object) -> bool:
+    samples: list[str] = []
+
+    def _walk(value: object, *, depth: int = 0) -> None:
+        if depth > 2 or len(samples) >= 8:
+            return
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if len(cleaned) >= 24 and " " in cleaned:
+                samples.append(cleaned)
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                _walk(item, depth=depth + 1)
+            return
+        if isinstance(value, list):
+            for item in value[:8]:
+                _walk(item, depth=depth + 1)
+
+    _walk(body)
+    return bool(samples)
+
+
+def _has_detail_anchor(
+    body: object,
+    *,
+    inferred_surface: str,
+    page_url: str,
+) -> bool:
+    if not isinstance(body, dict):
+        return False
+    alias_lookup = surface_alias_lookup(inferred_surface, None)
+    candidates: dict[str, list[object]] = {}
+    collect_structured_candidates(body, alias_lookup, page_url, candidates)
+    title = finalize_candidate_value("title", candidates.get("title", []))
+    url = finalize_candidate_value("url", candidates.get("url", []))
+    if inferred_surface == "ecommerce_detail":
+        price = finalize_candidate_value("price", candidates.get("price", []))
+        sku = finalize_candidate_value("sku", candidates.get("sku", []))
+        brand = finalize_candidate_value("brand", candidates.get("brand", []))
+        return bool(title and price and (sku or brand or url))
+    if inferred_surface == "job_detail":
+        company = finalize_candidate_value("company", candidates.get("company", []))
+        location = finalize_candidate_value("location", candidates.get("location", []))
+        apply_url = finalize_candidate_value("apply_url", candidates.get("apply_url", []))
+        description = finalize_candidate_value("description", candidates.get("description", []))
+        return bool(title and (company or location) and (apply_url or url or description))
+    return bool(title and url)
 
 
 def _finalize_detail_result(result: dict[str, Any]) -> dict[str, Any]:

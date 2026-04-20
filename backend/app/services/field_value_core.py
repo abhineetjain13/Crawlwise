@@ -41,6 +41,10 @@ STRUCTURED_MULTI_FIELDS = {
 }
 STRUCTURED_OBJECT_FIELDS = {"product_attributes", "selected_variant", "variant_axes"}
 STRUCTURED_OBJECT_LIST_FIELDS = {"variants"}
+# Price-like fields: string values must contain at least one digit to be valid
+_PRICE_FIELD_NAMES = {"price", "sale_price", "original_price", "discount_amount"}
+# Integer-only fields: string values like "out_of_stock" should be nulled
+_INTEGER_FIELD_NAMES = {"stock_quantity", "variant_count", "image_count"}
 LONG_TEXT_FIELDS = {
     "benefits",
     "care",
@@ -334,6 +338,18 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             value,
             keys=(field_name, "name", "title", "label", "value", "text"),
         )
+    # Reject non-numeric sentinel strings for price fields (e.g. "unavailable", "contact us")
+    if field_name in _PRICE_FIELD_NAMES and isinstance(value, str):
+        text = coerce_text(value)
+        if text and not re.search(r"\d", text):
+            return None
+        return text or None
+    # Reject non-numeric sentinel strings for integer fields (e.g. "out_of_stock")
+    if field_name in _INTEGER_FIELD_NAMES and isinstance(value, str):
+        text = coerce_text(value)
+        if text and not re.search(r"\d", text):
+            return None
+        return text or None
     if field_name in {"price", "sale_price", "original_price", "discount_amount"} and isinstance(value, dict):
         for key in (
             "price",
@@ -408,3 +424,69 @@ def finalize_record(
     cleaned = clean_record(record)
     cleaned = strip_record_tracking_params(cleaned, surface=surface)
     return normalize_record_fields(cleaned) if normalize_fields else cleaned
+
+
+# ---------------------------------------------------------------------------
+# Output schema validation
+# ---------------------------------------------------------------------------
+
+# Defines the allowed Python type names for key fields per surface.
+# Used by validate_and_clean() to catch type-mismatched values after extraction.
+_OUTPUT_SCHEMAS: dict[str, dict[str, frozenset[str]]] = {
+    "ecommerce_detail": {
+        "price": frozenset({"str", "NoneType"}),
+        "sale_price": frozenset({"str", "NoneType"}),
+        "original_price": frozenset({"str", "NoneType"}),
+        "variants": frozenset({"list", "NoneType"}),
+        "stock_quantity": frozenset({"int", "str", "NoneType"}),
+        "image_url": frozenset({"str", "NoneType"}),
+        "additional_images": frozenset({"list", "NoneType"}),
+    },
+    "job_detail": {
+        "salary": frozenset({"str", "NoneType"}),
+        "salary_range": frozenset({"dict", "str", "NoneType"}),
+    },
+}
+
+
+def validate_and_clean(
+    record: dict[str, Any],
+    surface: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate a post-extraction record against the surface output schema.
+
+    Fields whose type does not match the expected schema are nullified so they
+    are dropped by the downstream ``clean_record`` pass.  Returns a
+    ``(cleaned_record, errors)`` tuple where *errors* is a list of human-readable
+    messages describing each violation found.
+
+    Example usage::
+
+        cleaned, errors = validate_and_clean(record, "ecommerce_detail")
+        if errors:
+            logger.warning("Schema violations: %s", errors)
+        record = clean_record(cleaned)
+    """
+    normalized_surface = str(surface or "").strip().lower()
+    schema = _OUTPUT_SCHEMAS.get(normalized_surface, {})
+    if not schema:
+        return dict(record), []
+    errors: list[str] = []
+    cleaned: dict[str, Any] = {}
+    for field_name, value in record.items():
+        if field_name not in schema:
+            continue
+        if value in (None, "", [], {}):
+            cleaned[field_name] = value
+            continue
+        expected_types = schema[field_name]
+        actual_type = type(value).__name__
+        if actual_type not in expected_types:
+            errors.append(
+                f"{field_name}: expected one of {sorted(expected_types)}, "
+                f"got {actual_type!r} (value={str(value)[:60]!r})"
+            )
+            cleaned[field_name] = None  # Nullify so clean_record drops it
+        else:
+            cleaned[field_name] = value
+    return cleaned, errors

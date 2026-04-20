@@ -118,7 +118,7 @@ class GreenhouseAdapter(BaseAdapter):
             )
             if not isinstance(data, dict):
                 return []
-        except Exception:
+        except (ConnectionError, TimeoutError, ValueError, RuntimeError):
             return []
 
         jobs = data.get("jobs", [])
@@ -159,7 +159,7 @@ class GreenhouseAdapter(BaseAdapter):
                 api_url,
                 timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
             )
-        except Exception:
+        except (OSError, TimeoutError, ValueError, RuntimeError):
             return None
         if not isinstance(data, dict):
             return None

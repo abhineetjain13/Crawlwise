@@ -39,7 +39,8 @@ const navGroups = [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/crawl", label: "Crawl Studio", icon: Globe },
       { href: "/runs", label: "History", icon: History },
-      { href: "/selectors", label: "Selector Tool", icon: Search },
+      { href: "/selectors", label: "Selector Tool", icon: Search, exactMatch: true },
+      { href: "/selectors/manage", label: "Domain Memory", icon: Search },
       { href: "/jobs", label: "Jobs", icon: Activity },
     ],
   },
@@ -53,11 +54,22 @@ const navGroups = [
 ] as const satisfies ReadonlyArray<{
   label: string;
   items: ReadonlyArray<{
-    href: Route;
+    href: string;
     label: string;
     icon: ComponentType<{ className?: string }>;
+    exactMatch?: boolean;
   }>;
 }>;
+
+function isNavItemActive(
+  pathname: string,
+  item: (typeof navGroups)[number]["items"][number],
+): boolean {
+  if ("exactMatch" in item && item.exactMatch) {
+    return pathname === item.href;
+  }
+  return pathname === item.href || pathname.startsWith(`${item.href}/`);
+}
 
 const authTickerRows = [
   { domain: "shop.nike.com", records: "2,847 records", time: "just now" },
@@ -272,12 +284,12 @@ function Sidebar({ pathname }: Readonly<{ pathname: string }>) {
             {!collapsed && <p className="app-sidebar-group-label">{group.label}</p>}
             <div className="space-y-1">
               {group.items.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const active = isNavItemActive(pathname, item);
                 const Icon = item.icon;
                 return (
                   <Link
                     key={item.href}
-                    href={item.href}
+                    href={item.href as Route}
                     title={collapsed ? item.label : undefined}
                     className={cn("app-nav-item", active && "is-active", collapsed && "is-collapsed")}
                   >
@@ -409,12 +421,12 @@ function MobileNav({
               <p className="app-sidebar-group-label">{group.label}</p>
               <div className="space-y-1">
                 {group.items.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  const active = isNavItemActive(pathname, item);
                   const Icon = item.icon;
                   return (
                     <Link
                       key={item.href}
-                      href={item.href}
+                      href={item.href as Route}
                       onClick={onClose}
                       className={cn("app-nav-item", active && "is-active")}
                     >
@@ -446,6 +458,7 @@ function getFallbackHeader(pathname: string): TopBarState {
   if (pathname.startsWith("/crawl")) return { title: "Crawl Studio", description: "Configure sources, run jobs, and monitor execution." };
   if (pathname.startsWith("/runs/")) return { title: "Run Details", description: "Inspect a crawl run, logs, and extracted output." };
   if (pathname.startsWith("/runs")) return { title: "Run History", description: "Review and manage previously submitted crawls." };
+  if (pathname.startsWith("/selectors/manage")) return { title: "Domain Memory", description: "Manage saved selector memory by domain and surface." };
   if (pathname.startsWith("/selectors")) return { title: "Selector Tool", description: "Suggest, test, and validate field selectors." };
   if (pathname.startsWith("/admin/users")) return { title: "Users", description: "Manage workspace access and roles." };
   if (pathname.startsWith("/admin/llm")) return { title: "LLM Config", description: "Control provider settings and prompts." };

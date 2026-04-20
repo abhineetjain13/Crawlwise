@@ -16,7 +16,7 @@ from app.services.crawl_state import (
 )
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls_async
 from app.services.domain_utils import normalize_domain
-from app.services.pipeline.core import _mark_run_failed, _process_single_url
+from app.services.pipeline.core import _mark_run_failed, process_single_url
 from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE, log_event, set_stage
 from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
 from app.services.publish import VERDICT_ERROR, _aggregate_verdict
@@ -152,7 +152,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             try:
                 url_result = _ensure_url_processing_result(
                     await asyncio.wait_for(
-                        _process_single_url(
+                        process_single_url(
                             session=session,
                             run=run,
                             url=url,

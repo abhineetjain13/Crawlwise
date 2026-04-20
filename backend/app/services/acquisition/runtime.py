@@ -18,14 +18,13 @@ from app.services.field_value_core import clean_text
 from app.services.network_resolution import (
     address_family_preference,
     build_async_http_client,
-    should_retry_with_forced_ipv4,
 )
 from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
 
 logger = logging.getLogger(__name__)
 
-_SHARED_HTTP_CLIENTS: dict[tuple[str | None, str, bool], httpx.AsyncClient] = {}
+_SHARED_HTTP_CLIENTS: dict[tuple[str | None, str], httpx.AsyncClient] = {}
 _SHARED_HTTP_CLIENT_LOCK = asyncio.Lock()
 
 
@@ -315,10 +314,9 @@ async def should_escalate_to_browser_async(
 async def get_shared_http_client(
     *,
     proxy: str | None = None,
-    force_ipv4: bool = False,
 ) -> httpx.AsyncClient:
     family_preference = address_family_preference()
-    key = (str(proxy or "").strip() or None, family_preference, bool(force_ipv4))
+    key = (str(proxy or "").strip() or None, family_preference)
     client = _SHARED_HTTP_CLIENTS.get(key)
     if client is not None and not client.is_closed:
         return client
@@ -333,7 +331,6 @@ async def get_shared_http_client(
                     max_keepalive_connections=settings.http_max_keepalive_connections,
                 ),
                 proxy=key[0],
-                force_ipv4=bool(force_ipv4),
             )
             _SHARED_HTTP_CLIENTS[key] = client
         return client
@@ -358,22 +355,7 @@ async def http_fetch(
     blocked_html_checker=is_blocked_html_async,
 ) -> PageFetchResult:
     client = await get_client(proxy=proxy)
-    try:
-        response = await client.get(url, timeout=timeout_seconds)
-    except Exception as exc:
-        if not should_retry_with_forced_ipv4(exc):
-            raise
-        async with client_builder(
-            follow_redirects=True,
-            timeout=settings.http_timeout_seconds,
-            limits=httpx.Limits(
-                max_connections=settings.http_max_connections,
-                max_keepalive_connections=settings.http_max_keepalive_connections,
-            ),
-            proxy=proxy,
-            force_ipv4=True,
-        ) as retry_client:
-            response = await retry_client.get(url, timeout=timeout_seconds)
+    response = await client.get(url, timeout=timeout_seconds)
     html = response.text or ""
     headers = copy_headers(response.headers)
     vendor = classify_block_from_headers(headers)

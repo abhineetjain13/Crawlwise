@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -48,6 +49,7 @@ def extract_records(
     requested_fields: list[str] | None = None,
     adapter_records: list[dict] | None = None,
     network_payloads: list[dict[str, object]] | None = None,
+    artifacts: dict[str, object] | None = None,
     selector_rules: list[dict[str, object]] | None = None,
     extraction_runtime_snapshot: dict[str, object] | None = None,
     content_type: str | None = None,
@@ -86,6 +88,7 @@ def extract_records(
             page_url,
             surface,
             max_records=max_records,
+            artifacts=artifacts,
             selector_rules=selector_rules,
         )
     return extract_detail_records(
@@ -98,6 +101,36 @@ def extract_records(
         selector_rules=selector_rules,
         extraction_runtime_snapshot=extraction_runtime_snapshot,
     )[:max_records]
+
+
+async def extract_records_async(
+    html: str,
+    page_url: str,
+    surface: str,
+    *,
+    max_records: int,
+    requested_fields: list[str] | None = None,
+    adapter_records: list[dict] | None = None,
+    network_payloads: list[dict[str, object]] | None = None,
+    artifacts: dict[str, object] | None = None,
+    selector_rules: list[dict[str, object]] | None = None,
+    extraction_runtime_snapshot: dict[str, object] | None = None,
+    content_type: str | None = None,
+) -> list[dict]:
+    return await asyncio.to_thread(
+        extract_records,
+        html,
+        page_url,
+        surface,
+        max_records=max_records,
+        requested_fields=requested_fields,
+        adapter_records=adapter_records,
+        network_payloads=network_payloads,
+        artifacts=artifacts,
+        selector_rules=selector_rules,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        content_type=content_type,
+    )
 
 
 def _extract_raw_json_records(

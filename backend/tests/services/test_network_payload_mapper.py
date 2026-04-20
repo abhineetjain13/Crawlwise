@@ -395,3 +395,35 @@ def test_ghost_route_works_on_surface_with_no_specs() -> None:
     )
     assert len(rows) >= 1
     assert rows[0].get("title") == "Unconfigured Surface Product"
+
+
+def test_ghost_route_rejects_navigation_payloads_with_price_like_noise() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://example.com/api/menu",
+                "endpoint_type": "generic_json",
+                "body": {
+                    "menu": {
+                        "items": [
+                            {
+                                "label": "Sale",
+                                "href": "/sale",
+                                "price": "19.99",
+                            },
+                            {
+                                "label": "New In",
+                                "href": "/new-in",
+                                "price": "29.99",
+                            },
+                        ]
+                    },
+                    "footer": {"links": [{"label": "Contact", "href": "/contact"}]},
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://example.com/products/widget",
+    )
+
+    assert rows == []

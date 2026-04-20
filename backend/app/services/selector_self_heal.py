@@ -7,7 +7,7 @@ from bs4.element import Comment, NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRun
-from app.services.extraction_runtime import extract_records
+from app.services.extraction_runtime import extract_records_async
 from app.services.domain_memory_service import (
     load_domain_memory,
     save_domain_memory,
@@ -21,7 +21,17 @@ from app.services.xpath_service import extract_selector_value, validate_or_conve
 
 _SELECTOR_SYNTHESIS_MAX_HTML_CHARS = 200_000
 _SELECTOR_SYNTHESIS_ALLOWED_ATTRS = frozenset(
-    {"class", "id", "data-testid", "itemprop", "name", "aria-label", "href"}
+    {
+        "aria-label",
+        "class",
+        "data-testid",
+        "href",
+        "id",
+        "itemprop",
+        "name",
+        "shadowrootmode",
+        "slot",
+    }
 )
 _SELECTOR_SYNTHESIS_DROP_TAGS = frozenset({"script", "style", "noscript", "svg"})
 _SELECTOR_SYNTHESIS_LOW_VALUE_TAGS = frozenset(
@@ -36,7 +46,6 @@ _SELECTOR_SYNTHESIS_LOW_VALUE_TAGS = frozenset(
         "textarea",
         "iframe",
         "canvas",
-        "template",
     }
 )
 
@@ -101,6 +110,8 @@ def _append_reduced_node(
     if not isinstance(node, Tag):
         return 0
     if node.name in _SELECTOR_SYNTHESIS_LOW_VALUE_TAGS:
+        return 0
+    if node.name == "template" and not node.has_attr("shadowrootmode"):
         return 0
     serialized = str(node)
     if len(serialized) <= budget:
@@ -251,7 +262,7 @@ async def apply_selector_self_heal(
             updated_records.append(next_record)
             continue
         candidate_rules = _merge_selector_rules(current_rules, synthesized_rules)
-        rerun_records = extract_records(
+        rerun_records = await extract_records_async(
             html,
             page_url,
             run.surface,

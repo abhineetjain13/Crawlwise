@@ -19,6 +19,78 @@ def _js_shell_html() -> str:
     """
 
 
+def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="grid-shell">
+          <a href="/products/widget-prime"></a>
+          <img src="/images/widget-prime.jpg" alt="Widget Prime">
+          <h2>Widget Prime</h2>
+          <div>$19.99</div>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "/products/widget-prime",
+                    "x": 20,
+                    "y": 40,
+                    "width": 180,
+                    "height": 180,
+                    "text": "",
+                },
+                {
+                    "tag": "img",
+                    "src": "/images/widget-prime.jpg",
+                    "alt": "Widget Prime",
+                    "x": 20,
+                    "y": 40,
+                    "width": 180,
+                    "height": 140,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Widget Prime",
+                    "x": 24,
+                    "y": 190,
+                    "width": 170,
+                    "height": 24,
+                },
+                {
+                    "tag": "div",
+                    "text": "$19.99",
+                    "x": 24,
+                    "y": 220,
+                    "width": 80,
+                    "height": 24,
+                },
+            ]
+        },
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/collections/widgets",
+            "_source": "visual_listing",
+            "title": "Widget Prime",
+            "price": "19.99",
+            "image_url": "https://example.com/images/widget-prime.jpg",
+            "url": "https://example.com/products/widget-prime",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_fetch_page_uses_browser_after_js_shell_detection(
     monkeypatch: pytest.MonkeyPatch,

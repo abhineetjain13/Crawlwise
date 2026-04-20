@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -25,6 +26,8 @@ _LEVEL_ORDER = {
 _URL_PROGRESS_PATTERN = re.compile(r"^Processing URL \d+/\d+: ")
 _COUNTER_TTL_SECONDS = 86400
 _REDIS_KEY_PREFIX = "crawl:events"
+_DETACHED_LOG_WRITE_CONCURRENCY = 8
+_DETACHED_LOG_WRITE_SEMAPHORE = asyncio.Semaphore(_DETACHED_LOG_WRITE_CONCURRENCY)
 
 
 def clear_url_progress_counter(run_id: int) -> None:
@@ -223,41 +226,42 @@ async def append_log_event(
         await session.flush()
         return serialize_log_event(row)
 
-    async with SessionLocal() as new_session:
-        try:
-            new_session.add(row)
-            await new_session.flush()
-            await new_session.commit()
-            await new_session.refresh(row)
-            return serialize_log_event(row)
-        except IntegrityError:
-            await new_session.rollback()
-            logger.debug(
-                "Skipping persisted crawl log because run_id=%s is not yet visible to the detached session",
-                run_id,
-                exc_info=True,
-            )
-            return {
-                "id": None,
-                "run_id": run_id,
-                "level": normalized_level,
-                "message": formatted_message,
-                "created_at": created_at.isoformat(),
-            }
-        except Exception:
-            await new_session.rollback()
-            logger.debug(
-                "Skipping detached crawl log persistence for run_id=%s after transient session failure",
-                run_id,
-                exc_info=True,
-            )
-            return {
-                "id": None,
-                "run_id": run_id,
-                "level": normalized_level,
-                "message": formatted_message,
-                "created_at": created_at.isoformat(),
-            }
+    async with _DETACHED_LOG_WRITE_SEMAPHORE:
+        async with SessionLocal() as new_session:
+            try:
+                new_session.add(row)
+                await new_session.flush()
+                await new_session.commit()
+                await new_session.refresh(row)
+                return serialize_log_event(row)
+            except IntegrityError:
+                await new_session.rollback()
+                logger.debug(
+                    "Skipping persisted crawl log because run_id=%s is not yet visible to the detached session",
+                    run_id,
+                    exc_info=True,
+                )
+                return {
+                    "id": None,
+                    "run_id": run_id,
+                    "level": normalized_level,
+                    "message": formatted_message,
+                    "created_at": created_at.isoformat(),
+                }
+            except Exception:
+                await new_session.rollback()
+                logger.debug(
+                    "Skipping detached crawl log persistence for run_id=%s after transient session failure",
+                    run_id,
+                    exc_info=True,
+                )
+                return {
+                    "id": None,
+                    "run_id": run_id,
+                    "level": normalized_level,
+                    "message": formatted_message,
+                    "created_at": created_at.isoformat(),
+                }
 
 
 async def persist_run_summary_patch(
