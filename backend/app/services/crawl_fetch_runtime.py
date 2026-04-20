@@ -110,6 +110,7 @@ async def _browser_fetch(
     traversal_mode: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = 1,
+    on_event=None,
 ) -> PageFetchResult:
     return await browser_fetch(
         url,
@@ -120,6 +121,7 @@ async def _browser_fetch(
         traversal_mode=traversal_mode,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
+        on_event=on_event,
         runtime_provider=get_browser_runtime,
         proxied_page_factory=temporary_browser_page,
         blocked_html_checker=_is_blocked_html_async,
@@ -204,6 +206,7 @@ async def fetch_page(
     traversal_mode: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = 1,
+    on_event=None,
 ) -> PageFetchResult:
     resolved_timeout = float(timeout_seconds or settings.http_timeout_seconds)
     runtime_policy = resolve_platform_runtime_policy(url, surface=surface)
@@ -246,6 +249,7 @@ async def fetch_page(
                     traversal_mode=traversal_mode,
                     max_pages=max_pages,
                     max_scrolls=max_scrolls,
+                    on_event=on_event,
                 )
                 _remember_browser_host_if_good(browser_result)
                 return browser_result
@@ -311,6 +315,7 @@ async def fetch_page(
                         traversal_mode=traversal_mode,
                         max_pages=max_pages,
                         max_scrolls=max_scrolls,
+                        on_event=on_event,
                     )
                     _remember_browser_host_if_good(browser_result)
                     return browser_result
@@ -356,6 +361,7 @@ async def fetch_page(
                     traversal_mode=traversal_mode,
                     max_pages=max_pages,
                     max_scrolls=max_scrolls,
+                    on_event=on_event,
                 )
                 _remember_browser_host_if_good(browser_result)
                 return browser_result

@@ -154,6 +154,14 @@
       "network_signature_patterns": ["shopify", "product.js", "/cart.js"]
     },
     {
+      "family": "myntra",
+      "domain_patterns": ["myntra.com"],
+      "html_contains": ["window.__myx", "product-base", "results-base"],
+      "adapter_names": ["myntra"],
+      "job_platform": false,
+      "requires_browser": false
+    },
+    {
       "family": "nextjs",
       "network_signature_patterns": ["__next", "_next/data"]
     },

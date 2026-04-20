@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
-from app.services.field_value_utils import clean_text
+from app.services.field_value_core import clean_text
 
 _LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2})?$", re.IGNORECASE)
 

@@ -167,6 +167,23 @@ def surface_alias_lookup(
     return lookup
 
 
+def direct_record_to_surface_fields(
+    record: dict[str, Any],
+    *,
+    surface: str,
+    page_url: str,
+    requested_fields: list[str] | None = None,
+    base_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    shaped = dict(base_fields or {})
+    source_fields = surface_fields(surface, requested_fields)
+    for field_name in source_fields:
+        value = coerce_field_value(field_name, dict(record or {}).get(field_name), page_url)
+        if value not in (None, "", [], {}):
+            shaped[field_name] = value
+    return finalize_record(shaped, surface=surface)
+
+
 def coerce_text(value: object) -> str | None:
     if isinstance(value, str):
         if "<" in value or "&" in value:
@@ -175,6 +192,29 @@ def coerce_text(value: object) -> str | None:
             )
         return text_or_none(value)
     return text_or_none(value)
+
+
+def coerce_structured_scalar(
+    value: object,
+    *,
+    keys: tuple[str, ...],
+) -> str | None:
+    if isinstance(value, dict):
+        for key in keys:
+            candidate = value.get(key)
+            if candidate in (None, "", [], {}):
+                continue
+            text = coerce_structured_scalar(candidate, keys=keys)
+            if text:
+                return text
+        return None
+    if isinstance(value, list):
+        for item in value:
+            text = coerce_structured_scalar(item, keys=keys)
+            if text:
+                return text
+        return None
+    return coerce_text(value)
 
 
 def coerce_location(value: object) -> str | None:
@@ -288,6 +328,11 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             or value.get("title")
             or value.get("slug")
             or value.get("value")
+        )
+    if field_name in {"color", "size"}:
+        return coerce_structured_scalar(
+            value,
+            keys=(field_name, "name", "title", "label", "value", "text"),
         )
     if field_name in {"price", "sale_price", "original_price", "discount_amount"} and isinstance(value, dict):
         for key in (

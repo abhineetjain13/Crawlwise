@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from bs4 import BeautifulSoup
+from app.services.config.extraction_rules import HYDRATED_STATE_PATTERNS
 from app.services.script_text_extractor import (
     extract_script_text_by_id,
     find_first_script_text_matching,
@@ -26,13 +27,6 @@ _STATE_SCRIPT_IDS = {
     "__next_data__": "__NEXT_DATA__",
     "__nuxt_data__": "__NUXT_DATA__",
 }
-_ASSIGNMENT_STATE_PATTERNS = (
-    "__NUXT__",
-    "__APOLLO_STATE__",
-    "__INITIAL_STATE__",
-    "__PRELOADED_STATE__",
-    "__remixContext",
-)
 _EMBEDDED_ASSIGNMENT_NAMES = (
     "data",
     "items",
@@ -226,7 +220,8 @@ def parse_embedded_json(soup: BeautifulSoup, html: str) -> list[dict[str, Any]]:
     return rows
 
 
-def harvest_js_state_objects(soup: BeautifulSoup, html: str) -> dict[str, Any]:
+def harvest_js_state_objects(soup: BeautifulSoup | None, html: str) -> dict[str, Any]:
+    del soup
     state_objects: dict[str, Any] = {}
     for node_id, state_name in _STATE_SCRIPT_IDS.items():
         raw = extract_script_text_by_id(html, node_id)
@@ -240,11 +235,20 @@ def harvest_js_state_objects(soup: BeautifulSoup, html: str) -> dict[str, Any]:
             payload = _revive_nuxt_data_payload(payload)
         state_objects[state_name] = payload
 
-    for state_name in _ASSIGNMENT_STATE_PATTERNS:
+    for state_name in _assignment_state_patterns():
         payload = _extract_assignment_payload(html, state_name)
         if payload is not None:
             state_objects[state_name] = payload
     return state_objects
+
+
+def _assignment_state_patterns() -> tuple[str, ...]:
+    values = []
+    for value in list(HYDRATED_STATE_PATTERNS or []):
+        normalized = str(value or "").strip()
+        if normalized:
+            values.append(normalized)
+    return tuple(dict.fromkeys(values))
 
 
 def _extract_assignment_payload(html: str, state_name: str) -> Any | None:
@@ -378,7 +382,7 @@ def _microdata_node_value(node: Any, page_url: str) -> object:
         value = node.get(attribute)
         if value not in (None, ""):
             if attribute in {"href", "src"}:
-                from app.services.field_value_utils import absolute_url
+                from app.services.field_value_core import absolute_url
 
                 return absolute_url(page_url, value)
             return str(value).strip()

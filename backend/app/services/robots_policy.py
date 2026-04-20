@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -41,17 +42,23 @@ class _RobotsSnapshot:
     error: str | None = None
 
 
+_INIT_LOCK = threading.Lock()
+
 def _get_lock() -> asyncio.Lock:
     global _ROBOTS_CACHE_LOCK
     if _ROBOTS_CACHE_LOCK is None:
-        _ROBOTS_CACHE_LOCK = asyncio.Lock()
+        with _INIT_LOCK:
+            if _ROBOTS_CACHE_LOCK is None:
+                _ROBOTS_CACHE_LOCK = asyncio.Lock()
     return _ROBOTS_CACHE_LOCK
 
 
 def _get_inflight() -> dict[str, asyncio.Task["_RobotsSnapshot"]]:
     global _ROBOTS_INFLIGHT_FETCHES
     if _ROBOTS_INFLIGHT_FETCHES is None:
-        _ROBOTS_INFLIGHT_FETCHES = {}
+        with _INIT_LOCK:
+            if _ROBOTS_INFLIGHT_FETCHES is None:
+                _ROBOTS_INFLIGHT_FETCHES = {}
     return _ROBOTS_INFLIGHT_FETCHES
 
 

@@ -4,15 +4,23 @@ import json
 from typing import Any
 
 from app.services.detail_extractor import extract_detail_records
-from app.services.field_value_utils import (
+from app.services.field_value_core import (
+    ALL_CANONICAL_FIELDS,
     absolute_url,
     clean_text,
-    collect_structured_candidates,
     coerce_text,
-    finalize_candidate_value,
+    direct_record_to_surface_fields,
     finalize_record,
     surface_alias_lookup,
     surface_fields,
+)
+from app.services.field_value_candidates import (
+    collect_structured_candidates,
+    finalize_candidate_value,
+)
+from app.services.field_policy import (
+    canonical_fields_for_surface,
+    normalize_field_key,
 )
 from app.services.listing_extractor import extract_listing_records
 
@@ -56,18 +64,23 @@ def extract_records(
         return json_records[:max_records]
     if "listing" in surface:
         if adapter_records:
-            return [
-                {
-                    **{
-                        key: value
-                        for key, value in dict(record).items()
-                        if value not in (None, "", [], {})
+            rows: list[dict[str, Any]] = []
+            for record in list(adapter_records or [])[:max_records]:
+                if not isinstance(record, dict):
+                    continue
+                shaped = direct_record_to_surface_fields(
+                    record,
+                    surface=surface,
+                    page_url=page_url,
+                    requested_fields=requested_fields,
+                    base_fields={
+                        "source_url": page_url,
+                        "_source": str(record.get("_source") or "adapter"),
                     },
-                    "_source": str(record.get("_source") or "adapter"),
-                }
-                for record in list(adapter_records or [])[:max_records]
-                if isinstance(record, dict)
-            ]
+                )
+                if shaped.get("title") and shaped.get("url"):
+                    rows.append(shaped)
+            return rows
         return extract_listing_records(
             html,
             page_url,
@@ -142,22 +155,46 @@ def _parse_raw_json_payload(text: str, *, content_type: str | None) -> object | 
         return None
 
 
+_MIN_FIELD_OVERLAP_RATIO = 0.25
+_MIN_FIELD_OVERLAP_ABSOLUTE = 2
+
+
+def _has_surface_field_overlap(items: list[object], *, surface: str) -> bool:
+    canonical = set(canonical_fields_for_surface(surface))
+    if not canonical:
+        return True
+    dict_items = [item for item in items[:20] if isinstance(item, dict) and item]
+    if not dict_items:
+        return True
+    matching = 0
+    for item in dict_items:
+        item_keys = {normalize_field_key(k) for k in item if k}
+        if item_keys & canonical:
+            matching += 1
+    ratio = matching / len(dict_items) if dict_items else 0
+    return ratio >= _MIN_FIELD_OVERLAP_RATIO and matching >= _MIN_FIELD_OVERLAP_ABSOLUTE
+
+
 def _raw_json_items(payload: object, *, surface: str) -> list[object]:
     is_listing_surface = "listing" in str(surface or "").lower()
     if isinstance(payload, list):
+        if is_listing_surface and not _has_surface_field_overlap(payload, surface=surface):
+            return []
         return list(payload)
     if not isinstance(payload, dict):
         return [] if is_listing_surface else [payload]
     for key in _JSON_LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list) and value:
+            if is_listing_surface and not _has_surface_field_overlap(value, surface=surface):
+                continue
             return value
     if is_listing_surface:
-        return _best_nested_listing_items(payload)
+        return _best_nested_listing_items(payload, surface=surface)
     return [payload]
 
 
-def _best_nested_listing_items(payload: object, *, depth: int = 0) -> list[object]:
+def _best_nested_listing_items(payload: object, *, depth: int = 0, surface: str = "") -> list[object]:
     if depth > 6:
         return []
     candidates: list[tuple[int, list[object]]] = []
@@ -168,19 +205,22 @@ def _best_nested_listing_items(payload: object, *, depth: int = 0) -> list[objec
                 if score > 0:
                     candidates.append((score, value))
                 for item in value[:10]:
-                    nested = _best_nested_listing_items(item, depth=depth + 1)
+                    nested = _best_nested_listing_items(item, depth=depth + 1, surface=surface)
                     if nested:
                         candidates.append((_listing_items_score("nested", nested), nested))
             elif isinstance(value, dict):
-                nested = _best_nested_listing_items(value, depth=depth + 1)
+                nested = _best_nested_listing_items(value, depth=depth + 1, surface=surface)
                 if nested:
                     candidates.append((_listing_items_score(key, nested), nested))
     elif isinstance(payload, list):
         score = _listing_items_score("list", payload)
         if score > 0:
+            if surface and not _has_surface_field_overlap(payload, surface=surface):
+                score = 0
+        if score > 0:
             candidates.append((score, payload))
         for item in payload[:10]:
-            nested = _best_nested_listing_items(item, depth=depth + 1)
+            nested = _best_nested_listing_items(item, depth=depth + 1, surface=surface)
             if nested:
                 candidates.append((_listing_items_score("nested", nested), nested))
     if not candidates:

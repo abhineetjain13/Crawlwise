@@ -260,7 +260,7 @@ async def test_process_single_url_persists_detail_records_after_self_heal_and_ll
             "price": "19.99",
         }
     ]
-    assert run.summary_dict()["current_stage"] == "SAVE"
+    assert run.summary_dict()["current_stage"] == "PERSIST"
     assert total == 1
     assert rows[0].data == {"title": "Widget Prime (self-healed)", "price": "19.99"}
     assert rows[0].raw_html_path == "artifacts/widget-prime.html"
@@ -338,6 +338,63 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
     assert result.url_metrics["method"] == "browser"
     assert total == 1
     assert rows[0].data["title"] == "Widget Prime"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_keeps_platform_family_separate_from_adapter_provenance(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widget-prime.html"
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.detect_platform_family", lambda *args, **kwargs: "shopify")
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [{"title": "Widget Prime", "_source": "extraction"}],
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
+    )
+
+    result = await _process_single_url(db_session, run, run.url)
+
+    assert result.url_metrics["adapter_name"] is None
+    assert result.url_metrics["platform_family"] == "shopify"
 
 
 @pytest.mark.asyncio
@@ -642,6 +699,71 @@ async def test_process_single_url_does_not_retry_browser_after_empty_browser_acq
 
 
 @pytest.mark.asyncio
+async def test_process_single_url_ignores_extracted_placeholder_records_from_low_content_browser_page(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/for-sale/mixer-truck",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><head><title>JavaScript is disabled</title></head><body><h1>JavaScript is disabled</h1></body></html>",
+            method="browser",
+            status_code=200,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "browser_reason": "http-escalation",
+                "browser_outcome": "low_content_shell",
+            },
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [{"title": "JavaScript is disabled", "_source": "extraction"}],
+    )
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/mixer-truck.html"
+
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
+    )
+
+    result = await _process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert result.records == []
+    assert result.verdict == "empty"
+    assert result.url_metrics["browser_outcome"] == "low_content_shell"
+    assert total == 0
+    assert rows == []
+
+
+@pytest.mark.asyncio
 async def test_process_single_url_does_not_retry_browser_after_prior_challenge_attempt(
     db_session: AsyncSession,
     test_user,
@@ -759,8 +881,149 @@ async def test_process_single_url_raises_when_browser_retry_fails(
     assert len(acquire_calls) == 2
     assert [log.message for log in logs] == [
         "[ROBOTS] Ignoring robots.txt for https://example.com/category/widgets",
-        "[FETCH] Fetching https://example.com/category/widgets",
-        "[EXTRACT] No records via curl_cffi; retrying browser render for https://example.com/category/widgets",
-        "[EXTRACT] Browser retry failed for https://example.com/category/widgets: TimeoutError: browser retry timed out",
+        "Acquired payload via curl_cffi (status=200)",
+        "Extraction yielded 0 records (adapter: generic)",
+        "No records via curl_cffi; retrying browser render for https://example.com/category/widgets",
+        "Browser retry failed for https://example.com/category/widgets: TimeoutError: browser retry timed out",
     ]
     assert len(diagnostics_files) == 0
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_persists_live_acquisition_events(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+
+    async def _fake_acquire(request):
+        assert request.on_event is not None
+        await request.on_event("info", "Detected listing layout, pagination: scroll")
+        await request.on_event("info", "Scroll 1/3 - 24 -> 48 records")
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>browser</body></html>",
+            method="browser",
+            status_code=200,
+            browser_diagnostics={"browser_attempted": True},
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [{"title": "Widget Prime"}],
+    )
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widgets.html"
+
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
+    )
+
+    await _process_single_url(db_session, run, run.url)
+    logs = await get_run_logs(db_session, run.id)
+
+    assert [log.message for log in logs] == [
+        "[ROBOTS] Ignoring robots.txt for https://example.com/category/widgets",
+        "Detected listing layout, pagination: scroll",
+        "Scroll 1/3 - 24 -> 48 records",
+        "Extracted 1 records using generic adapter",
+        "Normalized 1 record(s) for persistence",
+        "Persisted 1 record(s) for https://example.com/category/widgets",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_extract_records_for_acquisition_keeps_adapter_fields_empty_when_no_adapter_matches(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.pipeline.core import (
+        _FetchedURLStage,
+        _URLProcessingContext,
+        _extract_records_for_acquisition,
+    )
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    context = _URLProcessingContext.build(
+        session=db_session,
+        run=run,
+        url=run.url,
+        config=URLProcessingConfig(),
+    )
+    acquisition = AcquisitionResult(
+        request=AcquisitionRequest(
+            run_id=run.id,
+            url=run.url,
+            plan=AcquisitionPlan(surface="ecommerce_listing"),
+        ),
+        final_url=run.url,
+        html="""
+        <html>
+          <body>
+            <article class="product-card">
+              <a href="/products/widget-prime">
+                <h2>Widget Prime</h2>
+              </a>
+            </article>
+          </body>
+        </html>
+        """,
+        method="browser",
+        status_code=200,
+    )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+
+    fetched = _FetchedURLStage(
+        context=context,
+        acquisition_result=acquisition,
+        url_metrics={},
+    )
+    records, _selector_rules = await _extract_records_for_acquisition(context, fetched)
+
+    assert records
+    assert acquisition.adapter_name is None
+    assert acquisition.adapter_source_type is None

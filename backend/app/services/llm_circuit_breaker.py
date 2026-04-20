@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -45,11 +46,18 @@ class LLMErrorCategory(StrEnum):
     RATE_LIMITED = "rate_limited"
     TIMEOUT = "timeout"
     AUTH_FAILURE = "auth_failure"
+    CLIENT_ERROR = "client_error"
     PROVIDER_ERROR = "provider_error"
     PARSE_FAILURE = "parse_failure"
     VALIDATION_FAILURE = "validation_failure"
     CIRCUIT_OPEN = "circuit_open"
     MISSING_CONFIG = "missing_config"
+
+
+_DETERMINISTIC_CLIENT_ERROR_CODES = frozenset({
+    "400", "402", "405", "406", "409", "410", "411", "413", "414",
+    "415", "416", "417", "418", "421", "422", "424", "426", "428", "431",
+})
 
 
 def classify_error(raw: str) -> LLMErrorCategory:
@@ -67,6 +75,11 @@ def classify_error(raw: str) -> LLMErrorCategory:
         or "forbidden" in lowered
     ):
         return LLMErrorCategory.AUTH_FAILURE
+    if raw.startswith(ERROR_PREFIX) and any(
+        re.search(r"\b" + re.escape(code) + r"\b", raw)
+        for code in _DETERMINISTIC_CLIENT_ERROR_CODES
+    ):
+        return LLMErrorCategory.CLIENT_ERROR
     if raw.startswith(ERROR_PREFIX):
         return LLMErrorCategory.PROVIDER_ERROR
     return LLMErrorCategory.NONE

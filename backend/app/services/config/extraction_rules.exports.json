@@ -5674,6 +5674,7 @@
       "__NUXT__",
       "__APOLLO_STATE__",
       "__PRELOADED_STATE__",
+      "__remixContext",
       "__INITIAL_PROPS__",
       "__DATA__",
       "__myx",

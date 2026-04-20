@@ -59,3 +59,14 @@ async def test_record_failure_normalizes_none_threshold_for_redis(
     )
 
     assert seen_args[6] == llm_circuit_breaker.DEFAULT_CIRCUIT_FAILURE_THRESHOLD
+
+
+def test_classify_error_uses_whole_status_code_matches() -> None:
+    assert (
+        llm_circuit_breaker.classify_error("Error: upstream returned 400 bad request")
+        == llm_circuit_breaker.LLMErrorCategory.CLIENT_ERROR
+    )
+    assert (
+        llm_circuit_breaker.classify_error("Error: provider code 14003")
+        == llm_circuit_breaker.LLMErrorCategory.PROVIDER_ERROR
+    )

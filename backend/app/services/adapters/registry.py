@@ -13,6 +13,7 @@ from app.services.adapters.icims import ICIMSAdapter
 from app.services.adapters.indeed import IndeedAdapter
 from app.services.adapters.jibe import JibeAdapter
 from app.services.adapters.linkedin import LinkedInAdapter
+from app.services.adapters.myntra import MyntraAdapter
 from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.paycom import PaycomAdapter
 from app.services.adapters.remoteok import RemoteOkAdapter
@@ -41,6 +42,7 @@ _ADAPTER_FACTORIES: dict[str, type[BaseAdapter]] = {
     "jibe": JibeAdapter,
     "indeed": IndeedAdapter,
     "linkedin": LinkedInAdapter,
+    "myntra": MyntraAdapter,
     "greenhouse": GreenhouseAdapter,
     "remotive": RemotiveAdapter,
     "remoteok": RemoteOkAdapter,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import regex as regex_lib
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from bs4 import BeautifulSoup, Tag
 from lxml import etree
@@ -38,6 +38,38 @@ _NON_PRIMARY_IMAGE_SECTION_HINTS = tuple(
         or ()
     )
 )
+_CDN_IMAGE_QUERY_PARAMS = frozenset(
+    {
+        "width",
+        "w",
+        "height",
+        "h",
+        "quality",
+        "q",
+        "dpr",
+        "fit",
+        "crop",
+        "format",
+        "fm",
+        "auto",
+    }
+)
+_CROSS_LINK_CONTAINER_HINTS = (
+    "carousel",
+    "cross-sell",
+    "crosssell",
+    "grid",
+    "related",
+    "recommend",
+    "similar",
+    "slider",
+    "upsell",
+    "widget",
+)
+_CDN_IMAGE_PATH_SUFFIX_RE = regex_lib.compile(
+    r"_(?:\d+x\d+|pico|icon|thumb|small|compact|medium|large|grande|original)(?=\.[a-z0-9]+$)",
+    regex_lib.I,
+)
 
 
 def _srcset_urls(value: object) -> list[str]:
@@ -67,6 +99,64 @@ def _looks_like_image_asset_url(url: str) -> bool:
         return True
     query = parsed.query
     return "format=" in query or "fm=" in query
+
+
+def _canonical_image_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    filtered_query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if str(key or "").strip().lower() not in _CDN_IMAGE_QUERY_PARAMS
+    ]
+    normalized_path = _CDN_IMAGE_PATH_SUFFIX_RE.sub("", parsed.path or "")
+    return urlunparse(
+        parsed._replace(
+            path=normalized_path,
+            query=urlencode(filtered_query, doseq=True),
+            fragment="",
+        )
+    ).lower()
+
+
+def _image_candidate_score(url: str) -> tuple[int, int, int]:
+    parsed = urlparse(str(url or "").strip())
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    numeric_params = {
+        str(key or "").strip().lower(): str(value or "").strip()
+        for key, value in query_pairs
+    }
+
+    def _int_param(*names: str) -> int:
+        for name in names:
+            try:
+                return int(numeric_params.get(name, "0") or "0")
+            except ValueError:
+                continue
+        return 0
+
+    width = _int_param("width", "w")
+    height = _int_param("height", "h")
+    area = width * height if width and height else max(width, height)
+    return (area, width, height)
+
+
+def _dedupe_image_urls(urls: list[str]) -> list[str]:
+    best_by_key: dict[str, tuple[tuple[int, int, int], int, str]] = {}
+    order: list[str] = []
+    for index, url in enumerate(urls):
+        canonical = _canonical_image_url(url)
+        if not canonical:
+            continue
+        score = _image_candidate_score(url)
+        current = best_by_key.get(canonical)
+        if current is None:
+            best_by_key[canonical] = (score, index, url)
+            order.append(canonical)
+            continue
+        current_score, current_index, current_url = current
+        if score > current_score or (score == current_score and index < current_index):
+            best_by_key[canonical] = (score, current_index, url if score > current_score else current_url)
+    return [best_by_key[key][2] for key in order]
 
 
 def _node_attr_text(node: Tag, *, max_depth: int = 6) -> str:
@@ -106,6 +196,7 @@ def _is_other_detail_link(
     page_url: str,
     *,
     surface: str | None = None,
+    link_node: Tag | None = None,
 ) -> bool:
     candidate = clean_text(url)
     if not candidate:
@@ -115,15 +206,33 @@ def _is_other_detail_link(
         return False
     page_parts = urlparse(page_url)
     candidate_parts = urlparse(candidate)
-    if (
-        (page_parts.hostname or "").lower() == (candidate_parts.hostname or "").lower()
-        and (page_parts.path.rstrip("/") or "/") == (candidate_parts.path.rstrip("/") or "/")
-    ):
+    same_host = (page_parts.hostname or "").lower() == (candidate_parts.hostname or "").lower()
+    same_path = (page_parts.path.rstrip("/") or "/") == (candidate_parts.path.rstrip("/") or "/")
+    if same_host and same_path:
         return False
+    is_detail_surface = "detail" in str(surface or "").lower()
     path = (candidate_parts.path or "").lower()
     if any(path.endswith(ext) for ext in _PAGE_FILE_EXTENSIONS):
         return True
-    return any(marker in path for marker in detail_path_hints(surface))
+    if any(marker in path for marker in detail_path_hints(surface)):
+        return True
+    if is_detail_surface and same_host and not same_path:
+        return True
+    if link_node is not None and _is_in_cross_link_container(link_node):
+        return True
+    return False
+
+
+def _is_in_cross_link_container(node: Tag, *, max_depth: int = 6) -> bool:
+    current: Tag | None = node
+    depth = 0
+    while isinstance(current, Tag) and depth < max_depth:
+        context = _node_attr_text(current)
+        if any(hint in context for hint in _CROSS_LINK_CONTAINER_HINTS):
+            return True
+        current = current.parent
+        depth += 1
+    return False
 
 
 def safe_select(root: BeautifulSoup | Tag, selector: str) -> list[Tag]:
@@ -290,7 +399,6 @@ def extract_page_images(
     surface: str | None = None,
 ) -> list[str]:
     values: list[str] = []
-    seen: set[str] = set()
     for node in root.find_all("img"):
         if _is_non_primary_image_context(node):
             continue
@@ -300,6 +408,7 @@ def extract_page_images(
                 absolute_url(page_url, link.get("href")),
                 page_url,
                 surface=surface,
+                link_node=link,
             ):
                 continue
         candidate = absolute_url(
@@ -325,11 +434,8 @@ def extract_page_images(
             )
         ):
             continue
-        if lowered in seen:
-            continue
-        seen.add(lowered)
         values.append(candidate)
-    return values[:12]
+    return _dedupe_image_urls(values)[:12]
 
 
 def extract_label_value_pairs(root: BeautifulSoup | Tag) -> list[tuple[str, str]]:

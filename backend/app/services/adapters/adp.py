@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.field_value_utils import clean_text
+from app.services.field_value_core import clean_text
 
 
 def _text(node: object, *, separator: str = "") -> str:

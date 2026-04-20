@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from app.models.crawl import CrawlLog
 
-STAGE_FETCH = "FETCH"
-STAGE_ANALYZE = "ANALYZE"
-STAGE_SAVE = "SAVE"
+STAGE_ACQUIRE = "ACQUIRE"
+STAGE_EXTRACT = "EXTRACT"
+STAGE_NORMALIZE = "NORMALIZE"
+STAGE_PERSIST = "PERSIST"
 
 
 async def log_event(session, run_id: int | None, level: str, message: str) -> None:

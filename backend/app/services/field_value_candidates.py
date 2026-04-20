@@ -16,6 +16,7 @@ from app.services.field_value_core import (
     extract_urls,
     text_or_none,
 )
+from app.services.extract.shared_variant_logic import resolve_variants
 from app.services.normalizers import normalize_decimal_price
 
 
@@ -52,6 +53,7 @@ def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, 
             continue
         offer = item.get("offers")
         offer = offer[0] if isinstance(offer, list) and offer else offer
+        availability_source = offer if isinstance(offer, dict) else item.get("availability")
         row: dict[str, object] = {}
         sku = coerce_text(item.get("sku"))
         if sku:
@@ -62,16 +64,16 @@ def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, 
         title = coerce_text(item.get("name"))
         if title:
             row["title"] = title
-        color = coerce_text(item.get("color"))
+        color = coerce_field_value("color", item.get("color"), page_url)
         if color:
             row["color"] = color
-        size = coerce_text(item.get("size"))
+        size = coerce_field_value("size", item.get("size"), page_url)
         if size:
             row["size"] = size
         price = coerce_field_value("price", offer or item, page_url)
         if price not in (None, "", [], {}):
             row["price"] = price
-        availability = coerce_field_value("availability", offer or item, page_url)
+        availability = coerce_field_value("availability", availability_source, page_url)
         if availability not in (None, "", [], {}):
             row["availability"] = availability
         image_url = coerce_field_value("image_url", item.get("image"), page_url)
@@ -235,18 +237,19 @@ def collect_structured_candidates(
             add_candidate(candidates, "rating", coerce_field_value("rating", aggregate, page_url))
             add_candidate(candidates, "review_count", coerce_field_value("review_count", aggregate, page_url))
             add_candidate(candidates, "category", coerce_text(payload.get("category")))
-            add_candidate(candidates, "color", coerce_text(payload.get("color")))
-            add_candidate(candidates, "size", coerce_text(payload.get("size")))
+            add_candidate(candidates, "color", coerce_field_value("color", payload.get("color"), page_url))
+            add_candidate(candidates, "size", coerce_field_value("size", payload.get("size"), page_url))
             add_candidate(candidates, "materials", coerce_text(payload.get("material")))
             if images:
                 add_candidate(candidates, "image_url", images[0])
                 add_candidate(candidates, "additional_images", images[1:])
             variants = _structured_variant_rows(payload.get("hasVariant"), page_url)
             if variants:
-                add_candidate(candidates, "variants", variants)
                 axes = _variant_axes_from_rows(variants)
                 if axes:
+                    variants = resolve_variants(axes, variants)
                     add_candidate(candidates, "variant_axes", axes)
+                add_candidate(candidates, "variants", variants)
                 add_candidate(candidates, "selected_variant", variants[0])
                 add_candidate(candidates, "variant_count", len(variants))
         if "jobposting" in normalized_type:
@@ -296,6 +299,8 @@ def finalize_candidate_value(field_name: str, values: list[object]) -> object | 
                     continue
                 seen.add(lowered)
                 rows.append(text)
+        if field_name == "additional_images":
+            return rows or None
         return ", ".join(rows) if rows else None
     if field_name in LONG_TEXT_FIELDS:
         rows: list[str] = []

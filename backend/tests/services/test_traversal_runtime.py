@@ -5,7 +5,12 @@ from typing import Any
 
 import pytest
 
-from app.services.acquisition.traversal import execute_listing_traversal
+from app.services.acquisition.traversal import (
+    TraversalResult,
+    _dismiss_overlays_if_needed,
+    count_listing_cards,
+    execute_listing_traversal,
+)
 from app.services.config.selectors import CARD_SELECTORS, PAGINATION_SELECTORS
 
 
@@ -69,6 +74,22 @@ class _FakeLocator:
         return {}
 
 
+class _EmptyRoleLocator:
+    async def count(self) -> int:
+        return 0
+
+    def nth(self, index: int) -> "_EmptyRoleLocator":
+        del index
+        return self
+
+    async def is_visible(self, timeout: int | None = None) -> bool:
+        del timeout
+        return False
+
+    async def is_disabled(self) -> bool:
+        return False
+
+
 class _FakePage:
     def __init__(
         self,
@@ -93,6 +114,10 @@ class _FakePage:
 
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator(self, selector)
+
+    def get_by_role(self, role: str, name: object = None) -> _EmptyRoleLocator:
+        del role, name
+        return _EmptyRoleLocator()
 
     async def evaluate(self, script: str) -> Any:
         if "scrollTo({" in script:
@@ -121,6 +146,37 @@ class _FakePage:
         self.url = url
         self.page_index = min(self.page_index + 1, len(self.paginated_states) - 1)
         self.state = self.paginated_states[self.page_index]
+
+
+class _OverlayTestLocator:
+    def __init__(self) -> None:
+        self.evaluate_calls: list[str] = []
+
+    async def evaluate(self, script: str) -> int:
+        self.evaluate_calls.append(script)
+        return 1
+
+
+class _OverlayTestPage:
+    def locator(self, selector: str) -> "_OverlayCookieLocator":
+        del selector
+        return _OverlayCookieLocator()
+
+    async def wait_for_timeout(self, timeout_ms: int) -> None:
+        del timeout_ms
+
+
+class _OverlayCookieLocator:
+    @property
+    def first(self) -> "_OverlayCookieLocator":
+        return self
+
+    async def count(self) -> int:
+        return 0
+
+    async def is_visible(self, timeout: int | None = None) -> bool:
+        del timeout
+        return False
 
 
 def _selector_group(selector: str) -> str:
@@ -490,3 +546,200 @@ async def test_auto_traversal_chooses_scroll_from_page_signals() -> None:
         "<div>jobs</div>",
         "<div>jobs more</div>",
     ]
+
+
+@pytest.mark.asyncio
+async def test_scroll_traversal_emits_live_events() -> None:
+    emitted: list[tuple[str, str]] = []
+    page = _FakePage(
+        surface="job_listing",
+        initial_state=_State(
+            html="<div>jobs</div>",
+            card_count=2,
+            scroll_height=2500,
+            client_height=600,
+            controls=set(),
+        ),
+        scroll_states=[
+            _State(html="<div>jobs</div>", card_count=2, scroll_height=2500, client_height=600, controls=set()),
+            _State(html="<div>jobs more</div>", card_count=6, scroll_height=3400, client_height=600, controls=set()),
+            _State(html="<div>jobs done</div>", card_count=6, scroll_height=3400, client_height=600, controls=set()),
+        ],
+    )
+
+    async def _on_event(level: str, message: str) -> None:
+        emitted.append((level, message))
+
+    await execute_listing_traversal(
+        page,
+        surface="job_listing",
+        traversal_mode="scroll",
+        max_pages=2,
+        max_scrolls=3,
+        on_event=_on_event,
+    )
+
+    assert emitted[:2] == [
+        ("info", "Detected listing layout, pagination: scroll"),
+        ("info", "Scroll 1/3 - 2 -> 6 records"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_paginate_traversal_detects_cycle_on_redirect_loop() -> None:
+    """If a ?page=999 redirects back to ?page=1, the crawler must stop
+    instead of infinite-looping until max_pages is hit."""
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1200,
+            controls={"next_page"},
+            next_href="https://example.com/listing?page=2",
+        ),
+        paginated_states=[
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+            ),
+            # Server redirects ?page=2 back to ?page=1 (cycle)
+            _State(
+                html="<div>page-1</div>",
+                card_count=2,
+                scroll_height=1200,
+                controls={"next_page"},
+                next_href="https://example.com/listing?page=2",
+            ),
+        ],
+    )
+    # Simulate the redirect: goto sets url to ?page=2 but the fake page
+    # state ends up identical to page-1.  Override url after goto to
+    # simulate server-side redirect back to page-1.
+    original_goto = page.goto
+    async def _redirect_goto(url, **kw):
+        await original_goto(url, **kw)
+        page.url = "https://example.com/listing"  # redirected back
+    page.goto = _redirect_goto
+
+    result = await execute_listing_traversal(
+        page,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        max_pages=5,
+        max_scrolls=1,
+    )
+
+    assert result.stop_reason == "paginate_cycle_detected"
+    assert result.pages_advanced == 0
+
+
+@pytest.mark.asyncio
+async def test_is_same_origin_blocks_cross_tenant_paths() -> None:
+    """Pagination must not bleed across path-based multi-tenant boundaries."""
+    from app.services.acquisition.traversal import _is_same_origin
+
+    assert _is_same_origin(
+        "https://myworkdayjobs.com/TenantA/jobs?page=1",
+        "https://myworkdayjobs.com/TenantA/jobs?page=2",
+    )
+    assert not _is_same_origin(
+        "https://myworkdayjobs.com/TenantA/jobs?page=1",
+        "https://myworkdayjobs.com/TenantB/jobs?page=1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_same_origin_allows_same_tenant_different_pages() -> None:
+    from app.services.acquisition.traversal import _is_same_origin
+
+    assert _is_same_origin(
+        "https://example.com/listing?page=1",
+        "https://example.com/listing?page=2",
+    )
+    assert not _is_same_origin(
+        "https://example.com/listing?page=1",
+        "https://other.com/listing?page=2",
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_same_origin_allows_same_host_path_changes_outside_tenant_hosts() -> None:
+    from app.services.acquisition.traversal import _is_same_origin
+
+    assert _is_same_origin(
+        "https://example.com/careers?page=1",
+        "https://example.com/jobs?page=2",
+    )
+
+
+@pytest.mark.asyncio
+async def test_dismiss_overlays_targets_interceptors_not_structural_tags() -> None:
+    page = _OverlayTestPage()
+    locator = _OverlayTestLocator()
+    result = TraversalResult(requested_mode="paginate")
+
+    await _dismiss_overlays_if_needed(page, locator=locator, result=result)
+
+    assert result.overlays_dismissed is True
+    assert locator.evaluate_calls
+    script = locator.evaluate_calls[0]
+    assert "elementsFromPoint" in script
+    assert "const tags = ['header', 'footer', 'nav']" not in script
+
+
+@pytest.mark.asyncio
+async def test_count_listing_cards_uses_myntra_card_selector() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="""
+            <ul class="results-base">
+              <li class="product-base"><a href="/a">A</a></li>
+              <li class="product-base"><a href="/b">B</a></li>
+              <li class="product-base"><a href="/c">C</a></li>
+            </ul>
+            """,
+            card_count=3,
+            scroll_height=1200,
+            controls=set(),
+        ),
+    )
+
+    count = await count_listing_cards(page, surface="ecommerce_listing")
+
+    assert count == 3
+
+
+@pytest.mark.asyncio
+async def test_count_listing_cards_does_not_fallback_to_heuristics_when_selectors_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ZeroLocator:
+        async def count(self) -> int:
+            return 0
+
+    class _SelectorPage:
+        def locator(self, selector: str) -> _ZeroLocator:
+            del selector
+            return _ZeroLocator()
+
+        async def evaluate(self, script: str, selectors: list[str] | None = None) -> int:
+            del selectors
+            if "querySelectorAll(selector).length" in script:
+                return 0
+            if "const positive =" in script:
+                return 7
+            return 0
+
+    monkeypatch.setattr(
+        "app.services.acquisition.traversal.CARD_SELECTORS",
+        {"ecommerce": [".product-card"], "jobs": [".job-card"]},
+    )
+
+    count = await count_listing_cards(_SelectorPage(), surface="ecommerce_listing")
+
+    assert count == 0

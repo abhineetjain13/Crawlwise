@@ -124,6 +124,7 @@
             "[data-testid*='product-list-item']",
             "[data-test-id*='product-list-item']",
             "li.grid__item",
+            "li.product-base",
             ".plp-card",
             ".search-result-gridview-item",
             ".product",

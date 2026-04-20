@@ -226,7 +226,7 @@ def test_extract_ecommerce_detail_returns_normalized_record() -> None:
     assert record["product_type"] == "Gadget"
     assert record["category"] == "Widgets"
     assert record["image_url"] == "https://example.com/images/widget-1.jpg"
-    assert "widget-2.jpg" in record["additional_images"]
+    assert any("widget-2.jpg" in value for value in record["additional_images"])
     assert record["rating"] == "4.7"
     assert record["review_count"] == 128
     assert record["features"] == "Lightweight body Long battery life"
@@ -885,4 +885,4 @@ def test_extract_detail_dom_images_excludes_related_product_cards() -> None:
     assert len(rows) == 1
     record = rows[0]
     assert record["image_url"] == "https://example.com/images/trail-runner-1.jpg"
-    assert record["additional_images"] == "https://example.com/images/trail-runner-2.jpg"
+    assert record["additional_images"] == ["https://example.com/images/trail-runner-2.jpg"]

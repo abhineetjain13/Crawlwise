@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 import httpx
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
-from app.services.field_value_utils import clean_text
+from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup, Tag
 
 try:  # pragma: no cover - optional dependency

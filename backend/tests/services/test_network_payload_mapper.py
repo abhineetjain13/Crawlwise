@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.services.network_payload_mapper import map_network_payloads_to_fields
+from app.services.network_payload_mapper import (
+    _looks_like_job_api,
+    _looks_like_product_api,
+    _infer_surface_from_body,
+    map_network_payloads_to_fields,
+)
 
 
 def test_map_network_payloads_to_fields_preserves_greenhouse_job_detail() -> None:
@@ -206,3 +211,187 @@ def test_map_network_payloads_to_fields_prioritizes_late_high_signal_product_pay
 
     assert rows[0]["title"] == "Commuter Backpack"
     assert rows[0]["price"] == "89.50"
+
+
+# ------------------------------------------------------------------
+# Ghost-routing tests
+# ------------------------------------------------------------------
+
+
+def test_looks_like_product_api_detects_product_payload() -> None:
+    assert _looks_like_product_api({
+        "price": "29.99",
+        "sku": "ABC-123",
+        "name": "Widget",
+        "description": "A fine widget",
+    })
+
+
+def test_looks_like_product_api_rejects_insufficient_keys() -> None:
+    assert not _looks_like_product_api({
+        "price": "29.99",
+        "sku": "ABC-123",
+    })
+
+
+def test_looks_like_job_api_detects_job_payload() -> None:
+    assert _looks_like_job_api({
+        "title": "Engineer",
+        "description": "Build things",
+        "location": "Remote",
+        "company": "Acme",
+    })
+
+
+def test_looks_like_job_api_rejects_insufficient_keys() -> None:
+    assert not _looks_like_job_api({
+        "title": "Engineer",
+        "description": "Build things",
+    })
+
+
+def test_looks_like_product_api_rejects_non_dict() -> None:
+    assert not _looks_like_product_api("not a dict")
+    assert not _looks_like_product_api([1, 2, 3])
+
+
+def test_looks_like_job_api_rejects_non_dict() -> None:
+    assert not _looks_like_job_api(None)
+
+
+def test_infer_surface_prefers_product_when_ambiguous() -> None:
+    body = {
+        "title": "Widget",
+        "price": "29.99",
+        "sku": "W-001",
+        "description": "A product",
+        "company": "MegaCorp",
+    }
+    assert _infer_surface_from_body(body) == "ecommerce_detail"
+
+
+def test_infer_surface_returns_job_when_job_signature_stronger() -> None:
+    body = {
+        "title": "Senior Engineer",
+        "description": "Build things",
+        "location": "Berlin",
+        "company": "Acme",
+        "apply_url": "https://acme.com/apply",
+        "salary": "100k",
+    }
+    assert _infer_surface_from_body(body) == "job_detail"
+
+
+def test_infer_surface_returns_none_for_unrecognised_payload() -> None:
+    assert _infer_surface_from_body({"foo": 1, "bar": 2}) is None
+
+
+def test_ghost_route_captures_unconfigured_product_payload() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://custom-spa.example.com/api/v2/item/42",
+                "endpoint_type": "generic_json",
+                "endpoint_family": "custom",
+                "body": {
+                    "name": "Artisan Candle",
+                    "price": "18.00",
+                    "sku": "AC-99",
+                    "description": "Hand-poured soy candle",
+                    "brand": "Lumière",
+                    "availability": "InStock",
+                    "currency": "EUR",
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://custom-spa.example.com/item/42",
+    )
+    assert len(rows) >= 1
+    record = rows[0]
+    assert record.get("title") == "Artisan Candle"
+    assert record.get("price") == "18.00"
+    assert record.get("sku") == "AC-99"
+
+
+def test_ghost_route_captures_unconfigured_job_payload() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://react-spa.example.com/api/career/55",
+                "endpoint_type": "generic_json",
+                "endpoint_family": "custom",
+                "body": {
+                    "title": "Frontend Engineer",
+                    "description": "Build React apps",
+                    "location": "London",
+                    "company": "StartupCo",
+                    "apply_url": "https://react-spa.example.com/apply/55",
+                    "salary": "£70k",
+                },
+            }
+        ],
+        surface="job_detail",
+        page_url="https://react-spa.example.com/careers/55",
+    )
+    assert len(rows) >= 1
+    record = rows[0]
+    assert record.get("title") == "Frontend Engineer"
+    assert record.get("company") == "StartupCo"
+
+
+def test_ghost_route_fallback_when_spec_fails_to_match() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://weird-spa.example.com/data",
+                "endpoint_type": "generic_json",
+                "endpoint_family": "unknown",
+                "body": {
+                    "name": "Ghost Product",
+                    "price": "42.00",
+                    "sku": "GP-01",
+                    "description": "Caught by ghost routing",
+                },
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://weird-spa.example.com/item/gp-01",
+    )
+    assert len(rows) >= 1
+    assert rows[0].get("title") == "Ghost Product"
+
+
+def test_ghost_route_skips_non_matching_payload() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://example.com/api/config",
+                "endpoint_type": "generic_json",
+                "body": {"theme": "dark", "locale": "en-US"},
+            }
+        ],
+        surface="ecommerce_detail",
+        page_url="https://example.com",
+    )
+    assert rows == []
+
+
+def test_ghost_route_works_on_surface_with_no_specs() -> None:
+    rows = map_network_payloads_to_fields(
+        [
+            {
+                "url": "https://example.com/api/product",
+                "body": {
+                    "name": "Unconfigured Surface Product",
+                    "price": "15.00",
+                    "sku": "US-01",
+                    "description": "No spec for this surface",
+                },
+            }
+        ],
+        surface="automobile_detail",
+        page_url="https://example.com/car/xyz",
+    )
+    assert len(rows) >= 1
+    assert rows[0].get("title") == "Unconfigured Surface Product"

@@ -14,6 +14,7 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
         final_url="https://example.com/listing?page=2",
         network_payloads=[{"url": "https://example.com/api/listing"}],
         adapter_name=None,
+        platform_family="shopify",
         browser_diagnostics={
             "navigation_strategy": "domcontentloaded",
             "network_payload_count": 1,
@@ -39,6 +40,7 @@ def test_build_url_metrics_promotes_traversal_diagnostics() -> None:
     assert metrics["pages_collected"] == 2
     assert metrics["pages_scrolled"] == 1
     assert metrics["network_payload_count"] == 1
+    assert metrics["platform_family"] == "shopify"
 
 
 def test_build_url_metrics_keeps_failed_browser_attempts_when_final_method_is_http() -> None:
@@ -49,6 +51,7 @@ def test_build_url_metrics_keeps_failed_browser_attempts_when_final_method_is_ht
         final_url="https://example.com/category/widgets",
         network_payloads=[],
         adapter_name=None,
+        platform_family=None,
         browser_diagnostics={
             "browser_attempted": True,
             "browser_reason": "empty-extraction retry",
@@ -66,6 +69,24 @@ def test_build_url_metrics_keeps_failed_browser_attempts_when_final_method_is_ht
     assert metrics["browser_outcome"] == "navigation_failed"
     assert metrics["html_bytes"] == 49
     assert metrics["browser_phase_timings_ms"] == {"navigation": 1200}
+
+
+def test_build_url_metrics_keeps_platform_family_separate_from_adapter_name() -> None:
+    acquisition_result = SimpleNamespace(
+        method="test",
+        status_code=200,
+        blocked=False,
+        final_url="https://example.com/products/widget-prime",
+        network_payloads=[],
+        adapter_name=None,
+        platform_family="shopify",
+        browser_diagnostics={},
+    )
+
+    metrics = build_url_metrics(acquisition_result, requested_fields=["title"])
+
+    assert metrics["adapter_name"] is None
+    assert metrics["platform_family"] == "shopify"
 
 
 def test_stringify_value_preserves_falsy_scalars() -> None:

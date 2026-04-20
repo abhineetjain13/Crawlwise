@@ -6,7 +6,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.field_value_utils import clean_text
+from app.services.field_value_core import clean_text
 
 _DEFAULT_ORDER = "postedDateDesc"
 _SEARCH_FILTERS: tuple[dict[str, object], ...] = (

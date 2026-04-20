@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,9 +11,11 @@ import pytest
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from app.services.acquisition.browser_capture import BrowserNetworkCapture
 from app.services.acquisition import browser_runtime
 from app.services.acquisition.traversal import TraversalResult
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.config.selectors import CARD_SELECTORS
 
 
 @dataclass
@@ -259,7 +262,7 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
 
 @pytest.mark.asyncio
 async def test_browser_fetch_fast_paths_ready_listing_cards_without_networkidle() -> None:
-    selectors = list(browser_runtime.CARD_SELECTORS.get("ecommerce") or [])
+    selectors = list(CARD_SELECTORS.get("ecommerce") or [])
     page = _FakeExpansionPage(
         base_html="<html><body><article class='product-card'>A</article></body></html>",
         selector_counts={selector: 3 for selector in selectors[:1]},
@@ -440,10 +443,7 @@ async def test_browser_fetch_aom_expansion_respects_interaction_cap() -> None:
                     {"role": "tab", "name": "Product dimensions"},
                 ],
             },
-            role_targets={
-                ("tab", "product specifications"),
-                ("tab", "product dimensions"),
-            },
+            role_targets={("tab", "product specifications")},
         )
 
         async def _fake_runtime():
@@ -462,6 +462,99 @@ async def test_browser_fetch_aom_expansion_respects_interaction_cap() -> None:
         assert result.browser_diagnostics["detail_expansion"]["aom"]["attempted"] is True
     finally:
         crawler_runtime_settings.detail_aom_expand_max_interactions = original_limit
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_if_needed_skips_non_detail_like_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_dom_expand(*args, **kwargs):
+        raise AssertionError("DOM expansion should be skipped")
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "expand_all_interactive_elements",
+        _unexpected_dom_expand,
+    )
+
+    diagnostics = await browser_runtime.expand_detail_content_if_needed(
+        _FakeExpansionPage(base_html="<html><body></body></html>"),
+        surface="ecommerce_detail",
+        readiness_probe={"is_ready": False, "detail_like": False},
+    )
+
+    assert diagnostics["status"] == "skipped"
+    assert diagnostics["reason"] == "not_detail_like"
+
+
+@pytest.mark.asyncio
+async def test_listing_card_signal_count_avoids_heuristic_card_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+
+    async def _fake_count_listing_cards(page, *, surface: str, allow_heuristic: bool = True) -> int:
+        del page, surface
+        calls.append(bool(allow_heuristic))
+        return 9 if allow_heuristic else 0
+
+    monkeypatch.setattr(browser_runtime, "count_listing_cards", _fake_count_listing_cards)
+    monkeypatch.setattr(
+        browser_runtime,
+        "CARD_SELECTORS",
+        {"ecommerce": [".product-card"], "jobs": [".job-card"]},
+    )
+
+    count = await browser_runtime.listing_card_signal_count(
+        _FakeExpansionPage(base_html="<html><body></body></html>"),
+        surface="ecommerce_listing",
+    )
+
+    assert count == 0
+    assert calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_browser_capture_close_drains_inflight_response_callbacks() -> None:
+    class _FakeResponse:
+        url = "https://example.com/api/product"
+        headers = {"content-type": "application/json"}
+        request = SimpleNamespace(method="GET")
+        status = 200
+
+    class _LateDispatchPage:
+        def __init__(self) -> None:
+            self.listener = None
+
+        def on(self, event_name: str, callback: Any) -> None:
+            assert event_name == "response"
+            self.listener = callback
+
+        def remove_listener(self, event_name: str, callback: Any) -> None:
+            assert event_name == "response"
+            self.listener = None
+            asyncio.get_running_loop().call_soon(callback, _FakeResponse())
+
+    async def _fake_read_payload_body(response, **_kwargs):
+        del response
+        return browser_runtime.NetworkPayloadReadResult(
+            body=b'{"id":"captured"}',
+            outcome="ok",
+        )
+
+    capture = BrowserNetworkCapture(
+        surface="ecommerce_detail",
+        should_capture_payload=lambda **_kwargs: True,
+        classify_endpoint=lambda **_kwargs: {"type": "api", "family": "generic"},
+        read_payload_body=_fake_read_payload_body,
+    )
+    page = _LateDispatchPage()
+    capture.attach(page)
+
+    summary = await capture.close(page)
+
+    assert summary.network_payload_count == 1
+    assert summary.payloads[0]["body"]["id"] == "captured"
 
 
 @pytest.mark.asyncio

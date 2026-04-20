@@ -2,36 +2,46 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import urlparse
 from typing import Any
 
 from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.confidence import score_record_confidence
-from app.services.config.extraction_rules import EXTRACTION_RULES
+from app.services.config.extraction_rules import (
+    EXTRACTION_RULES,
+    TITLE_PROMOTION_PREFIXES,
+    TITLE_PROMOTION_SEPARATOR,
+    TITLE_PROMOTION_SUBSTRINGS,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_context import (
-    collect_js_state_objects,
     collect_structured_source_payloads,
     prepare_extraction_context,
 )
-from app.services.field_value_utils import (
+from app.services.structured_sources import harvest_js_state_objects
+from app.services.field_value_core import (
     PRICE_RE,
     RATING_RE,
     REVIEW_COUNT_RE,
-    add_candidate,
-    apply_selector_fallbacks,
     clean_text,
     coerce_field_value,
-    collect_structured_candidates,
-    extract_heading_sections,
-    extract_page_images,
-    finalize_candidate_value,
     finalize_record,
-    record_score,
     surface_alias_lookup,
     surface_fields,
     text_or_none,
+)
+from app.services.field_value_candidates import (
+    add_candidate,
+    collect_structured_candidates,
+    finalize_candidate_value,
+    record_score,
+)
+from app.services.field_value_dom import (
+    apply_selector_fallbacks,
+    extract_heading_sections,
+    extract_page_images,
 )
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
@@ -72,6 +82,45 @@ _DOM_OPTIONAL_CUE_FIELDS: dict[str, frozenset[str]] = {
     "ecommerce_detail": frozenset({"features", "materials", "care", "dimensions"}),
     "job_detail": frozenset({"benefits", "skills", "requirements"}),
 }
+
+_ECOMMERCE_DETAIL_JS_STATE_FIELDS = frozenset(
+    {
+        "additional_images",
+        "availability",
+        "available_sizes",
+        "brand",
+        "color",
+        "currency",
+        "image_count",
+        "image_url",
+        "option1_name",
+        "option1_values",
+        "option2_name",
+        "option2_values",
+        "original_price",
+        "price",
+        "product_id",
+        "selected_variant",
+        "size",
+        "sku",
+        "stock_quantity",
+        "title",
+        "variant_axes",
+        "variant_count",
+        "variants",
+    }
+)
+
+
+def _field_source_rank(surface: str, field_name: str, source: str | None) -> int:
+    if str(surface or "").strip().lower() == "ecommerce_detail":
+        if field_name == "title" and source in {"js_state", "dom_h1"}:
+            return {"js_state": 2, "dom_h1": 3}[str(source)]
+        if field_name in _ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
+            return 2
+    return 100 + _SOURCE_PRIORITY_RANK.get(source, len(_SOURCE_PRIORITY_RANK))
+
+
 def _apply_dom_fallbacks(
     dom_parser: LexborHTMLParser,
     soup: BeautifulSoup,
@@ -121,7 +170,7 @@ def _apply_dom_fallbacks(
                 field_sources[field_name].append("dom_selector")
     canonical = soup.find("link", attrs={"rel": re.compile("canonical", re.I)})
     if canonical is not None:
-        from app.services.field_value_utils import absolute_url
+        from app.services.field_value_core import absolute_url
 
         _add_sourced_candidate(
                 candidates,
@@ -325,6 +374,7 @@ _SOURCE_PRIORITY_RANK = {
 
 
 def _ordered_candidates_for_field(
+    surface: str,
     field_name: str,
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
@@ -333,9 +383,10 @@ def _ordered_candidates_for_field(
     sources = list(candidate_sources.get(field_name, []))
     indexed_entries = [
         (
-            _SOURCE_PRIORITY_RANK.get(
+            _field_source_rank(
+                surface,
+                field_name,
                 sources[index] if index < len(sources) else None,
-                len(_SOURCE_PRIORITY_RANK),
             ),
             index,
             sources[index] if index < len(sources) else None,
@@ -403,6 +454,7 @@ def _materialize_record(
     selected_field_sources: dict[str, str] = {}
     for field_name in fields:
         ordered_candidates = _ordered_candidates_for_field(
+            surface,
             field_name,
             candidates,
             candidate_sources,
@@ -418,6 +470,14 @@ def _materialize_record(
             record[field_name] = finalized
             if selected_source:
                 selected_field_sources[field_name] = selected_source
+    promoted = _promote_detail_title(
+        record,
+        page_url=page_url,
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+    )
+    if promoted:
+        selected_field_sources["title"] = promoted[1]
     record["_field_sources"] = {
         field_name: list(source_list)
         for field_name, source_list in field_sources.items()
@@ -446,18 +506,82 @@ def _materialize_record(
 
 def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
     primary_image = text_or_none(record.get("image_url"))
-    additional_images = text_or_none(record.get("additional_images"))
-    if not primary_image or not additional_images:
+    raw_additional_images = record.get("additional_images")
+    if raw_additional_images in (None, "", [], {}):
         return
-    filtered = [
-        image
-        for image in [part.strip() for part in additional_images.split(",")]
-        if image and image != primary_image
-    ]
+    filtered: list[str] = []
+    seen: set[str] = set()
+    if primary_image:
+        seen.add(primary_image.lower())
+    values = (
+        list(raw_additional_images)
+        if isinstance(raw_additional_images, (list, tuple, set))
+        else [raw_additional_images]
+    )
+    for value in values:
+        image = text_or_none(value)
+        if not image:
+            continue
+        lowered = image.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        filtered.append(image)
     if filtered:
-        record["additional_images"] = ", ".join(filtered)
+        record["additional_images"] = filtered
         return
     record.pop("additional_images", None)
+
+
+def _promote_detail_title(
+    record: dict[str, Any],
+    *,
+    page_url: str,
+    candidates: dict[str, list[object]],
+    candidate_sources: dict[str, list[str]],
+) -> tuple[str, str] | None:
+    title = text_or_none(record.get("title"))
+    if not title or not _title_needs_promotion(title, page_url=page_url):
+        return None
+    values = list(candidates.get("title", []))
+    sources = list(candidate_sources.get("title", []))
+    ranked_candidates = sorted(
+        (
+            (
+                {"js_state": 0, "dom_h1": 1, "opengraph": 2, "dom_selector": 3}[sources[index]],
+                index,
+                text_or_none(values[index]),
+                sources[index],
+            )
+            for index in range(min(len(values), len(sources)))
+            if sources[index] in {"js_state", "dom_h1", "opengraph", "dom_selector"}
+        ),
+        key=lambda row: (row[0], row[1]),
+    )
+    replacement = next(
+        ((candidate, source) for _, _, candidate, source in ranked_candidates if candidate and len(candidate) > len(title)),
+        None,
+    )
+    if replacement:
+        record["title"] = replacement[0]
+        return replacement
+    return None
+
+
+def _title_needs_promotion(title: str, *, page_url: str) -> bool:
+    normalized_title = str(title or "").strip().lower()
+    host = str(urlparse(page_url).hostname or "").strip().lower()
+    if not normalized_title:
+        return False
+    if any(normalized_title.startswith(prefix) for prefix in TITLE_PROMOTION_PREFIXES):
+        return True
+    if TITLE_PROMOTION_SEPARATOR in normalized_title:
+        return True
+    if any(substring in normalized_title for substring in TITLE_PROMOTION_SUBSTRINGS):
+        return True
+    if not host:
+        return False
+    return normalized_title == host.removeprefix("www.").split(".", 1)[0]
 
 
 def _missing_requested_fields(
@@ -598,7 +722,7 @@ def build_detail_record(
 
     def _collect_js_state_stage() -> None:
         mapped_js_fields = map_js_state_to_fields(
-            collect_js_state_objects(context),
+            harvest_js_state_objects(None, context.cleaned_html),
             surface=surface,
             page_url=page_url,
         )
@@ -662,6 +786,19 @@ def build_detail_record(
         ):
             record["_extraction_tiers"]["early_exit"] = "structured_data"
             return record
+    if surface == "ecommerce_detail" and _title_needs_promotion(
+        text_or_none(record.get("title")) or "",
+        page_url=page_url,
+    ):
+        preferred_title = text_or_none(
+            map_js_state_to_fields(
+                harvest_js_state_objects(None, context.cleaned_html),
+                surface=surface,
+                page_url=page_url,
+            ).get("title")
+        )
+        if preferred_title:
+            record["title"] = preferred_title
     record["_extraction_tiers"]["early_exit"] = None
     return record
 

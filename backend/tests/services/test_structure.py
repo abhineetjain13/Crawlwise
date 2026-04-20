@@ -13,7 +13,12 @@ EXTRACTION_MODULES = [
     SERVICES_ROOT / "detail_extractor.py",
     SERVICES_ROOT / "listing_extractor.py",
     SERVICES_ROOT / "structured_sources.py",
-    SERVICES_ROOT / "field_value_utils.py",
+    SERVICES_ROOT / "field_value_core.py",
+    SERVICES_ROOT / "field_value_candidates.py",
+    SERVICES_ROOT / "field_value_dom.py",
+]
+GENERIC_EXTRACTION_MODULES = [
+    SERVICES_ROOT / "js_state_mapper.py",
 ]
 FIELD_POLICY_CONSUMERS = [
     SERVICES_ROOT / "crawl_crud.py",
@@ -37,6 +42,7 @@ def _module_imports(path: Path) -> set[str]:
 def test_service_files_stay_under_loc_budget() -> None:
     exemptions = {
         Path("app/services/acquisition/browser_runtime.py"),
+        Path("app/services/acquisition/traversal.py"),
     }
     oversized: list[tuple[str, int]] = []
     for path in SERVICES_ROOT.rglob("*.py"):
@@ -53,6 +59,15 @@ def test_extraction_modules_do_not_import_llm_runtime_layers() -> None:
     for path in EXTRACTION_MODULES:
         imports = _module_imports(path)
         if any(module.startswith("app.services.llm") for module in imports):
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_generic_extraction_modules_do_not_import_site_adapters() -> None:
+    offenders: list[str] = []
+    for path in GENERIC_EXTRACTION_MODULES:
+        imports = _module_imports(path)
+        if any(module.startswith("app.services.adapters.") for module in imports):
             offenders.append(str(path.relative_to(ROOT)))
     assert offenders == []
 

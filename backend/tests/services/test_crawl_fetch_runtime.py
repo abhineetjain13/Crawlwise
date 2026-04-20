@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.services import crawl_fetch_runtime
@@ -9,7 +11,11 @@ from app.services.acquisition.browser_runtime import (
     should_capture_network_payload,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.acquisition.runtime import PageFetchResult, should_escalate_to_browser_async
+from app.services.acquisition.runtime import (
+    PageFetchResult,
+    http_fetch,
+    should_escalate_to_browser_async,
+)
 
 
 class _FakeResponse:
@@ -167,6 +173,35 @@ async def test_should_escalate_to_browser_async_uses_thread_offload(
 
 
 @pytest.mark.asyncio
+async def test_http_fetch_populates_platform_family_from_response_url() -> None:
+    class _FakeClient:
+        async def get(self, url: str, timeout: float) -> SimpleNamespace:
+            del url, timeout
+            return SimpleNamespace(
+                text="<html><body>Jobs</body></html>",
+                headers={"content-type": "text/html"},
+                status_code=200,
+                url="https://boards.greenhouse.io/acme",
+            )
+
+    async def _fake_get_client(*, proxy: str | None = None):
+        del proxy
+        return _FakeClient()
+
+    async def _not_blocked(*_args, **_kwargs) -> bool:
+        return False
+
+    result = await http_fetch(
+        "https://example.com/jobs",
+        5,
+        get_client=_fake_get_client,
+        blocked_html_checker=_not_blocked,
+    )
+
+    assert result.platform_family == "greenhouse"
+
+
+@pytest.mark.asyncio
 async def test_detail_surface_without_signals_escalates_even_when_html_is_not_a_js_shell() -> None:
     listing_shell_html = (
         "<html><body><h1>Careers</h1>"
@@ -262,6 +297,77 @@ async def test_listing_202_shell_escalates_to_browser() -> None:
     )
 
     assert await should_escalate_to_browser_async(result, surface="ecommerce_listing") is True
+
+
+@pytest.mark.asyncio
+async def test_js_disabled_placeholder_shell_escalates_to_browser() -> None:
+    result = PageFetchResult(
+        url="https://example.com/for-sale/mixer-truck",
+        final_url="https://example.com/for-sale/mixer-truck",
+        html=(
+            "<html><head><title>JavaScript is disabled</title></head>"
+            "<body><noscript>Please enable JavaScript to continue.</noscript>"
+            "<main><h1>JavaScript is disabled</h1></main></body></html>"
+        ),
+        status_code=200,
+        method="httpx",
+        blocked=False,
+    )
+
+    assert await should_escalate_to_browser_async(result, surface="ecommerce_detail") is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_uses_browser_for_js_disabled_placeholder_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import crawl_fetch_runtime
+
+    async def _fake_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del timeout, proxy
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html=(
+                "<html><head><title>JavaScript is disabled</title></head>"
+                "<body><noscript>Please enable JavaScript to continue.</noscript>"
+                "<main><h1>JavaScript is disabled</h1></main></body></html>"
+            ),
+            status_code=200,
+            method="curl_cffi",
+            blocked=False,
+        )
+
+    async def _unexpected_http(url: str, timeout: float, *, proxy: str | None = None):
+        raise AssertionError(
+            f"http fallback should not run when curl already returned a JS-disabled shell: {url} {timeout} {proxy}"
+        )
+
+    browser_calls: list[str] = []
+
+    async def _fake_browser(url, timeout, **kwargs):
+        del timeout, kwargs
+        browser_calls.append(url)
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body><h1>Rendered listing</h1></body></html>",
+            status_code=200,
+            method="browser",
+            blocked=False,
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _unexpected_http)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/for-sale/mixer-truck",
+        surface="ecommerce_detail",
+    )
+
+    assert result.method == "browser"
+    assert browser_calls == ["https://example.com/for-sale/mixer-truck"]
 
 
 @pytest.mark.asyncio

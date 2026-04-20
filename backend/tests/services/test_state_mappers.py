@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.services import js_state_mapper
 from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 
@@ -429,3 +430,100 @@ def test_map_js_state_to_fields_uses_platform_owned_job_detail_selector_config()
         mapped["url"]
         == "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699"
     )
+
+
+def test_map_js_state_to_fields_rejects_dict_tags_from_promotional_ui() -> None:
+    js_state_objects = {
+        "__NEXT_DATA__": {
+            "props": {
+                "pageProps": {
+                    "product": {
+                        "id": 9002,
+                        "title": "Maternity Jean",
+                        "vendor": "Hatch",
+                        "handle": "the-relaxed-wide-leg-maternity-jean-1",
+                        "body_html": "<p>Comfortable maternity denim.</p>",
+                        "product_type": "Jeans",
+                        "currency": "USD",
+                        "tags": {
+                            "button": "Add",
+                            "freeGiftHint": "Free gift",
+                            "freeGiftWarning": "Add gift to cart to proceed to checkout",
+                            "goalReached": "Congrats - all tiers unlocked!",
+                            "rewardName1": "20% off",
+                            "rewardName2": "25% off",
+                            "rewardName3": "30% off",
+                        },
+                        "variants": [
+                            {
+                                "id": 201,
+                                "sku": "HJ-BLU-28",
+                                "price": 19800,
+                                "compare_at_price": 24800,
+                                "available": True,
+                                "option1": "Blue",
+                                "option2": "28",
+                            }
+                        ],
+                        "options": [{"name": "Color"}, {"name": "Size"}],
+                        "images": [
+                            {"src": "https://cdn.example.com/jean-1.jpg"},
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    mapped = map_js_state_to_fields(
+        js_state_objects,
+        surface="ecommerce_detail",
+        page_url="https://www.hatchcollection.com/products/the-relaxed-wide-leg-maternity-jean-1",
+    )
+    assert mapped.get("title") == "Maternity Jean"
+    assert mapped.get("tags") is None
+
+
+def test_map_product_payload_tolerates_product_glom_failures(
+    monkeypatch,
+) -> None:
+    original_glom = js_state_mapper.glom
+
+    def _fake_glom(target, spec, default=None):
+        if spec is js_state_mapper.PRODUCT_FIELD_SPEC:
+            raise RuntimeError("boom")
+        return original_glom(target, spec, default=default)
+
+    monkeypatch.setattr(js_state_mapper, "glom", _fake_glom)
+
+    mapped = js_state_mapper._map_product_payload(
+        {"id": "prod-1", "variants": []},
+        page_url="https://store.example.com/products/commuter-backpack",
+        category_fallback_from_type=False,
+    )
+
+    assert mapped == {}
+
+
+def test_normalize_variant_tolerates_non_dict_glom_result(
+    monkeypatch,
+) -> None:
+    original_glom = js_state_mapper.glom
+
+    def _fake_glom(target, spec, default=None):
+        if spec is js_state_mapper._VARIANT_FIELD_SPEC:
+            return None
+        return original_glom(target, spec, default=default)
+
+    monkeypatch.setattr(js_state_mapper, "glom", _fake_glom)
+
+    mapped = js_state_mapper._normalize_variant(
+        {"id": "sku-123"},
+        option_names=[],
+        page_url="https://store.example.com/products/commuter-backpack",
+        interpret_integral_as_cents=False,
+    )
+
+    assert mapped == {
+        "variant_id": "sku-123",
+        "url": "https://store.example.com/products/commuter-backpack?variant=sku-123",
+    }

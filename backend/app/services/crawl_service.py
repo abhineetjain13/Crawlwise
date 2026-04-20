@@ -36,6 +36,7 @@ VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = (
 CELERY_TASK_ID_KEY = "celery_task_id"
 logger = logging.getLogger(__name__)
 _local_run_tasks: dict[int, asyncio.Task[None]] = {}
+_background_tasks: set[asyncio.Task[None]] = set()
 _log = log_event
 
 
@@ -137,10 +138,14 @@ def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
                     )
 
             failure_task = asyncio.create_task(_record_failure())
+            _background_tasks.add(failure_task)
             failure_task.add_done_callback(
-                lambda completed_task: _log_background_task_exception(
-                    completed_task,
-                    f"Failed to persist failure state for run {run_id}",
+                lambda completed_task: (
+                    _background_tasks.discard(completed_task),
+                    _log_background_task_exception(
+                        completed_task,
+                        f"Failed to persist failure state for run {run_id}",
+                    ),
                 )
             )
         _clear_local_run_task(run_id, expected_task=completed_task)

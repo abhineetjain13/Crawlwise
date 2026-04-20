@@ -31,6 +31,30 @@ _STATIC_EXPORTS = {
 }
 globals().update(_STATIC_EXPORTS)
 
+LISTING_STRUCTURE_POSITIVE_HINTS = (
+    "card",
+    "item",
+    "listing",
+    "product",
+    "result",
+    "tile",
+    "record",
+    "entry",
+)
+LISTING_STRUCTURE_NEGATIVE_HINTS = (
+    "nav",
+    "menu",
+    "header",
+    "footer",
+    "breadcrumb",
+    "toolbar",
+    "filter",
+    "sort",
+    "sidebar",
+    "pagination",
+)
+LISTING_FALLBACK_CONTAINER_SELECTOR = "article, li, div, tr, section, [role='row']"
+
 DYNAMIC_FIELD_NAME_MAX_TOKENS = crawler_runtime_settings.dynamic_field_name_max_tokens
 KNOWN_ATS_PLATFORMS = known_ats_domains
 MAX_CANDIDATES_PER_FIELD = crawler_runtime_settings.max_candidates_per_field
@@ -42,6 +66,14 @@ JOB_REDIRECT_SHELL_HEADINGS = _acquisition_guard_export("job_redirect_shell_head
 JOB_ERROR_PAGE_TITLES = _acquisition_guard_export("job_error_page_titles")
 JOB_ERROR_PAGE_HEADINGS = _acquisition_guard_export("job_error_page_headings")
 
+TITLE_PROMOTION_PREFIXES: tuple[str, ...] = (
+    "buy ",
+)
+TITLE_PROMOTION_SUBSTRINGS: tuple[str, ...] = (
+    "apparel for",
+)
+TITLE_PROMOTION_SEPARATOR: str = "|"
+
 __all__ = sorted(
     [
         *_STATIC_EXPORTS.keys(),
@@ -52,6 +84,12 @@ __all__ = sorted(
         "JOB_REDIRECT_SHELL_HEADINGS",
         "JOB_REDIRECT_SHELL_TITLES",
         "KNOWN_ATS_PLATFORMS",
+        "LISTING_FALLBACK_CONTAINER_SELECTOR",
+        "LISTING_STRUCTURE_NEGATIVE_HINTS",
+        "LISTING_STRUCTURE_POSITIVE_HINTS",
         "MAX_CANDIDATES_PER_FIELD",
+        "TITLE_PROMOTION_PREFIXES",
+        "TITLE_PROMOTION_SEPARATOR",
+        "TITLE_PROMOTION_SUBSTRINGS",
     ]
 )

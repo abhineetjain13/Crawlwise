@@ -68,3 +68,14 @@ def test_greenhouse_adapter_normalizes_numeric_pay_ranges_and_strong_sections() 
     assert salary == "USD 1500 - 2500 yearly"
     assert sections["responsibilities"] == "Build systems."
     assert sections["qualifications"] == "5+ years."
+
+
+def test_greenhouse_adapter_extracts_company_slug_from_subdomain_board_hosts() -> None:
+    adapter = GreenhouseAdapter()
+
+    slug = adapter._extract_company_slug(
+        "https://preview.job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699",
+        "<html></html>",
+    )
+
+    assert slug == "greenhouse"

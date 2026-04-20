@@ -70,6 +70,7 @@ NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
         },
         {
             "name": "generic_job_detail",
+            "endpoint_path_tokens": ("/jobs/", "/job_posts/", "/postings/"),
             "required_path_groups": (
                 (
                     "posting.title",
@@ -188,6 +189,7 @@ NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
         {
             "name": "generic_ecommerce_detail",
             "endpoint_families": ("shopify", "nextjs"),
+            "endpoint_path_tokens": ("/products/", "/product/", "product.js"),
             "required_path_groups": (
                 (
                     "product.title",

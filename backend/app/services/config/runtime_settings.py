@@ -145,7 +145,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     listing_readiness_max_wait_ms: int = 6000
     listing_readiness_poll_ms: int = 500
     detail_expand_max_elapsed_ms: int = 2500
-    detail_aom_expand_max_interactions: int = 3
+    detail_aom_expand_max_interactions: int = 6
     detail_aom_expand_max_elapsed_ms: int = 1500
     scroll_wait_min_ms: int = 1500
     load_more_wait_min_ms: int = 2000
@@ -157,6 +157,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     traversal_active_scrollable_bonus: int = 10
     traversal_active_link_weight: int = 2
     traversal_active_target_label_max_len: int = 120
+    traversal_click_timeout_ms: int = 3000
     traversal_force_probe_min_advance_px: int = 600
     infinite_scroll_container_overflow_threshold_px: int = 500
     infinite_scroll_tall_page_ratio: int = 3
@@ -168,6 +169,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_new_page_timeout_ms: int = 10000
     browser_close_timeout_ms: int = 5000
     browser_render_timeout_seconds: float = 30.0
+    browser_max_contexts_before_recycle: int = 200
+    browser_max_lifetime_seconds: int = 1800
     iframe_promotion_max_candidates: int = 2
     extractability_non_product_type_ratio_max: float = 0.8
     extractability_json_ld_min_type_signals: int = 2

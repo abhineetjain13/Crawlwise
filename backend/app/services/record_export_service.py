@@ -9,6 +9,7 @@ from html import unescape
 from io import StringIO
 from urllib.parse import urlparse
 
+from bs4 import BeautifulSoup
 from app.models.crawl import CrawlRecord
 from app.models.user import User
 from app.services.crawl_access_service import (
@@ -50,6 +51,14 @@ _IMAGE_URL_SUFFIXES = (
     ".tif",
     ".tiff",
     ".webp",
+)
+_MARKDOWN_HIDDEN_FIELDS = frozenset(
+    {
+        "product_attributes",
+        "selected_variant",
+        "variant_axes",
+        "variants",
+    }
 )
 
 ExportStreamer = Callable[[AsyncSession, int], AsyncIterator[str]]
@@ -538,7 +547,7 @@ def record_to_markdown(row: CrawlRecord) -> str:
     scalar_rows: list[tuple[str, object]] = []
     for field_name, raw_value in data.items():
         normalized_field = str(field_name).strip().lower()
-        if normalized_field in {"title", "url", "source_url"}:
+        if normalized_field in {"title", "url", "source_url"} | _MARKDOWN_HIDDEN_FIELDS:
             continue
         rendered_value = stringify_markdown_value(raw_value)
         if not rendered_value:
@@ -619,8 +628,16 @@ def _dedupe_image_values(
     primary = str(primary_image or "").strip()
     if primary:
         seen.add(primary.lower())
-    for part in str(value or "").split(","):
-        candidate = part.strip()
+    if isinstance(value, str):
+        candidates = [part for part in value.split(", ") if part.strip()]
+    else:
+        candidates = (
+            list(value)
+            if isinstance(value, (list, tuple, set))
+            else [value]
+        )
+    for part in candidates:
+        candidate = str(part or "").strip()
         if not candidate:
             continue
         normalized = candidate.lower()
@@ -678,8 +695,9 @@ def render_markdown_inline(value: object) -> str:
 
 
 def render_markdown_block(value: str) -> str:
+    normalized_value = _normalize_markdown_block_value(value)
     rendered: list[str] = []
-    for raw_line in value.split("\n"):
+    for raw_line in normalized_value.split("\n"):
         line = raw_line.strip()
         if not line:
             if rendered and rendered[-1] != "":
@@ -691,6 +709,47 @@ def render_markdown_block(value: str) -> str:
         else:
             rendered.append(line)
     return "\n".join(rendered)
+
+
+def _normalize_markdown_block_value(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not _looks_like_html_fragment(text):
+        return text
+    return _html_fragment_to_markdown_text(text)
+
+
+def _looks_like_html_fragment(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(re.search(r"<[a-zA-Z][^>]*>", text))
+
+
+def _html_fragment_to_markdown_text(value: str) -> str:
+    soup = BeautifulSoup(str(value or ""), "html.parser")
+    for node in soup.find_all("br"):
+        node.replace_with("\n")
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for node in soup.find_all(
+        ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "dt", "dd"]
+    ):
+        text = " ".join(node.get_text(" ", strip=True).split()).strip()
+        if not text:
+            continue
+        if node.name == "li":
+            text = f"- {text}"
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        lines.append(text)
+    if lines:
+        return "\n".join(lines)
+    return " ".join(soup.get_text(" ", strip=True).split()).strip()
 
 
 def humanize_field_name(value: object) -> str:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+from app.services.adapters.myntra import MyntraAdapter
 from app.services.extraction_runtime import extract_records
 
 
@@ -252,3 +255,218 @@ def test_extract_ecommerce_detail_resolves_top_level_json_ld_array_references() 
     assert record["currency"] == "USD"
     assert record["availability"] == "in_stock"
     assert record["_source"] == "json_ld"
+
+
+def test_extract_ecommerce_detail_flattens_json_ld_size_specifications() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Size Spec Widget",
+          "size": {
+            "@type": "SizeSpecification",
+            "name": "XS",
+            "sizeSystem": "https://schema.org/WearableSizeSystemUS",
+            "sizeGroup": "https://schema.org/WearableSizeGroupRegular"
+          },
+          "hasVariant": [
+            {
+              "@type": "Product",
+              "name": "Size Spec Widget",
+              "sku": "W-XS",
+              "size": {
+                "@type": "SizeSpecification",
+                "name": "XS",
+                "sizeSystem": "https://schema.org/WearableSizeSystemUS",
+                "sizeGroup": "https://schema.org/WearableSizeGroupRegular"
+              },
+              "offers": {
+                "@type": "Offer",
+                "availability": "https://schema.org/InStock"
+              }
+            },
+            {
+              "@type": "Product",
+              "name": "Size Spec Widget",
+              "sku": "W-XL",
+              "size": {
+                "@type": "SizeSpecification",
+                "name": "XL",
+                "sizeSystem": "https://schema.org/WearableSizeSystemUS",
+                "sizeGroup": "https://schema.org/WearableSizeGroupRegular"
+              },
+              "offers": {
+                "@type": "Offer",
+                "availability": "https://schema.org/OutOfStock"
+              }
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/size-spec-widget",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["size"] == "XS"
+    assert record["variant_axes"] == {"size": ["XS", "XL"]}
+    assert record["selected_variant"]["size"] == "XS"
+    assert record["selected_variant"]["availability"] == "in_stock"
+    assert record["variants"][0]["size"] == "XS"
+    assert record["variants"][1]["size"] == "XL"
+    assert record["variants"][1]["availability"] == "out_of_stock"
+
+
+@pytest.mark.asyncio
+async def test_myntra_adapter_extracts_detail_media_and_variants() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Myntra</title>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Myntra",
+          "image": "https://constant.myntassets.com/web/assets/img/logo_2021.png"
+        }
+        </script>
+        <script>
+          window.__myx = {
+            "pdpData": {
+              "id": 30721580,
+              "name": "KALINI Floral Embroidered Kurta",
+              "brand": "KALINI",
+              "baseColour": "pink and white",
+              "mrp": 3196,
+              "selectedSeller": {"discountedPrice": 735},
+              "media": {
+                "albums": [
+                  {
+                    "name": "default",
+                    "images": [
+                      {"secureSrc": "https://assets.myntassets.com/assets/images/30721580/image-1.jpg"},
+                      {"secureSrc": "https://assets.myntassets.com/assets/images/30721580/image-2.jpg"},
+                      {"secureSrc": "https://assets.myntassets.com/assets/images/30721580/image-3.jpg"}
+                    ]
+                  }
+                ]
+              },
+              "colours": [
+                {"label": "pink and white", "url": "/products/30721580"},
+                {"label": "peach", "url": "/products/29861551"}
+              ],
+              "sizes": [
+                {
+                  "skuId": 98872105,
+                  "label": "S",
+                  "available": true,
+                  "selectedSeller": {"discountedPrice": 735, "availableCount": 8}
+                },
+                {
+                  "skuId": 98872106,
+                  "label": "M",
+                  "available": false,
+                  "selectedSeller": {"discountedPrice": 735, "availableCount": 0}
+                }
+              ]
+            }
+          };
+        </script>
+      </head>
+      <body>
+        <h1>KALINI Floral Embroidered Kurta</h1>
+      </body>
+    </html>
+    """
+
+    adapter = MyntraAdapter()
+    result = await adapter.extract(
+        "https://www.myntra.com/kurtas/kalini/example/30721580/buy",
+        html,
+        "ecommerce_detail",
+    )
+
+    rows = extract_records(
+        html,
+        "https://www.myntra.com/kurtas/kalini/example/30721580/buy",
+        "ecommerce_detail",
+        max_records=5,
+        adapter_records=result.records,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "KALINI Floral Embroidered Kurta"
+    assert record["image_url"] == "https://assets.myntassets.com/assets/images/30721580/image-1.jpg"
+    assert record["additional_images"] == [
+        "https://assets.myntassets.com/assets/images/30721580/image-2.jpg",
+        "https://assets.myntassets.com/assets/images/30721580/image-3.jpg",
+    ]
+    assert record["available_sizes"] == "S, M"
+    assert record["variant_count"] == 2
+    assert record["selected_variant"]["size"] == "S"
+    assert record["selected_variant"]["availability"] == "in_stock"
+
+
+@pytest.mark.asyncio
+async def test_myntra_adapter_allows_dom_description_fill_when_detail_payload_is_sparse() -> None:
+    html = """
+    <html>
+      <head>
+        <script>
+          window.__myx = {
+            "pdpData": {
+              "id": 30721580,
+              "name": "KALINI Floral Embroidered Kurta",
+              "brand": "KALINI",
+              "mrp": 3196,
+              "selectedSeller": {"discountedPrice": 735},
+              "media": {"albums": []},
+              "sizes": []
+            }
+          };
+        </script>
+      </head>
+      <body>
+        <h1>KALINI Floral Embroidered Kurta</h1>
+        <h2>Description</h2>
+        <p>Soft cotton fabric with embroidered floral detailing.</p>
+      </body>
+    </html>
+    """
+
+    adapter = MyntraAdapter()
+    result = await adapter.extract(
+        "https://www.myntra.com/kurtas/kalini/example/30721580/buy",
+        html,
+        "ecommerce_detail",
+    )
+
+    rows = extract_records(
+        html,
+        "https://www.myntra.com/kurtas/kalini/example/30721580/buy",
+        "ecommerce_detail",
+        max_records=5,
+        adapter_records=result.records,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "KALINI Floral Embroidered Kurta"
+    assert (
+        record["description"]
+        == "Soft cotton fabric with embroidered floral detailing."
+    )

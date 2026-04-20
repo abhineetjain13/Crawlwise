@@ -7,6 +7,7 @@ import pytest
 from app.models.crawl import CrawlRecord
 from app.services.crawl_crud import create_crawl_run
 from app.services import record_export_service
+from app.services.extraction_runtime import extract_records
 from app.services.record_export_service import (
     stream_export_artifacts_json,
     stream_export_csv,
@@ -124,3 +125,73 @@ async def test_export_streamers_preserve_order_across_paged_reads(
         "https://example.com/b",
         "https://example.com/c",
     ]
+
+
+def test_export_image_dedupe_preserves_comma_containing_urls() -> None:
+    sanitized = record_export_service._sanitize_markdown_export_data(
+        {
+            "image_url": "https://cdn.example.com/images/widget-1.jpg",
+            "additional_images": [
+                "https://cdn.example.com/images/f_auto,q_auto,w_1080/widget-2.jpg",
+                "https://cdn.example.com/images/f_auto,q_auto,w_1080/widget-3.jpg",
+            ],
+        }
+    )
+
+    assert sanitized["additional_images"] == (
+        "https://cdn.example.com/images/f_auto,q_auto,w_1080/widget-2.jpg, "
+        "https://cdn.example.com/images/f_auto,q_auto,w_1080/widget-3.jpg"
+    )
+
+
+def test_export_image_dedupe_handles_legacy_string_values() -> None:
+    sanitized = record_export_service._sanitize_markdown_export_data(
+        {
+            "image_url": "https://cdn.example.com/images/widget-1.jpg",
+            "additional_images": (
+                "https://cdn.example.com/images/widget-1.jpg, "
+                "https://cdn.example.com/images/widget-2.jpg"
+            ),
+        }
+    )
+
+    assert sanitized["additional_images"] == "https://cdn.example.com/images/widget-2.jpg"
+
+
+def test_listing_adapter_records_use_shared_surface_normalization() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.glossier.com/en-in/collections/makeup",
+        "ecommerce_listing",
+        max_records=5,
+        adapter_records=[
+            {
+                "title": "Boy Brow",
+                "brand": "Glossier",
+                "url": "https://www.glossier.com/en-in/products/boy-brow",
+                "image_url": "https://cdn.example.com/boy-brow-1.jpg",
+                "additional_images": [
+                    "https://cdn.example.com/boy-brow-2.jpg",
+                ],
+                "price": "2400",
+                "availability": "in_stock",
+                "description": "<p>Inspired by the flexible formula of mustache pomade.</p>",
+                "variants": [
+                    {"sku": "BBR-378-00-00", "title": "Dark Brown"},
+                ],
+                "variant_axes": {"shade": ["Dark Brown"]},
+                "selected_variant": {"sku": "BBR-378-00-00"},
+                "_source": "shopify_adapter",
+            }
+        ],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Boy Brow"
+    assert record["description"] == "Inspired by the flexible formula of mustache pomade."
+    assert record["additional_images"] == ["https://cdn.example.com/boy-brow-2.jpg"]
+    assert record["_source"] == "shopify_adapter"
+    assert "variants" not in record
+    assert "variant_axes" not in record
+    assert "selected_variant" not in record

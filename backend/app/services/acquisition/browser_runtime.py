@@ -33,16 +33,18 @@ from app.services.acquisition.runtime import (
     is_blocked_html_async,
 )
 from app.services.acquisition.traversal import (
+    count_listing_cards,
     execute_listing_traversal,
     should_run_traversal,
 )
-from app.services.config.selectors import CARD_SELECTORS
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.field_value_utils import clean_text
-from app.services.field_value_utils import hostname
+from app.services.config.selectors import CARD_SELECTORS
+from app.services.field_value_core import clean_text
+from app.services.field_value_core import hostname
 from app.services.platform_policy import (
     resolve_browser_readiness_policy,
     resolve_listing_readiness_override,
+    resolve_platform_runtime_policy,
 )
 
 if TYPE_CHECKING:
@@ -149,23 +151,43 @@ class SharedBrowserRuntime:
         self._browser: Browser | None = None
         self._semaphore = asyncio.Semaphore(self.max_contexts)
         self._lock = asyncio.Lock()
+        self._counter_lock = asyncio.Lock()
         self._stats_lock = asyncio.Lock()
         self._active_contexts = 0
         self._queued_count = 0
+        self._total_contexts_created = 0
+        self._browser_launched_at: float = 0.0
+
+    def _should_recycle_browser(self) -> bool:
+        if self._browser is None:
+            return False
+        if not getattr(self._browser, "is_connected", lambda: True)():
+            return True
+        max_contexts = int(
+            crawler_runtime_settings.browser_max_contexts_before_recycle
+        )
+        if max_contexts > 0 and self._total_contexts_created >= max_contexts:
+            return True
+        max_lifetime = int(crawler_runtime_settings.browser_max_lifetime_seconds)
+        if max_lifetime > 0 and self._browser_launched_at > 0:
+            if time.monotonic() - self._browser_launched_at >= max_lifetime:
+                return True
+        return False
 
     async def _ensure(self) -> None:
-        if self._browser is not None and getattr(
-            self._browser,
-            "is_connected",
-            lambda: True,
-        )():
+        if self._browser is not None and not self._should_recycle_browser():
             return
         async with self._lock:
-            if self._browser is not None and getattr(
-                self._browser,
-                "is_connected",
-                lambda: True,
-            )():
+            if self._should_recycle_browser():
+                logger.info(
+                    "Recycling browser instance (contexts=%d, lifetime=%.0fs)",
+                    self._total_contexts_created,
+                    time.monotonic() - self._browser_launched_at
+                    if self._browser_launched_at
+                    else 0,
+                )
+                await self.close()
+            if self._browser is not None:
                 return
             from playwright.async_api import async_playwright
 
@@ -173,6 +195,9 @@ class SharedBrowserRuntime:
             self._browser = await self._playwright.chromium.launch(
                 headless=settings.playwright_headless,
             )
+            self._browser_launched_at = time.monotonic()
+            async with self._counter_lock:
+                self._total_contexts_created = 0
 
     def _build_context_options(self) -> dict[str, object]:
         return build_playwright_context_options()
@@ -197,6 +222,8 @@ class SharedBrowserRuntime:
             if proxy:
                 context_options["proxy"] = {"server": proxy}
             context = await self._browser.new_context(**context_options)
+            async with self._counter_lock:
+                self._total_contexts_created += 1
             page = await context.new_page()
             await _apply_stealth(page)
             yield page
@@ -223,6 +250,7 @@ class SharedBrowserRuntime:
                     logger.debug("Failed to stop playwright", exc_info=True)
             self._browser = None
             self._playwright = None
+            self._browser_launched_at = 0.0
 
     async def _update_active_contexts(self, delta: int) -> None:
         async with self._stats_lock:
@@ -241,6 +269,12 @@ class SharedBrowserRuntime:
             "active": self._active_contexts,
             "queued": self._queued_count,
             "capacity": self.max_contexts,
+            "total_contexts_created": self._total_contexts_created,
+            "browser_lifetime_seconds": int(
+                time.monotonic() - self._browser_launched_at
+            )
+            if self._browser_launched_at
+            else 0,
             "preferred_hosts": len(_BROWSER_PREFERRED_HOSTS),
         }
 
@@ -389,6 +423,7 @@ async def browser_fetch(
     traversal_mode: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = 1,
+    on_event=None,
     runtime_provider=get_browser_runtime,
     proxied_page_factory=temporary_browser_page,
     blocked_html_checker=is_blocked_html_async,
@@ -399,7 +434,17 @@ async def browser_fetch(
         runtime = await runtime_provider()
         page_context = runtime.page()
     async with page_context as page:
+        await _emit_browser_event(
+            on_event,
+            "info",
+            f"Launched headless browser (chromium, proxy: {proxy or 'direct'})",
+        )
         started_at = time.perf_counter()
+        deadline = started_at + float(timeout_seconds)
+
+        def _remaining() -> float:
+            return max(2.0, deadline - time.perf_counter())
+
         phase_timings_ms: dict[str, int] = {}
         normalized_surface = str(surface or "")
         payload_capture = _BrowserNetworkCapture(
@@ -417,10 +462,20 @@ async def browser_fetch(
         readiness_override = readiness_policy.get("listing_override")
         try:
             response, navigation_strategy = await _navigate_browser_page(
-                page,
-                url=url,
-                timeout_seconds=timeout_seconds,
-                phase_timings_ms=phase_timings_ms,
+                page, url=url, timeout_seconds=_remaining(), phase_timings_ms=phase_timings_ms,
+            )
+            page_title = ""
+            try:
+                page_title = clean_text(await page.title())
+            except Exception:
+                page_title = ""
+            await _emit_browser_event(
+                on_event,
+                "info",
+                (
+                    f"Page loaded in {phase_timings_ms.get('navigation', 0)}ms"
+                    + (f' - title="{page_title}"' if page_title else "")
+                ),
             )
             (
                 current_probe,
@@ -433,7 +488,7 @@ async def browser_fetch(
                 page,
                 url=url,
                 surface=normalized_surface,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=_remaining(),
                 readiness_override=readiness_override,
                 readiness_policy=readiness_policy,
                 phase_timings_ms=phase_timings_ms,
@@ -443,10 +498,11 @@ async def browser_fetch(
                 surface=surface,
                 traversal_mode=traversal_mode,
                 traversal_active=traversal_active,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=_remaining(),
                 max_pages=max_pages,
                 max_scrolls=max_scrolls,
                 phase_timings_ms=phase_timings_ms,
+                on_event=on_event,
             )
             response_missing = response is None
             status_code = response.status if response is not None else 0
@@ -476,6 +532,21 @@ async def browser_fetch(
                 block_classification=blocked_classification,
                 traversal_result=traversal_result,
             )
+            if traversal_result is not None and traversal_result.activated:
+                await _emit_browser_event(
+                    on_event,
+                    "info",
+                    (
+                        f"Traversal complete - {int(traversal_result.card_count or 0)} records, "
+                        f"stop reason: {traversal_result.stop_reason}"
+                    ),
+                )
+            if blocked:
+                await _emit_browser_event(
+                    on_event,
+                    "warning",
+                    f"Acquisition detected rate limiting or bot protection for {url}",
+                )
             screenshot_path = ""
             if browser_outcome != "usable_content":
                 screenshot_started_at = time.perf_counter()
@@ -531,6 +602,11 @@ async def browser_fetch(
                     else "text/html"
                 ),
                 blocked=blocked,
+                platform_family=resolve_platform_runtime_policy(
+                    page.url,
+                    html,
+                    surface=surface,
+                ).get("family"),
                 headers=(
                     copy_headers(response.headers)
                     if response is not None
@@ -623,12 +699,21 @@ async def _settle_browser_page(
     dict[str, object],
 ]:
     readiness_probes: list[dict[str, object]] = []
-    current_probe = await probe_browser_readiness(
-        page,
-        url=url,
-        surface=surface,
-        listing_override=readiness_override,
-    )
+    cached_html: str | None = None
+
+    async def _cached_probe(*, refresh_html: bool = False) -> dict[str, object]:
+        nonlocal cached_html
+        if refresh_html or cached_html is None:
+            cached_html = await page.content()
+        return await probe_browser_readiness(
+            page,
+            url=url,
+            surface=surface,
+            listing_override=readiness_override,
+            html=cached_html,
+        )
+
+    current_probe = await _cached_probe(refresh_html=True)
     _append_readiness_probe(
         readiness_probes,
         stage="after_navigation",
@@ -642,12 +727,7 @@ async def _settle_browser_page(
         optimistic_wait_started_at = time.perf_counter()
         await page.wait_for_timeout(wait_ms)
         phase_timings_ms["optimistic_wait"] = _elapsed_ms(optimistic_wait_started_at)
-        current_probe = await probe_browser_readiness(
-            page,
-            url=url,
-            surface=surface,
-            listing_override=readiness_override,
-        )
+        current_probe = await _cached_probe(refresh_html=True)
         _append_readiness_probe(
             readiness_probes,
             stage="after_optimistic_wait",
@@ -671,12 +751,7 @@ async def _settle_browser_page(
         except Exception:
             networkidle_timed_out = True
         phase_timings_ms["networkidle_wait"] = _elapsed_ms(networkidle_wait_started_at)
-        current_probe = await probe_browser_readiness(
-            page,
-            url=url,
-            surface=surface,
-            listing_override=readiness_override,
-        )
+        current_probe = await _cached_probe(refresh_html=True)
         _append_readiness_probe(
             readiness_probes,
             stage="after_networkidle",
@@ -696,12 +771,7 @@ async def _settle_browser_page(
             override=readiness_override,
         )
         phase_timings_ms["readiness_wait"] = _elapsed_ms(readiness_started_at)
-        current_probe = await probe_browser_readiness(
-            page,
-            url=url,
-            surface=surface,
-            listing_override=readiness_override,
-        )
+        current_probe = await _cached_probe(refresh_html=True)
         _append_readiness_probe(
             readiness_probes,
             stage="after_platform_readiness",
@@ -724,12 +794,7 @@ async def _settle_browser_page(
     )
     phase_timings_ms["expansion"] = _elapsed_ms(expansion_started_at)
     if expansion_diagnostics.get("clicked_count", 0):
-        current_probe = await probe_browser_readiness(
-            page,
-            url=url,
-            surface=surface,
-            listing_override=readiness_override,
-        )
+        current_probe = await _cached_probe(refresh_html=True)
         _append_readiness_probe(
             readiness_probes,
             stage="after_detail_expansion",
@@ -755,6 +820,7 @@ async def _serialize_browser_page_content(
     max_pages: int,
     max_scrolls: int,
     phase_timings_ms: dict[str, int],
+    on_event=None,
 ):
     traversal_result = None
     traversal_started_at = time.perf_counter()
@@ -766,6 +832,7 @@ async def _serialize_browser_page_content(
             max_pages=max_pages,
             max_scrolls=max_scrolls,
             timeout_seconds=timeout_seconds,
+            on_event=on_event,
         )
         html = traversal_result.compose_html()
     else:
@@ -911,48 +978,23 @@ async def probe_browser_readiness(
 
 
 async def listing_card_signal_count(page: Any, *, surface: str) -> int:
-    selector_group = (
-        "jobs" if str(surface or "").strip().lower().startswith("job_") else "ecommerce"
-    )
-    selectors = [
-        str(selector).strip()
-        for selector in list(CARD_SELECTORS.get(selector_group) or [])
-        if str(selector).strip()
+    selector_group = "jobs" if str(surface or "").strip().lower().startswith("job_") else "ecommerce"
+    selectors = CARD_SELECTORS.get(selector_group) if isinstance(CARD_SELECTORS, dict) else []
+    normalized_selectors = [
+        str(selector).strip() for selector in list(selectors or []) if str(selector).strip()
     ]
-    if not selectors:
+    if not normalized_selectors:
         return 0
-    try:
-        count = await page.evaluate(
-            """
-            (selectors) => {
-              let highest = 0;
-              for (const selector of selectors) {
-                try {
-                  highest = Math.max(highest, document.querySelectorAll(selector).length);
-                } catch (error) {
-                  continue;
-                }
-              }
-              return highest;
-            }
-            """,
-            selectors,
-        )
-    except Exception:
-        highest = 0
-        for selector in selectors:
-            try:
-                highest = max(highest, await page.locator(selector).count())
-            except Exception:
-                continue
-        return highest
-    try:
-        return max(0, int(count or 0))
-    except (TypeError, ValueError):
-        return 0
+    return await count_listing_cards(
+        page,
+        surface=surface,
+        allow_heuristic=False,
+    )
 
 
 async def count_matching_selectors(page: Any, *, selectors: list[str]) -> int:
+    from playwright.async_api import Error as PlaywrightError
+
     matches = 0
     for selector in selectors:
         normalized = str(selector or "").strip()
@@ -960,6 +1002,8 @@ async def count_matching_selectors(page: Any, *, selectors: list[str]) -> int:
             continue
         try:
             matches += int(await page.locator(normalized).count())
+        except PlaywrightError:
+            raise
         except Exception:
             continue
     return matches
@@ -982,42 +1026,18 @@ async def expand_detail_content_if_needed(
     surface: str,
     readiness_probe: dict[str, object],
 ) -> dict[str, object]:
+    current_probe = dict(readiness_probe or {})
     if "detail" not in str(surface or "").lower():
-        return {
-            "status": "skipped",
-            "reason": "non_detail_surface",
-            "clicked_count": 0,
-            "expanded_elements": [],
-            "interaction_failures": [],
-            "dom": {},
-            "aom": {},
-        }
-    if bool(readiness_probe.get("is_ready")):
-        return {
-            "status": "skipped",
-            "reason": "already_ready",
-            "clicked_count": 0,
-            "expanded_elements": [],
-            "interaction_failures": [],
-            "dom": {},
-            "aom": {},
-        }
-    if not bool(readiness_probe.get("detail_like")):
-        return {
-            "status": "skipped",
-            "reason": "not_detail_like",
-            "clicked_count": 0,
-            "expanded_elements": [],
-            "interaction_failures": [],
-            "dom": {},
-            "aom": {},
-        }
+        return _detail_expansion_skip("non_detail_surface")
+    if current_probe.get("is_ready"):
+        return _detail_expansion_skip("already_ready")
+    if readiness_probe and not current_probe.get("detail_like"):
+        return _detail_expansion_skip("not_detail_like")
     dom = await expand_all_interactive_elements(
         page,
         surface=surface,
         max_elapsed_ms=int(crawler_runtime_settings.detail_expand_max_elapsed_ms),
     )
-    current_probe = readiness_probe
     if dom.get("clicked_count", 0):
         current_probe = await probe_browser_readiness(
             page,
@@ -1167,6 +1187,17 @@ async def expand_interactive_elements_via_accessibility(
     candidates = accessibility_expand_candidates(snapshot, surface=surface)
     diagnostics["buttons_found"] = len(candidates)
     max_interactions = max(0, int(crawler_runtime_settings.detail_aom_expand_max_interactions))
+    if len(candidates) > max_interactions:
+        keywords = detail_expansion_keywords(surface)
+        if keywords:
+            prioritized = [
+                item for item in candidates if any(keyword in item[1] for keyword in keywords)
+            ]
+            prioritized_set = set(prioritized)
+            candidates = prioritized + [
+                item for item in candidates if item not in prioritized_set
+            ]
+        diagnostics["skipped_count"] = len(candidates) - max_interactions
     for role, name in candidates[:max_interactions]:
         if max_elapsed_ms is not None and _elapsed_ms(started_at) >= int(max_elapsed_ms):
             diagnostics["status"] = "time_budget_reached"
@@ -1200,6 +1231,18 @@ async def expand_interactive_elements_via_accessibility(
         )
     diagnostics["elapsed_ms"] = _elapsed_ms(started_at)
     return diagnostics
+
+
+def _detail_expansion_skip(reason: str) -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "reason": reason,
+        "clicked_count": 0,
+        "expanded_elements": [],
+        "interaction_failures": [],
+        "dom": {},
+        "aom": {},
+    }
 
 
 def accessibility_expand_candidates(
@@ -1386,6 +1429,15 @@ def build_failed_browser_diagnostics(
 
 def _elapsed_ms(started_at: float) -> int:
     return max(0, int((time.perf_counter() - started_at) * 1000))
+
+
+async def _emit_browser_event(on_event, level: str, message: str) -> None:
+    if on_event is None:
+        return
+    try:
+        await on_event(level, message)
+    except Exception:
+        logger.debug("Browser event callback failed", exc_info=True)
 
 
 def _is_timeout_error(exc: Exception) -> bool:

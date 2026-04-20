@@ -17,7 +17,7 @@ from app.services.crawl_state import (
 from app.services.crawl_utils import normalize_target_url, parse_csv_urls_async
 from app.services.domain_utils import normalize_domain
 from app.services.pipeline.core import _mark_run_failed, _process_single_url
-from app.services.pipeline.runtime_helpers import STAGE_FETCH, log_event, set_stage
+from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE, log_event, set_stage
 from app.services.pipeline.types import URLProcessingConfig, URLProcessingResult
 from app.services.publish import VERDICT_ERROR, _aggregate_verdict
 from app.services.run_summary import as_int
@@ -99,7 +99,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             url_count=total_urls,
             record_count=as_int(run.get_summary("record_count", 0)),
             progress=as_int(run.get_summary("progress", 0)),
-            current_stage=STAGE_FETCH,
+            current_stage=STAGE_ACQUIRE,
             domain=normalize_domain(url_list[0]) if url_list else "",
             resolved_url_list=url_list,
         )
@@ -125,11 +125,15 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 await session.commit()
                 return
 
-            await log_event(session, run.id, "info", f"Processing URL {idx}/{total_urls}: {url}")
+            if idx == 1:
+                await log_event(session, run.id, "info", f"Starting crawl run for {url}")
+                await log_event(session, run.id, "info", f"Resolved {total_urls} seed URL(s), domain policy: standard")
+            else:
+                await log_event(session, run.id, "info", f"Starting crawl run for {url} ({idx}/{total_urls})")
             await set_stage(
                 session,
                 run,
-                STAGE_FETCH,
+                STAGE_ACQUIRE,
                 current_url=url,
                 current_url_index=idx,
                 total_urls=total_urls,

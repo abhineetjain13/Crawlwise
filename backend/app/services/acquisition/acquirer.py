@@ -24,6 +24,7 @@ class AcquisitionRequest:
     )
     acquisition_profile: dict[str, object] = field(default_factory=dict)
     checkpoint: Any = None
+    on_event: Any = None
 
     def with_profile_updates(self, **updates: object) -> "AcquisitionRequest":
         profile = dict(self.acquisition_profile)
@@ -59,6 +60,7 @@ class AcquisitionResult:
     status_code: int
     content_type: str = "text/html"
     blocked: bool = False
+    platform_family: str | None = None
     json_data: dict[str, object] | list[object] | None = None
     headers: dict[str, str] = field(default_factory=dict)
     adapter_records: list[dict[str, object]] = field(default_factory=list)
@@ -71,6 +73,15 @@ class AcquisitionResult:
 
 
 ProxyPoolExhausted = ProxyPoolExhaustedError
+
+
+async def _emit_event(on_event: Any, level: str, message: str) -> None:
+    if on_event is None:
+        return
+    try:
+        await on_event(level, message)
+    except Exception:
+        return
 
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
@@ -88,6 +99,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         requires_browser=bool(runtime_policy.get("requires_browser")),
     )
     try:
+        await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
         result = await fetch_page(
             effective_url,
             proxy_list=request.proxy_list,
@@ -97,6 +109,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
             browser_reason=browser_reason,
+            on_event=request.on_event,
         )
     except (httpx.HTTPError, TimeoutError, OSError) as exc:
         if not request.proxy_list:
@@ -110,6 +123,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         status_code=result.status_code,
         content_type=result.content_type,
         blocked=result.blocked,
+        platform_family=result.platform_family,
         headers=_headers_to_dict(result.headers),
         network_payloads=list(result.network_payloads or []),
         browser_diagnostics=dict(result.browser_diagnostics or {}),

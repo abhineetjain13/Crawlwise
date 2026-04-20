@@ -465,7 +465,7 @@ async def crawls_logs_ws(
                 if run.status_value in TERMINAL_STATUSES and not rows:
                     await websocket.close(code=1000, reason="Run completed")
                     return
-                await asyncio.sleep(0.75)
+                await asyncio.sleep(0.25)
 
         except WebSocketDisconnect:
             return

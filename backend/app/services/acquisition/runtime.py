@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 import logging
@@ -13,7 +14,7 @@ from bs4 import BeautifulSoup, Comment
 from app.core.config import settings
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.field_value_utils import clean_text
+from app.services.field_value_core import clean_text
 from app.services.network_resolution import (
     address_family_preference,
     build_async_http_client,
@@ -37,6 +38,7 @@ class PageFetchResult:
     method: str
     content_type: str = "text/html"
     blocked: bool = False
+    platform_family: str | None = None
     headers: httpx.Headers = field(default_factory=httpx.Headers)
     network_payloads: list[dict[str, object]] = field(default_factory=list)
     browser_diagnostics: dict[str, object] = field(default_factory=dict)
@@ -374,7 +376,11 @@ async def http_fetch(
     html = response.text or ""
     headers = copy_headers(response.headers)
     vendor = classify_block_from_headers(headers)
-    blocked = bool(vendor) or await blocked_html_checker(html, response.status_code)
+    blocked_result = blocked_html_checker(html, response.status_code)
+    if inspect.isawaitable(blocked_result):
+        blocked_result = await blocked_result
+    blocked = bool(vendor) or bool(blocked_result)
+    runtime_policy = resolve_platform_runtime_policy(str(response.url), html)
     return PageFetchResult(
         url=url,
         final_url=str(response.url),
@@ -383,6 +389,7 @@ async def http_fetch(
         method="httpx",
         content_type=response.headers.get("content-type", "text/html"),
         blocked=blocked,
+        platform_family=runtime_policy.get("family"),
         headers=headers,
     )
 
@@ -429,6 +436,7 @@ def _curl_fetch_sync(
     headers = copy_headers(response.headers)
     vendor = classify_block_from_headers(headers)
     blocked = bool(vendor) or is_blocked_html(html, response.status_code)
+    runtime_policy = resolve_platform_runtime_policy(str(response.url), html)
     return PageFetchResult(
         url=url,
         final_url=str(response.url),
@@ -437,12 +445,15 @@ def _curl_fetch_sync(
         method="curl_cffi",
         content_type=response.headers.get("content-type", "text/html"),
         blocked=blocked,
+        platform_family=runtime_policy.get("family"),
         headers=headers,
     )
 
 
 def _looks_like_js_shell(html: str, *, analysis: HtmlAnalysis | None = None) -> bool:
     parsed = analysis or _analyze_html(html)
+    if _looks_like_js_required_placeholder(parsed):
+        return True
     if len(parsed.visible_text) > 120:
         return False
     root = parsed.soup.find(id=re.compile(r"root|app|__next", re.I))
@@ -528,6 +539,8 @@ def _looks_like_listing_shell(
     analysis: HtmlAnalysis | None = None,
 ) -> bool:
     parsed = analysis or _analyze_html(result.html)
+    if _looks_like_js_required_placeholder(parsed):
+        return True
     lowered_surface = str(result.final_url or result.url or "").strip().lower()
     lowered_html = parsed.lowered_html
     if "#/" in lowered_surface:
@@ -552,6 +565,24 @@ def _looks_like_listing_shell(
             "application/ld+json",
         )
     )
+
+
+def _looks_like_js_required_placeholder(parsed: HtmlAnalysis) -> bool:
+    combined_text = clean_text(f"{parsed.title_text} {parsed.visible_text}").lower()
+    if not combined_text:
+        return False
+    if not any(
+        phrase in combined_text
+        for phrase in (
+            "javascript is disabled",
+            "please enable javascript",
+            "enable javascript to continue",
+            "javascript required",
+            "requires javascript",
+        )
+    ):
+        return False
+    return bool(parsed.soup.find("noscript")) or len(parsed.visible_text) <= 400
 
 
 def _state_payload_has_content(payload: Any) -> bool:

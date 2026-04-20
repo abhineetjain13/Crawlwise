@@ -12,10 +12,12 @@ from html import unescape
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.field_value_utils import clean_text
+from app.services.domain_utils import normalize_domain
+from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
 
 _HTML_PARSER = "html.parser"
+_GREENHOUSE_API_HOST = normalize_domain("https://boards-api.greenhouse.io")
 
 
 class GreenhouseAdapter(BaseAdapter):
@@ -64,10 +66,11 @@ class GreenhouseAdapter(BaseAdapter):
     def _extract_company_slug(self, url: str, html: str) -> str | None:
         """Extract the company slug from URL or embedded script."""
         parsed = urlparse(url)
+        host = normalize_domain(url)
 
         # boards.greenhouse.io/embed/job_board?for=<company>
         if (
-            self.greenhouse_board_host in parsed.netloc
+            _host_matches(host, normalize_domain(f"https://{self.greenhouse_board_host}"))
             and parsed.path.startswith("/embed/job_board")
         ):
             company = parse_qs(parsed.query).get("for", [""])[0].strip()
@@ -75,13 +78,19 @@ class GreenhouseAdapter(BaseAdapter):
                 return company
 
         # boards.greenhouse.io/<company>
-        if self.greenhouse_board_host in parsed.netloc or self.greenhouse_job_board_host in parsed.netloc:
+        if any(
+            _host_matches(host, candidate)
+            for candidate in (
+                normalize_domain(f"https://{self.greenhouse_board_host}"),
+                normalize_domain(f"https://{self.greenhouse_job_board_host}"),
+            )
+        ):
             parts = parsed.path.strip("/").split("/")
             if parts and parts[0]:
                 return parts[0]
 
         # boards-api.greenhouse.io/v1/boards/<company>/jobs
-        if "boards-api.greenhouse.io" in parsed.netloc:
+        if _host_matches(host, _GREENHOUSE_API_HOST):
             match = re.search(r"/boards/([^/]+)/", parsed.path)
             if match:
                 return match.group(1)
@@ -102,7 +111,6 @@ class GreenhouseAdapter(BaseAdapter):
         )
         if match:
             return match.group(1)
-
         return None
 
     async def _try_api(self, company_slug: str) -> list[dict]:
@@ -372,3 +380,11 @@ class GreenhouseAdapter(BaseAdapter):
         match = re.search(r"/jobs/(\d+)", urlparse(str(url or "")).path)
         query_id = parse_qs(urlparse(str(url or "")).query).get("gh_jid", [""])[0]
         return clean_text(match.group(1) if match else query_id)
+
+
+def _host_matches(host: str, expected: str) -> bool:
+    normalized_host = str(host or "").strip().lower()
+    normalized_expected = str(expected or "").strip().lower()
+    return normalized_host == normalized_expected or normalized_host.endswith(
+        f".{normalized_expected}"
+    )

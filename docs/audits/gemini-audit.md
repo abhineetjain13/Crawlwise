@@ -1,193 +1,178 @@
-
 1. SOLID / DRY / KISS — Core Software Principles
+Score: 4/10
+Violations:
+[HIGH] app/services/detail_extractor.py → build_detail_record (lines 280–385):
+Violates Single Responsibility Principle (SRP) and Testability. This function is a massive closure factory that defines four nested functions (_collect_authoritative_stage, _collect_structured_stage, etc.) which silently mutate outer-scope dictionaries (candidates, candidate_sources, field_sources). This makes the individual extraction phases completely untestable in isolation and tightly couples candidate collection to the final materialization step.
+[MEDIUM] app/services/adapters/adp.py → _text (lines 14 & 166):
+Violates DRY. A module-level helper _text() is defined, but the class also implements an identical self._text() instance method.
+[MEDIUM] app/services/llm_tasks.py → _validate_task_payload and children (lines 212–306):
+Violates KISS. Over 90 lines of manual isinstance, dict.get, and string formatting checks to validate LLM JSON payloads. The project already uses Pydantic extensively (e.g., app/schemas), rendering this massive wall of imperative validation code obsolete technical debt.
+Verdict: The extraction pipeline relies heavily on nested closures mutating shared state, making the core data flow opaque and fragile. Basic schema validation is hand-rolled rather than utilizing the existing Pydantic framework.
+2. Configuration Hygiene — No Site-Specific Hacks
 Score: 3/10
 Violations:
-[CRITICAL] app/services/acquisition/browser_runtime.py → browser_fetch (lines 280–503):
-Breaks Single Responsibility Principle. Functions as a 200+ line God Function managing navigation, DOM readiness probes, AOM/DOM detail expansion, XHR response interception, traversal mode routing, anti-bot classification, and screenshot capture. Enables silent state-machine deadlocks when asynchronous interception tasks outlive context closures.
-[HIGH] app/services/config/_module_exports.py → make_getattr (lines 9–35):
-Breaks KISS. Implements dynamic __getattr__ module-level exports to bridge Pydantic settings into module namespaces. Defeats static analysis (mypy), obfuscates dependency tracing, and masks configuration initialization order bugs.
-[MEDIUM] app/services/adapters/*.py → _clean_text (multiple files):
-Breaks DRY. Identical clean_text wrapper methods are duplicated across adp.py, greenhouse.py, icims.py, jibe.py, paycom.py, saashr.py, ultipro.py, and workday.py rather than directly importing and using app.services.field_value_utils.clean_text. Creates redundant abstraction layers.
-[LOW] app/services/pipeline/core.py → _process_single_url (lines 200–232):
-Breaks Dependency Inversion. Direct orchestration of lowest-level modules (persist_html_artifact, CrawlRecord SQLAlchemy models) inside the highest-level pipeline coordinator, tightly coupling URL processing to specific database ORM implementations.
-Verdict: Core principles are routinely sacrificed for script-like procedural execution in the critical path. The over-reliance on massive coordinator functions (browser_fetch, _process_single_url) makes the acquisition and pipeline layers highly fragile and resistant to safe refactoring.
-2. Configuration Hygiene — No Site-Specific Hacks
-Score: 4/10
-Violations:
-[HIGH] app/services/config/platforms.json → datadome_protected (lines 173–182):
-Breaks Configuration Hygiene. Hardcodes tenant/site-specific domains (autozone.com, footlocker.com, reddit.com) into core platform registry to force browser escalation, bypassing dynamic bot-detection signatures.
-[HIGH] app/services/structured_sources.py → _challenge_element_hits (lines 351–370):
-Breaks Configuration Hygiene. Hardcodes captcha-delivery.com and datadome directly into Python extraction logic instead of loading from app.services.config.block_signatures.
-[MEDIUM] app/services/field_value_utils.py → _is_other_detail_link (lines 62–74):
-Breaks Configuration Hygiene. Hardcodes PRODUCT_URL_HINTS and JOB_URL_HINTS directly into a generic image extraction filter instead of resolving via surface definitions.
-[MEDIUM] app/services/pipeline/pipeline_config.py vs app/services/config/crawl_runtime.py:
-Breaks Single Source of Truth. PipelineDefaults defines static MAX_PAGES, MAX_SCROLLS, MAX_RECORDS which contradict or shadow the typed Pydantic environment configurations in CrawlerRuntimeSettings.
-Verdict: The system exhibits significant configuration leakage, burying domain-specific heuristics and bot-detection vendors directly inside extraction and routing modules. This guarantees maintenance drift as target platforms evolve their URL structures and CDN providers.
+[CRITICAL] app/services/platform_url_normalizers.py → normalize_adp_detail_url (lines 9–14):
+Violates Open-Closed Principle (OCP) and Configuration Hygiene. ADP-specific domains (workforcenow.adp.com, myjobs.adp.com) are hardcoded directly into the Python logic. If a new ADP tenant domain is added to platforms.json, the normalizer will silently fail to process it because it relies on this hardcoded bypass.
+[HIGH] app/services/adapters/greenhouse.py, jibe.py, saashr.py, oracle_hcm.py, paycom.py, ultipro.py (Multiple locations):
+Magic numbers. Widespread hardcoding of timeout_seconds=10 or timeout_seconds=12 directly inside HTTP adapter calls. This ignores adapter_runtime_settings and crawler_runtime_settings, making it impossible for operators to globally scale timeouts during high-latency events.
+[MEDIUM] app/services/field_value_dom.py → _image_candidate_score (line 72):
+Hardcoded query parameters (w, h, width, height) for CDN images inside logic rather than referencing the _CDN_IMAGE_QUERY_PARAMS constant defined earlier in the file.
+Verdict: Domain routing and timeout configurations are leaking out of the configuration files and becoming embedded as magic strings/numbers directly inside the execution paths.
 3. Scalability, Maintainability & Resource Management
-Score: 5/10
+Score: 2/10
 Violations:
-[CRITICAL] app/services/acquisition/browser_runtime.py → _schedule_capture (lines 320–371):
-Resource Leak / Unbounded Concurrency. Spawns unmanaged background tasks (asyncio.create_task(_capture_response)) inside a page.on("response") handler. High-throughput sites will spawn thousands of untracked tasks that compete for the event loop and crash the worker if the browser context closes unexpectedly.
-[HIGH] app/services/pipeline/core.py → _persist_browser_artifacts (lines 446–486):
-Memory Exhaustion. Reads full PNG screenshot buffers into memory as raw bytes and delegates to asyncio.to_thread(persist_png_artifact). Concurrent browser tasks taking full-page screenshots will easily exceed container memory limits (OOM kill).
-[MEDIUM] app/services/llm_tasks.py → _trim_prompt_section_body (lines 307–318):
-CPU Blocking. Uses json.loads inside a token-budgeting loop on large strings without yielding to the event loop, causing latency spikes on worker threads processing large payload truncation.
-[LOW] app/services/pipeline/pipeline_config.py → _ROBOTS_CACHE (lines 20-23):
-Lock Contention. Uses a synchronous threading.RLock() around a TTLCache in an async pipeline, risking event-loop blocking during high-concurrency URL dispatch.
-Verdict: Async concurrency is poorly managed around I/O boundaries and event listeners. The unbounded creation of Playwright response-interception tasks combined with synchronous byte-buffer passing for artifacts creates severe scaling limits for concurrent crawls.
+[CRITICAL] app/services/pipeline/core.py → _run_extraction_stage (lines 222 & 259):
+Blocks the async event loop. _extract_records_for_acquisition calls extract_records completely synchronously. extract_records triggers BeautifulSoup parsing, Lexbor HTML parsing, JSON-LD decoding, JMESPath queries, and extruct microdata parsing. Running CPU-bound DOM parsing synchronously on the main thread will catastrophicly stall the FastAPI event loop under concurrent load.
+[HIGH] app/services/crawl_service.py → _track_local_run_task (lines 80–91):
+Unsafe task tracking. Spawns an untracked background failure task (failure_task = asyncio.create_task(_record_failure())) inside a callback. If the application receives a SIGTERM before this task completes, the failure state will be lost, leaving phantom "RUNNING" jobs in the database.
+[MEDIUM] app/services/extraction_context.py → prepare_extraction_context (line 30):
+Destructive DOM mutation prior to parsing. It calls node.decompose() on noise containers before giving structural extractors a chance to run. If the selector is overly aggressive, it permanently destroys DOM data that cannot be recovered by downstream fallback extractors.
+Verdict: The failure to offload heavy DOM and JSON parsing to a thread pool (asyncio.to_thread) is a fatal flaw that guarantees event loop starvation in production.
 4. Extraction & Normalisation Pipeline Audit
-Score: 6/10
-Violations:
-[HIGH] app/services/network_payload_mapper.py → map_network_payloads_to_fields (lines 14–29):
-Incomplete Hydration/Ghost-Routing Gap. XHR payloads are mapped, but app/services/acquisition/browser_runtime.py caps network payload captures at 500KB (_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES). E-commerce catalogs and enterprise ATS JSON payloads frequently exceed this, causing silent pipeline degradation to lower-quality DOM scraping.
-[HIGH] app/services/field_value_candidates.py → _primary_source_for_record (lines 141–148):
-Source Ranking Violation. Does not enforce true first-match-wins deterministic ranking. Candidates are collected from all sources, merged, and the "primary source" string is naively derived by doing an O(N) scan of _SOURCE_PRIORITY against whatever fields survived deduplication.
-[MEDIUM] app/services/pipeline/core.py → _apply_llm_fallback (lines 489–559):
-LLM Boundary Bleed. Directly merges LLM outputs into the canonical record state via coerce_field_value without running it back through the schema normalisation pipeline, allowing the LLM to inject hallucinated data types.
-[MEDIUM] app/services/structured_sources.py → parse_json_ld (lines 49–59):
-Suboptimal Graph Resolution. Traverses @graph structures as flat arrays but fails to resolve @id node references between entities, resulting in orphaned product/offer relationships on sites using strictly normalized JSON-LD graphs.
-Verdict: The extraction hierarchy is ambitious and covers advanced edge cases (AOM expansion, XHR ghost-routing, Next.js hydration). However, hardcoded byte limits on XHR payloads and flat-tree JSON-LD parsing cripple the effectiveness of these high-tier sources, forcing unnecessary reliance on DOM and LLM fallbacks.
-5. Traversal Mode Audit
 Score: 7/10
 Violations:
-[HIGH] app/services/acquisition/traversal.py → _run_paginate_traversal (lines 205–259):
-State Machine Escape. Navigation relies on page.goto(next_url) without validating if next_url is currently experiencing a vendor block or CAPTCHA challenge. If page 2 triggers Cloudflare, traversal silently records the CAPTCHA DOM as a "successful" traversal fragment.
-[MEDIUM] app/services/acquisition/traversal.py → _detect_auto_mode (lines 100–121):
-Heuristic Brittleness. Automatically downgrades to "scroll" if a "next page" anchor lacks an href or has javascript:. Modern React/Vue SPAs frequently use href="#" with onClick handlers for pagination, causing the traversal engine to misclassify SPA pagination as infinite scroll.
-[LOW] app/services/crawl_utils.py → resolve_traversal_mode (lines 79–112):
-Silent Fallthrough. Silently returns None and aborts traversal if the configuration contains an invalid traversal string instead of raising a terminal CrawlerConfigurationError, resulting in single-page runs disguised as successful crawls.
-Verdict: Traversal handles infinite scroll, pagination, and 'load more' elegantly with DOM snapshot comparison. However, it lacks robust anti-bot awareness between page transitions and misclassifies modern SPA pagination patterns.
-6. Resilience & Error Handling
-Score: 4/10
+[HIGH] app/services/field_value_dom.py → apply_selector_fallbacks (lines 351–386):
+Source ranking pollution. It blindly executes all custom selector rules and generic DOM patterns, appending them to candidates without tracking the precision of the match. Because _ordered_candidates_for_field treats all dom_selector matches as equally ranked, a highly precise user-defined XPath can be overwritten by a generic regex fallback if they end up in the same bucket.
+[MEDIUM] app/services/adapters/greenhouse.py → _extract_detail_from_html (lines 142–165):
+Redundant DOM extraction. Adapters like Greenhouse and OracleHCM manually implement BS4 h1 and body scraping fallbacks. This logic is already perfectly handled by the generic pipeline's dom_h1 and dom_sections tiers. It duplicates logic and bypasses the generic confidence scoring mechanism.
+[MEDIUM] app/services/field_policy.py → get_surface_field_aliases (lines 40–60):
+Surface Bleed Risk. The dynamic patching of alias dictionaries based on normalized.startswith("ecommerce_") mutates aliases at runtime. While technically contained, this approach risks injecting job-specific aliases (like commitment) into commerce searches if the alias dictionary boundaries drift.
+Verdict: Excellent inclusion of AOM, JMESPath XHR interception, and Hydrated State extraction. However, the adapter layer duplicates generic DOM logic, and selector ranking lacks tie-breaking granularity.
+5. Traversal Mode Audit
+Score: 8/10
 Violations:
-[CRITICAL] app/services/acquisition/browser_runtime.py → _wait_for_listing_readiness (lines 531–539):
-Swallowed Exception. Bare except Exception: catches PlaywrightTimeoutError but returns a synthetic {"status": "timed_out"} dictionary. Masks underlying browser crashes or context destruction.
-[HIGH] app/services/pipeline/core.py → _run_extraction_stage (lines 280–306):
-Masked Pipeline Failure. Catches generic (RuntimeError, ValueError, TypeError, OSError) during browser retry and continues pipeline execution with empty records instead of failing the URL.
-[MEDIUM] app/services/structured_sources.py → _revive_flattened_slot (lines 352–372):
-Silent Recursion Failure. Catches broad Exception when reviving Nuxt payload arrays. A malformed recursive reference will crash the JSON revival and silently return the unparsed array, entirely skipping the high-quality __NUXT_DATA__ source tier.
-Verdict: Exception handling heavily abuses except Exception: continue patterns to keep the pipeline moving at all costs. This creates "zombie" runs that technically complete but produce zero records due to swallowed upstream crashes.
+[LOW] app/services/acquisition/traversal.py → _looks_like_paginate_control (lines 352–395):
+Executes a massive block of inline JavaScript inside Playwright locator.evaluate. While functionally correct, embedding 40 lines of raw JavaScript inside a Python string makes linting, testing, and escaping incredibly brittle.
+Verdict: Highly robust cycle detection and pagination fallback heuristics. Traversal appropriately isolates advanced modes from standard escalation pathways.
+6. Resilience & Error Handling
+Score: 5/10
+Violations:
+[HIGH] app/services/crawl_fetch_runtime.py → fetch_page (lines 160, 218):
+Catches bare Exception during HTTP fetch loops and Browser fallbacks without localized retry logic. If a transient httpx.ConnectTimeout occurs, it immediately escalates to a full Browser render or fails the job entirely, bypassing the intended http_retry_status_codes backoff behavior which is completely absent in the fetch_page function.
+[MEDIUM] app/services/field_value_dom.py → safe_select (line 155):
+except Exception: logger.debug(...); return[]. Swallows CSS syntax errors silently. If a user provides a malformed CSS selector in their domain memory, it will fail silently in the background rather than surfacing a validation error to the control plane.
+[MEDIUM] app/services/llm_tasks.py → _trim_prompt_section_body (line 343):
+Swallows json.JSONDecodeError with a bare pass. If the LLM prompt truncation splits a JSON string exactly at a boundary that makes it invalid, it falls back to raw string truncation which often breaks the LLM's parsing ability entirely.
+Verdict: Error boundaries are too wide. Bare exception handlers mask root causes, and transient HTTP failures escalate to heavy browser loads instead of intelligently backing off.
 7. Dead Code & Technical Debt Hotspots
 Score: 6/10
 Violations:
-[MEDIUM] app/services/acquisition/http_client.py → request_result (lines 33–50):
-Dead Code / Abstraction Leak. Contains a block if prefer_browser or (not expect_json and method == "GET" and not headers...) that executes a full browser acquisition inside the HTTP client module. Bypasses the actual pipeline orchestrator entirely.
-[LOW] app/services/crawl_utils.py → _log_for_pytest (lines 22–29):
-Technical Debt. Hacks logging behavior specifically for Pytest LogCaptureHandler detection in production code, violating test/prod separation.
-[LOW] app/services/pipeline/pipeline_config.py → SECTION_PATTERNS:
-Dead Configuration. Defines SECTION_PATTERNS which overlaps entirely with EXTRACTION_RULES.semantic_detail.feature_section_aliases but lives in an isolated file.
-Verdict: The codebase has accumulated minor technical debt around testing boundaries and configuration overlap, but the most severe issue is abstraction leakage where low-level clients attempt to orchestrate high-level browser fallback paths.
+[HIGH] app/services/pipeline/core.py → _validate_llm_field_type (lines 92–106):
+Technical Debt. It contains a hardcoded _LLML_FIELD_TYPE_VALIDATORS map that duplicates schema definitions already present in app/services/config/field_mappings.py.
+[MEDIUM] app/services/extraction_html_helpers.py → extract_job_sections (lines 7–12):
+Technical Debt. Contains a hardcoded dictionary _JOB_SECTION_PATTERNS ("what you", "qualif", "perks") for semantic extraction. This logic should be externalized to the EXTRACTION_RULES JSON config rather than living inside executable code.
+[LOW] app/services/llm_runtime.py (lines 14–29):
+Exports discover_xpath_candidates, extract_missing_fields directly from llm_tasks.py creating circular dependency risks and muddying module boundaries.
+Verdict: Several extraction heuristics remain hardcoded in Python files rather than utilizing the centralized JSON rule engine, creating maintenance debt.
 8. Acquisition Mode Audit & Site Coverage
 Score: 8/10
 Violations:
-[MEDIUM] app/services/acquisition/browser_identity.py → _generate_coherent_fingerprint (lines 68–91):
-Fingerprint Generation Loop. Uses a for _ in range(3): retry loop to find a fingerprint matching the _UA_VERSION_RE regex. If browserforge generates 3 incoherent fingerprints, it falls back to a mismatched User-Agent/Brand combination, triggering Cloudflare/DataDome blocks immediately.
-[MEDIUM] app/services/acquisition/runtime.py → should_escalate_to_browser (lines 177–197):
-Heuristic Bleed. URL surface logic ("detail" in surface) leaks directly into the core HTTP-to-Browser escalation orchestrator, bypassing the PlatformPolicy definitions.
-Verdict: Excellent detection of hydrated state (__NEXT_DATA__, __INITIAL_STATE__) and strong integration of custom curl_cffi impersonation. Fingerprinting logic is mostly sound but possesses a dangerous fallback edge case that guarantees ban rates on heavily protected sites.
+[MEDIUM] app/services/structured_sources.py → harvest_js_state_objects (lines 191–214):
+__NUXT_DATA__ extraction is present but lacks native support for React Query (__APOLLO_STATE__) hydration reconstruction. While the prompt identifies it as a target, the implementation strictly maps Nuxt and NextJS, leaving a JS-truth coverage gap for major Shopify headless storefronts that use Apollo.
+[LOW] app/services/pipeline/core.py → _build_acquisition_request (lines 173–183):
+Generates a completely new AcquisitionProfile per URL. Browser identities and fingerprint states should ideally be pinned to the run_id across multiple URLs in the same run to avoid triggering bot-defenses due to rapidly changing TLS/Browser fingerprints mid-crawl.
+Verdict: Outstanding implementation of Ghost-routing via NETWORK_PAYLOAD_SPECS. The fallback matrix is highly logical, though cross-request fingerprint persistence is missing.
 FINAL SUMMARY
-Overall Score: 5.4/10
+Overall Score: 5.3/10
 Critical Path:
-Event Loop Starvation via Playwright Response Listeners: Unbounded asyncio.create_task calls inside page.on("response") will crash worker instances on high-traffic JSON API pages due to uncontrolled concurrency.
-OOM via Synchronous Artifact Persistence: Passing uncompressed raw bytes of full-page PNG screenshots to asyncio.to_thread for disk persistence will exceed container memory limits during parallel crawling.
-Incomplete XHR Payload Capture: The hardcoded 500KB cap on intercepted network JSON payloads actively drops the most valuable structured data sources (large eCommerce catalogs / ATS listings).
-Zombie Crawls via Swallowed Exceptions: Generic except Exception: return {} blocks in traversal, JS-revival, and browser readiness probes mask fatal browser crashes as "empty content".
-State Machine Escapes during Traversal: Pagination mechanisms blindly trigger .goto() without validating CAPTCHA interceptions, silently parsing bot-challenge DOMs as target records.
+Async Event Loop Starvation: _run_extraction_stage calls heavily CPU-bound DOM parsing (BeautifulSoup, Lexbor, extruct) synchronously in the main async path, which will completely lock up the FastAPI server under moderate concurrent load.
+Hardcoded Tenant Normalization: platform_url_normalizers.py hardcodes ADP domains, bypassing OCP and the platforms.json registry, meaning new ADP tenants will silently fail.
+Task Tracking Data Loss: _track_local_run_task spawns unawaited background failure tasks; abrupt worker terminations will leave jobs stuck in the RUNNING state indefinitely.
+Missing HTTP Backoff: fetch_page catches transient HTTP errors and immediately escalates to Playwright rather than honoring configured retry/backoff policies, drastically inflating infrastructure costs.
+Selector Ranking Pollution: Generic DOM fallbacks and high-precision user selectors are placed in the same confidence bucket, allowing low-quality regex guesses to overwrite user-defined domain memory rules.
 Genuine Strengths:
-Advanced Selector Self-Healing: app/services/selector_self_heal.py implements a sophisticated, production-grade automated recovery loop, persisting LLM-generated XPath/CSS rules to DomainMemory for future deterministic runs.
-Hydrated State Extraction: app/services/js_state_mapper.py utilizes glom for declarative, robust extraction of __NEXT_DATA__ and __NUXT_DATA__, bypassing the DOM entirely for supported SPAs.
-Accessibility Object Model (AOM) Expansion: app/services/acquisition/browser_runtime.py (expand_interactive_elements_via_accessibility) intelligently leverages Playwright's AOM snapshot to expand "View More" and "Read Details" elements regardless of CSS obfuscation.
+XHR Ghost-Routing: network_payload_mapper.py implements a brilliant, signature-based inference engine (_body_matches_signature_quick) to automatically map intercepted JSON payloads to canonical schemas without requiring brittle, site-specific API paths.
+AOM Accessibility Extraction: browser_runtime.py explicitly utilizes the Accessibility Object Model (page.accessibility.snapshot()) to find and expand hidden interactive elements (accordions, tabs) before extraction, bypassing visual obfuscation cleanly.
+Selector Self-Healing: selector_self_heal.py correctly reduces the DOM (reduce_html_for_selector_synthesis) before passing it to the LLM, ensuring token budgets are respected, and validates the generated XPath dynamically against the page before saving to domain memory.
 TOP 5 ARCHITECTURAL RECOMMENDATIONS
-1. Decouple XHR Interception from Playwright Event Emitters
-Target: app/services/acquisition/browser_runtime.py
-Current: page.on("response") fires synchronous handlers that spawn floating asyncio.create_task coroutines to read network bodies, causing event-loop flooding.
-Target Structure: Route response events to an asyncio.Queue. Create a bounded pool of 3-5 background worker tasks per context that await the queue, process the payload, and append to the network_payloads list.
-Simplification: Removes the need for complex network_payload_lock threading logic and local counters, replacing manual concurrency control with standard Python queue primitives.
-Outcome: Eliminates worker crashes due to event-loop starvation on API-heavy websites, improving dimension 3 (Scalability).
-2. Refactor Artifact Persistence to Async Streaming
-Target: app/services/artifact_store.py and app/services/pipeline/core.py
-Current: Reads full page screenshots into memory and passes them via asyncio.to_thread to synchronous file I/O operations.
-Target Structure: Use aiofiles or standard asyncio file operations. Pipe the output of Playwright's screenshot directly to the file stream rather than holding it in a variable.
-Simplification: Removes the thread-pool offloading layer and byte-array memory management for large artifacts.
-Outcome: Drops memory usage per worker by up to 40%, preventing OOM kills and improving dimension 3 (Scalability).
-3. Centralize Rule Validation via JSON-Schema/Pydantic
-Target: app/services/crawl_utils.py (validate_extraction_contract) and app/services/llm_tasks.py
-Current: Manual, iterative string checking and custom error concatenation for validating extraction schemas, LLM outputs, and XPath logic.
-Target Structure: Define ExtractionContract and LLMTaskPayload as strict Pydantic models. Let Pydantic handle the Regex, XPath (via custom validators), and type assertions.
-Simplification: Removes hundreds of lines of boilerplate if not isinstance(row, dict): return "error" logic.
-Outcome: Hardens the LLM output boundary, entirely preventing schema pollution (Dimension 4).
-4. Implement Strict Traversal Interceptors
-Target: app/services/acquisition/traversal.py
-Current: Traversal loops blindly call page.goto or .click() and process whatever HTML results.
-Target Structure: Introduce a middleware _verify_page_state() called after every transition. It invokes classify_blocked_page_async. If blocked, immediately throw BrowserNavigationError("traversal_blocked") to stop the loop.
-Simplification: Removes the need for complex post-traversal analysis trying to figure out why no cards were found.
-Outcome: Fixes silent traversal failure bugs (Dimension 5), correctly failing runs that get caught by bot protection mid-pagination.
-5. Standardize Data Normalization with Declarative Mappers
-Target: app/services/field_value_core.py and app/services/structured_sources.py
-Current: Uses deeply nested if/elif chains and imperative dictionary traversal to pluck price, sku, etc., from Microdata and JSON-LD.
-Target Structure: Expand the existing glom usage from js_state_mapper.py into a unified DeclarativeNormalizer class for JSON-LD and Microdata.
-Simplification: Consolidates 300+ lines of imperative parsing loops into two cleanly defined schema dictionaries mapping paths to canonical fields.
-Outcome: Improves code maintainability (Dimension 1) and drastically reduces schema pollution / cross-surface bleeding (Dimension 4).
+1. Offload CPU-Bound Extraction to Thread Pool
+Affected: app/services/pipeline/core.py (_run_extraction_stage)
+Current: extract_records executes massive HTML parsing workloads synchronously, blocking asyncio.
+Target:
+code
+Python
+records, selector_rules = await asyncio.to_thread(
+    _extract_records_for_acquisition, context, fetched
+)
+Simplification: Prevents the need to run the crawler in a multiprocess Gunicorn setup just to handle parsing blocking. 1-line fix.
+Outcome: Eliminates Event Loop Starvation (Critical Path #1); Scalability score improves instantly.
+2. Pydantic Model Validation for LLM Payloads
+Affected: app/services/llm_tasks.py (_validate_task_payload, _validate_field_cleanup_review_payload, etc.)
+Current: 90+ lines of brittle isinstance and .get() type-checking strings.
+Target: Define standard Pydantic models for expected LLM outputs.
+code
+Python
+try:
+    FieldCleanupResponse.model_validate(payload)
+except ValidationError as e:
+    return str(e)
+Simplification: Deletes ~100 lines of manual validation code, replacing it with the framework already imported natively across the app.
+Outcome: Reduces Technical Debt; improves LLM payload parsing reliability.
+3. Remove Domain Logic from Source Files
+Affected: app/services/platform_url_normalizers.py (normalize_adp_detail_url)
+Current: Hardcodes domains workforcenow.adp.com etc.
+Target: Read domains dynamically from platform_policy.py.
+code
+Python
+config = platform_config_for_family("adp")
+if hostname not in[urlparse(d).hostname for d in config.domain_patterns]:
+    return url
+Simplification: Centralizes all domain definitions to platforms.json, preventing split-brain configuration bugs.
+Outcome: Fixes Configuration Hygiene (Critical Path #2); strictly adheres to OCP.
+4. Implement HTTP Retry Wrapper in Fetcher
+Affected: app/services/crawl_fetch_runtime.py (fetch_page)
+Current: Wraps _curl_fetch and _http_fetch in a blanket except Exception, escalating to browser immediately.
+Target: Implement tenacity or a custom retry loop that honors crawler_runtime_settings.http_retry_status_codes before giving up.
+Simplification: Consolidates HTTP resilience into a standard decorator rather than wrapping control flow in nested try/except blocks.
+Outcome: Fixes Missing HTTP Backoff (Critical Path #4); massively reduces unnecessary Playwright executions.
+5. Flatten Detail Extractor Closure Factory
+Affected: app/services/detail_extractor.py (build_detail_record)
+Current: Defines four internal functions that mutate outer-scope variables (candidates).
+Target: Pass candidates and context explicitly as arguments to pure module-level functions.
+code
+Python
+def collect_dom_stage(context, candidates, field_sources, ...):
+    # pure execution, returns modifications
+Simplification: Removes hidden state mutations.
+Outcome: Code becomes strictly testable via standard unit tests; SOLID score improves from 4 to 8.
 EXTRACTION ENHANCEMENT RECOMMENDATIONS
-1. Graph-Based JSON-LD Resolution
-Reference: Diffbot Knowledge Graph / Structured Data Layer
-Gap Addressed: app/services/structured_sources.py parses @graph as a flat list, missing relationships where a Product entity references an Offer via an @id pointer instead of embedding it.
-Slot: Structured sources (JSON-LD parser).
-Implementation Sketch:
+1. Markdownify Node-Walking for Pre-LLM Context
+Gap: Currently, _truncate_html uses string indexing to snip substrings around anchor keywords, passing raw <div class="x">... noise to the LLM, burning tokens on markup.
+Reference: Jina AI Reader / Firecrawl.
+Slot: LLM Task Payload formatting (llm_tasks.py).
+Sketch:
 code
 Python
-def resolve_jsonld_graph(payloads: list[dict]) -> list[dict]:
-    # First pass: map all entities by @id
-    entity_map = {item["@id"]: item for item in payloads if "@id" in item}
-    
-    # Second pass: recursively replace @id references with actual objects
-    def resolve(node):
-        if isinstance(node, dict) and len(node) == 1 and "@id" in node:
-            return entity_map.get(node["@id"], node)
-        if isinstance(node, dict):
-            return {k: resolve(v) for k, v in node.items()}
-        if isinstance(node, list):
-            return [resolve(v) for v in node]
-        return node
-        
-    return [resolve(item) for item in payloads]
-Expected Yield: Recovers price and availability data for ~15% of enterprise eCommerce sites (like Shopify headless implementations) that heavily normalize their JSON-LD payload.
-2. Dynamic Payload Size Scaling for XHR Interception
-Reference: Crawlee API Interception
-Gap Addressed: The strict 500KB limit (_MAX_CAPTURED_NETWORK_PAYLOAD_BYTES) silently drops critical eCommerce API responses.
-Slot: XHR/JSON Network Payload Interceptor.
-Implementation Sketch:
+import markdownify
+def extract_markdown_snippet(html: str, anchors: list[str]) -> str:
+    md = markdownify.markdownify(html, strip=['script', 'style', 'nav', 'footer'])
+    # Perform truncation on dense markdown instead of raw HTML
+    return truncate_around_anchors(md, anchors, limit=8000)
+Expected Yield: Drastically reduces LLM token consumption by 40-60% per call, improves missing_field_extraction accuracy by removing DOM attribute noise.
+2. Bounding Box / Visual Prominence Extraction
+Gap: The DOM extractor scores title candidates solely by attribute signatures (_card_title_score_parts). It cannot differentiate between a large central H1 and a visually hidden H1.
+Reference: Diffbot VIPS (Visual Page Segmentation) / Zyte.
+Slot: Post-Playwright execution DOM augmentation (browser_runtime.py).
+Sketch:
+code
+JavaScript
+// Inside Playwright evaluate:
+const rect = el.getBoundingClientRect();
+el.setAttribute('data-area', rect.width * rect.height);
+el.setAttribute('data-center-x', rect.left + rect.width/2);
+Then, in field_value_dom.py, add a scoring bonus for nodes with the highest data-area that reside near the horizontal center.
+Expected Yield: Resolves tie-breakers between generic titles and actual product/job titles accurately 95%+ of the time, reducing reliance on LLM title promotion.
+3. Declarative Schema Healing via glom (Extended)
+Gap: While glom is used in js_state_mapper.py for product API payloads, the network payload ghost-router (network_payload_mapper.py) uses custom JMESPath logic (_first_non_empty_path), resulting in fragmented state-resolution strategies.
+Reference: Scrapy Itemloaders / Diffbot Normalization.
+Slot: network_payload_mapper.py
+Sketch:
 code
 Python
-# In browser_runtime.py -> should_capture_network_payload
-budget = _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES
-
-# Scale budget based on endpoint type
-endpoint_info = classify_network_endpoint(url=url, surface=surface)
-if endpoint_info["type"] in {"graphql", "product_api", "job_api"}:
-    budget = budget * 4  # Allow up to 2MB for high-value targets
-    
-content_length = coerce_content_length(headers)
-if content_length is not None and content_length > budget:
-    return False
-return True
-Expected Yield: Recovers full product listing arrays on heavily SPA-driven architectures (Target, Walmart), reducing reliance on brittle DOM scraping for pagination and variants.
-3. CSS-to-XPath Compilation for Self-Healing Rules
-Reference: Parsel / Scrapy-Playwright
-Gap Addressed: The LLM self-heal service (discover_xpath_candidates) occasionally returns CSS selectors masquerading as XPath, which crashes lxml.
-Slot: LLM Fallback / Selector Synthesis.
-Implementation Sketch:
-code
-Python
-import cssselect
-
-def validate_or_convert_xpath(candidate: str) -> str | None:
-    valid, _ = validate_xpath_syntax(candidate)
-    if valid:
-        return candidate
-    # Attempt to compile CSS to XPath if direct XPath validation fails
-    try:
-        return cssselect.GenericTranslator().css_to_xpath(candidate)
-    except cssselect.SelectorError:
-        return None
-Expected Yield: Improves LLM self-heal success rates by ~20% by allowing the LLM to output simpler CSS selectors while maintaining the strictness and power of the backend's XPath evaluation engine.
+from glom import glom, Coalesce
+GHOST_PRODUCT_SPEC = {
+    "price": Coalesce("price.current", "pricing.price", "price", default=None),
+    "sku": Coalesce("identifiers.sku", "sku", default=None)
+}
+mapped = glom(body, GHOST_PRODUCT_SPEC, default={})
+Expected Yield: Unifies the API for JSON traversal. Simplifies adding new platform fallbacks for network interception, making ghost-routing much easier to extend.

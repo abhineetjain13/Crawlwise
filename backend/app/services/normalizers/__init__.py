@@ -29,8 +29,8 @@ _BOOLEAN_FIELDS = {"remote"}
 _NUMERIC_TEXT_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
 _AVAILABILITY_TOKENS = {
     "in_stock": ("in stock", "instock", "available", "ready to ship"),
-    "limited_stock": ("limited stock", "low stock", "only", "left in stock"),
-    "out_of_stock": ("out of stock", "oos", "sold out", "unavailable"),
+    "limited_stock": ("limited stock", "limitedstock", "low stock", "lowstock", "only", "left in stock"),
+    "out_of_stock": ("out of stock", "outofstock", "oos", "sold out", "unavailable"),
     "preorder": ("pre-order", "preorder", "backorder", "back-order"),
 }
 
@@ -39,16 +39,14 @@ def _normalize_text(value: object) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
-def _normalize_text_list(value: object) -> str:
+def _normalize_text_list(value: object) -> object:
     if isinstance(value, str):
-        parts = re.split(r",|\n|\|", value)
-    elif isinstance(value, (list, tuple, set)):
-        parts = [str(item) for item in value]
-    else:
-        parts = [str(value)]
+        return _normalize_text(value)
+    if not isinstance(value, (list, tuple, set)):
+        return _normalize_text(value)
     rows: list[str] = []
     seen: set[str] = set()
-    for part in parts:
+    for part in value:
         cleaned = _normalize_text(part)
         if not cleaned:
             continue
@@ -57,7 +55,7 @@ def _normalize_text_list(value: object) -> str:
             continue
         seen.add(lowered)
         rows.append(cleaned)
-    return ", ".join(rows)
+    return rows
 
 
 def _normalize_bool(value: object) -> bool | str:
@@ -85,12 +83,12 @@ def normalize_decimal_price(
         return None
     match = _NUMERIC_TEXT_RE.search(text.replace(",", ""))
     if match is None:
-        return text
+        return None
     candidate = match.group(0).replace(",", "")
     try:
         decimal = Decimal(candidate)
     except (InvalidOperation, ValueError):
-        return text
+        return None
     if interpret_integral_as_cents and "." not in candidate and len(candidate) >= 3:
         decimal = decimal / Decimal("100")
     return format(decimal, "f")
@@ -106,18 +104,24 @@ def _normalize_int(value: object) -> int | str:
         return ""
     match = _NUMERIC_TEXT_RE.search(text.replace(",", ""))
     if match is None:
-        return text
+        return None
     try:
         return int(Decimal(match.group(0)))
     except (InvalidOperation, ValueError):
-        return text
+        return None
 
 
 def _normalize_availability(value: object) -> str:
     text = _normalize_text(value)
     lowered = text.lower()
-    for normalized, tokens in _AVAILABILITY_TOKENS.items():
-        if any(token in lowered for token in tokens):
+    flat_tokens = [
+        (token, normalized)
+        for normalized, tokens in _AVAILABILITY_TOKENS.items()
+        for token in tokens
+    ]
+    flat_tokens.sort(key=lambda t: len(t[0]), reverse=True)
+    for token, normalized in flat_tokens:
+        if token in lowered:
             return normalized
     return text
 
@@ -133,7 +137,8 @@ def normalize_value(field_name: str, value: object) -> object:
     if normalized_field == "availability":
         return _normalize_availability(value)
     if normalized_field in _DECIMAL_FIELDS:
-        return normalize_decimal_price(value) or ""
+        result = normalize_decimal_price(value)
+        return result if result is not None else ""
     if normalized_field.endswith("_count") or normalized_field in _INTEGER_FIELDS:
         return _normalize_int(value)
     if isinstance(value, str):
@@ -157,7 +162,7 @@ def normalize_review_value(value: object) -> str:
 
 def normalize_record_fields(record: dict[str, Any]) -> dict[str, Any]:
     return {
-        str(key): normalize_value(str(key), value)
+        str(key): (value if str(key).startswith("_") else normalize_value(str(key), value))
         for key, value in dict(record or {}).items()
         if value not in (None, "", [], {})
     }

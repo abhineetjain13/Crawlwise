@@ -1,8 +1,34 @@
 from __future__ import annotations
 
 SURFACE_DETAIL_PATH_HINTS: dict[str, tuple[str, ...]] = {
-    "ecommerce": ("/dp/", "/p/", "/pd/", "/product", "/products/", "/item/"),
-    "job": ("/job", "/jobs", "/career", "/careers", "/position", "/posting", "/opening"),
+    "ecommerce": (
+        "/dp/", "/p/", "/pd/",
+        "/product", "/products/", "/item/",
+        "/produit/", "/produits/",
+        "/produkt/", "/produkte/",
+        "/producto/", "/productos/",
+        "/prodotto/", "/prodotti/",
+        "/seihin/", "/shohin/",
+        "/artikel/",
+        "/articulo/",
+        "/merchandise/",
+        "/goods/",
+        "/sku/",
+        "/detail/",
+        "/buy/",
+        "/shop/",
+    ),
+    "job": (
+        "/job", "/jobs", "/career", "/careers",
+        "/position", "/posting", "/opening",
+        "/emploi/", "/offres-demploi/",
+        "/stelle/", "/stellenangebot/",
+        "/empleo/", "/ofertas-de-empleo/",
+        "/lavoro/", "/offerte-di-lavoro/",
+        "/kyuujin/", "/shigoto/",
+        "/vacancy/", "/vacatures/",
+        "/recruitment/",
+    ),
 }
 
 

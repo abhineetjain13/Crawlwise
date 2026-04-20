@@ -4,6 +4,7 @@ from app.core.telemetry import generate_correlation_id, get_correlation_id
 from app.models.crawl import CrawlLog, CrawlRecord, CrawlRun
 from app.models.crawl_settings import CrawlRunSettings
 from app.services.crawl_events import append_log_event
+from app.services.pipeline.runtime_helpers import STAGE_ACQUIRE
 from app.services.publish import (
     load_domain_requested_fields,
     refresh_record_commit_metadata,
@@ -24,9 +25,6 @@ from app.services.run_config_snapshot import snapshot_extraction_runtime_setting
 from app.services.url_safety import ensure_public_crawl_targets
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-STAGE_FETCH = "FETCH"
-
 
 async def create_crawl_run(
     session: AsyncSession, user_id: int, payload: dict
@@ -77,7 +75,7 @@ async def create_crawl_run(
         result_summary={
             "url_count": max(1, len(urls) or 1),
             "progress": 0,
-            "current_stage": STAGE_FETCH,
+            "current_stage": STAGE_ACQUIRE,
             "correlation_id": get_correlation_id() or generate_correlation_id(),
         },
     )

@@ -352,15 +352,13 @@ def resolve_browser_readiness_policy(
     traversal_active: bool = False,
 ) -> dict[str, Any]:
     listing_override = resolve_listing_readiness_override(url)
-    if traversal_active:
-        networkidle_reason = "traversal"
-    elif listing_override is not None:
+    if listing_override is not None:
         networkidle_reason = "platform-readiness"
     else:
         networkidle_reason = None
     return {
         "listing_override": listing_override,
-        "require_networkidle": bool(traversal_active or listing_override is not None),
+        "require_networkidle": bool(listing_override is not None),
         "networkidle_reason": networkidle_reason,
     }
 

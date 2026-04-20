@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
-from app.services.field_value_utils import clean_text
+from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +10,13 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.acquisition.runtime import NetworkPayloadReadResult
+from app.services.config.network_capture import (
+    ENDPOINT_TYPE_PATH_TOKENS,
+    GRAPHQL_PATH_TOKENS,
+    HIGH_VALUE_NETWORK_ENDPOINT_TYPES,
+    HIGH_VALUE_NETWORK_PAYLOAD_BUDGET_MULTIPLIER,
+    NETWORK_PAYLOAD_NOISE_URL_RE,
+)
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.platform_policy import classify_network_endpoint_family
 
@@ -27,15 +33,7 @@ _MAX_TOTAL_CAPTURED_NETWORK_PAYLOAD_BYTES = (
 )
 _NETWORK_CAPTURE_QUEUE_SIZE = _MAX_CAPTURED_NETWORK_PAYLOADS * 2
 _NETWORK_CAPTURE_WORKERS = 4
-_NETWORK_PAYLOAD_NOISE_URL_RE = re.compile(
-    r"geolocation|geoip|geo/|/geo\b|\banalytics\b|tracking|telemetry|"
-    r"klarna\.com|affirm\.com|afterpay\.com|olapic-cdn\.com|livechat|"
-    r"zendesk\.com|intercom\.io|facebook\.com|google-analytics|"
-    r"googletagmanager|sentry\.io|datadome|px\.ads|cdn-cgi/|captcha",
-    re.I,
-)
-_HIGH_VALUE_NETWORK_ENDPOINT_TYPES = frozenset({"graphql", "product_api", "job_api"})
-_HIGH_VALUE_NETWORK_PAYLOAD_BUDGET_MULTIPLIER = 4
+_QUEUE_JOIN_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(slots=True)
@@ -70,6 +68,7 @@ class BrowserNetworkCapture:
         )
         self._workers: list[asyncio.Task[None]] = []
         self._closed = False
+        self._closing = False
         self._listener_attached = False
         self._summary: BrowserNetworkCaptureSummary | None = None
         self._malformed_payloads = 0
@@ -94,20 +93,52 @@ class BrowserNetworkCapture:
     async def close(self, page: Any) -> BrowserNetworkCaptureSummary:
         if self._summary is not None:
             return self._summary
-        self._closed = True
         remove_listener = getattr(page, "remove_listener", None)
         if callable(remove_listener):
             try:
                 remove_listener("response", self._schedule_capture)
-            except Exception:
-                logger.debug("Failed to detach browser response listener", exc_info=True)
+            except Exception as exc:
+                if is_response_closed_error(exc):
+                    logger.debug("Browser response listener detach skipped (page already closed)")
+                else:
+                    logger.warning(
+                        "Failed to detach browser response listener: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
         self._listener_attached = False
         if self._workers:
-            await self._queue.join()
+            await asyncio.sleep(0)
+            try:
+                await asyncio.wait_for(
+                    self._queue.join(),
+                    timeout=_QUEUE_JOIN_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                self._closing = True
+                logger.warning(
+                    "Browser capture queue join timed out after %ss; "
+                    "cancelling workers and draining queue",
+                    _QUEUE_JOIN_TIMEOUT_SECONDS,
+                )
+                for worker in self._workers:
+                    worker.cancel()
+                while not self._queue.empty():
+                    try:
+                        self._queue.get_nowait()
+                        self._queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
+            else:
+                self._closing = True
             for _ in self._workers:
-                self._queue.put_nowait(None)
+                try:
+                    self._queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
             await asyncio.gather(*self._workers, return_exceptions=True)
             self._workers.clear()
+        self._closed = True
         async with self._lock:
             self._summary = BrowserNetworkCaptureSummary(
                 payloads=list(self._payloads[:_MAX_CAPTURED_NETWORK_PAYLOADS]),
@@ -122,7 +153,7 @@ class BrowserNetworkCapture:
         return self._summary
 
     def _schedule_capture(self, response: Any) -> None:
-        if self._closed:
+        if self._closing:
             return
         try:
             self._queue.put_nowait(response)
@@ -234,7 +265,7 @@ def should_capture_network_payload(
         return False
     if captured_count >= _MAX_CAPTURED_NETWORK_PAYLOADS:
         return False
-    if _NETWORK_PAYLOAD_NOISE_URL_RE.search(lowered_url):
+    if NETWORK_PAYLOAD_NOISE_URL_RE.search(lowered_url):
         return False
     payload_budget = _network_payload_byte_budget(
         url=url,
@@ -260,31 +291,14 @@ def classify_network_endpoint(*, response_url: str, surface: str) -> dict[str, s
     family = classify_network_endpoint_family(response_url)
 
     endpoint_type = "generic_json"
-    if "/graphql" in lowered_url or "graphql?" in lowered_url:
+    if any(token in lowered_url for token in GRAPHQL_PATH_TOKENS):
         endpoint_type = "graphql"
-    elif normalized_surface == "job_detail" and any(
-        token in lowered_url
-        for token in (
-            "/jobs/",
-            "/job_posts/",
-            "/postings/",
-            "/positions/",
-            "/requisition/",
-            "/careers/",
-        )
-    ):
-        endpoint_type = "job_api"
-    elif normalized_surface == "ecommerce_detail" and any(
-        token in lowered_url
-        for token in (
-            "/products/",
-            "/product/",
-            "product.js",
-            "/variants/",
-            "/cart.js",
-        )
-    ):
-        endpoint_type = "product_api"
+    else:
+        surface_tokens = ENDPOINT_TYPE_PATH_TOKENS.get(normalized_surface, {})
+        for etype, tokens in surface_tokens.items():
+            if any(token in lowered_url for token in tokens):
+                endpoint_type = etype
+                break
     return {"type": endpoint_type, "family": family}
 
 
@@ -378,8 +392,8 @@ def _network_payload_byte_budget(
         surface=surface,
     )
     budget = _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES
-    if resolved_endpoint.get("type") in _HIGH_VALUE_NETWORK_ENDPOINT_TYPES:
-        budget *= _HIGH_VALUE_NETWORK_PAYLOAD_BUDGET_MULTIPLIER
+    if resolved_endpoint.get("type") in HIGH_VALUE_NETWORK_ENDPOINT_TYPES:
+        budget *= HIGH_VALUE_NETWORK_PAYLOAD_BUDGET_MULTIPLIER
     return min(budget, _MAX_TOTAL_CAPTURED_NETWORK_PAYLOAD_BYTES)
 
 

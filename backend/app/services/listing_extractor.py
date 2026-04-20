@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
@@ -10,8 +10,11 @@ from app.services.config.extraction_rules import (
     LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
+    LISTING_FALLBACK_CONTAINER_SELECTOR,
     LISTING_MERCHANDISING_TITLE_PREFIXES,
     LISTING_NAVIGATION_TITLE_HINTS,
+    LISTING_STRUCTURE_NEGATIVE_HINTS,
+    LISTING_STRUCTURE_POSITIVE_HINTS,
     LISTING_WEAK_TITLES,
 )
 from app.services.config.selectors import CARD_SELECTORS
@@ -20,26 +23,27 @@ from app.services.extraction_context import (
     prepare_extraction_context,
 )
 from app.services.field_policy import normalize_requested_field
-from app.services.field_value_utils import (
+from app.services.field_value_core import (
+    IMAGE_FIELDS,
     PRICE_RE,
     RATING_RE,
     REVIEW_COUNT_RE,
+    URL_FIELDS,
     absolute_url,
-    add_candidate,
-    apply_selector_fallbacks,
     clean_text,
     coerce_field_value,
     coerce_text,
-    collect_structured_candidates,
-    extract_page_images,
-    extract_label_value_pairs,
-    finalize_candidate_value,
     finalize_record,
-    safe_select,
     same_host,
     surface_alias_lookup,
     surface_fields,
 )
+from app.services.field_value_candidates import (
+    add_candidate,
+    collect_structured_candidates,
+    finalize_candidate_value,
+)
+from app.services.field_value_dom import apply_selector_fallbacks
 from app.services.config.surface_hints import detail_path_hints
 from app.services.pipeline.pipeline_config import LISTING_FALLBACK_FRAGMENT_LIMIT
 
@@ -200,44 +204,236 @@ def _listing_title_is_noise(title: str) -> bool:
 
 def _listing_card_html_fragments(
     dom_parser: LexborHTMLParser, *, is_job: bool
-) -> list[str]:
+) -> list[object]:
     selector_group = "jobs" if is_job else "ecommerce"
     selectors = list(CARD_SELECTORS.get(selector_group) or [])
-    fragments: list[str] = []
     seen: set[str] = set()
+    scored: list[tuple[int, int, object]] = []
+    order = 0
     for selector in selectors:
         try:
             matches = dom_parser.css(selector)
         except Exception:
             matches = []
         for node in matches:
+            order += 1
+            score = _listing_fragment_score(node)
+            if score <= 0:
+                continue
             fragment = str(node.html or "").strip()
             if not fragment or fragment in seen:
                 continue
             seen.add(fragment)
-            fragments.append(fragment)
-    if fragments:
-        return fragments
-    for node in dom_parser.css("article, li, div"):
-        if node.css_first("a[href]") is None:
+            scored.append((score, order, node))
+    if scored:
+        return _sorted_listing_fragment_nodes(scored)
+    scanned = 0
+    for node in dom_parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR):
+        scanned += 1
+        if scanned > LISTING_FALLBACK_FRAGMENT_LIMIT * 40:
+            break
+        order += 1
+        score = _listing_fragment_score(node)
+        if score <= 0:
             continue
         fragment = str(node.html or "").strip()
         if not fragment or fragment in seen:
             continue
         seen.add(fragment)
-        fragments.append(fragment)
-        if len(fragments) >= LISTING_FALLBACK_FRAGMENT_LIMIT:
-            break
-    return fragments
+        scored.append((score, order, node))
+    if not scored:
+        return []
+    return _sorted_listing_fragment_nodes(
+        scored,
+        limit=int(LISTING_FALLBACK_FRAGMENT_LIMIT),
+    )
 
 
-def _card_title_node(card: Tag) -> Tag | None:
-    for selector in EXTRACTION_RULES.get("listing_extraction", {}).get("card_title_selectors", []):
-        nodes = safe_select(card, str(selector))
-        if nodes:
-            return nodes[0]
-    anchor = card.find("a", href=True)
-    return anchor if isinstance(anchor, Tag) else None
+def _sorted_listing_fragment_nodes(
+    scored: list[tuple[int, int, object]],
+    *,
+    limit: int | None = None,
+) -> list[object]:
+    scored.sort(key=lambda row: (-row[0], row[1]))
+    rows = scored if limit is None else scored[:limit]
+    return [node for _score, _order, node in rows]
+
+
+def _listing_fragment_score(node) -> int:
+    tag_name = str(getattr(node, "tag", "") or "").strip().lower()
+    if tag_name in {"header", "nav", "footer"}:
+        return -100
+    attrs = getattr(node, "attributes", {}) or {}
+    signature = " ".join(
+        [
+            str(attrs.get("class") or ""),
+            str(attrs.get("id") or ""),
+            str(attrs.get("role") or ""),
+            str(attrs.get("aria-label") or ""),
+        ]
+    ).lower()
+    if any(token in signature for token in LISTING_STRUCTURE_NEGATIVE_HINTS):
+        return -10
+    score = 0
+    if any(token in signature for token in LISTING_STRUCTURE_POSITIVE_HINTS):
+        score += 6
+    try:
+        links = node.css("a[href]")
+    except Exception:
+        return -100
+    link_count = len(links)
+    if link_count == 0:
+        return -100
+    if link_count == 1:
+        score += 4
+    elif link_count <= 6:
+        score += 2
+    elif link_count <= 12:
+        score -= 1
+    else:
+        score -= 6
+    text = clean_text(str(node.text(strip=True) or ""))
+    text_len = len(text)
+    if text_len < 12:
+        score -= 3
+    elif text_len <= 2000:
+        score += 3
+    else:
+        score -= 3
+    if PRICE_RE.search(text):
+        score += 3
+    if tag_name in {"article", "li", "tr", "section"}:
+        score += 2
+    return score
+
+
+def _node_text(node) -> str:
+    try:
+        return clean_text(str(node.text(strip=True) or ""))
+    except Exception:
+        return ""
+
+
+def _node_attr(node, name: str) -> str:
+    attrs = getattr(node, "attributes", {}) or {}
+    return str(attrs.get(name) or "").strip()
+
+
+def _node_signature(node) -> str:
+    return " ".join(
+        [
+            _node_attr(node, "class"),
+            _node_attr(node, "id"),
+            _node_attr(node, "role"),
+            _node_attr(node, "aria-label"),
+            _node_attr(node, "title"),
+        ]
+    ).lower()
+
+
+def _node_tag(node) -> str:
+    return str(getattr(node, "tag", "") or "").strip().lower()
+
+
+def _node_css(node, selector: str) -> list[object]:
+    if not selector:
+        return []
+    try:
+        return list(node.css(selector))
+    except Exception:
+        return []
+
+
+def _card_title_node(card) -> object | None:
+    candidates: list[object] = []
+    for selector in EXTRACTION_RULES.get("listing_extraction", {}).get(
+        "card_title_selectors", []
+    ):
+        candidates.extend(_node_css(card, str(selector)))
+    if candidates:
+        best = max(candidates, key=lambda node: (_card_title_score(node), len(_node_text(node))))
+        if _card_title_score(best) > 0:
+            return best
+    anchors = _node_css(card, "a[href]")
+    if not anchors:
+        return None
+    best = max(anchors, key=_card_title_score)
+    return best if _card_title_score(best) > 0 else None
+
+
+def _card_title_score(node) -> int:
+    text = _node_text(node)
+    if not text:
+        return -100
+    return _card_title_score_parts(
+        text=text,
+        attrs=_node_signature(node),
+        tag_name=_node_tag(node),
+        href_present=bool(_node_attr(node, "href")),
+    )
+
+
+def _card_title_score_parts(
+    *,
+    text: str,
+    attrs: str,
+    tag_name: str,
+    href_present: bool,
+) -> int:
+    score = 0
+    if any(token in attrs for token in ("title", "name", "product", "item", "listing", "result", "job", "record", "release")):
+        score += 6
+    if any(token in attrs for token in ("brand", "seller", "vendor", "rating", "price", "size", "wishlist")):
+        score -= 6
+    if tag_name in {"h1", "h2", "h3", "h4", "h5", "a"}:
+        score += 2
+    text_len = len(text)
+    if 8 <= text_len <= 180:
+        score += 3
+    elif text_len < 4:
+        score -= 6
+    elif text_len > 220:
+        score -= 2
+    if _listing_title_is_noise(text):
+        score -= 4
+    if href_present:
+        score += 2
+    return score
+
+
+def _select_primary_anchor(card, page_url: str, *, surface: str) -> tuple[object, str, str, int] | None:
+    is_job = surface.startswith("job_")
+    best: tuple[int, object, str, str] | None = None
+    for anchor in _node_css(card, "a[href]"):
+        url = absolute_url(page_url, _node_attr(anchor, "href"))
+        if not url or not same_host(page_url, url):
+            continue
+        lowered_url = url.lower()
+        if lowered_url.startswith(("javascript:", "#")) or lowered_url == page_url.lower():
+            continue
+        if any(token in lowered_url for token in ("sort=", "filter=", "facet=", "#review", "#details")):
+            continue
+        text = clean_text(
+            _node_attr(anchor, "title")
+            or _node_attr(anchor, "aria-label")
+            or _node_text(anchor)
+        )
+        score = _card_title_score_parts(
+            text=text,
+            attrs=_node_signature(anchor),
+            tag_name=_node_tag(anchor),
+            href_present=True,
+        )
+        if _detail_like_path(url, is_job=is_job):
+            score += 6
+        if any(token in lowered_url for token in ("/seller/", "/profile/", "/brand/", "/help/", "/search")):
+            score -= 5
+        if best is None or score > best[0]:
+            best = (score, anchor, url, text)
+    if best is None:
+        return None
+    score, anchor, url, text = best
+    return anchor, url, text, score
 
 
 def _detail_like_path(url: str, *, is_job: bool) -> bool:
@@ -248,53 +444,191 @@ def _detail_like_path(url: str, *, is_job: bool) -> bool:
     return any(marker in lowered for marker in hints)
 
 
+def _extract_node_value(node, field_name: str, page_url: str) -> object | None:
+    if field_name in IMAGE_FIELDS:
+        srcset = _node_attr(node, "srcset")
+        if srcset:
+            first_candidate = str(srcset).split(",")[0].strip().split(" ")[0]
+            resolved = absolute_url(page_url, first_candidate)
+            if resolved:
+                return resolved
+        for attr_name in ("content", "src", "data-src", "data-image", "href"):
+            resolved = absolute_url(page_url, _node_attr(node, attr_name))
+            if resolved:
+                return resolved
+        return None
+    if field_name in URL_FIELDS:
+        for attr_name in ("href", "content", "data-apply-url"):
+            resolved = absolute_url(page_url, _node_attr(node, attr_name))
+            if resolved:
+                return resolved
+        return None
+    for attr_name in ("content", "value", "datetime", "data-value", "data-price", "data-availability"):
+        attr_value = _node_attr(node, attr_name)
+        if attr_value:
+            return coerce_field_value(field_name, attr_value, page_url)
+    return coerce_field_value(field_name, _node_text(node), page_url)
+
+
+def _extract_selector_values_from_node(
+    root,
+    selector: str,
+    field_name: str,
+    page_url: str,
+) -> list[object]:
+    values: list[object] = []
+    for node in _node_css(root, selector)[:12]:
+        value = _extract_node_value(node, field_name, page_url)
+        if value in (None, "", [], {}):
+            continue
+        values.append(value)
+    return values
+
+
+def _extract_page_images_from_node(root, page_url: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for node in _node_css(root, "img"):
+        candidate = absolute_url(
+            page_url,
+            _node_attr(node, "src")
+            or _node_attr(node, "data-src")
+            or _node_attr(node, "data-original"),
+        )
+        if not candidate:
+            continue
+        lowered = candidate.lower()
+        if lowered.startswith("data:"):
+            continue
+        if any(
+            token in lowered
+            for token in (
+                "analytics",
+                "tracking",
+                "pixel",
+                "spacer",
+                "blank.gif",
+                "doubleclick",
+                "google-analytics",
+                "googletagmanager",
+            )
+        ):
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        values.append(candidate)
+    return values[:12]
+
+
+def _extract_label_value_pairs_from_node(root) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for tr in _node_css(root, "tr"):
+        cells = _node_css(tr, "th, td")
+        if len(cells) < 2:
+            continue
+        label = _node_text(cells[0])
+        value = _node_text(cells[1])
+        if label and value:
+            rows.append((label, value))
+    for node in _node_css(root, "li, p, div, span"):
+        text = _node_text(node)
+        if ":" not in text:
+            continue
+        label, value = text.split(":", 1)
+        label = clean_text(label)
+        value = clean_text(value)
+        if not label or not value:
+            continue
+        if len(label) > 40 or len(value) > 250:
+            continue
+        rows.append((label, value))
+    deduped: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for label, value in rows:
+        key = (label.lower(), value.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((label, value))
+    return deduped
+
+
+def _apply_dom_pattern_fallbacks_from_node(
+    card,
+    *,
+    page_url: str,
+    surface: str,
+    candidates: dict[str, list[object]],
+) -> None:
+    dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
+    for field_name in surface_fields(surface, None):
+        selector = str(dom_patterns.get(field_name) or "").strip()
+        if not selector:
+            continue
+        for value in _extract_selector_values_from_node(card, selector, field_name, page_url):
+            add_candidate(candidates, field_name, value)
+
+
 def _listing_record_from_card(
-    card: Tag,
+    card,
     page_url: str,
     surface: str,
     *,
     selector_rules: list[dict[str, object]] | None = None,
 ) -> dict[str, Any] | None:
     is_job = surface.startswith("job_")
-    title_node = _card_title_node(card)
-    if title_node is None:
+    primary_anchor = _select_primary_anchor(card, page_url, surface=surface)
+    if primary_anchor is None:
         return None
+    anchor_node, url, anchor_text, anchor_score = primary_anchor
+    title_node = _card_title_node(card) or anchor_node
     title = clean_text(
-        title_node.get("title")
-        or title_node.get("alt")
-        or title_node.get_text(" ", strip=True)
+        _node_attr(title_node, "title")
+        or _node_attr(title_node, "alt")
+        or _node_text(title_node)
+        or anchor_text
     )
     if len(title) < 4 or _listing_title_is_noise(title):
         return None
-    link_node = title_node if title_node.name == "a" else title_node.find_parent("a")
-    if link_node is None:
-        link_node = card.find("a", href=True)
-    if link_node is None:
+    if anchor_score < 4:
         return None
-    url = absolute_url(page_url, link_node.get("href"))
-    if not url or not same_host(page_url, url):
-        return None
-    card_text = clean_text(card.get_text(" ", strip=True))
+    card_text = _node_text(card)
+    image_urls = _extract_page_images_from_node(card, page_url)
+    has_supporting_listing_signals = bool(
+        PRICE_RE.search(card_text)
+        or RATING_RE.search(card_text)
+        or REVIEW_COUNT_RE.search(card_text)
+        or image_urls
+    )
     if not _detail_like_path(url, is_job=is_job):
-        if is_job and not any(token in card_text.lower() for token in ("salary", "remote", "location", "apply")):
-            return None
-        if not is_job and not PRICE_RE.search(card_text):
+        if is_job and anchor_score < 8:
+            if not any(token in card_text.lower() for token in ("salary", "remote", "location", "apply")):
+                return None
+        if not is_job and anchor_score < 8 and not has_supporting_listing_signals:
             return None
     alias_lookup = surface_alias_lookup(surface, None)
     candidates: dict[str, list[object]] = {"title": [title], "url": [url]}
-    apply_selector_fallbacks(
+    _apply_dom_pattern_fallbacks_from_node(
         card,
-        page_url,
-        surface,
-        None,
-        candidates,
-        selector_rules=selector_rules,
+        page_url=page_url,
+        surface=surface,
+        candidates=candidates,
     )
-    image_urls = extract_page_images(card, page_url, surface=surface)
+    if selector_rules:
+        card_soup = BeautifulSoup(str(getattr(card, "html", "") or ""), "html.parser")
+        apply_selector_fallbacks(
+            card_soup,
+            page_url,
+            surface,
+            None,
+            candidates,
+            selector_rules=selector_rules,
+        )
     if image_urls:
         add_candidate(candidates, "image_url", image_urls[0])
         add_candidate(candidates, "additional_images", image_urls[1:])
-    for label, value in extract_label_value_pairs(card):
+    for label, value in _extract_label_value_pairs_from_node(card):
         normalized_label = normalize_requested_field(label)
         if not normalized_label:
             normalized_label = clean_text(label).lower().replace(" ", "_")
@@ -367,16 +701,17 @@ def extract_listing_records(
             max_records=max_records,
         )
 
-    def _dom_stage() -> list[dict[str, Any]]:
+    def _dom_stage(
+        *,
+        seed_urls: set[str] | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        seen_urls: set[str] = set()
-        for fragment in _listing_card_html_fragments(
+        seen_urls: set[str] = set(seed_urls or ())
+        target_limit = max(1, int(limit if limit is not None else max_records))
+        for card in _listing_card_html_fragments(
             dom_parser, is_job=surface.startswith("job_")
         ):
-            card_soup = BeautifulSoup(fragment, "html.parser")
-            card = card_soup.find(["article", "li", "div"]) or card_soup.find(True)
-            if not isinstance(card, Tag):
-                continue
             record = _listing_record_from_card(
                 card,
                 page_url,
@@ -390,12 +725,24 @@ def extract_listing_records(
                 continue
             seen_urls.add(url)
             records.append(record)
-            if len(records) >= max_records:
+            if len(records) >= target_limit:
                 break
         return records
 
-    for extractor in (_structured_stage, _dom_stage):
-        records = extractor()
-        if records:
-            return records[:max_records]
+    structured_records = _structured_stage()
+    if len(structured_records) >= max_records:
+        return structured_records[:max_records]
+
+    structured_urls = {
+        str(record.get("url") or "")
+        for record in structured_records
+        if str(record.get("url") or "").strip()
+    }
+    remaining = max(1, int(max_records) - len(structured_records))
+    dom_records = _dom_stage(seed_urls=structured_urls, limit=remaining)
+
+    if structured_records:
+        return [*structured_records, *dom_records][:max_records]
+    if dom_records:
+        return dom_records[:max_records]
     return []

@@ -56,7 +56,7 @@ def build_url_metrics(
         "browser_phase_timings_ms": phase_timings_ms,
         "network_payloads": len(list(acquisition_result.network_payloads or [])),
         "adapter_name": acquisition_result.adapter_name,
-        "platform_family": acquisition_result.adapter_name,
+        "platform_family": getattr(acquisition_result, "platform_family", None),
         "browser_navigation_strategy": browser_diagnostics.get("navigation_strategy"),
         "network_payload_count": int(
             browser_diagnostics.get("network_payload_count", 0) or 0
