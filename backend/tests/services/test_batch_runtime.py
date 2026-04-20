@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.services._batch_runtime import process_run
@@ -255,3 +257,38 @@ async def test_process_run_continues_when_robots_allows_or_fails_open(
     assert run.result_summary["extraction_verdict"] == "success"
     assert total == 1
     assert rows[0].data["title"] == "Widget Prime"
+
+
+@pytest.mark.asyncio
+async def test_process_run_enforces_url_timeout_from_settings(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/slow-widget",
+            "surface": "ecommerce_detail",
+            "settings": {"url_timeout_seconds": 0.01},
+        },
+    )
+
+    async def _slow_process_single_url(*args, **kwargs):
+        del args, kwargs
+        await asyncio.sleep(0.05)
+        raise AssertionError("timeout should fire before this returns")
+
+    monkeypatch.setattr(
+        "app.services._batch_runtime._process_single_url",
+        _slow_process_single_url,
+    )
+
+    await process_run(db_session, run.id)
+    await db_session.refresh(run)
+
+    assert run.status == "completed"
+    assert run.result_summary["extraction_verdict"] == "error"
+    assert run.result_summary["url_verdicts"] == ["error"]

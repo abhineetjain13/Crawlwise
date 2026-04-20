@@ -164,6 +164,43 @@ def test_listing_extractor_preserves_faceted_grid_results() -> None:
     ]
 
 
+def test_listing_extractor_accepts_image_link_cards_with_separate_title_text() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="product-card">
+          <a href="/p/connect-in-colour-eyeshadow-palette-rose-lens?sku=2640287" aria-label="View product image">
+            <img src="/images/rose-lens.jpg" alt="Connect In Colour Eyeshadow Palette Rose Lens">
+          </a>
+          <div class="product-brand">MAC</div>
+          <div class="product-name">Connect In Colour Eyeshadow Palette Rose Lens</div>
+          <div class="price">$35.00</div>
+          <a href="/bag/add?sku=2640287">Add to bag</a>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://www.ulta.com/shop/makeup/makeup-palettes",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.ulta.com/shop/makeup/makeup-palettes",
+            "_source": "dom_listing",
+            "title": "Connect In Colour Eyeshadow Palette Rose Lens",
+            "brand": "MAC",
+            "price": "35.00",
+            "image_url": "https://www.ulta.com/images/rose-lens.jpg",
+            "url": "https://www.ulta.com/p/connect-in-colour-eyeshadow-palette-rose-lens?sku=2640287",
+        }
+    ]
+
+
 def test_detail_extractor_ignores_js_state_inside_removed_noise_containers() -> None:
     html = """
     <html>

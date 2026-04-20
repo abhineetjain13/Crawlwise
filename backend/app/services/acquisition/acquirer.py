@@ -102,6 +102,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         await _emit_event(request.on_event, "info", f"Acquiring {effective_url}")
         result = await fetch_page(
             effective_url,
+            run_id=request.run_id,
             proxy_list=request.proxy_list,
             prefer_browser=prefer_browser,
             surface=request.surface,
@@ -123,11 +124,11 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         status_code=result.status_code,
         content_type=result.content_type,
         blocked=result.blocked,
-        platform_family=result.platform_family,
+        platform_family=getattr(result, "platform_family", None),
         headers=_headers_to_dict(result.headers),
-        network_payloads=list(result.network_payloads or []),
-        browser_diagnostics=dict(result.browser_diagnostics or {}),
-        artifacts=dict(result.artifacts or {}),
+        network_payloads=list(getattr(result, "network_payloads", []) or []),
+        browser_diagnostics=dict(getattr(result, "browser_diagnostics", {}) or {}),
+        artifacts=dict(getattr(result, "artifacts", {}) or {}),
     )
 
 

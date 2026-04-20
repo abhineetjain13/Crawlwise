@@ -250,8 +250,7 @@ def should_escalate_to_browser(
     surface: str | None = None,
     runtime_policy: Mapping[str, Any] | None = None,
 ) -> bool:
-    if is_non_retryable_http_status(result.status_code):
-        return False
+    non_retryable_http_status = is_non_retryable_http_status(result.status_code)
     if result.blocked or is_retryable_http_status(result.status_code):
         return True
     resolved_policy = (
@@ -275,13 +274,15 @@ def should_escalate_to_browser(
         and not has_detail_signals
     ):
         return True
-    if bool(escalation_policy.get("missing_detail_signals")) and not has_detail_signals:
-        return True
     if (
         bool(escalation_policy.get("listing_shell_without_listing_signals"))
         and not has_listing_signals
         and _looks_like_listing_shell(result, analysis=analysis)
     ):
+        return True
+    if non_retryable_http_status:
+        return False
+    if bool(escalation_policy.get("missing_detail_signals")) and not has_detail_signals:
         return True
     return False
 

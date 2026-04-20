@@ -16,6 +16,9 @@ _ALL_CANONICAL_FIELDS = frozenset(
     for fields in CANONICAL_SCHEMAS.values()
     for field_name in fields
 )
+HTML_SECTION_FIELDS = frozenset(
+    {"responsibilities", "qualifications", "benefits", "skills"}
+)
 
 
 def canonical_fields_for_surface(surface: str) -> list[str]:
@@ -151,6 +154,8 @@ _REQUESTED_FIELD_ALIAS_EXTRAS = {
     "qualifications": (
         "job qualifications",
         "job_qualification",
+        "should have",
+        "you should have",
         "minimum requirements",
         "minimum_requirements",
         "preferred qualifications",
@@ -163,6 +168,7 @@ _REQUESTED_FIELD_ALIAS_EXTRAS = {
         "perks",
         "why you'll love this job",
         "life at stripe",
+        "what we offer",
     ),
     "skills": ("job skills", "job_skills", "experience", "what you'll bring"),
     "summary": ("description", "our opportunity", "about the role", "about the team"),

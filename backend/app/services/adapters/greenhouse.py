@@ -12,7 +12,9 @@ from html import unescape
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.domain_utils import normalize_domain
+from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
 
@@ -32,15 +34,8 @@ class GreenhouseAdapter(BaseAdapter):
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         if "detail" in str(surface or "").lower():
             detail_record = await self._try_detail_api(url, html)
-            if detail_record:
-                return AdapterResult(
-                    records=[detail_record],
-                    source_type="greenhouse_adapter",
-                    adapter_name=self.name,
-                )
-            detail_from_html = self._extract_detail_from_html(html, url)
             return AdapterResult(
-                records=[detail_from_html] if detail_from_html else [],
+                records=[detail_record] if detail_record else [],
                 source_type="greenhouse_adapter",
                 adapter_name=self.name,
             )
@@ -119,7 +114,7 @@ class GreenhouseAdapter(BaseAdapter):
         try:
             data = await self._request_json(
                 api_url,
-                timeout_seconds=10,
+                timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
             )
             if not isinstance(data, dict):
                 return []
@@ -160,7 +155,10 @@ class GreenhouseAdapter(BaseAdapter):
             return None
         api_url = f"https://boards-api.greenhouse.io/v1/boards/{company_slug}/jobs/{job_id}?content=true"
         try:
-            data = await self._request_json(api_url, timeout_seconds=10)
+            data = await self._request_json(
+                api_url,
+                timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
+            )
         except Exception:
             return None
         if not isinstance(data, dict):
@@ -217,34 +215,6 @@ class GreenhouseAdapter(BaseAdapter):
 
         return records
 
-    def _extract_detail_from_html(self, html: str, url: str) -> dict | None:
-        soup = BeautifulSoup(html, _HTML_PARSER)
-        title_node = soup.select_one("h1")
-        title = clean_text(
-            title_node.get_text(" ", strip=True) if title_node is not None else ""
-        )
-        if not title:
-            return None
-        location_node = soup.select_one("[class*='location'], .location")
-        location = clean_text(
-            location_node.get_text(" ", strip=True) if location_node is not None else ""
-        )
-        content_root = soup.select_one("main") or soup
-        description = clean_text(content_root.get_text(" ", strip=True))
-        record = {
-            "title": title,
-            "url": url,
-            "apply_url": url,
-            "location": location,
-            "description": description or None,
-        }
-        record.update(self._extract_sections_from_html(str(content_root)))
-        return {
-            key: value
-            for key, value in record.items()
-            if value not in (None, "", [], {})
-        }
-
     def _normalize_detail_record(self, payload: dict, *, page_url: str) -> dict | None:
         title = clean_text(payload.get("title"))
         if not title:
@@ -272,11 +242,8 @@ class GreenhouseAdapter(BaseAdapter):
                 record["salary"] = salary
         content = unescape(str(payload.get("content") or ""))
         if content:
-            sections = self._extract_sections_from_html(content)
-            record.update(sections)
-            description = clean_text(
-                BeautifulSoup(content, _HTML_PARSER).get_text(" ", strip=True)
-            )
+            record.update(extract_job_sections(content))
+            description = html_to_text(content)
             if description:
                 record["description"] = description
         if location_name and "remote" in location_name.lower():
@@ -286,49 +253,6 @@ class GreenhouseAdapter(BaseAdapter):
             for key, value in record.items()
             if value not in (None, "", [], {})
         }
-
-    def _extract_sections_from_html(self, html: str) -> dict[str, str]:
-        soup = BeautifulSoup(str(html or ""), _HTML_PARSER)
-        sections: dict[str, str] = {}
-        for heading in list(soup.find_all(["h2", "h3", "strong"])):
-            heading_text = clean_text(heading.get_text(" ", strip=True)).lower()
-            if not heading_text:
-                continue
-            values: list[str] = []
-            for sibling in heading.next_siblings:
-                sibling_name = str(getattr(sibling, "name", "") or "").lower()
-                if sibling_name in {"h1", "h2", "h3", "strong"}:
-                    break
-                text = (
-                    sibling.get_text(" ", strip=True)
-                    if hasattr(sibling, "get_text")
-                    else str(sibling)
-                )
-                cleaned = clean_text(text)
-                if cleaned:
-                    values.append(cleaned)
-            value = " ".join(values).strip()
-            if not value:
-                continue
-            section_name = self._section_name_for_heading(heading_text)
-            if section_name is not None:
-                sections[section_name] = value
-        return sections
-
-    def _section_name_for_heading(self, heading_text: str) -> str | None:
-        if "what you" in heading_text or "responsibil" in heading_text:
-            return "responsibilities"
-        if (
-            "should have" in heading_text
-            or "qualif" in heading_text
-            or "who you are" in heading_text
-        ):
-            return "qualifications"
-        if "benefit" in heading_text or "perks" in heading_text or "offer" in heading_text:
-            return "benefits"
-        if "skill" in heading_text or "bring" in heading_text:
-            return "skills"
-        return None
 
     def _normalize_pay_range(self, payload: object) -> str:
         if not isinstance(payload, dict):

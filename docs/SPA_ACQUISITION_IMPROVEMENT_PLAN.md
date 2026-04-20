@@ -1,5 +1,7 @@
 # SPA Acquisition Improvement Plan
 
+Repo-wide stabilization is now governed by [docs/plans/repo-stabilization-master-plan.md](/c:/Projects/pre_poc_ai_crawler/docs/plans/repo-stabilization-master-plan.md:1). Keep this document as SPA-specific local context only.
+
 ## Objective
 
 Improve SPA acquisition so that:

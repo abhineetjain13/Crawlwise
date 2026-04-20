@@ -94,6 +94,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         max_scrolls = settings_view.max_scrolls()
         max_records = settings_view.max_records()
         sleep_ms = settings_view.sleep_ms()
+        url_timeout_seconds = settings_view.url_timeout_seconds()
 
         run.update_summary(
             url_count=total_urls,
@@ -150,12 +151,24 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             )
             try:
                 url_result = _ensure_url_processing_result(
-                    await _process_single_url(
-                        session=session,
-                        run=run,
-                        url=url,
-                        config=url_config,
+                    await asyncio.wait_for(
+                        _process_single_url(
+                            session=session,
+                            run=run,
+                            url=url,
+                            config=url_config,
+                        ),
+                        timeout=url_timeout_seconds,
                     )
+                )
+            except TimeoutError:
+                logger.warning("URL processing timed out for run=%s url=%s", run.id, url)
+                url_result = URLProcessingResult(
+                    records=[],
+                    verdict=VERDICT_ERROR,
+                    url_metrics={
+                        "error": f"TimeoutError: url exceeded timeout_seconds={url_timeout_seconds}",
+                    },
                 )
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 logger.warning("URL processing failed for run=%s url=%s", run.id, url, exc_info=True)

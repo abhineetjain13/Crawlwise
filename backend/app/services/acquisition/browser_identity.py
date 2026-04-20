@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging as _logging
 import platform as _platform
 import re as _re
+import threading as _threading
 from dataclasses import dataclass
 from types import SimpleNamespace as _SimpleNamespace
 from typing import Any
 
 from browserforge.fingerprints import FingerprintGenerator
+from cachetools import TTLCache
 
 from app.services.pipeline.pipeline_config import FingerprintConfig
 
@@ -47,6 +49,14 @@ _HOST_OS_PLATFORM_LABELS = {
     "linux": "Linux",
 }
 _logger = _logging.getLogger(__name__)
+MAX_BROWSER_IDENTITIES = 1024
+BROWSER_IDENTITY_TTL_SECONDS = 60 * 60
+# Bound per-run identities so stale run IDs age out and the cache cannot grow forever.
+_RUN_BROWSER_IDENTITIES: TTLCache[int, BrowserIdentity] = TTLCache(
+    maxsize=MAX_BROWSER_IDENTITIES,
+    ttl=BROWSER_IDENTITY_TTL_SECONDS,
+)
+_RUN_BROWSER_IDENTITIES_LOCK = _threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +93,26 @@ def create_browser_identity() -> BrowserIdentity:
         if isinstance(navigator.userAgentData, dict)
         else False,
     )
+
+
+def browser_identity_for_run(run_id: int | None = None) -> BrowserIdentity:
+    if run_id is None:
+        return create_browser_identity()
+    normalized_run_id = int(run_id)
+    identity = _RUN_BROWSER_IDENTITIES.get(normalized_run_id)
+    if identity is not None:
+        return identity
+    with _RUN_BROWSER_IDENTITIES_LOCK:
+        identity = _RUN_BROWSER_IDENTITIES.get(normalized_run_id)
+        if identity is None:
+            identity = create_browser_identity()
+            _RUN_BROWSER_IDENTITIES[normalized_run_id] = identity
+    return identity
+
+
+def clear_browser_identity_cache() -> None:
+    with _RUN_BROWSER_IDENTITIES_LOCK:
+        _RUN_BROWSER_IDENTITIES.clear()
 
 
 _UA_VERSION_RE = _re.compile(r"Chrome/(\d+)\.")
@@ -191,8 +221,10 @@ def _normalize_incoherent_fingerprint(fingerprint):
 
 def build_playwright_context_options(
     identity: BrowserIdentity | None = None,
+    *,
+    run_id: int | None = None,
 ) -> dict[str, Any]:
-    identity = identity or create_browser_identity()
+    identity = identity or browser_identity_for_run(run_id)
     return {
         "user_agent": identity.user_agent,
         "viewport": dict(identity.viewport),

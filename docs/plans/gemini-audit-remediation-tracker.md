@@ -1,5 +1,7 @@
 # Gemini Audit Remediation Tracker
 
+Historical tracker. Repo-wide stabilization is now governed by [repo-stabilization-master-plan.md](./repo-stabilization-master-plan.md).
+
 Purpose: track the current-state review of `docs/audits/gemini-audit.md` and the independent implementation slices used to remediate live issues only.
 
 ## Source Documents

@@ -29,10 +29,6 @@ class LLMRuntimeSettings(BaseSettings):
     prompt_compact_json_max_keys: int = 12
     prompt_compact_json_max_list_items: int = 10
     prompt_compact_leaf_string_max_chars: int = 220
-    html_snippet_min_budget: int = 100
-    html_snippet_window_min_chars: int = 180
-    html_snippet_window_max_chars: int = 800
-    html_snippet_max_chunks: int = 6
     html_anchor_min_length: int = 3
     schema_field_name_max_length: int = 40
     groq_max_tokens: int = 1200

@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from bs4 import BeautifulSoup
+from selectolax.lexbor import SelectolaxError
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.config.extraction_rules import (
@@ -24,11 +25,9 @@ from app.services.extraction_context import (
 )
 from app.services.field_policy import normalize_requested_field
 from app.services.field_value_core import (
-    IMAGE_FIELDS,
     PRICE_RE,
     RATING_RE,
     REVIEW_COUNT_RE,
-    URL_FIELDS,
     absolute_url,
     clean_text,
     coerce_field_value,
@@ -309,8 +308,8 @@ def _listing_fragment_score(node) -> int:
 
 def _node_text(node) -> str:
     try:
-        return clean_text(str(node.text(strip=True) or ""))
-    except Exception:
+        return clean_text(str(node.text(separator=" ", strip=True) or ""))
+    except (AttributeError, TypeError, ValueError):
         return ""
 
 
@@ -340,7 +339,8 @@ def _node_css(node, selector: str) -> list[object]:
         return []
     try:
         return list(node.css(selector))
-    except Exception:
+    except SelectolaxError:
+        logger.warning("Skipping invalid listing selector: %s", selector)
         return []
 
 
@@ -352,6 +352,14 @@ def _card_title_node(card) -> object | None:
         candidates.extend(_node_css(card, str(selector)))
     if candidates:
         best = max(candidates, key=lambda node: (_card_title_score(node), len(_node_text(node))))
+        if _card_title_score(best) > 0:
+            return best
+    fallback_candidates = _fallback_card_title_candidates(card)
+    if fallback_candidates:
+        best = max(
+            fallback_candidates,
+            key=lambda node: (_card_title_score(node), len(_node_text(node))),
+        )
         if _card_title_score(best) > 0:
             return best
     anchors = _node_css(card, "a[href]")
@@ -371,6 +379,28 @@ def _card_title_score(node) -> int:
         tag_name=_node_tag(node),
         href_present=bool(_node_attr(node, "href")),
     )
+
+
+def _fallback_card_title_candidates(card) -> list[object]:
+    candidates: list[object] = []
+    for node in _node_css(card, "*"):
+        if _node_tag(node) in {"a", "button"}:
+            continue
+        attrs = _node_signature(node)
+        if not attrs:
+            continue
+        if not any(token in attrs for token in ("title", "name", "product", "item")):
+            continue
+        text = _node_text(node)
+        if not text or len(text) > 220:
+            continue
+        lowered_text = text.lower()
+        if PRICE_RE.search(text):
+            continue
+        if any(token in lowered_text for token in ("add to bag", "add to cart", "wishlist")):
+            continue
+        candidates.append(node)
+    return candidates
 
 
 def _card_title_score_parts(
@@ -444,47 +474,6 @@ def _detail_like_path(url: str, *, is_job: bool) -> bool:
     return any(marker in lowered for marker in hints)
 
 
-def _extract_node_value(node, field_name: str, page_url: str) -> object | None:
-    if field_name in IMAGE_FIELDS:
-        srcset = _node_attr(node, "srcset")
-        if srcset:
-            first_candidate = str(srcset).split(",")[0].strip().split(" ")[0]
-            resolved = absolute_url(page_url, first_candidate)
-            if resolved:
-                return resolved
-        for attr_name in ("content", "src", "data-src", "data-image", "href"):
-            resolved = absolute_url(page_url, _node_attr(node, attr_name))
-            if resolved:
-                return resolved
-        return None
-    if field_name in URL_FIELDS:
-        for attr_name in ("href", "content", "data-apply-url"):
-            resolved = absolute_url(page_url, _node_attr(node, attr_name))
-            if resolved:
-                return resolved
-        return None
-    for attr_name in ("content", "value", "datetime", "data-value", "data-price", "data-availability"):
-        attr_value = _node_attr(node, attr_name)
-        if attr_value:
-            return coerce_field_value(field_name, attr_value, page_url)
-    return coerce_field_value(field_name, _node_text(node), page_url)
-
-
-def _extract_selector_values_from_node(
-    root,
-    selector: str,
-    field_name: str,
-    page_url: str,
-) -> list[object]:
-    values: list[object] = []
-    for node in _node_css(root, selector)[:12]:
-        value = _extract_node_value(node, field_name, page_url)
-        if value in (None, "", [], {}):
-            continue
-        values.append(value)
-    return values
-
-
 def _extract_page_images_from_node(root, page_url: str) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
@@ -554,22 +543,6 @@ def _extract_label_value_pairs_from_node(root) -> list[tuple[str, str]]:
     return deduped
 
 
-def _apply_dom_pattern_fallbacks_from_node(
-    card,
-    *,
-    page_url: str,
-    surface: str,
-    candidates: dict[str, list[object]],
-) -> None:
-    dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
-    for field_name in surface_fields(surface, None):
-        selector = str(dom_patterns.get(field_name) or "").strip()
-        if not selector:
-            continue
-        for value in _extract_selector_values_from_node(card, selector, field_name, page_url):
-            add_candidate(candidates, field_name, value)
-
-
 def _listing_record_from_card(
     card,
     page_url: str,
@@ -583,6 +556,7 @@ def _listing_record_from_card(
         return None
     anchor_node, url, anchor_text, anchor_score = primary_anchor
     title_node = _card_title_node(card) or anchor_node
+    title_score = _card_title_score(title_node)
     title = clean_text(
         _node_attr(title_node, "title")
         or _node_attr(title_node, "alt")
@@ -591,7 +565,7 @@ def _listing_record_from_card(
     )
     if len(title) < 4 or _listing_title_is_noise(title):
         return None
-    if anchor_score < 4:
+    if anchor_score < 4 and title_score < 8:
         return None
     card_text = _node_text(card)
     image_urls = _extract_page_images_from_node(card, page_url)
@@ -605,28 +579,22 @@ def _listing_record_from_card(
         if is_job and anchor_score < 8:
             if not any(token in card_text.lower() for token in ("salary", "remote", "location", "apply")):
                 return None
-        if not is_job and anchor_score < 8 and not has_supporting_listing_signals:
+        if not is_job and anchor_score < 8 and not has_supporting_listing_signals and title_score < 8:
             return None
     alias_lookup = surface_alias_lookup(surface, None)
     candidates: dict[str, list[object]] = {"title": [title], "url": [url]}
-    _apply_dom_pattern_fallbacks_from_node(
-        card,
-        page_url=page_url,
-        surface=surface,
-        candidates=candidates,
+    card_soup = BeautifulSoup(str(getattr(card, "html", "") or ""), "html.parser")
+    apply_selector_fallbacks(
+        card_soup,
+        page_url,
+        surface,
+        None,
+        candidates,
+        selector_rules=selector_rules,
     )
-    if selector_rules:
-        card_soup = BeautifulSoup(str(getattr(card, "html", "") or ""), "html.parser")
-        apply_selector_fallbacks(
-            card_soup,
-            page_url,
-            surface,
-            None,
-            candidates,
-            selector_rules=selector_rules,
-        )
-    if image_urls:
+    if image_urls and not candidates.get("image_url"):
         add_candidate(candidates, "image_url", image_urls[0])
+    if image_urls[1:] and not candidates.get("additional_images"):
         add_candidate(candidates, "additional_images", image_urls[1:])
     for label, value in _extract_label_value_pairs_from_node(card):
         normalized_label = normalize_requested_field(label)
@@ -679,6 +647,11 @@ def extract_listing_records(
 ) -> list[dict[str, Any]]:
     context = prepare_extraction_context(html)
     dom_parser = context.dom_parser
+    if not _listing_card_html_fragments(dom_parser, is_job=surface.startswith("job_")):
+        original_parser = LexborHTMLParser(context.original_html)
+        if _listing_card_html_fragments(original_parser, is_job=surface.startswith("job_")):
+            logger.debug("Using original listing DOM after cleaned DOM lost card fragments for %s", page_url)
+            dom_parser = original_parser
 
     def _structured_stage() -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []

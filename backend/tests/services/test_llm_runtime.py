@@ -154,3 +154,30 @@ def test_trim_prompt_section_body_skips_expensive_large_json_reparse() -> None:
 
     assert trimmed.endswith("[TRUNCATED]}")
     assert len(trimmed) <= 120
+
+
+def test_truncate_html_prefers_markdown_dense_anchor_context() -> None:
+    html = """
+    <html><body>
+    <h1>Senior Python Engineer</h1>
+    <p>General intro that does not matter.</p>
+    <h2>Compensation</h2>
+    <p>Salary: $120k - $150k base plus bonus.</p>
+    <ul><li>Remote within the US</li></ul>
+    </body></html>
+    """
+
+    rendered = llm_tasks._truncate_html(html, 80, anchors=["salary"])
+
+    assert "<h1>" not in rendered
+    assert "Compensation" in rendered
+    assert "Salary: $120k - $150k base plus bonus." in rendered
+    assert len(rendered) <= 80
+
+
+def test_truncate_html_renders_markdown_like_blocks() -> None:
+    html = "<h1>Product Title</h1><p>Short description.</p><ul><li>Free shipping</li></ul>"
+
+    rendered = llm_tasks._truncate_html(html, 200)
+
+    assert rendered == "Product Title\nShort description.\n- Free shipping"

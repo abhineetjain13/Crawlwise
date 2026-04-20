@@ -3,9 +3,8 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.field_value_core import clean_text
 
 _DEFAULT_ORDER = "postedDateDesc"
@@ -25,8 +24,7 @@ class UltiProAdapter(BaseAdapter):
 
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         if self._looks_like_detail(url, surface):
-            record = self._extract_detail_from_html(url, html)
-            records = [record] if record else []
+            records = []
         else:
             records = await self._extract_listing(url)
         return AdapterResult(
@@ -58,7 +56,7 @@ class UltiProAdapter(BaseAdapter):
                     query_string=context["query"],
                     order_value=context["order_by"],
                 ),
-                timeout_seconds=12,
+                timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
             )
             if not isinstance(payload, dict):
                 break
@@ -195,27 +193,6 @@ class UltiProAdapter(BaseAdapter):
         query = urlencode(params)
         detail_path = f"{parsed.path.rstrip('/')}/OpportunityDetail"
         return urlunparse(parsed._replace(path=detail_path, query=query))
-
-    def _extract_detail_from_html(self, url: str, html: str) -> dict | None:
-        soup = BeautifulSoup(str(html or ""), "html.parser")
-        title_node = soup.select_one("h1, h2")
-        title = clean_text(
-            title_node.get_text(" ", strip=True) if title_node is not None else ""
-        )
-        if not title:
-            return None
-        body_text = clean_text(soup.get_text(" ", strip=True))
-        record = {
-            "title": title,
-            "url": url,
-            "apply_url": url,
-            "description": body_text or None,
-        }
-        return {
-            key: value
-            for key, value in record.items()
-            if value not in (None, "", [], {})
-        }
 
     def _looks_like_detail(self, url: str, surface: str) -> bool:
         lowered_surface = str(surface or "").lower()

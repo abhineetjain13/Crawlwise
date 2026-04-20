@@ -16,23 +16,8 @@ from app.services.field_value_core import (
     surface_fields,
 )
 
-# ------------------------------------------------------------------
-# Ghost-routing: dynamic API schema inference via key signatures
-# ------------------------------------------------------------------
-_PRODUCT_SIGNATURE: frozenset[str] = frozenset({
-    "price", "sku", "name", "description", "title", "brand",
-    "availability", "image", "images", "currency", "vendor",
-    "product_type", "category", "compare_at_price", "variants",
-    "inventory_quantity", "body_html",
-})
-
-_JOB_SIGNATURE: frozenset[str] = frozenset({
-    "title", "description", "location", "company", "apply_url",
-    "posted_date", "employment_type", "salary", "department",
-    "qualifications", "responsibilities", "benefits", "remote",
-    "date_posted", "datePosted", "applyUrl", "job_type",
-    "content", "absolute_url", "company_name",
-})
+_PRODUCT_SIGNATURE: frozenset[str] = frozenset({"price", "sku", "name", "description", "title", "brand", "availability", "image", "images", "currency", "vendor", "product_type", "category", "compare_at_price", "variants", "inventory_quantity", "body_html"})
+_JOB_SIGNATURE: frozenset[str] = frozenset({"title", "description", "location", "company", "apply_url", "posted_date", "employment_type", "salary", "department", "qualifications", "responsibilities", "benefits", "remote", "date_posted", "datePosted", "applyUrl", "job_type", "content", "absolute_url", "company_name"})
 
 _SIGNATURE_MIN_MATCH = 3
 
@@ -73,12 +58,7 @@ def _ordered_payloads(
         for index, payload in enumerate(list(payloads or []))
         if isinstance(payload, dict)
     ]
-    indexed.sort(
-        key=lambda item: (
-            -_payload_priority(item[1], surface=surface),
-            item[0],
-        )
-    )
+    indexed.sort(key=lambda item: (-_payload_priority(item[1], surface=surface), item[0]))
     return [payload for _, payload in indexed]
 
 
@@ -164,14 +144,7 @@ def _map_body_with_spec(
         for key, value in mapped.items()
         if value not in (None, "", [], {})
     }
-    description_html = str(result.pop("description_html", "") or "").strip()
-    if description_html:
-        result.update(extract_job_sections(description_html))
-        if "description" not in result:
-            result["description"] = html_to_text(description_html)
-    if result.get("apply_url") and not result.get("url"):
-        result["url"] = result["apply_url"]
-    return result
+    return _finalize_detail_result(result)
 
 
 def _matches_required_path_groups(
@@ -202,11 +175,6 @@ def _first_non_empty_path(body: object, paths: object) -> Any:
     return None
 
 
-# ------------------------------------------------------------------
-# Ghost-routing helpers
-# ------------------------------------------------------------------
-
-
 def _collect_keys(body: object, *, depth: int = 0, limit: int = 2) -> set[str]:
     if depth > limit or not isinstance(body, dict):
         return set()
@@ -222,27 +190,18 @@ def _collect_keys(body: object, *, depth: int = 0, limit: int = 2) -> set[str]:
 
 
 def _looks_like_product_api(body: object) -> bool:
-    if not isinstance(body, dict):
-        return False
-    keys = _collect_keys(body)
-    return len(keys & _PRODUCT_SIGNATURE) >= _SIGNATURE_MIN_MATCH
+    return _matches_signature(body, _PRODUCT_SIGNATURE)
 
 
 def _looks_like_job_api(body: object) -> bool:
-    if not isinstance(body, dict):
-        return False
-    keys = _collect_keys(body)
-    return len(keys & _JOB_SIGNATURE) >= _SIGNATURE_MIN_MATCH
+    return _matches_signature(body, _JOB_SIGNATURE)
 
 
 def _body_matches_signature_quick(body: dict[str, object]) -> bool:
-    keys = set(body.keys())
-    for value in body.values():
-        if isinstance(value, dict):
-            keys |= set(value.keys())
-    return (
-        len(keys & _PRODUCT_SIGNATURE) >= _SIGNATURE_MIN_MATCH
-        or len(keys & _JOB_SIGNATURE) >= _SIGNATURE_MIN_MATCH
+    return _matches_signature(body, _PRODUCT_SIGNATURE, depth=1) or _matches_signature(
+        body,
+        _JOB_SIGNATURE,
+        depth=1,
     )
 
 
@@ -277,6 +236,20 @@ def _ghost_route_payload(
             if field_name in STRUCTURED_MULTI_FIELDS and not isinstance(finalized, list):
                 continue
             result[field_name] = finalized
+    result = _finalize_detail_result(result)
+    return result or None
+
+
+def _matches_signature(
+    body: object,
+    signature: frozenset[str],
+    *,
+    depth: int = 2,
+) -> bool:
+    return isinstance(body, dict) and len(_collect_keys(body, limit=depth) & signature) >= _SIGNATURE_MIN_MATCH
+
+
+def _finalize_detail_result(result: dict[str, Any]) -> dict[str, Any]:
     description_html = str(result.pop("description_html", "") or "").strip()
     if description_html:
         result.update(extract_job_sections(description_html))
@@ -284,4 +257,4 @@ def _ghost_route_payload(
             result["description"] = html_to_text(description_html)
     if result.get("apply_url") and not result.get("url"):
         result["url"] = result["apply_url"]
-    return result if result else None
+    return result

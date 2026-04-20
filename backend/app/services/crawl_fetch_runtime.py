@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+
+import httpx
 
 from app.core.config import settings
 from app.services.acquisition.browser_identity import build_playwright_context_options
@@ -43,6 +46,7 @@ from app.services.acquisition.runtime import (
     should_escalate_to_browser_async,
 )
 from app.services.acquisition.traversal import should_run_traversal
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.network_resolution import build_async_http_client
 from app.services.platform_policy import resolve_platform_runtime_policy
 
@@ -50,8 +54,8 @@ logger = logging.getLogger(__name__)
 
 
 class SharedBrowserRuntime(_SharedBrowserRuntime):
-    def _build_context_options(self) -> dict[str, object]:
-        return build_playwright_context_options()
+    def _build_context_options(self, *, run_id: int | None = None) -> dict[str, object]:
+        return build_playwright_context_options(run_id=run_id)
 
 
 def _copy_headers(headers):
@@ -104,6 +108,7 @@ async def _browser_fetch(
     url: str,
     timeout_seconds: float,
     *,
+    run_id: int | None = None,
     proxy: str | None = None,
     browser_reason: str | None = None,
     surface: str | None = None,
@@ -115,6 +120,7 @@ async def _browser_fetch(
     return await browser_fetch(
         url,
         timeout_seconds,
+        run_id=run_id,
         proxy=proxy,
         browser_reason=browser_reason,
         surface=surface,
@@ -198,6 +204,7 @@ async def reset_fetch_runtime_state() -> None:
 async def fetch_page(
     url: str,
     *,
+    run_id: int | None = None,
     timeout_seconds: float | None = None,
     proxy_list: list[str] | None = None,
     prefer_browser: bool = False,
@@ -243,6 +250,7 @@ async def fetch_page(
                 browser_result = await _browser_fetch(
                     url,
                     resolved_timeout,
+                    run_id=run_id,
                     proxy=proxy,
                     browser_reason=resolved_browser_reason,
                     surface=surface,
@@ -271,23 +279,43 @@ async def fetch_page(
     last_error: Exception | None = None
     proxy_attempts = proxies or [None]
     vendor_block_confirmed = False
+    max_attempts = max(1, int(crawler_runtime_settings.http_max_retries) + 1)
     for proxy in proxy_attempts:
         if vendor_block_confirmed:
             break
         for fetcher in (_curl_fetch, _http_fetch):
             resolved_browser_reason: str | None = None
-            try:
-                if proxy is not None:
-                    result = await fetcher(url, resolved_timeout, proxy=proxy)
-                else:
-                    result = await fetcher(url, resolved_timeout)
-                if is_non_retryable_http_status(result.status_code):
-                    logger.info(
-                        "Returning non-retryable HTTP status %s for %s without browser fallback",
-                        result.status_code,
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if proxy is not None:
+                        result = await fetcher(url, resolved_timeout, proxy=proxy)
+                    else:
+                        result = await fetcher(url, resolved_timeout)
+                except (httpx.HTTPError, OSError, TimeoutError) as exc:
+                    last_error = exc
+                    logger.debug(
+                        "Retryable fetch failure for %s via %s (%s attempt=%s/%s)",
                         url,
+                        fetcher.__name__,
+                        proxy or "direct",
+                        attempt,
+                        max_attempts,
+                        exc_info=True,
                     )
-                    return result
+                    if attempt < max_attempts:
+                        await _sleep_before_retry(attempt)
+                        continue
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    logger.debug(
+                        "Fetch failed for %s via %s (%s)",
+                        url,
+                        fetcher.__name__,
+                        proxy or "direct",
+                        exc_info=True,
+                    )
+                    break
                 vendor = _vendor_confirmed_block(result)
                 if vendor:
                     vendor_block_confirmed = True
@@ -296,12 +324,20 @@ async def fetch_page(
                     result.html,
                     surface=surface,
                 )
-
-                if vendor or await _should_escalate_to_browser_async(
+                should_browser_escalate = vendor or await _should_escalate_to_browser_async(
                     result,
                     surface=surface,
                     runtime_policy=result_runtime_policy,
+                )
+                if (
+                    _retryable_status_for_http_fetch(result.status_code)
+                    and not vendor
+                    and not should_browser_escalate
+                    and attempt < max_attempts
                 ):
+                    await _sleep_before_retry(attempt)
+                    continue
+                if should_browser_escalate:
                     resolved_browser_reason = (
                         browser_reason
                         or (f"vendor-block:{vendor}" if vendor else "http-escalation")
@@ -309,6 +345,7 @@ async def fetch_page(
                     browser_result = await _browser_fetch(
                         url,
                         resolved_timeout,
+                        run_id=run_id,
                         proxy=proxy,
                         browser_reason=resolved_browser_reason,
                         surface=surface,
@@ -319,27 +356,20 @@ async def fetch_page(
                     )
                     _remember_browser_host_if_good(browser_result)
                     return browser_result
+                if is_non_retryable_http_status(result.status_code):
+                    logger.info(
+                        "Returning non-retryable HTTP status %s for %s without browser fallback",
+                        result.status_code,
+                        url,
+                    )
+                    return result
                 _attach_browser_attempt_diagnostics(
                     result,
                     diagnostics=last_browser_attempt_diagnostics,
                 )
                 return result
-            except Exception as exc:
-                last_error = exc
-                if resolved_browser_reason is not None:
-                    last_browser_attempt_diagnostics = build_failed_browser_diagnostics(
-                        browser_reason=resolved_browser_reason,
-                        exc=exc,
-                    )
-                logger.debug(
-                    "Fetch failed for %s via %s (%s)",
-                    url,
-                    fetcher.__name__,
-                    proxy or "direct",
-                    exc_info=True,
-                )
-                if vendor_block_confirmed:
-                    break
+            if vendor_block_confirmed:
+                break
     if vendor_block_confirmed and last_error is not None:
         raise last_error
     if last_error is not None:
@@ -355,6 +385,7 @@ async def fetch_page(
                 browser_result = await _browser_fetch(
                     url,
                     resolved_timeout,
+                    run_id=run_id,
                     proxy=proxy,
                     browser_reason=resolved_browser_reason,
                     surface=surface,
@@ -411,6 +442,21 @@ def _resolve_browser_reason(
     if host_preference_enabled:
         return "host-preference"
     return "http-escalation"
+
+
+def _retryable_status_for_http_fetch(status_code: int) -> bool:
+    code = int(status_code or 0)
+    return code in {int(value) for value in list(crawler_runtime_settings.http_retry_status_codes or [])}
+
+
+async def _sleep_before_retry(attempt: int) -> None:
+    base_ms = max(0, int(crawler_runtime_settings.http_retry_backoff_base_ms))
+    max_ms = max(base_ms, int(crawler_runtime_settings.http_retry_backoff_max_ms))
+    delay_ms = min(max_ms, base_ms * (2 ** max(0, attempt - 1)))
+    if delay_ms <= 0:
+        return
+    jitter_ms = random.randint(0, max(1, delay_ms // 4))
+    await asyncio.sleep((delay_ms + jitter_ms) / 1000)
 
 
 __all__ = [

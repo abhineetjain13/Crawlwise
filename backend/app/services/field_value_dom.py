@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from bs4 import BeautifulSoup, Tag
 from lxml import etree
 from lxml import html as lxml_html
+from soupsieve import SelectorSyntaxError
 
 from app.services.config.extraction_rules import EXTRACTION_RULES, SEMANTIC_SECTION_NOISE
 from app.services.config.surface_hints import detail_path_hints
@@ -240,8 +241,8 @@ def safe_select(root: BeautifulSoup | Tag, selector: str) -> list[Tag]:
         return []
     try:
         return [node for node in root.select(selector) if isinstance(node, Tag)]
-    except Exception:
-        logger.debug("Invalid selector %s", selector, exc_info=True)
+    except SelectorSyntaxError:
+        logger.warning("Skipping invalid css selector: %s", selector)
         return []
 
 
@@ -509,9 +510,25 @@ def apply_selector_fallbacks(
     requested_fields: list[str] | None,
     candidates: dict[str, list[object]],
     selector_rules: list[dict[str, object]] | None = None,
+    *,
+    candidate_sources: dict[str, list[str]] | None = None,
+    field_sources: dict[str, list[str]] | None = None,
 ) -> None:
+    def _add(field_name: str, value: object, source: str) -> None:
+        growth = add_candidate(candidates, field_name, value)
+        if growth <= 0:
+            return
+        if candidate_sources is not None:
+            candidate_sources.setdefault(field_name, []).extend([source] * growth)
+        if field_sources is not None:
+            bucket = field_sources.setdefault(field_name, [])
+            public_source = "dom_selector" if source == "selector_rule" else source
+            if public_source not in bucket:
+                bucket.append(public_source)
+
     fields = surface_fields(surface, requested_fields)
     alias_lookup = surface_alias_lookup(surface, requested_fields)
+    selector_hit_fields: set[str] = set()
     for row in list(selector_rules or []):
         if not isinstance(row, dict):
             continue
@@ -531,20 +548,20 @@ def apply_selector_fallbacks(
         elif not values and regex and not xpath and not css_selector:
             values = extract_regex_values(root, regex, field_name, page_url)
         for value in values:
-            add_candidate(candidates, field_name, value)
+            _add(field_name, value, "selector_rule")
+        if values:
+            selector_hit_fields.add(field_name)
     dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})
     for field_name in fields:
+        if field_name in selector_hit_fields:
+            continue
         selector = str(dom_patterns.get(field_name) or "").strip()
         if not selector:
             continue
         for value in extract_selector_values(root, selector, field_name, page_url):
-            add_candidate(candidates, field_name, value)
+            _add(field_name, value, "dom_selector")
     for label, value in extract_label_value_pairs(root):
         normalized_label = normalize_requested_field(label) or normalize_field_key(label)
         canonical = alias_lookup.get(normalized_label)
         if canonical:
-            add_candidate(
-                candidates,
-                canonical,
-                coerce_field_value(canonical, value, page_url),
-            )
+            _add(canonical, coerce_field_value(canonical, value, page_url), "dom_selector")

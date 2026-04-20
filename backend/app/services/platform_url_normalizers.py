@@ -2,17 +2,15 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from app.services.platform_policy import detect_platform_family
+from app.services.platform_policy import (
+    detect_platform_family,
+    url_host_matches_platform_family,
+)
 
 
 def normalize_adp_detail_url(url: str | None) -> str | None:
     parsed = urlparse(str(url or "").strip())
-    hostname = str(parsed.hostname or "").lower()
-    if hostname not in {
-        "workforcenow.adp.com",
-        "myjobs.adp.com",
-        "recruiting.adp.com",
-    }:
+    if not url_host_matches_platform_family(parsed.geturl(), "adp"):
         return url
     if "recruitment/recruitment.html" not in parsed.path.lower():
         return url

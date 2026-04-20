@@ -23,7 +23,10 @@ from app.services.acquisition.browser_capture import (
     read_network_payload_body,
     should_capture_network_payload,
 )
-from app.services.acquisition.browser_identity import build_playwright_context_options
+from app.services.acquisition.browser_identity import (
+    build_playwright_context_options,
+    clear_browser_identity_cache,
+)
 from app.services.acquisition.runtime import (
     BlockPageClassification,
     NetworkPayloadReadResult,
@@ -199,11 +202,11 @@ class SharedBrowserRuntime:
             async with self._counter_lock:
                 self._total_contexts_created = 0
 
-    def _build_context_options(self) -> dict[str, object]:
-        return build_playwright_context_options()
+    def _build_context_options(self, *, run_id: int | None = None) -> dict[str, object]:
+        return build_playwright_context_options(run_id=run_id)
 
     @asynccontextmanager
-    async def page(self, *, proxy: str | None = None):
+    async def page(self, *, proxy: str | None = None, run_id: int | None = None):
         await self._ensure()
         await self._update_queue_count(1)
         try:
@@ -218,7 +221,7 @@ class SharedBrowserRuntime:
         context: BrowserContext | None = None
         await self._update_active_contexts(1)
         try:
-            context_options = self._build_context_options()
+            context_options = self._build_context_options(run_id=run_id)
             if proxy:
                 context_options["proxy"] = {"server": proxy}
             context = await self._browser.new_context(**context_options)
@@ -280,9 +283,9 @@ class SharedBrowserRuntime:
 
 
 @asynccontextmanager
-async def temporary_browser_page(*, proxy: str):
+async def temporary_browser_page(*, proxy: str, run_id: int | None = None):
     runtime = await get_browser_runtime()
-    async with runtime.page(proxy=proxy) as page:
+    async with runtime.page(proxy=proxy, run_id=run_id) as page:
         yield page
 
 
@@ -359,6 +362,7 @@ async def shutdown_browser_runtime() -> None:
         _BROWSER_RUNTIME = None
     if runtime is not None:
         await runtime.close()
+    clear_browser_identity_cache()
 
 
 def shutdown_browser_runtime_sync() -> None:
@@ -417,6 +421,7 @@ async def browser_fetch(
     url: str,
     timeout_seconds: float,
     *,
+    run_id: int | None = None,
     proxy: str | None = None,
     browser_reason: str | None = None,
     surface: str | None = None,
@@ -429,10 +434,10 @@ async def browser_fetch(
     blocked_html_checker=is_blocked_html_async,
 ) -> PageFetchResult:
     if proxy:
-        page_context = proxied_page_factory(proxy=proxy)
+        page_context = proxied_page_factory(proxy=proxy, run_id=run_id)
     else:
         runtime = await runtime_provider()
-        page_context = runtime.page()
+        page_context = runtime.page(run_id=run_id)
     async with page_context as page:
         await _emit_browser_event(
             on_event,

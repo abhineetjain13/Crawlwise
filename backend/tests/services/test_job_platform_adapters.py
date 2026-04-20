@@ -10,6 +10,7 @@ from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.ultipro import UltiProAdapter
 from app.services.adapters.workday import WorkdayAdapter
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.listing_extractor import extract_listing_records
 from app.services.platform_url_normalizers import normalize_platform_acquisition_url
 
@@ -126,6 +127,40 @@ def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic
     assert normalized == (
         "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?jobId=12345&lang=en_US"
     )
+
+
+def test_platform_owned_adp_acquisition_normalization_uses_configured_domains() -> None:
+    normalized = normalize_platform_acquisition_url(
+        "https://acme.wd5.myworkforcenow.com/recruitment/recruitment.html?jobId= 12345 "
+    )
+
+    assert normalized == (
+        "https://acme.wd5.myworkforcenow.com/recruitment/recruitment.html?jobId=12345"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ats_adapter_request_timeout_comes_from_runtime_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = WorkdayAdapter()
+    observed_timeouts: list[int] = []
+
+    async def _fake_request_json(url: str, **kwargs):
+        del url
+        observed_timeouts.append(int(kwargs["timeout_seconds"]))
+        return {"total": 0, "jobPostings": []}
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+    monkeypatch.setattr(adapter_runtime_settings, "ats_request_timeout_seconds", 7)
+
+    await adapter.extract(
+        "https://example.wd5.myworkdayjobs.com/en-US/External",
+        "",
+        "job_listing",
+    )
+
+    assert observed_timeouts == [7]
 
 
 @pytest.mark.asyncio

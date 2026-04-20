@@ -5,6 +5,8 @@ from decimal import Decimal
 import pytest
 
 from app.services.adapters.greenhouse import GreenhouseAdapter
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
+from app.services.extraction_html_helpers import extract_job_sections
 
 
 @pytest.mark.asyncio
@@ -15,7 +17,7 @@ async def test_greenhouse_adapter_extracts_detail_from_public_api(
 
     async def fake_request_json(url: str, *, timeout_seconds: float = 0, **_: object):
         assert "boards/greenhouse/jobs/7704699" in url
-        assert timeout_seconds == 10
+        assert timeout_seconds == adapter_runtime_settings.ats_request_timeout_seconds
         return {
             "absolute_url": "https://job-boards.greenhouse.io/greenhouse/jobs/7704699?gh_jid=7704699",
             "title": "Manager, Engineering",
@@ -54,7 +56,7 @@ def test_greenhouse_adapter_normalizes_numeric_pay_ranges_and_strong_sections() 
             "title": "yearly",
         }
     )
-    sections = adapter._extract_sections_from_html(
+    sections = extract_job_sections(
         """
         <div>
           <strong>What you'll do</strong>

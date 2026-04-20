@@ -325,6 +325,20 @@ def resolve_listing_readiness_platform(url: str) -> str | None:
     return None
 
 
+def platform_domain_patterns(family: str | None) -> tuple[str, ...]:
+    config = platform_config_for_family(family)
+    if config is None:
+        return ()
+    return tuple(_normalize_patterns(config.domain_patterns))
+
+
+def url_host_matches_platform_family(url: str | None, family: str | None) -> bool:
+    host = _normalize_domain(urlparse(str(url or "")).netloc)
+    if not host:
+        return False
+    return any(_matches_domain(host, pattern) for pattern in platform_domain_patterns(family))
+
+
 def resolve_listing_readiness_override(url: str) -> dict[str, Any] | None:
     family = resolve_listing_readiness_platform(url)
     config = platform_config_for_family(family)
@@ -352,13 +366,15 @@ def resolve_browser_readiness_policy(
     traversal_active: bool = False,
 ) -> dict[str, Any]:
     listing_override = resolve_listing_readiness_override(url)
-    if listing_override is not None:
+    if traversal_active:
+        networkidle_reason = "traversal"
+    elif listing_override is not None:
         networkidle_reason = "platform-readiness"
     else:
         networkidle_reason = None
     return {
         "listing_override": listing_override,
-        "require_networkidle": bool(listing_override is not None),
+        "require_networkidle": bool(listing_override is not None or traversal_active),
         "networkidle_reason": networkidle_reason,
     }
 

@@ -58,6 +58,7 @@ _SOURCE_PRIORITY = (
     "js_state",
     "dom_h1",
     "dom_canonical",
+    "selector_rule",
     "dom_selector",
     "dom_sections",
     "dom_images",
@@ -148,9 +149,6 @@ def _apply_dom_fallbacks(
             title,
             source="dom_h1",
         )
-    prior_lengths = {
-        field_name: len(values) for field_name, values in candidates.items()
-    }
     apply_selector_fallbacks(
         soup,
         page_url,
@@ -158,16 +156,9 @@ def _apply_dom_fallbacks(
         requested_fields,
         candidates,
         selector_rules=selector_rules,
+        candidate_sources=candidate_sources,
+        field_sources=field_sources,
     )
-    for field_name in surface_fields(surface, requested_fields):
-        growth = len(candidates.get(field_name, [])) - prior_lengths.get(field_name, 0)
-        if growth > 0:
-            candidate_sources.setdefault(field_name, []).extend(
-                ["dom_selector"] * growth
-            )
-            field_sources.setdefault(field_name, [])
-            if "dom_selector" not in field_sources[field_name]:
-                field_sources[field_name].append("dom_selector")
     canonical = soup.find("link", attrs={"rel": re.compile("canonical", re.I)})
     if canonical is not None:
         from app.services.field_value_core import absolute_url
@@ -652,6 +643,27 @@ def _requires_dom_completion(
     return bool(requested_missing_fields & selector_backed_fields)
 
 
+def _primary_dom_context(
+    context,
+    *,
+    page_url: str,
+) -> tuple[LexborHTMLParser, BeautifulSoup]:
+    primary_selector = "main, article, h1, [itemprop='name']"
+    cleaned_parser = context.dom_parser
+    cleaned_soup = context.soup
+    if cleaned_parser.css_first(primary_selector) or cleaned_soup.select_one(primary_selector):
+        return cleaned_parser, cleaned_soup
+    original_parser = LexborHTMLParser(context.original_html)
+    original_soup = BeautifulSoup(context.original_html, "html.parser")
+    if not (
+        original_parser.css_first(primary_selector)
+        or original_soup.select_one(primary_selector)
+    ):
+        return cleaned_parser, cleaned_soup
+    logger.debug("Using original DOM after cleaned DOM lost primary content for %s", page_url)
+    return original_parser, original_soup
+
+
 def build_detail_record(
     html: str,
     page_url: str,
@@ -664,8 +676,10 @@ def build_detail_record(
     extraction_runtime_snapshot: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     context = prepare_extraction_context(html)
-    dom_parser = context.dom_parser
-    soup = context.soup
+    dom_parser, soup = _primary_dom_context(
+        context,
+        page_url=page_url,
+    )
     alias_lookup = surface_alias_lookup(surface, requested_fields)
     candidates: dict[str, list[object]] = {}
     candidate_sources: dict[str, list[str]] = {}
@@ -674,118 +688,139 @@ def build_detail_record(
     selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
     completed_tiers: list[str] = []
 
-    def _collect_authoritative_stage() -> None:
-        for adapter_record in list(adapter_records or []):
-            if isinstance(adapter_record, dict):
-                _collect_record_candidates(
-                    adapter_record,
-                    page_url=page_url,
-                    fields=fields,
-                    candidates=candidates,
-                    candidate_sources=candidate_sources,
-                    field_sources=field_sources,
-                    source="adapter",
-                )
-        for mapped_payload in map_network_payloads_to_fields(
-            network_payloads,
-            surface=surface,
-            page_url=page_url,
-        ):
+    for adapter_record in list(adapter_records or []):
+        if isinstance(adapter_record, dict):
             _collect_record_candidates(
-                mapped_payload,
+                adapter_record,
                 page_url=page_url,
                 fields=fields,
                 candidates=candidates,
                 candidate_sources=candidate_sources,
                 field_sources=field_sources,
-                source="network_payload",
+                source="adapter",
             )
-
-    def _collect_structured_stage() -> None:
-        structured_sources = collect_structured_source_payloads(
-            context,
+    for mapped_payload in map_network_payloads_to_fields(
+        network_payloads,
+        surface=surface,
+        page_url=page_url,
+    ):
+        _collect_record_candidates(
+            mapped_payload,
             page_url=page_url,
+            fields=fields,
+            candidates=candidates,
+            candidate_sources=candidate_sources,
+            field_sources=field_sources,
+            source="network_payload",
         )
-        for source_name, payloads in structured_sources:
-            if source_name == "js_state":
-                continue
-            for payload in payloads:
-                _collect_structured_payload_candidates(
-                    payload,
-                    alias_lookup=alias_lookup,
-                    page_url=page_url,
-                    candidates=candidates,
-                    candidate_sources=candidate_sources,
-                    field_sources=field_sources,
-                    source=source_name,
-                )
+    completed_tiers.append("authoritative")
+    record = _materialize_record(
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="authoritative",
+        completed_tiers=completed_tiers,
+    )
 
-    def _collect_js_state_stage() -> None:
-        mapped_js_fields = map_js_state_to_fields(
+    for source_name, payloads in collect_structured_source_payloads(
+        context,
+        page_url=page_url,
+    ):
+        if source_name == "js_state":
+            continue
+        for payload in payloads:
+            _collect_structured_payload_candidates(
+                payload,
+                alias_lookup=alias_lookup,
+                page_url=page_url,
+                candidates=candidates,
+                candidate_sources=candidate_sources,
+                field_sources=field_sources,
+                source=source_name,
+            )
+    completed_tiers.append("structured_data")
+    record = _materialize_record(
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="structured_data",
+        completed_tiers=completed_tiers,
+    )
+    if (
+        float(record["_confidence"]["score"])
+        >= float(selector_self_heal["threshold"])
+        and not _requires_dom_completion(
+            record=record,
+            surface=surface,
+            requested_fields=requested_fields,
+            selector_rules=selector_rules,
+            soup=soup,
+        )
+    ):
+        record["_extraction_tiers"]["early_exit"] = "structured_data"
+        return record
+
+    _collect_record_candidates(
+        map_js_state_to_fields(
             harvest_js_state_objects(None, context.cleaned_html),
             surface=surface,
             page_url=page_url,
-        )
-        _collect_record_candidates(
-            mapped_js_fields,
-            page_url=page_url,
-            fields=fields,
-            candidates=candidates,
-            candidate_sources=candidate_sources,
-            field_sources=field_sources,
-            source="js_state",
-        )
-
-    def _collect_dom_stage() -> None:
-        _apply_dom_fallbacks(
-            dom_parser,
-            soup,
-            page_url,
-            surface,
-            requested_fields,
-            candidates,
-            candidate_sources,
-            field_sources,
-            selector_rules=selector_rules,
-        )
-
-    record: dict[str, Any] = {}
-    stage_collectors = (
-        ("authoritative", _collect_authoritative_stage),
-        ("structured_data", _collect_structured_stage),
-        ("js_state", _collect_js_state_stage),
-        ("dom", _collect_dom_stage),
+        ),
+        page_url=page_url,
+        fields=fields,
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+        field_sources=field_sources,
+        source="js_state",
     )
-    for tier_name, collector in stage_collectors:
-        collector()
-        completed_tiers.append(tier_name)
-        record = _materialize_record(
-            page_url=page_url,
-            surface=surface,
-            requested_fields=requested_fields,
-            fields=fields,
-            candidates=candidates,
-            candidate_sources=candidate_sources,
-            field_sources=field_sources,
-            extraction_runtime_snapshot=extraction_runtime_snapshot,
-            tier_name=tier_name,
-            completed_tiers=completed_tiers,
-        )
-        if tier_name != "structured_data":
-            continue
-        if (
-            float(record["_confidence"]["score"])
-            >= float(selector_self_heal["threshold"])
-            and not _requires_dom_completion(
-                record=record,
-                surface=surface,
-                requested_fields=requested_fields,
-                selector_rules=selector_rules,
-                soup=soup,
-            )
-        ):
-            record["_extraction_tiers"]["early_exit"] = "structured_data"
-            return record
+    completed_tiers.append("js_state")
+    record = _materialize_record(
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="js_state",
+        completed_tiers=completed_tiers,
+    )
+
+    _apply_dom_fallbacks(
+        dom_parser,
+        soup,
+        page_url,
+        surface,
+        requested_fields,
+        candidates,
+        candidate_sources,
+        field_sources,
+        selector_rules=selector_rules,
+    )
+    completed_tiers.append("dom")
+    record = _materialize_record(
+        page_url=page_url,
+        surface=surface,
+        requested_fields=requested_fields,
+        fields=fields,
+        candidates=candidates,
+        candidate_sources=candidate_sources,
+        field_sources=field_sources,
+        extraction_runtime_snapshot=extraction_runtime_snapshot,
+        tier_name="dom",
+        completed_tiers=completed_tiers,
+    )
     if surface == "ecommerce_detail" and _title_needs_promotion(
         text_or_none(record.get("title")) or "",
         page_url=page_url,

@@ -1,5 +1,7 @@
 # Extraction Enhancement Slice Tracker
 
+Historical narrow plan. Repo-wide stabilization is now governed by [repo-stabilization-master-plan.md](./repo-stabilization-master-plan.md).
+
 Purpose: track the post-refactor reimplementation of extraction enhancements as independently landable slices.
 
 ## Source Documents

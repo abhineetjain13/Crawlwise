@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.field_value_core import clean_text
 
 
@@ -116,7 +117,7 @@ class PaycomAdapter(BaseAdapter):
                     headers=request_headers,
                     json_body=payload,
                     proxy=proxy,
-                    timeout_seconds=12,
+                    timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
                 )
                 if not isinstance(body, dict):
                     break
@@ -166,7 +167,7 @@ class PaycomAdapter(BaseAdapter):
                 endpoint,
                 headers=request_headers,
                 proxy=proxy,
-                timeout_seconds=12,
+                timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
             )
             if not isinstance(body, dict):
                 return None

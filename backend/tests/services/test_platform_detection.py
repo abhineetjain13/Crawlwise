@@ -95,6 +95,12 @@ def test_platform_registry_does_not_treat_detection_only_families_as_job_adapter
     assert is_job_platform_signal(platform_family="rippling") is False
 
 
+def test_detect_platform_family_for_stable_spa_canaries() -> None:
+    assert detect_platform_family("https://practicesoftwaretesting.com/#/shop") == "practicesoftwaretesting"
+    assert detect_platform_family("https://demo.spreecommerce.org/products") == "spree_commerce"
+    assert detect_platform_family("https://demo.saleor.io/products") == "saleor"
+
+
 def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_or_traversal() -> None:
     platform_policy = resolve_browser_readiness_policy(
         "https://smithnephew.wd5.myworkdayjobs.com/External",
@@ -114,3 +120,22 @@ def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_or_t
     assert traversal_policy["networkidle_reason"] == "traversal"
     assert default_policy["require_networkidle"] is False
     assert default_policy["networkidle_reason"] is None
+
+
+def test_resolve_browser_readiness_policy_uses_spree_canary_override() -> None:
+    policy = resolve_browser_readiness_policy(
+        "https://demo.spreecommerce.org/products",
+    )
+
+    assert policy["require_networkidle"] is True
+    assert policy["networkidle_reason"] == "platform-readiness"
+    assert policy["listing_override"] == {
+        "platform": "spree_commerce",
+        "domain": "demo.spreecommerce.org",
+        "selectors": [
+            "[data-testid='product-card']",
+            ".products .card",
+            "a[href*='/products/']",
+        ],
+        "max_wait_ms": 15000,
+    }

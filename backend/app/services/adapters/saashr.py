@@ -5,6 +5,7 @@ import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
 
@@ -68,7 +69,7 @@ class SaaSHRAdapter(BaseAdapter):
                 payload = await self._request_json(
                     endpoint,
                     proxy=proxy,
-                    timeout_seconds=12,
+                    timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
                 )
                 if not isinstance(payload, dict):
                     break
@@ -126,7 +127,7 @@ class SaaSHRAdapter(BaseAdapter):
             payload = await self._request_json(
                 endpoint,
                 proxy=proxy,
-                timeout_seconds=12,
+                timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
             )
             if not isinstance(payload, dict):
                 return ""

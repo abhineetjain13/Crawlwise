@@ -11,7 +11,7 @@ from app.services.extract.shared_variant_logic import (
     resolve_variants,
     split_variant_axes,
 )
-from app.services.field_value_core import absolute_url, extract_urls, text_or_none
+from app.services.field_value_core import extract_urls, text_or_none
 from app.services.js_state_helpers import (
     availability_value,
     compact_dict,
@@ -32,54 +32,27 @@ PRODUCT_FIELD_SPEC = {
     "brand": Coalesce("brand.name", "brand", "vendor.name", "vendor", default=None, skip=_SKIP),
     "vendor": Coalesce("vendor.name", "vendor", default=None, skip=_SKIP),
     "handle": Coalesce("handle", "slug", default=None, skip=_SKIP),
-    "description": Coalesce("description", "body_html", default=None, skip=_SKIP),
-    "product_id": Coalesce("id", "product_id", default=None, skip=_SKIP),
+    "description": Coalesce("description", "body_html", "descriptionHtml", default=None, skip=_SKIP),
+    "product_id": Coalesce("id", "product_id", "legacyResourceId", default=None, skip=_SKIP),
     "category": Coalesce("category", default=None, skip=_SKIP),
     "product_type": Coalesce("product_type", "type", default=None, skip=_SKIP),
     "sku": Coalesce("sku", default=None, skip=_SKIP),
     "barcode": Coalesce("barcode", default=None, skip=_SKIP),
-    "currency": Coalesce("currency", "currencyCode", "priceCurrency", default=None, skip=_SKIP),
-    "price": Coalesce("price", "amount", "minPrice", "maxPrice", "formattedPrice", default=None, skip=_SKIP),
-    "original_price": Coalesce("compare_at_price", "compareAtPrice", "original_price", "originalPrice", "listPrice", default=None, skip=_SKIP),
-    "availability": Coalesce("availability", "inventory.status", default=None, skip=_SKIP),
+    "currency": Coalesce("currency", "currencyCode", "priceCurrency", "priceRange.minVariantPrice.currencyCode", "priceRange.maxVariantPrice.currencyCode", default=None, skip=_SKIP),
+    "price": Coalesce("price", "amount", "minPrice", "maxPrice", "formattedPrice", "priceRange.minVariantPrice.amount", "priceRange.maxVariantPrice.amount", default=None, skip=_SKIP),
+    "original_price": Coalesce("compare_at_price", "compareAtPrice", "original_price", "originalPrice", "listPrice", "compareAtPriceRange.minVariantPrice.amount", "compareAtPriceRange.maxVariantPrice.amount", default=None, skip=_SKIP),
+    "availability": Coalesce("availability", "inventory.status", "availableForSale", default=None, skip=_SKIP),
     "tags": Coalesce("tags", default=None, skip=_SKIP),
     "created_at": Coalesce("created_at", default=None, skip=_SKIP),
     "updated_at": Coalesce("updated_at", default=None, skip=_SKIP),
     "published_at": Coalesce("published_at", default=None, skip=_SKIP),
 }
 _DECLARATIVE_PRODUCT_ROOTS: dict[str, tuple[str, ...]] = {
-    "__NEXT_DATA__": (
-        "props.pageProps.product",
-        "props.pageProps.productData",
-        "props.pageProps.initialData.product",
-        "props.pageProps.initialData",
-        "query.product",
-        "apollo.product",
-    ),
-    "__INITIAL_STATE__": (
-        "catalog.selected.product",
-        "product.current",
-        "product",
-        "pdp.product",
-        "state.product",
-    ),
-    "__PRELOADED_STATE__": (
-        "product.current",
-        "product",
-        "catalog.selected.product",
-        "state.product",
-    ),
-    "__NUXT__": (
-        "data[0].product",
-        "data.product",
-        "state.product",
-        "product",
-    ),
-    "__NUXT_DATA__": (
-        "data[0].product",
-        "state.product",
-        "product",
-    ),
+    "__NEXT_DATA__": ("props.pageProps.product", "props.pageProps.productData", "props.pageProps.initialData.product", "props.pageProps.initialData", "query.product", "apollo.product"),
+    "__INITIAL_STATE__": ("catalog.selected.product", "product.current", "product", "pdp.product", "state.product"),
+    "__PRELOADED_STATE__": ("product.current", "product", "catalog.selected.product", "state.product"),
+    "__NUXT__": ("data[0].product", "data.product", "state.product", "product"),
+    "__NUXT_DATA__": ("data[0].product", "state.product", "product"),
 }
 
 def map_js_state_to_fields(
@@ -386,8 +359,11 @@ def _map_product_payload(
 
 def _extract_product_images(product: dict[str, Any], *, page_url: str) -> list[str]:
     values = extract_urls(product.get("images"), page_url)
+    values.extend(extract_urls(_connection_nodes(product.get("images")), page_url))
     values.extend(extract_urls(product.get("image"), page_url))
+    values.extend(extract_urls(product.get("featuredImage"), page_url))
     values.extend(extract_urls(product.get("featured_image"), page_url))
+    values.extend(extract_urls(_connection_nodes(product.get("media")), page_url))
     deduped: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -489,7 +465,7 @@ def _normalize_variant(
     image_url = next(
         iter(
             extract_urls(
-                variant.get("featured_image") or variant.get("image"),
+                variant.get("featured_image") or variant.get("featuredImage") or variant.get("image"),
                 page_url,
             )
         ),
@@ -544,6 +520,22 @@ def _variant_url(page_url: str, variant_id: str) -> str:
     query_pairs.append(("variant", variant_id))
     return urlunsplit(parsed._replace(query=urlencode(query_pairs, doseq=True)))
 
+
+def _connection_nodes(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        nodes = value.get("nodes")
+        if isinstance(nodes, list):
+            return [node for node in nodes if isinstance(node, dict)]
+        edges = value.get("edges")
+        if isinstance(edges, list):
+            return [
+                node
+                for edge in edges
+                if isinstance(edge, dict)
+                for node in [edge.get("node")]
+                if isinstance(node, dict)
+            ]
+    return []
 
 
 def _name_or_value(value: Any) -> Any:

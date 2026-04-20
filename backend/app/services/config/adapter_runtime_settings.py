@@ -11,6 +11,7 @@ class AdapterRuntimeSettings(BaseSettings):
 
     model_config = _settings_config(env_prefix="ADAPTER_RUNTIME_")
 
+    ats_request_timeout_seconds: int = 12
     shopify_request_timeout_seconds: int = 6
     shopify_catalog_limit: int = 250
     shopify_max_products: int = 500
@@ -22,6 +23,8 @@ class AdapterRuntimeSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate(self) -> AdapterRuntimeSettings:
+        if self.ats_request_timeout_seconds <= 0:
+            raise ValueError("ats_request_timeout_seconds must be > 0")
         if self.shopify_request_timeout_seconds <= 0:
             raise ValueError("shopify_request_timeout_seconds must be > 0")
         if self.shopify_catalog_limit <= 0:

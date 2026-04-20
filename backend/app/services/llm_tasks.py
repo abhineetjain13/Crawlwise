@@ -4,7 +4,7 @@ import json
 import time
 from json import loads as parse_json
 from string import Template
-from typing import Any
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 from app.core.metrics import observe_llm_task_duration, record_llm_task_outcome
 from app.models.crawl import CrawlRun
@@ -24,10 +24,90 @@ from app.services.llm_config_service import (
 )
 from app.services.llm_provider_client import call_provider_with_retry, estimate_cost_usd
 from app.services.llm_types import LLMTaskResult
+from app.services.record_export_service import render_markdown_block
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_PAGE_CLASSIFICATION_TYPES = {"listing", "detail", "challenge", "error", "unknown"}
 _PROMPT_JSON_REPARSE_MAX_CHARS = 16_384
+
+
+def _require_present_value(value: Any) -> Any:
+    if value in (None, "", [], {}):
+        raise ValueError("must not be empty")
+    return value
+
+
+def _require_non_empty_text(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("must not be empty")
+    return normalized
+
+
+def _require_payload_key(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or normalized.startswith("_"):
+        raise ValueError("must be a non-empty field key")
+    return normalized
+
+
+def _require_schema_field_name(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or not _is_valid_schema_field_name(normalized):
+        raise ValueError("contains an invalid field name")
+    return normalized
+
+
+_FieldKey = Annotated[str, AfterValidator(_require_payload_key)]
+_NonEmptyText = Annotated[str, AfterValidator(_require_non_empty_text)]
+_PresentValue = Annotated[Any, AfterValidator(_require_present_value)]
+_SchemaFieldName = Annotated[str, AfterValidator(_require_schema_field_name)]
+
+
+class _XPathSelector(TypedDict):
+    field_name: _NonEmptyText
+    xpath: _NonEmptyText
+
+
+class _CanonicalFieldReview(TypedDict):
+    suggested_value: _PresentValue
+    source: _NonEmptyText
+    supporting_sources: NotRequired[list[_NonEmptyText]]
+
+
+class _ReviewBucketItem(TypedDict):
+    key: _NonEmptyText
+    value: _PresentValue
+    source: _NonEmptyText
+
+
+class _FieldCleanupReviewPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    canonical: dict[_FieldKey, _CanonicalFieldReview] = Field(default_factory=dict)
+    review_bucket: list[_ReviewBucketItem] = Field(default_factory=list)
+
+
+class _PageClassificationPayload(TypedDict):
+    page_type: Literal["listing", "detail", "challenge", "error", "unknown"]
+    has_secondary_listing: bool
+    wait_selector_hint: str
+    reasoning: str
+
+
+class _SchemaInferencePayload(TypedDict):
+    confirmed_fields: list[_SchemaFieldName]
+    new_fields: list[_SchemaFieldName]
+    absent_fields: list[_SchemaFieldName]
+
+
+_PAYLOAD_ADAPTERS = {
+    "xpath_discovery": TypeAdapter(list[_XPathSelector]),
+    "missing_field_extraction": TypeAdapter(dict[_FieldKey, Any]),
+    "field_cleanup_review": TypeAdapter(_FieldCleanupReviewPayload),
+    "page_classification": TypeAdapter(_PageClassificationPayload),
+    "schema_inference": TypeAdapter(_SchemaInferencePayload),
+}
 
 
 async def run_prompt_task(
@@ -152,8 +232,8 @@ async def run_prompt_task(
         inner = payload.get(str(task["data_key"]))
         if isinstance(inner, (dict, list)):
             payload = inner
-    validation_error = _validate_task_payload(task_type, payload)
-    if validation_error:
+    payload, validation_error = _validate_task_payload(task_type, payload)
+    if validation_error is not None:
         return _finish(
             LLMTaskResult(
                 payload=None,
@@ -318,149 +398,26 @@ def _parse_payload(raw_text: str, *, response_type: str) -> dict | list | None:
     return _parse_json_object(raw_text)
 
 
-def _validate_task_payload(task_type: str, payload: object) -> str | None:
-    validators = {
-        "xpath_discovery": _validate_xpath_discovery_payload,
-        "missing_field_extraction": _validate_missing_field_extraction_payload,
-        "field_cleanup_review": _validate_field_cleanup_review_payload,
-        "page_classification": _validate_page_classification_payload,
-        "schema_inference": _validate_schema_inference_payload,
-    }
-    validator = validators.get(str(task_type or "").strip())
-    if validator is None:
-        return None
-    return validator(payload)
+def _validate_task_payload(
+    task_type: str,
+    payload: object,
+) -> tuple[dict | list | object, str | None]:
+    adapter = _PAYLOAD_ADAPTERS.get(str(task_type or "").strip())
+    if adapter is None:
+        return payload, None
+    try:
+        validated = adapter.validate_python(payload)
+    except ValidationError as exc:
+        return payload, _format_validation_error(task_type, exc)
+    return validated.model_dump() if isinstance(validated, BaseModel) else validated, None
 
 
-def _validate_xpath_discovery_payload(payload: object) -> str | None:
-    if not isinstance(payload, list):
-        return "xpath_discovery payload must be a list of selector objects"
-    for index, row in enumerate(payload):
-        if not isinstance(row, dict):
-            return f"xpath_discovery selectors[{index}] must be an object"
-        field_name = str(row.get("field_name") or "").strip()
-        xpath = str(row.get("xpath") or "").strip()
-        if not field_name:
-            return f"xpath_discovery selectors[{index}].field_name is required"
-        if not xpath:
-            return f"xpath_discovery selectors[{index}].xpath is required"
-    return None
-
-
-def _validate_missing_field_extraction_payload(payload: object) -> str | None:
-    if not isinstance(payload, dict):
-        return "missing_field_extraction payload must be an object"
-    for key in payload:
-        normalized_key = str(key or "").strip()
-        if not normalized_key or normalized_key.startswith("_"):
-            return "missing_field_extraction payload contains an invalid field key"
-    return None
-
-
-def _validate_field_cleanup_review_payload(payload: object) -> str | None:
-    if not isinstance(payload, dict):
-        return "field_cleanup_review payload must be an object"
-    allowed_keys = {"canonical", "review_bucket"}
-    unexpected_keys = set(payload) - allowed_keys
-    if unexpected_keys:
-        unexpected = sorted(unexpected_keys)[0]
-        return f"field_cleanup_review payload has unexpected key '{unexpected}'"
-    canonical = payload.get("canonical", {})
-    if canonical not in ({}, None) and not isinstance(canonical, dict):
-        return "field_cleanup_review canonical must be an object"
-    if isinstance(canonical, dict):
-        for field_name, row in canonical.items():
-            normalized_field = str(field_name or "").strip()
-            if not normalized_field or normalized_field.startswith("_"):
-                return "field_cleanup_review canonical contains an invalid field key"
-            if not isinstance(row, dict):
-                return (
-                    f"field_cleanup_review canonical['{normalized_field}'] "
-                    "must be an object"
-                )
-            if row.get("suggested_value") in (None, "", [], {}):
-                return (
-                    f"field_cleanup_review canonical['{normalized_field}']."
-                    "suggested_value is required"
-                )
-            source = str(row.get("source") or "").strip()
-            if not source:
-                return (
-                    f"field_cleanup_review canonical['{normalized_field}']."
-                    "source is required"
-                )
-            supporting_sources = row.get("supporting_sources")
-            if supporting_sources is None:
-                continue
-            if not isinstance(supporting_sources, list):
-                return (
-                    f"field_cleanup_review canonical['{normalized_field}']."
-                    "supporting_sources must be a list"
-                )
-            if any(not str(item or "").strip() for item in supporting_sources):
-                return (
-                    f"field_cleanup_review canonical['{normalized_field}']."
-                    "supporting_sources contains an invalid source"
-                )
-    review_bucket = payload.get("review_bucket", [])
-    if review_bucket not in (None, []) and not isinstance(review_bucket, list):
-        return "field_cleanup_review review_bucket must be a list"
-    if isinstance(review_bucket, list):
-        for index, row in enumerate(review_bucket):
-            if not isinstance(row, dict):
-                return f"field_cleanup_review review_bucket[{index}] must be an object"
-            key = str(row.get("key") or "").strip()
-            source = str(row.get("source") or "").strip()
-            if not key:
-                return f"field_cleanup_review review_bucket[{index}].key is required"
-            if row.get("value") in (None, "", [], {}):
-                return f"field_cleanup_review review_bucket[{index}].value is required"
-            if not source:
-                return (
-                    f"field_cleanup_review review_bucket[{index}].source is required"
-                )
-    return None
-
-
-def _validate_page_classification_payload(payload: object) -> str | None:
-    if not isinstance(payload, dict):
-        return "page_classification payload must be an object"
-    required_keys = {
-        "page_type",
-        "has_secondary_listing",
-        "wait_selector_hint",
-        "reasoning",
-    }
-    missing_keys = sorted(required_keys - set(payload))
-    if missing_keys:
-        return f"page_classification payload missing key '{missing_keys[0]}'"
-    if str(payload.get("page_type") or "").strip() not in _PAGE_CLASSIFICATION_TYPES:
-        return "page_classification page_type is invalid"
-    if not isinstance(payload.get("has_secondary_listing"), bool):
-        return "page_classification has_secondary_listing must be a boolean"
-    if not isinstance(payload.get("wait_selector_hint"), str):
-        return "page_classification wait_selector_hint must be a string"
-    if not isinstance(payload.get("reasoning"), str):
-        return "page_classification reasoning must be a string"
-    return None
-
-
-def _validate_schema_inference_payload(payload: object) -> str | None:
-    if not isinstance(payload, dict):
-        return "schema_inference payload must be an object"
-    required_keys = {"confirmed_fields", "new_fields", "absent_fields"}
-    missing_keys = sorted(required_keys - set(payload))
-    if missing_keys:
-        return f"schema_inference payload missing key '{missing_keys[0]}'"
-    for key in sorted(required_keys):
-        value = payload.get(key)
-        if not isinstance(value, list):
-            return f"schema_inference {key} must be a list"
-        for field_name in value:
-            normalized = str(field_name or "").strip()
-            if not normalized or not _is_valid_schema_field_name(normalized):
-                return f"schema_inference {key} contains an invalid field name"
-    return None
+def _format_validation_error(task_type: str, exc: ValidationError) -> str:
+    error = exc.errors()[0]
+    location = ".".join(str(part) for part in error.get("loc", ()) if part != "root")
+    detail = str(error.get("msg") or "invalid payload")
+    suffix = f" at {location}" if location else ""
+    return f"{task_type} payload validation failed{suffix}: {detail}"
 
 
 def _is_valid_schema_field_name(value: str) -> bool:
@@ -504,49 +461,38 @@ def _truncate_html(
     *,
     anchors: list[str] | None = None,
 ) -> str:
-    text = html_text.strip()
-    if len(text) <= limit:
-        return text
-    targeted = _build_targeted_html_snippet(text, anchors or [], limit)
-    return targeted[:limit] if targeted else text[:limit]
-
-
-def _build_targeted_html_snippet(html_text: str, anchors: list[str], limit: int) -> str:
     if limit <= 0:
         return ""
+    rendered = render_markdown_block(html_text).strip()
+    if len(rendered) <= limit:
+        return rendered
+    focused = _focus_markdown_context(rendered, anchors or [])
+    return (focused or rendered)[:limit]
+
+
+def _focus_markdown_context(markdown_text: str, anchors: list[str]) -> str:
     normalized_anchors = _normalize_html_anchor_terms(anchors)
     if not normalized_anchors:
         return ""
-    lowered_html = html_text.lower()
-    snippet_budget = max(llm_runtime_settings.html_snippet_min_budget, limit)
-    window = max(
-        llm_runtime_settings.html_snippet_window_min_chars,
-        min(
-            llm_runtime_settings.html_snippet_window_max_chars,
-            snippet_budget // llm_runtime_settings.prompt_token_char_multiplier,
-        ),
-    )
-    chunks: list[str] = []
-    seen_ranges: list[tuple[int, int]] = []
-    for anchor in normalized_anchors:
-        start_index = lowered_html.find(anchor)
-        if start_index == -1:
+    focused_lines: list[str] = []
+    seen: set[str] = set()
+    previous_line = ""
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.strip()
+        if not line:
             continue
-        start = max(0, start_index - window)
-        end = min(len(html_text), start_index + len(anchor) + window)
-        if any(
-            not (end <= prev_start or start >= prev_end)
-            for prev_start, prev_end in seen_ranges
-        ):
+        lowered = line.lower()
+        if not any(anchor in lowered for anchor in normalized_anchors):
+            previous_line = line
             continue
-        seen_ranges.append((start, end))
-        chunks.append(html_text[start:end].strip())
-        rendered = "\n...\n".join(chunks)
-        if len(rendered) >= snippet_budget:
-            return rendered[:snippet_budget]
-        if len(chunks) >= llm_runtime_settings.html_snippet_max_chunks:
-            break
-    return "\n...\n".join(chunks)[:snippet_budget]
+        if previous_line and previous_line not in seen:
+            focused_lines.append(previous_line)
+            seen.add(previous_line)
+        if line not in seen:
+            focused_lines.append(line)
+            seen.add(line)
+        previous_line = line
+    return "\n".join(focused_lines)
 
 
 def _normalize_html_anchor_terms(values: list[str]) -> list[str]:
@@ -689,20 +635,24 @@ def _trim_prompt_section_body(body: str, budget: int, placeholder: str) -> str:
             try:
                 parsed = parse_json(stripped)
             except json.JSONDecodeError:
-                pass
+                return _truncate_structured_text(stripped, budget, placeholder)
             else:
                 return _truncate_json_literal(parsed, budget)
-        return _truncate_json_text_literal(stripped, budget, placeholder)
+        return _truncate_structured_text(stripped, budget, placeholder)
     if budget <= len(placeholder):
         return placeholder[:budget]
     return stripped[: budget - len(placeholder)].rstrip() + placeholder
 
 
-def _truncate_json_text_literal(text: str, budget: int, placeholder: str) -> str:
+def _truncate_structured_text(text: str, budget: int, placeholder: str) -> str:
     if budget <= 0:
         return ""
     if len(text) <= budget:
         return text
+    if "\n" in text:
+        framed = _truncate_structured_lines(text, budget, placeholder)
+        if framed:
+            return framed
     if budget <= len(placeholder):
         return placeholder[:budget]
     closing = ""
@@ -714,6 +664,31 @@ def _truncate_json_text_literal(text: str, budget: int, placeholder: str) -> str
     if head_budget <= 0:
         return (placeholder + closing)[:budget]
     return text[:head_budget].rstrip() + placeholder + closing
+
+
+def _truncate_structured_lines(text: str, budget: int, placeholder: str) -> str:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    closing = ""
+    if text.startswith("{") and text.rstrip().endswith("}"):
+        closing = "}"
+    elif text.startswith("[") and text.rstrip().endswith("]"):
+        closing = "]"
+    suffix = f"\n{placeholder}{closing}" if closing else f"\n{placeholder}"
+    if len(lines[0]) + len(suffix) > budget:
+        return ""
+    kept = [lines[0]]
+    used = len(lines[0])
+    for line in lines[1:]:
+        next_used = used + 1 + len(line)
+        if next_used + len(suffix) > budget:
+            break
+        kept.append(line)
+        used = next_used
+    if len(kept) == len(lines):
+        return "\n".join(kept)
+    return "\n".join(kept) + suffix
 
 
 def _compact_json_value(

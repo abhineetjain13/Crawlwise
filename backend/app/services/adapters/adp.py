@@ -112,7 +112,7 @@ class ADPAdapter(BaseAdapter):
         if len(title) < 3:
             return None
 
-        body_text = clean_text(self._text(parser.body))
+        body_text = clean_text(_text(parser.body, separator=" "))
         record: dict[str, str] = {
             "title": title,
             "url": url,
@@ -219,6 +219,3 @@ class ADPAdapter(BaseAdapter):
             or "requisition id:" in lowered_html
             or "backapply" in lowered_html
         )
-
-    def _text(self, node: object, *, separator: str = " ") -> str:
-        return _text(node, separator=separator)

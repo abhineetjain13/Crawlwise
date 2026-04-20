@@ -30,12 +30,13 @@ def add_candidate(
     candidates: dict[str, list[object]],
     field_name: str,
     value: object,
-) -> None:
+) -> int:
     if value in (None, "", [], {}):
-        return
+        return 0
     bucket = candidates.setdefault(field_name, [])
     values = list(value) if field_name in STRUCTURED_MULTI_FIELDS and isinstance(value, list) else [value]
     seen = {candidate_fingerprint(existing) for existing in bucket}
+    added = 0
     for item in values:
         if item in (None, "", [], {}):
             continue
@@ -44,6 +45,8 @@ def add_candidate(
             continue
         seen.add(fingerprint)
         bucket.append(item)
+        added += 1
+    return added
 
 
 def _structured_variant_rows(variants: object, page_url: str) -> list[dict[str, object]]:

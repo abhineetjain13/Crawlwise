@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
+from app.services.extraction_html_helpers import html_to_text
 from app.services.field_value_core import clean_text
 from bs4 import BeautifulSoup
 
@@ -76,7 +78,7 @@ class OracleHCMAdapter(BaseAdapter):
                     curl_requests.get,
                     endpoint,
                     proxy=proxy,
-                    timeout_seconds=12,
+                    timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
                 )
                 if not isinstance(payload, dict):
                     break
@@ -156,9 +158,9 @@ class OracleHCMAdapter(BaseAdapter):
             return None
 
         description_parts = [
-            self._html_to_text(requisition.get("ShortDescriptionStr")),
-            self._html_to_text(requisition.get("ExternalResponsibilitiesStr")),
-            self._html_to_text(requisition.get("ExternalQualificationsStr")),
+            html_to_text(requisition.get("ShortDescriptionStr")),
+            html_to_text(requisition.get("ExternalResponsibilitiesStr")),
+            html_to_text(requisition.get("ExternalQualificationsStr")),
         ]
         description = "\n\n".join(part for part in description_parts if part)
         location = self._join_locations(requisition)
@@ -273,11 +275,3 @@ class OracleHCMAdapter(BaseAdapter):
         unique_locations = dict.fromkeys(self._iter_location_values(requisition))
         return " | ".join(unique_locations)
 
-    def _html_to_text(self, value: object) -> str:
-        html = str(value or "").strip()
-        if not html:
-            return ""
-        if "<" not in html or ">" not in html:
-            return clean_text(html)
-        soup = BeautifulSoup(html, "html.parser")
-        return clean_text(soup.get_text(" ", strip=True))

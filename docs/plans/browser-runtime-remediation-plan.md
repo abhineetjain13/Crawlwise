@@ -1,5 +1,7 @@
 # Browser Runtime Remediation Plan
 
+Historical narrow plan. Repo-wide stabilization is now governed by [repo-stabilization-master-plan.md](./repo-stabilization-master-plan.md).
+
 Purpose: reduce browser-render cost, stop dishonest "success" cases on challenge or wrong-content pages, and keep the fix inside the acquisition/browser owner modules defined by [docs/ENGINEERING_STRATEGY.md](../ENGINEERING_STRATEGY.md).
 
 ## Source Documents

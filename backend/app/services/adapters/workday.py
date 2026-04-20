@@ -4,9 +4,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
-
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.field_value_core import clean_text
 
@@ -59,7 +58,7 @@ class WorkdayAdapter(BaseAdapter):
                     "offset": offset,
                     "searchText": "",
                 },
-                timeout_seconds=12,
+                timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
             )
             if not isinstance(payload, dict):
                 break
@@ -94,14 +93,17 @@ class WorkdayAdapter(BaseAdapter):
             return None
         detail_path = self._detail_api_path(url, site_slug=context["site_slug"])
         if not detail_path:
-            return self._extract_detail_from_html(url, html)
+            return None
         endpoint = f"{context['api_base']}/{detail_path}"
-        payload = await self._request_json(endpoint, timeout_seconds=12)
+        payload = await self._request_json(
+            endpoint,
+            timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
+        )
         if not isinstance(payload, dict):
-            return self._extract_detail_from_html(url, html)
+            return None
         info = payload.get("jobPostingInfo")
         if not isinstance(info, dict):
-            return self._extract_detail_from_html(url, html)
+            return None
         title = clean_text(info.get("title"))
         if not title:
             return None
@@ -221,27 +223,6 @@ class WorkdayAdapter(BaseAdapter):
         if not suffix.startswith("job/"):
             return ""
         return suffix
-
-    def _extract_detail_from_html(self, url: str, html: str) -> dict | None:
-        soup = BeautifulSoup(str(html or ""), "html.parser")
-        title_node = soup.select_one("h1")
-        title = clean_text(
-            title_node.get_text(" ", strip=True) if title_node is not None else ""
-        )
-        if not title:
-            return None
-        body_text = clean_text(soup.get_text(" ", strip=True))
-        record = {
-            "title": title,
-            "url": url,
-            "apply_url": url,
-            "description": body_text or None,
-        }
-        return {
-            key: value
-            for key, value in record.items()
-            if value not in (None, "", [], {})
-        }
 
     def _looks_like_detail(self, url: str, surface: str) -> bool:
         lowered_surface = str(surface or "").lower()

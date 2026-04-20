@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from uuid import uuid4
 from collections.abc import Awaitable, Callable
+from uuid import uuid4
 
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -36,7 +36,6 @@ VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = (
 CELERY_TASK_ID_KEY = "celery_task_id"
 logger = logging.getLogger(__name__)
 _local_run_tasks: dict[int, asyncio.Task[None]] = {}
-_background_tasks: set[asyncio.Task[None]] = set()
 _log = log_event
 
 
@@ -106,7 +105,22 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
 async def _run_with_local_session(run_id: int) -> None:
     async with SessionLocal() as session:
-        await process_run(session, run_id)
+        try:
+            await process_run(session, run_id)
+        except Exception as exc:
+            logger.error(
+                "Local crawl task failed for run %s",
+                run_id,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            try:
+                await _mark_run_failed(session, run_id, f"{type(exc).__name__}: {exc}")
+            except Exception:
+                logger.exception(
+                    "Failed to persist failed status for run %s after process_run error",
+                    run_id,
+                )
+            raise
 
 
 def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
@@ -125,29 +139,7 @@ def _track_local_run_task(run_id: int) -> asyncio.Task[None]:
             )
             exc = None
         if exc is not None:
-            logger.error(
-                "Local crawl task failed for run %s",
-                run_id,
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
-
-            async def _record_failure() -> None:
-                async with SessionLocal() as session:
-                    await _mark_run_failed(
-                        session, run_id, f"{type(exc).__name__}: {exc}"
-                    )
-
-            failure_task = asyncio.create_task(_record_failure())
-            _background_tasks.add(failure_task)
-            failure_task.add_done_callback(
-                lambda completed_task: (
-                    _background_tasks.discard(completed_task),
-                    _log_background_task_exception(
-                        completed_task,
-                        f"Failed to persist failure state for run {run_id}",
-                    ),
-                )
-            )
+            logger.debug("Local crawl task failure already persisted for run %s", run_id)
         _clear_local_run_task(run_id, expected_task=completed_task)
 
     task.add_done_callback(_cleanup)

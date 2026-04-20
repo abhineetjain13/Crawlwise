@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import concurrent.futures
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from app.services import crawl_fetch_runtime
+from app.services.acquisition import browser_identity
 from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     read_network_payload_body,
@@ -413,6 +417,64 @@ async def test_fetch_page_falls_back_to_browser_after_http_transport_errors(
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_retries_transport_errors_before_browser_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    await crawl_fetch_runtime.reset_fetch_runtime_state()
+    original_retries = crawler_runtime_settings.http_max_retries
+    original_base = crawler_runtime_settings.http_retry_backoff_base_ms
+    original_max = crawler_runtime_settings.http_retry_backoff_max_ms
+    crawler_runtime_settings.http_max_retries = 2
+    crawler_runtime_settings.http_retry_backoff_base_ms = 0
+    crawler_runtime_settings.http_retry_backoff_max_ms = 0
+    curl_calls: list[int] = []
+    http_calls: list[int] = []
+    browser_calls: list[str] = []
+
+    async def _failing_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del url, timeout, proxy
+        curl_calls.append(1)
+        raise httpx.ConnectTimeout("timed out")
+
+    async def _failing_http(url: str, timeout: float, *, proxy: str | None = None):
+        del url, timeout, proxy
+        http_calls.append(1)
+        raise httpx.ConnectTimeout("timed out")
+
+    async def _fake_browser(url, timeout, **kwargs):
+        del timeout, kwargs
+        browser_calls.append(url)
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body>browser-rendered</body></html>",
+            status_code=200,
+            method="browser",
+            blocked=False,
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _failing_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _failing_http)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
+    try:
+        result = await crawl_fetch_runtime.fetch_page(
+            "https://example.com/products/widget",
+            surface="ecommerce_detail",
+        )
+    finally:
+        crawler_runtime_settings.http_max_retries = original_retries
+        crawler_runtime_settings.http_retry_backoff_base_ms = original_base
+        crawler_runtime_settings.http_retry_backoff_max_ms = original_max
+
+    assert result.method == "browser"
+    assert len(curl_calls) == 3
+    assert len(http_calls) == 3
+    assert browser_calls == ["https://example.com/products/widget"]
+
+
+@pytest.mark.asyncio
 async def test_fetch_page_returns_non_retryable_404_without_browser_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -442,6 +504,53 @@ async def test_fetch_page_returns_non_retryable_404_without_browser_fallback(
 
     assert result.status_code == 404
     assert result.method == "curl_cffi"
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_escalates_404_shell_to_browser_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import crawl_fetch_runtime
+
+    async def _fake_curl(url: str, timeout: float, *, proxy: str | None = None):
+        del timeout, proxy
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html=(
+                "<html><body><div id='root'></div>"
+                "<script></script><script></script><script></script>"
+                "</body></html>"
+            ),
+            status_code=404,
+            method="curl_cffi",
+            blocked=False,
+        )
+
+    browser_calls: list[str] = []
+
+    async def _fake_browser(url, timeout, **kwargs):
+        del timeout, kwargs
+        browser_calls.append(url)
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html="<html><body><h1>Rendered page</h1></body></html>",
+            status_code=200,
+            method="browser",
+            blocked=False,
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+    monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _fake_browser)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/missing-spa-route",
+        surface="ecommerce_detail",
+    )
+
+    assert result.method == "browser"
+    assert browser_calls == ["https://example.com/missing-spa-route"]
 
 
 @pytest.mark.asyncio
@@ -753,3 +862,78 @@ async def test_reset_fetch_runtime_state_closes_adapter_and_runtime_http_clients
     await crawl_fetch_runtime.reset_fetch_runtime_state()
 
     assert calls == ["browser", "runtime_http", "adapter_http"]
+
+
+def test_build_playwright_context_options_reuses_identity_within_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser_identity.clear_browser_identity_cache()
+    created = iter(
+        [
+            browser_identity.BrowserIdentity(
+                user_agent="ua-1",
+                viewport={"width": 100, "height": 200},
+                extra_http_headers={"x-test": "1"},
+                locale="en-US",
+                device_scale_factor=1.0,
+                has_touch=False,
+                is_mobile=False,
+            ),
+            browser_identity.BrowserIdentity(
+                user_agent="ua-2",
+                viewport={"width": 101, "height": 201},
+                extra_http_headers={"x-test": "2"},
+                locale="en-US",
+                device_scale_factor=1.0,
+                has_touch=False,
+                is_mobile=False,
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        browser_identity,
+        "create_browser_identity",
+        lambda: next(created),
+    )
+
+    first = browser_identity.build_playwright_context_options(run_id=101)
+    second = browser_identity.build_playwright_context_options(run_id=101)
+    third = browser_identity.build_playwright_context_options(run_id=202)
+
+    assert first["user_agent"] == "ua-1"
+    assert second["user_agent"] == "ua-1"
+    assert third["user_agent"] == "ua-2"
+    browser_identity.clear_browser_identity_cache()
+
+
+def test_browser_identity_for_run_uses_single_creation_under_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser_identity.clear_browser_identity_cache()
+    created_count = 0
+    creation_lock = threading.Lock()
+
+    def _fake_create() -> browser_identity.BrowserIdentity:
+        nonlocal created_count
+        time.sleep(0.05)
+        with creation_lock:
+            created_count += 1
+            sequence = created_count
+        return browser_identity.BrowserIdentity(
+            user_agent=f"ua-{sequence}",
+            viewport={"width": 100, "height": 200},
+            extra_http_headers={"x-test": str(sequence)},
+            locale="en-US",
+            device_scale_factor=1.0,
+            has_touch=False,
+            is_mobile=False,
+        )
+
+    monkeypatch.setattr(browser_identity, "create_browser_identity", _fake_create)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        identities = list(executor.map(lambda _: browser_identity.browser_identity_for_run(303), range(4)))
+
+    assert created_count == 1
+    assert {identity.user_agent for identity in identities} == {"ua-1"}
+    browser_identity.clear_browser_identity_cache()

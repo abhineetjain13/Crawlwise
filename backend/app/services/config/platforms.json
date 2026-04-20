@@ -11,13 +11,13 @@
     },
     {
       "family": "adp",
-      "domain_patterns": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com"],
+      "domain_patterns": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com", "myworkforcenow.com"],
       "url_contains": ["/recruitment/recruitment.html", "/srccar/public/", "/srccsh/public/"],
       "html_contains": ["myjobs.adp.com", "recruitment/recruitment.html", "workforcenow.adp.com"],
       "adapter_names": ["adp"],
       "job_platform": true,
       "requires_browser": true,
-      "readiness_domains": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com"],
+      "readiness_domains": ["workforcenow.adp.com", "myjobs.adp.com", "recruiting.adp.com", "myworkforcenow.com"],
       "readiness_path_patterns": [
         "^/mascsr/default/mdf/recruitment/recruitment\\.html$",
         "^/srccar/public/.*$",
@@ -164,6 +164,30 @@
     {
       "family": "nextjs",
       "network_signature_patterns": ["__next", "_next/data"]
+    },
+    {
+      "family": "practicesoftwaretesting",
+      "domain_patterns": ["practicesoftwaretesting.com"],
+      "requires_browser": true
+    },
+    {
+      "family": "spree_commerce",
+      "domain_patterns": ["demo.spreecommerce.org"],
+      "requires_browser": true,
+      "readiness_domains": ["demo.spreecommerce.org"],
+      "readiness_path_patterns": [
+        "^/products(?:/.*)?$"
+      ],
+      "readiness_selectors": [
+        "[data-testid='product-card']",
+        ".products .card",
+        "a[href*='/products/']"
+      ],
+      "readiness_max_wait_ms": 15000
+    },
+    {
+      "family": "saleor",
+      "domain_patterns": ["demo.saleor.io"]
     },
     {
       "family": "rippling",

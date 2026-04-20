@@ -5,14 +5,7 @@ from app.services.llm_circuit_breaker import (
     LLMErrorCategory,
     circuit_breaker_snapshot,
 )
-from app.services.llm_config_service import (
-    get_prompt_task,
-    llm_provider_catalog,
-    load_prompt_file,
-    resolve_active_config,
-    resolve_run_config,
-    snapshot_active_configs,
-)
+from app.services.llm_config_service import llm_provider_catalog
 from app.services.llm_provider_client import test_provider_connection
 from app.services.llm_tasks import (
     discover_xpath_candidates,
@@ -29,13 +22,8 @@ __all__ = [
     "circuit_breaker_snapshot",
     "discover_xpath_candidates",
     "extract_missing_fields",
-    "get_prompt_task",
     "llm_provider_catalog",
-    "load_prompt_file",
-    "resolve_active_config",
-    "resolve_run_config",
     "review_field_candidates",
     "run_prompt_task",
-    "snapshot_active_configs",
     "test_provider_connection",
 ]

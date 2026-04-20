@@ -341,6 +341,56 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
 
 
 @pytest.mark.asyncio
+async def test_process_single_url_offloads_extract_records_to_thread(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+    to_thread_calls: list[str] = []
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        to_thread_calls.append(getattr(func, "__name__", type(func).__name__))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.asyncio.to_thread", _fake_to_thread)
+
+    result = await _process_single_url(db_session, run, run.url)
+
+    assert result.verdict == "success"
+    assert "extract_records" in to_thread_calls
+
+
+@pytest.mark.asyncio
 async def test_process_single_url_keeps_platform_family_separate_from_adapter_provenance(
     db_session: AsyncSession,
     test_user,

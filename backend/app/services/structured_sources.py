@@ -23,23 +23,9 @@ try:
 except ImportError:  # pragma: no cover - dependency may be absent in local test envs
     get_base_url = None
 
-_STATE_SCRIPT_IDS = {
-    "__next_data__": "__NEXT_DATA__",
-    "__nuxt_data__": "__NUXT_DATA__",
-}
-_EMBEDDED_ASSIGNMENT_NAMES = (
-    "data",
-    "items",
-    "listings",
-    "posts",
-    "products",
-    "records",
-    "results",
-)
-_NON_STATE_ASSIGNMENT_PATTERNS = (
-    re.compile(r"ShopifyAnalytics\.meta\s*=\s*(\{.*?\})\s*;", re.S),
-    re.compile(r"var\s+meta\s*=\s*(\{.*?\})\s*;", re.S),
-)
+_STATE_SCRIPT_IDS = {"__next_data__": "__NEXT_DATA__", "__nuxt_data__": "__NUXT_DATA__"}
+_EMBEDDED_ASSIGNMENT_NAMES = ("data", "items", "listings", "posts", "products", "records", "results")
+_NON_STATE_ASSIGNMENT_PATTERNS = (re.compile(r"ShopifyAnalytics\.meta\s*=\s*(\{.*?\})\s*;", re.S), re.compile(r"var\s+meta\s*=\s*(\{.*?\})\s*;", re.S))
 
 
 def json_candidates(value: Any) -> list[dict[str, Any]]:
@@ -252,40 +238,56 @@ def _assignment_state_patterns() -> tuple[str, ...]:
 
 
 def _extract_assignment_payload(html: str, state_name: str) -> Any | None:
-    pattern = re.compile(rf"(?:window\.)?{re.escape(state_name)}\s*=\s*", re.S)
-    raw = find_first_script_text_matching(html, pattern)
-    if raw is None:
-        return None
-    match = pattern.search(raw)
-    if match is None:
-        return None
-    fragment = _balanced_json_fragment(raw[match.end() :])
-    if not fragment:
-        return None
-    try:
-        return json.loads(fragment)
-    except json.JSONDecodeError:
-        return None
+    for pattern in _assignment_patterns(state_name):
+        raw = find_first_script_text_matching(html, pattern)
+        if raw is None:
+            continue
+        match = pattern.search(raw)
+        if match is None:
+            continue
+        fragment = _balanced_json_fragment(raw[match.end() :])
+        if not fragment:
+            continue
+        try:
+            return json.loads(fragment)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def _extract_generic_assignment_payloads(html: str) -> list[Any]:
     payloads: list[Any] = []
-    patterns = [
-        re.compile(rf"(?:var|let|const)\s+{re.escape(name)}\s*=\s*", re.S)
-        for name in _EMBEDDED_ASSIGNMENT_NAMES
-    ]
     for node in iter_script_text_nodes(html):
         raw = node.text
-        for pattern in patterns:
-            for match in pattern.finditer(raw):
-                fragment = _balanced_json_fragment(raw[match.end() :])
-                if not fragment:
-                    continue
-                try:
-                    payloads.append(json.loads(fragment))
-                except json.JSONDecodeError:
-                    continue
+        for name in _EMBEDDED_ASSIGNMENT_NAMES:
+            for pattern in _assignment_patterns(name, declarations_only=True):
+                for match in pattern.finditer(raw):
+                    fragment = _balanced_json_fragment(raw[match.end() :])
+                    if not fragment:
+                        continue
+                    try:
+                        payloads.append(json.loads(fragment))
+                    except json.JSONDecodeError:
+                        continue
     return payloads
+
+
+def _assignment_patterns(
+    state_name: str,
+    *,
+    declarations_only: bool = False,
+) -> tuple[re.Pattern[str], ...]:
+    escaped = re.escape(state_name)
+    if not declarations_only:
+        return (
+            re.compile(rf"(?:window|self|globalThis)\s*\.\s*{escaped}\s*=\s*", re.S),
+            re.compile(
+                rf"(?:window|self|globalThis)\s*\[\s*['\"]{escaped}['\"]\s*\]\s*=\s*",
+                re.S,
+            ),
+            re.compile(rf"(?:var|let|const)\s+{escaped}\s*=\s*", re.S),
+        )
+    return (re.compile(rf"(?:var|let|const)\s+{escaped}\s*=\s*", re.S),)
 
 
 def _balanced_json_fragment(text: str) -> str:

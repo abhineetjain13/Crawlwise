@@ -154,14 +154,6 @@ def _string_list(value: object) -> list[str]:
 
 
 _LLM_EXISTING_VALUE_MAX_CHARS = 500
-_LLML_FIELD_TYPE_VALIDATORS: dict[str, tuple[type, ...]] = {
-    **{f: (str,) for f in URL_FIELDS},
-    **{f: (str,) for f in IMAGE_FIELDS},
-    **{f: (str,) for f in LONG_TEXT_FIELDS},
-    **{f: (list,) for f in STRUCTURED_MULTI_FIELDS},
-    **{f: (dict,) for f in STRUCTURED_OBJECT_FIELDS},
-    **{f: (list,) for f in STRUCTURED_OBJECT_LIST_FIELDS},
-}
 
 
 def _sanitize_llm_existing_values(record: dict[str, object]) -> dict[str, object]:
@@ -202,10 +194,14 @@ def _sanitize_llm_existing_values(record: dict[str, object]) -> dict[str, object
 def _validate_llm_field_type(field_name: str, value: object) -> bool:
     if value in (None, "", [], {}):
         return True
-    expected_types = _LLML_FIELD_TYPE_VALIDATORS.get(field_name)
-    if expected_types is None:
-        return True
-    return isinstance(value, expected_types)
+    normalized = str(field_name or "").strip().lower()
+    if normalized in URL_FIELDS | IMAGE_FIELDS | LONG_TEXT_FIELDS:
+        return isinstance(value, str)
+    if normalized in STRUCTURED_MULTI_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS:
+        return isinstance(value, list)
+    if normalized in STRUCTURED_OBJECT_FIELDS:
+        return isinstance(value, dict)
+    return True
 
 
 def _browser_attempted(acquisition_result) -> bool:
@@ -628,7 +624,8 @@ async def _extract_records_for_acquisition(
         requested_fields=list(context.requested_fields),
     )
     selector_rules = await _load_selector_rules(context, acquisition_result.final_url)
-    records = extract_records(
+    records = await asyncio.to_thread(
+        extract_records,
         acquisition_result.html,
         acquisition_result.final_url,
         context.surface,

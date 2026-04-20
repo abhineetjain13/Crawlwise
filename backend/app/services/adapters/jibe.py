@@ -8,8 +8,9 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
 from app.services.acquisition.http_client import requests as curl_requests
+from app.services.config.adapter_runtime_settings import adapter_runtime_settings
+from app.services.extraction_html_helpers import html_to_text
 from app.services.field_value_core import clean_text
-from bs4 import BeautifulSoup
 
 
 _SEARCH_CONFIG_RE = re.compile(r"window\.searchConfig\s*=\s*(\{.*?\});", re.DOTALL)
@@ -49,7 +50,7 @@ class JibeAdapter(BaseAdapter):
                 curl_requests.get,
                 request_url,
                 proxy=proxy,
-                timeout_seconds=10,
+                timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
             )
             if not isinstance(payload, dict):
                 return []
@@ -132,7 +133,7 @@ class JibeAdapter(BaseAdapter):
         )
         tags7 = payload.get("tags7")
         description_html = str(payload.get("description") or "")
-        description = self._html_to_text(description_html)
+        description = html_to_text(description_html)
         full_location = clean_text(payload.get("full_location"))
         if not full_location:
             full_location = ", ".join(
@@ -178,13 +179,6 @@ class JibeAdapter(BaseAdapter):
             if cleaned and cleaned not in names:
                 names.append(cleaned)
         return " | ".join(names)
-
-    def _html_to_text(self, html: str) -> str:
-        if "<" not in html or ">" not in html:
-            return clean_text(html)
-        soup = BeautifulSoup(html, "html.parser")
-        text = soup.get_text(" ", strip=True)
-        return clean_text(text)
 
     def _extract_job_id_from_url(self, url: str) -> str:
         path = urlparse(url).path

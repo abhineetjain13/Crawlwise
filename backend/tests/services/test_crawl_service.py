@@ -291,3 +291,41 @@ def test_log_background_task_exception_logs_failures(
     asyncio.run(_exercise())
 
     assert "Failed to persist failure state for run 1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_with_local_session_preserves_original_process_run_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = object()
+
+    class _FakeSessionLocal:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def _failing_process_run(active_session, run_id: int) -> None:
+        assert active_session is session
+        assert run_id == 17
+        raise RuntimeError("process exploded")
+
+    async def _failing_mark_run_failed(active_session, run_id: int, message: str) -> None:
+        assert active_session is session
+        assert run_id == 17
+        assert "RuntimeError: process exploded" in message
+        raise ValueError("write failed")
+
+    monkeypatch.setattr(crawl_service, "SessionLocal", _FakeSessionLocal)
+    monkeypatch.setattr(crawl_service, "process_run", _failing_process_run)
+    monkeypatch.setattr(crawl_service, "_mark_run_failed", _failing_mark_run_failed)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="process exploded") as exc_info:
+            await crawl_service._run_with_local_session(17)
+
+    assert str(exc_info.value) == "process exploded"
+    assert "Local crawl task failed for run 17" in caplog.text
+    assert "Failed to persist failed status for run 17 after process_run error" in caplog.text
