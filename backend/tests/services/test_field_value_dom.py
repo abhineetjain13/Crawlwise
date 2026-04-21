@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from app.services.field_value_dom import extract_heading_sections, extract_page_images
+from app.services.field_value_dom import (
+    extract_heading_sections,
+    extract_page_images,
+    extract_selector_values,
+)
 
 
 def test_extract_page_images_excludes_linked_job_detail_images_by_surface() -> None:
@@ -155,6 +159,31 @@ def test_extract_page_images_prefers_gallery_media_and_filters_tracking_assets()
     ]
 
 
+def test_extract_page_images_filters_payment_svgs_outside_product_gallery() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <section class="secure-payment">
+              <img src="https://cdn.example.com/assets/amex.svg" alt="American Express" />
+              <img src="https://cdn.example.com/assets/paypal.svg" alt="PayPal" />
+            </section>
+            <main>
+              <section class="product-gallery">
+                <img src="https://cdn.example.com/products/widget-main.jpg?width=1200" alt="Widget Prime front view" />
+              </section>
+            </main>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    images = extract_page_images(soup, "https://example.com/products/widget-prime")
+
+    assert images == ["https://cdn.example.com/products/widget-main.jpg?width=1200"]
+
+
 def test_extract_heading_sections_follows_aria_controls_panels() -> None:
     soup = BeautifulSoup(
         """
@@ -219,3 +248,56 @@ def test_extract_heading_sections_reads_nested_wrapped_accordion_content() -> No
     assert sections == {
         "Specifications": "Rubber outsole with a reinforced toe cap."
     }
+
+
+def test_extract_heading_sections_skips_review_and_index_panels() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <button aria-controls="details-index">Check the details</button>
+            <section id="details-index">
+              <a href="#summary">Product summary</a>
+              <a href="#specs">General Specifications</a>
+              <a href="#manual">Owner's Manual</a>
+            </section>
+            <button aria-controls="reviews-panel">Reviews</button>
+            <section id="reviews-panel">
+              <p>Review this product</p>
+            </section>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert sections == {}
+
+
+def test_extract_selector_values_skips_long_text_section_indexes() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <section id="specifications">
+              <h2>Check the details</h2>
+              <button>Product summary</button>
+              <button>General Specifications</button>
+              <button>Owner's Manual</button>
+            </section>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    values = extract_selector_values(
+        soup,
+        "#specifications",
+        "specifications",
+        "https://example.com/products/widget-prime",
+    )
+
+    assert values == []

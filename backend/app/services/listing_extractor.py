@@ -43,6 +43,8 @@ from app.services.field_value_core import (
     clean_text,
     coerce_field_value,
     coerce_text,
+    extract_currency_code,
+    extract_price_text,
     finalize_record,
     same_host,
     surface_alias_lookup,
@@ -57,6 +59,13 @@ from app.services.field_value_dom import apply_selector_fallbacks
 from app.services.config.surface_hints import detail_path_hints
 
 logger = logging.getLogger(__name__)
+_PRICE_NODE_SELECTORS = (
+    "[itemprop='price']",
+    "[class*='price']",
+    "[data-testid*='price']",
+    "[data-price]",
+    "[aria-label*='price']",
+)
 
 
 def _structured_listing_record(
@@ -252,8 +261,11 @@ def _looks_like_untyped_listing_payload(payload: dict[str, Any]) -> bool:
 
 
 def _listing_title_is_noise(title: str) -> bool:
-    lowered = clean_text(title).lower()
+    cleaned = clean_text(title)
+    lowered = cleaned.lower()
     if not lowered:
+        return True
+    if cleaned.isdigit():
         return True
     if "star" in lowered and RATING_RE.search(lowered):
         return True
@@ -474,6 +486,42 @@ def _node_css(node, selector: str) -> list[object]:
     except SelectolaxError:
         logger.warning("Skipping invalid listing selector: %s", selector)
         return []
+
+
+def _extract_price_signal_from_card(card) -> str | None:
+    candidates: list[tuple[int, int, str]] = []
+    order = 0
+    for selector in _PRICE_NODE_SELECTORS:
+        for node in _node_css(card, selector):
+            order += 1
+            raw_text = clean_text(
+                _node_attr(node, "content")
+                or _node_attr(node, "data-price")
+                or _node_attr(node, "aria-label")
+                or _node_text(node)
+            )
+            if not raw_text or len(raw_text) > 120:
+                continue
+            price_text = extract_price_text(
+                raw_text,
+                prefer_last=False,
+                allow_unmarked=True,
+            )
+            if not price_text:
+                continue
+            score = 0
+            attrs = _node_signature(node)
+            if "price" in attrs:
+                score += 5
+            if len(raw_text) <= 40:
+                score += 2
+            if extract_currency_code(price_text):
+                score += 2
+            candidates.append((score, order, price_text))
+    if candidates:
+        candidates.sort(key=lambda row: (-row[0], row[1]))
+        return candidates[0][2]
+    return extract_price_text(_node_text(card), prefer_last=True)
 
 
 def _card_title_node(card) -> object | None:
@@ -754,9 +802,15 @@ def _listing_record_from_card(
                 coerce_field_value(canonical, value, page_url),
             )
     if not is_job and not candidates.get("price"):
-        price_match = PRICE_RE.search(card_text)
-        if price_match:
-            add_candidate(candidates, "price", price_match.group(0))
+        price_text = _extract_price_signal_from_card(card)
+        if price_text:
+            add_candidate(candidates, "price", price_text)
+    if not is_job and not candidates.get("currency"):
+        for price_value in list(candidates.get("price") or []):
+            currency_code = extract_currency_code(price_value)
+            if currency_code:
+                add_candidate(candidates, "currency", currency_code)
+                break
     if is_job and not candidates.get("salary"):
         salary_match = PRICE_RE.search(card_text)
         if salary_match:
@@ -865,8 +919,11 @@ def extract_listing_records(
     }
     remaining = max(1, int(max_records) - len(structured_records))
     dom_records = _dom_stage(seed_urls=structured_urls, limit=remaining)
+    rendered_listing_cards = (
+        artifacts.get("rendered_listing_cards") if isinstance(artifacts, dict) else None
+    )
     rendered_records = rendered_listing_records(
-        artifacts.get("rendered_listing_cards") if isinstance(artifacts, dict) else None,
+        rendered_listing_cards if isinstance(rendered_listing_cards, list) else None,
         page_url=page_url,
         surface=surface,
         max_records=max_records,
@@ -896,8 +953,11 @@ def extract_listing_records(
     )
     if best_non_visual:
         return best_non_visual[:max_records]
+    listing_visual_elements = (
+        artifacts.get("listing_visual_elements") if isinstance(artifacts, dict) else None
+    )
     visual_records = visual_listing_records(
-        artifacts.get("listing_visual_elements") if isinstance(artifacts, dict) else None,
+        listing_visual_elements if isinstance(listing_visual_elements, list) else None,
         page_url=page_url,
         surface=surface,
         max_records=max_records,

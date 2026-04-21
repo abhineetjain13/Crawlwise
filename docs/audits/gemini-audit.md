@@ -1,142 +1,174 @@
-Section 0: Delta Table (longitudinal)
-Finding ID	Previous Status	Current Status	Evidence
-N/A	N/A	N/A	FIRST RUN
-Section 1–8: Dimension Scores
-Dimension: D1. SOLID / DRY / KISS
-Floor: 7/10 | Ceiling: 9/10 | Score: 8.0/10
-Previous score: N/A → Change: N/A
-Reason for change: FIRST RUN
-Violations:
-LOW[pipeline/core.py → _sanitize_llm_existing_values (lines 101–125)]:
-Contains inline HTML stripping logic mixed directly into pipeline orchestration. This violates SRP. Text sanitization logic belongs in text_sanitization.py or a dedicated LLM prompt preparation helper, not in the core async pipeline runner.
-Verification: grep -r "class _Stripper(HTMLParser):" backend/app/services/pipeline/core.py
-Verdict: The core pipeline is well-structured and uses clear data objects (_URLProcessingContext, _ExtractedURLStage) instead of positional sprawl. Minor SRP violations remain in inline data transformations.
-Dimension: D2. Configuration Hygiene
-Floor: 6/10 | Ceiling: 9/10 | Score: 7.5/10
-Previous score: N/A → Change: N/A
-Reason for change: FIRST RUN
-Violations:
-HIGH[pipeline/core.py → _LLM_EXISTING_VALUE_MAX_CHARS (line 98)]:
-A magic number (500) is hardcoded directly into the pipeline orchestration logic for LLM payload truncation. This bypasses the active llm_runtime_settings (which defines existing_values_max_chars = 2400), leading to disjointed configuration where tuning the env vars has no effect on this specific truncation. INVARIANT #7 (Config-driven runtime).
-Verification: grep -r "_LLM_EXISTING_VALUE_MAX_CHARS =" backend/app/services/pipeline/core.py
-Verdict: Tunables are generally well-extracted to JSON and BaseSettings classes. The hardcoded LLM truncation limit in the pipeline is a stark outlier that ignores the established config framework.
-Dimension: D3. Scalability & Resource Management
-Floor: 7/10 | Ceiling: 9/10 | Score: 8.0/10
-Previous score: N/A → Change: N/A
-Reason for change: FIRST RUN
-Violations:
-MEDIUM[acquisition/browser_capture.py → _capture_response (lines 142–204)]:
-Network capture payloads are JSON-decoded synchronously directly within the _capture_worker task running on the main event loop. For multi-megabyte payloads (e.g., Next.js __NEXT_DATA__ chunks or React Server Components), json.loads(text) is CPU-bound and blocks the async loop, potentially causing Playwright protocol timeouts.
-Verification: grep -r "json.loads(text)" backend/app/services/acquisition/browser_capture.py
-Verdict: Context and connection management is strict (Playwright objects and HTTP clients are properly released). Synchronous JSON decoding of large browser intercepts is the primary risk to event loop responsiveness.
-Dimension: D4. Extraction & Normalisation Pipeline
-Floor: 4/10 | Ceiling: 9/10 | Score: 6.5/10
-Previous score: N/A → Change: N/A
-Reason for change: FIRST RUN
-Violations:
-CRITICAL[pipeline/core.py → _run_normalization_stage (lines 352–360) and field_value_core.py → validate_and_clean (lines 432–472)]:
-The validate_and_clean function, which explicitly strips type-mismatched fields based on the surface's output schema, is completely dead code. It is never called. Consequently, _run_normalization_stage currently acts as a pass-through. This violates INVARIANT #10 (records contain only populated logical fields) because un-coerced types (e.g., variants="not-a-list") can bypass the extraction boundary and reach persistence.
-Verification: grep -rn "def validate_and_clean" backend/app/services/field_value_core.py followed by grep -r "validate_and_clean(" backend/app/services/pipeline/core.py (which returns empty).
-Verdict: The extraction hierarchy and provenance tracking are excellent. However, the failure to invoke the final validation gate defeats the purpose of the output schema, creating a severe data integrity risk.
-Dimension: D5. Traversal Mode
+D1. SOLID / DRY / KISS
+Dimension: SOLID / DRY / KISS
 Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
 Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
-No violations found.
-Verification: grep -r "except Exception:" backend/app/services/acquisition/traversal.py returns no bare swallows for critical traversal logic. Same-origin checks correctly utilize path_tenant_boundary_family.
-Verdict: Traversal accurately distinguishes between UI intent (paginate, load_more) and applies robust cycle detection, including safeguards against path-based cross-tenant bleeding.
-Dimension: D6. Resilience & Error Handling
+MEDIUM [app/services/platform_url_normalizers.py → normalize_platform_acquisition_url (lines 14-20)]:
+The platform_url_normalizers.py module contains a hardcoded if family == "adp": check. This is an Open/Closed Principle (OCP) violation. Normalization for ADP is hardcoded into the generic acquisition path rather than being owned by the ADPAdapter itself.
+INVARIANTS.md clause 21: "Generic crawler paths stay generic. Do not hardcode tenant- or site-specific behavior in shared runtime."
+Production failure mode it enables: Adding new platform URL normalization requires modifying shared acquisition core logic instead of simply updating an adapter class, leading to merge conflicts and surface bleed.
+Verification: grep -r "family == \"adp\"" backend/app/services/platform_url_normalizers.py
+Verdict: The codebase has undergone a significant refactor and exhibits strong separation of concerns across extraction and acquisition boundaries. The OCP violation in URL normalization is an isolated leak in an otherwise well-structured domain model.
+D2. Configuration Hygiene
+Dimension: Configuration Hygiene
 Floor: 9/10 | Ceiling: 9/10 | Score: 9.0/10
 Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
 No violations found.
-Verification: LLM failures gracefully exit via _validate_task_payload without raising fatal exceptions. is_non_retryable_http_status correctly shields browser resources from 401s and terminal 4xx errors.
-Verdict: Exceptional resilience. Error state is carefully mapped to telemetry events and browser_diagnostics rather than swallowing exceptions or crashing the pipeline.
-Dimension: D7. Dead Code & Technical Debt
-Floor: 6/10 | Ceiling: 8/10 | Score: 7.0/10
+Verification: grep -r "if \"amazon\" in" backend/app/services/ returns empty. grep -rn "timeout=" backend/app/services/ predominantly references crawler_runtime_settings.
+Verdict: Configuration hygiene is excellent. Timeouts, limits, and boolean flags are tightly controlled via crawler_runtime_settings. Platform-specific heuristics are accurately constrained to platform_policy.py and JSON configuration.
+D3. Scalability & Resource Management
+Dimension: Scalability & Resource Management
+Floor: 7/10 | Ceiling: 9/10 | Score: 8.0/10
 Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
-HIGH [record_export_service.py (lines 620–625)]:
-Contains re-export stubs at the bottom of the file (_render_markdown_inline = render_markdown_inline, etc.) kept around after a refactor. This is a direct AP-6 violation (compatibility shims left behind) that clutters the module namespace.
-Verification: grep -rn "_render_markdown_inline = render_markdown_inline" backend/app/services/record_export_service.py
-HIGH [See D4]:
-validate_and_clean is fully implemented but disconnected from the execution graph.
-Verdict: While the codebase is post-refactor and mostly free of legacy rot, disconnected architectural components and leftover re-exports still represent meaningful technical debt.
-Dimension: D8. Acquisition Mode
+MEDIUM [app/services/acquisition/browser_capture.py → read_network_payload_body (lines 201-204)]:
+The payload body is read into memory entirely via body_bytes = await response.body() before its size is checked against payload_budget. If the server streams a multi-gigabyte response without a Content-Length header (e.g., chunked transfer encoding), this will cause an immediate Out Of Memory (OOM) crash in the Playwright worker.
+ENGINEERING_STRATEGY.md AP-8 (Resource unboundedness).
+Production failure mode it enables: Malicious or misconfigured target servers streaming infinite payloads will kill the browser container, dropping all active browser sessions.
+Verification: grep -A 2 "await response.body()" backend/app/services/acquisition/browser_capture.py
+Verdict: Browser context limits, semaphores, and queue draining are handled properly. However, the unchecked reading of network responses directly into memory is a latent denial-of-service vulnerability.
+D4. Extraction & Normalisation Pipeline
+Dimension: Extraction & Normalisation Pipeline
+Floor: 4/10 | Ceiling: 8/10 | Score: 6.0/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+CRITICAL [app/services/normalizers.py → normalize_decimal_price (lines 47-66)]:
+normalize_decimal_price blindly extracts any digit sequence using _NUMERIC_TEXT_RE.search(text). When adapter data or JSON-LD mislabels a generic string (e.g., "review_count": "157") as a price, this function silently accepts it because it does not require a currency symbol or contextual boundary. The attached Field Audit Report confirms that generic integers ("126", "136") are polluting the price fields.
+INVARIANTS.md clause 4: "Acquisition returns observational facts only... Do not fabricate".
+Production failure mode it enables: Corrupted pricing data silently enters the data warehouse, destroying e-commerce data integrity.
+Verification: grep -r "_NUMERIC_TEXT_RE.search" backend/app/services/normalizers.py
+HIGH [app/services/detail_extractor.py → _apply_dom_fallbacks (lines 104-109)]:
+extract_page_images(..., exclude_linked_detail_images=True) is called unconditionally for detail surfaces. On detail pages, product gallery thumbnails are almost always wrapped in <a> tags pointing to the full-resolution image URL. By excluding linked images, the extractor is stripping the primary product image gallery. The Field Audit Report confirms additional_images is missing on 50% of detail runs.
+INVARIANTS.md clause 11: "Persisted record.data contains only populated logical fields." (Loss of primary data).
+Production failure mode it enables: Severe data loss for visual e-commerce and real estate scraping where multiple images are required.
+Verification: grep -A 5 "extract_page_images(" backend/app/services/detail_extractor.py
+MEDIUM [app/services/config/extraction_rules.exports.json → LISTING_TITLE_CTA_TITLES (approx lines 1500)]:
+_listing_title_is_noise relies on hardcoded string lists. It does not proactively reject numeric-only strings. The ranking heuristics in listing_candidate_ranking.py subtract points for digits but do not nullify them, allowing "1" or "37" to be saved as a title if it is the only candidate.
+INVARIANTS.md clause 13: "Commerce/job extraction must filter page chrome and metadata noise before persistence."
+Production failure mode it enables: Garbage records containing pagination numbers or menu indexes saved as products.
+Verification: grep -r "title.isdigit()" backend/app/services/listing_extractor.py (Returns empty).
+Verdict: The extraction hierarchy is structurally sound, leveraging advanced mechanisms like ghost-routing and JS-state parsing. However, weak normalizers and overly aggressive image deduplication filters are causing severe data loss and corruption at the final yard line.
+D5. Traversal Mode
+Dimension: Traversal Mode
+Floor: 9/10 | Ceiling: 9/10 | Score: 9.0/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+No violations found.
+Verification: grep -r "_is_same_origin" backend/app/services/acquisition/traversal.py
+Verdict: Traversal logic correctly separates DOM mutation triggers from the evaluation of layout progression. Cross-tenant path boundaries are rigorously enforced.
+D6. Resilience & Error Handling
+Dimension: Resilience & Error Handling
 Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
 Previous score: N/A → Change: N/A
 Reason for change: FIRST RUN
 Violations:
-MEDIUM[acquisition/runtime.py → _curl_fetch_sync (lines 358–361)]:
-The curl_cffi fetcher ignores the http_user_agent defined in crawler_runtime_settings and hardcodes its own Accept and Accept-Language headers, creating divergence in header fingerprints between httpx and curl_cffi requests.
-Verification: grep -rn '"Accept-Language": "en-US,en;q=0.9"' backend/app/services/acquisition/runtime.py
-Verdict: Browser fallback orchestration is highly sophisticated, accurately gating Playwright usage behind content-length and JavaScript-shell heuristic checks. Minor header inconsistencies exist in the HTTP fetchers.
-Section 9: Final Summary
-Overall Score: 7.8/10 (previous: N/A, delta: N/A)
+LOW [app/services/acquisition/browser_page_flow.py → navigate_browser_page_impl (lines 142-156)]:
+Broad except Exception as final_exc: block catches everything, including base KeyboardInterrupt or SystemExit if they bubble up, potentially interfering with graceful shutdown, though the context is narrow.
+Verification: grep -r "except Exception as final_exc:" backend/app/services/acquisition/browser_page_flow.py
+Verdict: Excellent separation of HTTP protocol errors and browser rendering errors. Diagnostic footprints are preserved perfectly into browser_diagnostics.
+D7. Dead Code & Technical Debt
+Dimension: Dead Code & Technical Debt
+Floor: 9/10 | Ceiling: 9/10 | Score: 9.0/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+No violations found.
+Verification: grep -rn "TODO\|FIXME\|HACK" backend/app/services/ returns empty.
+Verdict: Codebase is clean, post-refactor, and free of lingering development stubs.
+D8. Acquisition Mode
+Dimension: Acquisition Mode
+Floor: 8/10 | Ceiling: 9/10 | Score: 8.5/10
+Previous score: N/A → Change: N/A
+Reason for change: FIRST RUN
+Violations:
+LOW [app/services/platform_policy.py → detect_platform_family (lines 154-159)]:
+Uses sequential regex searching over entire HTML strings re.search(raw_pattern, normalized_html, re.IGNORECASE). While it limits by platform configurations, executing heavy regex against 2MB+ HTML payloads blocks the event loop for milliseconds per pattern.
+Verification: grep -A 2 "re.search(raw_pattern, normalized_html" backend/app/services/platform_policy.py
+Verdict: Proxies are properly threaded through the entire HTTP and Playwright stacks. Identity generation leverages browserforge correctly and is validated for coherency.
+Final Summary
+Overall Score: 8.2/10 (previous: N/A, delta: N/A)
 Root Cause Findings (architectural — require a plan, not a bug fix):
-RC-1: validate_and_clean schema enforcement is disconnected from the pipeline — affects D4, D7
+RC-1: platform_url_normalizers.py contains hardcoded platform checks for ADP, violating OCP and generic extraction boundaries. — affects D1, D2.
 Leaf Node Findings (isolated bugs — Codex can fix directly):
-LN-1: pipeline/core.py hardcodes _LLM_EXISTING_VALUE_MAX_CHARS = 500 instead of reading llm_runtime_settings.
-LN-2: pipeline/core.py contains inline HTML parsing/stripping logic for LLM truncation.
-LN-3: record_export_service.py retains AP-6 legacy re-export shims at the bottom of the file.
-LN-4: curl_fetch_sync in acquisition/runtime.py hardcodes headers instead of sharing configuration with httpx.
+LN-1: normalize_decimal_price corrupts non-currency numeric strings into price fields.
+LN-2: extract_page_images(exclude_linked_detail_images=True) drops legitimate product gallery images on detail pages.
+LN-3: _listing_title_is_noise allows numeric-only strings (like pagination digits) to be extracted as titles.
+LN-4: read_network_payload_body reads unbounded response payloads into memory, risking OOM.
 Genuine Strengths (file-level evidence only, no generic praise):
-browser_identity.py → _is_version_coherent: Expert-level fingerprint validation that correctly discards mismatched navigator.userAgentData bounds to prevent bot-detection flags.
-js_state_mapper.py → _revive_flattened_slot: Implements an advanced Nuxt payload reviver capable of stitching together flattened array references, capturing state that generic JSON extractors miss.
-Section 10: Codex-Ready Work Orders
-WORK ORDER RC-1: Connect Post-Extraction Schema Validation to PipelineTouches buckets: API + Bootstrap, Extraction
-Risk: CRITICAL
-Do NOT touch: field_value_core.py (the logic there is correct, it just needs to be called).
+app/services/network_payload_mapper.py: Ghost routing implementation brilliantly identifies unregistered API payloads by signature-matching keys against known Job/Product schemas without requiring explicit domain-to-API config mappings.
+WORK ORDER RC-1: Move Platform URL Normalization to Adapters
+Touches buckets: 3 (Acquisition + Browser Runtime), 4 (Extraction)
+Risk: MEDIUM
+Do NOT touch: crawl_fetch_runtime.py
 What is wrong
-The function validate_and_clean in field_value_core.py is supposed to enforce output schemas (e.g., setting a field to None if a string is expected but a list is found). However, it is never called anywhere in the extraction pipeline. Records are bypassing schema validation before persistence.
+app/services/platform_url_normalizers.py hardcodes if family == "adp":. The acquisition layer should not contain hardcoded knowledge of specific platforms. URL normalization requirements are platform-specific and belong in the adapters.
 What to do
-In app/services/pipeline/core.py, locate _run_normalization_stage.
-Import validate_and_clean and clean_record from app.services.field_value_core.
-Update _run_normalization_stage to iterate through extracted.records, apply validate_and_clean(record, context.surface), log any generated schema validation errors (as warnings, but don't fail the crawl), and apply clean_record(cleaned_data) to strip the resulting None values.
-Return the updated records via the _ExtractedURLStage object.
+Add a method def normalize_acquisition_url(self, url: str) -> str: to BaseAdapter returning url by default.
+Move the ADP-specific URL normalization logic into ADPAdapter.normalize_acquisition_url in app/services/adapters/adp.py.
+In acquirer.py, replace the call to normalize_platform_acquisition_url with a dynamic lookup: iterate registered adapters, if adapter.can_handle returns true, use adapter.normalize_acquisition_url.
+Delete app/services/platform_url_normalizers.py completely.
 Acceptance criteria
 
-_run_normalization_stage explicitly iterates over extracted records and applies validate_and_clean.
+app/services/platform_url_normalizers.py is removed.
 
-Invalid types generated by adapters or generic extractors are successfully stripped before reaching persist_extracted_records.
+grep -r "adp" backend/app/services/ does not return matches in the generic acquisition pipeline.
 
-python -m pytest tests -q exits 0.
+python -m pytest tests -q exits 0
 What NOT to do
-Do not modify the implementation of validate_and_clean itself.
-Do not drop records entirely if a single field fails validation; only drop the invalid field.
-WORK ORDER LN-1: Connect LLM Existing Value Max Chars to Runtime Settings (single-session fix)
-File: backend/app/services/pipeline/core.py
-Function: _sanitize_llm_existing_values
-Fix: Remove the hardcoded _LLM_EXISTING_VALUE_MAX_CHARS = 500. Import llm_runtime_settings from app.services.config.llm_runtime and use llm_runtime_settings.existing_values_max_chars for truncation.
-Test: grep -r "_LLM_EXISTING_VALUE_MAX_CHARS" backend/app/services/ should return empty.
-WORK ORDER LN-2: Remove Inline HTML Stripper from Pipeline (single-session fix)
-File: backend/app/services/pipeline/core.py
-Function: _sanitize_llm_existing_values
-Fix: Move the inline _Stripper class (HTMLParser) to app/services/text_sanitization.py as a generic utility function (e.g., strip_html_tags), and import it into core.py to clean the strings.
-Test: grep -rn "class _Stripper" backend/app/services/pipeline/core.py should return empty.
-WORK ORDER LN-3: Remove AP-6 Export Shims from Record Export Service (single-session fix)
-File: backend/app/services/record_export_service.py
-Function: Global scope (bottom of file)
-Fix: Delete lines 620-625 containing _render_markdown_inline = render_markdown_inline, _render_markdown_block = render_markdown_block, etc.
-Test: grep -rn "_render_markdown_inline =" backend/app/services/record_export_service.py should return empty.
+Do not instantiate every adapter for every URL; use configured_adapter_names or the existing resolve_adapter logic efficiently.
+WORK ORDER LN-1: Fix Price Normalization Corruption (single-session fix)
+File: app/services/normalizers.py
+Function: normalize_decimal_price
+Fix: Check if the raw text contains a currency symbol or the word "price" before falling back to the raw _NUMERIC_TEXT_RE. If interpret_integral_as_cents is False and the text lacks currency context, reject it. Alternatively, rely on the upstream PRICE_RE from field_value_core.py to enforce currency bounds.
+Test: python -m pytest tests/test_normalizers.py (ensure "126" is rejected but "$126" is accepted).
+WORK ORDER LN-2: Preserve Detail Page Gallery Images (single-session fix)
+File: app/services/detail_extractor.py
+Function: _apply_dom_fallbacks
+Fix: Change exclude_linked_detail_images=True to exclude_linked_detail_images=False in the extract_page_images call. Detail pages should extract images wrapped in anchors because they are the gallery thumbnails.
+Test: grep -A 5 "extract_page_images(" backend/app/services/detail_extractor.py should show exclude_linked_detail_images=False.
+WORK ORDER LN-3: Reject Numeric-Only Titles (single-session fix)
+File: app/services/listing_extractor.py
+Function: _listing_title_is_noise
+Fix: Add a direct check if clean_text(title).isdigit(): return True at the top of the function to instantly reject pagination numbers or raw IDs masquerading as titles.
+Test: grep -r "isdigit()" backend/app/services/listing_extractor.py should return the new condition.
+WORK ORDER LN-4: Bound Network Payload Reading (single-session fix)
+File: app/services/acquisition/browser_capture.py
+Function: read_network_payload_body
+Fix: Use an async stream reader to enforce the budget size without loading the full payload. Alternatively, check response.headers.get("content-length") and if it exceeds budget, skip. If it's missing, read in chunks and abort if bytes exceed _MAX_CAPTURED_NETWORK_PAYLOAD_BYTES.
+Test: grep -r "await response.body()" backend/app/services/acquisition/browser_capture.py should return empty; replaced by safe stream reading.
 ARCHITECTURAL RECOMMENDATIONS
-Pydantic Output Validation
-Applies to: Diffbot, Zyte.
-Gap: RC-1 (Manual type checking via type(value).__name__ in validate_and_clean).
-Slot: Pipeline normalisation stage.
-Pseudocode:
-code
-Applies to: Crawlee, Apify.
-Gap: D3 (Synchronous JSON/RSC parsing blocking the event loop in browser_capture.py).
-Slot: Acquisition (browser_capture.py -> read_network_payload_body).
+1. Schema.org Variant Matrix Reconstruction
+Gap Found: Missing variants on structured-source-heavy detail pages (Audit D4 Variant Gap).
+Slot: structured_sources.py -> json_ld_candidates
 Pseudocode:
 code
 Python
-import asyncio
-
-async def _decode_rsc_payload_async(body_bytes: bytes) -> object | None:
-    return await asyncio.to_thread(_decode_rsc_payload, body_bytes.decode('utf-8'))
-Yield: Prevents Playwright websocket disconnects during heavy extraction loads by keeping the main event loop free while Megabyte-sized RSC blobs are parsed in a worker thread.
+def _reconstruct_jsonld_variants(node):
+    variants = node.get("hasVariant", [])
+    if not isinstance(variants, list): return {}
+    axes = {}
+    for v in variants:
+        for k in ("color", "size", "material"):
+            if v.get(k): axes.setdefault(k, set()).add(v[k])
+    return {"variant_axes": {k: list(v) for k, v in axes.items()}}
+Yield: Restores variant_axes and variants output for standard Shopify/WooCommerce JSON-LD nodes that currently get flattened or ignored.
+2. Network Payload JSON Fast-Pathing
+Gap Found: Playwright processes evaluate expensive regexes (D8) against massive strings.
+Slot: browser_capture.py -> _decode_network_payload
+Pseudocode:
+code
+Python
+def _decode_network_payload(body_bytes, content_type):
+    # using orjson or msgspec for ultra-fast strict JSON parsing
+    import orjson
+    try:
+        return orjson.loads(body_bytes)
+    except orjson.JSONDecodeError:
+        return None
+Yield: Eliminates event-loop blocking when parsing 5MB+ Graphql/AppSync responses intercepted by Playwright. Reduces CPU stall and timeout failures.

@@ -72,6 +72,10 @@ def _current_duration_ms(run: CrawlRun) -> int:
     return max(0, int((datetime.now(UTC) - run.created_at).total_seconds() * 1000))
 
 
+def _touch_run_heartbeat(run: CrawlRun) -> None:
+    run.last_heartbeat_at = datetime.now(UTC)
+
+
 async def process_run(session: AsyncSession, run_id: int) -> None:
     try:
         run = await session.get(CrawlRun, run_id)
@@ -82,16 +86,13 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
         if run.status_value == CrawlStatus.PENDING:
             update_run_status(run, CrawlStatus.RUNNING)
 
+        _touch_run_heartbeat(run)
         settings_view = run.settings_view
         url_list = await _resolve_run_urls(run, settings_view)
         total_urls = len(url_list)
         if total_urls == 0:
             raise ValueError("No URL provided")
 
-        proxy_list = settings_view.proxy_list()
-        traversal_mode = settings_view.traversal_mode()
-        max_pages = settings_view.max_pages()
-        max_scrolls = settings_view.max_scrolls()
         max_records = settings_view.max_records()
         sleep_ms = settings_view.sleep_ms()
         url_timeout_seconds = settings_view.url_timeout_seconds()
@@ -112,6 +113,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
 
         for idx, url in enumerate(url_list, start=1):
             await session.refresh(run)
+            _touch_run_heartbeat(run)
             control_request = get_control_request(run)
             if control_request == CONTROL_REQUEST_PAUSE:
                 update_run_status(run, CrawlStatus.PAUSED)
@@ -172,9 +174,12 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 logger.warning("URL processing failed for run=%s url=%s", run.id, url, exc_info=True)
-                url_metrics = {"error": f"{type(exc).__name__}: {exc}"}
-                if isinstance(getattr(exc, "browser_diagnostics", None), dict):
-                    url_metrics["browser_diagnostics"] = dict(exc.browser_diagnostics)
+                url_metrics: dict[str, object] = {
+                    "error": f"{type(exc).__name__}: {exc}"
+                }
+                browser_diagnostics = getattr(exc, "browser_diagnostics", None)
+                if isinstance(browser_diagnostics, dict):
+                    url_metrics["browser_diagnostics"] = dict(browser_diagnostics)
                 url_result = URLProcessingResult(
                     records=[],
                     verdict=VERDICT_ERROR,
@@ -188,6 +193,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             method = str(url_result.url_metrics.get("method") or "").strip()
             if method:
                 methods[method] = int(methods.get(method, 0) or 0) + 1
+            _touch_run_heartbeat(run)
             run.update_summary(
                 progress=int((idx / total_urls) * 100),
                 record_count=record_count,
@@ -216,6 +222,7 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
             return
         aggregate_verdict = _aggregate_verdict(verdicts)
         update_run_status(run, CrawlStatus.COMPLETED)
+        _touch_run_heartbeat(run)
         run.update_summary(
             progress=100,
             completed_urls=len(verdicts),

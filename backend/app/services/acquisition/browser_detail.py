@@ -4,26 +4,9 @@ import re
 import time
 from typing import Any
 
+from app.services.config.extraction_rules import DETAIL_BLOCKED_TOKENS
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_policy import normalize_requested_field
-
-_DETAIL_BLOCKED_TOKENS = (
-    "add to cart",
-    "add to bag",
-    "bag",
-    "buy now",
-    "cart",
-    "checkout",
-    "login",
-    "log in",
-    "menu",
-    "navigation",
-    "shopping bag",
-    "sign in",
-    "sign up",
-    "subscribe",
-    "wishlist",
-)
 
 
 def detail_expansion_skip(reason: str) -> dict[str, object]:
@@ -173,6 +156,7 @@ async def expand_all_interactive_elements_impl(
                 data_qa_action = str(snapshot.get("data_qa_action") or "").strip().lower()
                 class_name = str(snapshot.get("class_name") or "").strip().lower()
                 tag_name = str(snapshot.get("tag_name") or "").strip().lower()
+                keyword_probe = " ".join(part for part in (probe, class_name) if part).strip()
                 candidate_key = (label or probe, aria_controls, tag_name)
                 if candidate_key in seen_candidates:
                     continue
@@ -183,7 +167,7 @@ async def expand_all_interactive_elements_impl(
                 )
                 if (
                     probe
-                    and any(token in probe for token in _DETAIL_BLOCKED_TOKENS)
+                    and any(token in probe for token in DETAIL_BLOCKED_TOKENS)
                     and not size_toggle_hint
                 ):
                     continue
@@ -200,7 +184,7 @@ async def expand_all_interactive_elements_impl(
                     or aria_expanded == "false"
                     or aria_controls
                     or tag_name == "summary"
-                    or any(keyword in probe for keyword in keywords)
+                    or any(keyword in keyword_probe for keyword in keywords)
                 )
                 if not looks_expandable:
                     continue
@@ -343,7 +327,7 @@ def accessibility_expand_candidates_impl(
         if (
             role in aom_expand_roles
             and name
-            and not any(token in name for token in _DETAIL_BLOCKED_TOKENS)
+            and not any(token in name for token in DETAIL_BLOCKED_TOKENS)
             and (not keywords or any(keyword in name for keyword in keywords))
             and candidate not in seen
         ):

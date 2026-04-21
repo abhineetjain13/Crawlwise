@@ -9,13 +9,21 @@ from lxml import etree
 from lxml import html as lxml_html
 from soupsieve import SelectorSyntaxError
 
-from app.services.config.extraction_rules import EXTRACTION_RULES, SEMANTIC_SECTION_NOISE
+from app.services.config.extraction_rules import (
+    CROSS_LINK_CONTAINER_HINTS,
+    EXTRACTION_RULES,
+    NON_PRODUCT_IMAGE_HINTS,
+    NON_PRODUCT_PROVIDER_HINTS,
+    PRODUCT_GALLERY_CONTEXT_HINTS,
+    SEMANTIC_SECTION_NOISE,
+)
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_policy import normalize_field_key, normalize_requested_field
 
 from app.services.field_value_candidates import add_candidate
 from app.services.field_value_core import (
     IMAGE_FIELDS,
+    LONG_TEXT_FIELDS,
     URL_FIELDS,
     absolute_url,
     clean_text,
@@ -55,47 +63,37 @@ _CDN_IMAGE_QUERY_PARAMS = frozenset(
         "auto",
     }
 )
-_CROSS_LINK_CONTAINER_HINTS = (
-    "cross-sell",
-    "crosssell",
-    "grid",
-    "related",
-    "recommend",
-    "similar",
-    "upsell",
-    "widget",
-)
-_PRODUCT_GALLERY_CONTEXT_HINTS = (
-    "carousel",
-    "gallery",
-    "media",
-    "pdp",
-    "photo",
-    "product",
-    "slider",
-    "thumb",
-    "zoom",
-)
-_NON_PRODUCT_IMAGE_HINTS = (
-    "avatar",
-    "badge",
-    "blog",
-    "brand",
-    "breadcrumb",
-    "flag",
-    "icon",
-    "logo",
-    "payment",
-    "placeholder",
-    "promo",
-    "rating",
-    "review",
-    "social",
-    "sprite",
-)
 _CDN_IMAGE_PATH_SUFFIX_RE = regex_lib.compile(
     r"_(?:\d+x\d+|pico|icon|thumb|small|compact|medium|large|grande|original)(?=\.[a-z0-9]+$)",
     regex_lib.I,
+)
+_SECTION_LABEL_SKIP_TOKENS = tuple(
+    sorted(
+        {
+            *(
+                str(token).lower()
+                for token in (
+                    SEMANTIC_SECTION_NOISE.get("label_skip_tokens")
+                    or ()
+                )
+            ),
+            "answer",
+            "answers",
+            "q&a",
+            "question",
+            "questions",
+            "rating snapshot",
+            "review",
+            "reviews",
+        }
+    )
+)
+_SECTION_SKIP_PATTERNS = tuple(
+    str(token).lower()
+    for token in (
+        SEMANTIC_SECTION_NOISE.get("skip_patterns")
+        or ()
+    )
 )
 
 
@@ -236,7 +234,7 @@ def _is_in_product_gallery_context(node: Tag, *, max_depth: int = 6) -> bool:
         if current.name == "main" or str(current.get("role") or "").strip().lower() == "main":
             in_main = True
         context = _node_attr_text(current)
-        if any(hint in context for hint in _PRODUCT_GALLERY_CONTEXT_HINTS):
+        if any(hint in context for hint in PRODUCT_GALLERY_CONTEXT_HINTS):
             if in_main or any(
                 token in context for token in ("gallery", "media", "pdp", "product")
             ):
@@ -249,15 +247,22 @@ def _is_in_product_gallery_context(node: Tag, *, max_depth: int = 6) -> bool:
 def _is_garbage_image_candidate(node: Tag, candidate_url: str) -> bool:
     lowered = str(candidate_url or "").lower()
     context = _image_node_context(node)
-    if any(token in lowered for token in _NON_PRODUCT_IMAGE_HINTS):
+    if lowered.endswith(".svg") and not _is_in_product_gallery_context(node):
         return True
-    return any(token in context for token in _NON_PRODUCT_IMAGE_HINTS)
+    if any(token in lowered for token in NON_PRODUCT_IMAGE_HINTS):
+        return True
+    if any(token in lowered for token in NON_PRODUCT_PROVIDER_HINTS):
+        return True
+    return any(
+        token in context
+        for token in (*NON_PRODUCT_IMAGE_HINTS, *NON_PRODUCT_PROVIDER_HINTS)
+    )
 
 
 def _gallery_image_score(node: Tag, candidate_url: str) -> int:
     context = _image_node_context(node)
     score = 0
-    if any(hint in context for hint in _PRODUCT_GALLERY_CONTEXT_HINTS):
+    if any(hint in context for hint in PRODUCT_GALLERY_CONTEXT_HINTS):
         score += 4
     width = str(node.get("width") or "").strip()
     height = str(node.get("height") or "").strip()
@@ -338,7 +343,7 @@ def _is_in_cross_link_container(node: Tag, *, max_depth: int = 6) -> bool:
     depth = 0
     while isinstance(current, Tag) and depth < max_depth:
         context = _node_attr_text(current)
-        if any(hint in context for hint in _CROSS_LINK_CONTAINER_HINTS):
+        if any(hint in context for hint in CROSS_LINK_CONTAINER_HINTS):
             return True
         current = current.parent
         depth += 1
@@ -391,7 +396,14 @@ def extract_node_value(node: Tag, field_name: str, page_url: str) -> object | No
         attr_value = node.get(attr_name)
         if attr_value not in (None, "", [], {}):
             return coerce_field_value(field_name, attr_value, page_url)
-    return coerce_field_value(field_name, node.get_text(" ", strip=True), page_url)
+    text_value = coerce_field_value(field_name, node.get_text(" ", strip=True), page_url)
+    if field_name in LONG_TEXT_FIELDS and not _section_text_is_meaningful(
+        node,
+        label=field_name,
+        text=str(text_value or ""),
+    ):
+        return None
+    return text_value
 
 
 def extract_selector_values(
@@ -652,6 +664,8 @@ def _is_section_label(label: str) -> bool:
         return False
     if cleaned.lower() in {"details", "more", "overview"}:
         return False
+    if any(token in cleaned.lower() for token in _SECTION_LABEL_SKIP_TOKENS):
+        return False
     return any(char.isalpha() for char in cleaned)
 
 
@@ -680,6 +694,38 @@ def _extract_sibling_content(node: Tag) -> str:
     return " ".join(values)
 
 
+def _section_text_is_meaningful(
+    node: Tag | None,
+    *,
+    label: str,
+    text: str,
+) -> bool:
+    lowered_label = clean_text(label).lower()
+    lowered_text = clean_text(text).lower()
+    if not lowered_text:
+        return False
+    if any(token in lowered_label for token in _SECTION_LABEL_SKIP_TOKENS):
+        return False
+    if any(pattern in lowered_text for pattern in _SECTION_SKIP_PATTERNS):
+        return False
+    if isinstance(node, Tag):
+        interactive_count = len(
+            node.select("a[href], button, [role='button'], [role='tab'], summary")
+        )
+        content_count = sum(
+            1
+            for candidate in node.select("p, li, dd, td, dt")
+            if candidate.find_parent(
+                ["a", "button", "summary"],
+            ) is None
+            and str(candidate.get("role") or "").strip().lower()
+            not in {"button", "tab"}
+        )
+        if interactive_count >= 3 and content_count == 0:
+            return False
+    return True
+
+
 def _find_wrapped_section_content(node: Tag, *, label: str) -> str:
     container: Tag | None = node
     best_text = ""
@@ -693,7 +739,11 @@ def _find_wrapped_section_content(node: Tag, *, label: str) -> str:
                     continue
                 seen.add(id(target))
                 text = _section_text(target, label=label)
-                if len(text) >= 12 and (not best_text or len(text) < len(best_text)):
+                if len(text) >= 12 and _section_text_is_meaningful(
+                    target,
+                    label=label,
+                    text=text,
+                ) and (not best_text or len(text) < len(best_text)):
                     best_text = text
         parent = container.parent
         container = parent if isinstance(parent, Tag) else None
@@ -707,21 +757,32 @@ def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
         target = root.find(id=target_id)
         if isinstance(target, Tag):
             text = _section_text(target, label=label)
-            if len(text) >= 12:
+            if len(text) >= 12 and _section_text_is_meaningful(
+                target,
+                label=label,
+                text=text,
+            ):
                 return text
 
     if node.name == "summary":
         parent = node.parent if isinstance(node.parent, Tag) else None
         if isinstance(parent, Tag) and parent.name == "details":
             text = _section_text(parent, label=label)
-            if len(text) >= 12:
+            if len(text) >= 12 and _section_text_is_meaningful(
+                parent,
+                label=label,
+                text=text,
+            ):
                 return text
 
     wrapped = _find_wrapped_section_content(node, label=label)
     if wrapped:
         return wrapped
 
-    return _extract_sibling_content(node)
+    sibling_content = _extract_sibling_content(node)
+    if _section_text_is_meaningful(node, label=label, text=sibling_content):
+        return sibling_content
+    return ""
 
 
 def extract_heading_sections(root: BeautifulSoup | Tag) -> dict[str, str]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -246,6 +247,12 @@ async def test_recover_stale_local_runs_clears_task_entries_and_task_ids(
     )
     update_run_status(running_run, "running")
     running_run.update_summary(celery_task_id="running-task")
+    stale_time = datetime.now(UTC) - timedelta(
+        seconds=crawl_service.crawler_runtime_settings.stalled_run_threshold_seconds
+        + 30
+    )
+    running_run.last_heartbeat_at = stale_time
+    running_run.updated_at = stale_time
     await db_session.commit()
 
     finished_pending = asyncio.create_task(asyncio.sleep(0))
@@ -271,6 +278,44 @@ async def test_recover_stale_local_runs_clears_task_entries_and_task_ids(
     )
     assert pending_run.id not in crawl_service._local_run_tasks
     assert running_run.id not in crawl_service._local_run_tasks
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_local_runs_skips_fresh_active_runs(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "celery_dispatch_enabled", False)
+    pending_run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/jobs/fresh-pending",
+            "surface": "job_detail",
+        },
+    )
+    running_run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/jobs/fresh-running",
+            "surface": "job_detail",
+        },
+    )
+    update_run_status(running_run, "running")
+    running_run.last_heartbeat_at = datetime.now(UTC)
+    await db_session.commit()
+
+    recovered = await crawl_service.recover_stale_local_runs(db_session)
+    await db_session.refresh(pending_run)
+    await db_session.refresh(running_run)
+
+    assert recovered == 0
+    assert pending_run.status == "pending"
+    assert running_run.status == "running"
 
 
 def test_log_background_task_exception_logs_failures(

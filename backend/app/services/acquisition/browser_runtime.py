@@ -6,9 +6,7 @@ import logging
 import threading
 import time
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
-
-import httpx
+from typing import TYPE_CHECKING, Any, cast
 
 from app.core.config import settings
 from app.services.acquisition.browser_capture import (
@@ -24,7 +22,6 @@ from app.services.acquisition.browser_capture import (
 )
 from app.services.acquisition.browser_detail import (
     accessibility_expand_candidates_impl,
-    detail_expansion_skip,
     expand_all_interactive_elements_impl,
     expand_detail_content_if_needed_impl,
     expand_interactive_elements_via_accessibility_impl,
@@ -47,7 +44,6 @@ from app.services.acquisition.browser_page_flow import (
 from app.services.acquisition.browser_readiness import (
     classify_browser_outcome_impl,
     classify_low_content_reason_impl,
-    count_matching_selectors,
     probe_browser_readiness_impl,
     wait_for_listing_readiness_impl,
 )
@@ -55,6 +51,7 @@ from app.services.acquisition.runtime import (
     BlockPageClassification,
     NetworkPayloadReadResult,
     classify_blocked_page_async,
+    copy_headers,
     PageFetchResult,
     is_blocked_html_async,
 )
@@ -67,15 +64,16 @@ from app.services.acquisition.traversal import (
 from app.services.config.extraction_rules import (
     BROWSER_DETAIL_EXPAND_KEYWORDS,
     BROWSER_DETAIL_READINESS_HINTS,
+    DETAIL_EXPAND_KEYWORD_EXTENSIONS,
+    DETAIL_EXPAND_SELECTORS,
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
-from app.services.domain_utils import hostname
 from app.services.field_value_core import clean_text
 from app.services.platform_policy import resolve_listing_readiness_override
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, BrowserContext, Page, Playwright
+    from playwright.async_api import Browser, BrowserContext, Playwright
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +86,7 @@ _BLOCKED_TRACKER_TOKENS = (
 )
 
 try:
-    from playwright_stealth import Stealth as _PlaywrightStealth
+    from playwright_stealth import Stealth as _PlaywrightStealth  # type: ignore[import-untyped]
     _STEALTH_APPLIER = _PlaywrightStealth().apply_stealth_async
 except Exception:  # pragma: no cover - optional dep missing
     _STEALTH_APPLIER = None
@@ -108,33 +106,9 @@ _BROWSER_PREFERRED_HOSTS: dict[str, float] = {}
 _BROWSER_PREFERRED_HOST_SUCCESSES: dict[str, tuple[int, float]] = {}
 _BROWSER_RUNTIME: SharedBrowserRuntime | None = None
 _BROWSER_RUNTIME_LOCK = asyncio.Lock()
-_DETAIL_EXPAND_SELECTORS = (
-    "summary",
-    "details > summary",
-    "[aria-expanded='false']",
-    "button[aria-controls]",
-    "[role='button'][aria-controls]",
-    "[role='tab'][aria-controls]",
-    "button",
-    "[role='button']",
-    "a",
-)
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
     for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
-}
-_DETAIL_EXPAND_KEYWORD_EXTENSIONS: dict[str, tuple[str, ...]] = {
-    "ecommerce": (
-        "care",
-        "composition",
-        "materials",
-        "measurements",
-        "origin",
-        "returns",
-        "shipping",
-        "size",
-    ),
-    "job": (),
 }
 _DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
@@ -198,7 +172,7 @@ class SharedBrowserRuntime:
             async with self._counter_lock:
                 self._total_contexts_created = 0
 
-    def _build_context_options(self, *, run_id: int | None = None) -> dict[str, object]:
+    def _build_context_options(self, *, run_id: int | None = None) -> dict[str, Any]:
         return build_playwright_context_options(run_id=run_id)
 
     @asynccontextmanager
@@ -220,7 +194,7 @@ class SharedBrowserRuntime:
             context_options = self._build_context_options(run_id=run_id)
             if proxy:
                 context_options["proxy"] = {"server": proxy}
-            context = await self._browser.new_context(**context_options)
+            context = await self._browser.new_context(**cast(Any, context_options))
             await _configure_context_routes(context)
             async with self._counter_lock:
                 self._total_contexts_created += 1
@@ -416,6 +390,16 @@ def _normalize_surface(surface: str | None) -> str:
     return str(surface or "").strip().lower()
 
 
+def _mapping_value(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _network_payload_rows(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
 def _resolve_browser_fetch_policy(
     *,
     url: str,
@@ -558,19 +542,25 @@ async def browser_fetch(
                 emit_browser_event=_emit_browser_event,
                 elapsed_ms=_elapsed_ms,
             )
+            finalized_status_code = finalized.get("status_code", 0)
+            finalized_platform_family = (
+                str(finalized.get("platform_family") or "").strip() or None
+            )
             return PageFetchResult(
                 url=url,
                 final_url=page.url,
                 html=html,
-                status_code=int(finalized["status_code"]),
+                status_code=int(str(finalized_status_code or 0)),
                 method="browser",
                 content_type=str(finalized["content_type"]),
                 blocked=bool(finalized["blocked"]),
-                platform_family=finalized["platform_family"],
-                headers=finalized["page_headers"],
-                network_payloads=list(finalized["network_payloads"]),
-                browser_diagnostics=dict(finalized["diagnostics"]),
-                artifacts=dict(finalized["artifacts"]),
+                platform_family=finalized_platform_family,
+                headers=copy_headers(finalized.get("page_headers")),
+                network_payloads=_network_payload_rows(
+                    finalized.get("network_payloads")
+                ),
+                browser_diagnostics=_mapping_value(finalized.get("diagnostics")),
+                artifacts=_mapping_value(finalized.get("artifacts")),
                 page_markdown=str(finalized.get("page_markdown") or ""),
             )
         finally:
@@ -748,7 +738,7 @@ async def expand_all_interactive_elements(
         page,
         surface=surface,
         requested_fields=requested_fields,
-        detail_expand_selectors=_DETAIL_EXPAND_SELECTORS,
+        detail_expand_selectors=DETAIL_EXPAND_SELECTORS,
         detail_expansion_keywords=detail_expansion_keywords,
         interactive_candidate_snapshot=interactive_candidate_snapshot,
         elapsed_ms=_elapsed_ms,
@@ -797,17 +787,18 @@ def detail_expansion_keywords(
     lowered = str(surface or "").strip().lower()
     if "ecommerce" in lowered:
         base_keywords = _DETAIL_EXPAND_KEYWORDS["ecommerce"]
-        extended_keywords = _DETAIL_EXPAND_KEYWORD_EXTENSIONS["ecommerce"]
+        extended_keywords = DETAIL_EXPAND_KEYWORD_EXTENSIONS["ecommerce"]
     elif "job" in lowered:
         base_keywords = _DETAIL_EXPAND_KEYWORDS["job"]
-        extended_keywords = _DETAIL_EXPAND_KEYWORD_EXTENSIONS["job"]
+        extended_keywords = DETAIL_EXPAND_KEYWORD_EXTENSIONS["job"]
     else:
         base_keywords = ()
         extended_keywords = ()
     dynamic_keywords = requested_field_tokens(requested_fields)
     keywords = [*base_keywords]
-    if dynamic_keywords:
+    if dynamic_keywords or not list(requested_fields or []):
         keywords.extend(extended_keywords)
+    if dynamic_keywords:
         keywords.extend(dynamic_keywords)
     return tuple(dict.fromkeys(keywords))
 

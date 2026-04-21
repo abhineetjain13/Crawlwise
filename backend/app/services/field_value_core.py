@@ -9,8 +9,8 @@ from urllib.parse import parse_qsl, urljoin, urlparse
 from bs4 import BeautifulSoup
 from w3lib.url import url_query_cleaner
 
+from app.services.config.extraction_rules import CURRENCY_SYMBOL_MAP
 from app.services.config.field_mappings import CANONICAL_SCHEMAS
-from app.services.domain_utils import hostname as hostname
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_policy import (
     expand_requested_fields,
@@ -22,7 +22,19 @@ from app.services.normalizers import normalize_record_fields
 
 PRODUCT_URL_HINTS = detail_path_hints("ecommerce_detail")
 JOB_URL_HINTS = detail_path_hints("job_detail")
-PRICE_RE = re.compile(r"[$€£₹]\s?\d[\d,]*(?:\.\d{1,2})?")
+_CURRENCY_SYMBOL_PATTERN = "|".join(
+    re.escape(str(symbol))
+    for symbol in sorted(
+        (str(symbol) for symbol in dict(CURRENCY_SYMBOL_MAP or {}).keys() if symbol),
+        key=len,
+        reverse=True,
+    )
+) or r"(?!)"  # Never-matching pattern if no symbols defined
+PRICE_RE = re.compile(
+    rf"(?:(?:{_CURRENCY_SYMBOL_PATTERN})\s*\d[\d.,]*|\d[\d.,]*\s*(?:{_CURRENCY_SYMBOL_PATTERN}))"
+)
+_UNMARKED_PRICE_RE = re.compile(r"\d[\d.,]*")
+_CURRENCY_CODE_RE = re.compile(r"\b([A-Z]{3})\b")
 PERCENT_RE = re.compile(r"\b\d{1,3}(?:\.\d+)?\s?%")
 REVIEW_COUNT_RE = re.compile(r"\b(\d[\d,]*)\s+reviews?\b", re.I)
 RATING_RE = re.compile(r"\b([1-5](?:\.\d)?)\s*(?:/5|out of 5|stars?)\b", re.I)
@@ -241,6 +253,37 @@ def coerce_text(value: object) -> str | None:
     return text_or_none(value)
 
 
+def extract_price_text(
+    value: object,
+    *,
+    prefer_last: bool = True,
+    allow_unmarked: bool = False,
+) -> str | None:
+    text = clean_text(value)
+    if not text:
+        return None
+    matches = list(PRICE_RE.finditer(text))
+    if not matches and allow_unmarked:
+        matches = list(_UNMARKED_PRICE_RE.finditer(text))
+    if not matches:
+        return None
+    match = matches[-1] if prefer_last else matches[0]
+    return clean_text(match.group(0))
+
+
+def extract_currency_code(value: object) -> str | None:
+    text = clean_text(value)
+    if not text:
+        return None
+    for symbol, code in dict(CURRENCY_SYMBOL_MAP or {}).items():
+        if str(symbol) in text:
+            return str(code)
+    code_match = _CURRENCY_CODE_RE.search(text.upper())
+    if code_match:
+        return code_match.group(1)
+    return None
+
+
 def coerce_structured_scalar(
     value: object,
     *,
@@ -364,6 +407,14 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
         return coerce_location(value)
     if field_name == "salary":
         return salary_from_json(value)
+    if field_name in {"currency", "salary_currency"} and isinstance(value, str):
+        currency_code = extract_currency_code(value)
+        if currency_code:
+            return currency_code
+        text = coerce_text(value)
+        if text and re.fullmatch(r"[A-Za-z]{3}", text):
+            return text.upper()
+        return text
     if field_name in {"brand", "company", "dealer_name", "vendor"} and isinstance(
         value,
         dict,
@@ -443,16 +494,16 @@ def coerce_field_value(field_name: str, value: object, page_url: str) -> object 
             rows = [coerce_text(item) for item in value.values()]
             return [row for row in rows if row] or None
     if isinstance(value, list):
-        rows: list[object] = []
+        normalized_rows: list[object] = []
         for item in value:
             normalized = coerce_field_value(field_name, item, page_url)
             if normalized in (None, "", [], {}):
                 continue
             if isinstance(normalized, list):
-                rows.extend(normalized)
+                normalized_rows.extend(normalized)
             else:
-                rows.append(normalized)
-        return rows or None
+                normalized_rows.append(normalized)
+        return normalized_rows or None
     if field_name in LONG_TEXT_FIELDS:
         return coerce_text(value)
     return coerce_text(value)

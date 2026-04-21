@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
+import secrets
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -36,7 +36,6 @@ from app.services.acquisition.runtime import (
     PageFetchResult,
     classify_block_from_headers,
     close_shared_http_client,
-    copy_headers,
     curl_fetch,
     get_shared_http_client,
     http_fetch,
@@ -44,11 +43,9 @@ from app.services.acquisition.runtime import (
     is_blocked_html_async,
     is_non_retryable_http_status,
     should_escalate_to_browser,
-    should_escalate_to_browser_async,
 )
 from app.services.acquisition.traversal import should_run_traversal
 from app.services.config.runtime_settings import crawler_runtime_settings
-from app.services.network_resolution import build_async_http_client
 from app.services.platform_policy import resolve_platform_runtime_policy
 
 logger = logging.getLogger(__name__)
@@ -133,7 +130,6 @@ async def _http_fetch(
         timeout_seconds,
         proxy=proxy,
         get_client=_get_shared_http_client,
-        client_builder=build_async_http_client,
         blocked_html_checker=_is_blocked_html_async,
     )
 
@@ -559,7 +555,7 @@ async def _sleep_before_retry(attempt: int) -> None:
     delay_ms = min(max_ms, base_ms * (2 ** max(0, attempt - 1)))
     if delay_ms <= 0:
         return
-    jitter_ms = random.randint(0, max(1, delay_ms // 4))
+    jitter_ms = secrets.randbelow(max(1, delay_ms // 4) + 1)
     await asyncio.sleep((delay_ms + jitter_ms) / 1000)
 
 

@@ -4,46 +4,7 @@ from collections import defaultdict
 import re
 from typing import Any
 
-
-_SURFACE_WEIGHTS: dict[str, dict[str, float]] = {
-    "ecommerce_detail": {
-        "title": 0.2,
-        "price": 0.15,
-        "brand": 0.1,
-        "image_url": 0.1,
-        "description": 0.1,
-        "availability": 0.1,
-        "variants": 0.15,
-        "selected_variant": 0.1,
-    },
-    "job_detail": {
-        "title": 0.2,
-        "company": 0.1,
-        "location": 0.1,
-        "description": 0.1,
-        "responsibilities": 0.15,
-        "qualifications": 0.15,
-        "apply_url": 0.1,
-        "posted_date": 0.1,
-    },
-}
-
-_SOURCE_TIERS: dict[str, tuple[str, float]] = {
-    "adapter": ("authoritative", 1.0),
-    "network_payload": ("authoritative", 0.98),
-    "js_state": ("structured", 0.92),
-    "json_ld": ("structured", 0.9),
-    "microdata": ("structured", 0.88),
-    "opengraph": ("structured", 0.84),
-    "embedded_json": ("structured", 0.84),
-    "dom_selector": ("dom", 0.78),
-    "dom_sections": ("dom", 0.76),
-    "dom_images": ("dom", 0.74),
-    "dom_h1": ("dom", 0.7),
-    "dom_canonical": ("dom", 0.72),
-    "dom_text": ("text", 0.58),
-    "llm_missing_field_extraction": ("llm", 0.55),
-}
+from app.services.config.extraction_rules import SOURCE_TIERS, SURFACE_WEIGHTS
 
 _GENERIC_TITLE_RE = re.compile(
     r"^(product|item|details?|job|career opportunity|untitled|listing)$",
@@ -60,7 +21,7 @@ def score_record_confidence(
     requested_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized_surface = str(surface or "").strip().lower()
-    weights = dict(_SURFACE_WEIGHTS.get(normalized_surface) or {})
+    weights = dict(SURFACE_WEIGHTS.get(normalized_surface) or {})
     if not weights:
         weights = {
             key: 1.0
@@ -89,6 +50,7 @@ def score_record_confidence(
             surface=normalized_surface,
             field_name=field_name,
             value=value,
+            sources=field_sources.get(field_name),
         )
         penalty_total = min(
             sum(float(item.get("weight") or 0.0) for item in penalty_items),
@@ -166,7 +128,7 @@ def _field_source_quality(
     best_quality = 0.58
     best_tier = "text"
     for source in candidates:
-        tier, quality = _SOURCE_TIERS.get(str(source), ("text", 0.58))
+        tier, quality = SOURCE_TIERS.get(str(source), ("text", 0.58))
         if quality > best_quality:
             best_quality = quality
             best_tier = tier
@@ -178,15 +140,21 @@ def _field_penalties(
     surface: str,
     field_name: str,
     value: Any,
+    sources: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     penalties: list[dict[str, Any]] = []
     text = _text_value(value)
     lowered = text.lower()
+    normalized_sources = {str(source or "").strip() for source in list(sources or [])}
 
     if field_name == "title":
         if _GENERIC_TITLE_RE.match(text):
             penalties.append(
                 {"field": field_name, "kind": "generic_title", "weight": 0.55}
+            )
+        elif "url_slug" in normalized_sources:
+            penalties.append(
+                {"field": field_name, "kind": "generic_title", "weight": 0.25}
             )
         elif len(text) < 4:
             penalties.append(

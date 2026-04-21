@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import re
 import time
 from typing import Any
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from app.services.acquisition.browser_recovery import (
     capture_rendered_listing_cards,
@@ -51,6 +52,37 @@ _MARKDOWN_NOISE_SELECTORS = (
     "[role='contentinfo']",
 )
 _MARKDOWN_NOISE_TOKENS = ("cookie", "consent", "modal", "popup", "banner")
+_DETAIL_MARKDOWN_SECTION_NOISE_TOKENS = (
+    "affirm",
+    "amex",
+    "answer",
+    "answers",
+    "ask a question",
+    "filter reviews",
+    "helpful",
+    "klarna",
+    "mastercard",
+    "overall rating",
+    "payment",
+    "paypal",
+    "q&a",
+    "question",
+    "questions",
+    "rating snapshot",
+    "report this answer",
+    "report this review",
+    "review",
+    "reviews",
+    "secure payment",
+    "verified reviewer",
+    "visa",
+    "what are other people saying",
+)
+_DETAIL_MARKDOWN_LINE_NOISE = (
+    "add to cart",
+    "home",
+    "skip the navigation",
+)
 
 
 @dataclass(slots=True)
@@ -529,6 +561,7 @@ async def serialize_browser_page_content_impl(
     on_event=None,
 ):
     traversal_result = None
+    traversal_html = ""
     rendered_html = ""
     listing_recovery_diagnostics = {
         "status": "skipped",
@@ -565,7 +598,14 @@ async def serialize_browser_page_content_impl(
             on_event=on_event,
         )
         rendered_html = await get_page_html(page)
-        html = traversal_result.compose_html()
+        traversal_html = traversal_result.compose_html()
+        html = _select_primary_browser_html(
+            surface=surface,
+            traversal_result=traversal_result,
+            traversal_html=traversal_html,
+            rendered_html=rendered_html,
+            listing_min_items=int(crawler_runtime_settings.listing_min_items),
+        )
     else:
         html = ""
     phase_timings_ms["traversal"] = elapsed_ms(traversal_started_at)
@@ -579,6 +619,7 @@ async def serialize_browser_page_content_impl(
     page_markdown = await _generate_page_markdown(
         page,
         html=rendered_html or html,
+        surface=surface,
     )
     phase_timings_ms["page_markdown"] = elapsed_ms(markdown_started_at)
     return html, traversal_result, rendered_html, listing_recovery_diagnostics, page_markdown
@@ -672,15 +713,49 @@ def build_browser_artifacts(
     if listing_visual_elements:
         artifacts["listing_visual_elements"] = listing_visual_elements
     if traversal_result is not None and traversal_result.activated:
-        artifacts["traversal_composed_html"] = html
+        artifacts["traversal_composed_html"] = traversal_result.compose_html()
         artifacts["full_rendered_html"] = rendered_html
     return artifacts
 
+def _select_primary_browser_html(
+    *,
+    surface: str | None,
+    traversal_result,
+    traversal_html: str,
+    rendered_html: str,
+    listing_min_items: int,
+) -> str:
+    if traversal_result is None or not getattr(traversal_result, "activated", False):
+        return traversal_html or rendered_html
+    if "listing" not in str(surface or "").strip().lower():
+        return traversal_html or rendered_html
+    if not str(rendered_html or "").strip():
+        return traversal_html
+    if not str(traversal_html or "").strip():
+        return rendered_html
+    progress_events = int(getattr(traversal_result, "progress_events", 0) or 0)
+    card_count = int(getattr(traversal_result, "card_count", 0) or 0)
+    stop_reason = str(getattr(traversal_result, "stop_reason", "") or "").strip()
+    rendered_signal_count = _listing_html_detail_anchor_count(rendered_html)
+    traversal_signal_count = _listing_html_detail_anchor_count(traversal_html)
+    if progress_events > 0 and (
+        card_count >= max(1, int(listing_min_items))
+        or traversal_signal_count >= max(2, rendered_signal_count)
+    ):
+        return traversal_html
+    if rendered_signal_count > traversal_signal_count:
+        return rendered_html
+    if card_count >= max(1, int(listing_min_items)):
+        return rendered_html
+    if stop_reason.endswith(("_not_found", "_no_progress", "_click_failed", "_blocked")):
+        return rendered_html
+    return traversal_html
 
 async def _generate_page_markdown(
     page: Any,
     *,
     html: str,
+    surface: str | None = None,
 ) -> str:
     soup = BeautifulSoup(str(html or ""), "html.parser")
     for node in list(soup.find_all(True)):
@@ -704,25 +779,21 @@ async def _generate_page_markdown(
         ).lower()
         if any(token in attr_text for token in _MARKDOWN_NOISE_TOKENS):
             node.decompose()
+    if "detail" in str(surface or "").strip().lower():
+        _prune_detail_markdown_noise(soup)
 
     content_root = _select_markdown_root(soup)
-    text = content_root.get_text("\n", strip=True)
-    lines = [
-        " ".join(str(line or "").split()).strip()
-        for line in text.splitlines()
-        if str(line or "").strip()
-    ]
-    markdown = "\n".join(lines)
-
-    link_lines: list[str] = []
-    for anchor in content_root.select("a[href]"):
-        attrs = getattr(anchor, "attrs", None)
-        if not isinstance(attrs, dict):
-            continue
-        href = " ".join(str(attrs.get("href") or "").split()).strip()
-        label = " ".join(anchor.get_text(" ", strip=True).split()).strip()
-        if href and label and len(label) >= 3:
-            link_lines.append(f"- {label} -> {href}")
+    body_or_soup = soup.body if soup.body is not None else soup
+    markdown, link_lines = _serialize_markdown_root(content_root)
+    if content_root is not body_or_soup:
+        full_markdown, full_link_lines = _serialize_markdown_root(body_or_soup)
+        if (
+            len(full_markdown) >= len(markdown) + 120
+            or len(full_link_lines) > len(link_lines)
+        ):
+            markdown, link_lines = full_markdown, full_link_lines
+    if "detail" in str(surface or "").strip().lower():
+        markdown, link_lines = _filter_detail_markdown_payload(markdown, link_lines)
     if link_lines:
         markdown = (
             f"{markdown}\n\nVisible links:\n" + "\n".join(link_lines[:120])
@@ -749,6 +820,153 @@ async def _generate_page_markdown(
             )
     return markdown.strip()
 
+def _serialize_markdown_root(root: BeautifulSoup | Any) -> tuple[str, list[str]]:
+    text = root.get_text("\n", strip=True)
+    lines = [
+        " ".join(str(line or "").split()).strip()
+        for line in text.splitlines()
+        if str(line or "").strip()
+    ]
+    link_lines: list[str] = []
+    for anchor in root.select("a[href]"):
+        attrs = getattr(anchor, "attrs", None)
+        if not isinstance(attrs, dict):
+            continue
+        href = " ".join(str(attrs.get("href") or "").split()).strip()
+        label = " ".join(anchor.get_text(" ", strip=True).split()).strip()
+        if href and label and len(label) >= 3:
+            link_lines.append(f"- {label} -> {href}")
+    return "\n".join(lines), link_lines
+
+def _node_markdown_probe(node: Tag) -> str:
+    attrs = getattr(node, "attrs", None)
+    attr_text = ""
+    if isinstance(attrs, dict):
+        attr_text = " ".join(
+            [
+                " ".join(str(item) for item in attrs.get("class", []) if item),
+                str(attrs.get("id") or ""),
+                str(attrs.get("data-testid") or ""),
+                str(attrs.get("data-qa-id") or ""),
+                str(attrs.get("data-qa-action") or ""),
+                str(attrs.get("aria-label") or ""),
+            ]
+        )
+    headings: list[str] = []
+    for candidate in node.select("h1, h2, h3, h4, summary, button, [role='tab']")[:4]:
+        headings.append(candidate.get_text(" ", strip=True))
+    return " ".join([attr_text, *headings]).lower()
+
+def _prune_detail_markdown_noise(soup: BeautifulSoup) -> None:
+    for node in list(soup.find_all(["section", "div", "aside", "article", "details"])):
+        if not isinstance(node, Tag):
+            continue
+        if node.name in {"body", "main"}:
+            continue
+        if not _detail_markdown_probe_is_noise(node):
+            continue
+        node.decompose()
+
+
+def _detail_markdown_line_is_noise(line: str) -> bool:
+    compact = " ".join(str(line or "").split()).strip()
+    lowered = compact.lower()
+    if not lowered:
+        return True
+    if lowered == ">":
+        return True
+    if any(token in lowered for token in _DETAIL_MARKDOWN_LINE_NOISE):
+        return True
+    if compact.isupper() and len(compact) <= 24:
+        return True
+    return False
+
+
+def _detail_markdown_probe_is_noise(node: Tag) -> bool:
+    attr_probe = _node_markdown_attr_text(node)
+    heading_probe = _node_markdown_heading_text(node)
+    if not attr_probe and not heading_probe:
+        return False
+    attr_hits = {
+        _detail_markdown_token_key(token)
+        for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
+        if _detail_markdown_contains_token(attr_probe, token)
+    }
+    heading_hits = {
+        _detail_markdown_token_key(token)
+        for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
+        if _detail_markdown_contains_token(heading_probe, token)
+    }
+    if any(" " in token or "&" in token for token in attr_hits | heading_hits):
+        return True
+    return bool(attr_hits and heading_hits)
+
+
+def _detail_markdown_contains_token(text: str, token: str) -> bool:
+    normalized_token = str(token or "").strip().lower()
+    if not normalized_token:
+        return False
+    pattern = r"\b" + re.escape(normalized_token).replace(r"\ ", r"[\s_-]+") + r"\b"
+    return bool(re.search(pattern, text))
+
+
+def _detail_markdown_token_key(token: str) -> str:
+    normalized_token = str(token or "").strip().lower()
+    if normalized_token.endswith("s") and " " not in normalized_token:
+        return normalized_token[:-1]
+    return normalized_token
+
+
+def _listing_html_detail_anchor_count(html: str) -> int:
+    soup = BeautifulSoup(str(html or ""), "html.parser")
+    count = 0
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor.get("href") or "").strip().lower()
+        if any(marker in href for marker in ("/products/", "/product/", "/p/", "/item/", "/jobs/", "/job/")):
+            count += 1
+    return count
+
+
+def _node_markdown_attr_text(node: Tag) -> str:
+    attrs = getattr(node, "attrs", None)
+    if not isinstance(attrs, dict):
+        return ""
+    return " ".join(
+        [
+            " ".join(str(item) for item in attrs.get("class", []) if item),
+            str(attrs.get("id") or ""),
+            str(attrs.get("data-testid") or ""),
+            str(attrs.get("data-qa-id") or ""),
+            str(attrs.get("data-qa-action") or ""),
+            str(attrs.get("aria-label") or ""),
+        ]
+    ).lower()
+
+
+def _node_markdown_heading_text(node: Tag) -> str:
+    headings: list[str] = []
+    for candidate in node.select("h1, h2, h3, h4, summary, button, [role='tab']")[:4]:
+        headings.append(candidate.get_text(" ", strip=True))
+    return " ".join(headings).lower()
+
+
+def _filter_detail_markdown_payload(
+    markdown: str,
+    link_lines: list[str],
+) -> tuple[str, list[str]]:
+    filtered_lines = [
+        line
+        for line in str(markdown or "").splitlines()
+        if not _detail_markdown_line_is_noise(line)
+    ]
+    filtered_links = [
+        line
+        for line in link_lines
+        if not any(
+            token in line.lower() for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS
+        )
+    ]
+    return "\n".join(filtered_lines), filtered_links
 
 def _select_markdown_root(soup: BeautifulSoup) -> BeautifulSoup | Any:
     body = soup.body
@@ -767,7 +985,6 @@ def _select_markdown_root(soup: BeautifulSoup) -> BeautifulSoup | Any:
             return candidate
     return body if body is not None else soup
 
-
 def _serialize_accessibility_snapshot(
     node: dict[str, object] | None,
     *,
@@ -777,25 +994,23 @@ def _serialize_accessibility_snapshot(
         return ""
     lines: list[str] = []
     name = " ".join(str(node.get("name") or "").split()).strip()
+    lowered_name = name.lower()
+    if any(token in lowered_name for token in _DETAIL_MARKDOWN_SECTION_NOISE_TOKENS):
+        return ""
     if name:
         role = " ".join(str(node.get("role") or "element").split()).strip() or "element"
         lines.append(f"{'  ' * depth}[{role}] {name}")
-    for child in list(node.get("children") or []):
+    raw_children = node.get("children")
+    children = raw_children if isinstance(raw_children, list) else []
+    for child in children:
         if isinstance(child, dict):
             child_text = _serialize_accessibility_snapshot(child, depth=depth + 1)
             if child_text:
                 lines.append(child_text)
     return "\n".join(lines)
 
-
 def _normalize_listing_recovery_mode(value: object) -> str | None:
-    normalized = (
-        str(value or "")
-        .strip()
-        .lower()
-        .replace("-", "_")
-        .replace(" ", "_")
-    )
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     if normalized.endswith("_retry"):
         normalized = normalized[: -len("_retry")]
     return normalized or None
@@ -833,6 +1048,7 @@ def _detail_expansion_extractability(
         "matched_requested_fields": matched_requested_fields,
         "section_fields": sorted(section_fields),
     }
+
 
 async def _capture_listing_visual_elements(
     page: Any,
@@ -931,7 +1147,7 @@ async def finalize_browser_fetch(
     capture_browser_screenshot,
     emit_browser_event,
     elapsed_ms,
-) -> object:
+) -> dict[str, object]:
     builder = BrowserAcquisitionResultBuilder(
         payload,
         blocked_html_checker=blocked_html_checker,

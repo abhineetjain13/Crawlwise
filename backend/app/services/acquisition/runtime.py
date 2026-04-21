@@ -144,6 +144,13 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
     soup = analysis.soup
     visible_text = analysis.visible_text.lower()
     title_text = analysis.title_text.lower()
+    has_extractable_content = _has_extractable_detail_signals(
+        html,
+        analysis=analysis,
+    ) or _has_extractable_listing_signals(
+        html,
+        analysis=analysis,
+    )
 
     title_patterns = _string_sequence(BLOCK_SIGNATURES.get("title_regexes"))
     title_matches: list[str] = []
@@ -225,6 +232,8 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
         blocked = True
     elif strong_hits and weak_hits and provider_hits:
         blocked = True
+    if blocked and has_extractable_content and not strong_hits and not title_matches:
+        blocked = False
     return BlockPageClassification(
         blocked=blocked,
         outcome="challenge_page" if blocked else "ok",
@@ -346,9 +355,11 @@ async def http_fetch(
     *,
     proxy: str | None = None,
     get_client=get_shared_http_client,
-    client_builder=build_async_http_client,
+    client_builder=None,
     blocked_html_checker=is_blocked_html_async,
 ) -> PageFetchResult:
+    if client_builder is not None:
+        get_client = client_builder
     client = await get_client(proxy=proxy)
     response = await client.get(url, timeout=timeout_seconds)
     html = response.text or ""

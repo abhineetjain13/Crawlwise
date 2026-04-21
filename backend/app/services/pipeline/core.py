@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.services.acquisition.acquirer import AcquisitionRequest
+from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.acquisition.acquirer import acquire as _acquire
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter, try_blocked_adapter_recovery
@@ -116,7 +117,7 @@ class _URLProcessingContext:
 @dataclass(slots=True)
 class _FetchedURLStage:
     context: _URLProcessingContext
-    acquisition_result: object
+    acquisition_result: AcquisitionResult
     url_metrics: dict[str, object]
 
 
@@ -197,7 +198,7 @@ def _validate_llm_field_type(field_name: str, value: object) -> bool:
         return isinstance(value, dict)
     return True
 
-def _browser_attempted(acquisition_result) -> bool:
+def _browser_attempted(acquisition_result: AcquisitionResult) -> bool:
     diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     return bool(diagnostics.get("browser_attempted")) or getattr(
         acquisition_result,
@@ -205,7 +206,7 @@ def _browser_attempted(acquisition_result) -> bool:
         "",
     ) == "browser"
 
-def _browser_outcome(acquisition_result) -> str:
+def _browser_outcome(acquisition_result: AcquisitionResult) -> str:
     diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     return str(diagnostics.get("browser_outcome") or "").strip().lower()
 
@@ -218,13 +219,13 @@ def _screenshot_required(browser_outcome: str) -> bool:
         "render_timeout",
     }
 
-def _browser_result_is_extractable(acquisition_result) -> bool:
+def _browser_result_is_extractable(acquisition_result: AcquisitionResult) -> bool:
     if getattr(acquisition_result, "method", "") != "browser":
         return True
     return _browser_outcome(acquisition_result) in {"", "usable_content"}
 
 def _merge_browser_diagnostics(
-    acquisition_result,
+    acquisition_result: AcquisitionResult,
     diagnostics: dict[str, object],
 ) -> None:
     merged = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
@@ -246,7 +247,7 @@ async def process_single_url(
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
-    prefetched_acquisition=None,
+    prefetched_acquisition: AcquisitionResult | None = None,
 ) -> URLProcessingResult:
     del checkpoint
     context = _URLProcessingContext.build(
@@ -371,7 +372,7 @@ def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionReq
 async def _run_acquisition_stage(
     context: _URLProcessingContext,
     *,
-    prefetched_acquisition,
+    prefetched_acquisition: AcquisitionResult | None,
 ) -> _FetchedURLStage:
     acquisition_request = _build_acquisition_request(context)
     acquisition_result = prefetched_acquisition or await acquire(acquisition_request)
@@ -470,7 +471,7 @@ async def _run_extraction_stage(
 
 def _record_detail_expansion_extraction_outcome(
     context: _URLProcessingContext,
-    acquisition_result,
+    acquisition_result: AcquisitionResult,
     records: list[dict[str, object]],
 ) -> None:
     if str(getattr(acquisition_result, "method", "") or "").strip().lower() != "browser":
@@ -479,7 +480,11 @@ def _record_detail_expansion_extraction_outcome(
         getattr(acquisition_result, "browser_diagnostics", {})
     )
     detail_expansion = mapping_or_empty(browser_diagnostics.get("detail_expansion"))
-    if int(detail_expansion.get("clicked_count", 0) or 0) <= 0:
+    try:
+        clicked_count = int(str(detail_expansion.get("clicked_count", 0) or 0))
+    except (TypeError, ValueError):
+        clicked_count = 0
+    if clicked_count <= 0:
         return
     requested_fields = {
         normalized
@@ -692,7 +697,7 @@ async def _extract_records_for_acquisition(
 
 async def _populate_adapter_records(
     context: _URLProcessingContext,
-    acquisition_result,
+    acquisition_result: AcquisitionResult,
 ) -> None:
     acquisition_result.adapter_records = []
     acquisition_result.adapter_name = None
@@ -726,7 +731,7 @@ async def _populate_adapter_records(
         acquisition_result.adapter_name = adapter_result.adapter_name or None
         acquisition_result.adapter_source_type = adapter_result.source_type or None
 
-def _assign_platform_family(acquisition_result) -> None:
+def _assign_platform_family(acquisition_result: AcquisitionResult) -> None:
     platform_family = detect_platform_family(
         acquisition_result.final_url,
         acquisition_result.html,
@@ -738,7 +743,7 @@ def _assign_platform_family(acquisition_result) -> None:
 async def _run_record_extraction(
     context: _URLProcessingContext,
     *,
-    acquisition_result,
+    acquisition_result: AcquisitionResult,
     selector_rules: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     return await asyncio.to_thread(
@@ -828,7 +833,7 @@ async def _extract_records_from_preserved_browser_html(
     return fallback_records
 
 def _empty_extraction_browser_retry_decision(
-    acquisition_result,
+    acquisition_result: AcquisitionResult,
     records: list[dict[str, object]],
 ) -> dict[str, object]:
     if records:
@@ -850,7 +855,7 @@ def _empty_extraction_browser_retry_decision(
 
 def _thin_listing_browser_retry_decision(
     context: _URLProcessingContext,
-    acquisition_result,
+    acquisition_result: AcquisitionResult,
     records: list[dict[str, object]],
 ) -> dict[str, object]:
     if "listing" not in context.surface:

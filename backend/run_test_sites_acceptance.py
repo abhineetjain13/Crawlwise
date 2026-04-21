@@ -36,7 +36,7 @@ async def _run_one(site: dict[str, str], mode: str) -> dict[str, object]:
     }
     try:
         result.update(await run_site_harness(url=site["url"], surface=site["surface"], mode=mode))
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         result["error"] = f"{type(exc).__name__}: {exc}"
     result["elapsed_s"] = round(time.perf_counter() - started, 2)
     result["failure_mode"] = classify_failure_mode(result)

@@ -129,14 +129,12 @@ class BrowserNetworkCapture:
             workers = set(self._workers)
             await asyncio.sleep(0)
             join_timeout_seconds = _queue_join_timeout_seconds()
-            timed_out = False
             try:
                 await asyncio.wait_for(
                     self._queue.join(),
                     timeout=join_timeout_seconds,
                 )
             except asyncio.TimeoutError:
-                timed_out = True
                 self._closing = True
                 logger.warning(
                     "Browser capture queue join timed out after %ss; "
@@ -153,8 +151,20 @@ class BrowserNetworkCapture:
                         break
             else:
                 self._closing = True
-                for _ in workers:
-                    self._queue.put_nowait(None)
+                try:
+                    for _ in workers:
+                        await asyncio.wait_for(
+                            self._queue.put(None),
+                            timeout=join_timeout_seconds,
+                        )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Browser capture sentinel enqueue timed out after %ss; "
+                        "cancelling workers",
+                        join_timeout_seconds,
+                    )
+                    for worker in workers:
+                        worker.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
             self._workers.clear()
         self._closed = True
@@ -414,6 +424,12 @@ async def read_network_payload_body(
     surface: str = "",
     endpoint_info: dict[str, str] | None = None,
 ) -> NetworkPayloadReadResult:
+    payload_budget = _network_payload_byte_budget(
+        url=str(getattr(response, "url", "") or ""),
+        surface=surface,
+        endpoint_info=endpoint_info,
+    )
+    headers = getattr(response, "headers", None)
     try:
         body_bytes = await response.body()
     except Exception as exc:
@@ -428,11 +444,6 @@ async def read_network_payload_body(
             outcome="read_error",
             error=f"{type(exc).__name__}: {exc}",
         )
-    payload_budget = _network_payload_byte_budget(
-        url=str(getattr(response, "url", "") or ""),
-        surface=surface,
-        endpoint_info=endpoint_info,
-    )
     if len(body_bytes) > payload_budget:
         return NetworkPayloadReadResult(body=None, outcome="too_large")
     return NetworkPayloadReadResult(body=body_bytes, outcome="read")

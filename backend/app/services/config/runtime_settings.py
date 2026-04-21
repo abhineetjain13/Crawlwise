@@ -204,6 +204,10 @@ class CrawlerRuntimeSettings(BaseSettings):
     selector_self_heal_enabled: bool = False
     selector_self_heal_min_confidence: float = 0.55
     selector_self_heal_cache_enabled: bool = False
+    selector_synthesis_max_html_chars: int = 200000
+    raw_json_surface_field_overlap_ratio: float = 0.25
+    raw_json_surface_field_overlap_absolute: int = 2
+    listing_candidate_strong_score_threshold: int = 18
     robots_cache_size: int = 512
     robots_cache_ttl: float = 3600.0
     robots_fetch_user_agent: str = "CrawlerAI"

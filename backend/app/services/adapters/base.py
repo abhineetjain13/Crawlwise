@@ -51,6 +51,9 @@ class BaseAdapter(ABC):
         """
         ...
 
+    def normalize_acquisition_url(self, url: str | None) -> str | None:
+        return url
+
     def _matches_platform_family(self, url: str, html: str) -> bool:
         expected_family = str(self.platform_family or "").strip().lower()
         if not expected_family:

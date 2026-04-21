@@ -68,10 +68,12 @@ class JibeAdapter(BaseAdapter):
         ]
         records = [row for row in normalized if row]
         if "detail" in str(surface or "").lower():
-            target_id = self._extract_job_id_from_url(url)
+            target_id = self._normalize_job_id(self._extract_job_id_from_url(url))
             if target_id:
                 records = [
-                    row for row in records if str(row.get("job_id") or "") == target_id
+                    row
+                    for row in records
+                    if self._normalize_job_id(row.get("job_id")) == target_id
                 ]
         return records
 
@@ -180,6 +182,9 @@ class JibeAdapter(BaseAdapter):
 
     def _extract_job_id_from_url(self, url: str) -> str:
         path = urlparse(url).path
-        match = re.search(r"/jobs/(\d+)", path)
+        match = re.search(r"/jobs/([^/?#]+)", path, re.IGNORECASE)
         return match.group(1) if match else ""
+
+    def _normalize_job_id(self, value: object) -> str:
+        return clean_text(value).strip().lower()
 

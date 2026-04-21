@@ -149,6 +149,53 @@ def test_map_js_state_to_fields_recovers_existing_state_product_fields() -> None
     ]
 
 
+def test_map_js_state_to_fields_ignores_header_payment_state_before_real_product() -> None:
+    js_state_objects = {
+        "__INITIAL_STATE__": {
+            "header": {
+                "paymentMethods": {
+                    "title": "We accept",
+                    "images": [
+                        {"src": "https://cdn.example.com/assets/amex.svg"},
+                        {"src": "https://cdn.example.com/assets/paypal.svg"},
+                    ],
+                }
+            },
+            "catalog": {
+                "selected": {
+                    "product": {
+                        "id": "sku-123",
+                        "name": "Commuter Backpack",
+                        "vendor": {"name": "Urban Carry"},
+                        "handle": "commuter-backpack",
+                        "description": "Weather resistant pack",
+                        "type": "Bags",
+                        "price": "89.50",
+                        "sku": "CB-001",
+                        "availability": "In Stock",
+                        "image": [
+                            "/images/commuter-1.jpg",
+                            "/images/commuter-2.jpg",
+                        ],
+                    }
+                }
+            },
+        }
+    }
+
+    mapped = map_js_state_to_fields(
+        js_state_objects,
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/commuter-backpack",
+    )
+
+    assert mapped["title"] == "Commuter Backpack"
+    assert mapped["image_url"] == "https://store.example.com/images/commuter-1.jpg"
+    assert mapped["additional_images"] == [
+        "https://store.example.com/images/commuter-2.jpg"
+    ]
+
+
 def test_map_network_payloads_to_fields_recovers_workday_job_detail_payload() -> None:
     mapped = map_network_payloads_to_fields(
         [

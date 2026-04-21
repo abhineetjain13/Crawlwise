@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - dependency may be absent in local test
 try:
     from w3lib.html import get_base_url
 except ImportError:  # pragma: no cover - dependency may be absent in local test envs
-    get_base_url = None
+    get_base_url = None  # type: ignore[assignment]
 
 _STATE_SCRIPT_IDS = {"__next_data__": "__NEXT_DATA__", "__nuxt_data__": "__NUXT_DATA__"}
 _EMBEDDED_ASSIGNMENT_NAMES = ("data", "items", "listings", "posts", "products", "records", "results")

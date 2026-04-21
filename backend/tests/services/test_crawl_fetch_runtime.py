@@ -30,11 +30,13 @@ class _FakeResponse:
         *,
         error: Exception | None = None,
         url: str = "https://example.com/api/data.json",
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._body = body
         self._error = error
         self.url = url
         self.body_calls = 0
+        self.headers = headers or {}
 
     async def body(self) -> bytes:
         self.body_calls += 1
@@ -229,6 +231,20 @@ async def test_read_network_payload_body_rejects_oversized_body_before_decode() 
 
 
 @pytest.mark.asyncio
+async def test_read_network_payload_body_rejects_oversized_declared_content_length_before_body_read() -> None:
+    response = _FakeResponse(
+        b"x",
+        headers={"content-length": "3500000"},
+    )
+
+    body = await read_network_payload_body(response)
+
+    assert body.outcome == "read"
+    assert body.body == b"x"
+    assert response.body_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_read_network_payload_body_accepts_large_but_in_budget_body() -> None:
     response = _FakeResponse(b"x" * 600_000)
 
@@ -329,6 +345,35 @@ async def test_http_fetch_populates_platform_family_from_response_url() -> None:
     )
 
     assert result.platform_family == "greenhouse"
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_accepts_legacy_client_builder_keyword() -> None:
+    class _FakeClient:
+        async def get(self, url: str, timeout: float) -> SimpleNamespace:
+            del url, timeout
+            return SimpleNamespace(
+                text="<html><body>ok</body></html>",
+                headers={"content-type": "text/html"},
+                status_code=200,
+                url="https://example.com/products/widget",
+            )
+
+    async def _legacy_client_builder(*, proxy: str | None = None):
+        assert proxy is None
+        return _FakeClient()
+
+    async def _not_blocked(*_args, **_kwargs) -> bool:
+        return False
+
+    result = await http_fetch(
+        "https://example.com/products/widget",
+        5,
+        client_builder=_legacy_client_builder,
+        blocked_html_checker=_not_blocked,
+    )
+
+    assert result.final_url == "https://example.com/products/widget"
 
 
 @pytest.mark.asyncio
@@ -920,4 +965,4 @@ def test_create_browser_identity_builds_generator_lazily(
     identity = browser_identity.create_browser_identity()
 
     assert identity.locale == "en-US"
-    assert captured["locale"] == "fr-FR"
+    assert captured["locale"] == ["fr-FR"]

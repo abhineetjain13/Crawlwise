@@ -180,6 +180,7 @@ async def listing_card_signal_count_impl(page: Any, *, surface: str) -> int:
 
 async def count_matching_selectors(page: Any, *, selectors: list[str]) -> int:
     from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
     matches = 0
     for selector in selectors:
@@ -188,9 +189,11 @@ async def count_matching_selectors(page: Any, *, selectors: list[str]) -> int:
             continue
         try:
             matches += int(await page.locator(normalized).count())
+        except PlaywrightTimeoutError:
+            continue
         except PlaywrightError:
             raise
-        except Exception:
+        except (TypeError, ValueError):
             continue
     return matches
 
@@ -206,12 +209,19 @@ def classify_browser_outcome_impl(
 ) -> str:
     if block_classification.blocked or blocked:
         return "challenge_page"
+    low_content_shell = looks_like_low_content_shell(html, html_bytes=html_bytes)
     if traversal_result is not None and bool(getattr(traversal_result, "activated", False)):
         progress_events = int(getattr(traversal_result, "progress_events", 0) or 0)
+        card_count = int(getattr(traversal_result, "card_count", 0) or 0)
         stop_reason = str(getattr(traversal_result, "stop_reason", "") or "").strip()
-        if progress_events == 0 and stop_reason.endswith(("_not_found", "_no_progress")):
+        if (
+            progress_events == 0
+            and card_count < int(crawler_runtime_settings.listing_min_items)
+            and stop_reason.endswith(("_not_found", "_no_progress"))
+            and low_content_shell
+        ):
             return "traversal_failed"
-    if looks_like_low_content_shell(html, html_bytes=html_bytes):
+    if low_content_shell:
         return "low_content_shell"
     return "usable_content"
 

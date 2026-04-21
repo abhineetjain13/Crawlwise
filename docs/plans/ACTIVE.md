@@ -3,7 +3,7 @@
 **Current:** Listing Recovery and Zara Remediation -> `docs/plans/listing-recovery-and-zara-remediation-plan.md`
 **Status:** IN PROGRESS
 **Started:** 2026-04-21
-**Last slice completed:** Acceptance-led recovery slices 1-4; slice 5 partial
+**Last slice completed:** Slice 5 — Tighten Browser Give-Up Rules Without Growing Recovery Layers
 
 ## Queue
 1. Close Extraction Regressions From Old-to-New Port -- done

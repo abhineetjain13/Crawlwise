@@ -3,7 +3,13 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from app.services.field_value_core import absolute_url, clean_text, finalize_record
+from app.services.field_value_core import (
+    absolute_url,
+    clean_text,
+    extract_currency_code,
+    extract_price_text,
+    finalize_record,
+)
 
 
 def visual_listing_records(
@@ -182,13 +188,13 @@ def _visual_cluster_to_record(
         (
             str(item.get("text") or "")
             for item in cluster
-            if re.search(r"[$€£₹]\s?\d", str(item.get("text") or ""))
+            if extract_price_text(str(item.get("text") or ""))
         ),
         "",
     )
-    price_match = re.search(r"[$€£₹]?\s?[\d,.]+", price_text)
+    extracted_price = extract_price_text(price_text, prefer_last=False, allow_unmarked=True)
     is_job = surface.startswith("job_")
-    if not is_job and not price_match and not _visual_title_matches_url(title, href):
+    if not is_job and not extracted_price and not _visual_title_matches_url(title, href):
         return None
     record = {
         "source_url": page_url,
@@ -198,10 +204,11 @@ def _visual_cluster_to_record(
     }
     if image_url:
         record["image_url"] = image_url
-    if price_match:
-        record["price"] = (
-            price_match.group(0).strip().lstrip("$€£₹").strip().replace(",", "")
-        )
+    if extracted_price:
+        record["price"] = extracted_price
+        currency_code = extract_currency_code(extracted_price)
+        if currency_code:
+            record["currency"] = currency_code
     return finalize_record(record, surface=surface)
 
 

@@ -11,4 +11,12 @@ _STATIC_EXPORTS = load_export_data(str(_EXPORTS_PATH))
 for _name, _value in _STATIC_EXPORTS.items():
     globals()[_name] = _value
 
+
+def __getattr__(name: str) -> Any:
+    try:
+        return _STATIC_EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(name) from exc
+
+
 __all__ = sorted(_STATIC_EXPORTS.keys())

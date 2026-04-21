@@ -112,3 +112,38 @@ def test_classify_blocked_page_uses_configured_challenge_element_markers(
 
     assert classification.blocked is True
     assert "vendor_iframe" in classification.challenge_element_hits
+
+
+def test_classify_blocked_page_preserves_usable_listing_content_despite_vendor_markers() -> None:
+    html = """
+    <html>
+      <head>
+        <title>KitchenAid Food Processors</title>
+        <script>window.vendor = "akamai";</script>
+      </head>
+      <body>
+        <div class="g-recaptcha"></div>
+        <iframe title="captcha"></iframe>
+        <main>
+          <article>
+            <a href="/products/food-processor-1">Food Processor One</a>
+            <span>$129.99</span>
+          </article>
+          <article>
+            <a href="/products/food-processor-2">Food Processor Two</a>
+            <span>$149.99</span>
+          </article>
+          <article>
+            <a href="/products/food-processor-3">Food Processor Three</a>
+            <span>$179.99</span>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    classification = classify_blocked_page(html, 200)
+
+    assert classification.blocked is False
+    assert "akamai" in classification.provider_hits
+    assert "captcha_titled_iframe" in classification.challenge_element_hits

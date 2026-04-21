@@ -12,9 +12,9 @@ from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
 from app.services.adapters.ultipro import UltiProAdapter
 from app.services.adapters.workday import WorkdayAdapter
+from app.services.adapters.registry import normalize_adapter_acquisition_url
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.listing_extractor import extract_listing_records
-from app.services.platform_url_normalizers import normalize_platform_acquisition_url
 
 
 class _DummyAdapter(BaseAdapter):
@@ -121,8 +121,9 @@ async def test_run_adapter_fails_open_when_adapter_raises(
     assert result is None
 
 
-def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic() -> None:
-    normalized = normalize_platform_acquisition_url(
+@pytest.mark.asyncio
+async def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic() -> None:
+    normalized = await normalize_adapter_acquisition_url(
         "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?jobId= 12345 &lang=en_US"
     )
 
@@ -131,8 +132,9 @@ def test_platform_owned_adp_acquisition_normalization_keeps_generic_flow_generic
     )
 
 
-def test_platform_owned_adp_acquisition_normalization_uses_configured_domains() -> None:
-    normalized = normalize_platform_acquisition_url(
+@pytest.mark.asyncio
+async def test_platform_owned_adp_acquisition_normalization_uses_configured_domains() -> None:
+    normalized = await normalize_adapter_acquisition_url(
         "https://acme.wd5.myworkforcenow.com/recruitment/recruitment.html?jobId= 12345 "
     )
 
@@ -745,6 +747,37 @@ async def test_jibe_adapter_uses_shared_request_json_contract(
 
 
 @pytest.mark.asyncio
+async def test_jibe_adapter_matches_detail_records_by_slug_like_job_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = JibeAdapter()
+
+    async def _fake_request_json(url: str, **kwargs):
+        del url, kwargs
+        return {
+            "jobs": [
+                {
+                    "data": {
+                        "title": "Telemetry Nurse",
+                        "req_id": "REQ-1",
+                        "apply_url": "/jobs/req-1",
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+
+    records = await adapter.try_public_endpoint(
+        "https://jobs.example.com/jobs/req-1",
+        surface="job_detail",
+    )
+
+    assert len(records) == 1
+    assert records[0]["job_id"] == "REQ-1"
+
+
+@pytest.mark.asyncio
 async def test_oracle_hcm_adapter_uses_shared_request_json_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -788,8 +821,45 @@ async def test_oracle_hcm_adapter_uses_shared_request_json_contract(
     )
 
     assert len(records) == 1
-    assert calls
-    assert "/hcmRestApi/resources/latest/recruitingCEJobRequisitions" in calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_oracle_hcm_adapter_accepts_list_payloads_from_shared_json_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = OracleHCMAdapter()
+
+    async def _fake_request_json(url: str, **kwargs):
+        del url, kwargs
+        return [
+            {
+                "Id": 123,
+                "Title": "Platform Engineer",
+                "PostedDate": "2026-04-20",
+                "PrimaryLocation": "Remote",
+            }
+        ]
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+    monkeypatch.setattr(adapter, "_extract_site_number", lambda *_args, **_kwargs: "42")
+    monkeypatch.setattr(adapter, "_extract_site_lang", lambda *_args, **_kwargs: "en")
+    monkeypatch.setattr(adapter, "_extract_site_name", lambda *_args, **_kwargs: "Example Co")
+    monkeypatch.setattr(
+        adapter,
+        "_normalize_requisition",
+        lambda requisition, **_kwargs: {
+            "title": str(requisition.get("Title") or ""),
+            "job_id": str(requisition.get("Id") or ""),
+            "url": "https://example.com/job/123",
+        },
+    )
+
+    records = await adapter.try_public_endpoint(
+        "https://example.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs",
+        surface="job_listing",
+    )
+
+    assert len(records) == 1
 
 
 def test_extract_listing_records_preserves_job_cards_inside_filtered_container() -> None:

@@ -192,6 +192,9 @@ def collect_structured_candidates(
         list_item_wrapper = "listitem" in normalized_type and (
             "position" in payload or "item" in payload
         )
+        review_like = any(
+            token in normalized_type for token in ("review", "reviewrating")
+        )
         additional_properties = payload.get("additionalProperty")
         if isinstance(additional_properties, list):
             for item in additional_properties[:20]:
@@ -228,7 +231,10 @@ def collect_structured_candidates(
             ):
                 continue
             canonical = alias_lookup.get(normalized_key)
-            if canonical:
+            if canonical and not (
+                review_like
+                and canonical in {"title", "description", "image_url", "additional_images"}
+            ):
                 add_candidate(
                     candidates,
                     canonical,

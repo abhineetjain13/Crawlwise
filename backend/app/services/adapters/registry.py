@@ -83,6 +83,16 @@ async def resolve_adapter(url: str, html: str) -> BaseAdapter | None:
     return None
 
 
+async def normalize_adapter_acquisition_url(url: str | None) -> str | None:
+    requested_url = str(url or "").strip()
+    if not requested_url:
+        return url
+    adapter = await resolve_adapter(requested_url, "")
+    if adapter is None:
+        return url
+    return adapter.normalize_acquisition_url(url)
+
+
 async def run_adapter(
     url: str, html: str, surface: str | None
 ) -> AdapterResult | None:

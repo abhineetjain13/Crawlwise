@@ -6,6 +6,7 @@ from typing import Any
 import jmespath
 from glom import Coalesce, glom
 
+from app.services.config.extraction_rules import JS_STATE_NON_PRODUCT_IMAGE_HINTS
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.extract.shared_variant_logic import (
     normalized_variant_axis_key,
@@ -223,11 +224,12 @@ def _looks_like_product_payload(value: Any) -> bool:
             "handle",
             "price",
             "sku",
-            "images",
-            "image",
             "availability",
             "category",
             "type",
+            "id",
+            "product_id",
+            "offers",
         )
     ) and any(key in value for key in ("title", "name"))
 
@@ -435,6 +437,10 @@ def _extract_product_images(product: dict[str, Any], *, page_url: str) -> list[s
     seen: set[str] = set()
     for value in values:
         lowered = value.lower()
+        if lowered.endswith(".mp4") or any(
+            token in lowered for token in JS_STATE_NON_PRODUCT_IMAGE_HINTS
+        ):
+            continue
         if lowered in seen:
             continue
         seen.add(lowered)

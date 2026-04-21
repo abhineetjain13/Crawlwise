@@ -284,7 +284,7 @@ async def _run_one(site: dict, run_id: int, timeout_seconds: int) -> dict:
             result["ok"] = not missing_fields
             if missing_fields:
                 result["issue"] = f"Missing expected fields: {missing_fields}"
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         result["ok"] = False
         result["error"] = f"{type(exc).__name__}: {exc}"
     finally:

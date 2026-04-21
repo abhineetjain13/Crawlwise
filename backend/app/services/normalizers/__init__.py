@@ -24,12 +24,29 @@ _INTEGER_FIELDS = {
     "stock_quantity",
     "variant_count",
 }
-_LIST_TEXT_FIELDS = {"additional_images", "available_sizes", "option1_values", "option2_values", "tags"}
+_LIST_TEXT_FIELDS = {
+    "additional_images",
+    "available_sizes",
+    "option1_values",
+    "option2_values",
+    "tags",
+}
 _BOOLEAN_FIELDS = {"remote"}
-_NUMERIC_TEXT_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
+_NUMERIC_TEXT_RE = re.compile(r"[-+]?\d[\d.,]*")
+_CURRENCY_CONTEXT_RE = re.compile(
+    r"[$€£¥₹]|(?:^|\b)(?:price|sale|now|from|starting(?:\s+at)?|mrp|msrp|cost)\b",
+    re.I,
+)
 _AVAILABILITY_TOKENS = {
     "in_stock": ("in stock", "instock", "available", "ready to ship"),
-    "limited_stock": ("limited stock", "limitedstock", "low stock", "lowstock", "only", "left in stock"),
+    "limited_stock": (
+        "limited stock",
+        "limitedstock",
+        "low stock",
+        "lowstock",
+        "only",
+        "left in stock",
+    ),
     "out_of_stock": ("out of stock", "outofstock", "oos", "sold out", "unavailable"),
     "preorder": ("pre-order", "preorder", "backorder", "back-order"),
 }
@@ -81,10 +98,23 @@ def normalize_decimal_price(
     text = _normalize_text(value)
     if not text:
         return None
-    match = _NUMERIC_TEXT_RE.search(text.replace(",", ""))
+    if isinstance(value, str):
+        stripped = _canonicalize_decimal_candidate(text)
+        if stripped is None:
+            return None
+        if (
+            not interpret_integral_as_cents
+            and "." not in stripped
+            and len(re.sub(r"\D+", "", stripped)) <= 3
+            and _CURRENCY_CONTEXT_RE.search(text) is None
+        ):
+            return None
+    match = _NUMERIC_TEXT_RE.search(text)
     if match is None:
         return None
-    candidate = match.group(0).replace(",", "")
+    candidate = _canonicalize_decimal_candidate(match.group(0))
+    if candidate is None:
+        return None
     try:
         decimal = Decimal(candidate)
     except (InvalidOperation, ValueError):
@@ -92,6 +122,26 @@ def normalize_decimal_price(
     if interpret_integral_as_cents and "." not in candidate and len(candidate) >= 3:
         decimal = decimal / Decimal("100")
     return format(decimal, "f")
+
+
+def _canonicalize_decimal_candidate(value: str) -> str | None:
+    text = _normalize_text(value)
+    if not text:
+        return None
+    match = _NUMERIC_TEXT_RE.search(text)
+    if match is None:
+        return None
+    candidate = match.group(0)
+    if "," in candidate and "." in candidate:
+        if candidate.rfind(",") > candidate.rfind("."):
+            return candidate.replace(".", "").replace(",", ".")
+        return candidate.replace(",", "")
+    if "," in candidate:
+        head, tail = candidate.rsplit(",", 1)
+        if tail.isdigit() and len(tail) in {1, 2} and re.search(r"\d", head):
+            return head.replace(",", "").replace(".", "") + "." + tail
+        return candidate.replace(",", "")
+    return candidate
 
 
 def _normalize_int(value: object) -> int | str:
@@ -144,7 +194,11 @@ def normalize_value(field_name: str, value: object) -> object:
     if isinstance(value, str):
         return _normalize_text(value)
     if isinstance(value, list):
-        return [normalize_value(normalized_field, item) for item in value if item not in (None, "", [], {})]
+        return [
+            normalize_value(normalized_field, item)
+            for item in value
+            if item not in (None, "", [], {})
+        ]
     if isinstance(value, dict):
         return {
             str(key): normalize_value(str(key), item)

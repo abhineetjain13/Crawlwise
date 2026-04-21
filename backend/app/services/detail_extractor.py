@@ -10,12 +10,20 @@ from bs4 import BeautifulSoup
 from selectolax.lexbor import LexborHTMLParser
 
 from app.services.confidence import score_record_confidence
+from app.services.config.field_mappings import (
+    DOM_HIGH_VALUE_FIELDS,
+    DOM_OPTIONAL_CUE_FIELDS,
+    ECOMMERCE_DETAIL_JS_STATE_FIELDS,
+    VARIANT_DOM_FIELD_NAMES,
+)
 from app.services.config.extraction_rules import (
+    DETAIL_TITLE_SOURCE_RANKS,
     EXTRACTION_RULES,
     LISTING_ALT_TEXT_TITLE_PATTERN,
     LISTING_ACTION_NOISE_PATTERNS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_MERCHANDISING_TITLE_PREFIXES,
+    SOURCE_PRIORITY,
     LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_TITLE_CTA_TITLES,
     LISTING_WEAK_TITLES,
@@ -30,6 +38,7 @@ from app.services.extraction_context import (
 )
 from app.services.structured_sources import harvest_js_state_objects
 from app.services.field_value_core import (
+    LONG_TEXT_FIELDS,
     PRICE_RE,
     RATING_RE,
     REVIEW_COUNT_RE,
@@ -37,6 +46,8 @@ from app.services.field_value_core import (
     STRUCTURED_OBJECT_LIST_FIELDS,
     clean_text,
     coerce_field_value,
+    extract_currency_code,
+    extract_price_text,
     finalize_record,
     surface_alias_lookup,
     surface_fields,
@@ -57,13 +68,13 @@ from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.js_state_helpers import select_variant
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 from app.services.extract.shared_variant_logic import (
-    infer_variant_group_name,
+    iter_variant_choice_groups,
+    iter_variant_select_groups,
     normalized_variant_axis_key,
     resolve_variants,
+    resolve_variant_group_name,
     split_variant_axes,
     variant_dom_cues_present,
-    variant_node_is_noise,
-    variant_value_is_noise,
 )
 from app.services.extract.detail_tiers import (
     DetailTierState,
@@ -75,90 +86,24 @@ from app.services.extract.detail_tiers import (
 )
 
 logger = logging.getLogger(__name__)
-
-_SOURCE_PRIORITY = (
-    "adapter",
-    "network_payload",
-    "json_ld",
-    "microdata",
-    "opengraph",
-    "embedded_json",
-    "js_state",
-    "dom_h1",
-    "dom_canonical",
-    "selector_rule",
-    "dom_selector",
-    "dom_sections",
-    "dom_images",
-    "dom_text",
-)
-_DOM_HIGH_VALUE_FIELDS: dict[str, frozenset[str]] = {
-    "ecommerce_detail": frozenset(
-        {
-            "description",
-            "specifications",
-        }
-    ),
-    "job_detail": frozenset(
-        {
-            "description",
-            "responsibilities",
-            "qualifications",
-        }
-    ),
-}
-_DOM_OPTIONAL_CUE_FIELDS: dict[str, frozenset[str]] = {
-    "ecommerce_detail": frozenset({"features", "materials", "care", "dimensions"}),
-    "job_detail": frozenset({"benefits", "skills", "requirements"}),
-}
-
-_ECOMMERCE_DETAIL_JS_STATE_FIELDS = frozenset(
+_LOW_SIGNAL_LONG_TEXT_VALUES = frozenset(
     {
-        "additional_images",
-        "availability",
-        "available_sizes",
-        "brand",
-        "color",
-        "currency",
-        "image_count",
-        "image_url",
-        "option1_name",
-        "option1_values",
-        "option2_name",
-        "option2_values",
-        "original_price",
-        "price",
-        "product_id",
-        "selected_variant",
-        "size",
-        "sku",
-        "stock_quantity",
-        "title",
-        "variant_axes",
-        "variant_count",
-        "variants",
+        "description",
+        "details",
+        "normal",
+        "overview",
+        "product summary",
+        "specifications",
     }
 )
-_VARIANT_DOM_FIELD_NAMES = (
-    "available_sizes",
-    "option1_name",
-    "option1_values",
-    "option2_name",
-    "option2_values",
-    "variant_axes",
-    "variant_count",
-    "variants",
-)
-
 
 def _field_source_rank(surface: str, field_name: str, source: str | None) -> int:
     if str(surface or "").strip().lower() == "ecommerce_detail":
         if field_name == "title":
-            return {"adapter": 0, "network_payload": 1, "json_ld": 2, "microdata": 3, "opengraph": 4, "embedded_json": 5, "js_state": 6, "dom_h1": 10, "dom_canonical": 11, "selector_rule": 12, "dom_selector": 13, "dom_sections": 14, "dom_images": 15, "dom_text": 16}.get(str(source or ""), 20)
-        if field_name in _ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
+            return DETAIL_TITLE_SOURCE_RANKS.get(str(source or ""), 20)
+        if field_name in ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2
     return 100 + _SOURCE_PRIORITY_RANK.get(source, len(_SOURCE_PRIORITY_RANK))
-
 
 def _detail_title_is_noise(title: object) -> bool:
     cleaned = clean_text(title)
@@ -180,7 +125,6 @@ def _detail_title_is_noise(title: object) -> bool:
     if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
         return True
     return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
-
 
 def _detail_title_from_url(page_url: str) -> str | None:
     path_segments = [
@@ -220,7 +164,11 @@ def _apply_dom_fallbacks(
     h1_title = text_or_none(h1.text(separator=" ", strip=True) if h1 else "")
     page_title_text = text_or_none(page_title.text(separator=" ", strip=True) if page_title else "")
     title = next(
-        (candidate for candidate in (h1_title, page_title_text) if candidate and not _detail_title_is_noise(candidate)),
+        (
+            candidate
+            for candidate in (h1_title, page_title_text)
+            if candidate and not _detail_title_is_noise(candidate)
+        ),
         None,
     )
     if title:
@@ -247,17 +195,17 @@ def _apply_dom_fallbacks(
         from app.services.field_value_core import absolute_url
 
         _add_sourced_candidate(
-                candidates,
-                candidate_sources,
-                field_sources,
-                "url",
-                absolute_url(page_url, canonical.get("href")),
-                source="dom_canonical",
+            candidates,
+            candidate_sources,
+            field_sources,
+            "url",
+            absolute_url(page_url, canonical.get("href")),
+            source="dom_canonical",
         )
     images = extract_page_images(
         soup,
         page_url,
-        exclude_linked_detail_images=True,
+        exclude_linked_detail_images=False,
         surface=surface,
     )
     if images:
@@ -296,16 +244,30 @@ def _apply_dom_fallbacks(
         clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
     )
     if "price" in fields and not candidates.get("price"):
-        price_match = PRICE_RE.search(body_text)
-        if price_match:
+        price_text = extract_price_text(body_text, prefer_last=False)
+        if price_text:
             _add_sourced_candidate(
                 candidates,
                 candidate_sources,
                 field_sources,
                 "price",
-                price_match.group(0),
+                price_text,
                 source="dom_text",
             )
+    if "currency" in fields and not candidates.get("currency"):
+        for price_value in list(candidates.get("price") or []):
+            currency_code = extract_currency_code(price_value)
+            if not currency_code:
+                continue
+            _add_sourced_candidate(
+                candidates,
+                candidate_sources,
+                field_sources,
+                "currency",
+                currency_code,
+                source="dom_text",
+            )
+            break
     if "review_count" in fields and not candidates.get("review_count"):
         review_match = REVIEW_COUNT_RE.search(body_text)
         if review_match:
@@ -351,6 +313,8 @@ def _add_sourced_candidate(
     *,
     source: str,
 ) -> None:
+    if _long_text_candidate_is_noise(field_name, value):
+        return
     before = len(candidates.get(field_name, []))
     add_candidate(candidates, field_name, value)
     after = len(candidates.get(field_name, []))
@@ -360,6 +324,22 @@ def _add_sourced_candidate(
     bucket = field_sources.setdefault(field_name, [])
     if source not in bucket:
         bucket.append(source)
+
+
+def _long_text_candidate_is_noise(field_name: str, value: object) -> bool:
+    if field_name not in LONG_TEXT_FIELDS:
+        return False
+    cleaned = clean_text(value)
+    lowered = cleaned.lower()
+    if not lowered:
+        return True
+    if lowered in _LOW_SIGNAL_LONG_TEXT_VALUES:
+        return True
+    if field_name in {"description", "specifications"} and lowered.startswith(
+        ("check the details", "product summary")
+    ):
+        return True
+    return len(cleaned.split()) < 2
 
 def _collect_record_candidates(
     record: dict[str, Any],
@@ -437,10 +417,7 @@ def _primary_source_for_record(
         )
     return "structured_dom"
 
-
-_SOURCE_PRIORITY_RANK = {
-    source_name: index for index, source_name in enumerate(_SOURCE_PRIORITY)
-}
+_SOURCE_PRIORITY_RANK = {source_name: index for index, source_name in enumerate(SOURCE_PRIORITY)}
 
 def _ordered_candidates_for_field(
     surface: str,
@@ -509,7 +486,6 @@ def _selector_self_heal_config(
         ),
     }
 
-
 def _materialize_record(
     *,
     page_url: str,
@@ -523,10 +499,7 @@ def _materialize_record(
     tier_name: str,
     completed_tiers: list[str],
 ) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "source_url": page_url,
-        "url": page_url,
-    }
+    record: dict[str, Any] = {"source_url": page_url, "url": page_url}
     selected_field_sources: dict[str, str] = {}
     for field_name in fields:
         ordered_candidates = _ordered_candidates_for_field(
@@ -567,20 +540,13 @@ def _materialize_record(
     )
     selector_self_heal = _selector_self_heal_config(extraction_runtime_snapshot)
     record["_confidence"] = confidence
-    record["_extraction_tiers"] = {
-        "completed": list(completed_tiers),
-        "current": tier_name,
-    }
+    record["_extraction_tiers"] = {"completed": list(completed_tiers), "current": tier_name}
     record["_self_heal"] = {
         "enabled": bool(selector_self_heal["enabled"]),
         "triggered": False,
         "threshold": float(selector_self_heal["threshold"]),
     }
     return finalize_record(record, surface=surface)
-
-
-
-
 def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
     primary_image = text_or_none(record.get("image_url"))
     raw_additional_images = record.get("additional_images")
@@ -611,7 +577,7 @@ def _dedupe_primary_and_additional_images(record: dict[str, Any]) -> None:
 
 
 def _variant_fields_are_empty(candidates: dict[str, list[object]]) -> bool:
-    return not any(candidates.get(field_name) for field_name in _VARIANT_DOM_FIELD_NAMES)
+    return not any(candidates.get(field_name) for field_name in VARIANT_DOM_FIELD_NAMES)
 
 
 def _should_collect_dom_variants(candidates: dict[str, list[object]]) -> bool:
@@ -620,108 +586,65 @@ def _should_collect_dom_variants(candidates: dict[str, list[object]]) -> bool:
 
 def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
     option_groups: list[dict[str, object]] = []
-    for select in soup.select(
-        "select[name*='variant' i], select[name*='option' i], "
-        "select[name*='size' i], select[name*='color' i], "
-        "select[id*='variant' i], select[id*='option' i], "
-        "select[id*='size' i], select[id*='color' i], "
-        "select[aria-label*='size' i], select[aria-label*='color' i], "
-        "select[class*='variant' i], select[data-option], select[data-option-name]"
-    )[:4]:
-        raw_name = (
-            select.get("data-option-name")
-            or select.get("aria-label")
-            or select.get("name")
-            or select.get("id")
-            or ""
-        )
+    for select in iter_variant_select_groups(soup):
+        cleaned_name = resolve_variant_group_name(select)
+        if not cleaned_name:
+            continue
         values = [
             clean_text(option.get_text(" ", strip=True))
             for option in select.find_all("option")
             if clean_text(option.get_text(" ", strip=True))
+            and clean_text(option.get_text(" ", strip=True)).lower()
+            not in {"select", "choose", "option", "size guide"}
             and str(option.get("value") or "").strip().lower() not in {"", "select", "choose"}
         ]
         deduped_values = list(dict.fromkeys(values))
         if len(deduped_values) >= 2:
-            option_groups.append(
-                {
-                    "name": clean_text(str(raw_name).replace("_", " ").replace("-", " ")),
-                    "values": deduped_values,
-                }
-            )
+            option_groups.append({"name": cleaned_name, "values": deduped_values})
 
-    for container in soup.select(
-        "[data-option-name], [aria-label*='size' i], [aria-label*='color' i], "
-        "[class*='swatch' i], [class*='variant' i], [class*='option' i], "
-        "[class*='color-selector' i], [class*='size-selector' i], "
-        "[data-testid*='swatch' i], [role='radiogroup'], "
-        "[data-qa-action='select-color'], [data-qa-action*='size-selector']"
-    )[:8]:
-        raw_name = (
-            container.get("data-option-name")
-            or container.get("aria-label")
-            or container.get("data-testid")
-            or container.get("data-qa-action")
-            or infer_variant_group_name(container)
-            or ""
-        )
+    for container in iter_variant_choice_groups(soup):
+        cleaned_name = resolve_variant_group_name(container)
+        if not cleaned_name:
+            continue
         values: list[str] = []
         for node in container.select(
-            "[data-value], [data-option-value], [aria-label], button, label, span, input"
+            "[data-value], [data-option-value], [aria-label], input[value], [role='radio']"
         )[:24]:
-            if variant_node_is_noise(node):
-                continue
             raw_value = (
                 node.get("data-value")
                 or node.get("data-option-value")
                 or node.get("aria-label")
                 or node.get("value")
-                or node.get_text(" ", strip=True)
             )
             cleaned = clean_text(raw_value)
-            if variant_value_is_noise(cleaned):
+            if (
+                not cleaned
+                or cleaned.lower() in {"select", "choose", "option", "size guide"}
+                or re.fullmatch(r"\(\d+\)", cleaned)
+                or re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", cleaned)
+            ):
                 continue
             values.append(cleaned)
         deduped_values = list(dict.fromkeys(values))
         if len(deduped_values) >= 2:
-            option_groups.append(
-                {
-                    "name": clean_text(
-                        str(raw_name or infer_variant_group_name(container))
-                        .replace("_", " ")
-                        .replace("-", " ")
-                    ),
-                    "values": deduped_values,
-                }
-            )
+            option_groups.append({"name": cleaned_name, "values": deduped_values})
 
     deduped_groups: list[dict[str, object]] = []
     merged_groups: dict[str, dict[str, object]] = {}
     for group in option_groups:
-        values = [
-            clean_text(value)
-            for value in list(group.get("values") or [])
-            if not variant_value_is_noise(value)
-        ]
+        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
         if len(values) < 2:
             continue
         name = clean_text(group.get("name"))
         axis_key = normalized_variant_axis_key(name)
-        if not axis_key:
+        if axis_key not in {"color", "size"}:
             continue
-        merged = merged_groups.setdefault(
-            axis_key,
-            {"name": name or axis_key, "values": []},
-        )
+        merged = merged_groups.setdefault(axis_key, {"name": name or axis_key, "values": []})
         if len(name) > len(str(merged.get("name") or "")):
             merged["name"] = name
         merged["values"] = list(dict.fromkeys([*list(merged.get("values") or []), *values]))
     for group in merged_groups.values():
-        values = [
-            clean_text(value)
-            for value in list(group.get("values") or [])
-            if not variant_value_is_noise(value)
-        ]
+        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
         if len(values) < 2:
             continue
         deduped_groups.append({"name": clean_text(group.get("name")), "values": values})
@@ -772,11 +695,7 @@ def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
         variant_axes,
         always_selectable_axes=frozenset({"size"}),
     )
-    resolved_variants = (
-        resolve_variants(selectable_axes or variant_axes, variants)
-        if variants
-        else []
-    )
+    resolved_variants = resolve_variants(selectable_axes or variant_axes, variants) if variants else []
     selected_variant = select_variant(resolved_variants, page_url="")
     for axis_name, value in single_value_attributes.items():
         record.setdefault(axis_name, value)
@@ -888,7 +807,7 @@ def _requires_dom_completion(
         ):
             return True
     alias_lookup = surface_alias_lookup(surface, requested_fields)
-    high_value_fields = set(_DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
+    high_value_fields = set(DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
     advertised_dom_sections = {
         normalized
         for label in extract_heading_sections(soup).keys()
@@ -912,7 +831,7 @@ def _requires_dom_completion(
         return True
     optional_cue_fields = {
         field_name
-        for field_name in set(_DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ())
+        for field_name in set(DOM_OPTIONAL_CUE_FIELDS.get(normalized_surface) or ())
         if record.get(field_name) in (None, "", [], {})
     }
     dom_patterns = dict(EXTRACTION_RULES.get("dom_patterns") or {})

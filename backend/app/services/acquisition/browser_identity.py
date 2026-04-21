@@ -25,6 +25,11 @@ def _host_os_fingerprint_arg() -> str:
 
 _HOST_OS = _host_os_fingerprint_arg()
 _FINGERPRINT_GENERATOR: FingerprintGenerator | None = None
+_FINGERPRINT_GENERATOR_CONFIG: tuple[
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+] | None = None
 _FINGERPRINT_GENERATOR_LOCK = _threading.Lock()
 _HEADER_DROP_KEYS = {
     "accept-encoding",
@@ -111,18 +116,53 @@ def clear_browser_identity_cache() -> None:
         _RUN_BROWSER_IDENTITIES.clear()
 
 
+def _normalize_fingerprint_setting(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        normalized = str(value).strip()
+        return (normalized,) if normalized else ()
+    normalized_values: list[str] = []
+    for item in list(value or []):
+        normalized = str(item).strip()
+        if normalized:
+            normalized_values.append(normalized)
+    return tuple(normalized_values)
+
+
 def _fingerprint_generator() -> FingerprintGenerator:
-    global _FINGERPRINT_GENERATOR
-    if _FINGERPRINT_GENERATOR is not None:
+    global _FINGERPRINT_GENERATOR, _FINGERPRINT_GENERATOR_CONFIG
+    if _FINGERPRINT_GENERATOR is not None and not isinstance(
+        _FINGERPRINT_GENERATOR,
+        FingerprintGenerator,
+    ):
+        return _FINGERPRINT_GENERATOR
+    config = (
+        _normalize_fingerprint_setting(
+            crawler_runtime_settings.fingerprint_browser
+        ),
+        _normalize_fingerprint_setting(
+            crawler_runtime_settings.fingerprint_device
+        ),
+        _normalize_fingerprint_setting(
+            crawler_runtime_settings.fingerprint_locale
+        ),
+    )
+    if (
+        _FINGERPRINT_GENERATOR is not None
+        and _FINGERPRINT_GENERATOR_CONFIG == config
+    ):
         return _FINGERPRINT_GENERATOR
     with _FINGERPRINT_GENERATOR_LOCK:
-        if _FINGERPRINT_GENERATOR is None:
+        if (
+            _FINGERPRINT_GENERATOR is None
+            or _FINGERPRINT_GENERATOR_CONFIG != config
+        ):
             _FINGERPRINT_GENERATOR = FingerprintGenerator(
-                browser=crawler_runtime_settings.fingerprint_browser,
+                browser=list(config[0]),
                 os=[_HOST_OS],
-                device=crawler_runtime_settings.fingerprint_device,
-                locale=crawler_runtime_settings.fingerprint_locale,
+                device=list(config[1]),
+                locale=list(config[2]),
             )
+            _FINGERPRINT_GENERATOR_CONFIG = config
     return _FINGERPRINT_GENERATOR
 
 

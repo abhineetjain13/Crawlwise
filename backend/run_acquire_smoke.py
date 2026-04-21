@@ -109,7 +109,7 @@ async def _run_one(run_id: int, name: str, url: str, timeout_seconds: int) -> di
             "browser_diagnostics": dict(result.browser_diagnostics or {}),
             "seconds": round(time.perf_counter() - started, 2),
         }
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         return {
             "name": name,
             "url": url,

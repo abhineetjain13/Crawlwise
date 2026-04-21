@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from json import loads as parse_json
@@ -29,6 +30,8 @@ from bs4 import BeautifulSoup, Comment, Tag
 from app.services.record_export_service import render_markdown_block
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 
 def _require_present_value(value: Any) -> Any:

@@ -9,8 +9,8 @@ from app.services.config.runtime_settings import crawler_runtime_settings
 
 AddressFamilyPreference = Literal["auto", "ipv4", "ipv6"]
 
-_IPV4_LOCAL_ADDRESS = "0.0.0.0"
-_IPV6_LOCAL_ADDRESS = "::"
+_IPV4_LOCAL_ADDRESS = "0.0.0.0"  # nosec B104
+_IPV6_LOCAL_ADDRESS = "::"  # nosec B104
 
 
 def address_family_preference() -> AddressFamilyPreference:

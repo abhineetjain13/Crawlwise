@@ -4,27 +4,12 @@ import itertools
 import re
 from typing import Any
 
-from app.services.field_value_core import clean_text
-
-
-_AXIS_ALIASES = {
-    "colour": "color",
-    "colourway": "color",
-    "colorway": "color",
-    "size_name": "size",
-}
-_VARIANT_DOM_CUE_SELECTORS = (
-    "select[name*='variant' i], select[name*='option' i], select[name*='size' i], "
-    "select[name*='color' i], select[id*='variant' i], select[id*='option' i], "
-    "select[id*='size' i], select[id*='color' i], select[aria-label*='size' i], "
-    "select[aria-label*='color' i], select[class*='variant' i], select[data-option], "
-    "select[data-option-name]",
-    "[data-option-name], [aria-label*='size' i], [aria-label*='color' i], "
-    "[class*='swatch' i], [class*='variant' i], [class*='option' i], "
-    "[class*='color-selector' i], [class*='size-selector' i], "
-    "[data-testid*='swatch' i], [role='radiogroup'], "
-    "[data-qa-action='select-color'], [data-qa-action*='size-selector']",
+from app.services.config.extraction_rules import (
+    VARIANT_AXIS_ALIASES,
+    VARIANT_CHOICE_GROUP_SELECTOR,
+    VARIANT_SELECT_GROUP_SELECTOR,
 )
+from app.services.field_value_core import clean_text
 
 
 def normalized_variant_axis_key(value: object) -> str:
@@ -32,18 +17,26 @@ def normalized_variant_axis_key(value: object) -> str:
     if not text:
         return ""
     text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
-    return _AXIS_ALIASES.get(text, text)
+    aliases = VARIANT_AXIS_ALIASES if isinstance(VARIANT_AXIS_ALIASES, dict) else {}
+    return str(aliases.get(text) or text)
 
 
 def variant_dom_cues_present(soup: Any) -> bool:
-    return any(soup.select(selector) for selector in _VARIANT_DOM_CUE_SELECTORS)
+    return bool(iter_variant_select_groups(soup) or iter_variant_choice_groups(soup))
 
 
 def infer_variant_group_name(node: Any) -> str:
     if not hasattr(node, "get"):
         return ""
     parts: list[str] = []
-    for attr_name in ("data-option-name", "aria-label", "data-testid", "data-qa-action", "id", "name", "class"):
+    for attr_name in (
+        "data-option-name",
+        "data-testid",
+        "data-qa-action",
+        "id",
+        "name",
+        "class",
+    ):
         value = node.get(attr_name)
         if isinstance(value, list):
             parts.extend(str(item) for item in value if item)
@@ -57,21 +50,56 @@ def infer_variant_group_name(node: Any) -> str:
     return ""
 
 
-def variant_value_is_noise(value: object) -> bool:
-    cleaned = clean_text(value)
-    lowered = cleaned.lower()
-    return not cleaned or lowered in {"select", "choose", "option", "size guide"} or len(cleaned) > 60 or bool(re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", cleaned))
+def resolve_variant_group_name(node: Any) -> str:
+    if not hasattr(node, "get"):
+        return ""
+    inferred_name = infer_variant_group_name(node)
+    raw_candidates: list[object] = [
+        node.get(attr_name)
+        for attr_name in (
+            "data-option-name",
+            "aria-label",
+            "name",
+            "id",
+            "data-testid",
+            "data-qa-action",
+        )
+        if node.get(attr_name) not in (None, "", [], {})
+    ]
+    label = node.find_parent("label") if hasattr(node, "find_parent") else None
+    if label is not None:
+        raw_candidates.append(label.get_text(" ", strip=True))
+    fieldset = node.find_parent("fieldset") if hasattr(node, "find_parent") else None
+    if fieldset is not None:
+        legend = fieldset.find("legend")
+        if legend is not None:
+            raw_candidates.append(legend.get_text(" ", strip=True))
+    for raw_name in [*raw_candidates, inferred_name]:
+        cleaned_name = clean_text(str(raw_name).replace("_", " ").replace("-", " "))
+        axis_key = normalized_variant_axis_key(cleaned_name)
+        if axis_key in {"color", "size"}:
+            return cleaned_name
+    return clean_text(inferred_name)
 
 
-def variant_node_is_noise(node: Any) -> bool:
-    probe_parts: list[str] = []
-    for attr_name in ("data-qa-action", "data-testid", "aria-label", "class", "title"):
-        value = node.get(attr_name)
-        if isinstance(value, list):
-            probe_parts.extend(str(item) for item in value if item)
-        elif value not in (None, "", [], {}):
-            probe_parts.append(str(value))
-    return "copy" in " ".join(probe_parts).lower()
+def iter_variant_select_groups(soup: Any) -> list[Any]:
+    groups: list[Any] = []
+    for select in soup.select(VARIANT_SELECT_GROUP_SELECTOR):
+        if resolve_variant_group_name(select):
+            groups.append(select)
+        if len(groups) >= 4:
+            break
+    return groups
+
+
+def iter_variant_choice_groups(soup: Any) -> list[Any]:
+    groups: list[Any] = []
+    for container in soup.select(VARIANT_CHOICE_GROUP_SELECTOR):
+        if resolve_variant_group_name(container):
+            groups.append(container)
+        if len(groups) >= 8:
+            break
+    return groups
 
 
 def split_variant_axes(

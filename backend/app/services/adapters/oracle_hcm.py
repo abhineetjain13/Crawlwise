@@ -78,12 +78,12 @@ class OracleHCMAdapter(BaseAdapter):
                     proxy=proxy,
                     timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,
                 )
-                if not isinstance(payload, dict):
+                if not isinstance(payload, (dict, list)):
                     break
             except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
                 break
 
-            items = payload.get("items") if isinstance(payload, dict) else []
+            items = payload.get("items") if isinstance(payload, dict) else payload
             if not isinstance(items, list) or not items:
                 break
 
@@ -94,7 +94,7 @@ class OracleHCMAdapter(BaseAdapter):
                     item.get("requisitionList") if isinstance(item, dict) else None
                 )
                 if not isinstance(requisitions, list):
-                    continue
+                    requisitions = [item] if isinstance(item, dict) else []
                 for requisition in requisitions:
                     normalized = self._normalize_requisition(
                         requisition,

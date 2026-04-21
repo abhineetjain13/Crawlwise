@@ -4,6 +4,7 @@ import asyncio
 import logging
 import weakref
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.core.config import settings
@@ -11,6 +12,7 @@ from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.tasks import process_run_task
 from app.services._batch_runtime import process_run as _batch_process_run
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
     CONTROL_REQUEST_PAUSE,
@@ -27,7 +29,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 VERDICT_SUCCESS, VERDICT_PARTIAL, VERDICT_BLOCKED = "success", "partial", "blocked"
-VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = (
+VERDICT_ERROR, VERDICT_SCHEMA_MISS, VERDICT_LISTING_FAILED, VERDICT_EMPTY = (
+    "error",
     "schema_miss",
     "listing_detection_failed",
     "empty",
@@ -74,6 +77,91 @@ def _clear_local_run_task(
     if expected_task is not None and task is not expected_task:
         return
     _local_run_tasks.pop(run_id, None)
+
+
+def _as_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _heartbeat_checkpoint(
+    *,
+    last_heartbeat_at: datetime | None,
+    updated_at: datetime | None,
+    created_at: datetime | None,
+) -> datetime | None:
+    return (
+        _as_utc_datetime(last_heartbeat_at)
+        or _as_utc_datetime(updated_at)
+        or _as_utc_datetime(created_at)
+    )
+
+
+def _summary_task_id(summary: object) -> str | None:
+    if not isinstance(summary, dict):
+        return None
+    task_id = str(summary.get(CELERY_TASK_ID_KEY) or "").strip()
+    return task_id or None
+
+
+def _should_recover_stale_run(
+    *,
+    status: CrawlStatus,
+    summary: object,
+    last_heartbeat_at: datetime | None,
+    updated_at: datetime | None,
+    created_at: datetime | None,
+    now: datetime | None = None,
+) -> bool:
+    if status == CrawlStatus.PENDING and _summary_task_id(summary):
+        return True
+    reference_time = _heartbeat_checkpoint(
+        last_heartbeat_at=last_heartbeat_at,
+        updated_at=updated_at,
+        created_at=created_at,
+    )
+    if reference_time is None:
+        return True
+    current_time = now or datetime.now(UTC)
+    return (
+        current_time - reference_time
+    ).total_seconds() >= crawler_runtime_settings.stalled_run_threshold_seconds
+
+
+async def _recover_stale_local_run(
+    session: AsyncSession,
+    run_id: int,
+    *,
+    target_status: CrawlStatus,
+    error_message: str,
+    extraction_verdict: str,
+    log_level: str,
+) -> bool:
+    run = await session.get(CrawlRun, run_id)
+    if run is None:
+        return False
+    if run.status_value in TERMINAL_STATUSES:
+        if _get_task_id(run) is None:
+            return False
+        _set_task_id(run, None)
+        await session.commit()
+        return False
+    if run.status_value != CrawlStatus.PENDING and target_status == CrawlStatus.KILLED:
+        return False
+    if run.status_value != CrawlStatus.RUNNING and target_status == CrawlStatus.FAILED:
+        return False
+    _set_task_id(run, None)
+    run.update_summary(
+        error=error_message,
+        extraction_verdict=extraction_verdict,
+    )
+    update_run_status(run, target_status)
+    await log_event(session, run.id, log_level, error_message)
+    await session.commit()
+    return True
 
 
 async def _load_run_with_normalized_status(
@@ -286,7 +374,14 @@ async def recover_stale_local_runs(session: AsyncSession) -> int:
         return 0
 
     result = await session.execute(
-        select(CrawlRun).where(
+        select(
+            CrawlRun.id,
+            CrawlRun.status,
+            CrawlRun.result_summary,
+            CrawlRun.last_heartbeat_at,
+            CrawlRun.updated_at,
+            CrawlRun.created_at,
+        ).where(
             CrawlRun.status.in_(
                 [
                     CrawlStatus.PENDING.value,
@@ -296,24 +391,44 @@ async def recover_stale_local_runs(session: AsyncSession) -> int:
         )
     )
     recovered = 0
-    for run in result.scalars().all():
-        _clear_local_run_task(int(run.id))
-        _set_task_id(run, None)
-        if run.status_value == CrawlStatus.PENDING:
-            update_run_status(run, CrawlStatus.KILLED)
-            run.update_summary(
-                error="Local dev runner was interrupted before processing began",
-                extraction_verdict=VERDICT_BLOCKED,
+    for (
+        run_id,
+        status_value,
+        result_summary,
+        last_heartbeat_at,
+        updated_at,
+        created_at,
+    ) in result.all():
+        status = CrawlStatus(str(status_value or "").strip().lower())
+        if not _should_recover_stale_run(
+            status=status,
+            summary=result_summary,
+            last_heartbeat_at=last_heartbeat_at,
+            updated_at=updated_at,
+            created_at=created_at,
+        ):
+            continue
+        _clear_local_run_task(int(run_id))
+        if status == CrawlStatus.PENDING:
+            recovered += int(
+                await _recover_stale_local_run(
+                    session,
+                    int(run_id),
+                    target_status=CrawlStatus.KILLED,
+                    error_message="Local dev runner was interrupted before processing began",
+                    extraction_verdict=VERDICT_BLOCKED,
+                    log_level="warning",
+                )
             )
-            await session.commit()
-        else:
-            await _mark_run_failed(
+            continue
+        recovered += int(
+            await _recover_stale_local_run(
                 session,
-                int(run.id),
-                "Local dev runner was interrupted by backend restart or process termination",
+                int(run_id),
+                target_status=CrawlStatus.FAILED,
+                error_message="Local dev runner was interrupted by backend restart or process termination",
+                extraction_verdict=VERDICT_ERROR,
+                log_level="error",
             )
-            await session.refresh(run)
-            _set_task_id(run, None)
-            await session.commit()
-        recovered += 1
+        )
     return recovered

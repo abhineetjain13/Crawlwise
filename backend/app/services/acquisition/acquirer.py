@@ -7,10 +7,10 @@ from typing import Any
 import httpx
 
 from app.services.acquisition_plan import AcquisitionPlan
+from app.services.adapters.registry import normalize_adapter_acquisition_url
 from app.services.crawl_fetch_runtime import fetch_page
 from app.services.exceptions import ProxyPoolExhaustedError
 from app.services.platform_policy import resolve_platform_runtime_policy
-from app.services.platform_url_normalizers import normalize_platform_acquisition_url
 
 
 @dataclass(slots=True)
@@ -86,7 +86,7 @@ async def _emit_event(on_event: Any, level: str, message: str) -> None:
 
 async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
     requested_url = str(request.url or "")
-    effective_url = normalize_platform_acquisition_url(requested_url) or requested_url
+    effective_url = await normalize_adapter_acquisition_url(requested_url) or requested_url
     runtime_policy = resolve_platform_runtime_policy(
         effective_url,
         surface=request.surface,

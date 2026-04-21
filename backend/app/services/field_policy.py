@@ -102,10 +102,11 @@ def _dedupe_aliases(*groups: object) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
     for group in groups:
+        candidates: tuple[str, ...]
         if isinstance(group, str):
             candidates = (group,)
         elif isinstance(group, (list, tuple, set, frozenset)):
-            candidates = group
+            candidates = tuple(str(item) for item in group)
         else:
             continue
         for alias in candidates:

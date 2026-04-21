@@ -12,7 +12,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.services.acquisition.browser_capture import BrowserNetworkCapture
-from app.services.acquisition import browser_capture, browser_page_flow, browser_runtime
+from app.services.acquisition import browser_page_flow, browser_readiness, browser_runtime
 from app.services.acquisition.traversal import TraversalResult
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
@@ -901,14 +901,122 @@ async def test_generate_page_markdown_falls_back_to_body_when_main_is_too_narrow
 
 
 @pytest.mark.asyncio
-async def test_detail_expansion_keywords_only_extend_when_fields_requested() -> None:
+async def test_generate_page_markdown_falls_back_to_body_when_main_omits_relevant_links() -> None:
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(
+            base_html="""
+            <html>
+              <body>
+                <main>
+                  <h1>Widget Prime</h1>
+                  <p>Built for long mileage with a stable midsole and grippy outsole.</p>
+                  <p>Breathable mesh upper with protective rand and reinforced heel counter.</p>
+                </main>
+                <aside>
+                  <p>Support and care guidance lives outside the main container.</p>
+                  <a href="/support/care">Care instructions</a>
+                </aside>
+              </body>
+            </html>
+            """
+        ),
+        html="""
+        <html>
+          <body>
+            <main>
+              <h1>Widget Prime</h1>
+              <p>Built for long mileage with a stable midsole and grippy outsole.</p>
+              <p>Breathable mesh upper with protective rand and reinforced heel counter.</p>
+            </main>
+            <aside>
+              <p>Support and care guidance lives outside the main container.</p>
+              <a href="/support/care">Care instructions</a>
+            </aside>
+          </body>
+        </html>
+        """,
+    )
+
+    assert "Support and care guidance lives outside the main container." in markdown
+    assert "Care instructions -> /support/care" in markdown
+
+
+@pytest.mark.asyncio
+async def test_generate_page_markdown_skips_review_qa_and_payment_noise_on_detail_pages() -> None:
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(
+            base_html="""
+            <html>
+              <body>
+                <main>
+                  <h1>7 Cup Food Processor</h1>
+                  <p>Elevate your everyday meals with 3 speed options.</p>
+                  <section class="reviews-panel">
+                    <h2>Reviews</h2>
+                    <p>Review this product</p>
+                  </section>
+                  <section class="questions-panel">
+                    <h2>Questions &amp; Answers</h2>
+                    <p>Will this shred cooked pork?</p>
+                  </section>
+                </main>
+                <aside class="secure-payment">
+                  <p>100% secure payment</p>
+                  <p>Affirm available</p>
+                </aside>
+              </body>
+            </html>
+            """,
+            accessibility_snapshot={
+                "role": "document",
+                "children": [
+                    {"role": "heading", "name": "7 Cup Food Processor"},
+                    {"role": "heading", "name": "Reviews"},
+                    {"role": "text", "name": "100% secure payment"},
+                ],
+            },
+        ),
+        html="""
+        <html>
+          <body>
+            <main>
+              <h1>7 Cup Food Processor</h1>
+              <p>Elevate your everyday meals with 3 speed options.</p>
+              <section class="reviews-panel">
+                <h2>Reviews</h2>
+                <p>Review this product</p>
+              </section>
+              <section class="questions-panel">
+                <h2>Questions &amp; Answers</h2>
+                <p>Will this shred cooked pork?</p>
+              </section>
+            </main>
+            <aside class="secure-payment">
+              <p>100% secure payment</p>
+              <p>Affirm available</p>
+            </aside>
+          </body>
+        </html>
+        """,
+        surface="ecommerce_detail",
+    )
+
+    assert "7 Cup Food Processor" in markdown
+    assert "Elevate your everyday meals with 3 speed options." in markdown
+    assert "Reviews" not in markdown
+    assert "Questions & Answers" not in markdown
+    assert "100% secure payment" not in markdown
+
+
+@pytest.mark.asyncio
+async def test_detail_expansion_keywords_include_ecommerce_fallbacks_without_requested_fields() -> None:
     default_keywords = browser_runtime.detail_expansion_keywords("ecommerce_detail")
     requested_keywords = browser_runtime.detail_expansion_keywords(
         "ecommerce_detail",
         requested_fields=["description"],
     )
 
-    assert "shipping" not in default_keywords
+    assert "shipping" in default_keywords
     assert "shipping" in requested_keywords
 
 
@@ -929,6 +1037,26 @@ async def test_interactive_candidate_snapshot_excludes_class_names_from_probe() 
     assert snapshot["class_name"] == "btn btn--size-selector utility-token"
     assert "utility-token" not in str(snapshot["probe"])
     assert "care-panel-toggle" in str(snapshot["probe"])
+
+
+@pytest.mark.asyncio
+async def test_expand_all_interactive_elements_matches_keywords_from_class_names() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {
+                "label": "",
+                "attributes": {"class": "accordion materials-panel-toggle"},
+            }
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+    )
+
+    assert diagnostics["clicked_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -1331,6 +1459,58 @@ async def test_browser_capture_close_uses_bounded_queue_join_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_browser_capture_close_awaits_sentinel_enqueue_when_queue_put_blocks() -> None:
+    capture = BrowserNetworkCapture(surface="ecommerce_detail")
+
+    class _Queue:
+        def __init__(self) -> None:
+            self.put_calls: list[object] = []
+
+        async def join(self) -> None:
+            return None
+
+        async def put(self, value: object) -> None:
+            self.put_calls.append(value)
+            await asyncio.sleep(0)
+
+    fake_queue = _Queue()
+    capture._queue = fake_queue  # type: ignore[assignment]
+    capture._workers = {asyncio.create_task(asyncio.sleep(0))}
+
+    summary = await capture.close(_FakeExpansionPage(base_html="<html><body></body></html>"))
+
+    assert summary.network_payload_count == 0
+    assert fake_queue.put_calls == [None]
+
+
+@pytest.mark.asyncio
+async def test_browser_capture_close_cancels_workers_when_sentinel_enqueue_times_out() -> None:
+    original_timeout_ms = crawler_runtime_settings.browser_capture_queue_join_timeout_ms
+    crawler_runtime_settings.browser_capture_queue_join_timeout_ms = 50
+    try:
+        capture = BrowserNetworkCapture(surface="ecommerce_detail")
+
+        class _Queue:
+            async def join(self) -> None:
+                return None
+
+            async def put(self, value: object) -> None:
+                del value
+                await asyncio.sleep(1)
+
+        worker = asyncio.create_task(asyncio.sleep(1))
+        capture._queue = _Queue()  # type: ignore[assignment]
+        capture._workers = {worker}
+
+        summary = await capture.close(_FakeExpansionPage(base_html="<html><body></body></html>"))
+
+        assert summary.network_payload_count == 0
+        assert worker.cancelled() or worker.done()
+    finally:
+        crawler_runtime_settings.browser_capture_queue_join_timeout_ms = original_timeout_ms
+
+
+@pytest.mark.asyncio
 async def test_probe_browser_readiness_skips_listing_queries_for_detail_pages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1358,6 +1538,25 @@ async def test_probe_browser_readiness_skips_listing_queries_for_detail_pages(
     assert probe["is_ready"] is False
     assert probe["listing_card_count"] == 0
     assert probe["matched_listing_selectors"] == 0
+
+
+@pytest.mark.asyncio
+async def test_count_matching_selectors_ignores_timeout_misses() -> None:
+    class _Locator:
+        async def count(self) -> int:
+            raise PlaywrightTimeoutError("timed out")
+
+    class _Page:
+        def locator(self, selector: str) -> _Locator:
+            del selector
+            return _Locator()
+
+    matches = await browser_readiness.count_matching_selectors(
+        _Page(),
+        selectors=[".product-card"],
+    )
+
+    assert matches == 0
 
 
 @pytest.mark.asyncio
@@ -1438,6 +1637,58 @@ def test_classify_browser_outcome_marks_empty_category_as_low_content_shell() ->
         html,
         html_bytes=len(html.encode("utf-8")),
     ) == "empty_terminal_page"
+
+
+def test_classify_browser_outcome_keeps_ready_listing_with_no_pagination_progress_usable() -> None:
+    html = """
+    <html><body>
+      <article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article>
+      <article class='product-card'><a href='/products/widget-2'>Widget Two</a><span>$20</span></article>
+      <article class='product-card'><a href='/products/widget-3'>Widget Three</a><span>$30</span></article>
+    </body></html>
+    """
+
+    outcome = browser_runtime.classify_browser_outcome(
+        html=html,
+        html_bytes=len(html.encode("utf-8")),
+        blocked=False,
+        traversal_result=TraversalResult(
+            requested_mode="paginate",
+            selected_mode="paginate",
+            activated=True,
+            stop_reason="next_page_not_found",
+            progress_events=0,
+            card_count=3,
+        ),
+    )
+
+    assert outcome == "usable_content"
+
+
+def test_classify_browser_outcome_keeps_extractable_listing_usable_below_threshold() -> None:
+    html = """
+    <html><body>
+      <article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article>
+      <article class='product-card'><a href='/products/widget-2'>Widget Two</a><span>$20</span></article>
+      <article class='product-card'><a href='/products/widget-3'>Widget Three</a><span>$30</span></article>
+    </body></html>
+    """
+
+    outcome = browser_runtime.classify_browser_outcome(
+        html=html,
+        html_bytes=len(html.encode("utf-8")),
+        blocked=False,
+        traversal_result=TraversalResult(
+            requested_mode="paginate",
+            selected_mode="paginate",
+            activated=True,
+            stop_reason="paginate_no_progress",
+            progress_events=0,
+            card_count=0,
+        ),
+    )
+
+    assert outcome == "usable_content"
 
 
 def test_build_failed_browser_diagnostics_marks_page_closed_explicitly() -> None:
@@ -1614,3 +1865,136 @@ async def test_browser_fetch_surfaces_traversal_fragment_metrics(
     )
     assert 'data-traversal-fragment="1"' in result.html
     assert 'data-traversal-fragment="2"' in result.html
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_keeps_full_rendered_html_when_traversal_makes_no_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selectors = list(CARD_SELECTORS.get("ecommerce") or [])
+    page = _FakeExpansionPage(
+        base_html=(
+            "<html><body>"
+            "<article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article>"
+            "<article class='product-card'><a href='/products/widget-2'>Widget Two</a><span>$20</span></article>"
+            "<article class='product-card'><a href='/products/widget-3'>Widget Three</a><span>$30</span></article>"
+            "</body></html>"
+        ),
+        selector_counts={selectors[0]: 3} if selectors else {},
+        card_count=3,
+    )
+    page.url = "https://example.com/collections/widgets"
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    async def _fake_execute_listing_traversal(*args, **kwargs):
+        del args, kwargs
+        return TraversalResult(
+            requested_mode="paginate",
+            selected_mode="paginate",
+            activated=True,
+            stop_reason="paginate_blocked",
+            progress_events=0,
+            card_count=0,
+            html_fragments=[
+                ("<div data-traversal-cards='true'><a href='/privacy'>Privacy notice</a></div>", False),
+            ],
+        )
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "execute_listing_traversal",
+        _fake_execute_listing_traversal,
+    )
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert "Widget One" in result.html
+    assert "Privacy notice" not in result.html
+    assert "traversal_composed_html" in result.artifacts
+    assert "Privacy notice" in result.artifacts["traversal_composed_html"]
+    assert result.browser_diagnostics["browser_outcome"] == "usable_content"
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_prefers_rendered_html_when_progress_traversal_fragment_is_thin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selectors = list(CARD_SELECTORS.get("ecommerce") or [])
+    page = _FakeExpansionPage(
+        base_html=(
+            "<html><body>"
+            "<article class='product-card'><a href='/products/widget-1'>Widget One</a><span>$10</span></article>"
+            "<article class='product-card'><a href='/products/widget-2'>Widget Two</a><span>$20</span></article>"
+            "<article class='product-card'><a href='/products/widget-3'>Widget Three</a><span>$30</span></article>"
+            "</body></html>"
+        ),
+        selector_counts={selectors[0]: 3} if selectors else {},
+        card_count=3,
+    )
+    page.url = "https://example.com/collections/widgets"
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    async def _fake_execute_listing_traversal(*args, **kwargs):
+        del args, kwargs
+        return TraversalResult(
+            requested_mode="paginate",
+            selected_mode="paginate",
+            activated=True,
+            stop_reason="paginate_progressed",
+            progress_events=1,
+            card_count=0,
+            html_fragments=[
+                ("<div data-traversal-cards='true'><a href='/products/widget-1'>Widget One</a></div>", False),
+            ],
+        )
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "execute_listing_traversal",
+        _fake_execute_listing_traversal,
+    )
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        traversal_mode="paginate",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert "Widget Two" in result.html
+    assert "traversal_composed_html" in result.artifacts
+
+
+@pytest.mark.asyncio
+async def test_generate_page_markdown_preserves_legitimate_faq_content() -> None:
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(base_html="<html><body></body></html>"),
+        html="""
+        <html>
+          <body>
+            <main>
+              <h1>Widget Prime</h1>
+              <section class="faq-panel">
+                <h2>Sizing questions</h2>
+                <p>Questions about fit are answered in the size guide below.</p>
+              </section>
+            </main>
+          </body>
+        </html>
+        """,
+        surface="ecommerce_detail",
+    )
+
+    assert "Sizing questions" in markdown
+    assert "Questions about fit are answered in the size guide below." in markdown

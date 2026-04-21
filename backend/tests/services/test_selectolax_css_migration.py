@@ -15,6 +15,13 @@ from app.services.listing_extractor import extract_listing_records
 from app.services.xpath_service import extract_selector_value
 
 
+def _read_optional_artifact_text(path: str) -> str:
+    artifact = Path(__file__).resolve().parents[2].joinpath(path)
+    if not artifact.exists():
+        pytest.skip(f"artifact fixture missing: {artifact}")
+    return artifact.read_text(encoding="utf-8", errors="ignore")
+
+
 def test_detail_extractor_preserves_css_dom_field_output() -> None:
     html = """
     <html>
@@ -122,6 +129,7 @@ def test_listing_extractor_does_not_remove_body_for_sidebar_layouts() -> None:
             "_source": "dom_listing",
             "title": "Abominable Hoodie",
             "price": "69.00",
+            "currency": "USD",
             "image_url": "https://www.scrapingcourse.com/ecommerce/wp-content/uploads/2024/03/mh09-blue_main.jpg",
             "url": "https://www.scrapingcourse.com/ecommerce/product/abominable-hoodie/",
         }
@@ -161,6 +169,7 @@ def test_listing_extractor_preserves_faceted_grid_results() -> None:
             "_source": "dom_listing",
             "title": "Alpha Strat",
             "price": "1299.00",
+            "currency": "USD",
             "url": "https://reverb.com/item/alpha-strat",
         }
     ]
@@ -197,8 +206,47 @@ def test_listing_extractor_accepts_image_link_cards_with_separate_title_text() -
             "title": "Connect In Colour Eyeshadow Palette Rose Lens",
             "brand": "MAC",
             "price": "35.00",
+            "currency": "USD",
             "image_url": "https://www.ulta.com/images/rose-lens.jpg",
             "url": "https://www.ulta.com/p/connect-in-colour-eyeshadow-palette-rose-lens?sku=2640287",
+        }
+    ]
+
+
+def test_listing_extractor_prefers_explicit_price_node_over_description_mentions_and_keeps_currency() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="/products/remastered">
+            <img src="/images/remastered.jpg" alt="The Last of Us Remastered">
+            <h2 class="product-title">The Last of Us Remastered</h2>
+          </a>
+          <p class="description">
+            Includes additional game content: over $30 in value.
+          </p>
+          <div class="price-wrapper">92,99 €</div>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://sandbox.oxylabs.io/products",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://sandbox.oxylabs.io/products",
+            "_source": "dom_listing",
+            "title": "The Last of Us Remastered",
+            "price": "92.99",
+            "currency": "EUR",
+            "image_url": "https://sandbox.oxylabs.io/images/remastered.jpg",
+            "url": "https://sandbox.oxylabs.io/products/remastered",
         }
     ]
 
@@ -232,6 +280,7 @@ def test_listing_extractor_avoids_numeric_title_nodes_when_real_title_exists() -
             "_source": "dom_listing",
             "title": "Widget Prime",
             "price": "19.99",
+            "currency": "USD",
             "image_url": "https://example.com/images/widget-prime.jpg",
             "url": "https://example.com/products/widget-prime",
         }
@@ -305,10 +354,7 @@ def test_listing_extractor_filters_acceptance_artifact_noise(
     surface: str,
     blocked_terms: tuple[str, ...],
 ) -> None:
-    html = Path(__file__).resolve().parents[2].joinpath(artifact_path).read_text(
-        encoding="utf-8",
-        errors="ignore",
-    )
+    html = _read_optional_artifact_text(artifact_path)
 
     rows = extract_listing_records(
         html,
@@ -370,6 +416,7 @@ def test_listing_extractor_ignores_none_embedded_json_payloads(
             "_source": "dom_listing",
             "title": "Widget Prime",
             "price": "19.99",
+            "currency": "USD",
             "url": "https://example.com/products/widget-prime",
         }
     ]
@@ -456,6 +503,7 @@ def test_listing_extractor_ignores_structured_payloads_inside_removed_noise_cont
             "_source": "dom_listing",
             "title": "Widget Prime",
             "price": "19.99",
+            "currency": "USD",
             "url": "https://example.com/products/widget-prime",
         }
     ]

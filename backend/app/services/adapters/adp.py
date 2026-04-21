@@ -32,6 +32,32 @@ class ADPAdapter(BaseAdapter):
     async def can_handle(self, url: str, html: str) -> bool:
         return self._matches_platform_family(url, html)
 
+    def normalize_acquisition_url(self, url: str | None) -> str | None:
+        parsed = urlparse(str(url or "").strip())
+        if not self._matches_platform_family(parsed.geturl(), ""):
+            return url
+        if "recruitment/recruitment.html" not in parsed.path.lower():
+            return url
+        if parsed.fragment:
+            return url
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        job_id = " ".join(str(query.get("jobId") or "").split()).strip()
+        if not job_id:
+            return url
+        normalized_pairs: list[tuple[str, str]] = []
+        replaced_job_id = False
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            if key == "jobId":
+                normalized_pairs.append((key, job_id))
+                replaced_job_id = True
+                continue
+            normalized_pairs.append((key, value))
+        if not replaced_job_id:
+            normalized_pairs.append(("jobId", job_id))
+        return urlunparse(
+            parsed._replace(query=urlencode(normalized_pairs, doseq=True))
+        )
+
     async def extract(self, url: str, html: str, surface: str) -> AdapterResult:
         if self._looks_like_detail(url, html, surface):
             records = [self._extract_detail(url, html)] if html else []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import absolute_url, clean_text, finalize_record
 
 
@@ -98,7 +99,10 @@ def _listing_record_set_score(
     ]
     if not quality_scores:
         return (-1, -1, -1, -1, -1)
-    strong_records = sum(score >= 18 for score in quality_scores)
+    strong_records = sum(
+        score >= crawler_runtime_settings.listing_candidate_strong_score_threshold
+        for score in quality_scores
+    )
     priced_records = sum(
         record.get("price") not in (None, "", [], {})
         for record in records

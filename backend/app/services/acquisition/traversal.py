@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass, field
 import logging
@@ -816,10 +817,15 @@ async def _locator_still_resolves(locator) -> bool:
     counter = getattr(locator, "count", None)
     if not callable(counter):
         return True
-    try:
-        return bool(await counter())
-    except Exception:
-        return False
+    for attempt in range(2):
+        try:
+            if bool(await counter()):
+                return True
+        except Exception:
+            pass
+        if attempt == 0:
+            await asyncio.sleep(0)
+    return False
 
 
 async def dismiss_overlays_if_needed(
@@ -1488,7 +1494,10 @@ def _content_signature(html: str) -> str:
     text = str(html or "").strip()
     if not text:
         return ""
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+    return hashlib.sha1(
+        text.encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()
 
 
 async def _has_scroll_signals(page, *, surface: str) -> bool:

@@ -10,7 +10,6 @@ from defusedxml import ElementTree as ET
 
 from app.services.detail_extractor import extract_detail_records
 from app.services.field_value_core import (
-    ALL_CANONICAL_FIELDS,
     absolute_url,
     clean_text,
     coerce_text,
@@ -28,6 +27,7 @@ from app.services.field_policy import (
     normalize_field_key,
 )
 from app.services.listing_extractor import extract_listing_records
+from app.services.config.runtime_settings import crawler_runtime_settings
 
 _JSON_LIST_KEYS = (
     "data",
@@ -289,10 +289,6 @@ def _parse_raw_json_payload(text: str, *, content_type: str | None) -> object | 
         return None
 
 
-_MIN_FIELD_OVERLAP_RATIO = 0.25
-_MIN_FIELD_OVERLAP_ABSOLUTE = 2
-
-
 def _has_surface_field_overlap(items: list[object], *, surface: str) -> bool:
     canonical = set(canonical_fields_for_surface(surface))
     if not canonical:
@@ -306,7 +302,10 @@ def _has_surface_field_overlap(items: list[object], *, surface: str) -> bool:
         if item_keys & canonical:
             matching += 1
     ratio = matching / len(dict_items) if dict_items else 0
-    return ratio >= _MIN_FIELD_OVERLAP_RATIO and matching >= _MIN_FIELD_OVERLAP_ABSOLUTE
+    return (
+        ratio >= crawler_runtime_settings.raw_json_surface_field_overlap_ratio
+        and matching >= crawler_runtime_settings.raw_json_surface_field_overlap_absolute
+    )
 
 
 def _raw_json_items(payload: object, *, surface: str) -> list[object]:

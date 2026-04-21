@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from app.services.adapters.myntra import MyntraAdapter
@@ -76,6 +74,51 @@ def test_extract_ecommerce_detail_from_opengraph() -> None:
     assert record["image_url"] == "https://example.com/images/og-widget.jpg"
     assert record["url"] == "https://example.com/products/og-widget"
     assert record["_source"] == "opengraph"
+
+
+def test_extract_ecommerce_detail_ignores_review_json_ld_title_description_and_images() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:description" content="Weather resistant pack for daily commuting.">
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Commuter Backpack",
+          "image": "https://example.com/images/product.jpg",
+          "sku": "CB-001"
+        }
+        </script>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Review",
+          "name": "Best choice I ever made",
+          "description": "normal",
+          "image": "https://example.com/images/review-photo.jpg"
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Commuter Backpack</h1>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/commuter-backpack",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["description"],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Commuter Backpack"
+    assert record["description"] == "Weather resistant pack for daily commuting."
+    assert record["image_url"] == "https://example.com/images/product.jpg"
 
 
 def test_extract_ecommerce_detail_ignores_noisy_h1_and_uses_page_title() -> None:
@@ -611,6 +654,84 @@ def test_extract_ecommerce_detail_skips_unnamed_dom_variant_groups() -> None:
     assert "variants" not in record
 
 
+def test_extract_ecommerce_detail_ignores_review_qa_controls_and_payment_icons() -> None:
+    html = """
+    <html>
+      <body>
+        <section class="secure-payment">
+          <img src="https://cdn.example.com/assets/amex.svg" alt="American Express" />
+          <img src="https://cdn.example.com/assets/paypal.svg" alt="PayPal" />
+        </section>
+        <main>
+          <h1>7 Cup Food Processor</h1>
+          <section class="product-gallery">
+            <img src="https://cdn.example.com/products/food-processor.jpg?width=1200" alt="7 Cup Food Processor front view" />
+          </section>
+          <button aria-controls="specifications-panel">Specifications</button>
+          <section id="specifications-panel">
+            <p>7 cup work bowl with high, low, and pulse speed controls.</p>
+          </section>
+          <section class="product-questions">
+            <div role="radiogroup" aria-label="1 Answers to Question: Will this shred cooked pork?">
+              <button type="button">See KASA Review profile.</button>
+              <button type="button">Content helpfulness</button>
+              <button type="button">Report this answer by KASA Review as inappropriate.</button>
+            </div>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/food-processor",
+        "ecommerce_detail",
+        max_records=5,
+        requested_fields=["specifications"],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["image_url"] == "https://cdn.example.com/products/food-processor.jpg?width=1200"
+    assert record["specifications"] == "7 cup work bowl with high, low, and pulse speed controls."
+    assert "additional_images" not in record
+    assert "option1_name" not in record
+    assert "variant_axes" not in record
+    assert "variants" not in record
+
+
+def test_extract_ecommerce_detail_does_not_treat_question_radiogroup_as_size_variants() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>7 Cup Food Processor</h1>
+          <section class="product-questions">
+            <div role="radiogroup" aria-label="Will the 7 cup model chop cooked pork into a small size">
+              <button type="button">Yes</button>
+              <button type="button">No</button>
+            </div>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/food-processor",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "option1_name" not in record
+    assert "variant_axes" not in record
+    assert "variants" not in record
+
+
 def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fallback() -> None:
     html = """
     <html>
@@ -651,9 +772,27 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
 
 
 def test_extract_ecommerce_detail_filters_zara_copy_code_from_dom_variants() -> None:
-    html = Path(__file__).resolve().parents[2].joinpath(
-        "artifacts/runs/2/pages/db832f82d5b83440.html"
-    ).read_text(encoding="utf-8", errors="ignore")
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Regular Fit Shirt</h1>
+          <fieldset>
+            <legend>Color</legend>
+            <div class="product-detail-color-selector">
+              <button type="button" aria-label="Black"></button>
+              <button type="button" aria-label="Blue/White"></button>
+              <button type="button" aria-label="White"></button>
+              <button type="button" aria-label="Sky blue"></button>
+              <button type="button" aria-label="Ecru / Blue"></button>
+              <button type="button" aria-label="White / Sky blue"></button>
+              <button type="button" aria-label="4493/144/800"></button>
+            </div>
+          </fieldset>
+        </main>
+      </body>
+    </html>
+    """
 
     rows = extract_records(
         html,

@@ -85,6 +85,7 @@ def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts(
             "_source": "visual_listing",
             "title": "Widget Prime",
             "price": "19.99",
+            "currency": "USD",
             "image_url": "https://example.com/images/widget-prime.jpg",
             "url": "https://example.com/products/widget-prime",
         }

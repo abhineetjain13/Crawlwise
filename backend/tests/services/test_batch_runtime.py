@@ -72,6 +72,7 @@ async def test_process_run_persists_detail_records(
     rows, total = await get_run_records(db_session, run.id, 1, 20)
 
     assert run.status == "completed"
+    assert run.last_heartbeat_at is not None
     assert run.result_summary["extraction_verdict"] == "success"
     assert total == 1
     assert rows[0].data["title"] == "Widget Prime"

@@ -7,6 +7,7 @@ from bs4.element import Comment, NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRun
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.db_utils import mapping_or_empty
 from app.services.extraction_runtime import extract_records_async
 from app.services.domain_memory_service import (
@@ -20,7 +21,6 @@ from app.services.field_policy import field_allowed_for_surface
 from app.services.llm_runtime import discover_xpath_candidates
 from app.services.xpath_service import extract_selector_value, validate_or_convert_xpath
 
-_SELECTOR_SYNTHESIS_MAX_HTML_CHARS = 200_000
 _SELECTOR_SYNTHESIS_ALLOWED_ATTRS = frozenset(
     {
         "aria-label",
@@ -73,7 +73,7 @@ def reduce_html_for_selector_synthesis(html: str) -> str:
         reduced,
         target_root,
         list(source_root.children),
-        _SELECTOR_SYNTHESIS_MAX_HTML_CHARS - len(str(reduced)),
+        crawler_runtime_settings.selector_synthesis_max_html_chars - len(str(reduced)),
     )
     return str(reduced)
 

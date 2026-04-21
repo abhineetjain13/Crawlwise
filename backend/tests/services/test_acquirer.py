@@ -58,3 +58,53 @@ async def test_acquire_returns_public_headers_as_plain_dict(
         ("info", "Acquiring https://example.com"),
         ("info", "Launched headless browser (chromium, proxy: direct)"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_acquire_normalizes_url_via_adapter_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_urls: list[str] = []
+
+    async def _fake_normalize(url: str | None) -> str | None:
+        return f"{url}&normalized=1"
+
+    async def _fake_fetch_page(url: str, *args, **kwargs):
+        del args, kwargs
+        observed_urls.append(url)
+        return type(
+            "FetchResult",
+            (),
+            {
+                "final_url": url,
+                "html": "<html></html>",
+                "method": "httpx",
+                "status_code": 200,
+                "content_type": "text/html",
+                "blocked": False,
+                "headers": httpx.Headers({"content-type": "text/html"}),
+                "network_payloads": [],
+                "browser_diagnostics": {},
+                "artifacts": {},
+            },
+        )()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.acquirer.normalize_adapter_acquisition_url",
+        _fake_normalize,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.acquirer.fetch_page",
+        _fake_fetch_page,
+    )
+
+    result = await acquire(
+        AcquisitionRequest(
+            run_id=1,
+            url="https://example.com/jobs/123",
+            plan=AcquisitionPlan(surface="job_detail"),
+        )
+    )
+
+    assert observed_urls == ["https://example.com/jobs/123&normalized=1"]
+    assert result.final_url == "https://example.com/jobs/123&normalized=1"
