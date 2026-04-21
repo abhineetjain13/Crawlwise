@@ -19,26 +19,27 @@ These rules are the backend contract. Refactors may change structure, not these 
 
 8. Listing and detail extraction stay separate. Listing pages do not fall back into synthetic single-record detail behavior.
 9. A listing run with zero records produces `listing_detection_failed`, not a false success.
-10. Persisted `record.data` contains only populated logical fields. Empty values, `_` internals, and raw manifest containers do not belong in the user-facing payload.
-11. `source_trace` and `discovered_data` must preserve provenance and reviewable metadata without leaking obsolete raw-container noise into normal API responses.
-12. Commerce/job extraction must filter page chrome and metadata noise before persistence.
+10. All supported surfaces, including listing surfaces, pass schema/type validation before persistence; unsupported field types must be nulled instead of silently surviving.
+11. Persisted `record.data` contains only populated logical fields. Empty values, `_` internals, and raw manifest containers do not belong in the user-facing payload.
+12. `source_trace` and `discovered_data` must preserve provenance and reviewable metadata without leaking obsolete raw-container noise into normal API responses.
+13. Commerce/job extraction must filter page chrome and metadata noise before persistence.
 
 ## 4. Selectors, review, and memory
 
-13. Domain memory is scoped by normalized `(domain, surface)`. Generic fallback may supplement a surface-specific rule set, not override the scoping model.
-14. Selector CRUD, review saves, and selector self-heal may improve future extraction, but they must remain explicit, diagnosable flows.
-15. Reused domain-memory selectors should satisfy later runs before new selector synthesis is attempted. Do not trigger another generic self-heal pass once the requested fields are already covered.
-16. Automatically synthesized selectors must be validated before they are saved or reused.
+14. Domain memory is scoped by normalized `(domain, surface)`. Generic fallback may supplement a surface-specific rule set, not override the scoping model.
+15. Selector CRUD, review saves, and selector self-heal may improve future extraction, but they must remain explicit, diagnosable flows.
+16. Reused domain-memory selectors should satisfy later runs before new selector synthesis is attempted. Do not trigger another generic self-heal pass once the requested fields are already covered.
+17. Automatically synthesized selectors must be validated before they are saved or reused.
 
 ## 5. LLM and snapshots
 
-17. LLM use is opt-in at run time through settings and active config. It must not silently activate itself.
-18. Run snapshots are stable within a run. `llm_config_snapshot` and `extraction_runtime_snapshot` should prevent mid-run config drift.
-19. LLM failures should degrade gracefully and remain visible in diagnostics rather than corrupting extraction state.
+18. LLM use is opt-in at run time through settings and active config. It must not silently activate itself.
+19. Run snapshots are stable within a run. `llm_config_snapshot` and `extraction_runtime_snapshot` should prevent mid-run config drift.
+20. LLM failures should degrade gracefully and remain visible in diagnostics rather than corrupting extraction state.
 
 ## 6. Codebase shape
 
-20. Generic crawler paths stay generic. Do not hardcode tenant- or site-specific behavior in shared runtime or extraction code.
-21. Pipeline boundaries should use typed objects and explicit contracts rather than growing positional argument sprawl.
-22. CPU-bound parsing and sync third-party calls must not block async hot paths.
-23. If a rule is important enough to preserve, it should have a clear owning test.
+21. Generic crawler paths stay generic. Do not hardcode tenant- or site-specific behavior in shared runtime or extraction code.
+22. Pipeline boundaries should use typed objects and explicit contracts rather than growing positional argument sprawl.
+23. CPU-bound parsing and sync third-party calls must not block async hot paths.
+24. If a rule is important enough to preserve, it should have a clear owning test.

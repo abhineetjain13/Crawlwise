@@ -123,6 +123,62 @@ def test_extract_records_keeps_first_match_for_long_text_fields() -> None:
     assert record["_source"] == "adapter"
 
 
+def test_extract_records_uses_accordion_dom_sections_for_long_text_fields() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget Prime</h1>
+          <button aria-controls="description-panel">Description</button>
+          <section id="description-panel">
+            Built for long mileage with a reinforced toe cap.
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+    record = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["description"],
+    )[0]
+
+    assert record["description"] == "Built for long mileage with a reinforced toe cap."
+    assert record["_field_sources"]["description"] == ["dom_sections"]
+
+
+def test_extract_records_uses_nested_wrapped_dom_sections_for_long_text_fields() -> None:
+    html = """
+    <html>
+      <body>
+        <main>
+          <h1>Widget Prime</h1>
+          <div class="accordion-item">
+            <button>Specifications</button>
+            <div class="accordion-item__body">
+              <div class="rich-content">
+                Rubber outsole with a reinforced toe cap.
+              </div>
+            </div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+    record = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=1,
+        requested_fields=["specifications"],
+    )[0]
+
+    assert record["specifications"] == "Rubber outsole with a reinforced toe cap."
+    assert record["_field_sources"]["specifications"] == ["dom_sections"]
+
+
 def test_extract_records_applies_regex_as_post_filter_to_xpath_result() -> None:
     html = """
     <html>

@@ -14,8 +14,11 @@ from app.services.adapters.registry import run_adapter, try_blocked_adapter_reco
 from app.services.acquisition.browser_runtime import build_failed_browser_diagnostics
 from app.services.crawl_state import TERMINAL_STATUSES, CrawlStatus, update_run_status
 from app.services.domain_memory_service import load_domain_selector_rules
+from app.services.db_utils import mapping_or_empty
 from app.services.domain_utils import normalize_domain
 from app.services.confidence import score_record_confidence
+from app.services.config.llm_runtime import llm_runtime_settings
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import (
     IMAGE_FIELDS,
     LONG_TEXT_FIELDS,
@@ -25,9 +28,18 @@ from app.services.field_value_core import (
     URL_FIELDS,
     coerce_field_value,
     finalize_record,
+    strip_html_tags,
+    validate_record_for_surface,
 )
-from app.services.field_policy import field_allowed_for_surface
-from app.services.llm_runtime import extract_missing_fields
+from app.services.field_policy import field_allowed_for_surface, normalize_requested_field
+from app.services.llm_config_service import resolve_run_config
+from app.services.llm_runtime import (
+    extract_missing_fields,
+    extract_records_directly as extract_records_directly_with_llm,
+)
+from app.services.pipeline.direct_record_fallback import (
+    apply_direct_record_llm_fallback as apply_direct_record_llm_fallback_impl,
+)
 from app.services.platform_policy import detect_platform_family
 from app.services.publish import (
     VERDICT_BLOCKED,
@@ -142,49 +154,27 @@ def _resolved_url_processing_config(
         update_run_state=update_run_state,
         persist_logs=persist_logs,
     )
-
-def _mapping_or_empty(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, dict) else {}
-
-
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
 
-
-_LLM_EXISTING_VALUE_MAX_CHARS = 500
-
-
 def _sanitize_llm_existing_values(record: dict[str, object]) -> dict[str, object]:
     sanitized: dict[str, object] = {}
+    max_chars = max(1, int(llm_runtime_settings.existing_values_max_chars or 1))
     for key, value in record.items():
         if str(key).startswith("_"):
             continue
         if isinstance(value, str):
-            truncated = value[:_LLM_EXISTING_VALUE_MAX_CHARS]
+            truncated = value
             if "<" in truncated and ">" in truncated:
-                from html.parser import HTMLParser
-
-                class _Stripper(HTMLParser):
-                    def __init__(self) -> None:
-                        super().__init__()
-                        self._parts: list[str] = []
-
-                    def handle_data(self, data: str) -> None:
-                        self._parts.append(data)
-
-                    def get_text(self) -> str:
-                        return " ".join(self._parts)
-
-                stripper = _Stripper()
-                stripper.feed(truncated)
-                truncated = stripper.get_text()[:_LLM_EXISTING_VALUE_MAX_CHARS]
+                truncated = strip_html_tags(truncated)
+            truncated = truncated[:max_chars]
             sanitized[key] = truncated
         elif isinstance(value, (list, dict)):
             serialized = json.dumps(value, default=str)
-            if len(serialized) > _LLM_EXISTING_VALUE_MAX_CHARS:
-                serialized = serialized[:_LLM_EXISTING_VALUE_MAX_CHARS]
+            if len(serialized) > max_chars:
+                serialized = serialized[:max_chars]
             sanitized[key] = serialized
         else:
             sanitized[key] = value
@@ -194,7 +184,6 @@ def _sanitize_llm_existing_values(record: dict[str, object]) -> dict[str, object
 _STRING_FIELDS = URL_FIELDS | IMAGE_FIELDS | LONG_TEXT_FIELDS
 _LIST_FIELDS = STRUCTURED_MULTI_FIELDS | STRUCTURED_OBJECT_LIST_FIELDS
 _DICT_FIELDS = STRUCTURED_OBJECT_FIELDS
-
 
 def _validate_llm_field_type(field_name: str, value: object) -> bool:
     if value in (None, "", [], {}):
@@ -208,20 +197,17 @@ def _validate_llm_field_type(field_name: str, value: object) -> bool:
         return isinstance(value, dict)
     return True
 
-
 def _browser_attempted(acquisition_result) -> bool:
-    diagnostics = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     return bool(diagnostics.get("browser_attempted")) or getattr(
         acquisition_result,
         "method",
         "",
     ) == "browser"
 
-
 def _browser_outcome(acquisition_result) -> str:
-    diagnostics = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     return str(diagnostics.get("browser_outcome") or "").strip().lower()
-
 
 def _screenshot_required(browser_outcome: str) -> bool:
     return browser_outcome in {
@@ -232,21 +218,18 @@ def _screenshot_required(browser_outcome: str) -> bool:
         "render_timeout",
     }
 
-
 def _browser_result_is_extractable(acquisition_result) -> bool:
     if getattr(acquisition_result, "method", "") != "browser":
         return True
     return _browser_outcome(acquisition_result) in {"", "usable_content"}
 
-
 def _merge_browser_diagnostics(
     acquisition_result,
     diagnostics: dict[str, object],
 ) -> None:
-    merged = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    merged = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     merged.update(dict(diagnostics or {}))
     acquisition_result.browser_diagnostics = merged
-
 
 async def process_single_url(
     session: AsyncSession,
@@ -298,7 +281,6 @@ async def process_single_url(
     extracted = await _run_normalization_stage(context, extracted)
     return await _run_persistence_stage(context, extracted)
 
-
 async def _enter_acquire_stage(context: _URLProcessingContext) -> None:
     if context.config.update_run_state:
         await set_stage(
@@ -308,7 +290,6 @@ async def _enter_acquire_stage(context: _URLProcessingContext) -> None:
             current_url=context.url,
         )
         await context.session.commit()
-
 
 async def _enter_extract_stage(context: _URLProcessingContext) -> None:
     if context.config.update_run_state:
@@ -320,7 +301,6 @@ async def _enter_extract_stage(context: _URLProcessingContext) -> None:
         )
         await context.session.commit()
 
-
 async def _enter_normalize_stage(context: _URLProcessingContext) -> None:
     if context.config.update_run_state:
         await set_stage(
@@ -331,7 +311,6 @@ async def _enter_normalize_stage(context: _URLProcessingContext) -> None:
         )
         await context.session.commit()
 
-
 async def _enter_persist_stage(context: _URLProcessingContext) -> None:
     if context.config.update_run_state:
         await set_stage(
@@ -341,7 +320,6 @@ async def _enter_persist_stage(context: _URLProcessingContext) -> None:
             current_url=context.url,
         )
         await context.session.commit()
-
 
 async def _log_pipeline_event(
     context: _URLProcessingContext,
@@ -355,7 +333,6 @@ async def _log_pipeline_event(
     await log_event(context.session, context.run.id, level, message)
     if commit:
         await context.session.commit()
-
 
 async def _run_robots_gate(
     context: _URLProcessingContext,
@@ -406,7 +383,6 @@ async def _run_robots_gate(
     )
     return None
 
-
 def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionRequest:
     plan = context.config.resolved_acquisition_plan(surface=context.surface)
     return AcquisitionRequest(
@@ -419,7 +395,6 @@ def _build_acquisition_request(context: _URLProcessingContext) -> AcquisitionReq
         on_event=_build_live_acquisition_logger(context),
     )
 
-
 async def _run_acquisition_stage(
     context: _URLProcessingContext,
     *,
@@ -430,10 +405,10 @@ async def _run_acquisition_stage(
     method = getattr(acquisition_result, "method", "unknown")
     if method == "browser":
         if getattr(acquisition_request, "on_event", None) is None:
-            diagnostics = _mapping_or_empty(
+            diagnostics = mapping_or_empty(
                 getattr(acquisition_result, "browser_diagnostics", {})
             )
-            timings = _mapping_or_empty(diagnostics.get("phase_timings_ms", {}))
+            timings = mapping_or_empty(diagnostics.get("phase_timings_ms", {}))
             load_ms = timings.get("navigation", 0) or timings.get("total", 0)
             await _log_pipeline_event(
                 context,
@@ -469,7 +444,6 @@ async def _run_acquisition_stage(
         ),
     )
 
-
 def _build_prefetch_only_result(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -485,7 +459,6 @@ def _build_prefetch_only_result(
         url_metrics=finalize_url_metrics(fetched.url_metrics, record_count=0),
     )
 
-
 async def _run_extraction_stage(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -495,7 +468,18 @@ async def _run_extraction_stage(
         context,
         fetched,
     )
+    _record_detail_expansion_extraction_outcome(
+        context,
+        acquisition_result,
+        records,
+    )
     await _log_extraction_outcome(context, acquisition_result, records)
+    records, selector_rules = await _retry_thin_listing_with_browser(
+        context,
+        fetched,
+        records=records,
+        selector_rules=selector_rules,
+    )
     records, selector_rules = await _retry_empty_extraction_with_browser(
         context,
         fetched,
@@ -511,19 +495,71 @@ async def _run_extraction_stage(
     )
     return _ExtractedURLStage(fetched=fetched, records=records)
 
+def _record_detail_expansion_extraction_outcome(
+    context: _URLProcessingContext,
+    acquisition_result,
+    records: list[dict[str, object]],
+) -> None:
+    if str(getattr(acquisition_result, "method", "") or "").strip().lower() != "browser":
+        return
+    browser_diagnostics = mapping_or_empty(
+        getattr(acquisition_result, "browser_diagnostics", {})
+    )
+    detail_expansion = mapping_or_empty(browser_diagnostics.get("detail_expansion"))
+    if int(detail_expansion.get("clicked_count", 0) or 0) <= 0:
+        return
+    requested_fields = {
+        normalized
+        for value in context.requested_fields
+        if (normalized := normalize_requested_field(value))
+    }
+    extracted_fields = sorted(
+        {
+            str(field_name).strip().lower()
+            for record in records
+            if isinstance(record, dict)
+            for field_name, value in record.items()
+            if (
+                not str(field_name).startswith("_")
+                and value not in (None, "", [], {})
+                and (
+                    not requested_fields
+                    or str(field_name).strip().lower() in requested_fields
+                    or str(field_name).strip().lower() in LONG_TEXT_FIELDS
+                )
+            )
+        }
+    )
+    detail_expansion["extraction_consumed"] = bool(extracted_fields or records)
+    detail_expansion["extracted_fields"] = extracted_fields
+    browser_diagnostics["detail_expansion"] = detail_expansion
+    acquisition_result.browser_diagnostics = browser_diagnostics
 
 async def _run_normalization_stage(
     context: _URLProcessingContext,
     extracted: _ExtractedURLStage,
 ) -> _ExtractedURLStage:
     await _enter_normalize_stage(context)
+    normalized_records: list[dict[str, object]] = []
+    for index, record in enumerate(extracted.records, start=1):
+        normalized_record, validation_errors = validate_record_for_surface(
+            dict(record),
+            context.surface,
+        )
+        normalized_records.append(normalized_record)
+        if validation_errors:
+            await _log_pipeline_event(
+                context,
+                "warning",
+                "Schema validation cleaned record "
+                f"{index} for {context.url}: {'; '.join(validation_errors)}",
+            )
     await _log_pipeline_event(
         context,
         "info",
-        f"Normalized {len(extracted.records)} record(s) for persistence",
+        f"Normalized {len(normalized_records)} record(s) for persistence",
     )
-    return extracted
-
+    return _ExtractedURLStage(fetched=extracted.fetched, records=normalized_records)
 
 async def _log_extraction_outcome(
     context: _URLProcessingContext,
@@ -544,7 +580,6 @@ async def _log_extraction_outcome(
         f"Extraction yielded 0 records (adapter: {adapter})",
     )
 
-
 async def _retry_empty_extraction_with_browser(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -553,52 +588,62 @@ async def _retry_empty_extraction_with_browser(
     selector_rules: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     acquisition_result = fetched.acquisition_result
-    retry_decision = _empty_extraction_browser_retry_decision(
-        acquisition_result,
-        records,
-    )
+    retry_decision = _empty_extraction_browser_retry_decision(acquisition_result, records)
     if not retry_decision["should_retry"]:
         return records, selector_rules
-    await _log_pipeline_event(
-        context,
-        "info",
-        f"No records via {acquisition_result.method}; retrying browser render for {context.url}",
-    )
-    browser_result = await _acquire_browser_retry_result(context, fetched)
+    await _log_pipeline_event(context, "info", f"No records via {acquisition_result.method}; retrying browser render for {context.url}")
+    browser_result = await _acquire_browser_retry_result(context, fetched, retry_reason="empty_extraction")
     fetched.acquisition_result = browser_result
     return await _extract_records_for_acquisition(context, fetched)
 
+async def _retry_thin_listing_with_browser(
+    context: _URLProcessingContext,
+    fetched: _FetchedURLStage,
+    *,
+    records: list[dict[str, object]],
+    selector_rules: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    acquisition_result = fetched.acquisition_result
+    retry_decision = _thin_listing_browser_retry_decision(context, acquisition_result, records)
+    if not retry_decision["should_retry"]:
+        return records, selector_rules
+    await _log_pipeline_event(context, "info", f"Thin listing extraction ({len(records)} record(s)); retrying browser recovery actions for {context.url}")
+    try:
+        browser_result = await _acquire_browser_retry_result(context, fetched, retry_reason="thin_listing")
+    except (RuntimeError, ValueError, TypeError, OSError):
+        return records, selector_rules
+    retry_fetched = _FetchedURLStage(
+        context=context,
+        acquisition_result=browser_result,
+        url_metrics=build_url_metrics(browser_result, requested_fields=list(context.requested_fields)),
+    )
+    retry_records, retry_selector_rules = await _extract_records_for_acquisition(context, retry_fetched)
+    if not _listing_retry_improved(records, retry_records):
+        await _log_pipeline_event(context, "info", f"Browser recovery retry did not improve listing extraction ({len(retry_records)} vs {len(records)})")
+        return records, selector_rules
+    fetched.acquisition_result = retry_fetched.acquisition_result
+    fetched.url_metrics = retry_fetched.url_metrics
+    await _log_pipeline_event(context, "info", f"Browser recovery retry improved listing extraction ({len(records)} -> {len(retry_records)} record(s))")
+    return retry_records, retry_selector_rules
 
 async def _acquire_browser_retry_result(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
+    *,
+    retry_reason: str,
 ):
     acquisition_result = fetched.acquisition_result
-    retry_request = _build_acquisition_request(context).with_profile_updates(
-        prefer_browser=True,
-        retry_reason="empty_extraction",
-    )
+    retry_request = _build_acquisition_request(context).with_profile_updates(prefer_browser=True, retry_reason=retry_reason)
     try:
         return await acquire(retry_request)
     except (RuntimeError, ValueError, TypeError, OSError) as exc:
         _merge_browser_diagnostics(
             acquisition_result,
-            build_failed_browser_diagnostics(
-                browser_reason="empty-extraction retry",
-                exc=exc,
-            ),
+            build_failed_browser_diagnostics(browser_reason=f"{retry_reason.replace('_', '-')} retry", exc=exc),
         )
-        fetched.url_metrics = build_url_metrics(
-            acquisition_result,
-            requested_fields=list(context.requested_fields),
-        )
-        await _log_pipeline_event(
-            context,
-            "warning",
-            f"Browser retry failed for {context.url}: {type(exc).__name__}: {exc}",
-        )
+        fetched.url_metrics = build_url_metrics(acquisition_result, requested_fields=list(context.requested_fields))
+        await _log_pipeline_event(context, "warning", f"Browser retry failed for {context.url}: {type(exc).__name__}: {exc}")
         raise
-
 
 async def _apply_extraction_post_processing(
     context: _URLProcessingContext,
@@ -607,29 +652,36 @@ async def _apply_extraction_post_processing(
     records: list[dict[str, object]],
     selector_rules: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    if "detail" not in context.surface or not records:
+    if "detail" in context.surface and records:
+        records, selector_rules = await apply_selector_self_heal(
+            context.session,
+            run=context.run,
+            page_url=acquisition_result.final_url,
+            html=acquisition_result.html,
+            records=records,
+            adapter_records=acquisition_result.adapter_records,
+            network_payloads=acquisition_result.network_payloads,
+            selector_rules=selector_rules,
+        )
+    if not context.run.settings_view.llm_enabled():
         return records, selector_rules
-    records, selector_rules = await apply_selector_self_heal(
+    records = await _apply_direct_record_llm_fallback(
         context.session,
         run=context.run,
         page_url=acquisition_result.final_url,
         html=acquisition_result.html,
-        records=records,
-        adapter_records=acquisition_result.adapter_records,
-        network_payloads=acquisition_result.network_payloads,
-        selector_rules=selector_rules,
-    )
-    if not context.run.settings_view.llm_enabled() or not records:
-        return records, selector_rules
-    records = await apply_llm_fallback(
-        context.session,
-        run=context.run,
-        page_url=acquisition_result.final_url,
-        html=acquisition_result.html,
+        page_markdown=str(getattr(acquisition_result, "page_markdown", "") or ""),
         records=records,
     )
+    if "detail" in context.surface and records:
+        records = await apply_llm_fallback(
+            context.session,
+            run=context.run,
+            page_url=acquisition_result.final_url,
+            html=acquisition_result.html,
+            records=records,
+        )
     return records, selector_rules
-
 
 async def _extract_records_for_acquisition(
     context: _URLProcessingContext,
@@ -664,7 +716,6 @@ async def _extract_records_for_acquisition(
         if fallback_records:
             records = fallback_records
     return records, selector_rules
-
 
 async def _populate_adapter_records(
     context: _URLProcessingContext,
@@ -702,7 +753,6 @@ async def _populate_adapter_records(
         acquisition_result.adapter_name = adapter_result.adapter_name or None
         acquisition_result.adapter_source_type = adapter_result.source_type or None
 
-
 def _assign_platform_family(acquisition_result) -> None:
     platform_family = detect_platform_family(
         acquisition_result.final_url,
@@ -711,7 +761,6 @@ def _assign_platform_family(acquisition_result) -> None:
     if not platform_family and acquisition_result.adapter_name:
         platform_family = acquisition_result.adapter_name
     acquisition_result.platform_family = platform_family or None
-
 
 async def _run_record_extraction(
     context: _URLProcessingContext,
@@ -734,7 +783,6 @@ async def _run_record_extraction(
         content_type=acquisition_result.content_type,
     )
 
-
 async def _extract_records_from_preserved_browser_html(
     context: _URLProcessingContext,
     fetched: _FetchedURLStage,
@@ -742,12 +790,12 @@ async def _extract_records_from_preserved_browser_html(
     selector_rules: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     acquisition_result = fetched.acquisition_result
-    browser_diagnostics = _mapping_or_empty(
+    browser_diagnostics = mapping_or_empty(
         getattr(acquisition_result, "browser_diagnostics", {})
     )
     if not bool(browser_diagnostics.get("traversal_activated")):
         return []
-    artifacts = _mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
+    artifacts = mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
     rendered_html = str(artifacts.get("full_rendered_html") or "").strip()
     if not rendered_html or rendered_html == str(acquisition_result.html or "").strip():
         return []
@@ -806,7 +854,6 @@ async def _extract_records_from_preserved_browser_html(
     )
     return fallback_records
 
-
 def _empty_extraction_browser_retry_decision(
     acquisition_result,
     records: list[dict[str, object]],
@@ -828,6 +875,95 @@ def _empty_extraction_browser_retry_decision(
         return {"should_retry": False, "reason": "json_response"}
     return {"should_retry": True, "reason": "empty_non_browser_html"}
 
+def _thin_listing_browser_retry_decision(
+    context: _URLProcessingContext,
+    acquisition_result,
+    records: list[dict[str, object]],
+) -> dict[str, object]:
+    if "listing" not in context.surface:
+        return {"should_retry": False, "reason": "non_listing_surface"}
+    if not bool(crawler_runtime_settings.listing_recovery_enabled):
+        return {"should_retry": False, "reason": "disabled"}
+    try:
+        threshold = max(1, int(crawler_runtime_settings.listing_recovery_min_records_threshold or 5))
+    except (TypeError, ValueError):
+        threshold = 5  # sensible default
+    below_count_threshold = len(records) < threshold
+    if not below_count_threshold and not _listing_records_look_low_quality(records):
+        return {"should_retry": False, "reason": "enough_records"}
+    if str(getattr(acquisition_result, "method", "") or "").strip().lower() != "browser":
+        return {"should_retry": False, "reason": "non_browser_acquisition"}
+    if bool(getattr(acquisition_result, "blocked", False)):
+        return {"should_retry": False, "reason": "blocked"}
+    browser_diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    if not bool(browser_diagnostics.get("traversal_activated") or browser_diagnostics.get("requested_traversal_mode")):
+        return {"should_retry": False, "reason": "traversal_not_requested"}
+    return {
+        "should_retry": True,
+        "reason": "thin_listing" if below_count_threshold else "low_quality_listing",
+    }
+
+def _listing_records_look_low_quality(records: list[dict[str, object]]) -> bool:
+    if not records:
+        return True
+    signal_fields = ("title", "url", "price", "image_url", "brand")
+    populated_counts: list[int] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        populated_counts.append(
+            sum(
+                record.get(field_name) not in (None, "", [], {})
+                for field_name in signal_fields
+            )
+        )
+    if not populated_counts:
+        return True
+    average_populated = sum(populated_counts) / max(1, len(populated_counts))
+    raw_min_populated_fields = (
+        crawler_runtime_settings.listing_recovery_min_populated_fields_per_record
+    )
+    try:
+        min_populated_fields = (
+            float(raw_min_populated_fields)
+            if raw_min_populated_fields is not None
+            else 0.0
+        )
+    except (TypeError, ValueError):
+        min_populated_fields = 0.0
+    return average_populated < min_populated_fields
+
+def _listing_retry_improved(
+    previous_records: list[dict[str, object]],
+    retry_records: list[dict[str, object]],
+) -> bool:
+    if len(retry_records) > len(previous_records):
+        return True
+    if len(retry_records) < len(previous_records):
+        return False
+    return _listing_record_population_signature(retry_records) > _listing_record_population_signature(
+        previous_records
+    )
+
+def _listing_record_population_signature(
+    records: list[dict[str, object]],
+) -> tuple[int, int, int]:
+    signal_fields = ("title", "url", "price", "image_url", "brand")
+    populated_counts = [
+        sum(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in signal_fields
+        )
+        for record in records
+        if isinstance(record, dict)
+    ]
+    if not populated_counts:
+        return (0, 0, 0)
+    return (
+        int(round(sum(populated_counts) / max(1, len(populated_counts)) * 100)),
+        max(populated_counts),
+        sum(populated_counts),
+    )
 
 async def _load_selector_rules(
     context: _URLProcessingContext,
@@ -853,7 +989,6 @@ async def _load_selector_rules(
             if isinstance(row, dict)
         ],
     ]
-
 
 async def _run_persistence_stage(
     context: _URLProcessingContext,
@@ -896,6 +1031,25 @@ async def _run_persistence_stage(
         ),
     )
 
+async def _apply_direct_record_llm_fallback(
+    session: AsyncSession,
+    *,
+    run: CrawlRun,
+    page_url: str,
+    html: str,
+    page_markdown: str,
+    records: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return await apply_direct_record_llm_fallback_impl(
+        session,
+        run=run,
+        page_url=page_url,
+        html=html,
+        page_markdown=page_markdown,
+        records=records,
+        resolve_run_config_fn=resolve_run_config,
+        extract_records_fn=extract_records_directly_with_llm,
+    )
 
 async def apply_llm_fallback(
     session: AsyncSession,
@@ -910,8 +1064,8 @@ async def apply_llm_fallback(
     requested_fields = list(run.requested_fields or [])
     for record in records:
         next_record = dict(record)
-        confidence = _mapping_or_empty(next_record.get("_confidence"))
-        self_heal = _mapping_or_empty(next_record.get("_self_heal"))
+        confidence = mapping_or_empty(next_record.get("_confidence"))
+        self_heal = mapping_or_empty(next_record.get("_self_heal"))
         missing_fields = [
             field_name
             for field_name in requested_fields
@@ -941,7 +1095,7 @@ async def apply_llm_fallback(
             missing_fields=missing_fields or requested_fields,
             existing_values=sanitized_existing,
         )
-        field_sources = _mapping_or_empty(next_record.get("_field_sources"))
+        field_sources = mapping_or_empty(next_record.get("_field_sources"))
         applied_llm_fields: list[str] = []
         llm_rejected_fields: list[str] = []
         if isinstance(payload, dict):
@@ -995,7 +1149,6 @@ async def apply_llm_fallback(
         updated_records.append(next_record)
     return updated_records
 
-
 async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -> None:
     try:
         await session.rollback()
@@ -1023,7 +1176,6 @@ async def _mark_run_failed(session: AsyncSession, run_id: int, error_msg: str) -
         )
         return
 
-
 async def _persist_failure_state(
     session: AsyncSession,
     run_id: int,
@@ -1041,7 +1193,6 @@ async def _persist_failure_state(
     if run.status_value not in TERMINAL_STATUSES:
         update_run_status(run, CrawlStatus.FAILED)
     await session.commit()
-
 
 def _build_live_acquisition_logger(context: _URLProcessingContext):
     if not context.config.persist_logs:

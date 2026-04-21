@@ -11,6 +11,7 @@ from app.services.config.field_mappings import (
 
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<!^)(?=[A-Z])")
 _NON_FIELD_RE = re.compile(r"[^a-z0-9.]+")
+_REQUESTED_FIELD_PREFIXES = ("product_", "item_", "job_")
 _ALL_CANONICAL_FIELDS = frozenset(
     field_name
     for fields in CANONICAL_SCHEMAS.values()
@@ -217,7 +218,34 @@ def normalize_requested_field(value: str | None) -> str:
         return ""
     if text.startswith("sections."):
         text = text.split(".", 1)[1]
-    return _ALIAS_TO_CANONICAL.get(text, text)
+    for candidate in _requested_field_candidates(text):
+        canonical = _ALIAS_TO_CANONICAL.get(candidate)
+        if canonical:
+            return canonical
+
+    best_match = ""
+    best_score = (0, 0)
+    for candidate in _requested_field_candidates(text):
+        candidate_tokens = set(candidate.split("_"))
+        for alias_key, canonical in _ALIAS_TO_CANONICAL.items():
+            alias_tokens = set(alias_key.split("_"))
+            if not alias_tokens or not alias_tokens.issubset(candidate_tokens):
+                continue
+            score = (len(alias_tokens), len(alias_key))
+            if score > best_score:
+                best_score = score
+                best_match = canonical
+    return best_match or text
+
+
+def _requested_field_candidates(text: str) -> list[str]:
+    candidates = [text]
+    for prefix in _REQUESTED_FIELD_PREFIXES:
+        if text.startswith(prefix):
+            stripped = text[len(prefix) :]
+            if stripped and stripped not in candidates:
+                candidates.append(stripped)
+    return candidates
 
 
 def expand_requested_fields(values: Iterable[str] | None) -> list[str]:

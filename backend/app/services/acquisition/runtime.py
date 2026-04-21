@@ -9,15 +9,18 @@ import re
 from typing import Any
 
 import httpx
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup
 
+from app.services.acquisition.browser_readiness import HtmlAnalysis, analyze_html
 from app.core.config import settings
 from app.services.config.block_signatures import BLOCK_SIGNATURES
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.db_utils import mapping_or_empty
 from app.services.field_value_core import clean_text
 from app.services.network_resolution import (
     address_family_preference,
     build_async_http_client,
+    default_request_headers,
 )
 from app.services.platform_policy import resolve_platform_runtime_policy
 from app.services.structured_sources import harvest_js_state_objects, parse_json_ld
@@ -42,6 +45,7 @@ class PageFetchResult:
     network_payloads: list[dict[str, object]] = field(default_factory=list)
     browser_diagnostics: dict[str, object] = field(default_factory=dict)
     artifacts: dict[str, object] = field(default_factory=dict)
+    page_markdown: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,15 +66,6 @@ class BlockPageClassification:
     weak_hits: list[str] = field(default_factory=list)
     title_matches: list[str] = field(default_factory=list)
     challenge_element_hits: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True, slots=True)
-class HtmlAnalysis:
-    html: str
-    lowered_html: str
-    soup: BeautifulSoup
-    visible_text: str
-    title_text: str
 
 
 _BOT_VENDOR_HEADER_MARKERS: tuple[tuple[str, str, str], ...] = (
@@ -145,7 +140,7 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
     if not lowered.strip():
         return BlockPageClassification(blocked=False, outcome="empty")
 
-    analysis = _analyze_html(html)
+    analysis = analyze_html(html)
     soup = analysis.soup
     visible_text = analysis.visible_text.lower()
     title_text = analysis.title_text.lower()
@@ -168,14 +163,14 @@ def classify_blocked_page(html: str, status_code: int) -> BlockPageClassificatio
 
     strong_markers = [
         str(marker or "").strip().lower()
-        for marker in _mapping_or_empty(
+        for marker in mapping_or_empty(
             BLOCK_SIGNATURES.get("browser_challenge_strong_markers")
         ).keys()
         if str(marker or "").strip()
     ]
     weak_markers = [
         str(marker or "").strip().lower()
-        for marker in _mapping_or_empty(
+        for marker in mapping_or_empty(
             BLOCK_SIGNATURES.get("browser_challenge_weak_markers")
         ).keys()
         if str(marker or "").strip()
@@ -264,7 +259,7 @@ def should_escalate_to_browser(
     escalation_policy = resolved_policy.get("http_browser_escalation")
     if not isinstance(escalation_policy, Mapping):
         escalation_policy = {}
-    analysis = _analyze_html(result.html)
+    analysis = analyze_html(result.html)
     has_detail_signals = _has_extractable_detail_signals(result.html, analysis=analysis)
     has_listing_signals = _has_extractable_listing_signals(result.html, analysis=analysis)
     if (
@@ -410,10 +405,7 @@ def _curl_fetch_sync(
         allow_redirects=True,
         timeout=timeout_seconds,
         proxy=proxy,
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
+        headers=default_request_headers(),
     )
     html = response.text or ""
     headers = copy_headers(response.headers)
@@ -434,7 +426,7 @@ def _curl_fetch_sync(
 
 
 def _looks_like_js_shell(html: str, *, analysis: HtmlAnalysis | None = None) -> bool:
-    parsed = analysis or _analyze_html(html)
+    parsed = analysis or analyze_html(html)
     if _looks_like_js_required_placeholder(parsed):
         return True
     if len(parsed.visible_text) > 120:
@@ -449,7 +441,7 @@ def _has_extractable_detail_signals(
     *,
     analysis: HtmlAnalysis | None = None,
 ) -> bool:
-    parsed = analysis or _analyze_html(html)
+    parsed = analysis or analyze_html(html)
     if not parsed.html:
         return False
     for payload in parse_json_ld(parsed.soup):
@@ -481,7 +473,7 @@ def _has_extractable_listing_signals(
     *,
     analysis: HtmlAnalysis | None = None,
 ) -> bool:
-    parsed = analysis or _analyze_html(html)
+    parsed = analysis or analyze_html(html)
     if not parsed.html:
         return False
     for payload in parse_json_ld(parsed.soup):
@@ -521,7 +513,7 @@ def _looks_like_listing_shell(
     *,
     analysis: HtmlAnalysis | None = None,
 ) -> bool:
-    parsed = analysis or _analyze_html(result.html)
+    parsed = analysis or analyze_html(result.html)
     if _looks_like_js_required_placeholder(parsed):
         return True
     lowered_surface = str(result.final_url or result.url or "").strip().lower()
@@ -586,38 +578,6 @@ def _state_payload_has_content(payload: Any) -> bool:
     return payload not in (None, "")
 
 
-def _analyze_html(html: str) -> HtmlAnalysis:
-    text = str(html or "")
-    soup = BeautifulSoup(text, "html.parser")
-    return HtmlAnalysis(
-        html=text,
-        lowered_html=text.lower(),
-        soup=soup,
-        visible_text=_visible_text_from_soup(soup),
-        title_text=clean_text(
-            soup.title.get_text(" ", strip=True) if soup.title else ""
-        ),
-    )
-
-
-def _visible_text_from_soup(soup: BeautifulSoup) -> str:
-    pieces: list[str] = []
-    for node in soup.find_all(string=True):
-        if isinstance(node, Comment):
-            continue
-        parent_name = str(getattr(getattr(node, "parent", None), "name", "") or "").lower()
-        if parent_name in {"script", "style", "noscript"}:
-            continue
-        text = clean_text(str(node))
-        if text:
-            pieces.append(text)
-    return clean_text(" ".join(pieces))
-
-
-def _mapping_or_empty(value: object) -> dict[object, object]:
-    return dict(value) if isinstance(value, dict) else {}
-
-
 def _mapping_sequence(value: object) -> list[dict[object, object]]:
     if not isinstance(value, list):
         return []
@@ -631,25 +591,25 @@ def _string_sequence(value: object) -> list[str]:
 
 
 def _challenge_element_hits(soup: BeautifulSoup, lowered_html: str) -> list[str]:
-    challenge_elements = _mapping_or_empty(BLOCK_SIGNATURES.get("challenge_elements"))
+    challenge_elements = mapping_or_empty(BLOCK_SIGNATURES.get("challenge_elements"))
     iframe_src_markers = {
         str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in _mapping_or_empty(challenge_elements.get("iframe_src_markers")).items()
+        for marker, hit in mapping_or_empty(challenge_elements.get("iframe_src_markers")).items()
         if str(marker or "").strip() and str(hit or "").strip()
     }
     iframe_title_markers = {
         str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in _mapping_or_empty(challenge_elements.get("iframe_title_markers")).items()
+        for marker, hit in mapping_or_empty(challenge_elements.get("iframe_title_markers")).items()
         if str(marker or "").strip() and str(hit or "").strip()
     }
     script_src_markers = {
         str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in _mapping_or_empty(challenge_elements.get("script_src_markers")).items()
+        for marker, hit in mapping_or_empty(challenge_elements.get("script_src_markers")).items()
         if str(marker or "").strip() and str(hit or "").strip()
     }
     html_markers = {
         str(marker or "").strip().lower(): str(hit or "").strip()
-        for marker, hit in _mapping_or_empty(challenge_elements.get("html_markers")).items()
+        for marker, hit in mapping_or_empty(challenge_elements.get("html_markers")).items()
         if str(marker or "").strip() and str(hit or "").strip()
     }
     hits: list[str] = []

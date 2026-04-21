@@ -1,7 +1,8 @@
 from __future__ import annotations
+import re
 import logging
 from typing import Any
-
+from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 from selectolax.lexbor import SelectolaxError
 from selectolax.lexbor import LexborHTMLParser
@@ -20,9 +21,14 @@ from app.services.config.extraction_rules import (
     LISTING_WEAK_TITLES,
 )
 from app.services.config.selectors import CARD_SELECTORS
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.extraction_context import (
     collect_structured_source_payloads,
     prepare_extraction_context,
+)
+from app.services.extract.listing_candidate_ranking import (
+    best_listing_candidate_set,
+    rendered_listing_records,
 )
 from app.services.field_policy import normalize_requested_field
 from app.services.field_value_core import (
@@ -48,6 +54,9 @@ from app.services.config.surface_hints import detail_path_hints
 from app.services.pipeline.pipeline_config import LISTING_FALLBACK_FRAGMENT_LIMIT
 
 logger = logging.getLogger(__name__)
+
+_VISUAL_CTA_TITLES = frozenset(("add to bag", "add to cart", "buy now", "choose options", "learn more", "quick add", "quick view", "read more", "see details", "select options", "shop now", "view details"))
+_VISUAL_URL_MATCH_STOPWORDS = frozenset(("and", "buy", "care", "category", "collections", "details", "for", "hair", "in", "item", "items", "language", "location", "now", "page", "product", "products", "region", "select", "shop", "the", "to", "with", "your"))
 
 
 def _structured_listing_record(
@@ -91,11 +100,18 @@ def _url_is_structural(url: str, page_url: str) -> bool:
         return True
     try:
         parsed = urlsplit(url)
+        page_parsed = urlsplit(page_url)
         # Bare domain root (homepage)
         if parsed.path in ("", "/"):
             return True
-        # Check each path segment against non-listing tokens
-        path_segments = {seg.strip("/") for seg in parsed.path.lower().split("/") if seg.strip("/")}
+        # Same path as source page (query-string/fragment variant of the page itself)
+        if parsed.path.rstrip("/").lower() == page_parsed.path.rstrip("/").lower():
+            return True
+        # Check each path segment (split on both / and -) against non-listing tokens
+        import re as _re
+        raw_path = parsed.path.lower()
+        path_segments = set(_re.split(r"[/\-]", raw_path))
+        path_segments = {s.strip("./") for s in path_segments if s.strip("./")}
         if path_segments & set(LISTING_NON_LISTING_PATH_TOKENS):
             return True
     except Exception:
@@ -131,6 +147,9 @@ def _extract_structured_listing(
             record = _structured_listing_record(item, page_url, surface)
             url = str(record.get("url") or "")
             if not url or url in seen_urls or url == page_url:
+                continue
+            # Reject external-domain links from JSON-LD (e.g. parent-corp privacy pages)
+            if not same_host(page_url, url):
                 continue
             seen_urls.add(url)
             records.append(record)
@@ -173,7 +192,10 @@ def _listing_payload_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]
 
 
 def _allow_embedded_json_listing_payloads(payloads: list[dict[str, Any]]) -> bool:
+    listing_like = 0
     for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
         raw_type = payload.get("@type")
         normalized_type = (
             " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
@@ -182,6 +204,8 @@ def _allow_embedded_json_listing_payloads(payloads: list[dict[str, Any]]) -> boo
             return True
         if isinstance(payload.get("itemListElement"), list) and payload.get("itemListElement"):
             return True
+        if _looks_like_untyped_listing_payload(payload):
+            listing_like += 1
         main_entity = payload.get("mainEntity")
         if not isinstance(main_entity, dict):
             continue
@@ -195,7 +219,7 @@ def _allow_embedded_json_listing_payloads(payloads: list[dict[str, Any]]) -> boo
             return True
         if isinstance(main_entity.get("itemListElement"), list) and main_entity.get("itemListElement"):
             return True
-    return False
+    return listing_like >= max(2, int(crawler_runtime_settings.listing_min_items))
 
 
 def _looks_like_untyped_listing_payload(payload: dict[str, Any]) -> bool:
@@ -223,6 +247,8 @@ def _looks_like_untyped_listing_payload(payload: dict[str, Any]) -> bool:
 def _listing_title_is_noise(title: str) -> bool:
     lowered = clean_text(title).lower()
     if not lowered:
+        return True
+    if lowered in _VISUAL_CTA_TITLES:
         return True
     if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
         return True
@@ -451,6 +477,10 @@ def _visual_cluster_to_record(
         ),
         "",
     )
+    price_match = PRICE_RE.search(price_text)
+    is_job = surface.startswith("job_")
+    if not is_job and not price_match and not _visual_title_matches_url(title, href):
+        return None
     record = {
         "source_url": page_url,
         "_source": "visual_listing",
@@ -459,7 +489,6 @@ def _visual_cluster_to_record(
     }
     if image_url:
         record["image_url"] = image_url
-    price_match = PRICE_RE.search(price_text)
     if price_match:
         record["price"] = (
             price_match.group(0)
@@ -469,6 +498,18 @@ def _visual_cluster_to_record(
             .replace(",", "")
         )
     return finalize_record(record, surface=surface)
+
+
+def _visual_title_matches_url(title: str, href: str) -> bool:
+    return bool(
+        (title_tokens := _visual_match_tokens(title))
+        and (path_tokens := _visual_match_tokens(urlsplit(href).path))
+        and title_tokens & path_tokens
+    )
+
+
+def _visual_match_tokens(value: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]+", clean_text(value).lower()) if len(token) >= 2 and token not in _VISUAL_URL_MATCH_STOPWORDS}
 
 
 def _listing_fragment_score(node) -> int:
@@ -651,9 +692,10 @@ def _select_primary_anchor(card, page_url: str, *, surface: str) -> tuple[object
         url = absolute_url(page_url, _node_attr(anchor, "href"))
         if not url or not same_host(page_url, url):
             continue
+        lowered_url = url.lower()
         if _url_is_structural(url, page_url):
             continue
-        if any(token in url.lower() for token in ("sort=", "filter=", "facet=", "#review", "#details")):
+        if any(token in lowered_url for token in ("sort=", "filter=", "facet=", "#review", "#details")):
             continue
         text = clean_text(
             _node_attr(anchor, "title")
@@ -874,7 +916,9 @@ def extract_listing_records(
         ):
             if source_name == "js_state":
                 continue
-            payload_list = list(source_payloads)
+            payload_list = [
+                payload for payload in list(source_payloads) if isinstance(payload, dict)
+            ]
             if source_name == "embedded_json" and not _allow_embedded_json_listing_payloads(
                 payload_list
             ):
@@ -916,9 +960,6 @@ def extract_listing_records(
         return records
 
     structured_records = _structured_stage()
-    if len(structured_records) >= max_records:
-        return structured_records[:max_records]
-
     structured_urls = {
         str(record.get("url") or "")
         for record in structured_records
@@ -926,11 +967,28 @@ def extract_listing_records(
     }
     remaining = max(1, int(max_records) - len(structured_records))
     dom_records = _dom_stage(seed_urls=structured_urls, limit=remaining)
-
-    if structured_records:
-        return [*structured_records, *dom_records][:max_records]
-    if dom_records:
-        return dom_records[:max_records]
+    rendered_records = rendered_listing_records(
+        artifacts.get("rendered_listing_cards") if isinstance(artifacts, dict) else None,
+        page_url=page_url,
+        surface=surface,
+        max_records=max_records,
+        title_is_noise=_listing_title_is_noise,
+        url_is_structural=_url_is_structural,
+    )
+    best_non_visual = best_listing_candidate_set(
+        [
+            ("structured", structured_records),
+            ("dom", dom_records),
+            ("structured_plus_dom", [*structured_records, *dom_records]),
+            ("rendered", rendered_records),
+        ],
+        page_url=page_url,
+        max_records=max_records,
+        title_is_noise=_listing_title_is_noise,
+        url_is_structural=_url_is_structural,
+    )
+    if best_non_visual:
+        return best_non_visual[:max_records]
     visual_records = _visual_listing_records(
         artifacts.get("listing_visual_elements") if isinstance(artifacts, dict) else None,
         page_url=page_url,

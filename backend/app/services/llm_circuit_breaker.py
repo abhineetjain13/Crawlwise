@@ -13,7 +13,6 @@ ERROR_PREFIX = "Error:"
 logger = logging.getLogger(__name__)
 
 _LLM_CIRCUIT_KEY_PREFIX = "crawl:llm:circuit"
-DEFAULT_CIRCUIT_FAILURE_THRESHOLD = 5
 _RECORD_LLM_FAILURE_LUA = """
 local stats_key = KEYS[1]
 local open_key = KEYS[2]
@@ -163,13 +162,16 @@ def _shared_circuit_stats_ttl_seconds() -> int:
 
 
 def _resolved_failure_threshold() -> int | None:
+    default_threshold = type(llm_runtime_settings).model_fields[
+        "circuit_failure_threshold"
+    ].default
     raw_threshold = getattr(
         llm_runtime_settings,
         "circuit_failure_threshold",
-        DEFAULT_CIRCUIT_FAILURE_THRESHOLD,
+        default_threshold,
     )
     if raw_threshold is None:
-        raw_threshold = DEFAULT_CIRCUIT_FAILURE_THRESHOLD
+        raw_threshold = default_threshold
     try:
         return max(1, int(raw_threshold))
     except (TypeError, ValueError):

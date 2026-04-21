@@ -77,6 +77,7 @@ async def snapshot_active_configs(
     snapshot: dict[str, dict] = {}
     for task_type in task_types or [
         "general",
+        "direct_record_extraction",
         "xpath_discovery",
         "missing_field_extraction",
         "field_cleanup_review",

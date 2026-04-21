@@ -9,6 +9,7 @@ from app.services.llm_config_service import llm_provider_catalog
 from app.services.llm_provider_client import test_provider_connection
 from app.services.llm_tasks import (
     discover_xpath_candidates,
+    extract_records_directly,
     extract_missing_fields,
     review_field_candidates,
     run_prompt_task,
@@ -21,6 +22,7 @@ __all__ = [
     "LLMTaskResult",
     "circuit_breaker_snapshot",
     "discover_xpath_candidates",
+    "extract_records_directly",
     "extract_missing_fields",
     "llm_provider_catalog",
     "review_field_candidates",

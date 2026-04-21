@@ -129,6 +129,18 @@ describe("CrawlRunScreen", () => {
     });
   });
 
+  it("renders markdown from the existing export endpoint in the Markdown tab", async () => {
+    apiMock.getMarkdown.mockResolvedValue("# Widget Prime\n\nBuilt for long mileage.");
+
+    renderRunScreen();
+
+    const markdownButtons = await screen.findAllByRole("button", { name: "Markdown" });
+    fireEvent.click(markdownButtons.at(-1)!);
+
+    expect(await screen.findByText("Widget Prime")).toBeInTheDocument();
+    expect(screen.getByText("Built for long mileage.")).toBeInTheDocument();
+  });
+
   it("renders completed summary chips from persisted backend values", async () => {
     apiMock.getCrawl.mockResolvedValue({
       ...terminalRun(101),
@@ -385,13 +397,15 @@ describe("CrawlRunScreen", () => {
 
   it("triggers direct CSV export downloads from the terminal workspace", async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    try {
+      renderRunScreen();
 
-    renderRunScreen();
+      const button = await screen.findByRole("button", { name: "Excel (CSV)" });
+      fireEvent.click(button);
 
-    const button = await screen.findByRole("button", { name: "Excel (CSV)" });
-    fireEvent.click(button);
-
-    expect(apiMock.exportCsv).toHaveBeenCalledWith(101);
-    expect(clickSpy).toHaveBeenCalledTimes(1);
-  });
-});
+      expect(apiMock.exportCsv).toHaveBeenCalledWith(101);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      clickSpy.mockRestore();
+    }
+  });});

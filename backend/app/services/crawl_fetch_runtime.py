@@ -27,6 +27,10 @@ from app.services.acquisition.browser_runtime import (
 from app.services.acquisition.http_client import (
     close_shared_http_client as close_adapter_shared_http_client,
 )
+from app.services.acquisition.pacing import (
+    apply_protected_host_backoff,
+    wait_for_host_slot,
+)
 from app.services.acquisition.runtime import (
     NetworkPayloadReadResult,
     PageFetchResult,
@@ -147,6 +151,8 @@ async def _browser_fetch(
     browser_reason: str | None = None,
     surface: str | None = None,
     traversal_mode: str | None = None,
+    requested_fields: list[str] | None = None,
+    listing_recovery_mode: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,
@@ -159,6 +165,8 @@ async def _browser_fetch(
         browser_reason=browser_reason,
         surface=surface,
         traversal_mode=traversal_mode,
+        requested_fields=requested_fields,
+        listing_recovery_mode=listing_recovery_mode,
         max_pages=max_pages,
         max_scrolls=max_scrolls,
         on_event=on_event,
@@ -225,6 +233,8 @@ async def fetch_page(
     browser_reason: str | None = None,
     surface: str | None = None,
     traversal_mode: str | None = None,
+    requested_fields: list[str] | None = None,
+    listing_recovery_mode: str | None = None,
     max_pages: int = 1,
     max_scrolls: int = 1,
     on_event=None,
@@ -258,6 +268,8 @@ async def fetch_page(
                 traversal_required=context.traversal_required,
                 host_preference_enabled=False,
             ),
+            requested_fields=requested_fields,
+            listing_recovery_mode=listing_recovery_mode,
         )
 
     http_result, vendor_block_confirmed = await _run_http_fetch_chain(context)
@@ -275,6 +287,8 @@ async def fetch_page(
             return await _run_browser_attempts(
                 context,
                 reason=browser_reason or "http-escalation",
+                requested_fields=requested_fields,
+                listing_recovery_mode=listing_recovery_mode,
             )
         except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
             raise context.last_error from exc
@@ -298,11 +312,14 @@ async def _run_browser_attempts(
     context: _FetchRuntimeContext,
     *,
     reason: str,
+    requested_fields: list[str] | None = None,
+    listing_recovery_mode: str | None = None,
     proxies: list[str | None] | None = None,
 ) -> PageFetchResult:
     last_browser_error: Exception | None = None
     for proxy in list(proxies or context.proxies):
         try:
+            await wait_for_host_slot(context.url)
             return await _browser_fetch(
                 context.url,
                 context.resolved_timeout,
@@ -311,6 +328,8 @@ async def _run_browser_attempts(
                 browser_reason=reason,
                 surface=context.surface,
                 traversal_mode=context.traversal_mode,
+                requested_fields=requested_fields,
+                listing_recovery_mode=listing_recovery_mode,
                 max_pages=context.max_pages,
                 max_scrolls=context.max_scrolls,
                 on_event=context.on_event,
@@ -394,6 +413,7 @@ async def _attempt_http_fetch(
     max_attempts: int,
 ) -> PageFetchResult | object:
     try:
+        await wait_for_host_slot(context.url)
         if proxy is not None:
             return await fetcher(context.url, context.resolved_timeout, proxy=proxy)
         return await fetcher(context.url, context.resolved_timeout)
@@ -432,6 +452,8 @@ async def _handle_http_result(
     max_attempts: int,
 ) -> tuple[PageFetchResult | object | None, bool]:
     vendor = _vendor_confirmed_block(result)
+    if vendor or bool(result.blocked):
+        await apply_protected_host_backoff(result.final_url or result.url or context.url)
     result_runtime_policy = resolve_platform_runtime_policy(
         result.final_url or result.url,
         result.html,
@@ -460,6 +482,10 @@ async def _handle_http_result(
             reason=browser_reason,
             proxies=[proxy],
         )
+        if bool(browser_result.blocked):
+            await apply_protected_host_backoff(
+                browser_result.final_url or browser_result.url or context.url
+            )
         return browser_result, bool(vendor)
     if is_non_retryable_http_status(result.status_code):
         logger.info(

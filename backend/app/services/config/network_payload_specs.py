@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from typing import Final
 
+from app.services.config.runtime_settings import crawler_runtime_settings
+
 
 FieldPathMap = dict[str, tuple[str, ...]]
 PayloadMappingSpec = dict[
     str,
     str | tuple[str, ...] | tuple[tuple[str, ...], ...] | FieldPathMap,
 ]
+NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH: Final[int] = (
+    crawler_runtime_settings.network_payload_signature_min_match
+)
 
 
 NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
@@ -70,7 +75,15 @@ NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
         },
         {
             "name": "generic_job_detail",
-            "endpoint_path_tokens": ("/jobs/", "/job_posts/", "/postings/"),
+            "endpoint_type": "job_api",
+            "endpoint_path_tokens": (
+                "/jobs/",
+                "/job_posts/",
+                "/postings/",
+                "/positions/",
+                "/requisition/",
+                "/careers/",
+            ),
             "required_path_groups": (
                 (
                     "posting.title",
@@ -188,8 +201,15 @@ NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
     "ecommerce_detail": (
         {
             "name": "generic_ecommerce_detail",
+            "endpoint_type": "product_api",
             "endpoint_families": ("shopify", "nextjs"),
-            "endpoint_path_tokens": ("/products/", "/product/", "product.js"),
+            "endpoint_path_tokens": (
+                "/products/",
+                "/product/",
+                "product.js",
+                "/variants/",
+                "/cart.js",
+            ),
             "required_path_groups": (
                 (
                     "product.title",
@@ -371,3 +391,21 @@ NETWORK_PAYLOAD_SPECS: Final[dict[str, tuple[PayloadMappingSpec, ...]]] = {
         },
     ),
 }
+
+
+def endpoint_type_path_tokens() -> dict[str, dict[str, tuple[str, ...]]]:
+    tokens_by_surface: dict[str, dict[str, tuple[str, ...]]] = {}
+    for surface, specs in NETWORK_PAYLOAD_SPECS.items():
+        surface_tokens: dict[str, tuple[str, ...]] = {}
+        for spec in specs:
+            endpoint_type = str(spec.get("endpoint_type") or "").strip().lower()
+            raw_tokens = spec.get("endpoint_path_tokens")
+            if not endpoint_type or not isinstance(raw_tokens, tuple) or not raw_tokens:
+                continue
+            existing_tokens = surface_tokens.get(endpoint_type, ())
+            surface_tokens[endpoint_type] = tuple(
+                dict.fromkeys([*existing_tokens, *raw_tokens])
+            )
+        if surface_tokens:
+            tokens_by_surface[surface] = surface_tokens
+    return tokens_by_surface

@@ -18,11 +18,7 @@ from app.services.crawl_fetch_runtime import reset_fetch_runtime_state
 from app.services.acquisition.pacing import reset_pacing_state
 from app.services.crawl_state import ACTIVE_STATUSES
 from app.services.robots_policy import reset_robots_policy_cache
-from app.services.config.crawl_runtime import (
-    LONG_RUN_THRESHOLD_SECONDS,
-    MAX_DURATION_SAMPLE_SIZE,
-    STALLED_RUN_THRESHOLD_SECONDS,
-)
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.services.runtime_metrics import snapshot as runtime_metrics_snapshot
 from sqlalchemy import delete, func, select, text
@@ -230,8 +226,10 @@ def _legacy_artifact_paths() -> list[Path]:
 async def build_operational_metrics(session: AsyncSession) -> dict:
     """Build lightweight runtime + DB-backed operational metrics."""
     runtime = await runtime_metrics_snapshot()
-    long_run_threshold_seconds = LONG_RUN_THRESHOLD_SECONDS
-    stalled_run_threshold_seconds = STALLED_RUN_THRESHOLD_SECONDS
+    long_run_threshold_seconds = crawler_runtime_settings.long_run_threshold_seconds
+    stalled_run_threshold_seconds = (
+        crawler_runtime_settings.stalled_run_threshold_seconds
+    )
     run_duration_rows = await session.execute(
         select(
             CrawlRun.created_at,
@@ -239,7 +237,7 @@ async def build_operational_metrics(session: AsyncSession) -> dict:
         )
         .where(CrawlRun.created_at.is_not(None))
         .order_by(CrawlRun.created_at.desc())
-        .limit(MAX_DURATION_SAMPLE_SIZE)
+        .limit(crawler_runtime_settings.max_duration_sample_size)
     )
     durations_seconds: list[float] = []
     long_running_count = 0

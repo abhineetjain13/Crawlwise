@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import crawl_fetch_runtime
-from app.services.acquisition import browser_identity
+from app.services.acquisition import browser_identity, runtime as acquisition_runtime
 from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     read_network_payload_body,
@@ -127,13 +128,93 @@ def test_classify_network_endpoint_uses_platform_config_family_signatures() -> N
         surface="job_detail",
     ) == {"type": "job_api", "family": "greenhouse"}
     assert classify_network_endpoint(
+        response_url="https://jobs.example.com/api/positions/1234",
+        surface="job_detail",
+    ) == {"type": "job_api", "family": "generic"}
+    assert classify_network_endpoint(
         response_url="https://shop.example.com/products/widget/product.js",
         surface="ecommerce_detail",
     ) == {"type": "product_api", "family": "shopify"}
     assert classify_network_endpoint(
+        response_url="https://shop.example.com/api/variants/123",
+        surface="ecommerce_detail",
+    ) == {"type": "product_api", "family": "generic"}
+    assert classify_network_endpoint(
         response_url="https://store.example.com/_next/data/build-id/widget.json",
         surface="ecommerce_detail",
     ) == {"type": "generic_json", "family": "nextjs"}
+
+
+@pytest.mark.asyncio
+async def test_curl_fetch_uses_runtime_owned_default_request_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_headers: dict[str, str] = {}
+    original_user_agent = crawler_runtime_settings.http_user_agent
+    crawler_runtime_settings.http_user_agent = "CrawlerAI-Test-Agent/1.0"
+
+    def _fake_get(url: str, **kwargs):
+        del url
+        captured_headers.update(dict(kwargs.get("headers") or {}))
+        return SimpleNamespace(
+            text="<html><body>ok</body></html>",
+            headers={"content-type": "text/html"},
+            status_code=200,
+            url="https://example.com/products/widget",
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "curl_cffi",
+        SimpleNamespace(requests=SimpleNamespace(get=_fake_get)),
+    )
+    try:
+        result = await acquisition_runtime.curl_fetch(
+            "https://example.com/products/widget",
+            5.0,
+        )
+    finally:
+        crawler_runtime_settings.http_user_agent = original_user_agent
+
+    assert result.method == "curl_cffi"
+    assert captured_headers["User-Agent"] == "CrawlerAI-Test-Agent/1.0"
+    assert "Accept" in captured_headers
+    assert "Accept-Language" in captured_headers
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_waits_for_host_slot_before_http_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wait_calls: list[str] = []
+
+    async def _fake_wait_for_host_slot(url: str) -> None:
+        wait_calls.append(url)
+
+    async def _fake_curl(url: str, timeout_seconds: float, *, proxy: str | None = None):
+        del timeout_seconds, proxy
+        return PageFetchResult(
+            url=url,
+            final_url=url,
+            html=(
+                "<html><body><article class='product-card'>"
+                "<a href='/products/widget'>Widget</a><span>$19.99</span>"
+                "</article></body></html>"
+            ),
+            status_code=200,
+            method="curl_cffi",
+        )
+
+    monkeypatch.setattr(crawl_fetch_runtime, "wait_for_host_slot", _fake_wait_for_host_slot)
+    monkeypatch.setattr(crawl_fetch_runtime, "_curl_fetch", _fake_curl)
+
+    result = await crawl_fetch_runtime.fetch_page(
+        "https://example.com/collections/widgets",
+        surface="ecommerce_listing",
+    )
+
+    assert result.method == "curl_cffi"
+    assert wait_calls == ["https://example.com/collections/widgets"]
 
 
 @pytest.mark.asyncio

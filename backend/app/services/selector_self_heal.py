@@ -7,6 +7,7 @@ from bs4.element import Comment, NavigableString, Tag
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl import CrawlRun
+from app.services.db_utils import mapping_or_empty
 from app.services.extraction_runtime import extract_records_async
 from app.services.domain_memory_service import (
     load_domain_memory,
@@ -159,7 +160,7 @@ def selector_self_heal_targets(
     run: CrawlRun,
     record: dict[str, object],
 ) -> list[str]:
-    confidence = _mapping_or_empty(record.get("_confidence"))
+    confidence = mapping_or_empty(record.get("_confidence"))
     requested_fields = [
         str(field_name or "").strip().lower()
         for field_name in list(run.requested_fields or [])
@@ -211,7 +212,7 @@ async def apply_selector_self_heal(
     persisted_rules = False
     for record in records:
         next_record = dict(record)
-        confidence = _mapping_or_empty(next_record.get("_confidence"))
+        confidence = mapping_or_empty(next_record.get("_confidence"))
         confidence_score = _safe_float(confidence.get("score"), default=1.0)
         requested_missing_fields = [
             field_name
@@ -420,10 +421,6 @@ def _safe_int(value: object, *, default: int | None) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return default
-
-
-def _mapping_or_empty(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def _list_or_empty(value: object) -> list[object]:

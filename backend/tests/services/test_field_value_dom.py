@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from app.services.field_value_dom import extract_page_images
+from app.services.field_value_dom import extract_heading_sections, extract_page_images
 
 
 def test_extract_page_images_excludes_linked_job_detail_images_by_surface() -> None:
@@ -53,6 +53,34 @@ def test_extract_page_images_excludes_linked_product_detail_images_by_surface() 
     )
 
     assert images == ["https://example.com/images/gallery.jpg"]
+
+
+def test_extract_page_images_keeps_main_gallery_carousel_images_on_detail_pages() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <main>
+              <section class="product-gallery carousel">
+                <a href="/products/widget-prime?view=2">
+                  <img src="/images/gallery-2.jpg" alt="Widget Prime side view" />
+                </a>
+              </section>
+            </main>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    images = extract_page_images(
+        soup,
+        "https://example.com/products/widget-prime",
+        exclude_linked_detail_images=True,
+        surface="ecommerce_detail",
+    )
+
+    assert images == ["https://example.com/images/gallery-2.jpg"]
 
 
 def test_extract_page_images_dedupes_cdn_resized_variants_and_keeps_highest_resolution() -> None:
@@ -125,3 +153,69 @@ def test_extract_page_images_prefers_gallery_media_and_filters_tracking_assets()
         "https://cdn.example.com/products/widget-main.jpg?width=1200",
         "https://cdn.example.com/products/widget-side.jpg?width=900",
     ]
+
+
+def test_extract_heading_sections_follows_aria_controls_panels() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <button aria-controls="materials-panel">Materials</button>
+            <section id="materials-panel">
+              <p>Full-grain leather upper with mesh lining.</p>
+            </section>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert sections == {"Materials": "Full-grain leather upper with mesh lining."}
+
+
+def test_extract_heading_sections_reads_details_summary_content() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <details>
+              <summary>Description</summary>
+              <div>Built for long mileage and wet-weather traction.</div>
+            </details>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert sections == {"Description": "Built for long mileage and wet-weather traction."}
+
+
+def test_extract_heading_sections_reads_nested_wrapped_accordion_content() -> None:
+    soup = BeautifulSoup(
+        """
+        <html>
+          <body>
+            <div class="accordion-item">
+              <button>Specifications</button>
+              <div class="accordion-item__body">
+                <div class="rich-content">
+                  Rubber outsole with a reinforced toe cap.
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+        """,
+        "html.parser",
+    )
+
+    sections = extract_heading_sections(soup)
+
+    assert sections == {
+        "Specifications": "Rubber outsole with a reinforced toe cap."
+    }

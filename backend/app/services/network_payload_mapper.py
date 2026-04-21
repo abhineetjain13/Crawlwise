@@ -4,7 +4,10 @@ from typing import Any
 
 import jmespath
 
-from app.services.config.network_payload_specs import NETWORK_PAYLOAD_SPECS
+from app.services.config.network_payload_specs import (
+    NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH,
+    NETWORK_PAYLOAD_SPECS,
+)
 from app.services.extraction_html_helpers import extract_job_sections, html_to_text
 from app.services.field_value_candidates import (
     collect_structured_candidates,
@@ -19,7 +22,6 @@ from app.services.field_value_core import (
 _PRODUCT_SIGNATURE: frozenset[str] = frozenset({"price", "sku", "name", "description", "title", "brand", "availability", "image", "images", "currency", "vendor", "product_type", "category", "compare_at_price", "variants", "inventory_quantity", "body_html"})
 _JOB_SIGNATURE: frozenset[str] = frozenset({"title", "description", "location", "company", "apply_url", "posted_date", "employment_type", "salary", "department", "qualifications", "responsibilities", "benefits", "remote", "date_posted", "datePosted", "applyUrl", "job_type", "content", "absolute_url", "company_name"})
 
-_SIGNATURE_MIN_MATCH = 3
 _GHOST_ROUTE_COMPATIBLE_SURFACES = {
     "ecommerce_detail",
     "job_detail",
@@ -219,9 +221,12 @@ def _infer_surface_from_body(body: object) -> str | None:
     keys = _collect_keys(body)
     product_score = len(keys & _PRODUCT_SIGNATURE)
     job_score = len(keys & _JOB_SIGNATURE)
-    if product_score >= _SIGNATURE_MIN_MATCH and product_score >= job_score:
+    if (
+        product_score >= NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH
+        and product_score >= job_score
+    ):
         return "ecommerce_detail"
-    if job_score >= _SIGNATURE_MIN_MATCH:
+    if job_score >= NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH:
         return "job_detail"
     return None
 
@@ -265,7 +270,11 @@ def _matches_signature(
     *,
     depth: int = 2,
 ) -> bool:
-    return isinstance(body, dict) and len(_collect_keys(body, limit=depth) & signature) >= _SIGNATURE_MIN_MATCH
+    return (
+        isinstance(body, dict)
+        and len(_collect_keys(body, limit=depth) & signature)
+        >= NETWORK_PAYLOAD_SIGNATURE_MIN_MATCH
+    )
 
 
 def _looks_like_navigation_payload(body: object) -> bool:

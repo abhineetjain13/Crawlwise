@@ -159,25 +159,6 @@ def resolve_traversal_mode(settings: object) -> str | None:
     raise CrawlerConfigurationError(f"Unsupported traversal_mode: {mode}")
 
 
-# Field name normalization
-
-
-def normalize_committed_field_name(value: object) -> str:
-    """Normalize a field name to snake_case format."""
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    # Convert camelCase to snake_case
-    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
-    # Replace spaces with underscores and lowercase
-    normalized = re.sub(r"\s+", "_", text.lower())
-    # Remove non-alphanumeric characters except underscores
-    normalized = re.sub(r"[^a-z0-9_]+", "_", normalized)
-    # Collapse multiple underscores
-    normalized = re.sub(r"_+", "_", normalized)
-    return normalized.strip("_")
-
-
 # Extraction contract validation
 
 

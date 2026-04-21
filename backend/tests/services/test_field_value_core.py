@@ -28,3 +28,39 @@ def test_validate_and_clean_nulls_schema_type_mismatches() -> None:
 
     assert cleaned == {"price": None, "variants": None}
     assert len(errors) == 2
+
+
+def test_validate_and_clean_applies_listing_surface_schema() -> None:
+    cleaned, errors = validate_and_clean(
+        {
+            "title": ["Widget"],
+            "url": "https://example.com/products/widget",
+            "image_url": {"src": "https://cdn.example.com/widget.jpg"},
+        },
+        "ecommerce_listing",
+    )
+
+    assert cleaned == {
+        "title": None,
+        "url": "https://example.com/products/widget",
+        "image_url": None,
+    }
+    assert len(errors) == 2
+
+
+def test_validate_and_clean_applies_job_listing_surface_schema() -> None:
+    cleaned, errors = validate_and_clean(
+        {
+            "title": "Platform Engineer",
+            "company": {"name": "Acme"},
+            "apply_url": "https://jobs.example.com/apply/123",
+        },
+        "job_listing",
+    )
+
+    assert cleaned == {
+        "title": "Platform Engineer",
+        "company": None,
+        "apply_url": "https://jobs.example.com/apply/123",
+    }
+    assert len(errors) == 1

@@ -18,14 +18,10 @@ from app.models.crawl_domain import (
     transition_status,
 )
 from app.models.crawl_settings import CrawlRunSettings
+from app.services.db_utils import mapping_or_empty
 from app.services.run_summary import as_int, merge_run_summary_patch
 
 CRAWL_RUN_FK = "crawl_runs.id"
-
-
-def _mapping_or_empty(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
 
 def _string_list(value: object) -> list[str]:
     return [str(item or "").strip() for item in value] if isinstance(value, list) else []
@@ -103,7 +99,7 @@ class CrawlRun(Base):
         return merged
 
     def summary_dict(self) -> dict[str, object]:
-        return _mapping_or_empty(self.result_summary)
+        return mapping_or_empty(self.result_summary)
 
     def get_summary(self, key: str, default: object = None) -> object:
         return self.summary_dict().get(key, default)
@@ -182,7 +178,7 @@ class BatchRunProgressState:
         url_domain: str,
         persisted_record_count: int,
     ) -> "BatchRunProgressState":
-        summary = _mapping_or_empty(current_summary)
+        summary = mapping_or_empty(current_summary)
         raw_verdicts = _string_list(summary.get("url_verdicts"))[:total_urls]
         completed_count = min(as_int(summary.get("completed_urls", 0)), total_urls)
         if raw_verdicts:
@@ -195,9 +191,9 @@ class BatchRunProgressState:
             total_urls=total_urls,
             url_domain=str(url_domain or ""),
             url_verdicts=raw_verdicts,
-            verdict_counts={str(key): as_int(value) for key, value in _mapping_or_empty(summary.get("verdict_counts")).items()},
-            acquisition_summary=_mapping_or_empty(summary.get("acquisition_summary")),
-            quality_summary=_mapping_or_empty(summary.get("quality_summary")),
+            verdict_counts={str(key): as_int(value) for key, value in mapping_or_empty(summary.get("verdict_counts")).items()},
+            acquisition_summary=mapping_or_empty(summary.get("acquisition_summary")),
+            quality_summary=mapping_or_empty(summary.get("quality_summary")),
             persisted_record_count=max(0, as_int(persisted_record_count)),
             completed_count=completed_count,
         )
@@ -284,14 +280,14 @@ def _merge_run_acquisition_metrics(
     existing: object,
     url_metrics: dict[str, object],
 ) -> dict[str, object]:
-    current = _mapping_or_empty(existing)
-    methods = {str(key): as_int(value) for key, value in _mapping_or_empty(current.get("methods")).items()}
+    current = mapping_or_empty(existing)
+    methods = {str(key): as_int(value) for key, value in mapping_or_empty(current.get("methods")).items()}
     method = str(url_metrics.get("method") or "").strip()
     if method:
         methods[method] = as_int(methods.get(method, 0)) + 1
     platform_families = {
         str(key): as_int(value)
-        for key, value in _mapping_or_empty(current.get("platform_families")).items()
+        for key, value in mapping_or_empty(current.get("platform_families")).items()
     }
     platform_family = str(url_metrics.get("platform_family") or "").strip()
     if platform_family:
@@ -364,14 +360,14 @@ def _merge_run_acquisition_metrics(
     if traversal_mode:
         traversal_modes_used = {
             str(key): as_int(value)
-            for key, value in _mapping_or_empty(current.get("traversal_modes_used")).items()
+            for key, value in mapping_or_empty(current.get("traversal_modes_used")).items()
         }
         summary["traversal_modes_used"] = {
             **traversal_modes_used,
             traversal_mode: as_int(traversal_modes_used.get(traversal_mode, 0)) + 1,
         }
     elif current.get("traversal_modes_used"):
-        summary["traversal_modes_used"] = _mapping_or_empty(current.get("traversal_modes_used"))
+        summary["traversal_modes_used"] = mapping_or_empty(current.get("traversal_modes_used"))
 
     return summary
 
@@ -388,16 +384,16 @@ def _merge_run_quality_summary(
     existing: object,
     url_metrics: dict[str, object],
 ) -> dict[str, object]:
-    current = _mapping_or_empty(existing)
+    current = mapping_or_empty(existing)
     url_quality = (
-        _mapping_or_empty(url_metrics.get("quality_summary"))
+        mapping_or_empty(url_metrics.get("quality_summary"))
         if isinstance(url_metrics.get("quality_summary"), dict)
         else {}
     )
     if not url_quality:
         return current
 
-    level_counts = {str(key): as_int(value) for key, value in _mapping_or_empty(current.get("level_counts")).items()}
+    level_counts = {str(key): as_int(value) for key, value in mapping_or_empty(current.get("level_counts")).items()}
     url_level = str(url_quality.get("level") or "").strip().lower()
     if url_level in {"high", "medium", "low", "unknown"}:
         level_counts[url_level] = int(level_counts.get(url_level, 0) or 0) + 1

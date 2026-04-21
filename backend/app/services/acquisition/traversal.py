@@ -55,6 +55,11 @@ _PRICE_HINT_RE = re.compile(
     r"(?:rs\.?|inr|\$|£|€)\s*\d|\b\d[\d,]{2,}\b",
     re.I,
 )
+_LISTING_RECOVERY_ACTIONS: tuple[tuple[str, str, str], ...] = (
+    ("clear_filters", r"(clear all|clear filters|reset|reset filters)", "Removing active filters"),
+    ("view_all", r"(view all|see all|shop all|show all)", "Expanding the listing view"),
+    ("next_page", r"(next|older|›|»|>)", "Advancing pagination"),
+)
 
 
 @dataclass(slots=True)
@@ -587,6 +592,43 @@ async def _find_actionable_locator(page, selector_group: str):
             name_pattern=r"(load more|show more|see more|view more)",
         )
     return None
+
+
+async def recover_listing_page_content(
+    page,
+    *,
+    on_event=None,
+) -> dict[str, object]:
+    diagnostics: dict[str, object] = {"status": "attempted", "clicked_count": 0, "actions_taken": [], "limit": int(crawler_runtime_settings.listing_recovery_max_actions)}
+    max_actions = max(0, int(crawler_runtime_settings.listing_recovery_max_actions))
+    if max_actions == 0:
+        diagnostics["status"] = "disabled"
+        return diagnostics
+
+    helper_result = TraversalResult(requested_mode="recovery")
+    wait_ms = max(0, int(crawler_runtime_settings.listing_recovery_post_action_wait_ms))
+    for action_name, pattern, message in _LISTING_RECOVERY_ACTIONS:
+        if diagnostics["clicked_count"] >= max_actions:
+            diagnostics["status"] = "interaction_limit_reached"
+            break
+        locator = await _find_actionable_locator(page, "next_page") if action_name == "next_page" else await _find_aom_actionable_locator(page, selector_group=action_name, name_pattern=pattern)
+        if locator is None:
+            continue
+        await _emit_event(on_event, "info", f"{message}...")
+        if not await _click_with_retry(page, locator, result=helper_result):
+            continue
+        diagnostics["clicked_count"] += 1
+        diagnostics["actions_taken"].append(action_name)
+        if wait_ms > 0:
+            await page.wait_for_timeout(wait_ms)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=int(crawler_runtime_settings.traversal_settle_networkidle_timeout_ms))
+        except Exception:
+            logger.debug("Listing recovery networkidle wait timed out for action=%s url=%s", action_name, getattr(page, "url", ""), exc_info=True)
+    if diagnostics["status"] == "attempted":
+        diagnostics["status"] = "recovered" if diagnostics["clicked_count"] > 0 else "no_actionable_elements"
+    diagnostics["click_retries"] = helper_result.click_retries
+    return diagnostics
 
 
 async def _find_generic_next_page_locator(page):

@@ -13,6 +13,10 @@ from app.services.acquisition.runtime import (
     close_shared_http_client as close_runtime_shared_http_client,
     get_shared_http_client,
 )
+from app.services.network_resolution import (
+    build_async_http_client,
+    should_retry_with_forced_ipv4,
+)
 
 requests = httpx
 
@@ -46,15 +50,29 @@ async def request_result(
     del prefer_browser
 
     timeout = timeout_seconds or settings.http_timeout_seconds
-    response = await _request_with_httpx(
-        url,
-        method=method,
-        headers=headers,
-        json_body=json_body,
-        data=data,
-        proxy=proxy,
-        timeout=timeout,
-    )
+    try:
+        response = await _request_with_httpx(
+            url,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            proxy=proxy,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        if not should_retry_with_forced_ipv4(exc):
+            raise
+        response = await _request_with_httpx(
+            url,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            data=data,
+            proxy=proxy,
+            timeout=timeout,
+            force_ipv4=True,
+        )
     text = response.text or ""
     return HttpFetchResult(
         url=url,
@@ -78,7 +96,27 @@ async def _request_with_httpx(
     data: Any | None,
     proxy: str | None,
     timeout: float,
+    force_ipv4: bool = False,
 ) -> httpx.Response:
+    if force_ipv4:
+        async with build_async_http_client(
+            follow_redirects=True,
+            timeout=settings.http_timeout_seconds,
+            limits=httpx.Limits(
+                max_connections=settings.http_max_connections,
+                max_keepalive_connections=settings.http_max_keepalive_connections,
+            ),
+            proxy=proxy,
+            force_ipv4=True,
+        ) as client:
+            return await client.request(
+                method.upper(),
+                url,
+                headers=headers,
+                json=json_body,
+                data=data,
+                timeout=timeout,
+            )
     client = await get_shared_http_client(proxy=proxy)
     return await client.request(
         method.upper(),

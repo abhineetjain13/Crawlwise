@@ -56,14 +56,12 @@ _CDN_IMAGE_QUERY_PARAMS = frozenset(
     }
 )
 _CROSS_LINK_CONTAINER_HINTS = (
-    "carousel",
     "cross-sell",
     "crosssell",
     "grid",
     "related",
     "recommend",
     "similar",
-    "slider",
     "upsell",
     "widget",
 )
@@ -230,6 +228,24 @@ def _image_node_context(node: Tag) -> str:
     return " ".join(parts).lower()
 
 
+def _is_in_product_gallery_context(node: Tag, *, max_depth: int = 6) -> bool:
+    current: Tag | None = node
+    depth = 0
+    in_main = False
+    while isinstance(current, Tag) and depth < max_depth:
+        if current.name == "main" or str(current.get("role") or "").strip().lower() == "main":
+            in_main = True
+        context = _node_attr_text(current)
+        if any(hint in context for hint in _PRODUCT_GALLERY_CONTEXT_HINTS):
+            if in_main or any(
+                token in context for token in ("gallery", "media", "pdp", "product")
+            ):
+                return True
+        current = current.parent
+        depth += 1
+    return False
+
+
 def _is_garbage_image_candidate(node: Tag, candidate_url: str) -> bool:
     lowered = str(candidate_url or "").lower()
     context = _image_node_context(node)
@@ -299,6 +315,12 @@ def _is_other_detail_link(
     if same_host and same_path:
         return False
     is_detail_surface = "detail" in str(surface or "").lower()
+    if (
+        is_detail_surface
+        and link_node is not None
+        and _is_in_product_gallery_context(link_node)
+    ):
+        return False
     path = (candidate_parts.path or "").lower()
     if any(path.endswith(ext) for ext in _PAGE_FILE_EXTENSIONS):
         return True
@@ -571,26 +593,150 @@ def extract_label_value_pairs(root: BeautifulSoup | Tag) -> list[tuple[str, str]
     return deduped
 
 
+_SECTION_LABEL_SELECTOR = ",".join(
+    [
+        "summary",
+        "details > summary",
+        "button[aria-controls]",
+        "[role='button'][aria-controls]",
+        "[role='tab'][aria-controls]",
+        "[data-accordion-heading]",
+        "[data-tab-heading]",
+        "button",
+        "[role='button']",
+        "[role='tab']",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "strong",
+    ]
+)
+_SECTION_CONTAINER_SELECTORS = (
+    "[data-accordion-content]",
+    "[data-collapse-content]",
+    "[data-content]",
+    "[data-details-content]",
+    "[data-tab-content]",
+    "[role='tabpanel']",
+    "[aria-labelledby]",
+    ".accordion__answer",
+    ".accordion-content",
+    ".accordion-panel",
+    ".accordion-body",
+    ".tabs__content",
+    ".tab-content",
+    ".tab-panel",
+    ".panel",
+    "[class*='accordion' i]",
+    "[class*='content' i]",
+    "[class*='details' i]",
+    "[class*='description' i]",
+    "[class*='spec' i]",
+)
+_SECTION_STOP_TAGS = {"h1", "h2", "h3", "h4", "h5", "summary"}
+
+
+def _section_label_text(node: Tag) -> str:
+    pieces = [
+        node.get_text(" ", strip=True),
+        node.get("aria-label"),
+        node.get("title"),
+    ]
+    return clean_text(next((piece for piece in pieces if piece), ""))
+
+
+def _is_section_label(label: str) -> bool:
+    cleaned = clean_text(label)
+    if len(cleaned) < 3 or len(cleaned) > 80:
+        return False
+    if cleaned.lower() in {"details", "more", "overview"}:
+        return False
+    return any(char.isalpha() for char in cleaned)
+
+
+def _section_text(node: Tag, *, label: str = "") -> str:
+    text = clean_text(node.get_text(" ", strip=True))
+    if not text:
+        return ""
+    if label and text.lower().startswith(label.lower()):
+        text = clean_text(text[len(label) :])
+    return text
+
+
+def _extract_sibling_content(node: Tag) -> str:
+    values: list[str] = []
+    for sibling in node.next_siblings:
+        if isinstance(sibling, Tag) and sibling.name in _SECTION_STOP_TAGS:
+            break
+        text = clean_text(
+            sibling.get_text(" ", strip=True) if isinstance(sibling, Tag) else str(sibling)
+        )
+        if not text:
+            continue
+        values.append(text)
+        if len(values) >= 4 or sum(len(item) for item in values) >= 1000:
+            break
+    return " ".join(values)
+
+
+def _find_wrapped_section_content(node: Tag, *, label: str) -> str:
+    container: Tag | None = node
+    best_text = ""
+    seen: set[int] = set()
+    for _ in range(4):
+        if not isinstance(container, Tag):
+            break
+        for selector in _SECTION_CONTAINER_SELECTORS:
+            for target in safe_select(container, selector):
+                if id(target) in seen or target is node:
+                    continue
+                seen.add(id(target))
+                text = _section_text(target, label=label)
+                if len(text) >= 12 and (not best_text or len(text) < len(best_text)):
+                    best_text = text
+        parent = container.parent
+        container = parent if isinstance(parent, Tag) else None
+    return best_text
+
+
+def _extract_section_content(node: Tag, root: BeautifulSoup | Tag) -> str:
+    label = _section_label_text(node)
+    target_id = clean_text(node.get("aria-controls"))
+    if target_id:
+        target = root.find(id=target_id)
+        if isinstance(target, Tag):
+            text = _section_text(target, label=label)
+            if len(text) >= 12:
+                return text
+
+    if node.name == "summary":
+        parent = node.parent if isinstance(node.parent, Tag) else None
+        if isinstance(parent, Tag) and parent.name == "details":
+            text = _section_text(parent, label=label)
+            if len(text) >= 12:
+                return text
+
+    wrapped = _find_wrapped_section_content(node, label=label)
+    if wrapped:
+        return wrapped
+
+    return _extract_sibling_content(node)
+
+
 def extract_heading_sections(root: BeautifulSoup | Tag) -> dict[str, str]:
     sections: dict[str, str] = {}
-    for heading in root.find_all(["h2", "h3", "h4", "h5", "strong"]):
-        heading_text = clean_text(heading.get_text(" ", strip=True))
-        if len(heading_text) < 3 or len(heading_text) > 60:
+    seen: set[int] = set()
+    for heading in safe_select(root, _SECTION_LABEL_SELECTOR):
+        if id(heading) in seen:
             continue
-        values: list[str] = []
-        for sibling in heading.next_siblings:
-            if isinstance(sibling, Tag) and sibling.name in {"h1", "h2", "h3", "h4", "h5"}:
-                break
-            text = clean_text(
-                sibling.get_text(" ", strip=True) if isinstance(sibling, Tag) else str(sibling)
-            )
-            if not text:
-                continue
-            values.append(text)
-            if len(values) >= 4 or sum(len(item) for item in values) >= 1000:
-                break
-        if values:
-            sections[heading_text] = " ".join(values)
+        seen.add(id(heading))
+        heading_text = _section_label_text(heading)
+        if not _is_section_label(heading_text):
+            continue
+        content = _extract_section_content(heading, root)
+        if len(content) >= 12:
+            sections.setdefault(heading_text, content)
     return sections
 
 

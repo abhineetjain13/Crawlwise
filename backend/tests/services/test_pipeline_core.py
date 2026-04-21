@@ -6,9 +6,18 @@ from pathlib import Path
 import pytest
 
 from app.services.acquisition_plan import AcquisitionPlan
-from app.services.acquisition.acquirer import AcquisitionRequest, AcquisitionResult
+from app.services.acquisition.acquirer import (
+    AcquisitionRequest,
+    AcquisitionResult,
+    acquire,
+)
 from app.services.crawl_crud import create_crawl_run, get_run_logs, get_run_records
-from app.services.pipeline.core import apply_llm_fallback, process_single_url
+from app.services.pipeline.core import (
+    _sanitize_llm_existing_values,
+    _apply_direct_record_llm_fallback,
+    apply_llm_fallback,
+    process_single_url,
+)
 from app.services.pipeline.persistence import persist_acquisition_artifacts
 from app.services.pipeline.types import URLProcessingConfig
 from app.services.robots_policy import RobotsPolicyResult
@@ -21,6 +30,28 @@ def _detail_html() -> str:
 
 def _listing_html() -> str:
     return "<html><body><h1>Empty category</h1></body></html>"
+
+
+def test_sanitize_llm_existing_values_uses_runtime_max_chars_and_strips_html(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.pipeline.core.llm_runtime_settings.existing_values_max_chars",
+        12,
+    )
+
+    sanitized = _sanitize_llm_existing_values(
+        {
+            "title": "<b>Widget Prime</b>",
+            "details": {"price": "19.99", "currency": "USD"},
+            "_source": "adapter",
+        }
+    )
+
+    assert sanitized == {
+        "title": "Widget Prime",
+        "details": '{"price": "1',
+    }
 
 
 @pytest.mark.asyncio
@@ -130,6 +161,44 @@ def test_url_processing_config_syncs_compatibility_fields_from_acquisition_plan(
     assert config.max_records == 11
     assert config.sleep_ms == 900
     assert config.persist_logs is False
+
+
+@pytest.mark.asyncio
+async def test_acquire_normalizes_retry_reason_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_fetch_page(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return type(
+            "_FetchResult",
+            (),
+            {
+                "final_url": url,
+                "html": "<html></html>",
+                "method": "browser",
+                "status_code": 200,
+                "content_type": "text/html",
+                "blocked": False,
+                "headers": {},
+            },
+        )()
+
+    monkeypatch.setattr("app.services.acquisition.acquirer.fetch_page", _fake_fetch_page)
+
+    await acquire(
+        AcquisitionRequest(
+            run_id=1,
+            url="https://example.com/category/widgets",
+            plan=AcquisitionPlan(surface="ecommerce_listing", traversal_mode="paginate"),
+            acquisition_profile={"prefer_browser": True, "retry_reason": "thin-listing retry"},
+        )
+    )
+
+    assert captured["browser_reason"] == "thin-listing retry"
+    assert captured["listing_recovery_mode"] == "thin_listing"
 
 
 @pytest.mark.asyncio
@@ -508,6 +577,62 @@ async def test_apply_llm_fallback_re_normalizes_llm_values_before_return(
 
 
 @pytest.mark.asyncio
+async def test_apply_direct_record_llm_fallback_replaces_weaker_listing_records(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/collections/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"llm_enabled": True},
+        },
+    )
+
+    async def _fake_resolve_run_config(*args, **kwargs):
+        del args, kwargs
+        return {"provider": "groq", "model": "llama", "task_type": "direct_record_extraction"}
+
+    async def _fake_extract_records_directly(*args, **kwargs):
+        del args, kwargs
+        return (
+            [
+                {
+                    "title": "Widget Prime",
+                    "url": "https://example.com/products/widget-prime",
+                    "price": "19.99",
+                    "image_url": "https://example.com/images/widget-prime.jpg",
+                    "brand": "Acme",
+                }
+            ],
+            None,
+        )
+
+    monkeypatch.setattr("app.services.pipeline.core.resolve_run_config", _fake_resolve_run_config)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records_directly_with_llm",
+        _fake_extract_records_directly,
+    )
+
+    rows = await _apply_direct_record_llm_fallback(
+        db_session,
+        run=run,
+        page_url="https://example.com/collections/widgets",
+        html="<html><body><article>Widget Prime</article></body></html>",
+        page_markdown="Widget Prime",
+        records=[{"title": "Widget Prime", "url": "https://example.com/products/widget-prime"}],
+    )
+
+    assert rows[0]["_source"] == "llm_direct_record_extraction"
+    assert rows[0]["price"] == "19.99"
+    assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
+
+
+@pytest.mark.asyncio
 async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_non_numeric(
     db_session: AsyncSession,
     test_user,
@@ -581,6 +706,78 @@ async def test_process_single_url_applies_llm_fallback_when_confidence_score_is_
     assert result.records[0]["price"] == "19.99"
     assert total == 1
     assert rows[0].data["price"] == "19.99"
+
+
+@pytest.mark.asyncio
+async def test_process_single_url_strips_schema_type_mismatches_during_normalization(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget-prime",
+            "surface": "ecommerce_detail",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html=_detail_html(),
+            method="test",
+            status_code=200,
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widget-prime.html"
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.load_domain_selector_rules",
+        _no_selector_rules,
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [
+            {
+                "title": "Widget Prime",
+                "price": {"amount": "19.99"},
+                "variants": "not-a-list",
+                "_source": "adapter",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+    logs = await get_run_logs(db_session, run.id)
+
+    assert result.records == [{"title": "Widget Prime", "_source": "adapter"}]
+    assert total == 1
+    assert rows[0].data == {"title": "Widget Prime"}
+    assert any(
+        "Schema validation cleaned record 1" in log.message for log in logs
+    )
 
 
 @pytest.mark.asyncio
@@ -1162,3 +1359,305 @@ async def test_extract_records_for_acquisition_recovers_from_zero_record_travers
     assert fetched.url_metrics["traversal_fallback_used"] is True
     assert fetched.url_metrics["traversal_fallback_recovered"] is True
     assert fetched.url_metrics["traversal_fallback_record_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_thin_listing_with_browser_keeps_retry_only_when_it_improves_records(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.pipeline.core import (
+        _FetchedURLStage,
+        _URLProcessingContext,
+        _retry_thin_listing_with_browser,
+    )
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False, "traversal_mode": "paginate"},
+        },
+    )
+    context = _URLProcessingContext.build(
+        session=db_session,
+        run=run,
+        url=run.url,
+        config=URLProcessingConfig(traversal_mode="paginate"),
+    )
+    acquisition = AcquisitionResult(
+        request=AcquisitionRequest(
+            run_id=run.id,
+            url=run.url,
+            plan=AcquisitionPlan(surface="ecommerce_listing", traversal_mode="paginate"),
+        ),
+        final_url=run.url,
+        html="<html><body>thin listing</body></html>",
+        method="browser",
+        status_code=200,
+        browser_diagnostics={
+            "browser_attempted": True,
+            "requested_traversal_mode": "paginate",
+            "selected_traversal_mode": "paginate",
+            "traversal_activated": True,
+        },
+    )
+    fetched = _FetchedURLStage(
+        context=context,
+        acquisition_result=acquisition,
+        url_metrics={},
+    )
+    retry_reasons: list[str | None] = []
+
+    async def _fake_acquire(request):
+        retry_reasons.append(str(request.acquisition_profile.get("retry_reason") or ""))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>recovered listing</body></html>",
+            method="browser",
+            status_code=200,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "requested_traversal_mode": "paginate",
+                "selected_traversal_mode": "paginate",
+                "traversal_activated": True,
+                "listing_recovery": {
+                    "status": "recovered",
+                    "clicked_count": 1,
+                    "actions_taken": ["view_all"],
+                },
+            },
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    def _extract_records(html, *args, **kwargs):
+        del args, kwargs
+        if "recovered listing" in html:
+            return [
+                {"title": f"Widget {index}", "url": f"https://example.com/products/{index}"}
+                for index in range(6)
+            ]
+        return [
+            {"title": "Widget 1", "url": "https://example.com/products/1"},
+            {"title": "Widget 2", "url": "https://example.com/products/2"},
+        ]
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+
+    records, returned_selector_rules = await _retry_thin_listing_with_browser(
+        context,
+        fetched,
+        records=_extract_records(acquisition.html),
+        selector_rules=[],
+    )
+
+    assert len(records) == 6
+    assert returned_selector_rules == []
+    assert fetched.acquisition_result.html == "<html><body>recovered listing</body></html>"
+    assert retry_reasons == ["thin_listing"]
+
+
+@pytest.mark.asyncio
+async def test_retry_thin_listing_with_browser_retries_high_count_low_quality_records(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.pipeline.core import (
+        _FetchedURLStage,
+        _URLProcessingContext,
+        _retry_thin_listing_with_browser,
+    )
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False, "traversal_mode": "paginate"},
+        },
+    )
+    context = _URLProcessingContext.build(
+        session=db_session,
+        run=run,
+        url=run.url,
+        config=URLProcessingConfig(traversal_mode="paginate"),
+    )
+    acquisition = AcquisitionResult(
+        request=AcquisitionRequest(
+            run_id=run.id,
+            url=run.url,
+            plan=AcquisitionPlan(surface="ecommerce_listing", traversal_mode="paginate"),
+        ),
+        final_url=run.url,
+        html="<html><body>thin listing</body></html>",
+        method="browser",
+        status_code=200,
+        browser_diagnostics={
+            "browser_attempted": True,
+            "requested_traversal_mode": "paginate",
+            "selected_traversal_mode": "paginate",
+            "traversal_activated": True,
+        },
+    )
+    fetched = _FetchedURLStage(
+        context=context,
+        acquisition_result=acquisition,
+        url_metrics={},
+    )
+    retry_reasons: list[str | None] = []
+
+    async def _fake_acquire(request):
+        retry_reasons.append(str(request.acquisition_profile.get("retry_reason") or ""))
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>recovered listing</body></html>",
+            method="browser",
+            status_code=200,
+            browser_diagnostics={
+                "browser_attempted": True,
+                "requested_traversal_mode": "paginate",
+                "selected_traversal_mode": "paginate",
+                "traversal_activated": True,
+            },
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    def _extract_records(html, *args, **kwargs):
+        del args, kwargs
+        if "recovered listing" in html:
+            return [
+                {
+                    "title": f"Widget {index}",
+                    "url": f"https://example.com/products/{index}",
+                    "price": "19.99",
+                    "image_url": f"https://example.com/images/{index}.jpg",
+                }
+                for index in range(6)
+            ]
+        return [
+            {
+                "title": f"Widget {index}",
+                "url": f"https://example.com/products/{index}",
+            }
+            for index in range(6)
+        ]
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr("app.services.pipeline.core.extract_records", _extract_records)
+
+    records, _selector_rules = await _retry_thin_listing_with_browser(
+        context,
+        fetched,
+        records=_extract_records(acquisition.html),
+        selector_rules=[],
+    )
+
+    assert len(records) == 6
+    assert records[0]["price"] == "19.99"
+    assert retry_reasons == ["thin_listing"]
+
+
+@pytest.mark.asyncio
+async def test_extract_records_stage_records_when_detail_expansion_was_consumed(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.pipeline.core import (
+        _FetchedURLStage,
+        _URLProcessingContext,
+        _run_extraction_stage,
+    )
+
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/products/widget",
+            "surface": "ecommerce_detail",
+            "additional_fields": ["materials"],
+        },
+    )
+    context = _URLProcessingContext.build(
+        session=db_session,
+        run=run,
+        url=run.url,
+        config=URLProcessingConfig(),
+    )
+    acquisition = AcquisitionResult(
+        request=AcquisitionRequest(
+            run_id=run.id,
+            url=run.url,
+            plan=AcquisitionPlan(surface="ecommerce_detail"),
+        ),
+        final_url=run.url,
+        html="<html><body><h1>Widget Prime</h1></body></html>",
+        method="browser",
+        status_code=200,
+        browser_diagnostics={
+            "browser_attempted": True,
+            "detail_expansion": {
+                "clicked_count": 1,
+                "expanded_elements": ["materials"],
+            },
+        },
+    )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [{"materials": "Full-grain leather upper."}],
+    )
+
+    extracted = await _run_extraction_stage(
+        context,
+        _FetchedURLStage(
+            context=context,
+            acquisition_result=acquisition,
+            url_metrics={},
+        ),
+    )
+
+    diagnostics = acquisition.browser_diagnostics["detail_expansion"]
+
+    assert extracted.records == [{"materials": "Full-grain leather upper."}]
+    assert diagnostics["extraction_consumed"] is True
+    assert diagnostics["extracted_fields"] == ["materials"]

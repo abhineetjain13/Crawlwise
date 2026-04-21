@@ -18,6 +18,7 @@ from app.services.domain_memory_service import (
     selector_payload_from_rules,
     selector_rules_from_memory,
 )
+from app.services.domain_utils import normalize_domain
 from app.services.field_policy import normalize_field_key
 from app.services.field_value_core import PRICE_RE, clean_text
 from app.services.llm_runtime import discover_xpath_candidates
@@ -311,7 +312,7 @@ async def suggest_selectors(
         url=final_url,
         expected_fields=expected_columns,
     )
-    domain = _normalized_domain(final_url)
+    domain = normalize_domain(final_url)
     suggestions: dict[str, list[dict[str, object]]] = defaultdict(list)
 
     for row in await list_selector_records(
@@ -480,12 +481,6 @@ async def _ensure_unique_selector_ids(session: AsyncSession) -> None:
         )
     if changed:
         await session.flush()
-
-
-def _normalized_domain(url: str) -> str:
-    from app.services.domain_utils import normalize_domain
-
-    return normalize_domain(url)
 
 
 def _primary_iframe_candidate(page_url: str, html: str) -> str:

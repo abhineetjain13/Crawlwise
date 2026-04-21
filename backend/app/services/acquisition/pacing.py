@@ -24,10 +24,7 @@ async def wait_for_host_slot(_url: str) -> None:
     host = _normalized_host(_url)
     if not host:
         return
-    min_interval_ms = max(
-        0,
-        int(crawler_runtime_settings.acquire_host_min_interval_ms),
-    )
+    min_interval_ms = _host_interval_ms(protected=False)
     ttl_seconds = max(
         1,
         int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
@@ -48,6 +45,36 @@ async def wait_for_host_slot(_url: str) -> None:
 async def reset_pacing_state() -> None:
     async with _HOST_PACING_LOCK:
         _HOST_NEXT_ALLOWED_AT.clear()
+
+
+async def apply_protected_host_backoff(_url: str) -> None:
+    host = _normalized_host(_url)
+    if not host:
+        return
+    ttl_seconds = max(
+        1,
+        int(crawler_runtime_settings.pacing_host_cache_ttl_seconds),
+    )
+    now = time.monotonic()
+    protected_interval_seconds = _host_interval_ms(protected=True) / 1000.0
+    async with _HOST_PACING_LOCK:
+        _prune_expired_hosts(now=now, ttl_seconds=ttl_seconds)
+        next_allowed_at = _HOST_NEXT_ALLOWED_AT.get(host, now)
+        _HOST_NEXT_ALLOWED_AT[host] = max(next_allowed_at, now + protected_interval_seconds)
+        _enforce_host_cache_limit()
+
+
+def _host_interval_ms(*, protected: bool) -> int:
+    base_interval_ms = max(
+        0,
+        int(crawler_runtime_settings.acquire_host_min_interval_ms),
+    )
+    if not protected:
+        return base_interval_ms
+    return max(
+        base_interval_ms,
+        int(crawler_runtime_settings.protected_host_additional_interval_ms),
+    )
 
 
 def _prune_expired_hosts(*, now: float, ttl_seconds: int) -> None:

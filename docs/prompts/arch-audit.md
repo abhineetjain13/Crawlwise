@@ -1,287 +1,357 @@
-You have been given the full backend source of CrawlerAI — a Python/FastAPI web crawling
-and data extraction platform. It uses a hybrid acquisition pipeline (curl_cffi default →
-Playwright fallback), selectors/domain-memory feedback loops, provenance-aware record
-responses, admin-managed LLM runtime/config, and handles primary extraction surfaces such as
-ecommerce PDPs/listings and job listings/detail pages.
+# CrawlerAI — Forensic Architecture Audit
+
+## System Context
+
+CrawlerAI is a Python/FastAPI web crawling and data extraction platform. It uses a
+hybrid acquisition pipeline (curl_cffi default → Playwright fallback), selectors/domain-
+memory feedback loops, provenance-aware record responses, admin-managed LLM runtime/config,
+and handles primary extraction surfaces: ecommerce PDPs/listings and job listings/detail pages.
 
 Pipeline stages: ACQUIRE → EXTRACT → PUBLISH.
-Extraction source hierarchy: adapter → XHR/JSON / network payload mapping → JSON-LD /
-microdata / Open Graph → hydrated state (e.g. `__NEXT_DATA__`, `__NUXT_DATA__`) → DOM
-→ LLM fallback.
-Current code is deterministic and source-ordered, with selector self-heal and review /
-provenance flows layered around the extraction core.
 
-You are acting as a senior principal engineer conducting a forensic code audit.
+Extraction source hierarchy (deterministic, first-match-wins):
+adapter → XHR/JSON / network payload mapping → JSON-LD / microdata / Open Graph →
+hydrated state (`__NEXT_DATA__`, `__NUXT_DATA__`) → DOM → LLM fallback.
+
+The codebase is post-refactor. Treat `CLAUDE.md` and `INVARIANTS.md` as the authoritative
+intent. Every place where code contradicts these docs is a violation.
+
+Ownership buckets (from `ENGINEERING_STRATEGY.md`):
+1. API + Bootstrap
+2. Crawl Ingestion + Orchestration
+3. Acquisition + Browser Runtime
+4. Extraction
+5. Publish + Persistence
+6. Review + Selectors + Domain Memory
+7. LLM Admin + Runtime
+
+Known recent implementations (audit for quality, not existence):
+structured-source expansion (microdata/Open Graph/Nuxt revival), network payload specs,
+declarative JMESPath JS-state mappings, browserforge identity, URL tracking-param stripping,
+selector self-heal with improvement gating, domain memory scoped by (domain, surface),
+provenance/review-bucket-aware responses, selectors API, LLM admin/config surfaces,
+acquisition plan normalization through `AcquisitionPlan → URLProcessingConfig → AcquisitionRequest`.
+
+---
+
+## LONGITUDINAL MODE — REQUIRED INPUT
+
+**Paste the previous session's "Top Findings" list below before running this audit.**
+If this is the first session, write `FIRST RUN` and skip the delta step.
+
+```
+PREVIOUS TOP FINDINGS:
+[paste previous audit's Critical Path findings here, one per line with their IDs]
+```
+
+Before auditing any dimension, evaluate each previous finding as:
+- **FIXED** — code evidence confirms the fix is in place (cite the file/function)
+- **PERSISTS** — still present (re-cite exact location)
+- **REGRESSED** — was fixed, is broken again (cite what changed)
+- **NOT FOUND** — cannot confirm either way (mark as unverifiable, do not score)
+
+Output this delta table first, before any dimension scores.
+
+---
+
+## AUDIT ROLE
+
+You are a senior principal engineer conducting a forensic code audit.
 Do not summarize what the code does. Do not be diplomatic. Do not praise effort.
-Your only job is to find violations, assign honest scores, and surface production risks,
-then provide expert improvement recommendations grounded in competitor analysis.
+Your job: find violations, score dimensions honestly, surface production risks, and
+output structured remediation work orders that can be handed directly to Codex.
+
+---
+
+## VERIFICATION REQUIREMENT — ENFORCED FOR EVERY FINDING
+
+For every violation you cite, you must provide:
+
+```
+grep -r "exact_symbol_or_pattern" backend/app/services/[file]
+```
+
+or an equivalent search that would confirm the finding in the actual codebase.
+
+If you cannot construct a grep that would find it, do not report the finding.
+"I believe this pattern exists" is not a citation. Line numbers that you are not
+confident are accurate must be marked `(approx)`. Fabricated line numbers that are
+off by more than 20 lines in either direction are worse than no citation.
+
+---
+
+## SCORING MODEL
+
+**Do not use the rule "a single CRITICAL caps the dimension at 5/10."**
+That rule punishes progress and inflates perceived stagnation.
+
+Use this model instead:
+
+Each dimension is scored 1–10 on two axes:
+
+| Axis | Meaning |
+|------|---------|
+| **Floor** | Set by the worst single violation. CRITICAL = floor of 4. HIGH = floor of 6. MEDIUM = floor of 7. LOW = floor of 8. No violations = floor of 9. |
+| **Ceiling** | Set by overall dimension quality — test coverage, consistency, structural integrity. Maximum ceiling is 10. |
+
+**Final score = (floor + ceiling) / 2**, rounded to one decimal.
+
+This means: a dimension with one CRITICAL but otherwise excellent code scores (4 + 8) / 2 = 6.
+A dimension with three CRITICALs and no redeeming quality scores (4 + 3) / 2 = 3.5.
+A dimension with no violations and excellent patterns scores (9 + 10) / 2 = 9.5.
+
+Show both the floor and ceiling, then the final score, for every dimension.
+
+**Longitudinal note:** If the previous session's score is provided, you must explain in
+one sentence why the score changed (or did not change) relative to the previous run.
+Do not allow scores to decrease without citing a new finding. Do not allow scores to
+increase without citing what was fixed.
 
 ---
 
 ## AUDIT DIMENSIONS
 
-Evaluate each dimension below as a deep, file-level audit. For every violation found,
-cite the exact filename, function name, and line range. Generic statements like
-"error handling could be improved" are unacceptable — name the specific function,
-the specific failure mode, and the first-principles rule it violates.
+Evaluate each dimension with file-level forensic depth. Generic statements are
+unacceptable. Name the specific function, the specific failure mode, and the
+first-principles rule or INVARIANTS.md clause it breaks.
 
-### 1. SOLID / DRY / KISS — Core Software Principles
+### D1. SOLID / DRY / KISS
 
-Deep audit. Penalise hard.
+- **SRP:** Functions over 50 lines doing 3+ conceptually distinct things. Classes with
+  more than one reason to change. Cite function name and line range.
+- **OCP:** New surfaces or adapters added by modifying generic paths rather than extending
+  adapter/config owned slots.
+- **DIP:** High-level modules importing from low-level concrete modules (layer violations).
+  Example anti-pattern: `pipeline/core.py` importing from `detail_extractor.py` internals.
+- **DRY:** Exact or near-exact function duplication across files. Field resolution,
+  URL normalisation, retry logic written twice.
+- **KISS:** Indirection or abstraction where a direct call or constant would suffice.
+  Anti-patterns AP-1 through AP-10 from `ENGINEERING_STRATEGY.md`.
 
-- **SRP:** Does any class or function have more than one reason to change? God classes,
-  god functions, functions over 50 lines that do 3+ conceptually distinct things.
-- **OCP:** Are new surfaces/adapters added by modification rather than extension?
-- **DIP:** Are high-level modules directly importing from low-level concrete modules
-  (layer violations)?
-- **DRY:** Duplicated logic across files — field resolution, URL normalisation, score
-  calculation, retry logic. Exact or near-exact function duplication.
-- **KISS:** Indirection, abstraction, or configuration where a direct call or constant
-  would suffice. Complexity that solves no real problem.
-
-### 2. Configuration Hygiene — No Site-Specific Hacks
-
-Very important. Penalise any magic buried in logic.
+### D2. Configuration Hygiene
 
 - Hardcoded domain strings, URL fragments, or selector strings inside business logic
-  (not in config/constants files).
-- Magic numbers (timeouts, retry counts, score thresholds, page limits) scattered inline
-  rather than named constants in one place.
-- Site-specific conditional branches (`if "amazon" in url`, `if "linkedin"`) inside
-  generic pipeline functions — generic crawler paths must stay generic; tenant/site
-  hardcodes in shared runtime or extraction code are violations.
-- Config values defined in multiple places (env, constants.py, config.py, inline defaults)
-  that could contradict each other.
-- Per-site overrides that have no corresponding config schema entry — pure hacks.
+  (not in `services/config/*`). Search for string literals that look like hostnames
+  inside `acquisition/`, `crawl_engine.py`, `detail_extractor.py`, `listing_extractor.py`.
+- Magic numbers (timeouts, retry counts, thresholds) scattered inline rather than
+  named constants in `services/config/`.
+- `if "amazon" in url`, `if "shopify"`, `if "linkedin"` — platform conditionals in
+  generic paths. These are AP-4 violations.
+- Config defined in multiple places (env + `config.py` + inline defaults) that can contradict.
+- AP-10: inline dicts or constants that bypass env-controlled settings.
 
-### 3. Scalability, Maintainability & Resource Management
+### D3. Scalability & Resource Management
 
-- Blocking I/O in async code paths. Sync third-party calls and CPU-heavy parsing must not
-  block async hot paths.
-- Unbounded data structures (lists that grow without cap, caches without eviction).
-- Missing connection pool limits or session reuse failures.
-- Memory leaks: Playwright browser/context/page objects not closed in `finally` blocks.
-- Async tasks or threads spawned without tracking or cancellation.
-- Functions or modules so large that a new engineer cannot safely modify them in < 30 min.
-- Circular imports or import-time side effects.
+- Blocking I/O or sync third-party calls on async hot paths (especially in
+  `crawl_fetch_runtime.py`, `pipeline/core.py`, `structured_sources.py`).
+- Playwright browser/context/page objects not closed in `finally` blocks.
+  Search: `browser_runtime.py`, `browser_page_flow.py` — every context acquisition
+  must have a matching release in a `finally` or `async with`.
+- Unbounded data structures: lists that grow without cap in traversal or extraction loops.
+- Async tasks spawned without tracking or cancellation (bare `asyncio.create_task`
+  without storing the result).
+- Shared HTTP client pool — confirm `runtime.py` `get_shared_http_client()` is truly
+  shared and `http_client.py` does not maintain a second pool.
 
-### 4. Extraction & Normalisation Pipeline Audit
+### D4. Extraction & Normalisation Pipeline
 
 This is the most critical dimension. Be exhaustive.
 
-- **Surface bleed:** Are ecommerce fields (brand, sku, color, currency, specifications)
-  able to appear in job listing records, or vice versa? Trace the field alias resolution
-  path. Cross-surface pollution is a contract violation.
+- **Surface bleed:** Trace the field alias resolution path. Can ecommerce fields
+  (`sku`, `brand`, `color`, `currency`) appear in job records, or vice versa?
+  Check `config/field_mappings.py` — are alias dicts surface-partitioned or global?
 - **Schema pollution:** Does any extractor emit fields outside the canonical field
-  namespace? Are unknown fields silently passed through to output?
-- **Hydrated state extraction:** Is `__NEXT_DATA__` / `window.__PRELOADED_STATE__` /
-  `__APOLLO_STATE__` / `__NUXT_DATA__` extraction implemented as a first-class source in
-  the hierarchy, or is it incomplete / bolted-on? Audit mapper completeness and fallback
-  quality, not just existence.
-- **XHR/API interception:** Is Playwright request interception used to capture background
-  JSON API calls before DOM rendering completes, and are captured payloads actually mapped
-  into canonical fields? Or does the pipeline fall back to raw post-render DOM scraping?
-  Audit both interception and mapping completeness.
-- **Structured-source coverage:** Microdata and Open Graph support may already exist.
-  Audit whether they are first-class, correctly normalised, and actually contribute
-  useful candidate data rather than treating them as absent by default.
-- **Source ranking integrity:** Does the pipeline enforce first-match-wins with early
-  exit / deterministic source ordering, or does it collect from all sources and then
-  sort/merge (which allows lower-quality sources to pollute)?
-- **LLM boundary:** Is the LLM used as a non-deterministic cleanup layer only, or is it
-  being used as a primary field mapper (making output non-deterministic by design)?
-  Run-level LLM config and extraction-runtime snapshots must remain stable within a run.
-- **Output efficiency:** Are raw HTML blobs, full DOM trees, or large unstripped payloads
-  being passed to the LLM unnecessarily? Is HTML minified before prompt construction?
-- **Normalisation correctness:** Price normalisation (cent-to-dollar conversion, currency
-  symbol stripping), URL absolutisation for relative hrefs, image URL filtering
-  (CDN vs analytics pixel).
-- **Accessibility tree / hidden content:** Are tabs, accordions, and "View More" sections
-  that hide specs/requirements ever programmatically expanded before extraction?
-  Or is content silently missed when it is collapsed?
-- **Selector self-heal and domain memory:** Audit whether selector self-heal is snapshot-
-  stable, bounded, validated before persistence, and clearly partitioned by normalized
-  `(domain, surface)`. If this subsystem exists, evaluate it as production code rather
-  than flagging it as dead weight by default.
-- **Record contract cleanliness:** Audit whether `record.data`, `discovered_data`,
-  `review_bucket`, `source_trace`, and provenance/manifest-trace responses preserve the
-  clean user-facing contract without leaking raw manifest noise into normal record APIs.
+  namespace for that surface? Do unknown fields silently reach `record.data`?
+- **Source ranking integrity:** Is first-match-wins enforced with early exit, or does
+  the pipeline collect from all sources then merge (allowing lower-quality sources
+  to pollute higher-quality ones)?
+- **Hydrated state extraction:** Audit `structured_sources.py` + `js_state_mapper.py`
+  for `__NEXT_DATA__`, `__NUXT_DATA__`, `__PRELOADED_STATE__`, `__APOLLO_STATE__`.
+  Grade completeness and fallback quality — not just existence.
+- **XHR interception:** Does `browser_capture.py` capture and map network payloads?
+  Does `network_payload_mapper.py` actually produce canonical fields or just raw blobs?
+  Audit mapping completeness for known platforms (Workday, Greenhouse, Lever).
+- **Normalisation correctness:** Price (cent-to-dollar, currency stripping), URL
+  absolutisation, image URL filtering (CDN vs analytics pixel, spacer/logo exclusion).
+  Check `field_value_core.py` and `field_value_*.py`.
+- **LLM boundary:** Is LLM used as opt-in normalization layer only? Confirm it cannot
+  activate silently. Check `llm_enabled` flag is respected throughout `pipeline/core.py`.
+- **Record contract:** Does `CrawlRecordResponse` cleanly expose `data`, `review_bucket`,
+  `source_trace` without leaking raw manifest noise or `_`-prefixed internals?
 
-### 5. Traversal Mode Audit
+### D5. Traversal Mode
 
-- Are all traversal modes (auto, single, sitemap, crawl) explicitly handled with no
-  silent fallthrough?
-- Is `advanced_mode` (paginate/scroll/load_more) cleanly separated from browser
-  rendering escalation? Or does escalation accidentally trigger
-  traversal behavior?
-- Are exceptions during traversal surfaced and logged, or silently swallowed?
-- Does the traversal layer correctly respect `max_pages`, `max_depth`, and
-  domain-boundary constraints, or can it escape into off-domain crawls?
-- Are fragment-only URLs (`#section`) and `javascript:` hrefs correctly excluded?
+- All traversal modes (`auto`, `single`, `sitemap`, `crawl`) — explicit handling, no
+  silent fallthrough. Check `traversal.py` and `_batch_runtime.py`.
+- `advanced_mode` (paginate/scroll/load_more) cleanly separated from browser escalation.
+  These are different decisions — traversal only runs when settings authorize it (INVARIANT #3).
+- Fragment-only URLs (`#section`) and `javascript:` hrefs excluded from pagination loops.
+- Same-origin pagination enforced — can traversal escape to off-domain URLs?
+- Exceptions during traversal: surfaced and logged, or silently swallowed?
 
-### 6. Resilience & Error Handling
+### D6. Resilience & Error Handling
 
-- Functions with bare `except Exception: pass` or `except Exception: continue` — list
-  every one.
-- Missing retry logic on network I/O that will cause single-request failures to propagate
-  as job failures. Rate-limit behavior should still fail fast rather than sleeping through
-  free-tier exhaustion.
-- LLM API call failure modes: What happens if the LLM returns malformed JSON, times out,
-  or returns an empty response? Is there a fallback?
-- Are HTTP 4xx vs 5xx responses handled differently, or treated identically?
-- Playwright-specific failures (navigation timeout, context crash) — are they caught
-  and does the system recover or deadlock?
-- Are errors logged with sufficient context (URL, surface, extractor stage) to debug
-  in production, or are bare `print()` / `logger.exception(e)` without context?
+- Bare `except Exception: pass` or `except Exception: continue` — list every one with
+  exact file and function. Search: `grep -r "except Exception" backend/app/services`
+- LLM failure modes: malformed JSON response, timeout, empty response. Is there a
+  fallback that degrades gracefully into `discovered_data` without corrupting `record.data`?
+- HTTP 4xx vs 5xx — handled differently, or collapsed?
+- `401` must NOT escalate to browser (auth wall). `403`/`429` may escalate. Verify.
+- Playwright navigation timeout and context crash — caught, recovered, or deadlock?
+- Error log context: does every log call include URL, surface, and extractor stage?
+  Or bare `logger.exception(e)` without context?
 
-### 7. Dead Code & Technical Debt Hotspots
+### D7. Dead Code & Technical Debt
 
-- Unreachable code paths (functions defined but never called from any live code path —
-  not just untested, but genuinely unreferenced).
-- TODO/FIXME/HACK comments — list every one with file and line.
-- Commented-out code blocks that have survived more than one refactor cycle.
-- Deprecated function wrappers kept "for compatibility" with no active callers.
-- Private functions (`_foo`) exported or tested as public API, indicating structural
-  instability in the module boundary.
-- Modules that are tested via private-function imports — these block structural
-  refactoring.
+- Functions defined but never called from any live code path (not just untested — unreferenced).
+  Use `vulture` output if available, or search for functions with no import in `grep -r`.
+- TODO/FIXME/HACK comments — list every one with file and line number.
+  Search: `grep -rn "TODO\|FIXME\|HACK" backend/app/services`
+- Re-export stubs / compatibility shims kept after migrations. AP-6 violations.
+- Private functions (`_foo`) exported or tested as public API.
+- Modules tested via private-function imports (AP-7 violations) — these block refactoring.
 
-### 8. Acquisition Mode Audit & Site Coverage
+### D8. Acquisition Mode
 
-- For each acquisition mode (plain HTTP, curl_cffi, Playwright), identify which sites or
-  surface types are routed to each mode and whether the routing logic is correct.
-- Are anti-bot / JS-rendering requirements correctly detected, or is Playwright used as
-  a blanket fallback (wasting resources) or never triggered when needed?
-- Is the acquisition layer cleanly separated from the extraction layer, or does
-  acquisition code contain extraction logic (hard layer violation)?
-- For known platforms (Shopify, Next.js SPAs, Greenhouse, Lever, Workday, Taleo,
-  LinkedIn, Dice, Amazon), is adapter selection deterministic and config-driven, or does
-  it depend on URL heuristics buried in acquisition code?
-- **JS-truth coverage gap:** Which platforms embed `__NEXT_DATA__` or equivalent hydrated
-  state that the pipeline currently fails to extract, causing silent partial records?
-- **XHR ghost-routing gap:** Which platforms load detail content via background API calls
-  (e.g., `/api/v1/jobs/details/{id}`) that the pipeline is not intercepting?
-- **Browser identity quality:** If browser identity / fingerprint generation exists,
-  audit whether it is coherent, actually applied to Playwright contexts, and consistent
-  with the diagnostics and emitted acquisition behavior.
+- For each acquisition mode (plain HTTP, curl_cffi, Playwright): which sites/surfaces route
+  to each mode, and is the routing logic correct?
+- Playwright used as blanket fallback (wasting resources) or correctly triggered only
+  when JS rendering is required?
+- Acquisition code containing extraction logic — hard layer violation.
+- Adapter selection: deterministic and config-driven, or URL heuristics in acquisition code?
+- Browser identity: `browserforge` fingerprint applied to Playwright contexts? Coherent
+  UA + OS combination? Consistent with diagnostics emitted?
+- Proxy threading: does `fetch_page` actually thread proxy through curl/http/browser
+  attempts, or is `proxy_list` discarded at a boundary?
 
 ---
 
 ## OUTPUT FORMAT
 
+### Section 0: Delta Table (longitudinal)
+
+```
+| Finding ID | Previous Status | Current Status | Evidence |
+|------------|----------------|----------------|---------|
+| F-001      | [description]  | FIXED/PERSISTS/REGRESSED | file:line |
+```
+
+### Section 1–8: Dimension Scores
+
 For each dimension:
 
 ```
-Score: X/10
+Dimension: [Name]
+Floor: X/10 | Ceiling: X/10 | Score: X.X/10
+Previous score: X.X → Change: +X.X / -X.X / unchanged
+Reason for change: [one sentence]
+
 Violations:
-  [CRITICAL / HIGH / MEDIUM / LOW] filename.py → function_name (lines X–Y):
-  Precise description. Which first-principles rule or INVARIANTS.md clause it breaks.
-  What production failure mode it enables.
+  [CRITICAL|HIGH|MEDIUM|LOW] [filename.py → function_name (lines X–Y)]:
+  Precise violation description.
+  INVARIANTS.md clause or ENGINEERING_STRATEGY.md AP-N it breaks.
+  Production failure mode it enables.
+  Verification: `grep -r "pattern" backend/app/services/`
+
 Verdict: 2–3 sentences. No hedging.
 ```
 
----
-
-## FINAL SUMMARY
+### Section 9: Final Summary
 
 ```
-Overall Score: X/10
+Overall Score: X.X/10  (previous: X.X, delta: +/-X.X)
 
-Critical Path: Top 5 findings that will cause production failures or data corruption
-if left unfixed. Ranked by impact. One sentence each: what breaks, when, and why.
+Root Cause Findings (architectural — require a plan, not a bug fix):
+  RC-1: [description] — affects dimensions D?, D?
+  RC-2: ...
 
-Genuine Strengths: Specific things this system does well, with file-level evidence.
-No generic praise. If you cannot find file-level evidence for a strength, do not list it.
+Leaf Node Findings (isolated bugs — Codex can fix directly):
+  LN-1: [file → function → exact fix]
+  LN-2: ...
+
+Genuine Strengths (file-level evidence only, no generic praise):
+  [file → function]: what it does well and why
+```
+
+### Section 10: Codex-Ready Work Orders
+
+**This section is the handoff artifact. Format each work order for direct Codex execution.**
+
+For each Root Cause finding (RC-N) that has a clear fix:
+
+```
+## WORK ORDER RC-N: [Title]
+
+Touches buckets: [list from ENGINEERING_STRATEGY.md]
+Risk: CRITICAL | HIGH | MEDIUM
+Do NOT touch: [files/modules out of scope]
+
+### What is wrong
+[2–3 sentences. Specific files and functions.]
+
+### What to do
+[Step-by-step. File names, function names, what to delete, what to move.]
+1. [specific action]
+2. [specific action]
+
+### Acceptance criteria
+- [ ] [specific, testable outcome]
+- [ ] `grep -r "pattern_that_should_not_exist" backend/app/services` returns empty
+- [ ] `python -m pytest tests -q` exits 0
+
+### What NOT to do
+- Do not [specific anti-pattern relevant to this fix]
+- Do not [another anti-pattern]
+```
+
+For each Leaf Node finding (LN-N):
+
+```
+## WORK ORDER LN-N: [Title] (single-session fix)
+
+File: [exact path]
+Function: [exact name]
+Fix: [1–3 sentences. Precise.]
+Test: [exact pytest command or grep to verify]
 ```
 
 ---
 
-## TOP 5 ARCHITECTURAL RECOMMENDATIONS
+## ARCHITECTURAL RECOMMENDATIONS
 
-Each recommendation must:
-1. Name the specific files and functions affected.
-2. Describe the current structure and why it is wrong.
-3. Describe the target structure concisely (pseudocode or a 3-line sketch is acceptable).
-4. Include a code simplification angle — how the refactor reduces total lines of code
-   or removes an abstraction layer, not just reorganises it.
-5. State the measurable outcome: what bug class disappears, what dimension score improves.
+After the audit, provide up to 5 recommendations. Only include recommendations where:
 
-Default bias is deletion and consolidation, not new patterns.
-Do not recommend adding new abstractions unless they replace two or more existing ones.
+1. The gap was actually found during this audit (not speculative).
+2. The technique is not already present in the codebase (verify before recommending).
 
----
+For each recommendation:
+- Name the technique and which projects use it (Scrapy, Crawlee, Apify, Firecrawl, Diffbot, Zyte).
+- Map it to the specific gap found — cite the audit finding by ID.
+- Name which source-hierarchy slot it occupies.
+- Provide a concrete 5–15 line Python pseudocode sketch.
+- State expected yield: which surfaces benefit, which fields are recovered, estimated LLM fallback reduction.
 
-## EXTRACTION ENHANCEMENT RECOMMENDATIONS
-
-After the audit, provide 3–5 expert-level improvement recommendations drawn from
-competitor analysis and modern scraping best practices. Each recommendation must:
-
-- Name the technique, which competitor crawler engines or open-source projects use it
-  (e.g., Scrapy, Crawlee, Apify, Firecrawl, Diffbot, Zyte/Scrapy-Playwright).
-- Map it to a specific gap found during the audit — do not recommend techniques that
-  are already present in the codebase.
-- Reference the relevant source-hierarchy slot (adapter / XHR/JSON / structured sources /
-  hydrated state / DOM / LLM) to show where it would slot in.
-- Provide a concrete implementation sketch (5–15 lines of Python pseudocode).
-- State the expected yield improvement: which surface types benefit, what fields are
-  recovered, what the estimated reduction in LLM fallback rate would be.
-
-### Techniques to evaluate (select those that address actual gaps found):
-
-**JS-Truth / Hydrated State Interception**
-Target: `__NEXT_DATA__`, `window.__PRELOADED_STATE__`, `__APOLLO_STATE__`, Nuxt hydration.
-Slot: hydrated-state source.
-Reference: Crawlee's `infiniteScroll` + state capture; Diffbot's structured data layer.
-
-**XHR Ghost-Routing / Playwright Request Interception**
-Target: Workday, Taleo, and commerce sites that load detail JSON via background API calls.
-Slot: XHR/JSON source (between adapter and JSON-LD).
-Reference: Apify's `RequestQueue` + `page.on('response')` pattern; Zyte's HTTP layer.
-
-**Accessibility Tree Expansion (AOM)**
-Target: collapsed tabs, accordions, "View More" / "Full Description" patterns on specs
-and job requirement sections.
-Slot: pre-DOM-parse browser expansion step.
-Reference: Playwright `accessibility.snapshot()` + heuristic click expansion.
-
-**Schema Healing via Declarative Path Specs (glom / JMESPath)**
-Target: replace brittle `if/else` field resolution chains with a declarative multi-path
-spec that tries fallback paths without code branching.
-Slot: normalisation step after candidate collection.
-Reference: `glom` (Python), JMESPath; used in Diffbot's field normalization layer.
-
-**LLM-Guided Selector Synthesis (Self-Healing Fallback)**
-Target: bespoke sites that break every deterministic rule; triggers only when
-deterministic confidence falls below threshold.
-Slot: LLM fallback (current last resort), but repurposed for selector generation
-rather than raw-text extraction.
-Reference: Firecrawl's AI selector mode; Zyte's AutoExtract.
-Constraint: must not rewrite user-owned crawl controls, and config/persistence ownership
-must remain explicit and diagnosable.
-
-Before recommending any technique above, verify whether the repo already implements it
-in some form. If it exists, audit completeness, correctness, and integration quality
-instead of presenting it as a missing capability.
+Techniques to evaluate if gaps were found (verify existence before recommending):
+- JS-Truth hydrated state interception (`__NEXT_DATA__`, `__PRELOADED_STATE__`, `__APOLLO_STATE__`)
+- XHR ghost-routing via Playwright `page.on('response')` for Workday/Taleo/commerce detail JSON
+- Accessibility tree expansion (AOM) for collapsed tabs, accordions, "View More" sections
+- Declarative path specs (glom / JMESPath) replacing brittle if/else field resolution
+- LLM-guided selector synthesis as self-healing fallback (not primary extraction)
 
 ---
 
 ## AUDIT CONSTRAINTS
 
-- You are auditing a post-refactor codebase. Treat `CLAUDE.md` and `INVARIANTS.md`
-  as the authoritative intent. Flag every place where the code contradicts these docs.
-- Generic crawler paths must stay generic. No tenant/site hardcodes in shared runtime
-  or extraction code. Platform behavior should be family-based or adapter-owned.
-- Do not audit test files for coverage — audit them only for private-function imports
-  that indicate structural instability.
+- Treat `CLAUDE.md` and `INVARIANTS.md` as authoritative intent. Every contradiction is a violation.
+- Generic crawler paths must stay generic. Platform behavior must be adapter-owned or config-driven.
+- Do not audit test files for coverage. Audit them only for private-function imports (AP-7).
 - Do not suggest adding logging, monitoring, or observability infrastructure.
-- If you cannot find a violation in a dimension, say "No violations found — [reason]."
-  Do not invent violations.
-- Your score must reflect the worst violation in the dimension, not an average.
-  A single CRITICAL violation caps the dimension at 5/10 or below.
-- Enhancement recommendations in the final section must address gaps found in the audit.
-  Do not recommend techniques already present in the codebase.
-- Be especially careful with recently implemented areas: structured-source expansion
-  (microdata / Open Graph / Nuxt revival), network payload specs, browser identity,
-  URL tracking-param stripping, selector self-heal, domain memory, provenance APIs,
-  selectors API, and LLM admin/config surfaces. These should be audited for quality
-  and remaining gaps, not assumed absent.
+- Do not recommend techniques already present in the codebase. Verify before recommending.
+- If you cannot find a violation in a dimension, write "No violations found" with the grep
+  command you used to verify. Do not invent violations to fill the section.
+- Scores must reflect actual evidence. Do not lower a score without a new finding.
+  Do not raise a score without evidence that a previous finding is fixed.
+- The codebase is post-refactor. Do not penalize for problems that were explicitly fixed
+  in recent work (see "Known recent implementations" in System Context).
+- Every CRITICAL finding must have a corresponding Work Order in Section 10.
+  If you cannot write a specific Work Order for a CRITICAL, it is not a CRITICAL.

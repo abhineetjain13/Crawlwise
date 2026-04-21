@@ -158,6 +158,24 @@ def test_export_image_dedupe_handles_legacy_string_values() -> None:
     assert sanitized["additional_images"] == "https://cdn.example.com/images/widget-2.jpg"
 
 
+def test_record_to_markdown_includes_page_context_from_raw_data() -> None:
+    row = CrawlRecord(
+        id=1,
+        run_id=7,
+        source_url="https://example.com/products/widget",
+        data={"title": "Widget Prime", "price": "19.99"},
+        raw_data={"page_markdown": "Widget Prime\n\nVisible links:\n- View specs -> /specs"},
+        discovered_data={},
+        source_trace={},
+    )
+
+    markdown = record_export_service.record_to_markdown(row)
+
+    assert "## Page Context" in markdown
+    assert "Visible links:" in markdown
+    assert "Widget Prime" in markdown
+
+
 def test_listing_adapter_records_use_shared_surface_normalization() -> None:
     rows = extract_records(
         "<html><body></body></html>",

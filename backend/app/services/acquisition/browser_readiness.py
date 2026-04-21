@@ -1,27 +1,42 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any
 
 from bs4 import BeautifulSoup, Comment
 
 from app.services.acquisition.dom_runtime import get_page_html
-from app.services.acquisition.traversal import count_listing_cards
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.field_value_core import clean_text
 
 
-class BrowserHtmlAnalysis:
-    __slots__ = ("h1_present", "html", "lowered_html", "normalized_text", "soup", "visible_text")
+@dataclass(frozen=True, slots=True)
+class HtmlAnalysis:
+    html: str
+    lowered_html: str
+    soup: BeautifulSoup
+    visible_text: str
+    normalized_text: str
+    title_text: str
+    h1_present: bool
 
-    def __init__(self, html: str) -> None:
-        text = str(html or "")
-        self.html = text
-        self.lowered_html = text.lower()
-        self.soup = BeautifulSoup(text, "html.parser")
-        self.visible_text = visible_text_from_soup(self.soup)
-        self.normalized_text = " ".join(self.visible_text.split())
-        self.h1_present = bool(self.soup.find("h1"))
+
+def analyze_html(html: str) -> HtmlAnalysis:
+    text = str(html or "")
+    soup = BeautifulSoup(text, "html.parser")
+    visible_text = visible_text_from_soup(soup)
+    return HtmlAnalysis(
+        html=text,
+        lowered_html=text.lower(),
+        soup=soup,
+        visible_text=visible_text,
+        normalized_text=" ".join(visible_text.split()),
+        title_text=clean_text(
+            soup.title.get_text(" ", strip=True) if soup.title else ""
+        ),
+        h1_present=bool(soup.find("h1")),
+    )
 
 
 async def wait_for_listing_readiness_impl(
@@ -88,7 +103,7 @@ async def probe_browser_readiness_impl(
     detail_readiness_hint_count,
 ) -> dict[str, object]:
     html_text = html if html is not None else await get_page_html(page)
-    analysis = BrowserHtmlAnalysis(html_text or "")
+    analysis = analyze_html(html_text or "")
     visible_text_length = len(analysis.normalized_text)
     structured_data_present = any(
         token in analysis.lowered_html
@@ -103,15 +118,18 @@ async def probe_browser_readiness_impl(
     )
     detail_hints = detail_readiness_hint_count(surface, analysis.visible_text.lower())
     detail_like = analysis.h1_present or structured_data_present or detail_hints > 0
-    listing_card_count = await listing_card_signal_count_impl(page, surface=surface)
-    matched_listing_selectors = await count_matching_selectors(
-        page,
-        selectors=list(listing_override.get("selectors") or [])
-        if isinstance(listing_override, dict)
-        else [],
-    )
     is_detail = "detail" in surface
     is_listing = "listing" in surface
+    listing_card_count = 0
+    matched_listing_selectors = 0
+    if is_listing:
+        listing_card_count = await listing_card_signal_count_impl(page, surface=surface)
+        matched_listing_selectors = await count_matching_selectors(
+            page,
+            selectors=list(listing_override.get("selectors") or [])
+            if isinstance(listing_override, dict)
+            else [],
+        )
     if is_detail:
         is_ready = bool(
             structured_data_present
@@ -151,6 +169,8 @@ async def probe_browser_readiness_impl(
 
 
 async def listing_card_signal_count_impl(page: Any, *, surface: str) -> int:
+    from app.services.acquisition.traversal import count_listing_cards
+
     return await count_listing_cards(
         page,
         surface=surface,
@@ -197,7 +217,7 @@ def classify_browser_outcome_impl(
 
 
 def classify_low_content_reason_impl(html: str, *, html_bytes: int) -> str | None:
-    analysis = BrowserHtmlAnalysis(html)
+    analysis = analyze_html(html)
     if not analysis.html.strip():
         return "empty_html"
     lowered_text = analysis.normalized_text.lower()
@@ -212,7 +232,7 @@ def classify_low_content_reason_impl(html: str, *, html_bytes: int) -> str | Non
         )
     ):
         return "empty_terminal_page"
-    if len(analysis.normalized_text) >= 120:
+    if len(analysis.visible_text.strip()) >= 120:
         return None
     if any(
         token in analysis.lowered_html

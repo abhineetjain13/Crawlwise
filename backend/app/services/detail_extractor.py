@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from itertools import product
 from urllib.parse import urlparse
 from typing import Any
 
@@ -46,7 +47,13 @@ from app.services.field_value_dom import (
     extract_page_images,
 )
 from app.services.js_state_mapper import map_js_state_to_fields
+from app.services.js_state_helpers import select_variant
 from app.services.network_payload_mapper import map_network_payloads_to_fields
+from app.services.extract.shared_variant_logic import (
+    normalized_variant_axis_key,
+    resolve_variants,
+    split_variant_axes,
+)
 from app.services.extract.detail_tiers import (
     DetailTierState,
     collect_authoritative_tier,
@@ -133,7 +140,6 @@ _VARIANT_DOM_FIELD_NAMES = (
 )
 
 
-
 def _field_source_rank(surface: str, field_name: str, source: str | None) -> int:
     if str(surface or "").strip().lower() == "ecommerce_detail":
         if field_name == "title" and source in {"js_state", "dom_h1"}:
@@ -141,7 +147,6 @@ def _field_source_rank(surface: str, field_name: str, source: str | None) -> int
         if field_name in _ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2
     return 100 + _SOURCE_PRIORITY_RANK.get(source, len(_SOURCE_PRIORITY_RANK))
-
 
 def _apply_dom_fallbacks(
     dom_parser: LexborHTMLParser,
@@ -280,7 +285,6 @@ def _apply_dom_fallbacks(
                 source="dom_text",
             )
 
-
 def _add_sourced_candidate(
     candidates: dict[str, list[object]],
     candidate_sources: dict[str, list[str]],
@@ -299,7 +303,6 @@ def _add_sourced_candidate(
     bucket = field_sources.setdefault(field_name, [])
     if source not in bucket:
         bucket.append(source)
-
 
 def _collect_record_candidates(
     record: dict[str, Any],
@@ -329,7 +332,6 @@ def _collect_record_candidates(
             source=source,
         )
 
-
 def _collect_structured_payload_candidates(
     payload: object,
     *,
@@ -358,7 +360,6 @@ def _collect_structured_payload_candidates(
                 source=source,
             )
 
-
 def _primary_source_for_record(
     record: dict[str, Any],
     selected_field_sources: dict[str, str],
@@ -384,7 +385,6 @@ _SOURCE_PRIORITY_RANK = {
     source_name: index for index, source_name in enumerate(_SOURCE_PRIORITY)
 }
 
-
 def _ordered_candidates_for_field(
     surface: str,
     field_name: str,
@@ -409,7 +409,6 @@ def _ordered_candidates_for_field(
     indexed_entries.sort(key=lambda row: (row[0], row[1]))
     return [(source, value) for _, _, source, value in indexed_entries]
 
-
 def _winning_candidates_for_field(
     ordered_candidates: list[tuple[str | None, object]],
 ) -> tuple[list[object], str | None]:
@@ -421,7 +420,6 @@ def _winning_candidates_for_field(
         winning_source,
     )
 
-
 def _merged_structured_field_value(
     field_name: str,
     ordered_candidates: list[tuple[str | None, object]],
@@ -430,7 +428,6 @@ def _merged_structured_field_value(
         field_name,
         [value for _, value in ordered_candidates],
     )
-
 
 def _selector_self_heal_config(
     extraction_runtime_snapshot: dict[str, object] | None,
@@ -560,6 +557,10 @@ def _variant_fields_are_empty(candidates: dict[str, list[object]]) -> bool:
     return not any(candidates.get(field_name) for field_name in _VARIANT_DOM_FIELD_NAMES)
 
 
+def _should_collect_dom_variants(candidates: dict[str, list[object]]) -> bool:
+    return _variant_fields_are_empty(candidates) or not candidates.get("variants")
+
+
 def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
     option_groups: list[dict[str, object]] = []
     for select in soup.select(
@@ -650,19 +651,64 @@ def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
     if not deduped_groups:
         return {}
 
-    record: dict[str, object] = {"variant_count": sum(len(group["values"]) for group in deduped_groups)}
+    record: dict[str, object] = {}
     variant_axes: dict[str, list[str]] = {}
-    for index, group in enumerate(deduped_groups, start=1):
+    axis_order: list[tuple[str, str, list[str]]] = []
+    for group in deduped_groups:
         name = clean_text(group.get("name"))
         values = list(group.get("values") or [])
-        axis_key = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or f"option{index}"
-        record[f"option{index}_name"] = name or axis_key.replace("_", " ")
-        record[f"option{index}_values"] = values
+        axis_key = normalized_variant_axis_key(name)
+        if not axis_key:
+            continue
+        axis_index = len(axis_order) + 1
+        record[f"option{axis_index}_name"] = name
+        record[f"option{axis_index}_values"] = values
         variant_axes[axis_key] = values
+        axis_order.append((axis_key, name, values))
         if axis_key == "size" and not record.get("available_sizes"):
             record["available_sizes"] = values
-    if variant_axes:
+    if not variant_axes:
+        return {}
+
+    variants: list[dict[str, object]] = []
+    axis_names = [axis_key for axis_key, _label, _values in axis_order]
+    axis_value_lists = [values for _axis_key, _label, values in axis_order]
+    for combo in product(*axis_value_lists):
+        option_values = {
+            axis_name: value
+            for axis_name, value in zip(axis_names, combo, strict=False)
+            if clean_text(value)
+        }
+        if not option_values:
+            continue
+        variant: dict[str, object] = {
+            "option_values": option_values,
+        }
+        for axis_name, value in option_values.items():
+            variant[axis_name] = value
+        variants.append(variant)
+
+    selectable_axes, single_value_attributes = split_variant_axes(
+        variant_axes,
+        always_selectable_axes=frozenset({"size"}),
+    )
+    resolved_variants = (
+        resolve_variants(selectable_axes or variant_axes, variants)
+        if variants
+        else []
+    )
+    selected_variant = select_variant(resolved_variants, page_url="")
+    for axis_name, value in single_value_attributes.items():
+        record.setdefault(axis_name, value)
+    if selectable_axes:
+        record["variant_axes"] = selectable_axes
+    elif variant_axes:
         record["variant_axes"] = variant_axes
+    if resolved_variants:
+        record["variants"] = resolved_variants
+        record["variant_count"] = len(resolved_variants)
+        if selected_variant:
+            record["selected_variant"] = selected_variant
     return record
 
 
@@ -902,6 +948,7 @@ def build_detail_record(
         selector_rules=selector_rules,
         apply_dom_fallbacks=_apply_dom_fallbacks,
         extract_variants_from_dom=_extract_variants_from_dom,
+        should_collect_dom_variants=_should_collect_dom_variants,
         add_sourced_candidate=_add_sourced_candidate,
     )
     record = materialize_detail_tier(

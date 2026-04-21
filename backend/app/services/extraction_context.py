@@ -63,29 +63,46 @@ def collect_structured_source_payloads(
     *,
     page_url: str,
 ) -> tuple[tuple[str, list[dict[str, Any]]], ...]:
-    json_ld_payloads = parse_json_ld(context.soup)
+    json_ld_payloads = _dict_payloads(parse_json_ld(context.soup))
     skip_extruct_fallbacks = _json_ld_listing_confident(json_ld_payloads)
     js_state_objects = harvest_js_state_objects(None, context.cleaned_html)
-    js_state_payloads = [
-        payload for payload in js_state_objects.values() if isinstance(payload, dict)
-    ]
+    js_state_payloads: list[dict[str, Any]] = []
+    for payload in js_state_objects.values():
+        if isinstance(payload, dict):
+            js_state_payloads.append(payload)
+            continue
+        if isinstance(payload, list) and payload:
+            js_state_payloads.append({"itemListElement": payload})
     return (
         ("json_ld", json_ld_payloads),
         (
             "microdata",
             []
             if skip_extruct_fallbacks
-            else parse_microdata(context.soup, context.cleaned_html, page_url),
+            else _dict_payloads(
+                parse_microdata(context.soup, context.cleaned_html, page_url)
+            ),
         ),
         (
             "opengraph",
             []
             if skip_extruct_fallbacks
-            else parse_opengraph(context.soup, context.cleaned_html, page_url),
+            else _dict_payloads(
+                parse_opengraph(context.soup, context.cleaned_html, page_url)
+            ),
         ),
-        ("embedded_json", parse_embedded_json(context.soup, context.cleaned_html)),
+        (
+            "embedded_json",
+            _dict_payloads(parse_embedded_json(context.soup, context.cleaned_html)),
+        ),
         ("js_state", js_state_payloads),
     )
+
+
+def _dict_payloads(payloads: object) -> list[dict[str, Any]]:
+    if not isinstance(payloads, list):
+        return []
+    return [payload for payload in payloads if isinstance(payload, dict)]
 
 
 def _json_ld_listing_confident(payloads: list[dict[str, Any]]) -> bool:

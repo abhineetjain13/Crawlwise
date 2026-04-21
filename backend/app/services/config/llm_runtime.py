@@ -22,6 +22,7 @@ class LLMRuntimeSettings(BaseSettings):
     circuit_failure_threshold: int = 5
     circuit_cooldown_seconds: int = 120
     prompt_token_limit: int = 5600
+    prompt_json_reparse_max_chars: int = 16384
     prompt_token_char_multiplier: int = 3
     prompt_safe_truncate_max_str_len: int = 400
     prompt_safe_truncate_max_list_items: int = 5

@@ -124,6 +124,7 @@ def collect_dom_tier(
     selector_rules: list[dict[str, object]] | None,
     apply_dom_fallbacks,
     extract_variants_from_dom,
+    should_collect_dom_variants,
     add_sourced_candidate,
 ) -> None:
     apply_dom_fallbacks(
@@ -137,7 +138,7 @@ def collect_dom_tier(
         state.field_sources,
         selector_rules=selector_rules,
     )
-    if state.surface == "ecommerce_detail":
+    if state.surface == "ecommerce_detail" and should_collect_dom_variants(state.candidates):
         for field_name, value in extract_variants_from_dom(soup).items():
             add_sourced_candidate(
                 state.candidates,

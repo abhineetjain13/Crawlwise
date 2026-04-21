@@ -301,9 +301,11 @@ async def test_request_result_applies_per_request_timeout_with_shared_client(
 
 
 @pytest.mark.asyncio
-async def test_request_result_surfaces_dns_failure_without_hidden_retry(
+async def test_request_result_retries_dns_failure_with_forced_ipv4(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    attempts: list[str] = []
+
     class _FakeClient:
         async def request(
             self,
@@ -315,22 +317,59 @@ async def test_request_result_surfaces_dns_failure_without_hidden_retry(
             timeout=None,
         ):
             del method, url, headers, json, data, timeout
+            attempts.append("shared")
             raise OSError(11001, "getaddrinfo failed")
 
     async def _fake_get_shared(*, proxy=None, force_ipv4=False):
         del proxy, force_ipv4
         return _FakeClient()
 
+    class _RetryClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            return False
+
+        async def request(
+            self,
+            method,
+            url,
+            headers=None,
+            json=None,
+            data=None,
+            timeout=None,
+        ):
+            del method, url, headers, json, data, timeout
+            attempts.append("ipv4")
+            return type(
+                "_FakeResponse",
+                (),
+                {
+                    "status_code": 200,
+                    "url": "https://example.com/api/jobs",
+                    "headers": httpx.Headers({"content-type": "application/json"}),
+                    "text": '{"jobs":[{"id":1}]}',
+                },
+            )()
+
     monkeypatch.setattr(
         "app.services.acquisition.http_client.get_shared_http_client",
         _fake_get_shared,
     )
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.build_async_http_client",
+        lambda **kwargs: _RetryClient(),
+    )
 
-    with pytest.raises(OSError, match="getaddrinfo failed"):
-        await request_result(
-            "https://example.com/api/jobs",
-            expect_json=True,
-        )
+    result = await request_result(
+        "https://example.com/api/jobs",
+        expect_json=True,
+    )
+
+    assert attempts == ["shared", "ipv4"]
+    assert result.json_data == {"jobs": [{"id": 1}]}
 
 
 @pytest.mark.asyncio

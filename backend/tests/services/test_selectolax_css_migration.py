@@ -201,6 +201,57 @@ def test_listing_extractor_accepts_image_link_cards_with_separate_title_text() -
     ]
 
 
+def test_listing_extractor_ignores_none_embedded_json_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html = """
+    <html>
+      <body>
+        <section>
+          <article class="product-card">
+            <a href="/products/widget-prime">
+              <h2>Widget Prime</h2>
+            </a>
+            <div>$19.99</div>
+          </article>
+        </section>
+      </body>
+    </html>
+    """
+
+    def _fake_structured_payloads(*args, **kwargs):
+        del args, kwargs
+        return (
+            ("json_ld", []),
+            ("microdata", []),
+            ("opengraph", []),
+            ("embedded_json", [None, {"@type": "ItemList", "itemListElement": []}]),
+            ("js_state", []),
+        )
+
+    monkeypatch.setattr(
+        "app.services.listing_extractor.collect_structured_source_payloads",
+        _fake_structured_payloads,
+    )
+
+    rows = extract_listing_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/collections/widgets",
+            "_source": "dom_listing",
+            "title": "Widget Prime",
+            "price": "19.99",
+            "url": "https://example.com/products/widget-prime",
+        }
+    ]
+
+
 def test_detail_extractor_ignores_js_state_inside_removed_noise_containers() -> None:
     html = """
     <html>

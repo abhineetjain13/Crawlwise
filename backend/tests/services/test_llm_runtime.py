@@ -143,6 +143,64 @@ async def test_run_prompt_task_returns_typed_provider_failure(
     assert cost_logs == []
 
 
+@pytest.mark.asyncio
+async def test_run_prompt_task_validates_direct_record_extraction_array_payload(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_resolve_run_config(session, *, run_id, task_type):
+        del session, run_id, task_type
+        return {"provider": "groq", "model": "llama", "api_key_encrypted": ""}
+
+    def fake_get_prompt_task(task_type: str):
+        assert task_type == "direct_record_extraction"
+        return {
+            "system_file": "system.txt",
+            "user_file": "user.txt",
+            "response_type": "array",
+        }
+
+    def fake_load_prompt_file(_path: str) -> str:
+        return "Return JSON."
+
+    async def fake_call_provider_with_retry(**_kwargs):
+        return '[{"title":"Widget Prime","url":"https://example.com/products/widget"}]', 12, 8
+
+    async def fake_load_cached_llm_result(_cache_key: str):
+        return None
+
+    async def fake_store_cached_llm_result(_cache_key: str, _result) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.llm_tasks.resolve_run_config", fake_resolve_run_config)
+    monkeypatch.setattr("app.services.llm_tasks.get_prompt_task", fake_get_prompt_task)
+    monkeypatch.setattr("app.services.llm_tasks.load_prompt_file", fake_load_prompt_file)
+    monkeypatch.setattr(
+        "app.services.llm_tasks.call_provider_with_retry",
+        fake_call_provider_with_retry,
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.load_cached_llm_result",
+        fake_load_cached_llm_result,
+    )
+    monkeypatch.setattr(
+        "app.services.llm_tasks.store_cached_llm_result",
+        fake_store_cached_llm_result,
+    )
+
+    result = await llm_runtime.run_prompt_task(
+        db_session,
+        task_type="direct_record_extraction",
+        run_id=None,
+        domain="example.com",
+        variables={"page_markdown": "Widget Prime"},
+    )
+
+    assert result.payload == [
+        {"title": "Widget Prime", "url": "https://example.com/products/widget"}
+    ]
+
+
 def test_trim_prompt_section_body_skips_expensive_large_json_reparse() -> None:
     large_json = '{"items":[' + ",".join('"value"' for _ in range(5000)) + "]}"
 

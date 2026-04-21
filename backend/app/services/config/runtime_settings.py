@@ -82,6 +82,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     max_url_process_timeout_seconds: float = 600.0
     worker_max_concurrent_jobs: int = 8
     worker_orphan_recovery_grace_seconds: int = 900
+    long_run_threshold_seconds: int = 30 * 60
+    max_duration_sample_size: int = 1000
+    stalled_run_threshold_seconds: int = 2 * 60
     max_candidates_per_field: int = 5
     dynamic_field_name_max_tokens: int = 7
     accordion_expand_max: int = 20
@@ -99,6 +102,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     js_shell_visible_ratio_max: float = 0.15
     js_shell_min_script_count: int = 2
     detail_field_signal_min_count: int = 2
+    network_payload_signature_min_match: int = 3
+    structured_source_generic_assignment_max_script_chars: int = 250000
+    structured_source_generic_assignment_max_matches_per_script: int = 24
     http_retry_status_codes: list[int] = Field(
         default_factory=lambda: [403, 429, 502, 503, 504]
     )
@@ -114,6 +120,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     dns_resolution_retry_delay_ms: int = 250
     network_address_family_preference: Literal["auto", "ipv4", "ipv6"] = "auto"
     acquire_host_min_interval_ms: int = 250
+    protected_host_additional_interval_ms: int = 2000
     pacing_host_cache_max_entries: int = 1024
     pacing_host_cache_ttl_seconds: int = 3600
     stealth_prefer_ttl_hours: int = 24
@@ -147,6 +154,7 @@ class CrawlerRuntimeSettings(BaseSettings):
     listing_readiness_max_wait_ms: int = 6000
     listing_readiness_poll_ms: int = 500
     detail_expand_max_elapsed_ms: int = 2500
+    detail_expand_max_per_selector: int = 4
     detail_aom_expand_max_interactions: int = 6
     detail_aom_expand_max_elapsed_ms: int = 1500
     scroll_wait_min_ms: int = 1500
@@ -156,6 +164,12 @@ class CrawlerRuntimeSettings(BaseSettings):
     traversal_min_settle_wait_ms: int = 500
     traversal_settle_networkidle_timeout_ms: int = 4000
     traversal_weak_progress_streak_max: int = 2
+    listing_recovery_enabled: bool = True
+    listing_recovery_min_records_threshold: int = 5
+    listing_recovery_min_populated_fields_per_record: float = 3.0
+    listing_recovery_max_actions: int = 3
+    listing_recovery_post_action_wait_ms: int = 1500
+    rendered_listing_card_capture_limit: int = 48
     traversal_active_scrollable_threshold_px: int = 150
     traversal_active_scrollable_bonus: int = 10
     traversal_active_link_weight: int = 2
@@ -175,13 +189,11 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_max_contexts_before_recycle: int = 200
     browser_max_lifetime_seconds: int = 1800
     iframe_promotion_max_candidates: int = 2
-    extractability_non_product_type_ratio_max: float = 0.8
-    extractability_json_ld_min_type_signals: int = 2
-    extractability_next_data_signal_trigger: int = 15
-    extractability_next_data_signal_min: int = 4
     browser_preference_min_successes: int = 2
     acquisition_artifact_ttl_seconds: int = 86400
     acquisition_artifact_cleanup_interval_seconds: int = 300
+    llm_direct_record_extraction_min_records: int = 3
+    llm_direct_record_extraction_min_populated_fields_per_record: float = 3.0
     selector_self_heal_enabled: bool = False
     selector_self_heal_min_confidence: float = 0.55
     selector_self_heal_cache_enabled: bool = False

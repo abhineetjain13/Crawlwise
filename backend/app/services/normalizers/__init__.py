@@ -156,10 +156,6 @@ def normalize_value(field_name: str, value: object) -> object:
     return _normalize_text(value)
 
 
-def normalize_review_value(value: object) -> str:
-    return str(normalize_value("review_value", value) or "")
-
-
 def normalize_record_fields(record: dict[str, Any]) -> dict[str, Any]:
     return {
         str(key): (value if str(key).startswith("_") else normalize_value(str(key), value))

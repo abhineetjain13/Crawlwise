@@ -91,7 +91,13 @@ class BrowserNetworkCapture:
         self._dropped_payload_events = 0
 
     def attach(self, page: Any) -> None:
-        if self._listener_attached:
+        if (
+            self._listener_attached
+            or self._closing
+            or self._closed
+            or self._summary is not None
+            or self._workers
+        ):
             return
         self._workers = [
             asyncio.create_task(self._capture_worker())
@@ -339,7 +345,6 @@ def _decode_network_payload(
         return json.loads(text)
     except json.JSONDecodeError:
         return None
-
 
 def _decode_rsc_payload(text: str) -> object | None:
     decoder = json.JSONDecoder()

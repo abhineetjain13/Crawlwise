@@ -7,7 +7,7 @@ from app.services._batch_runtime import process_run
 from app.services.acquisition.acquirer import AcquisitionResult
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.crawl_crud import create_crawl_run, get_run_records
-from app.services.llm_config_service import resolve_run_config
+from app.services.llm_config_service import resolve_run_config, snapshot_active_configs
 
 
 def _detail_html() -> str:
@@ -161,3 +161,23 @@ async def test_process_run_uses_stamped_selector_self_heal_snapshot(
     finally:
         crawler_runtime_settings.selector_self_heal_enabled = original_enabled
         crawler_runtime_settings.selector_self_heal_min_confidence = original_threshold
+
+
+@pytest.mark.asyncio
+async def test_snapshot_active_configs_includes_direct_record_extraction(
+    db_session,
+) -> None:
+    db_session.add(
+        LLMConfig(
+            provider="groq",
+            model="llama",
+            api_key_encrypted="enc",
+            task_type="direct_record_extraction",
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    snapshot = await snapshot_active_configs(db_session)
+
+    assert snapshot["direct_record_extraction"]["task_type"] == "direct_record_extraction"

@@ -78,6 +78,21 @@ def test_invalid_traversal_mode_raises_configuration_error() -> None:
         settings.traversal_mode()
 
 
+def test_crawl_run_settings_preserves_advanced_mode_storage_contract() -> None:
+    settings = CrawlRunSettings.from_value(
+        {
+            "advanced_enabled": True,
+            "advanced_mode": "view_all",
+            "traversal_mode": "load_more",
+        }
+    )
+
+    normalized = settings.normalized_for_storage()
+
+    assert normalized["advanced_mode"] == "view_all"
+    assert normalized["traversal_mode"] == "load_more"
+
+
 def test_platform_runtime_policy_does_not_force_browser_for_vendor_specific_domains() -> None:
     policy = resolve_platform_runtime_policy("https://www.autozone.com/")
 

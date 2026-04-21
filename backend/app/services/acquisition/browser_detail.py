@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
 from app.services.config.runtime_settings import crawler_runtime_settings
+from app.services.field_policy import normalize_requested_field
+
+_DETAIL_BLOCKED_TOKENS = (
+    "add to cart",
+    "add to bag",
+    "bag",
+    "buy now",
+    "cart",
+    "checkout",
+    "login",
+    "log in",
+    "shopping bag",
+    "sign in",
+    "sign up",
+    "subscribe",
+    "wishlist",
+)
 
 
 def detail_expansion_skip(reason: str) -> dict[str, object]:
@@ -23,6 +41,7 @@ async def expand_detail_content_if_needed_impl(
     *,
     surface: str,
     readiness_probe: dict[str, object],
+    requested_fields: list[str] | None,
     expand_all_interactive_elements,
     probe_browser_readiness,
     expand_interactive_elements_via_accessibility,
@@ -30,13 +49,12 @@ async def expand_detail_content_if_needed_impl(
     current_probe = dict(readiness_probe or {})
     if "detail" not in str(surface or "").lower():
         return detail_expansion_skip("non_detail_surface")
-    if current_probe.get("is_ready"):
-        return detail_expansion_skip("already_ready")
     if readiness_probe and not current_probe.get("detail_like"):
         return detail_expansion_skip("not_detail_like")
     dom = await expand_all_interactive_elements(
         page,
         surface=surface,
+        requested_fields=requested_fields,
         max_elapsed_ms=int(crawler_runtime_settings.detail_expand_max_elapsed_ms),
     )
     if dom.get("clicked_count", 0):
@@ -59,6 +77,7 @@ async def expand_detail_content_if_needed_impl(
         aom = await expand_interactive_elements_via_accessibility(
             page,
             surface=surface,
+            requested_fields=requested_fields,
             max_elapsed_ms=int(crawler_runtime_settings.detail_aom_expand_max_elapsed_ms),
         )
     return {
@@ -85,10 +104,10 @@ async def expand_all_interactive_elements_impl(
     page: Any,
     *,
     surface: str,
-    detail_expand_selectors: str,
+    requested_fields: list[str] | None,
+    detail_expand_selectors: tuple[str, ...] | list[str],
     detail_expansion_keywords,
-    interactive_label,
-    is_actionable_interactive_handle,
+    interactive_candidate_snapshot,
     elapsed_ms,
     max_elapsed_ms: int | None = None,
 ) -> dict[str, object]:
@@ -102,16 +121,9 @@ async def expand_all_interactive_elements_impl(
         "limit": int(crawler_runtime_settings.detail_expand_max_interactions),
         "max_elapsed_ms": max_elapsed_ms,
     }
-    try:
-        candidates = await page.locator(detail_expand_selectors).element_handles()
-    except Exception as exc:
-        diagnostics["interaction_failures"] = [f"locator_failed:{exc}"]
-        return diagnostics
-
-    keywords = detail_expansion_keywords(surface)
+    keywords = detail_expansion_keywords(surface, requested_fields=requested_fields)
     expanded_elements: list[str] = []
     interaction_failures: list[str] = []
-    diagnostics["buttons_found"] = len(candidates)
     max_interactions = max(
         0,
         min(
@@ -119,8 +131,15 @@ async def expand_all_interactive_elements_impl(
             int(crawler_runtime_settings.accordion_expand_max),
         ),
     )
+    max_per_selector = max(1, int(crawler_runtime_settings.detail_expand_max_per_selector))
     clicked_count = 0
-    for handle in candidates:
+    seen_candidates: set[tuple[str, str, str]] = set()
+    selectors = [
+        str(selector).strip()
+        for selector in list(detail_expand_selectors or [])
+        if str(selector).strip()
+    ]
+    for selector in selectors:
         if clicked_count >= max_interactions:
             diagnostics["status"] = "interaction_limit_reached"
             break
@@ -128,28 +147,71 @@ async def expand_all_interactive_elements_impl(
             diagnostics["status"] = "time_budget_reached"
             break
         try:
-            label = await interactive_label(handle)
-            label_lower = (label or "").lower()
-            if keywords and label and not any(keyword in label_lower for keyword in keywords):
-                continue
-            if not await is_actionable_interactive_handle(handle):
-                continue
-            await handle.scroll_into_view_if_needed()
-            try:
-                await handle.click(timeout=1_000)
-            except Exception:
-                await handle.evaluate(
-                    "(node) => node instanceof HTMLElement && node.click()"
-                )
-            if int(crawler_runtime_settings.accordion_expand_wait_ms) > 0:
-                await page.wait_for_timeout(
-                    int(crawler_runtime_settings.accordion_expand_wait_ms)
-                )
-            clicked_count += 1
-            if label:
-                expanded_elements.append(label)
+            candidates = await page.locator(selector).element_handles()
         except Exception as exc:
-            interaction_failures.append(str(exc))
+            interaction_failures.append(f"locator_failed:{selector}:{exc}")
+            continue
+        diagnostics["buttons_found"] = int(diagnostics["buttons_found"]) + len(candidates)
+        selector_clicks = 0
+        for handle in candidates:
+            if clicked_count >= max_interactions:
+                diagnostics["status"] = "interaction_limit_reached"
+                break
+            if max_elapsed_ms is not None and elapsed_ms(started_at) >= int(max_elapsed_ms):
+                diagnostics["status"] = "time_budget_reached"
+                break
+            if selector_clicks >= max_per_selector:
+                break
+            try:
+                snapshot = await interactive_candidate_snapshot(handle)
+                probe = str(snapshot.get("probe") or "").strip().lower()
+                label = str(snapshot.get("label") or "").strip().lower()
+                aria_expanded = str(snapshot.get("aria_expanded") or "").strip().lower()
+                aria_controls = str(snapshot.get("aria_controls") or "").strip()
+                tag_name = str(snapshot.get("tag_name") or "").strip().lower()
+                candidate_key = (label or probe, aria_controls, tag_name)
+                if candidate_key in seen_candidates:
+                    continue
+                seen_candidates.add(candidate_key)
+                if probe and any(token in probe for token in _DETAIL_BLOCKED_TOKENS):
+                    continue
+                looks_expandable = bool(
+                    selector
+                    in {
+                        "summary",
+                        "details > summary",
+                        "[aria-expanded='false']",
+                        "button[aria-controls]",
+                        "[role='button'][aria-controls]",
+                        "[role='tab'][aria-controls]",
+                    }
+                    or aria_expanded == "false"
+                    or aria_controls
+                    or tag_name == "summary"
+                    or any(keyword in probe for keyword in keywords)
+                )
+                if not looks_expandable:
+                    continue
+                if not bool(snapshot.get("visible")) or not bool(snapshot.get("actionable")):
+                    continue
+                await handle.scroll_into_view_if_needed()
+                try:
+                    await handle.click(timeout=1_000)
+                except Exception:
+                    await handle.evaluate(
+                        "(node) => node instanceof HTMLElement && node.click()"
+                    )
+                if int(crawler_runtime_settings.accordion_expand_wait_ms) > 0:
+                    await page.wait_for_timeout(
+                        int(crawler_runtime_settings.accordion_expand_wait_ms)
+                    )
+                clicked_count += 1
+                selector_clicks += 1
+                expanded_label = label or probe
+                if expanded_label:
+                    expanded_elements.append(expanded_label)
+            except Exception as exc:
+                interaction_failures.append(str(exc))
     if diagnostics["status"] == "attempted":
         diagnostics["status"] = "expanded" if clicked_count > 0 else "no_matches"
     diagnostics["clicked_count"] = clicked_count
@@ -163,6 +225,7 @@ async def expand_interactive_elements_via_accessibility_impl(
     page: Any,
     *,
     surface: str,
+    requested_fields: list[str] | None,
     accessibility_expand_candidates,
     detail_expansion_keywords,
     elapsed_ms,
@@ -194,11 +257,15 @@ async def expand_interactive_elements_via_accessibility_impl(
         diagnostics["interaction_failures"] = [f"snapshot_failed:{exc}"]
         diagnostics["elapsed_ms"] = elapsed_ms(started_at)
         return diagnostics
-    candidates = accessibility_expand_candidates(snapshot, surface=surface)
+    candidates = accessibility_expand_candidates(
+        snapshot,
+        surface=surface,
+        requested_fields=requested_fields,
+    )
     diagnostics["buttons_found"] = len(candidates)
     max_interactions = max(0, int(crawler_runtime_settings.detail_aom_expand_max_interactions))
     if len(candidates) > max_interactions:
-        keywords = detail_expansion_keywords(surface)
+        keywords = detail_expansion_keywords(surface, requested_fields=requested_fields)
         if keywords:
             prioritized = [
                 item for item in candidates if any(keyword in item[1] for keyword in keywords)
@@ -247,10 +314,11 @@ def accessibility_expand_candidates_impl(
     snapshot: dict[str, object] | None,
     *,
     surface: str,
+    requested_fields: list[str] | None,
     aom_expand_roles: set[str],
     detail_expansion_keywords,
 ) -> list[tuple[str, str]]:
-    keywords = detail_expansion_keywords(surface)
+    keywords = detail_expansion_keywords(surface, requested_fields=requested_fields)
     if not snapshot:
         return []
     results: list[tuple[str, str]] = []
@@ -263,6 +331,7 @@ def accessibility_expand_candidates_impl(
         if (
             role in aom_expand_roles
             and name
+            and not any(token in name for token in _DETAIL_BLOCKED_TOKENS)
             and (not keywords or any(keyword in name for keyword in keywords))
             and candidate not in seen
         ):
@@ -274,3 +343,19 @@ def accessibility_expand_candidates_impl(
 
     _walk(snapshot)
     return results
+
+
+def requested_field_tokens(requested_fields: list[str] | None) -> tuple[str, ...]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for field_name in list(requested_fields or []):
+        normalized = normalize_requested_field(str(field_name or ""))
+        if not normalized:
+            continue
+        for token in re.split(r"[_\W]+", normalized):
+            cleaned = str(token or "").strip().lower()
+            if len(cleaned) < 3 or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            tokens.append(cleaned)
+    return tuple(tokens)

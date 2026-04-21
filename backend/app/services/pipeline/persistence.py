@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 
 from app.models.crawl import CrawlRecord, CrawlRun
+from app.services.db_utils import mapping_or_empty
 from app.services.artifact_store import (
     persist_html_artifact,
     persist_json_artifact,
@@ -12,11 +13,6 @@ from app.services.artifact_store import (
 )
 from app.services.publish.metadata import refresh_record_commit_metadata
 from sqlalchemy.ext.asyncio import AsyncSession
-
-
-def _mapping_or_empty(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, dict) else {}
-
 
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
@@ -28,7 +24,7 @@ def _merge_browser_diagnostics(
     acquisition_result,
     diagnostics: dict[str, object],
 ) -> None:
-    merged = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    merged = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
     merged.update(dict(diagnostics or {}))
     acquisition_result.browser_diagnostics = merged
 
@@ -42,7 +38,7 @@ def _record_identity_key(source_url: str) -> str | None:
 
 def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[str, object]:
     field_discovery = {}
-    field_sources = _mapping_or_empty(record.get("_field_sources"))
+    field_sources = mapping_or_empty(record.get("_field_sources"))
     for key, value in record.items():
         if str(key).startswith("_"):
             continue
@@ -62,17 +58,17 @@ def _build_source_trace(acquisition_result, record: dict[str, object]) -> dict[s
             "adapter_name": acquisition_result.adapter_name,
             "adapter_source_type": acquisition_result.adapter_source_type,
             "network_payload_count": len(list(acquisition_result.network_payloads or [])),
-            "browser_diagnostics": _mapping_or_empty(acquisition_result.browser_diagnostics),
+            "browser_diagnostics": mapping_or_empty(acquisition_result.browser_diagnostics),
         },
         "extraction": {
             "source": str(record.get("_source") or "extraction"),
-            "confidence": _mapping_or_empty(record.get("_confidence")),
-            "self_heal": _mapping_or_empty(record.get("_self_heal")),
-            "manifest_trace": _mapping_or_empty(record.get("_manifest_trace")),
+            "confidence": mapping_or_empty(record.get("_confidence")),
+            "self_heal": mapping_or_empty(record.get("_self_heal")),
+            "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
             "review_bucket": list(record.get("_review_bucket") or [])
             if isinstance(record.get("_review_bucket"), list)
             else [],
-            "semantic": _mapping_or_empty(record.get("_semantic")),
+            "semantic": mapping_or_empty(record.get("_semantic")),
         },
         "field_discovery": field_discovery,
     }
@@ -94,8 +90,8 @@ async def persist_acquisition_artifacts(
     if not browser_attempted:
         return raw_html_path
 
-    diagnostics = _mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
-    artifacts = _mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
+    diagnostics = mapping_or_empty(getattr(acquisition_result, "browser_diagnostics", {}))
+    artifacts = mapping_or_empty(getattr(acquisition_result, "artifacts", {}))
     screenshot_path_source = str(artifacts.pop("browser_screenshot_path", "") or "").strip()
     screenshot_bytes = artifacts.pop("browser_screenshot_png", b"")
     screenshot_path = ""
@@ -168,18 +164,22 @@ async def persist_extracted_records(
             continue
         if identity_key is not None:
             seen_identities.add(identity_key)
+        raw_record = dict(record)
+        page_markdown = str(getattr(acquisition_result, "page_markdown", "") or "").strip()
+        if page_markdown and not str(raw_record.get("page_markdown") or "").strip():
+            raw_record["page_markdown"] = page_markdown
         crawl_record = CrawlRecord(
             run_id=run.id,
             source_url=source_url,
             url_identity_key=identity_key,
             data=data,
-            raw_data=dict(record),
+            raw_data=raw_record,
             discovered_data={
                 key: value
                 for key, value in {
-                    "confidence": _mapping_or_empty(record.get("_confidence")),
-                    "manifest_trace": _mapping_or_empty(record.get("_manifest_trace")),
-                    "semantic": _mapping_or_empty(record.get("_semantic")),
+                    "confidence": mapping_or_empty(record.get("_confidence")),
+                    "manifest_trace": mapping_or_empty(record.get("_manifest_trace")),
+                    "semantic": mapping_or_empty(record.get("_semantic")),
                     "review_bucket": list(record.get("_review_bucket") or [])
                     if isinstance(record.get("_review_bucket"), list)
                     else [],

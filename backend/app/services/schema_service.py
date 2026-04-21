@@ -172,15 +172,3 @@ async def load_resolved_schema(
     )
 
 
-def schema_trace_payload(schema: ResolvedSchema) -> dict:
-    return {
-        "surface": schema.surface,
-        "domain": schema.domain,
-        "baseline_fields": list(schema.baseline_fields),
-        "resolved_fields": list(schema.fields),
-        "new_fields": list(schema.new_fields),
-        "deprecated_fields": list(schema.deprecated_fields),
-        "source": schema.source,
-        "saved_at": schema.saved_at,
-        "stale": schema.stale,
-    }

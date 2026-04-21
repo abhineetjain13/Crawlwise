@@ -509,3 +509,73 @@ def test_extract_ecommerce_detail_recovers_variant_axes_from_dom_controls_when_j
     assert record["option2_values"] == "Black, Olive"
     assert record["available_sizes"] == "S, M, L"
     assert record["variant_axes"] == {"size": ["S", "M", "L"], "color": ["Black", "Olive"]}
+    assert record["variant_count"] == 6
+    assert isinstance(record["variants"], list)
+    assert len(record["variants"]) == 6
+    assert record["variants"][0]["option_values"] == {"size": "S", "color": "Black"}
+
+
+def test_extract_ecommerce_detail_skips_unnamed_dom_variant_groups() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Trail Runner</h1>
+        <div class="swatch-group">
+          <button type="button" aria-label="Black"></button>
+          <button type="button" aria-label="Olive"></button>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert "option1_name" not in record
+    assert "variant_axes" not in record
+    assert "variants" not in record
+
+
+def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fallback() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Trail Runner</h1>
+        <label>
+          Size
+          <select name="size">
+            <option value="">Choose size</option>
+            <option value="s">S</option>
+            <option value="m">M</option>
+          </select>
+        </label>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+        adapter_records=[
+            {
+                "variant_axes": {"size": ["S", "M", "L"]},
+                "selected_variant": {"sku": "TRAIL-S", "option_values": {"size": "S"}},
+            }
+        ],
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["variant_axes"] == {"size": ["S", "M", "L"]}
+    assert record["selected_variant"] == {
+        "sku": "TRAIL-S",
+        "option_values": {"size": "S"},
+    }

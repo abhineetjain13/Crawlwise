@@ -1157,6 +1157,26 @@
     "__type__": "dict",
     "items": [
       {
+        "key": "direct_record_extraction",
+        "value": {
+          "__type__": "dict",
+          "items": [
+            {
+              "key": "response_type",
+              "value": "array"
+            },
+            {
+              "key": "system_file",
+              "value": "direct_record_extraction.system.txt"
+            },
+            {
+              "key": "user_file",
+              "value": "direct_record_extraction.user.txt"
+            }
+          ]
+        }
+      },
+      {
         "key": "field_cleanup_review",
         "value": {
           "__type__": "dict",

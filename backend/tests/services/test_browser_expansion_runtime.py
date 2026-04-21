@@ -12,7 +12,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.services.acquisition.browser_capture import BrowserNetworkCapture
-from app.services.acquisition import browser_page_flow, browser_runtime
+from app.services.acquisition import browser_capture, browser_page_flow, browser_runtime
 from app.services.acquisition.traversal import TraversalResult
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
@@ -22,15 +22,28 @@ from app.services.config.selectors import CARD_SELECTORS
 class _FakeHandle:
     label: str
     page: "_FakeExpansionPage"
+    attributes: dict[str, str]
+    tag_name: str = "button"
     actionable: bool = True
 
     async def evaluate(self, script: str) -> str | dict[str, bool] | None:
         if "pieces" in script:
             return self.label
+        if "tagName" in script:
+            return self.tag_name
         if "getBoundingClientRect" in script:
             return {"actionable": self.actionable}
         self.page.expanded = True
         return None
+
+    async def inner_text(self) -> str:
+        return self.label
+
+    async def get_attribute(self, name: str) -> str | None:
+        return self.attributes.get(name)
+
+    async def is_visible(self) -> bool:
+        return self.actionable
 
     async def scroll_into_view_if_needed(self) -> None:
         return None
@@ -50,16 +63,53 @@ class _FakeLocator:
         return self
 
     async def element_handles(self) -> list[_FakeHandle]:
-        if "button" not in self._selector and "summary" not in self._selector:
-            return []
-        return [
-            _FakeHandle(
-                row["label"],
-                self._page,
-                actionable=bool(row.get("actionable", True)),
+        handles: list[_FakeHandle] = []
+        for row in self._page.labels:
+            attributes = {
+                str(key): str(value)
+                for key, value in dict(row.get("attributes", {})).items()
+            }
+            tag_name = str(row.get("tag_name", "button"))
+            if not self._matches_selector(tag_name, attributes):
+                continue
+            handles.append(
+                _FakeHandle(
+                    row["label"],
+                    self._page,
+                    attributes=attributes,
+                    tag_name=tag_name,
+                    actionable=bool(row.get("actionable", True)),
+                )
             )
-            for row in self._page.labels
-        ]
+        return handles
+
+    def _matches_selector(
+        self,
+        tag_name: str,
+        attributes: dict[str, str],
+    ) -> bool:
+        selector = self._selector
+        role = str(attributes.get("role") or "").lower()
+        aria_controls = str(attributes.get("aria-controls") or "")
+        aria_expanded = str(attributes.get("aria-expanded") or "").lower()
+        lowered_tag = tag_name.lower()
+        if selector == "summary" or selector == "details > summary":
+            return lowered_tag == "summary"
+        if selector == "[aria-expanded='false']":
+            return aria_expanded == "false"
+        if selector == "button[aria-controls]":
+            return lowered_tag == "button" and bool(aria_controls)
+        if selector == "[role='button'][aria-controls]":
+            return role == "button" and bool(aria_controls)
+        if selector == "[role='tab'][aria-controls]":
+            return role == "tab" and bool(aria_controls)
+        if selector == "button":
+            return lowered_tag == "button"
+        if selector == "[role='button']":
+            return role == "button"
+        if selector == "a":
+            return lowered_tag == "a"
+        return False
 
     async def count(self) -> int:
         if self._selector in self._page.selector_counts:
@@ -121,6 +171,9 @@ class _FakeExpansionPage:
         response_events: list[Any] | None = None,
         wait_for_selector_error: Exception | None = None,
         shadow_html: str | None = None,
+        rendered_listing_cards: list[dict[str, object]] | None = None,
+        wait_html_sequence: list[str] | None = None,
+        cookie_snapshots: list[list[dict[str, object]]] | None = None,
     ) -> None:
         self.base_html = base_html
         self.expanded_html = expanded_html or base_html
@@ -140,11 +193,15 @@ class _FakeExpansionPage:
         self.wait_for_selector_error = wait_for_selector_error
         self.wait_for_selector_calls: list[tuple[str, str | None, int | None]] = []
         self.listeners: dict[str, list[Any]] = {}
+        self.rendered_listing_cards = list(rendered_listing_cards or [])
+        self.wait_html_sequence = list(wait_html_sequence or [])
+        self.cookie_snapshots = list(cookie_snapshots or [[]])
         self.accessibility = SimpleNamespace(
             snapshot=self._snapshot if accessibility_snapshot is not None else None
         )
         self._accessibility_snapshot = accessibility_snapshot
         self.shadow_flattened = False
+        self.context = SimpleNamespace(cookies=self._cookies)
 
     async def _snapshot(self) -> dict[str, object] | None:
         return self._accessibility_snapshot
@@ -177,10 +234,15 @@ class _FakeExpansionPage:
                 callback(response)
         return SimpleNamespace(status=200, headers={"content-type": "text/html"})
 
+    async def _cookies(self, *_args, **_kwargs) -> list[dict[str, object]]:
+        return list(self.cookie_snapshots[0] if self.cookie_snapshots else [])
+
     async def evaluate(self, script: str, arg: Any | None = None) -> Any:
         if "document.querySelectorAll('*')" in script and self.shadow_html is not None:
             self.shadow_flattened = True
             return 1
+        if "const cardSelectors" in script:
+            return list(self.rendered_listing_cards)
         if "querySelectorAll(selector).length" in script:
             selectors = list(arg or [])
             return max(
@@ -196,6 +258,12 @@ class _FakeExpansionPage:
 
     async def wait_for_timeout(self, timeout_ms: int) -> None:
         self.wait_timeout_calls.append(timeout_ms)
+        if self.wait_html_sequence:
+            next_html = self.wait_html_sequence.pop(0)
+            self.base_html = next_html
+            self.expanded_html = next_html
+        if len(self.cookie_snapshots) > 1:
+            self.cookie_snapshots.pop(0)
 
     async def wait_for_load_state(
         self,
@@ -278,7 +346,8 @@ async def test_browser_fetch_fast_paths_ready_detail_without_extra_waits() -> No
     assert result.browser_diagnostics["phase_timings_ms"]["networkidle_wait"] == 0
     assert result.browser_diagnostics["phase_timings_ms"]["readiness_wait"] == 0
     assert result.browser_diagnostics["networkidle_skip_reason"] == "fast_path_ready"
-    assert result.browser_diagnostics["detail_expansion"]["reason"] == "already_ready"
+    assert result.browser_diagnostics["detail_expansion"]["reason"] == "missing_detail_content"
+    assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 0
     assert page.wait_timeout_calls == []
     assert "networkidle" not in page.load_state_calls
 
@@ -514,6 +583,110 @@ async def test_browser_fetch_expands_detail_accordions_before_collecting_html() 
 
 
 @pytest.mark.asyncio
+async def test_browser_fetch_expands_requested_field_sections_even_when_probe_is_ready() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1><button>Materials</button></body></html>",
+        expanded_html="""
+        <html><body>
+          <h1>Widget Prime</h1>
+          <button aria-controls="materials-panel">Materials</button>
+          <section id="materials-panel">Full-grain leather upper.</section>
+        </body></html>
+        """,
+        labels=[
+            {
+                "label": "materials",
+                "attributes": {"aria-controls": "materials-panel"},
+            }
+        ],
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+        runtime_provider=_fake_runtime,
+    )
+
+    assert "Full-grain leather upper." in result.html
+    assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_if_needed_skips_aom_when_page_is_already_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_aom(*args, **kwargs):
+        raise AssertionError("AOM expansion should be skipped")
+
+    monkeypatch.setattr(
+        browser_runtime,
+        "expand_interactive_elements_via_accessibility",
+        _unexpected_aom,
+    )
+
+    diagnostics = await browser_runtime.expand_detail_content_if_needed(
+        _FakeExpansionPage(base_html="<html><body><h1>Widget Prime</h1></body></html>"),
+        surface="ecommerce_detail",
+        readiness_probe={"is_ready": True, "detail_like": True},
+    )
+
+    assert diagnostics["aom"]["status"] == "skipped"
+    assert diagnostics["aom"]["reason"] == "not_needed"
+
+
+@pytest.mark.asyncio
+async def test_expand_all_interactive_elements_skips_blocked_commerce_actions() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {"label": "add to cart"},
+            {
+                "label": "materials",
+                "attributes": {"aria-controls": "materials-panel"},
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["materials"]
+
+
+@pytest.mark.asyncio
+async def test_expand_all_interactive_elements_scans_past_non_expandable_early_candidates() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {"label": "add to cart"},
+            {"label": "materials", "actionable": False},
+            {
+                "label": "materials",
+                "attributes": {"aria-controls": "materials-panel"},
+            },
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["materials"]
+
+
+@pytest.mark.asyncio
 async def test_browser_fetch_flattens_shadow_dom_before_serializing_html() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body><shop-product></shop-product></body></html>",
@@ -536,6 +709,199 @@ async def test_browser_fetch_flattens_shadow_dom_before_serializing_html() -> No
 
     assert page.shadow_flattened is True
     assert "Shadow DOM specifications" in result.html
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_populates_page_markdown_for_existing_markdown_view() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html>
+          <body>
+            <header>Brand header</header>
+            <main>
+              <h1>Widget Prime</h1>
+              <p>Built for long mileage.</p>
+              <a href="/products/widget/specs">View specs</a>
+            </main>
+          </body>
+        </html>
+        """,
+        accessibility_snapshot={
+            "role": "document",
+            "children": [
+                {"role": "heading", "name": "Widget Prime"},
+                {"role": "link", "name": "View specs"},
+            ],
+        },
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert "Widget Prime" in result.page_markdown
+    assert "Built for long mileage." in result.page_markdown
+    assert "Visible links:" in result.page_markdown
+    assert "SEMANTIC ACCESSIBILITY SNAPSHOT" in result.page_markdown
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_captures_rendered_listing_cards_artifact() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html>
+          <body>
+            <article class="product-card">
+              <a href="/products/widget-prime"><h2>Widget Prime</h2></a>
+              <div class="price">$19.99</div>
+              <img src="/images/widget-prime.jpg" alt="Widget Prime" />
+            </article>
+          </body>
+        </html>
+        """,
+        rendered_listing_cards=[
+            {
+                "title": "Widget Prime",
+                "url": "https://example.com/products/widget-prime",
+                "price": "$19.99",
+                "image_url": "https://example.com/images/widget-prime.jpg",
+                "brand": "",
+            }
+        ],
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/collections/widgets",
+        5,
+        surface="ecommerce_listing",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.artifacts["rendered_listing_cards"] == [
+        {
+            "title": "Widget Prime",
+            "url": "https://example.com/products/widget-prime",
+            "price": "$19.99",
+            "image_url": "https://example.com/images/widget-prime.jpg",
+            "brand": "",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_page_markdown_tolerates_nodes_with_missing_attrs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_beautifulsoup = browser_page_flow.BeautifulSoup
+
+    def _broken_attr_soup(*args, **kwargs):
+        soup = original_beautifulsoup(*args, **kwargs)
+        broken = soup.select_one("div")
+        assert broken is not None
+        broken.attrs = None
+        return soup
+
+    monkeypatch.setattr(browser_page_flow, "BeautifulSoup", _broken_attr_soup)
+
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(
+            base_html="<html><body><div class='hero'>Widget Prime</div></body></html>"
+        ),
+        html="<html><body><div class='hero'>Widget Prime</div></body></html>",
+    )
+
+    assert "Widget Prime" in markdown
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_records_extractable_sections_after_detail_expansion() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1><button>Materials</button></body></html>",
+        expanded_html="""
+        <html><body>
+          <h1>Widget Prime</h1>
+          <div class="accordion-item">
+            <button>Materials</button>
+            <div class="accordion-item__body">
+              <div class="rich-content">Full-grain leather upper.</div>
+            </div>
+          </div>
+        </body></html>
+        """,
+        labels=[{"label": "materials"}],
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+        runtime_provider=_fake_runtime,
+    )
+
+    extractability = result.browser_diagnostics["detail_expansion"]["extractability"]
+
+    assert extractability["verified"] is True
+    assert extractability["matched_requested_fields"] == ["materials"]
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_waits_for_challenge_recovery_before_settling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><div>challenge</div></body></html>",
+        wait_html_sequence=["<html><body><h1>Widget Prime</h1></body></html>"],
+        cookie_snapshots=[[], [{"name": "_abck"}]],
+    )
+    calls = {"count": 0}
+
+    async def _fake_classify_blocked_page_async(_html: str, _status: int):
+        calls["count"] += 1
+        blocked = calls["count"] == 1
+        return SimpleNamespace(
+            blocked=blocked,
+            outcome="challenge_page" if blocked else "ok",
+            evidence=["provider:akamai"] if blocked else [],
+            provider_hits=["akamai"] if blocked else [],
+            active_provider_hits=[],
+            strong_hits=[],
+            weak_hits=[],
+            title_matches=[],
+            challenge_element_hits=[],
+        )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    monkeypatch.setattr(
+        browser_page_flow,
+        "classify_blocked_page_async",
+        _fake_classify_blocked_page_async,
+    )
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        runtime_provider=_fake_runtime,
+    )
+
+    assert "Widget Prime" in result.html
+    assert page.wait_timeout_calls
+    assert page.goto_calls == ["networkidle"]
 
 
 @pytest.mark.asyncio
@@ -746,6 +1112,33 @@ async def test_browser_capture_decodes_react_server_component_payloads() -> None
 
 
 @pytest.mark.asyncio
+async def test_browser_capture_offloads_payload_decoding_to_thread(
+) -> None:
+    class _JsonResponse:
+        def __init__(self) -> None:
+            self.url = "https://example.com/api/product"
+            self.status = 200
+            self.headers = {"content-type": "application/json"}
+            self.request = SimpleNamespace(method="GET")
+
+        async def body(self) -> bytes:
+            return b'{"id":"captured"}'
+
+    page = _FakeExpansionPage(base_html="<html><body></body></html>")
+    capture = BrowserNetworkCapture(surface="ecommerce_detail")
+    capture.attach(page)
+
+    listeners = page.listeners.get("response") or []
+    assert listeners
+    listeners[0](_JsonResponse())
+
+    summary = await capture.close(page)
+
+    assert summary.network_payload_count == 1
+    assert summary.payloads[0]["body"]["id"] == "captured"
+
+
+@pytest.mark.asyncio
 async def test_browser_capture_close_uses_bounded_queue_join_timeout() -> None:
     original_timeout_ms = crawler_runtime_settings.browser_capture_queue_join_timeout_ms
     crawler_runtime_settings.browser_capture_queue_join_timeout_ms = 50
@@ -775,6 +1168,57 @@ async def test_browser_capture_close_uses_bounded_queue_join_timeout() -> None:
         assert elapsed < 0.5
     finally:
         crawler_runtime_settings.browser_capture_queue_join_timeout_ms = original_timeout_ms
+
+
+@pytest.mark.asyncio
+async def test_probe_browser_readiness_skips_listing_queries_for_detail_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_listing_card_count(*args, **kwargs):
+        raise AssertionError("listing card count should not run for detail pages")
+
+    async def _unexpected_selector_count(*args, **kwargs):
+        raise AssertionError("listing selector count should not run for detail pages")
+
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_readiness.listing_card_signal_count_impl",
+        _unexpected_listing_card_count,
+    )
+    monkeypatch.setattr(
+        "app.services.acquisition.browser_readiness.count_matching_selectors",
+        _unexpected_selector_count,
+    )
+
+    probe = await browser_runtime.probe_browser_readiness(
+        _FakeExpansionPage(base_html="<html><body><h1>Widget Prime</h1></body></html>"),
+        url="https://example.com/products/widget",
+        surface="ecommerce_detail",
+    )
+
+    assert probe["is_ready"] is False
+    assert probe["listing_card_count"] == 0
+    assert probe["matched_listing_selectors"] == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_page_markdown_tolerates_slow_accessibility_snapshots() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><h1>Widget Prime</h1></body></html>",
+        accessibility_snapshot={"role": "document", "children": []},
+    )
+
+    async def _slow_snapshot() -> dict[str, object]:
+        await asyncio.sleep(1)
+        return {"role": "document", "children": []}
+
+    page.accessibility = SimpleNamespace(snapshot=_slow_snapshot)
+
+    markdown = await browser_page_flow._generate_page_markdown(
+        page,
+        html=page.base_html,
+    )
+
+    assert "Widget Prime" in markdown
 
 
 @pytest.mark.asyncio

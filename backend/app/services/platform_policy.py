@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from app.services.config.surface_hints import surface_group
+from app.services.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
 
@@ -74,26 +75,22 @@ def _platforms_path() -> Path:
 
 
 @lru_cache(maxsize=1)
-def load_platform_registry() -> PlatformRegistryDocument:
+def _load_platform_registry() -> PlatformRegistryDocument:
     payload = json.loads(_platforms_path().read_text(encoding="utf-8"))
     return PlatformRegistryDocument.model_validate(payload)
 
 
 def platform_configs() -> list[PlatformConfig]:
-    return list(load_platform_registry().platforms)
+    return list(_load_platform_registry().platforms)
 
 
 def _normalize_patterns(values: list[str]) -> list[str]:
     return [value.strip().lower() for value in values if value and value.strip()]
 
 
-def _normalize_domain(value: str) -> str:
-    return str(value or "").strip().lower().removeprefix("www.")
-
-
 def _matches_domain(host: str, pattern: str) -> bool:
-    normalized_host = _normalize_domain(host)
-    normalized_pattern = _normalize_domain(pattern)
+    normalized_host = normalize_domain(host)
+    normalized_pattern = normalize_domain(pattern)
     if not normalized_host or not normalized_pattern:
         return False
     return normalized_host == normalized_pattern or normalized_host.endswith(
@@ -150,11 +147,11 @@ def browser_first_platform_families() -> set[str]:
 
 def browser_first_domains() -> list[str]:
     values = {
-        _normalize_domain(pattern)
+        normalize_domain(pattern)
         for config in platform_configs()
         if bool(config.requires_browser)
         for pattern in config.domain_patterns
-        if _normalize_domain(pattern)
+        if normalize_domain(pattern)
     }
     return sorted(values)
 
@@ -242,7 +239,7 @@ def is_job_platform_signal(
 def detect_platform_family(url: str, html: str = "") -> str | None:
     normalized_url = str(url or "").strip().lower()
     normalized_html = str(html or "").lower()
-    domain = _normalize_domain(urlparse(normalized_url).netloc)
+    domain = normalize_domain(urlparse(normalized_url).netloc)
 
     for config in platform_configs():
         domain_patterns = _normalize_patterns(config.domain_patterns)
@@ -297,7 +294,7 @@ def resolve_listing_readiness_platform(url: str) -> str | None:
     if not normalized_url:
         return None
     parsed = urlparse(normalized_url)
-    host = _normalize_domain(parsed.netloc)
+    host = normalize_domain(parsed.netloc)
     path = str(parsed.path or "").strip().lower()
     if not host or not path:
         return None
@@ -335,7 +332,7 @@ def platform_domain_patterns(family: str | None) -> tuple[str, ...]:
 
 
 def url_host_matches_platform_family(url: str | None, family: str | None) -> bool:
-    host = _normalize_domain(urlparse(str(url or "")).netloc)
+    host = normalize_domain(urlparse(str(url or "")).netloc)
     if not host:
         return False
     return any(_matches_domain(host, pattern) for pattern in platform_domain_patterns(family))

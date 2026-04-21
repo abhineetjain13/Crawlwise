@@ -10,9 +10,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.crawl import CrawlRun
 from app.tasks import process_run_task
-from app.services._batch_runtime import (
-    process_run as _batch_process_run,
-)
+from app.services._batch_runtime import process_run as _batch_process_run
 from app.services.crawl_state import (
     CONTROL_REQUEST_KILL,
     CONTROL_REQUEST_PAUSE,
@@ -39,7 +37,6 @@ logger = logging.getLogger(__name__)
 _local_run_tasks: weakref.WeakValueDictionary[int, asyncio.Task[None]] = (
     weakref.WeakValueDictionary()
 )
-_log = log_event
 
 
 def _new_task_id(run_id: int) -> str:
@@ -101,15 +98,10 @@ async def _run_control_update(
     return run
 
 
-async def process_run(session: AsyncSession, run_id: int) -> None:
-    """Compatibility wrapper so test patches on crawl_service symbols still apply."""
-    await _batch_process_run(session, run_id)
-
-
 async def _run_with_local_session(run_id: int) -> None:
     async with SessionLocal() as session:
         try:
-            await process_run(session, run_id)
+            await _batch_process_run(session, run_id)
         except Exception as exc:
             logger.error(
                 "Local crawl task failed for run %s",

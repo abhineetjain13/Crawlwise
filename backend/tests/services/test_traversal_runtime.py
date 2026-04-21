@@ -24,6 +24,7 @@ class _State:
     client_height: int = 600
     overflow_containers: int = 0
     controls: set[str] | None = None
+    role_controls: list[dict[str, Any]] | None = None
     next_href: str | None = None
     next_control_state: dict[str, Any] | None = None
 
@@ -49,8 +50,11 @@ class _FakeLocator:
     async def is_disabled(self) -> bool:
         return False
 
-    async def click(self, timeout: int | None = None) -> None:
+    async def scroll_into_view_if_needed(self, timeout: int | None = None) -> None:
         del timeout
+
+    async def click(self, timeout: int | None = None, force: bool = False) -> None:
+        del timeout, force
         group = _selector_group(self._selector)
         if group == "load_more":
             self._page.load_more_clicks += 1
@@ -92,6 +96,44 @@ class _EmptyRoleLocator:
         return False
 
 
+class _RoleLocator:
+    def __init__(self, page: "_FakePage", matches: list[dict[str, Any]]) -> None:
+        self._page = page
+        self._matches = matches
+
+    async def count(self) -> int:
+        return len(self._matches)
+
+    def nth(self, index: int) -> "_RoleLocator":
+        if index >= len(self._matches):
+            return _RoleLocator(self._page, [])
+        return _RoleLocator(self._page, [self._matches[index]])
+
+    async def is_visible(self, timeout: int | None = None) -> bool:
+        del timeout
+        if not self._matches:
+            return False
+        return bool(self._matches[0].get("visible", True))
+
+    async def is_disabled(self) -> bool:
+        if not self._matches:
+            return True
+        return bool(self._matches[0].get("disabled", False))
+
+    async def scroll_into_view_if_needed(self, timeout: int | None = None) -> None:
+        del timeout
+
+    async def evaluate(self, script: str) -> Any:
+        del script
+        return None
+
+    async def click(self, timeout: int | None = None, force: bool = False) -> None:
+        del timeout, force
+        if not self._matches:
+            return
+        self._page.role_clicks.append(str(self._matches[0].get("name") or ""))
+
+
 class _FakePage:
     def __init__(
         self,
@@ -115,13 +157,26 @@ class _FakePage:
         self.load_state_calls: list[str] = []
         self.wait_timeout_calls: list[int] = []
         self.mutation_settle_calls = 0
+        self.role_clicks: list[str] = []
 
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator(self, selector)
 
-    def get_by_role(self, role: str, name: object = None) -> _EmptyRoleLocator:
-        del role, name
-        return _EmptyRoleLocator()
+    def get_by_role(self, role: str, name: object = None) -> _EmptyRoleLocator | _RoleLocator:
+        matches: list[dict[str, Any]] = []
+        for control in list(self.state.role_controls or []):
+            if str(control.get("role") or "") != role:
+                continue
+            candidate_name = str(control.get("name") or "")
+            if hasattr(name, "search"):
+                if not name.search(candidate_name):
+                    continue
+            elif name is not None and candidate_name != name:
+                continue
+            matches.append(control)
+        if not matches:
+            return _EmptyRoleLocator()
+        return _RoleLocator(self, matches)
 
     async def evaluate(self, script: str, arg: Any | None = None) -> Any:
         if "scrollTo({" in script:
@@ -247,6 +302,31 @@ async def test_auto_traversal_prefers_paginate_and_collects_multiple_pages() -> 
     fragments = [fragment for fragment, _ in result.html_fragments]
     assert "page-1" in "\n".join(fragments)
     assert "page-2" in "\n".join(fragments)
+
+
+@pytest.mark.asyncio
+async def test_recover_listing_page_content_clicks_view_all_then_next_page() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="<div>page-1</div>",
+            card_count=2,
+            scroll_height=1200,
+            controls={"next_page"},
+            role_controls=[
+                {"role": "button", "name": "View All Products"},
+            ],
+            next_href="https://example.com/listing?page=2",
+        ),
+    )
+
+    diagnostics = await traversal_module.recover_listing_page_content(page)
+
+    assert diagnostics["status"] == "recovered"
+    assert diagnostics["clicked_count"] == 2
+    assert diagnostics["actions_taken"] == ["view_all", "next_page"]
+    assert page.role_clicks == ["View All Products"]
+    assert page.goto_calls == ["https://example.com/listing?page=2"]
 
 
 @pytest.mark.asyncio

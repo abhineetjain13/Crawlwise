@@ -13,12 +13,11 @@ from app.services.crawl_state import ACTIVE_STATUSES, CrawlStatus
 from app.models.crawl_settings import normalize_crawl_settings
 from app.services.crawl_utils import (
     collect_target_urls,
-    normalize_committed_field_name,
     normalize_target_url,
     validate_extraction_contract,
 )
 from app.services.db_utils import escape_like_pattern
-from app.services.field_policy import expand_requested_fields
+from app.services.field_policy import expand_requested_fields, normalize_field_key
 from app.services.llm_config_service import snapshot_active_configs
 from app.services.normalizers import normalize_value
 from app.services.run_config_snapshot import snapshot_extraction_runtime_settings
@@ -222,7 +221,7 @@ async def commit_selected_fields(
         record = records.get(record_id)
         if record is None:
             continue
-        field_name = normalize_committed_field_name(item.get("field_name"))
+        field_name = normalize_field_key(item.get("field_name"))
         if not field_name:
             continue
         value = item.get("value")

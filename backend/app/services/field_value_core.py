@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from html import unescape
 from typing import Any
 from urllib.parse import parse_qsl, urljoin, urlparse
@@ -70,6 +71,28 @@ def clean_text(value: object) -> str:
     return WHITESPACE_RE.sub(" ", text)
 
 
+class _HTMLTextStripper(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    def get_text(self) -> str:
+        return " ".join(self._parts)
+
+
+def strip_html_tags(value: object) -> str:
+    text = str(value or "")
+    if "<" not in text or ">" not in text:
+        return text
+    stripper = _HTMLTextStripper()
+    stripper.feed(text)
+    stripper.close()
+    return stripper.get_text()
+
+
 def text_or_none(value: object) -> str | None:
     text = clean_text(value)
     return text or None
@@ -98,6 +121,23 @@ def clean_record(record: dict[str, Any]) -> dict[str, Any]:
         for key, value in record.items()
         if value not in (None, "", [], {})
     }
+
+
+def validate_record_for_surface(
+    record: dict[str, Any],
+    surface: str,
+) -> tuple[dict[str, Any], list[str]]:
+    logical_fields = {
+        key: value for key, value in dict(record).items() if not str(key).startswith("_")
+    }
+    internal_fields = {
+        key: value for key, value in dict(record).items() if str(key).startswith("_")
+    }
+    validated_fields, errors = validate_and_clean(logical_fields, surface)
+    return {
+        **clean_record({**logical_fields, **validated_fields}),
+        **internal_fields,
+    }, errors
 
 
 def _surface_needs_tracking_strip(surface: str | None) -> bool:
@@ -433,6 +473,15 @@ def finalize_record(
 # Defines the allowed Python type names for key fields per surface.
 # Used by validate_and_clean() to catch type-mismatched values after extraction.
 _OUTPUT_SCHEMAS: dict[str, dict[str, frozenset[str]]] = {
+    "ecommerce_listing": {
+        "title": frozenset({"str", "NoneType"}),
+        "url": frozenset({"str", "NoneType"}),
+        "price": frozenset({"str", "NoneType"}),
+        "sale_price": frozenset({"str", "NoneType"}),
+        "original_price": frozenset({"str", "NoneType"}),
+        "image_url": frozenset({"str", "NoneType"}),
+        "additional_images": frozenset({"list", "NoneType"}),
+    },
     "ecommerce_detail": {
         "price": frozenset({"str", "NoneType"}),
         "sale_price": frozenset({"str", "NoneType"}),
@@ -441,6 +490,14 @@ _OUTPUT_SCHEMAS: dict[str, dict[str, frozenset[str]]] = {
         "stock_quantity": frozenset({"int", "str", "NoneType"}),
         "image_url": frozenset({"str", "NoneType"}),
         "additional_images": frozenset({"list", "NoneType"}),
+    },
+    "job_listing": {
+        "title": frozenset({"str", "NoneType"}),
+        "company": frozenset({"str", "NoneType"}),
+        "location": frozenset({"str", "NoneType"}),
+        "url": frozenset({"str", "NoneType"}),
+        "apply_url": frozenset({"str", "NoneType"}),
+        "salary": frozenset({"str", "NoneType"}),
     },
     "job_detail": {
         "salary": frozenset({"str", "NoneType"}),

@@ -30,8 +30,6 @@ from app.services.record_export_service import render_markdown_block
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_PROMPT_JSON_REPARSE_MAX_CHARS = 16_384
-
 
 def _require_present_value(value: Any) -> Any:
     if value in (None, "", [], {}):
@@ -105,6 +103,7 @@ class _SchemaInferencePayload(TypedDict):
 
 
 _PAYLOAD_ADAPTERS = {
+    "direct_record_extraction": TypeAdapter(list[dict[_FieldKey, Any]]),
     "xpath_discovery": TypeAdapter(list[_XPathSelector]),
     "missing_field_extraction": TypeAdapter(dict[_FieldKey, Any]),
     "field_cleanup_review": TypeAdapter(_FieldCleanupReviewPayload),
@@ -310,6 +309,47 @@ async def discover_xpath_candidates(
                 html_text,
                 llm_runtime_settings.html_snippet_max_chars,
                 anchors=missing_fields,
+            ),
+        },
+    )
+    payload = result.payload
+    return (payload if isinstance(payload, list) else []), (result.error_message or None)
+
+
+async def extract_records_directly(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    domain: str,
+    url: str,
+    surface: str,
+    html_text: str,
+    markdown_text: str,
+    requested_fields: list[str] | None,
+    existing_records: list[dict[str, object]] | None,
+) -> tuple[list[dict[str, object]], str | None]:
+    result = await run_prompt_task(
+        session,
+        task_type="direct_record_extraction",
+        run_id=run_id,
+        domain=domain,
+        variables={
+            "url": url,
+            "surface": surface,
+            "requested_fields_json": json.dumps(list(requested_fields or [])),
+            "existing_records_json": _truncate_json_literal(
+                _safe_truncate_for_prompt(list(existing_records or [])),
+                llm_runtime_settings.candidate_evidence_max_chars,
+            ),
+            "page_markdown": _trim_prompt_section_body(
+                str(markdown_text or ""),
+                llm_runtime_settings.html_snippet_max_chars,
+                "[TRUNCATED]",
+            ),
+            "html_snippet": _truncate_html(
+                html_text,
+                llm_runtime_settings.html_snippet_max_chars,
+                anchors=list(requested_fields or []),
             ),
         },
     )
@@ -575,10 +615,10 @@ def _truncate_html(
 ) -> str:
     if limit <= 0:
         return ""
-    pruned = _prune_html_for_llm(html_text)
+    pruned = render_markdown_block(_prune_html_for_llm(html_text))
     if len(pruned) <= limit:
         return pruned
-    focused = _focus_html_context(pruned, anchors or [])
+    focused = _focus_markdown_context(pruned, anchors or [])
     return (focused or pruned)[:limit]
 
 
@@ -765,7 +805,7 @@ def _trim_prompt_section_body(body: str, budget: int, placeholder: str) -> str:
     if len(stripped) <= budget:
         return stripped
     if stripped.startswith(("{", "[")):
-        if len(stripped) <= _PROMPT_JSON_REPARSE_MAX_CHARS:
+        if len(stripped) <= llm_runtime_settings.prompt_json_reparse_max_chars:
             try:
                 parsed = parse_json(stripped)
             except json.JSONDecodeError:

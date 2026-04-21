@@ -15,7 +15,11 @@ def test_record_local_failure_uses_default_threshold_when_setting_is_none(
         None,
     )
 
-    for _ in range(llm_circuit_breaker.DEFAULT_CIRCUIT_FAILURE_THRESHOLD):
+    default_threshold = type(
+        llm_circuit_breaker.llm_runtime_settings
+    ).model_fields["circuit_failure_threshold"].default
+
+    for _ in range(default_threshold):
         llm_circuit_breaker._record_local_failure(
             "openai",
             llm_circuit_breaker.LLMErrorCategory.TIMEOUT,
@@ -58,7 +62,9 @@ async def test_record_failure_normalizes_none_threshold_for_redis(
         llm_circuit_breaker.LLMErrorCategory.TIMEOUT,
     )
 
-    assert seen_args[6] == llm_circuit_breaker.DEFAULT_CIRCUIT_FAILURE_THRESHOLD
+    assert seen_args[6] == type(
+        llm_circuit_breaker.llm_runtime_settings
+    ).model_fields["circuit_failure_threshold"].default
 
 
 def test_classify_error_uses_whole_status_code_matches() -> None:

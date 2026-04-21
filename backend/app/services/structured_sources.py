@@ -7,6 +7,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 from app.services.config.extraction_rules import HYDRATED_STATE_PATTERNS
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.script_text_extractor import (
     extract_script_text_by_id,
     find_first_script_text_matching,
@@ -27,8 +28,6 @@ except ImportError:  # pragma: no cover - dependency may be absent in local test
 _STATE_SCRIPT_IDS = {"__next_data__": "__NEXT_DATA__", "__nuxt_data__": "__NUXT_DATA__"}
 _EMBEDDED_ASSIGNMENT_NAMES = ("data", "items", "listings", "posts", "products", "records", "results")
 _NON_STATE_ASSIGNMENT_PATTERNS = (re.compile(r"ShopifyAnalytics\.meta\s*=\s*(\{.*?\})\s*;", re.S), re.compile(r"var\s+meta\s*=\s*(\{.*?\})\s*;", re.S))
-_GENERIC_ASSIGNMENT_MAX_SCRIPT_CHARS = 250_000
-_GENERIC_ASSIGNMENT_MAX_MATCHES_PER_SCRIPT = 24
 
 
 def json_candidates(value: Any) -> list[dict[str, Any]]:
@@ -260,16 +259,22 @@ def _extract_assignment_payload(html: str, state_name: str) -> Any | None:
 
 def _extract_generic_assignment_payloads(html: str) -> list[Any]:
     payloads: list[Any] = []
+    max_script_chars = (
+        crawler_runtime_settings.structured_source_generic_assignment_max_script_chars
+    )
+    max_matches_per_script = (
+        crawler_runtime_settings.structured_source_generic_assignment_max_matches_per_script
+    )
     for node in iter_script_text_nodes(html):
         raw = node.text
-        if len(raw) > _GENERIC_ASSIGNMENT_MAX_SCRIPT_CHARS:
+        if len(raw) > max_script_chars:
             continue
         script_matches = 0
         for name in _EMBEDDED_ASSIGNMENT_NAMES:
             for pattern in _assignment_patterns(name, declarations_only=True):
                 for match in pattern.finditer(raw):
                     script_matches += 1
-                    if script_matches > _GENERIC_ASSIGNMENT_MAX_MATCHES_PER_SCRIPT:
+                    if script_matches > max_matches_per_script:
                         break
                     fragment = _balanced_json_fragment(raw[match.end() :])
                     if not fragment:
@@ -278,9 +283,9 @@ def _extract_generic_assignment_payloads(html: str) -> list[Any]:
                         payloads.append(json.loads(fragment))
                     except json.JSONDecodeError:
                         continue
-                if script_matches > _GENERIC_ASSIGNMENT_MAX_MATCHES_PER_SCRIPT:
+                if script_matches > max_matches_per_script:
                     break
-            if script_matches > _GENERIC_ASSIGNMENT_MAX_MATCHES_PER_SCRIPT:
+            if script_matches > max_matches_per_script:
                 break
     return payloads
 

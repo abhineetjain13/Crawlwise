@@ -6,7 +6,6 @@ from typing import Any
 
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.crawl_utils import normalize_target_url, resolve_traversal_mode
-from app.services.config.crawl_runtime import coerce_url_timeout_seconds
 from app.services.config.runtime_settings import crawler_runtime_settings
 
 
@@ -119,7 +118,7 @@ class CrawlRunSettings:
         )
 
     def url_timeout_seconds(self) -> float:
-        return coerce_url_timeout_seconds(
+        return crawler_runtime_settings.coerce_url_timeout_seconds(
             self.data.get(
                 "url_timeout_seconds",
                 crawler_runtime_settings.url_process_timeout_seconds,
@@ -185,9 +184,10 @@ class CrawlRunSettings:
         normalized["sleep_ms"] = self.sleep_ms()
         normalized["respect_robots_txt"] = self.respect_robots_txt()
         normalized["traversal_mode"] = self.traversal_mode()
-        normalized["advanced_mode"] = (
-            normalized["traversal_mode"] if self.advanced_enabled() else None
-        )
+        if self.advanced_enabled():
+            normalized["advanced_mode"] = self.get("advanced_mode")
+        elif "advanced_mode" in normalized:
+            normalized["advanced_mode"] = None
         return normalized
 
 

@@ -107,6 +107,8 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
             prefer_browser=prefer_browser,
             surface=request.surface,
             traversal_mode=request.traversal_mode,
+            requested_fields=list(request.requested_fields),
+            listing_recovery_mode=_resolve_listing_recovery_mode(request),
             max_pages=request.max_pages,
             max_scrolls=request.max_scrolls,
             browser_reason=browser_reason,
@@ -129,6 +131,7 @@ async def acquire(request: AcquisitionRequest) -> AcquisitionResult:
         network_payloads=list(getattr(result, "network_payloads", []) or []),
         browser_diagnostics=dict(getattr(result, "browser_diagnostics", {}) or {}),
         artifacts=dict(getattr(result, "artifacts", {}) or {}),
+        page_markdown=str(getattr(result, "page_markdown", "") or ""),
     )
 
 
@@ -148,9 +151,35 @@ def _resolve_browser_reason(
     request: AcquisitionRequest,
     requires_browser: bool,
 ) -> str | None:
-    retry_reason = str(request.acquisition_profile.get("retry_reason") or "").strip().lower()
+    retry_reason = _normalized_retry_reason(
+        request.acquisition_profile.get("retry_reason")
+    )
     if retry_reason == "empty_extraction":
         return "empty-extraction retry"
+    if retry_reason == "thin_listing":
+        return "thin-listing retry"
     if requires_browser:
         return "platform-required"
     return None
+
+
+def _resolve_listing_recovery_mode(request: AcquisitionRequest) -> str | None:
+    retry_reason = _normalized_retry_reason(
+        request.acquisition_profile.get("retry_reason")
+    )
+    if retry_reason == "thin_listing":
+        return retry_reason
+    return None
+
+
+def _normalized_retry_reason(value: object) -> str:
+    normalized = (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+    if normalized.endswith("_retry"):
+        normalized = normalized[: -len("_retry")]
+    return normalized

@@ -91,6 +91,191 @@ def test_extract_records_recovers_flattened_listing_cards_from_visual_artifacts(
     ]
 
 
+def test_extract_records_rejects_visual_artifact_cta_and_footer_clusters() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.dyson.in/hair-care/hair-stylers",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "/airwrap-id-multi-styler-dryer-vinca-blue-topaz",
+                    "x": 557,
+                    "y": 3347,
+                    "width": 142,
+                    "height": 22,
+                    "text": "",
+                },
+                {
+                    "tag": "a",
+                    "href": "/airwrap-id-multi-styler-dryer-vinca-blue-topaz",
+                    "x": 510,
+                    "y": 4026,
+                    "width": 236,
+                    "height": 68,
+                    "text": "Shop now",
+                },
+                {
+                    "tag": "img",
+                    "src": "https://dyson-h.assetsadobe2.com/is/image/content/dam/dyson/images/back-up/tick-outline-green.png?scl=1&fmt=png-alpha",
+                    "x": 520,
+                    "y": 3958,
+                    "width": 24,
+                    "height": 24,
+                    "text": "",
+                },
+                {
+                    "tag": "a",
+                    "href": "/products/hair-care/hair-care-accessories",
+                    "x": 115,
+                    "y": 8048,
+                    "width": 478,
+                    "height": 40,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Talking to us is easy.",
+                    "x": 115,
+                    "y": 7969,
+                    "width": 478,
+                    "height": 68,
+                },
+                {
+                    "tag": "img",
+                    "src": "https://dyson-h.assetsadobe2.com/is/image/content/dam/dyson/icons/owner-footer/mydyson/haircare-icon.png?scl=1&fmt=png-alpha",
+                    "x": 120,
+                    "y": 7890,
+                    "width": 48,
+                    "height": 48,
+                    "text": "",
+                },
+                {
+                    "tag": "a",
+                    "href": "https://www.dyson.in/select-your-location",
+                    "x": 1281,
+                    "y": 8586,
+                    "width": 74,
+                    "height": 22,
+                    "text": "India",
+                    "ariaLabel": "select language and region: India",
+                },
+            ]
+        },
+    )
+
+    assert rows == []
+
+
+def test_extract_records_keeps_visual_artifact_product_without_price_when_title_matches_url() -> None:
+    rows = extract_records(
+        "<html><body></body></html>",
+        "https://www.dyson.in/hair-care/hair-stylers",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "listing_visual_elements": [
+                {
+                    "tag": "a",
+                    "href": "/airwrap-id-multi-styler-dryer-vinca-blue-topaz",
+                    "x": 557,
+                    "y": 3347,
+                    "width": 142,
+                    "height": 22,
+                    "text": "",
+                },
+                {
+                    "tag": "h2",
+                    "text": "Airwrap i.d. multi-styler and dryer Vinca Blue/Topaz",
+                    "x": 510,
+                    "y": 3440,
+                    "width": 236,
+                    "height": 68,
+                },
+                {
+                    "tag": "img",
+                    "src": "https://example.com/images/airwrap-id.jpg",
+                    "alt": "Airwrap i.d. multi-styler and dryer Vinca Blue/Topaz",
+                    "x": 510,
+                    "y": 3508,
+                    "width": 236,
+                    "height": 236,
+                    "text": "",
+                },
+            ]
+        },
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://www.dyson.in/hair-care/hair-stylers",
+            "_source": "visual_listing",
+            "title": "Airwrap i.d. multi-styler and dryer Vinca Blue/Topaz",
+            "image_url": "https://example.com/images/airwrap-id.jpg",
+            "url": "https://www.dyson.in/airwrap-id-multi-styler-dryer-vinca-blue-topaz",
+        }
+    ]
+
+
+def test_extract_records_prefers_rendered_listing_cards_over_thin_structured_records() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@type": "Product",
+              "name": "Widget Prime",
+              "url": "/products/widget-prime"
+            },
+            {
+              "@type": "Product",
+              "name": "Widget Pro",
+              "url": "/products/widget-pro"
+            }
+          ]
+        }
+        </script>
+      </head>
+      <body><div id="__next"></div></body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+        artifacts={
+            "rendered_listing_cards": [
+                {
+                    "title": "Widget Prime",
+                    "url": "https://example.com/products/widget-prime",
+                    "price": "$19.99",
+                    "image_url": "https://example.com/images/widget-prime.jpg",
+                    "brand": "Acme",
+                },
+                {
+                    "title": "Widget Pro",
+                    "url": "https://example.com/products/widget-pro",
+                    "price": "$29.99",
+                    "image_url": "https://example.com/images/widget-pro.jpg",
+                    "brand": "Acme",
+                },
+            ]
+        },
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["_source"] == "rendered_listing"
+    assert rows[0]["price"] == "19.99"
+    assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
+
+
 @pytest.mark.asyncio
 async def test_fetch_page_uses_browser_after_js_shell_detection(
     monkeypatch: pytest.MonkeyPatch,

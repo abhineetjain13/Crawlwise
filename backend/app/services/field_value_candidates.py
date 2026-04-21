@@ -358,9 +358,32 @@ def _deep_merge_structured_dict(
     incoming: dict[str, object],
 ) -> dict[str, object]:
     merged = dict(base)
+    incoming_option_keys = {
+        str(key)
+        for key in (
+            incoming.get("option_values", {}).keys()
+            if isinstance(incoming.get("option_values"), dict)
+            else ()
+        )
+    }
     for key, value in incoming.items():
         normalized_key = str(key)
         existing = merged.get(normalized_key)
+        if (
+            normalized_key == "option_values"
+            and isinstance(existing, dict)
+            and existing
+            and isinstance(value, dict)
+        ):
+            continue
+        if (
+            incoming_option_keys
+            and isinstance(merged.get("option_values"), dict)
+            and merged["option_values"]
+            and normalized_key in incoming_option_keys
+            and existing in (None, "", [], {})
+        ):
+            continue
         if isinstance(existing, dict) and isinstance(value, dict):
             merged[normalized_key] = _deep_merge_structured_dict(existing, value)
             continue

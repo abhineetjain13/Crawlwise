@@ -303,7 +303,9 @@ async def stream_table_rows_csv(table_rows: list[dict]):
 
 
 async def stream_export_discoverist(session: AsyncSession, run_id: int):
-    fieldnames = discoverist_schema()
+    fieldnames = tuple(
+        str(field_name) for field_name in DISCOVERIST_SCHEMA if str(field_name).strip()
+    )
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow(fieldnames)
@@ -357,14 +359,6 @@ def clean_export_data(data: dict) -> dict:
     }
 
 
-def collect_table_export_rows(rows: list[CrawlRecord]) -> list[dict]:
-    flattened: list[dict] = []
-    for row in rows:
-        for table_row in artifact_table_rows(row):
-            flattened.append(table_row)
-    return flattened
-
-
 def artifact_table_rows(row: CrawlRecord) -> list[dict]:
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
     manifest_trace = source_trace.get("manifest_trace")
@@ -412,41 +406,8 @@ def artifact_table_rows(row: CrawlRecord) -> list[dict]:
     return flattened
 
 
-def legacy_fallback_markdown_rows(row: CrawlRecord) -> list[dict]:
-    raw_data = row.data if isinstance(row.data, dict) else {}
-    markdown = stringify_markdown_value(raw_data.get("page_markdown"))
-    if not markdown:
-        return []
-
-    heading_re = re.compile(
-        r"^##\s+\[(?P<title>[^\]]+)\]\((?P<url>[^)]+)\)\s*$",
-        re.MULTILINE,
-    )
-    matches = list(heading_re.finditer(markdown))
-    rows: list[dict] = []
-    for index, match in enumerate(matches):
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
-        description = markdown[start:end].strip()
-        payload = {
-            "record_id": row.id,
-            "source_url": row.source_url,
-            "title": match.group("title").strip(),
-            "url": match.group("url").strip(),
-            "description": description,
-        }
-        rows.append(
-            {
-                key: value
-                for key, value in payload.items()
-                if value not in (None, "", [], {})
-            }
-        )
-    return rows
-
-
 def record_artifact_bundle(row: CrawlRecord) -> dict[str, object]:
-    raw_data = row.data if isinstance(row.data, dict) else {}
+    raw_data = _record_markdown_source(row)
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
     manifest_trace = (
         source_trace.get("manifest_trace")
@@ -500,8 +461,9 @@ def export_headers(metadata: dict[str, int | bool]) -> dict[str, str]:
 
 
 def record_to_markdown(row: CrawlRecord) -> str:
-    raw_data = row.data if isinstance(row.data, dict) else {}
-    data = _sanitize_markdown_export_data(clean_export_data(raw_data))
+    raw_data = _record_markdown_source(row)
+    structured_data = row.data if isinstance(row.data, dict) else {}
+    data = _sanitize_markdown_export_data(clean_export_data(structured_data))
     source_trace = row.source_trace if isinstance(row.source_trace, dict) else {}
     semantic = (
         source_trace.get("semantic")
@@ -601,7 +563,18 @@ def record_to_markdown(row: CrawlRecord) -> str:
         for label, value in spec_rows:
             lines.append(f"- **{label}:** {render_markdown_inline(value)}")
 
+    page_markdown = stringify_markdown_value(raw_data.get("page_markdown"))
+    if page_markdown and str(source_trace.get("type") or "") != "listing_fallback":
+        lines.extend(["", "## Page Context", "", render_markdown_block(page_markdown)])
+
     return "\n".join(lines).strip()
+
+
+def _record_markdown_source(row: CrawlRecord) -> dict[str, object]:
+    raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+    if raw:
+        return dict(raw)
+    return dict(row.data) if isinstance(row.data, dict) else {}
 
 
 def _sanitize_markdown_export_data(data: dict[str, object]) -> dict[str, object]:
@@ -772,14 +745,3 @@ def markdown_long_form_fields() -> frozenset[str]:
     )
 
 
-@lru_cache(maxsize=1)
-def discoverist_schema() -> tuple[str, ...]:
-    return tuple(
-        str(field_name) for field_name in DISCOVERIST_SCHEMA if str(field_name).strip()
-    )
-
-_render_markdown_inline = render_markdown_inline
-_render_markdown_block = render_markdown_block
-_humanize_field_name = humanize_field_name
-_markdown_long_form_fields = markdown_long_form_fields
-_discoverist_schema = discoverist_schema

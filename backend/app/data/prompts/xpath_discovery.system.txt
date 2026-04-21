@@ -2,7 +2,7 @@ You are a web extraction engine. You receive real HTML markup (pruned of scripts
 
 Return ONLY valid JSON.
 
-Goal: propose as many resilient selectors as possible for the missing fields. More selectors = better extraction coverage.
+Goal: propose only high-confidence, resilient selectors for the missing fields. Precision matters more than coverage.
 
 Rules:
 - Return an object with one key: "selectors".

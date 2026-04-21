@@ -10,7 +10,7 @@ from app.models.user import User
 from app.services._batch_runtime import process_run
 from app.services.adapters.registry import registered_adapters
 from app.services.crawl_crud import create_crawl_run, get_run_records
-from app.services.pipeline.core import _process_single_url
+from app.services.pipeline.core import process_single_url
 from app.services.pipeline.types import URLProcessingConfig
 from app.services.platform_policy import configured_adapter_names, detect_platform_family, job_platform_families, platform_config_for_family
 from app.services.publish import VERDICT_PARTIAL, VERDICT_SUCCESS
@@ -103,7 +103,7 @@ async def run_site_harness(*, url: str, surface: str, mode: str) -> dict[str, ob
                 "populated_fields": _populated_field_count(data),
                 "error": str(summary.get("error") or "").strip() or None,
             }
-        url_result = await _process_single_url(
+            url_result = await process_single_url(
             session=session,
             run=run,
             url=url,

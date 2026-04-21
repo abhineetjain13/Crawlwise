@@ -111,12 +111,6 @@ llm_task_outcomes_total = (
 )
 
 
-def observe_acquisition_duration(seconds: float) -> None:
-    if seconds < 0:
-        return
-    acquisition_duration_seconds.observe(seconds)
-
-
 def observe_llm_task_duration(
     *,
     task_type: str,
