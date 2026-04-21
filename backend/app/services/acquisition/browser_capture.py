@@ -78,7 +78,7 @@ class BrowserNetworkCapture:
         self._queue: asyncio.Queue[Any | None] = asyncio.Queue(
             maxsize=max(1, _NETWORK_CAPTURE_QUEUE_SIZE)
         )
-        self._workers: list[asyncio.Task[None]] = []
+        self._workers: set[asyncio.Task[None]] = set()
         self._closed = False
         self._closing = False
         self._listener_attached = False
@@ -99,12 +99,12 @@ class BrowserNetworkCapture:
             or self._workers
         ):
             return
-        self._workers = [
+        self._workers = {
             asyncio.create_task(self._capture_worker())
             for _ in range(
                 max(1, min(_NETWORK_CAPTURE_WORKERS, _MAX_CAPTURED_NETWORK_PAYLOADS))
             )
-        ]
+        }
         page.on("response", self._schedule_capture)
         self._listener_attached = True
 
@@ -126,21 +126,24 @@ class BrowserNetworkCapture:
                     )
         self._listener_attached = False
         if self._workers:
+            workers = set(self._workers)
             await asyncio.sleep(0)
             join_timeout_seconds = _queue_join_timeout_seconds()
+            timed_out = False
             try:
                 await asyncio.wait_for(
                     self._queue.join(),
                     timeout=join_timeout_seconds,
                 )
             except asyncio.TimeoutError:
+                timed_out = True
                 self._closing = True
                 logger.warning(
                     "Browser capture queue join timed out after %ss; "
                     "cancelling workers and draining queue",
                     join_timeout_seconds,
                 )
-                for worker in self._workers:
+                for worker in workers:
                     worker.cancel()
                 while not self._queue.empty():
                     try:
@@ -150,12 +153,9 @@ class BrowserNetworkCapture:
                         break
             else:
                 self._closing = True
-            for _ in self._workers:
-                try:
+                for _ in workers:
                     self._queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass
-            await asyncio.gather(*self._workers, return_exceptions=True)
+            await asyncio.gather(*workers, return_exceptions=True)
             self._workers.clear()
         self._closed = True
         async with self._lock:

@@ -403,7 +403,7 @@ These boundaries must be respected by every change, regardless of phase.
 
 | Doc | Purpose |
 |-----|---------|
-| `CLAUDE.md` | Session bootstrap — read first every session |
+| `AGENTS.md` | Session bootstrap — read first every session |
 | `docs/CODEBASE_MAP.md` | File-to-bucket map for every file in the repo |
 | `docs/ENGINEERING_STRATEGY.md` | Engineering principles and named anti-patterns |
 | `docs/INVARIANTS.md` | Runtime contracts that no refactor may break |

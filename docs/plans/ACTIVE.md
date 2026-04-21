@@ -1,10 +1,12 @@
 # Active Plan
 
-**Current:** Eliminate Extraction Architecture Debt Without LOC Growth -> `docs/plans/extraction-architecture-debt-remediation-plan.md`
+**Current:** Listing Recovery and Zara Remediation -> `docs/plans/listing-recovery-and-zara-remediation-plan.md`
 **Status:** IN PROGRESS
 **Started:** 2026-04-21
-**Last slice completed:** None
+**Last slice completed:** Acceptance-led recovery slices 1-4; slice 5 partial
 
 ## Queue
 1. Close Extraction Regressions From Old-to-New Port -- done
 2. Port Old-App Recovery Features Through the Existing Markdown and Extraction Paths -- done
+3. Eliminate Extraction Architecture Debt Without LOC Growth -- done
+4. Forensic Architecture Audit Remediation (D1–D8) -- blocked on missing Zara fixture + detail_extractor LOC budget

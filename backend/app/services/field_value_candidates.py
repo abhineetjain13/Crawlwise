@@ -185,6 +185,13 @@ def collect_structured_candidates(
     if depth > limit:
         return
     if isinstance(payload, dict):
+        raw_type = payload.get("@type")
+        normalized_type = " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
+        normalized_type = normalized_type.lower()
+        breadcrumb_list = "breadcrumblist" in normalized_type
+        list_item_wrapper = "listitem" in normalized_type and (
+            "position" in payload or "item" in payload
+        )
         additional_properties = payload.get("additionalProperty")
         if isinstance(additional_properties, list):
             for item in additional_properties[:20]:
@@ -212,6 +219,14 @@ def collect_structured_candidates(
                 )
                 continue
             normalized_key = normalize_field_key(key)
+            if (
+                breadcrumb_list
+                and normalized_key in {"item_list_element", "item", "name", "title", "position"}
+            ) or (
+                list_item_wrapper
+                and normalized_key in {"item", "name", "title", "position"}
+            ):
+                continue
             canonical = alias_lookup.get(normalized_key)
             if canonical:
                 add_candidate(
@@ -232,9 +247,6 @@ def collect_structured_candidates(
                 depth=depth + 1,
                 limit=limit,
             )
-        raw_type = payload.get("@type")
-        normalized_type = " ".join(raw_type) if isinstance(raw_type, list) else str(raw_type or "")
-        normalized_type = normalized_type.lower()
         if "product" in normalized_type or "productgroup" in normalized_type:
             offer = payload.get("offers")
             offer = offer[0] if isinstance(offer, list) and offer else offer

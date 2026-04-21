@@ -61,7 +61,6 @@ from app.services.extraction_runtime import extract_records
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .pipeline_config import LLMFallbackConfig, PipelineDefaults
 from .persistence import persist_acquisition_artifacts, persist_extracted_records
 from .runtime_helpers import (
     STAGE_ACQUIRE,
@@ -74,6 +73,7 @@ from .runtime_helpers import (
 from .types import URLProcessingConfig, URLProcessingResult
 
 logger = logging.getLogger(__name__)
+_LISTING_SIGNAL_FIELDS = ("title", "url", "price", "image_url", "brand")
 
 __all__ = [
     "STAGE_ACQUIRE",
@@ -239,10 +239,10 @@ async def process_single_url(
     *,
     proxy_list: list[str] | None = None,
     traversal_mode: str | None = None,
-    max_pages: int = PipelineDefaults.MAX_PAGES,
-    max_scrolls: int = PipelineDefaults.MAX_SCROLLS,
-    max_records: int = PipelineDefaults.MAX_RECORDS,
-    sleep_ms: int = PipelineDefaults.SLEEP_MS,
+    max_pages: int = crawler_runtime_settings.default_max_pages,
+    max_scrolls: int = crawler_runtime_settings.default_max_scrolls,
+    max_records: int = crawler_runtime_settings.default_max_records,
+    sleep_ms: int = crawler_runtime_settings.default_sleep_ms,
     checkpoint=None,
     update_run_state: bool = True,
     persist_logs: bool = True,
@@ -266,7 +266,7 @@ async def process_single_url(
             persist_logs=persist_logs,
         ),
     )
-    await _enter_acquire_stage(context)
+    await _enter_stage(context, STAGE_ACQUIRE)
     robots_result = await _run_robots_gate(context)
     if robots_result is not None:
         return robots_result
@@ -276,47 +276,20 @@ async def process_single_url(
     )
     if context.config.prefetch_only:
         return _build_prefetch_only_result(context, fetched)
-    await _enter_extract_stage(context)
+    await _enter_stage(context, STAGE_EXTRACT)
     extracted = await _run_extraction_stage(context, fetched)
     extracted = await _run_normalization_stage(context, extracted)
     return await _run_persistence_stage(context, extracted)
 
-async def _enter_acquire_stage(context: _URLProcessingContext) -> None:
+async def _enter_stage(
+    context: _URLProcessingContext,
+    stage_name: str,
+) -> None:
     if context.config.update_run_state:
         await set_stage(
             context.session,
             context.run,
-            STAGE_ACQUIRE,
-            current_url=context.url,
-        )
-        await context.session.commit()
-
-async def _enter_extract_stage(context: _URLProcessingContext) -> None:
-    if context.config.update_run_state:
-        await set_stage(
-            context.session,
-            context.run,
-            STAGE_EXTRACT,
-            current_url=context.url,
-        )
-        await context.session.commit()
-
-async def _enter_normalize_stage(context: _URLProcessingContext) -> None:
-    if context.config.update_run_state:
-        await set_stage(
-            context.session,
-            context.run,
-            STAGE_NORMALIZE,
-            current_url=context.url,
-        )
-        await context.session.commit()
-
-async def _enter_persist_stage(context: _URLProcessingContext) -> None:
-    if context.config.update_run_state:
-        await set_stage(
-            context.session,
-            context.run,
-            STAGE_PERSIST,
+            stage_name,
             current_url=context.url,
         )
         await context.session.commit()
@@ -539,7 +512,7 @@ async def _run_normalization_stage(
     context: _URLProcessingContext,
     extracted: _ExtractedURLStage,
 ) -> _ExtractedURLStage:
-    await _enter_normalize_stage(context)
+    await _enter_stage(context, STAGE_NORMALIZE)
     normalized_records: list[dict[str, object]] = []
     for index, record in enumerate(extracted.records, start=1):
         normalized_record, validation_errors = validate_record_for_surface(
@@ -906,7 +879,6 @@ def _thin_listing_browser_retry_decision(
 def _listing_records_look_low_quality(records: list[dict[str, object]]) -> bool:
     if not records:
         return True
-    signal_fields = ("title", "url", "price", "image_url", "brand")
     populated_counts: list[int] = []
     for record in records:
         if not isinstance(record, dict):
@@ -914,7 +886,7 @@ def _listing_records_look_low_quality(records: list[dict[str, object]]) -> bool:
         populated_counts.append(
             sum(
                 record.get(field_name) not in (None, "", [], {})
-                for field_name in signal_fields
+                for field_name in _LISTING_SIGNAL_FIELDS
             )
         )
     if not populated_counts:
@@ -948,11 +920,10 @@ def _listing_retry_improved(
 def _listing_record_population_signature(
     records: list[dict[str, object]],
 ) -> tuple[int, int, int]:
-    signal_fields = ("title", "url", "price", "image_url", "brand")
     populated_counts = [
         sum(
             record.get(field_name) not in (None, "", [], {})
-            for field_name in signal_fields
+            for field_name in _LISTING_SIGNAL_FIELDS
         )
         for record in records
         if isinstance(record, dict)
@@ -1001,7 +972,7 @@ async def _run_persistence_stage(
         browser_attempted=_browser_attempted(acquisition_result),
         screenshot_required=_screenshot_required(_browser_outcome(acquisition_result)),
     )
-    await _enter_persist_stage(context)
+    await _enter_stage(context, STAGE_PERSIST)
     persisted_count = await persist_extracted_records(
         context.session,
         context.run,
@@ -1077,7 +1048,9 @@ async def apply_llm_fallback(
             float_score = float(str(raw_score)) if raw_score is not None else 1.0
         except (TypeError, ValueError):
             float_score = 1.0
-        low_confidence = float_score < LLMFallbackConfig.CONFIDENCE_THRESHOLD
+        low_confidence = (
+            float_score < crawler_runtime_settings.llm_confidence_threshold
+        )
         selector_heal_rerun = str(self_heal.get("mode") or "").strip().lower() == "selector_synthesis"
         should_run = bool(missing_fields) or (
             low_confidence and not selector_heal_rerun
@@ -1141,7 +1114,7 @@ async def apply_llm_fallback(
         next_record["_self_heal"] = {
             "enabled": True,
             "triggered": True,
-            "threshold": LLMFallbackConfig.CONFIDENCE_THRESHOLD,
+            "threshold": crawler_runtime_settings.llm_confidence_threshold,
             "mode": "missing_field_extraction",
             "error": error_message or None,
             "rejected_fields": llm_rejected_fields or None,

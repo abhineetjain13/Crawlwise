@@ -54,6 +54,15 @@ from app.services.platform_policy import resolve_platform_runtime_policy
 logger = logging.getLogger(__name__)
 
 
+def _attach_exception_browser_diagnostics(
+    exc: Exception | None,
+    diagnostics: dict[str, object] | None,
+) -> None:
+    if exc is None or not diagnostics:
+        return
+    setattr(exc, "browser_diagnostics", dict(diagnostics))
+
+
 @dataclass(slots=True)
 class _FetchRuntimeContext:
     url: str
@@ -94,10 +103,6 @@ def _ensure_scheme(url: str) -> str:
 class SharedBrowserRuntime(_SharedBrowserRuntime):
     def _build_context_options(self, *, run_id: int | None = None) -> dict[str, object]:
         return build_playwright_context_options(run_id=run_id)
-
-
-def _copy_headers(headers):
-    return copy_headers(headers)
 
 
 def _should_escalate_to_browser(
@@ -291,6 +296,10 @@ async def fetch_page(
                 listing_recovery_mode=listing_recovery_mode,
             )
         except (httpx.HTTPError, OSError, TimeoutError, RuntimeError) as exc:
+            _attach_exception_browser_diagnostics(
+                context.last_error,
+                context.last_browser_attempt_diagnostics,
+            )
             raise context.last_error from exc
     raise RuntimeError(f"Failed to fetch {url}")
 
@@ -340,6 +349,10 @@ async def _run_browser_attempts(
                 browser_reason=reason,
                 exc=exc,
             )
+            _attach_exception_browser_diagnostics(
+                exc,
+                context.last_browser_attempt_diagnostics,
+            )
             logger.debug(
                 "Browser fetch failed for %s via %s",
                 context.url,
@@ -347,6 +360,10 @@ async def _run_browser_attempts(
                 exc_info=True,
             )
     if last_browser_error is not None:
+        _attach_exception_browser_diagnostics(
+            last_browser_error,
+            context.last_browser_attempt_diagnostics,
+        )
         raise last_browser_error
     raise RuntimeError(f"Failed to fetch {context.url} in browser")
 

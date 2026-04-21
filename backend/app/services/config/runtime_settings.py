@@ -75,6 +75,8 @@ class CrawlerRuntimeSettings(BaseSettings):
     default_sleep_ms: int = 0
     min_request_delay_ms: int = 100
     default_max_scrolls: int = 10
+    schema_max_age_days: int = 30
+    listing_fallback_fragment_limit: int = 200
     auto_detect_surface: bool = False
     batch_url_concurrency: int = 8
     url_batch_concurrency: int = 4
@@ -142,6 +144,10 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_capture_max_network_payload_bytes: int = 3000000
     browser_capture_total_network_payload_bytes: int = 12000000
     browser_capture_queue_join_timeout_ms: int = 2000
+    fingerprint_browser: str = "chrome"
+    fingerprint_os: tuple[str, ...] = ("windows", "macos", "linux")
+    fingerprint_device: str = "desktop"
+    fingerprint_locale: str = "en-US"
     browser_readiness_visible_text_min: int = 120
     interruptible_wait_poll_ms: int = 250
     cooperative_sleep_poll_ms: int = 250
@@ -194,9 +200,13 @@ class CrawlerRuntimeSettings(BaseSettings):
     acquisition_artifact_cleanup_interval_seconds: int = 300
     llm_direct_record_extraction_min_records: int = 3
     llm_direct_record_extraction_min_populated_fields_per_record: float = 3.0
+    llm_confidence_threshold: float = 0.55
     selector_self_heal_enabled: bool = False
     selector_self_heal_min_confidence: float = 0.55
     selector_self_heal_cache_enabled: bool = False
+    robots_cache_size: int = 512
+    robots_cache_ttl: float = 3600.0
+    robots_fetch_user_agent: str = "CrawlerAI"
 
     @model_validator(mode="after")
     def _apply_profile_defaults(self) -> CrawlerRuntimeSettings:
@@ -261,6 +271,8 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError(
                 "acquisition_artifact_cleanup_interval_seconds must be >= 0"
             )
+        if not 0.0 <= float(self.llm_confidence_threshold) <= 1.0:
+            raise ValueError("llm_confidence_threshold must be between 0 and 1")
         if not 0.0 <= float(self.selector_self_heal_min_confidence) <= 1.0:
             raise ValueError("selector_self_heal_min_confidence must be between 0 and 1")
         return self

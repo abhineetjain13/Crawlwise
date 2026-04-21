@@ -7,6 +7,10 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 
+def hostname(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
 def normalize_domain(url: str) -> str:
     """Return a normalised domain key for Site Memory and selector scoping.
 

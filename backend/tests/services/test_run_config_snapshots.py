@@ -181,3 +181,10 @@ async def test_snapshot_active_configs_includes_direct_record_extraction(
     snapshot = await snapshot_active_configs(db_session)
 
     assert snapshot["direct_record_extraction"]["task_type"] == "direct_record_extraction"
+
+
+def test_runtime_settings_reject_invalid_llm_confidence_threshold() -> None:
+    from app.services.config.runtime_settings import CrawlerRuntimeSettings
+
+    with pytest.raises(ValueError, match="llm_confidence_threshold must be between 0 and 1"):
+        CrawlerRuntimeSettings(llm_confidence_threshold=1.2)

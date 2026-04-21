@@ -176,6 +176,47 @@ def test_record_to_markdown_includes_page_context_from_raw_data() -> None:
     assert "Widget Prime" in markdown
 
 
+def test_record_to_markdown_keeps_listing_source_and_record_url_distinct() -> None:
+    row = CrawlRecord(
+        id=2,
+        run_id=7,
+        source_url="https://example.com/collections/widgets",
+        data={
+            "title": "Widget Prime",
+            "url": "https://example.com/products/widget-prime",
+            "price": "19.99",
+        },
+        raw_data={},
+        discovered_data={},
+        source_trace={},
+    )
+
+    markdown = record_export_service.record_to_markdown(row)
+
+    assert "Source: <https://example.com/collections/widgets>" in markdown
+    assert "Record URL: <https://example.com/products/widget-prime>" in markdown
+
+
+def test_clean_export_data_keeps_variant_payloads_but_hides_internal_markdown() -> None:
+    cleaned = record_export_service.clean_export_data(
+        {
+            "title": "Widget Prime",
+            "variants": [{"sku": "W-1", "color": "Black"}],
+            "variant_axes": {"color": ["Black"]},
+            "selected_variant": {"sku": "W-1", "color": "Black"},
+            "page_markdown": "# internal",
+            "_source": "dom",
+        }
+    )
+
+    assert cleaned == {
+        "title": "Widget Prime",
+        "variants": [{"sku": "W-1", "color": "Black"}],
+        "variant_axes": {"color": ["Black"]},
+        "selected_variant": {"sku": "W-1", "color": "Black"},
+    }
+
+
 def test_listing_adapter_records_use_shared_surface_normalization() -> None:
     rows = extract_records(
         "<html><body></body></html>",

@@ -1,4 +1,4 @@
-# CLAUDE.md — CrawlerAI Session Bootstrap
+# AGENTS.md — CrawlerAI Session Bootstrap
 
 > **This is the only file you need to attach at the start of every session.**
 > Read it fully before writing any code or asking clarifying questions.
@@ -89,7 +89,7 @@ $env:PYTHONPATH='.'
 
 ## Doc Rules
 
-- `CLAUDE.md` — session bootstrap only. Keep under 200 lines.
+- `AGENTS.md` — session bootstrap only. Keep under 200 lines.
 - `docs/CODEBASE_MAP.md` — file-to-bucket map. Update when files move or are added.
 - `docs/ENGINEERING_STRATEGY.md` — principles + named anti-patterns. The most important doc for preventing bloat.
 - `docs/INVARIANTS.md` — must-preserve runtime rules. Only changes when a contract genuinely changes.

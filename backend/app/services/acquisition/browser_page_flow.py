@@ -22,6 +22,14 @@ from app.services.platform_policy import resolve_browser_readiness_policy, resol
 
 logger = logging.getLogger(__name__)
 _ACCESSIBILITY_SNAPSHOT_TIMEOUT_SECONDS = 0.5
+_MARKDOWN_ROOT_SELECTORS = (
+    "main",
+    "[role='main']",
+    "article",
+    ".product-detail-view__main-content",
+    ".product-detail-info",
+    "[data-qa-id='product-detail-info']",
+)
 _MARKDOWN_NOISE_SELECTORS = (
     "nav",
     "footer",
@@ -29,6 +37,15 @@ _MARKDOWN_NOISE_SELECTORS = (
     "script",
     "style",
     "noscript",
+    "svg",
+    "template",
+    "iframe",
+    "dialog",
+    "[role='dialog']",
+    "[aria-modal='true']",
+    "[hidden]",
+    "[aria-hidden='true']",
+    "[inert]",
     "[role='navigation']",
     "[role='banner']",
     "[role='contentinfo']",
@@ -681,12 +698,15 @@ async def _generate_page_markdown(
                 " ".join(str(item) for item in attrs.get("class", []) if item),
                 str(attrs.get("id") or ""),
                 str(attrs.get("data-testid") or ""),
+                str(attrs.get("data-qa-id") or ""),
+                str(attrs.get("data-qa-action") or ""),
             ]
         ).lower()
         if any(token in attr_text for token in _MARKDOWN_NOISE_TOKENS):
             node.decompose()
 
-    text = soup.get_text("\n", strip=True)
+    content_root = _select_markdown_root(soup)
+    text = content_root.get_text("\n", strip=True)
     lines = [
         " ".join(str(line or "").split()).strip()
         for line in text.splitlines()
@@ -695,7 +715,7 @@ async def _generate_page_markdown(
     markdown = "\n".join(lines)
 
     link_lines: list[str] = []
-    for anchor in soup.select("a[href]"):
+    for anchor in content_root.select("a[href]"):
         attrs = getattr(anchor, "attrs", None)
         if not isinstance(attrs, dict):
             continue
@@ -728,6 +748,24 @@ async def _generate_page_markdown(
                 else f"=== SEMANTIC ACCESSIBILITY SNAPSHOT ===\n{aria_text}"
             )
     return markdown.strip()
+
+
+def _select_markdown_root(soup: BeautifulSoup) -> BeautifulSoup | Any:
+    body = soup.body
+    body_text = ""
+    if body is not None:
+        body_text = " ".join(body.get_text(" ", strip=True).split()).strip()
+    for selector in _MARKDOWN_ROOT_SELECTORS:
+        candidate = soup.select_one(selector)
+        if candidate is None:
+            continue
+        text = " ".join(candidate.get_text(" ", strip=True).split()).strip()
+        if len(text) >= 80:
+            if body is not None and candidate is not body and body_text:
+                if len(text) < max(80, int(len(body_text) * 0.4)):
+                    continue
+            return candidate
+    return body if body is not None else soup
 
 
 def _serialize_accessibility_snapshot(

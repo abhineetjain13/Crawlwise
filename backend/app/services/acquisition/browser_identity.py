@@ -11,7 +11,7 @@ from typing import Any
 from browserforge.fingerprints import FingerprintGenerator
 from cachetools import TTLCache
 
-from app.services.pipeline.pipeline_config import FingerprintConfig
+from app.services.config.runtime_settings import crawler_runtime_settings
 
 
 def _host_os_fingerprint_arg() -> str:
@@ -24,12 +24,8 @@ def _host_os_fingerprint_arg() -> str:
 
 
 _HOST_OS = _host_os_fingerprint_arg()
-_FINGERPRINT_GENERATOR = FingerprintGenerator(
-    browser=FingerprintConfig.browser,
-    os=[_HOST_OS],
-    device=FingerprintConfig.device,
-    locale=FingerprintConfig.locale,
-)
+_FINGERPRINT_GENERATOR: FingerprintGenerator | None = None
+_FINGERPRINT_GENERATOR_LOCK = _threading.Lock()
 _HEADER_DROP_KEYS = {
     "accept-encoding",
     "sec-fetch-dest",
@@ -115,6 +111,21 @@ def clear_browser_identity_cache() -> None:
         _RUN_BROWSER_IDENTITIES.clear()
 
 
+def _fingerprint_generator() -> FingerprintGenerator:
+    global _FINGERPRINT_GENERATOR
+    if _FINGERPRINT_GENERATOR is not None:
+        return _FINGERPRINT_GENERATOR
+    with _FINGERPRINT_GENERATOR_LOCK:
+        if _FINGERPRINT_GENERATOR is None:
+            _FINGERPRINT_GENERATOR = FingerprintGenerator(
+                browser=crawler_runtime_settings.fingerprint_browser,
+                os=[_HOST_OS],
+                device=crawler_runtime_settings.fingerprint_device,
+                locale=crawler_runtime_settings.fingerprint_locale,
+            )
+    return _FINGERPRINT_GENERATOR
+
+
 _UA_VERSION_RE = _re.compile(r"Chrome/(\d+)\.")
 _MOBILE_UA_RE = _re.compile(r"\bmobile\b", _re.I)
 
@@ -164,7 +175,7 @@ def _generate_coherent_fingerprint():
     expected_token = _HOST_OS_UA_TOKENS[_HOST_OS]
     fallback_fingerprint = None
     for _ in range(3):
-        fingerprint = _FINGERPRINT_GENERATOR.generate()
+        fingerprint = _fingerprint_generator().generate()
         fallback_fingerprint = fingerprint
         ua = str(fingerprint.navigator.userAgent or "").lower()
         if expected_token in ua and _is_version_coherent(fingerprint):

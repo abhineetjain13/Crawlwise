@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.services.adapters.adp import ADPAdapter
@@ -199,6 +201,127 @@ def test_listing_extractor_accepts_image_link_cards_with_separate_title_text() -
             "url": "https://www.ulta.com/p/connect-in-colour-eyeshadow-palette-rose-lens?sku=2640287",
         }
     ]
+
+
+def test_listing_extractor_avoids_numeric_title_nodes_when_real_title_exists() -> None:
+    html = """
+    <html>
+      <body>
+        <div class="product-card">
+          <a href="/products/widget-prime" aria-label="Widget Prime">
+            <img src="/images/widget-prime.jpg" alt="Widget Prime">
+          </a>
+          <div class="product-title">1</div>
+          <div class="product-name">Widget Prime</div>
+          <div class="price">$19.99</div>
+        </div>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/collections/widgets",
+            "_source": "dom_listing",
+            "title": "Widget Prime",
+            "price": "19.99",
+            "image_url": "https://example.com/images/widget-prime.jpg",
+            "url": "https://example.com/products/widget-prime",
+        }
+    ]
+
+
+def test_listing_extractor_filters_category_cloud_links_when_supported_product_tiles_exist() -> None:
+    product_rows = "\n".join(
+        f"""
+        <li class="product-grid-product">
+          <a href="/in/en/regular-fit-shirt-p44{i:02d}.html">
+            <img src="/images/p{i}.jpg" alt="Regular Fit Shirt {i}">
+            <span>Regular Fit Shirt {i}</span>
+          </a>
+          <span>₹ 3,950.00</span>
+        </li>
+        """
+        for i in range(1, 13)
+    )
+    category_links = "\n".join(
+        f'<li><a href="/in/en/man-shirts-l{index}.html">Men Shirts {index}</a></li>'
+        for index in range(1, 10)
+    )
+    html = f"""
+    <html>
+      <body>
+        <nav><ul>{category_links}</ul></nav>
+        <main><ul class="product-grid">{product_rows}</ul></main>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://www.zara.com/in/en/man-shirts-l737.html",
+        "ecommerce_listing",
+        max_records=20,
+    )
+
+    assert len(rows) == 12
+    assert all("/regular-fit-shirt-p44" in row["url"] for row in rows)
+    assert all("Men Shirts" not in row["title"] for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("artifact_path", "url", "surface", "blocked_terms"),
+    [
+        (
+            "artifacts/runs/8/pages/169dea1b9aaaa49e.html",
+            "https://www.usajobs.gov/search/results/?k=software+engineer&p=1",
+            "job_listing",
+            ("sort by", "career explorer"),
+        ),
+        (
+            "artifacts/runs/9/pages/4eabd73fbea7fd19.html",
+            "https://startup.jobs/",
+            "job_listing",
+            ("bookmark apply",),
+        ),
+        (
+            "artifacts/runs/19/pages/b1c15ef21f4b7b2d.html",
+            "https://www.karenmillen.com/eu/categories/womens-trousers",
+            "ecommerce_listing",
+            ("flash promo", "code:"),
+        ),
+    ],
+)
+def test_listing_extractor_filters_acceptance_artifact_noise(
+    artifact_path: str,
+    url: str,
+    surface: str,
+    blocked_terms: tuple[str, ...],
+) -> None:
+    html = Path(__file__).resolve().parents[2].joinpath(artifact_path).read_text(
+        encoding="utf-8",
+        errors="ignore",
+    )
+
+    rows = extract_listing_records(
+        html,
+        url,
+        surface,
+        max_records=10,
+    )
+
+    for row in rows:
+        lowered_title = str(row.get("title") or "").lower()
+        lowered_url = str(row.get("url") or "").lower()
+        assert all(term not in lowered_title for term in blocked_terms)
+        assert all(term not in lowered_url for term in blocked_terms)
 
 
 def test_listing_extractor_ignores_none_embedded_json_payloads(

@@ -6,7 +6,6 @@ from app.models.crawl_settings import CrawlRunSettings
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.exceptions import CrawlerConfigurationError
-from app.services.pipeline.pipeline_config import PipelineDefaults
 from app.services.platform_policy import resolve_platform_runtime_policy
 import pytest
 
@@ -56,13 +55,10 @@ def test_runtime_backed_defaults_remain_single_source_of_truth() -> None:
     plan = AcquisitionPlan(surface="job_listing")
     settings = CrawlRunSettings.from_value({})
 
-    assert PipelineDefaults.MAX_PAGES == crawler_runtime_settings.default_max_pages
-    assert PipelineDefaults.MAX_SCROLLS == crawler_runtime_settings.default_max_scrolls
-    assert PipelineDefaults.MAX_RECORDS == crawler_runtime_settings.default_max_records
-    assert PipelineDefaults.SLEEP_MS == crawler_runtime_settings.default_sleep_ms
     assert plan.max_pages == crawler_runtime_settings.default_max_pages
     assert plan.max_scrolls == crawler_runtime_settings.default_max_scrolls
     assert plan.max_records == crawler_runtime_settings.default_max_records
+    assert plan.sleep_ms == crawler_runtime_settings.min_request_delay_ms
     assert settings.max_records() == crawler_runtime_settings.default_max_records
 
 

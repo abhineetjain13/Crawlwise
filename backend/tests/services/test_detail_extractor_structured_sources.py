@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.services.adapters.myntra import MyntraAdapter
@@ -74,6 +76,34 @@ def test_extract_ecommerce_detail_from_opengraph() -> None:
     assert record["image_url"] == "https://example.com/images/og-widget.jpg"
     assert record["url"] == "https://example.com/products/og-widget"
     assert record["_source"] == "opengraph"
+
+
+def test_extract_ecommerce_detail_ignores_noisy_h1_and_uses_page_title() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Widget Prime</title>
+      </head>
+      <body>
+        <main>
+          <h1>Save 20% With Code SPRING</h1>
+          <div class="price">$19.99</div>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/widget-prime",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Widget Prime"
+    assert record["price"] == "19.99"
 
 
 def test_extract_ecommerce_detail_from_array_style_nuxt_payload() -> None:
@@ -202,6 +232,45 @@ def test_extract_ecommerce_detail_resolves_json_ld_graph_node_references() -> No
     assert record["price"] == "29.99"
     assert record["currency"] == "USD"
     assert record["availability"] == "in_stock"
+    assert record["_source"] == "json_ld"
+
+
+def test_extract_ecommerce_detail_prefers_json_ld_title_over_noisy_dom_h1() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Products</title>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Graph Widget",
+          "offers": {
+            "@type": "Offer",
+            "price": "29.99",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Products</h1>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/graph-widget",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Graph Widget"
     assert record["_source"] == "json_ld"
 
 
@@ -579,3 +648,34 @@ def test_extract_ecommerce_detail_keeps_stronger_js_state_variants_over_dom_fall
         "sku": "TRAIL-S",
         "option_values": {"size": "S"},
     }
+
+
+def test_extract_ecommerce_detail_filters_zara_copy_code_from_dom_variants() -> None:
+    html = Path(__file__).resolve().parents[2].joinpath(
+        "artifacts/runs/2/pages/db832f82d5b83440.html"
+    ).read_text(encoding="utf-8", errors="ignore")
+
+    rows = extract_records(
+        html,
+        "https://www.zara.com/in/en/regular-fit-shirt-p04493144.html",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert str(record["option1_name"]).lower() == "color"
+    assert "option2_name" not in record
+    assert "4493/144/800" not in str(record.get("option1_values") or "")
+    assert record["variant_axes"] == {
+        "color": [
+            "Black",
+            "Blue/White",
+            "White",
+            "Sky blue",
+            "Ecru / Blue",
+            "White / Sky blue",
+        ]
+    }
+    assert record["variant_count"] == 6
+    assert record["selected_variant"]["option_values"]["color"] == "Black"

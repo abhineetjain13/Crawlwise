@@ -964,6 +964,93 @@ def test_extract_records_does_not_synthesize_listing_from_nested_json_without_it
     assert rows == []
 
 
+def test_extract_records_emits_xml_sitemap_listing_records() -> None:
+    xml = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url>
+        <loc>https://example.com/products/widget-prime</loc>
+      </url>
+      <url>
+        <loc>https://example.com/products/widget-pro</loc>
+      </url>
+    </urlset>
+    """
+
+    rows = extract_records(
+        xml,
+        "https://example.com/media/sitemap-products.xml",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/xml; charset=utf-8",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["_source"] == "xml_sitemap"
+    assert rows[0]["url"] == "https://example.com/products/widget-prime"
+    assert rows[0]["title"] == "widget prime"
+
+
+def test_extract_records_emits_rss_listing_records_from_link_nodes() -> None:
+    rss = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>Widget Prime</title>
+          <link>https://example.com/products/widget-prime</link>
+        </item>
+        <item>
+          <title>Widget Pro</title>
+          <link>https://example.com/products/widget-pro</link>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    rows = extract_records(
+        rss,
+        "https://example.com/feed.xml",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/rss+xml; charset=utf-8",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["_source"] == "xml_sitemap"
+    assert rows[0]["url"] == "https://example.com/products/widget-prime"
+    assert rows[1]["title"] == "widget pro"
+
+
+def test_extract_records_emits_atom_listing_records_from_link_href() -> None:
+    atom = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <title>Widget Prime</title>
+        <link href="https://example.com/products/widget-prime" />
+      </entry>
+      <entry>
+        <title>Widget Pro</title>
+        <link href="https://example.com/products/widget-pro" />
+      </entry>
+    </feed>
+    """
+
+    rows = extract_records(
+        atom,
+        "https://example.com/atom.xml",
+        "ecommerce_listing",
+        max_records=10,
+        content_type="application/atom+xml; charset=utf-8",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["_source"] == "xml_sitemap"
+    assert rows[0]["url"] == "https://example.com/products/widget-prime"
+    assert rows[1]["title"] == "widget pro"
+
+
 def test_extract_detail_keeps_dom_stage_for_high_scoring_js_state_when_long_text_missing() -> None:
     html = """
     <html>

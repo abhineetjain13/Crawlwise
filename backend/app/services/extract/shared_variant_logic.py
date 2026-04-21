@@ -4,6 +4,8 @@ import itertools
 import re
 from typing import Any
 
+from app.services.field_value_core import clean_text
+
 
 _AXIS_ALIASES = {
     "colour": "color",
@@ -11,6 +13,18 @@ _AXIS_ALIASES = {
     "colorway": "color",
     "size_name": "size",
 }
+_VARIANT_DOM_CUE_SELECTORS = (
+    "select[name*='variant' i], select[name*='option' i], select[name*='size' i], "
+    "select[name*='color' i], select[id*='variant' i], select[id*='option' i], "
+    "select[id*='size' i], select[id*='color' i], select[aria-label*='size' i], "
+    "select[aria-label*='color' i], select[class*='variant' i], select[data-option], "
+    "select[data-option-name]",
+    "[data-option-name], [aria-label*='size' i], [aria-label*='color' i], "
+    "[class*='swatch' i], [class*='variant' i], [class*='option' i], "
+    "[class*='color-selector' i], [class*='size-selector' i], "
+    "[data-testid*='swatch' i], [role='radiogroup'], "
+    "[data-qa-action='select-color'], [data-qa-action*='size-selector']",
+)
 
 
 def normalized_variant_axis_key(value: object) -> str:
@@ -19,6 +33,45 @@ def normalized_variant_axis_key(value: object) -> str:
         return ""
     text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
     return _AXIS_ALIASES.get(text, text)
+
+
+def variant_dom_cues_present(soup: Any) -> bool:
+    return any(soup.select(selector) for selector in _VARIANT_DOM_CUE_SELECTORS)
+
+
+def infer_variant_group_name(node: Any) -> str:
+    if not hasattr(node, "get"):
+        return ""
+    parts: list[str] = []
+    for attr_name in ("data-option-name", "aria-label", "data-testid", "data-qa-action", "id", "name", "class"):
+        value = node.get(attr_name)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value if item)
+        elif value not in (None, "", [], {}):
+            parts.append(str(value))
+    probe = " ".join(parts).replace("_", " ").replace("-", " ").lower()
+    if "color" in probe or "colour" in probe:
+        return "color"
+    if "size" in probe or "fit" in probe:
+        return "size"
+    return ""
+
+
+def variant_value_is_noise(value: object) -> bool:
+    cleaned = clean_text(value)
+    lowered = cleaned.lower()
+    return not cleaned or lowered in {"select", "choose", "option", "size guide"} or len(cleaned) > 60 or bool(re.fullmatch(r"\d{3,5}/\d{2,5}/\d{2,5}", cleaned))
+
+
+def variant_node_is_noise(node: Any) -> bool:
+    probe_parts: list[str] = []
+    for attr_name in ("data-qa-action", "data-testid", "aria-label", "class", "title"):
+        value = node.get(attr_name)
+        if isinstance(value, list):
+            probe_parts.extend(str(item) for item in value if item)
+        elif value not in (None, "", [], {}):
+            probe_parts.append(str(value))
+    return "copy" in " ".join(probe_parts).lower()
 
 
 def split_variant_axes(

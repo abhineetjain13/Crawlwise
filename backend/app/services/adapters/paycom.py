@@ -5,8 +5,8 @@ import json
 import re
 from urllib.parse import urljoin, urlparse
 
+from curl_cffi import requests as curl_requests
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.acquisition.http_client import requests as curl_requests
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.field_value_core import clean_text
 

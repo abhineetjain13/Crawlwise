@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from functools import lru_cache
 from typing import Any
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover - dependency may be absent in local test
 _STATE_SCRIPT_IDS = {"__next_data__": "__NEXT_DATA__", "__nuxt_data__": "__NUXT_DATA__"}
 _EMBEDDED_ASSIGNMENT_NAMES = ("data", "items", "listings", "posts", "products", "records", "results")
 _NON_STATE_ASSIGNMENT_PATTERNS = (re.compile(r"ShopifyAnalytics\.meta\s*=\s*(\{.*?\})\s*;", re.S), re.compile(r"var\s+meta\s*=\s*(\{.*?\})\s*;", re.S))
+logger = logging.getLogger(__name__)
 
 
 def json_candidates(value: Any) -> list[dict[str, Any]]:
@@ -361,6 +363,12 @@ def _extract_extruct_rows(html: str, page_url: str, *, syntax: str) -> list[dict
             uniform=True,
         )
     except Exception:
+        logger.warning(
+            "Structured source extraction via extruct failed for syntax=%s url=%s",
+            syntax,
+            page_url,
+            exc_info=True,
+        )
         return []
     rows = extracted.get(syntax)
     return [row for row in list(rows or []) if isinstance(row, dict)]

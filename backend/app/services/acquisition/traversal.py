@@ -654,6 +654,12 @@ async def _find_generic_next_page_locator(page):
             logger.info("Traversal generic next-page selector=%s url=%s", selector, page.url)
             return locator
         except Exception:
+            logger.debug(
+                "Traversal generic next-page lookup failed selector=%s url=%s",
+                selector,
+                page.url,
+                exc_info=True,
+            )
             continue
     return None
 
@@ -670,6 +676,13 @@ async def _find_aom_actionable_locator(
         try:
             count = min(await locator.count(), 10)
         except Exception:
+            logger.debug(
+                "Traversal AOM locator count failed selector_group=%s role=%s url=%s",
+                selector_group,
+                role,
+                page.url,
+                exc_info=True,
+            )
             continue
         for index in range(count):
             candidate = locator.nth(index)
@@ -687,6 +700,14 @@ async def _find_aom_actionable_locator(
                 )
                 return candidate
             except Exception:
+                logger.debug(
+                    "Traversal AOM candidate probe failed selector_group=%s role=%s index=%s url=%s",
+                    selector_group,
+                    role,
+                    index,
+                    page.url,
+                    exc_info=True,
+                )
                 continue
     return None
 
@@ -718,6 +739,8 @@ async def _click_with_retry(
         await locator.scroll_into_view_if_needed(timeout=2000)
     except Exception:
         logger.debug("Traversal scroll_into_view failed", exc_info=True)
+        if not await _locator_still_resolves(locator):
+            return False
     try:
         await locator.evaluate(
             """(node) => {
@@ -727,7 +750,13 @@ async def _click_with_retry(
             }"""
         )
     except Exception:
-        pass
+        logger.debug(
+            "Traversal center-scroll evaluate failed url=%s",
+            page.url,
+            exc_info=True,
+        )
+        if not await _locator_still_resolves(locator):
+            return False
 
     # Step 2: Normal click
     first_exc = None
@@ -736,6 +765,8 @@ async def _click_with_retry(
         return True
     except Exception as exc:
         first_exc = exc
+        if not await _locator_still_resolves(locator):
+            return False
         logger.debug(
             "Traversal normal click failed (%s); trying overlay dismissal + force",
             type(exc).__name__,
@@ -751,6 +782,8 @@ async def _click_with_retry(
         return True
     except Exception as exc:
         force_exc = exc
+        if not await _locator_still_resolves(locator):
+            return False
         logger.debug(
             "Traversal force click failed (%s); trying JS click",
             type(exc).__name__,
@@ -776,6 +809,16 @@ async def _click_with_retry(
             type(force_exc).__name__,
             type(js_exc).__name__,
         )
+        return False
+
+
+async def _locator_still_resolves(locator) -> bool:
+    counter = getattr(locator, "count", None)
+    if not callable(counter):
+        return True
+    try:
+        return bool(await counter())
+    except Exception:
         return False
 
 
@@ -875,6 +918,12 @@ async def dismiss_overlays_if_needed(
                 logger.info("Traversal dismissed cookie consent via %s", selector)
                 break
         except Exception:
+            logger.debug(
+                "Traversal cookie consent dismissal probe failed selector=%s url=%s",
+                selector,
+                page.url,
+                exc_info=True,
+            )
             continue
     if dismissed_any:
         result.overlays_dismissed = True
@@ -1469,11 +1518,19 @@ async def _settle_after_action(
     try:
         await page.wait_for_load_state("networkidle", timeout=min(1500, wait_ms * 2))
     except Exception:
-        pass
+        logger.debug(
+            "Traversal networkidle settle wait failed url=%s",
+            page.url,
+            exc_info=True,
+        )
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=min(1500, wait_ms * 2))
     except Exception:
-        pass
+        logger.debug(
+            "Traversal domcontentloaded settle wait failed url=%s",
+            page.url,
+            exc_info=True,
+        )
     await wait_for_dom_mutation_settle(
         page,
         quiet_window_ms=min(500, max(100, wait_ms // 4)),

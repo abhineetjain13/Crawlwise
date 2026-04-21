@@ -938,6 +938,28 @@ async def test_count_listing_cards_uses_myntra_card_selector() -> None:
 
 
 @pytest.mark.asyncio
+async def test_count_listing_cards_uses_zara_product_grid_selector() -> None:
+    page = _FakePage(
+        surface="ecommerce_listing",
+        initial_state=_State(
+            html="""
+            <ul class="product-grid">
+              <li class="product-grid-product"><a href="/in/en/product-a-p0001.html">A</a></li>
+              <li class="product-grid-product"><a href="/in/en/product-b-p0002.html">B</a></li>
+            </ul>
+            """,
+            card_count=12,
+            scroll_height=1600,
+            controls=set(),
+        ),
+    )
+
+    count = await count_listing_cards(page, surface="ecommerce_listing")
+
+    assert count == 12
+
+
+@pytest.mark.asyncio
 async def test_count_listing_cards_does_not_fallback_to_heuristics_when_selectors_miss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1023,3 +1045,58 @@ async def test_click_with_retry_uses_mutation_settle_after_js_fallback() -> None
     assert result.click_retries == 2
     assert page.mutation_settle_calls == 1
     assert page.wait_timeout_calls == []
+
+
+@pytest.mark.asyncio
+async def test_click_with_retry_stops_when_locator_no_longer_resolves() -> None:
+    class _ClickPage:
+        url = "https://example.com/listing"
+
+        def locator(self, selector: str):
+            del selector
+            return _OverlayCookieLocator()
+
+        async def evaluate(self, script: str, arg: Any | None = None) -> Any:
+            del script, arg
+            return None
+
+        async def wait_for_load_state(
+            self,
+            state: str,
+            timeout: int | None = None,
+        ) -> None:
+            del state, timeout
+
+        async def wait_for_timeout(self, timeout_ms: int) -> None:
+            del timeout_ms
+
+    class _StaleLocator:
+        def __init__(self) -> None:
+            self.detached = False
+            self.click_calls = 0
+
+        async def scroll_into_view_if_needed(self, timeout: int | None = None) -> None:
+            del timeout
+
+        async def evaluate(self, script: str) -> Any:
+            del script
+            self.detached = True
+            raise RuntimeError("detached")
+
+        async def count(self) -> int:
+            return 0 if self.detached else 1
+
+        async def click(self, timeout: int | None = None, force: bool = False) -> None:
+            del timeout, force
+            self.click_calls += 1
+            raise AssertionError("click should not run once locator is stale")
+
+    page = _ClickPage()
+    locator = _StaleLocator()
+    result = TraversalResult(requested_mode="load_more")
+
+    clicked = await _click_with_retry(page, locator, result=result)
+
+    assert clicked is False
+    assert locator.click_calls == 0
+    assert result.click_retries == 0

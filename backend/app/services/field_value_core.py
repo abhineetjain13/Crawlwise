@@ -10,9 +10,11 @@ from bs4 import BeautifulSoup
 from w3lib.url import url_query_cleaner
 
 from app.services.config.field_mappings import CANONICAL_SCHEMAS
+from app.services.domain_utils import hostname as hostname
 from app.services.config.surface_hints import detail_path_hints
 from app.services.field_policy import (
     expand_requested_fields,
+    field_allowed_for_surface,
     get_surface_field_aliases,
     normalize_field_key,
 )
@@ -111,10 +113,6 @@ def same_host(base_url: str, candidate_url: str) -> bool:
     return bool(candidate_host) and candidate_host == base_host
 
 
-def hostname(url: str) -> str:
-    return (urlparse(url).hostname or "").lower()
-
-
 def clean_record(record: dict[str, Any]) -> dict[str, Any]:
     return {
         str(key): value
@@ -134,6 +132,11 @@ def validate_record_for_surface(
         key: value for key, value in dict(record).items() if str(key).startswith("_")
     }
     validated_fields, errors = validate_and_clean(logical_fields, surface)
+    for field_name, value in logical_fields.items():
+        if field_name in validated_fields:
+            continue
+        if field_allowed_for_surface(surface, field_name):
+            validated_fields[field_name] = value
     return {
         **clean_record({**logical_fields, **validated_fields}),
         **internal_fields,

@@ -823,6 +823,115 @@ async def test_generate_page_markdown_tolerates_nodes_with_missing_attrs(
 
 
 @pytest.mark.asyncio
+async def test_generate_page_markdown_prefers_main_content_over_open_dialog_noise() -> None:
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(
+            base_html="""
+            <html>
+              <body>
+                <div role="dialog" aria-label="Category menu">
+                  <p>WOMAN MAN KIDS BEST SELLERS TOPS SHIRTS</p>
+                </div>
+                <main>
+                  <h1>Widget Prime</h1>
+                  <p>Built for long mileage.</p>
+                </main>
+              </body>
+            </html>
+            """
+        ),
+        html="""
+        <html>
+          <body>
+            <div role="dialog" aria-label="Category menu">
+              <p>WOMAN MAN KIDS BEST SELLERS TOPS SHIRTS</p>
+            </div>
+            <main>
+              <h1>Widget Prime</h1>
+              <p>Built for long mileage.</p>
+            </main>
+          </body>
+        </html>
+        """,
+    )
+
+    assert "Widget Prime" in markdown
+    assert "Built for long mileage." in markdown
+    assert "BEST SELLERS" not in markdown
+
+
+@pytest.mark.asyncio
+async def test_generate_page_markdown_falls_back_to_body_when_main_is_too_narrow() -> None:
+    markdown = await browser_page_flow._generate_page_markdown(
+        _FakeExpansionPage(
+            base_html="""
+            <html>
+              <body>
+                <main>
+                  <h1>Widget Prime</h1>
+                  <p>Built for long mileage with a stable midsole and grippy outsole.</p>
+                </main>
+                <section>
+                  <p>Support, returns, and care instructions live outside the main container.</p>
+                  <a href="/support/returns">Returns and exchanges</a>
+                </section>
+              </body>
+            </html>
+            """
+        ),
+        html="""
+        <html>
+          <body>
+            <main>
+              <h1>Widget Prime</h1>
+              <p>Built for long mileage with a stable midsole and grippy outsole.</p>
+            </main>
+            <section>
+              <p>Support, returns, and care instructions live outside the main container.</p>
+              <a href="/support/returns">Returns and exchanges</a>
+            </section>
+          </body>
+        </html>
+        """,
+    )
+
+    assert "Widget Prime" in markdown
+    assert "Support, returns, and care instructions live outside the main container." in markdown
+    assert "Returns and exchanges -> /support/returns" in markdown
+
+
+@pytest.mark.asyncio
+async def test_detail_expansion_keywords_only_extend_when_fields_requested() -> None:
+    default_keywords = browser_runtime.detail_expansion_keywords("ecommerce_detail")
+    requested_keywords = browser_runtime.detail_expansion_keywords(
+        "ecommerce_detail",
+        requested_fields=["description"],
+    )
+
+    assert "shipping" not in default_keywords
+    assert "shipping" in requested_keywords
+
+
+@pytest.mark.asyncio
+async def test_interactive_candidate_snapshot_excludes_class_names_from_probe() -> None:
+    page = _FakeExpansionPage(base_html="<html><body></body></html>")
+    handle = _FakeHandle(
+        "Care instructions",
+        page,
+        attributes={
+            "class": "btn btn--size-selector utility-token",
+            "data-testid": "care-panel-toggle",
+        },
+    )
+
+    snapshot = await browser_runtime.interactive_candidate_snapshot(handle)
+
+    assert snapshot["class_name"] == "btn btn--size-selector utility-token"
+    assert "utility-token" not in str(snapshot["probe"])
+    assert "care-panel-toggle" in str(snapshot["probe"])
+
+
+@pytest.mark.asyncio
 async def test_browser_fetch_records_extractable_sections_after_detail_expansion() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body><h1>Widget Prime</h1><button>Materials</button></body></html>",
@@ -855,6 +964,57 @@ async def test_browser_fetch_records_extractable_sections_after_detail_expansion
 
     assert extractability["verified"] is True
     assert extractability["matched_requested_fields"] == ["materials"]
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_uses_data_qa_action_to_open_size_selector() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><button aria-label='Add to bag'>Add</button></body></html>",
+        labels=[
+            {
+                "label": "add",
+                "attributes": {
+                    "aria-label": "Add to bag",
+                    "data-qa-action": "product-grid-open-size-selector",
+                },
+                "tag_name": "button",
+            }
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=None,
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert page.expanded is True
+
+
+@pytest.mark.asyncio
+async def test_expand_detail_content_skips_menu_toggles() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body><button aria-controls='site-menu'>Open menu</button></body></html>",
+        labels=[
+            {
+                "label": "open menu",
+                "attributes": {
+                    "aria-controls": "site-menu",
+                },
+                "tag_name": "button",
+            }
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+    )
+
+    assert diagnostics["clicked_count"] == 0
+    assert page.expanded is False
 
 
 @pytest.mark.asyncio

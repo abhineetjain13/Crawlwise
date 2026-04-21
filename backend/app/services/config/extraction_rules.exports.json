@@ -8120,6 +8120,7 @@
       "play animation",
       "prev",
       "previous",
+      "privacy policy",
       "privacy notice",
       "read more",
       "register",
@@ -8143,13 +8144,17 @@
     "__type__": "tuple",
     "items": [
       "claim ",
+      "code ",
       "diwali ",
+      "exclusive ",
       "exclusive offer",
+      "extra ",
       "flash sale",
       "free shipping",
       "independence day",
       "limited time",
-      "republic day"
+      "republic day",
+      "save "
     ]
   },
   "LISTING_EDITORIAL_TITLE_PATTERNS": {
@@ -8182,6 +8187,110 @@
       }
     ]
   },
+  "LISTING_TITLE_CTA_TITLES": {
+    "__type__": "frozenset",
+    "items": [
+      "add to bag",
+      "add to cart",
+      "apply",
+      "bookmark",
+      "buy now",
+      "choose options",
+      "learn more",
+      "quick add",
+      "quick view",
+      "read more",
+      "see details",
+      "select options",
+      "shop now",
+      "view details"
+    ]
+  },
+  "LISTING_ACTION_NOISE_PATTERNS": {
+    "__type__": "tuple",
+    "items": [
+      {
+        "__type__": "pattern",
+        "pattern": "^\\d+$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^products?$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "^purchases?$",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bbookmark\\s+apply\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bapply\\s+bookmark\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bask\\s+.+\\s+question\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bcareer explorer\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bother search suggestions\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bplease refine your search\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bsave\\s+\\d+%\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bextra\\s+\\d+%\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bcode\\s*:",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bsort by\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bclear\\s+sort",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bclear\\s+filters?\\b",
+        "flags": 34
+      },
+      {
+        "__type__": "pattern",
+        "pattern": "\\bfilter by\\b",
+        "flags": 34
+      }
+    ]
+  },
   "LISTING_ALT_TEXT_TITLE_PATTERN": {
     "__type__": "pattern",
     "pattern": "\\b(?:worn|wearing|shown|shot|mid-shot|close-up|detail(?:ed)? view|view of|front view|back view)\\b",
@@ -8192,10 +8301,29 @@
     "items": [
       "best seller",
       "featured",
+      "great deals",
+      "items",
       "new",
+      "recommended alternatives",
+      "products",
+      "purchases",
+      "results",
       "sale",
+      "store",
       "top rated",
       "top seller"
+    ]
+  },
+  "LISTING_LABEL_NOISE_TOKENS": {
+    "__type__": "frozenset",
+    "items": [
+      "clear",
+      "facet",
+      "filter",
+      "page",
+      "show",
+      "sort",
+      "view"
     ]
   },
   "ACQUISITION_GUARDS_RULES": {

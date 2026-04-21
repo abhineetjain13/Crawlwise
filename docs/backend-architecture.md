@@ -230,6 +230,8 @@ Important implemented features:
 - `network_payload_mapper.py` now uses declarative specs from `config/network_payload_specs.py`, and browser-side endpoint classification derives its path tokens from that same spec source instead of maintaining a parallel capture-only token table
 - tracking-parameter stripping is live in field-value normalization via `w3lib`
 - platform registry config in `config/platforms.json` now owns adapter registration metadata, network signatures, JS-state mappings, and listing-readiness selectors/waits
+- extraction runtime now short-circuits raw XML sitemap/listing payloads into deterministic URL records before HTML DOM parsing, which keeps sitemap targets out of the expensive BeautifulSoup listing path
+- ecommerce detail title selection now ranks structured sources ahead of raw DOM headings, rejects noisy DOM `<h1>/<title>` values such as promo or generic-results text, and only promotes fallback titles when the replacement source is materially stronger
 - detail extraction now has a DOM variant fallback for `ecommerce_detail` pages when structured data and JS state leave variant axes empty
 - DOM listing extraction no longer accepts the first non-empty candidate set; it now ranks structured, DOM, and browser-captured rendered-card candidates by record quality and keeps visual elements as a last-resort fallback only
 - DOM image extraction now scores likely product-gallery media higher and filters obvious tracking, logo, and spacer assets before building `additional_images`
@@ -400,7 +402,7 @@ $env:PYTHONPATH='.'
 
 Companion docs:
 
-- [../CLAUDE.md](../CLAUDE.md)
+- [../AGENTS.md](../AGENTS.md)
 - [ENGINEERING_STRATEGY.md](ENGINEERING_STRATEGY.md)
 - [INVARIANTS.md](INVARIANTS.md)
 - [frontend-architecture.md](frontend-architecture.md)

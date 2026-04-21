@@ -12,6 +12,13 @@ from selectolax.lexbor import LexborHTMLParser
 from app.services.confidence import score_record_confidence
 from app.services.config.extraction_rules import (
     EXTRACTION_RULES,
+    LISTING_ALT_TEXT_TITLE_PATTERN,
+    LISTING_ACTION_NOISE_PATTERNS,
+    LISTING_EDITORIAL_TITLE_PATTERNS,
+    LISTING_MERCHANDISING_TITLE_PREFIXES,
+    LISTING_NAVIGATION_TITLE_HINTS,
+    LISTING_TITLE_CTA_TITLES,
+    LISTING_WEAK_TITLES,
     TITLE_PROMOTION_PREFIXES,
     TITLE_PROMOTION_SEPARATOR,
     TITLE_PROMOTION_SUBSTRINGS,
@@ -50,9 +57,13 @@ from app.services.js_state_mapper import map_js_state_to_fields
 from app.services.js_state_helpers import select_variant
 from app.services.network_payload_mapper import map_network_payloads_to_fields
 from app.services.extract.shared_variant_logic import (
+    infer_variant_group_name,
     normalized_variant_axis_key,
     resolve_variants,
     split_variant_axes,
+    variant_dom_cues_present,
+    variant_node_is_noise,
+    variant_value_is_noise,
 )
 from app.services.extract.detail_tiers import (
     DetailTierState,
@@ -142,11 +153,55 @@ _VARIANT_DOM_FIELD_NAMES = (
 
 def _field_source_rank(surface: str, field_name: str, source: str | None) -> int:
     if str(surface or "").strip().lower() == "ecommerce_detail":
-        if field_name == "title" and source in {"js_state", "dom_h1"}:
-            return {"js_state": 2, "dom_h1": 3}[str(source)]
+        if field_name == "title":
+            return {"adapter": 0, "network_payload": 1, "json_ld": 2, "microdata": 3, "opengraph": 4, "embedded_json": 5, "js_state": 6, "dom_h1": 10, "dom_canonical": 11, "selector_rule": 12, "dom_selector": 13, "dom_sections": 14, "dom_images": 15, "dom_text": 16}.get(str(source or ""), 20)
         if field_name in _ECOMMERCE_DETAIL_JS_STATE_FIELDS and source == "js_state":
             return 2
     return 100 + _SOURCE_PRIORITY_RANK.get(source, len(_SOURCE_PRIORITY_RANK))
+
+
+def _detail_title_is_noise(title: object) -> bool:
+    cleaned = clean_text(title)
+    lowered = cleaned.lower()
+    if not lowered:
+        return True
+    if len(cleaned) < 4 or cleaned.isdigit():
+        return True
+    if "star" in lowered and RATING_RE.search(lowered):
+        return True
+    if lowered in LISTING_TITLE_CTA_TITLES:
+        return True
+    if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
+        return True
+    if any(lowered.startswith(prefix) for prefix in LISTING_MERCHANDISING_TITLE_PREFIXES):
+        return True
+    if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
+        return True
+    if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
+        return True
+    return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
+
+
+def _detail_title_from_url(page_url: str) -> str | None:
+    path_segments = [
+        segment
+        for segment in str(urlparse(page_url).path or "").strip("/").split("/")
+        if segment
+    ]
+    if not path_segments:
+        return None
+    for segment in reversed(path_segments):
+        terminal = re.sub(r"\.(html?|htm)$", "", segment, flags=re.I)
+        if not terminal or terminal.isdigit():
+            continue
+        if re.fullmatch(r"[a-f0-9]{8,}(?:-[a-f0-9]{4,}){2,}", terminal, re.I):
+            continue
+        if terminal in {"p", "dp", "product", "products", "job", "jobs", "release"}:
+            continue
+        title = clean_text(re.sub(r"[-_]+", " ", terminal))
+        if title and not _detail_title_is_noise(title):
+            return title
+    return None
 
 def _apply_dom_fallbacks(
     dom_parser: LexborHTMLParser,
@@ -162,9 +217,11 @@ def _apply_dom_fallbacks(
     fields = surface_fields(surface, requested_fields)
     h1 = dom_parser.css_first("h1")
     page_title = dom_parser.css_first("title")
-    title = text_or_none(
-        (h1.text(separator=" ", strip=True) if h1 else "")
-        or (page_title.text(separator=" ", strip=True) if page_title else "")
+    h1_title = text_or_none(h1.text(separator=" ", strip=True) if h1 else "")
+    page_title_text = text_or_none(page_title.text(separator=" ", strip=True) if page_title else "")
+    title = next(
+        (candidate for candidate in (h1_title, page_title_text) if candidate and not _detail_title_is_noise(candidate)),
+        None,
     )
     if title:
         _add_sourced_candidate(
@@ -596,18 +653,24 @@ def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
     for container in soup.select(
         "[data-option-name], [aria-label*='size' i], [aria-label*='color' i], "
         "[class*='swatch' i], [class*='variant' i], [class*='option' i], "
-        "[data-testid*='swatch' i], [role='radiogroup']"
+        "[class*='color-selector' i], [class*='size-selector' i], "
+        "[data-testid*='swatch' i], [role='radiogroup'], "
+        "[data-qa-action='select-color'], [data-qa-action*='size-selector']"
     )[:8]:
         raw_name = (
             container.get("data-option-name")
             or container.get("aria-label")
             or container.get("data-testid")
+            or container.get("data-qa-action")
+            or infer_variant_group_name(container)
             or ""
         )
         values: list[str] = []
         for node in container.select(
             "[data-value], [data-option-value], [aria-label], button, label, span, input"
         )[:24]:
+            if variant_node_is_noise(node):
+                continue
             raw_value = (
                 node.get("data-value")
                 or node.get("data-option-value")
@@ -616,35 +679,52 @@ def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
                 or node.get_text(" ", strip=True)
             )
             cleaned = clean_text(raw_value)
-            lowered = cleaned.lower()
-            if (
-                not cleaned
-                or lowered in {"select", "choose", "option", "size guide"}
-                or len(cleaned) > 60
-            ):
+            if variant_value_is_noise(cleaned):
                 continue
             values.append(cleaned)
         deduped_values = list(dict.fromkeys(values))
         if len(deduped_values) >= 2:
             option_groups.append(
                 {
-                    "name": clean_text(str(raw_name).replace("_", " ").replace("-", " ")),
+                    "name": clean_text(
+                        str(raw_name or infer_variant_group_name(container))
+                        .replace("_", " ")
+                        .replace("-", " ")
+                    ),
                     "values": deduped_values,
                 }
             )
 
     deduped_groups: list[dict[str, object]] = []
-    seen_signatures: set[tuple[str, tuple[str, ...]]] = set()
+    merged_groups: dict[str, dict[str, object]] = {}
     for group in option_groups:
-        values = [clean_text(value) for value in list(group.get("values") or []) if clean_text(value)]
+        values = [
+            clean_text(value)
+            for value in list(group.get("values") or [])
+            if not variant_value_is_noise(value)
+        ]
         if len(values) < 2:
             continue
         name = clean_text(group.get("name"))
-        signature = (name.lower(), tuple(value.lower() for value in values))
-        if signature in seen_signatures:
+        axis_key = normalized_variant_axis_key(name)
+        if not axis_key:
             continue
-        seen_signatures.add(signature)
-        deduped_groups.append({"name": name, "values": values})
+        merged = merged_groups.setdefault(
+            axis_key,
+            {"name": name or axis_key, "values": []},
+        )
+        if len(name) > len(str(merged.get("name") or "")):
+            merged["name"] = name
+        merged["values"] = list(dict.fromkeys([*list(merged.get("values") or []), *values]))
+    for group in merged_groups.values():
+        values = [
+            clean_text(value)
+            for value in list(group.get("values") or [])
+            if not variant_value_is_noise(value)
+        ]
+        if len(values) < 2:
+            continue
+        deduped_groups.append({"name": clean_text(group.get("name")), "values": values})
         if len(deduped_groups) >= 2:
             break
 
@@ -727,18 +807,33 @@ def _promote_detail_title(
     ranked_candidates = sorted(
         (
             (
-                {"js_state": 0, "dom_h1": 1, "opengraph": 2, "dom_selector": 3}[sources[index]],
+                _field_source_rank("ecommerce_detail", "title", sources[index]),
                 index,
                 text_or_none(values[index]),
                 sources[index],
             )
             for index in range(min(len(values), len(sources)))
-            if sources[index] in {"js_state", "dom_h1", "opengraph", "dom_selector"}
+            if text_or_none(values[index])
         ),
         key=lambda row: (row[0], row[1]),
     )
+    current_rank = min(
+        (
+            _field_source_rank("ecommerce_detail", "title", source)
+            for source, value in zip(sources, values, strict=False)
+            if text_or_none(value) == title
+        ),
+        default=_field_source_rank("ecommerce_detail", "title", "dom_h1"),
+    )
     replacement = next(
-        ((candidate, source) for _, _, candidate, source in ranked_candidates if candidate and len(candidate) > len(title)),
+        (
+            (candidate, source)
+            for rank, _, candidate, source in ranked_candidates
+            if candidate
+            and candidate != title
+            and not _detail_title_is_noise(candidate)
+            and (rank < current_rank or source in {"network_payload", "json_ld", "microdata", "opengraph", "embedded_json", "js_state"} or len(candidate) > len(title))
+        ),
         None,
     )
     if replacement:
@@ -752,6 +847,8 @@ def _title_needs_promotion(title: str, *, page_url: str) -> bool:
     host = str(urlparse(page_url).hostname or "").strip().lower()
     if not normalized_title:
         return False
+    if _detail_title_is_noise(normalized_title):
+        return True
     if any(normalized_title.startswith(prefix) for prefix in TITLE_PROMOTION_PREFIXES):
         return True
     if TITLE_PROMOTION_SEPARATOR in normalized_title:
@@ -784,6 +881,12 @@ def _requires_dom_completion(
     soup: BeautifulSoup,
 ) -> bool:
     normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface == "ecommerce_detail" and variant_dom_cues_present(soup):
+        if any(
+            record.get(field_name) in (None, "", [], {})
+            for field_name in ("variant_axes", "variants", "selected_variant")
+        ):
+            return True
     alias_lookup = surface_alias_lookup(surface, requested_fields)
     high_value_fields = set(_DOM_HIGH_VALUE_FIELDS.get(normalized_surface) or ())
     advertised_dom_sections = {
@@ -890,6 +993,9 @@ def build_detail_record(
         surface=surface,
         page_url=page_url,
     )
+    if surface == "ecommerce_detail" and _detail_title_is_noise(js_state_record.get("title")):
+        js_state_record = dict(js_state_record)
+        js_state_record.pop("title", None)
 
     collect_authoritative_tier(
         state,
@@ -963,6 +1069,25 @@ def build_detail_record(
         preferred_title = text_or_none(js_state_record.get("title"))
         if preferred_title:
             record["title"] = preferred_title
+        else:
+            fallback_title = _detail_title_from_url(page_url)
+            if fallback_title:
+                record["title"] = fallback_title
+                title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
+                if "url_slug" not in title_sources:
+                    title_sources.append("url_slug")
+    if surface == "ecommerce_detail" and not text_or_none(record.get("title")):
+        fallback_title = _detail_title_from_url(page_url)
+        if fallback_title:
+            record["title"] = fallback_title
+            title_sources = record.setdefault("_field_sources", {}).setdefault("title", [])
+            if "url_slug" not in title_sources:
+                title_sources.append("url_slug")
+    record["_confidence"] = score_record_confidence(
+        record,
+        surface=surface,
+        requested_fields=requested_fields,
+    )
     record["_extraction_tiers"]["early_exit"] = None
     return record
 

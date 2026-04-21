@@ -136,7 +136,7 @@ Only update canonical docs. Never write to CHANGELOG.
 | A file was added or moved to a different bucket | `docs/CODEBASE_MAP.md` |
 | A must-preserve runtime rule changed | `docs/INVARIANTS.md` |
 | A new anti-pattern was discovered | `docs/ENGINEERING_STRATEGY.md` Anti-Patterns section |
-| Ownership buckets changed | `CLAUDE.md` ownership table + `docs/CODEBASE_MAP.md` |
+| Ownership buckets changed | `AGENTS.md` ownership table + `docs/CODEBASE_MAP.md` |
 | A plan slice is done | `docs/plans/[active-plan].md` — mark slice DONE |
 | A plan is fully done | `docs/plans/ACTIVE.md` — mark complete or point to next |
 

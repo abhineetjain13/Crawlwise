@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 import harness_support
+from app.services.acquisition_plan import AcquisitionPlan
 from harness_support import classify_failure_mode, infer_surface, parse_test_sites_markdown
 
 
@@ -21,6 +23,24 @@ def test_infer_surface_classifies_job_and_commerce_urls() -> None:
             "https://secure7.saashr.com/ta/6208610.careers?ein_id=1&career_portal_id=2&ShowJob=587687242"
         )
         == "job_detail"
+    )
+
+
+def test_infer_surface_handles_acceptance_critical_hosts() -> None:
+    assert infer_surface("https://www.usajobs.gov/search/results/?k=software+engineer&p=1") == "job_listing"
+    assert infer_surface("https://www.indeed.com/search?q=data+engineer") == "job_listing"
+    assert infer_surface("https://startup.jobs/") == "job_listing"
+    assert (
+        infer_surface(
+            "https://www.autozone.com/motor-oil-and-transmission-fluid/motor-oil/mobil-1/mobil-1-extended-performance-full-synthetic-motor-oil-5w-30-5-quart/881036_0_0"
+        )
+        == "ecommerce_detail"
+    )
+    assert (
+        infer_surface(
+            "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html"
+        )
+        == "ecommerce_detail"
     )
 
 
@@ -126,6 +146,69 @@ def test_classify_failure_mode_treats_uppercase_success_verdict_as_success() -> 
     }
 
     assert classify_failure_mode(result) == "success"
+
+
+@pytest.mark.asyncio
+async def test_run_site_harness_supports_acquisition_only_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            return False
+
+    class _FakeSettingsView:
+        def acquisition_plan(self, *, surface: str):
+            return AcquisitionPlan(surface=surface)
+
+    async def _fake_create_crawl_run(session, user_id, payload):
+        del session, user_id
+        return SimpleNamespace(
+            id=11,
+            status="queued",
+            url=payload["url"],
+            settings_view=_FakeSettingsView(),
+        )
+
+    async def _fake_ensure_harness_user_id(session):
+        del session
+        return 7
+
+    async def _fake_process_single_url(*, session, run, url, config):
+        del session, run, url, config
+        return SimpleNamespace(
+            verdict="success",
+            url_metrics={
+                "method": "curl_cffi",
+                "platform_family": "generic",
+                "status_code": 200,
+                "blocked": False,
+                "record_count": 0,
+            },
+        )
+
+    monkeypatch.setattr(harness_support, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        harness_support,
+        "_ensure_harness_user_id",
+        _fake_ensure_harness_user_id,
+    )
+    monkeypatch.setattr(harness_support, "create_crawl_run", _fake_create_crawl_run)
+    monkeypatch.setattr(harness_support, "process_single_url", _fake_process_single_url)
+
+    result = await harness_support.run_site_harness(
+        url="https://example.com/catalog",
+        surface="ecommerce_listing",
+        mode=harness_support.HARNESS_MODE_ACQUISITION_ONLY,
+    )
+
+    assert result["verdict"] == "success"
+    assert result["method"] == "curl_cffi"
+    assert result["status_code"] == 200
+    assert result["records"] == 0
 
 
 @pytest.mark.asyncio

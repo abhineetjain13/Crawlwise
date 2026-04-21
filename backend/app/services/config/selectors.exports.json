@@ -114,6 +114,7 @@
             ".product-item",
             ".product-tile",
             ".product-grid-item",
+            "li.product-grid-product",
             "[data-testid='product-card']",
             "[data-test-id='product-card']",
             ".grid-item[data-product-id]",

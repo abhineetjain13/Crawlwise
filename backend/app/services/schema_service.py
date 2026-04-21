@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from app.models.crawl import ReviewPromotion
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.domain_utils import normalize_domain
 from app.services.field_policy import canonical_fields_for_surface, field_allowed_for_surface
-from app.services.pipeline.pipeline_config import SCHEMA_MAX_AGE_DAYS
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_SCHEMA_MAX_AGE = timedelta(days=SCHEMA_MAX_AGE_DAYS)
+_SCHEMA_MAX_AGE = timedelta(days=crawler_runtime_settings.schema_max_age_days)
 
 @dataclass
 class ResolvedSchema:

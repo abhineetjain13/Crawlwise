@@ -11,15 +11,13 @@ import httpx
 from app.core.config import settings
 from app.services.acquisition.runtime import (
     close_shared_http_client as close_runtime_shared_http_client,
+    copy_headers,
     get_shared_http_client,
 )
 from app.services.network_resolution import (
     build_async_http_client,
     should_retry_with_forced_ipv4,
 )
-
-requests = httpx
-
 
 @dataclass(slots=True)
 class HttpFetchResult:
@@ -79,9 +77,10 @@ async def request_result(
         final_url=str(response.url),
         text=text,
         status_code=response.status_code,
-        headers=_copy_headers(response.headers),
+        headers=copy_headers(response.headers),
         json_data=_parse_json_payload(
             text,
+            expect_json=expect_json,
             content_type=response.headers.get("content-type"),
         ),
     )
@@ -131,25 +130,15 @@ async def _request_with_httpx(
 async def close_shared_http_client() -> None:
     await close_runtime_shared_http_client()
 
-
-def _copy_headers(headers: Any) -> httpx.Headers:
-    if isinstance(headers, httpx.Headers):
-        return httpx.Headers(list(headers.multi_items()))
-    if hasattr(headers, "multi_items"):
-        return httpx.Headers(list(headers.multi_items()))
-    if isinstance(headers, dict):
-        return httpx.Headers(headers)
-    return httpx.Headers(list(getattr(headers, "items", lambda: [])()))
-
-
 def _parse_json_payload(
     text: str,
     *,
+    expect_json: bool = False,
     content_type: object = None,
 ) -> dict[str, object] | list[object] | None:
     lowered_content_type = str(content_type or "").lower()
     payload_text = str(text or "").strip()
-    if not payload_text or "json" not in lowered_content_type:
+    if not payload_text or (not expect_json and "json" not in lowered_content_type):
         return None
     try:
         payload = json.loads(payload_text)

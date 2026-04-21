@@ -410,6 +410,74 @@ async def test_process_single_url_retries_with_browser_after_empty_non_browser_e
 
 
 @pytest.mark.asyncio
+async def test_process_single_url_persists_listing_page_source_separately_from_record_url(
+    db_session: AsyncSession,
+    test_user,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = await create_crawl_run(
+        db_session,
+        test_user.id,
+        {
+            "run_type": "crawl",
+            "url": "https://example.com/category/widgets",
+            "surface": "ecommerce_listing",
+            "settings": {"respect_robots_txt": False},
+        },
+    )
+
+    async def _fake_acquire(request):
+        return AcquisitionResult(
+            request=request,
+            final_url=request.url,
+            html="<html><body>listing</body></html>",
+            method="browser",
+            status_code=200,
+            browser_diagnostics={"browser_attempted": True},
+        )
+
+    async def _no_adapter(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def _no_selector_rules(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    monkeypatch.setattr("app.services.pipeline.core.acquire", _fake_acquire)
+    monkeypatch.setattr("app.services.pipeline.core.run_adapter", _no_adapter)
+    monkeypatch.setattr("app.services.pipeline.core.load_domain_selector_rules", _no_selector_rules)
+    monkeypatch.setattr(
+        "app.services.pipeline.core.extract_records",
+        lambda *args, **kwargs: [
+            {
+                "title": "Widget Prime",
+                "source_url": "https://example.com/category/widgets",
+                "url": "https://example.com/products/widget-prime",
+                "_source": "dom_listing",
+            }
+        ],
+    )
+    async def _persist_artifacts(**kwargs):
+        del kwargs
+        return "artifacts/widgets.html"
+
+    monkeypatch.setattr(
+        "app.services.pipeline.core.persist_acquisition_artifacts",
+        _persist_artifacts,
+    )
+
+    result = await process_single_url(db_session, run, run.url)
+    rows, total = await get_run_records(db_session, run.id, 1, 20)
+
+    assert result.verdict == "success"
+    assert total == 1
+    assert rows[0].source_url == "https://example.com/category/widgets"
+    assert rows[0].data["url"] == "https://example.com/products/widget-prime"
+    assert "page_markdown" not in (rows[0].raw_data or {})
+
+
+@pytest.mark.asyncio
 async def test_process_single_url_offloads_extract_records_to_thread(
     db_session: AsyncSession,
     test_user,

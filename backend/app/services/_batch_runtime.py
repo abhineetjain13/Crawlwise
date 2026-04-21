@@ -172,10 +172,13 @@ async def process_run(session: AsyncSession, run_id: int) -> None:
                 )
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 logger.warning("URL processing failed for run=%s url=%s", run.id, url, exc_info=True)
+                url_metrics = {"error": f"{type(exc).__name__}: {exc}"}
+                if isinstance(getattr(exc, "browser_diagnostics", None), dict):
+                    url_metrics["browser_diagnostics"] = dict(exc.browser_diagnostics)
                 url_result = URLProcessingResult(
                     records=[],
                     verdict=VERDICT_ERROR,
-                    url_metrics={"error": f"{type(exc).__name__}: {exc}"},
+                    url_metrics=url_metrics,
                 )
 
             verdicts.append(str(url_result.verdict or VERDICT_ERROR))

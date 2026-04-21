@@ -16,6 +16,8 @@ _DETAIL_BLOCKED_TOKENS = (
     "checkout",
     "login",
     "log in",
+    "menu",
+    "navigation",
     "shopping bag",
     "sign in",
     "sign up",
@@ -168,12 +170,22 @@ async def expand_all_interactive_elements_impl(
                 label = str(snapshot.get("label") or "").strip().lower()
                 aria_expanded = str(snapshot.get("aria_expanded") or "").strip().lower()
                 aria_controls = str(snapshot.get("aria_controls") or "").strip()
+                data_qa_action = str(snapshot.get("data_qa_action") or "").strip().lower()
+                class_name = str(snapshot.get("class_name") or "").strip().lower()
                 tag_name = str(snapshot.get("tag_name") or "").strip().lower()
                 candidate_key = (label or probe, aria_controls, tag_name)
                 if candidate_key in seen_candidates:
                     continue
                 seen_candidates.add(candidate_key)
-                if probe and any(token in probe for token in _DETAIL_BLOCKED_TOKENS):
+                size_toggle_hint = any(
+                    token in f"{data_qa_action} {class_name}"
+                    for token in ("size selector", "size-selector", "open-size-selector")
+                )
+                if (
+                    probe
+                    and any(token in probe for token in _DETAIL_BLOCKED_TOKENS)
+                    and not size_toggle_hint
+                ):
                     continue
                 looks_expandable = bool(
                     selector

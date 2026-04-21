@@ -7,7 +7,6 @@ from html import unescape
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from app.services.adapters.base import AdapterResult, BaseAdapter
-from app.services.acquisition.http_client import requests as curl_requests
 from app.services.config.adapter_runtime_settings import adapter_runtime_settings
 from app.services.extraction_html_helpers import html_to_text
 from app.services.field_value_core import clean_text
@@ -46,8 +45,7 @@ class JibeAdapter(BaseAdapter):
             api_url if not query else f"{api_url}?{urlencode(query, doseq=True)}"
         )
         try:
-            payload = await self._request_json_with_curl(
-                curl_requests.get,
+            payload = await self._request_json(
                 request_url,
                 proxy=proxy,
                 timeout_seconds=adapter_runtime_settings.ats_request_timeout_seconds,

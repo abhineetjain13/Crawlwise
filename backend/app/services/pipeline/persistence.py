@@ -156,21 +156,27 @@ async def persist_extracted_records(
         }
         if not data:
             continue
-        source_url = str(
-            data.get("url") or data.get("source_url") or acquisition_result.final_url
+        record_source_url = str(
+            data.get("source_url") or acquisition_result.final_url
         )
-        identity_key = _record_identity_key(source_url)
+        identity_source_url = str(data.get("url") or record_source_url)
+        identity_key = _record_identity_key(identity_source_url)
         if identity_key and identity_key in seen_identities:
             continue
         if identity_key is not None:
             seen_identities.add(identity_key)
         raw_record = dict(record)
         page_markdown = str(getattr(acquisition_result, "page_markdown", "") or "").strip()
-        if page_markdown and not str(raw_record.get("page_markdown") or "").strip():
+        record_url = str(data.get("url") or "").strip()
+        if (
+            page_markdown
+            and not str(raw_record.get("page_markdown") or "").strip()
+            and (not record_url or record_url == record_source_url)
+        ):
             raw_record["page_markdown"] = page_markdown
         crawl_record = CrawlRecord(
             run_id=run.id,
-            source_url=source_url,
+            source_url=record_source_url,
             url_identity_key=identity_key,
             data=data,
             raw_data=raw_record,

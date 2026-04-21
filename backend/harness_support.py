@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import html
 import os
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app.core.database import SessionLocal
 from app.core.security import hash_password
@@ -19,9 +21,23 @@ from sqlalchemy import select
 HARNESS_MODE_ACQUISITION_ONLY = "acquisition_only"
 HARNESS_MODE_FULL_PIPELINE = "full_pipeline"
 
-_DETAIL_HINTS = ("/products/", "/product/", "/p/", "/dp/", "/job/", "/viewjob", "showjob=")
+_DETAIL_HINTS = ("/products/", "/product/", "/p/", "/dp/", "/job/", "/viewjob", "showjob=", "/release/")
 _LISTING_HINTS = ("/collections", "/shop/", "/category/", "/careers", "/jobs", "job-search", "career-page", "jobboard", "recruitment", "currentopenings")
-_JOB_LISTING_HINTS = ("/jobs", "/careers", "job-search", "career-page", "jobboard", "recruitment", "currentopenings", "searchrelation=", "mode=location", "sortby=", "page=")
+_JOB_LISTING_HINTS = (
+    "/jobs",
+    "/careers",
+    "/search/results",
+    "/search?",
+    "job-search",
+    "career-page",
+    "jobboard",
+    "recruitment",
+    "currentopenings",
+    "searchrelation=",
+    "mode=location",
+    "sortby=",
+    "page=",
+)
 _SUCCESS_VERDICTS = {VERDICT_SUCCESS.lower(), VERDICT_PARTIAL.lower()}
 _PLACEHOLDER_TITLES = {
     "404",
@@ -30,6 +46,9 @@ _PLACEHOLDER_TITLES = {
     "page not found",
     "sylius demo",
 }
+_DETAIL_SLUG_WITH_ID_RE = re.compile(r".+_\d+$")
+_DETAIL_FILE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\.(?:html?|htm)$")
+_NON_DETAIL_FILE_RE = re.compile(r"^(?:index|page[-_]?\d+)\.(?:html?|htm)$")
 
 
 def infer_surface(url: str, explicit_surface: object | None = None) -> str:
@@ -37,15 +56,44 @@ def infer_surface(url: str, explicit_surface: object | None = None) -> str:
     if explicit:
         return explicit
     normalized_url = str(url or "").strip().lower()
+    parsed_url = urlsplit(normalized_url)
+    host = str(parsed_url.hostname or "").strip().lower()
+    host_label = host.removeprefix("www.").split(".", 1)[0]
+    path_segments = [segment for segment in parsed_url.path.split("/") if segment]
     family = detect_platform_family(normalized_url)
-    if family in job_platform_families():
+    if (
+        family in job_platform_families()
+        or host.endswith(".jobs")
+        or host.endswith("startup.jobs")
+        or host.endswith("usajobs.gov")
+    ):
         if any(token in normalized_url for token in _JOB_LISTING_HINTS):
             return "job_listing"
         return "job_detail" if any(token in normalized_url for token in ("/job/", "/viewjob", "showjob=")) else "job_listing"
+    if any(token in host_label for token in ("job", "career")) and not any(
+        token in normalized_url for token in _DETAIL_HINTS
+    ):
+        return "job_listing"
     if any(token in normalized_url for token in _JOB_LISTING_HINTS):
         return "job_listing"
+    if host.endswith("autozone.com") and normalized_url.rstrip("/").rsplit("/", 1)[-1].count("_") >= 2:
+        return "ecommerce_detail"
+    if (
+        len(path_segments) >= 2
+        and path_segments[-1] == "index.html"
+        and _DETAIL_SLUG_WITH_ID_RE.fullmatch(path_segments[-2])
+    ):
+        return "ecommerce_detail"
     if any(token in normalized_url for token in _DETAIL_HINTS):
         return "job_detail" if "/job" in normalized_url else "ecommerce_detail"
+    terminal = path_segments[-1].lower() if path_segments else ""
+    if (
+        _DETAIL_FILE_RE.fullmatch(terminal)
+        and not _NON_DETAIL_FILE_RE.fullmatch(terminal)
+        and any(separator in terminal for separator in ("-", "_"))
+        and not any(token in terminal for token in ("jobs", "careers", "category", "collection"))
+    ):
+        return "ecommerce_detail"
     if any(token in normalized_url for token in _LISTING_HINTS):
         return "job_listing" if "job" in normalized_url or "career" in normalized_url else "ecommerce_listing"
     return "ecommerce_listing"
@@ -103,7 +151,7 @@ async def run_site_harness(*, url: str, surface: str, mode: str) -> dict[str, ob
                 "populated_fields": _populated_field_count(data),
                 "error": str(summary.get("error") or "").strip() or None,
             }
-            url_result = await process_single_url(
+        url_result = await process_single_url(
             session=session,
             run=run,
             url=url,
@@ -151,6 +199,8 @@ def classify_failure_mode(result: dict[str, object]) -> str:
         return "dns_or_network_failure"
     if "chrome-error://chromewebdata/" in error_text:
         return "browser_navigation_failure"
+    if verdict == "blocked":
+        return "blocked"
     if result.get("blocked") or _diagnostics_indicate_challenge(diagnostics):
         return "blocked"
     if verdict == "listing_detection_failed":

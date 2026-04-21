@@ -764,8 +764,12 @@ async def test_fetch_page_reraises_original_transport_error_when_browser_also_fa
     monkeypatch.setattr(crawl_fetch_runtime, "_http_fetch", _failing_http)
     monkeypatch.setattr(crawl_fetch_runtime, "_browser_fetch", _failing_browser)
 
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(httpx.ConnectError) as excinfo:
         await crawl_fetch_runtime.fetch_page("https://paycomonline.net/career-page")
+
+    assert excinfo.value.browser_diagnostics["browser_attempted"] is True
+    assert excinfo.value.browser_diagnostics["browser_outcome"] == "navigation_failed"
+    assert excinfo.value.browser_diagnostics["failure_kind"] == "navigation_error"
 
 
 
@@ -881,3 +885,39 @@ def test_browser_identity_for_run_uses_single_creation_under_concurrency(
     assert created_count == 1
     assert {identity.user_agent for identity in identities} == {"ua-1"}
     browser_identity.clear_browser_identity_cache()
+
+
+def test_create_browser_identity_builds_generator_lazily(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    browser_identity.clear_browser_identity_cache()
+    monkeypatch.setattr(browser_identity, "_FINGERPRINT_GENERATOR", None)
+    captured: dict[str, object] = {}
+
+    class _FakeGenerator:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def generate(self):
+            return SimpleNamespace(
+                screen=SimpleNamespace(width=1280, height=720, devicePixelRatio=1.0),
+                navigator=SimpleNamespace(
+                    userAgent="Mozilla/5.0 Chrome/131.0.0.0",
+                    language="en-US",
+                    maxTouchPoints=0,
+                    userAgentData={"mobile": False, "brands": []},
+                ),
+                headers={"accept-language": "en-US"},
+            )
+
+    monkeypatch.setattr(browser_identity, "FingerprintGenerator", _FakeGenerator)
+    monkeypatch.setattr(
+        browser_identity.crawler_runtime_settings,
+        "fingerprint_locale",
+        "fr-FR",
+    )
+
+    identity = browser_identity.create_browser_identity()
+
+    assert identity.locale == "en-US"
+    assert captured["locale"] == "fr-FR"

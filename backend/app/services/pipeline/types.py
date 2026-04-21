@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from app.services.acquisition_plan import AcquisitionPlan
-from app.services.pipeline.pipeline_config import PipelineDefaults
+from app.services.config.runtime_settings import crawler_runtime_settings
 
 
 @dataclass(slots=True)
@@ -25,10 +25,10 @@ class URLProcessingConfig:
     acquisition_plan: AcquisitionPlan | None = None
     proxy_list: list[str] = field(default_factory=list)
     traversal_mode: str | None = None
-    max_pages: int = PipelineDefaults.MAX_PAGES
-    max_scrolls: int = PipelineDefaults.MAX_SCROLLS
-    max_records: int = PipelineDefaults.MAX_RECORDS
-    sleep_ms: int = PipelineDefaults.SLEEP_MS
+    max_pages: int = crawler_runtime_settings.default_max_pages
+    max_scrolls: int = crawler_runtime_settings.default_max_scrolls
+    max_records: int = crawler_runtime_settings.default_max_records
+    sleep_ms: int = crawler_runtime_settings.default_sleep_ms
     update_run_state: bool = True
     persist_logs: bool = True
     prefetch_only: bool = False

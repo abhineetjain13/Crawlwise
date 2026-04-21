@@ -5,6 +5,8 @@ import pytest
 
 from app.services.acquisition.http_client import HttpFetchResult, request_result
 from app.services.adapters.base import AdapterResult, BaseAdapter
+from app.services.adapters.jibe import JibeAdapter
+from app.services.adapters.oracle_hcm import OracleHCMAdapter
 from app.services.adapters.registry import registered_adapters, run_adapter
 from app.services.adapters.saashr import SaaSHRAdapter
 from app.services.adapters.shopify import ShopifyAdapter
@@ -373,6 +375,46 @@ async def test_request_result_retries_dns_failure_with_forced_ipv4(
 
 
 @pytest.mark.asyncio
+async def test_request_result_honors_expect_json_without_json_content_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeResponse:
+        status_code = 200
+        url = "https://example.com/api/jobs"
+        headers = httpx.Headers({"content-type": "text/plain"})
+        text = '{"jobs":[{"id":1}]}'
+
+    class _FakeClient:
+        async def request(
+            self,
+            method,
+            url,
+            headers=None,
+            json=None,
+            data=None,
+            timeout=None,
+        ):
+            del method, url, headers, json, data, timeout
+            return _FakeResponse()
+
+    async def _fake_get_shared(*, proxy=None, force_ipv4=False):
+        del proxy, force_ipv4
+        return _FakeClient()
+
+    monkeypatch.setattr(
+        "app.services.acquisition.http_client.get_shared_http_client",
+        _fake_get_shared,
+    )
+
+    result = await request_result(
+        "https://example.com/api/jobs",
+        expect_json=True,
+    )
+
+    assert result.json_data == {"jobs": [{"id": 1}]}
+
+
+@pytest.mark.asyncio
 async def test_workday_adapter_extracts_listing_from_cxs_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -667,6 +709,87 @@ def test_registered_adapters_include_workday_and_ultipro() -> None:
 
     assert "workday" in names
     assert "ultipro_ukg" in names
+
+
+@pytest.mark.asyncio
+async def test_jibe_adapter_uses_shared_request_json_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = JibeAdapter()
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def _fake_request_json(url: str, **kwargs):
+        calls.append((url, kwargs))
+        return {
+            "jobs": [
+                {
+                    "data": {
+                        "title": "Telemetry Nurse",
+                        "req_id": "REQ-1",
+                        "apply_url": "/jobs/req-1",
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+
+    records = await adapter.try_public_endpoint(
+        "https://jobs.example.com/search?location=remote",
+        surface="job_listing",
+    )
+
+    assert len(records) == 1
+    assert calls
+    assert calls[0][0].startswith("https://jobs.example.com/api/jobs?")
+
+
+@pytest.mark.asyncio
+async def test_oracle_hcm_adapter_uses_shared_request_json_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = OracleHCMAdapter()
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def _fake_request_json(url: str, **kwargs):
+        calls.append((url, kwargs))
+        return {
+            "items": [
+                {
+                    "requisitionList": [
+                        {
+                            "Id": 123,
+                            "Title": "Platform Engineer",
+                            "PostedDate": "2026-04-20",
+                            "PrimaryLocation": "Remote",
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+    monkeypatch.setattr(adapter, "_extract_site_number", lambda *_args, **_kwargs: "42")
+    monkeypatch.setattr(adapter, "_extract_site_lang", lambda *_args, **_kwargs: "en")
+    monkeypatch.setattr(adapter, "_extract_site_name", lambda *_args, **_kwargs: "Example Co")
+    monkeypatch.setattr(
+        adapter,
+        "_normalize_requisition",
+        lambda requisition, **_kwargs: {
+            "title": str(requisition.get("Title") or ""),
+            "job_id": str(requisition.get("Id") or ""),
+            "url": "https://example.com/job/123",
+        },
+    )
+
+    records = await adapter.try_public_endpoint(
+        "https://example.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs",
+        surface="job_listing",
+    )
+
+    assert len(records) == 1
+    assert calls
+    assert "/hcmRestApi/resources/latest/recruitingCEJobRequisitions" in calls[0][0]
 
 
 def test_extract_listing_records_preserves_job_cards_inside_filtered_container() -> None:

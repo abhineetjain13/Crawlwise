@@ -70,8 +70,8 @@ from app.services.config.extraction_rules import (
 )
 from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.selectors import CARD_SELECTORS
+from app.services.domain_utils import hostname
 from app.services.field_value_core import clean_text
-from app.services.field_value_core import hostname
 from app.services.platform_policy import resolve_listing_readiness_override
 
 if TYPE_CHECKING:
@@ -122,6 +122,19 @@ _DETAIL_EXPAND_SELECTORS = (
 _DETAIL_EXPAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
     for key, value in dict(BROWSER_DETAIL_EXPAND_KEYWORDS or {}).items()
+}
+_DETAIL_EXPAND_KEYWORD_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    "ecommerce": (
+        "care",
+        "composition",
+        "materials",
+        "measurements",
+        "origin",
+        "returns",
+        "shipping",
+        "size",
+    ),
+    "job": (),
 }
 _DETAIL_READINESS_HINTS: dict[str, tuple[str, ...]] = {
     str(key): tuple(str(item) for item in list(value or []))
@@ -784,14 +797,19 @@ def detail_expansion_keywords(
     lowered = str(surface or "").strip().lower()
     if "ecommerce" in lowered:
         base_keywords = _DETAIL_EXPAND_KEYWORDS["ecommerce"]
+        extended_keywords = _DETAIL_EXPAND_KEYWORD_EXTENSIONS["ecommerce"]
     elif "job" in lowered:
         base_keywords = _DETAIL_EXPAND_KEYWORDS["job"]
+        extended_keywords = _DETAIL_EXPAND_KEYWORD_EXTENSIONS["job"]
     else:
         base_keywords = ()
+        extended_keywords = ()
     dynamic_keywords = requested_field_tokens(requested_fields)
-    if not dynamic_keywords:
-        return base_keywords
-    return tuple(dict.fromkeys([*base_keywords, *dynamic_keywords]))
+    keywords = [*base_keywords]
+    if dynamic_keywords:
+        keywords.extend(extended_keywords)
+        keywords.extend(dynamic_keywords)
+    return tuple(dict.fromkeys(keywords))
 
 
 async def interactive_label(handle: Any) -> str:
@@ -846,10 +864,13 @@ async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
     title = await _interactive_handle_attr(handle, "title")
     aria_controls = await _interactive_handle_attr(handle, "aria-controls")
     aria_expanded = await _interactive_handle_attr(handle, "aria-expanded")
+    data_qa_action = await _interactive_handle_attr(handle, "data-qa-action")
+    data_testid = await _interactive_handle_attr(handle, "data-testid")
+    class_name = await _interactive_handle_attr(handle, "class")
     tag_name = await _interactive_handle_tag_name(handle)
     probe = " ".join(
         part
-        for part in (label, aria_label, title)
+        for part in (label, aria_label, title, data_qa_action, data_testid)
         if str(part or "").strip()
     ).strip().lower()
     return {
@@ -859,6 +880,9 @@ async def interactive_candidate_snapshot(handle: Any) -> dict[str, object]:
         "title": title,
         "aria_controls": aria_controls,
         "aria_expanded": aria_expanded,
+        "data_qa_action": data_qa_action,
+        "data_testid": data_testid,
+        "class_name": class_name,
         "tag_name": tag_name,
         "visible": visible,
         "actionable": await is_actionable_interactive_handle(handle),

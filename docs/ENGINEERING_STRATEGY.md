@@ -4,7 +4,7 @@
 
 This is the engineering constraints doc for the repo.
 
-`CLAUDE.md` is the session bootstrap and operator guide.
+`AGENTS.md` is the session bootstrap and operator guide.
 `INVARIANTS.md` is the hard runtime contract.
 `backend-architecture.md` and `frontend-architecture.md` describe the live system.
 `docs/CODEBASE_MAP.md` is the compressed file-to-bucket orientation map.
@@ -202,7 +202,7 @@ If a rule matters, a focused test should defend it.
 
 ## Documentation Rules
 
-- `CLAUDE.md` — session bootstrap only. Keep under 200 lines.
+- `AGENTS.md` — session bootstrap only. Keep under 200 lines.
 - `docs/CODEBASE_MAP.md` — file-to-bucket map. Update when files are added/moved.
 - `docs/ENGINEERING_STRATEGY.md` — engineering constraints + named anti-patterns.
 - `docs/INVARIANTS.md` — must-preserve runtime behavior.

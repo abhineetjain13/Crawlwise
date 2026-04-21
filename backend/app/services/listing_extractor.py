@@ -10,14 +10,17 @@ from selectolax.lexbor import LexborHTMLParser
 from app.services.config.extraction_rules import (
     EXTRACTION_RULES,
     LISTING_ALT_TEXT_TITLE_PATTERN,
+    LISTING_ACTION_NOISE_PATTERNS,
     LISTING_DETAIL_PATH_MARKERS,
     LISTING_EDITORIAL_TITLE_PATTERNS,
     LISTING_FALLBACK_CONTAINER_SELECTOR,
+    LISTING_LABEL_NOISE_TOKENS,
     LISTING_MERCHANDISING_TITLE_PREFIXES,
     LISTING_NAVIGATION_TITLE_HINTS,
     LISTING_NON_LISTING_PATH_TOKENS,
     LISTING_STRUCTURE_NEGATIVE_HINTS,
     LISTING_STRUCTURE_POSITIVE_HINTS,
+    LISTING_TITLE_CTA_TITLES,
     LISTING_WEAK_TITLES,
 )
 from app.services.config.selectors import CARD_SELECTORS
@@ -30,6 +33,7 @@ from app.services.extract.listing_candidate_ranking import (
     best_listing_candidate_set,
     rendered_listing_records,
 )
+from app.services.extract.listing_visual import visual_listing_records
 from app.services.field_policy import normalize_requested_field
 from app.services.field_value_core import (
     PRICE_RE,
@@ -51,12 +55,8 @@ from app.services.field_value_candidates import (
 )
 from app.services.field_value_dom import apply_selector_fallbacks
 from app.services.config.surface_hints import detail_path_hints
-from app.services.pipeline.pipeline_config import LISTING_FALLBACK_FRAGMENT_LIMIT
 
 logger = logging.getLogger(__name__)
-
-_VISUAL_CTA_TITLES = frozenset(("add to bag", "add to cart", "buy now", "choose options", "learn more", "quick add", "quick view", "read more", "see details", "select options", "shop now", "view details"))
-_VISUAL_URL_MATCH_STOPWORDS = frozenset(("and", "buy", "care", "category", "collections", "details", "for", "hair", "in", "item", "items", "language", "location", "now", "page", "product", "products", "region", "select", "shop", "the", "to", "with", "your"))
 
 
 def _structured_listing_record(
@@ -83,7 +83,14 @@ def _structured_listing_record(
         if fallback_url:
             record["url"] = fallback_url
     url = str(record.get("url") or "")
-    if not url or not record.get("title"):
+    if not url:
+        return {}
+    title = clean_text(record.get("title"))
+    if not title or _listing_title_is_noise(title):
+        fallback_title = _title_from_url(url)
+        if fallback_title and not _listing_title_is_noise(fallback_title):
+            record["title"] = fallback_title
+    if not record.get("title"):
         return {}
     if _url_is_structural(url, page_url):
         return {}
@@ -115,7 +122,7 @@ def _url_is_structural(url: str, page_url: str) -> bool:
         if path_segments & set(LISTING_NON_LISTING_PATH_TOKENS):
             return True
     except Exception:
-        pass
+        logger.debug("URL structural check failed for %s", page_url, exc_info=True)
     return False
 
 
@@ -248,7 +255,11 @@ def _listing_title_is_noise(title: str) -> bool:
     lowered = clean_text(title).lower()
     if not lowered:
         return True
-    if lowered in _VISUAL_CTA_TITLES:
+    if "star" in lowered and RATING_RE.search(lowered):
+        return True
+    if lowered in LISTING_TITLE_CTA_TITLES:
+        return True
+    if any(pattern.search(lowered) for pattern in LISTING_ACTION_NOISE_PATTERNS):
         return True
     if lowered in LISTING_NAVIGATION_TITLE_HINTS or lowered in LISTING_WEAK_TITLES:
         return True
@@ -257,6 +268,68 @@ def _listing_title_is_noise(title: str) -> bool:
     if LISTING_ALT_TEXT_TITLE_PATTERN.search(lowered):
         return True
     return any(pattern.search(lowered) for pattern in LISTING_EDITORIAL_TITLE_PATTERNS)
+
+
+def _title_from_url(url: str) -> str | None:
+    path = str(urlsplit(str(url or "")).path or "").strip("/")
+    if not path:
+        return None
+    terminal = path.rsplit("/", 1)[-1]
+    terminal = re.sub(r"\.(html?|htm)$", "", terminal, flags=re.I)
+    if not terminal:
+        return None
+    title = clean_text(re.sub(r"[-_]+", " ", terminal))
+    if not title or title.isdigit():
+        return None
+    return title
+
+
+def _record_has_supporting_listing_signals(record: dict[str, Any], *, surface: str) -> bool:
+    if any(
+        record.get(field_name) not in (None, "", [], {})
+        for field_name in ("image_url", "price", "rating", "review_count")
+    ):
+        return True
+    if surface.startswith("job_"):
+        return any(
+            record.get(field_name) not in (None, "", [], {})
+            for field_name in ("company", "location", "salary", "job_type")
+        )
+    return record.get("brand") not in (None, "", [], {})
+
+
+def _job_listing_url_looks_like_posting(url: str) -> bool:
+    terminal = (urlsplit(url).path or "").rstrip("/").rsplit("/", 1)[-1]
+    return bool(re.search(r"\d{4,}", terminal))
+
+
+def _job_listing_url_is_utility(url: str) -> bool:
+    lowered = url.lower()
+    return any(
+        token in lowered
+        for token in ("/applicant/", "/careerexplorer/", "/help/", "/savedsearches")
+    )
+
+
+def _record_is_supported_listing_candidate(
+    record: dict[str, Any],
+    *,
+    page_url: str,
+    surface: str,
+) -> bool:
+    title = clean_text(record.get("title"))
+    url = str(record.get("url") or "").strip()
+    if not title or not url or _listing_title_is_noise(title) or _url_is_structural(url, page_url):
+        return False
+    if surface.startswith("job_") and _job_listing_url_is_utility(url):
+        return False
+    if _detail_like_path(url, is_job=surface.startswith("job_")):
+        return True
+    if _record_has_supporting_listing_signals(record, surface=surface):
+        return True
+    if surface.startswith("job_") and _job_listing_url_looks_like_posting(url):
+        return True
+    return False
 
 
 def _listing_card_html_fragments(
@@ -285,9 +358,10 @@ def _listing_card_html_fragments(
     if scored:
         return _sorted_listing_fragment_nodes(scored)
     scanned = 0
+    fragment_limit = max(1, int(crawler_runtime_settings.listing_fallback_fragment_limit))
     for node in dom_parser.css(LISTING_FALLBACK_CONTAINER_SELECTOR):
         scanned += 1
-        if scanned > LISTING_FALLBACK_FRAGMENT_LIMIT * 40:
+        if scanned > fragment_limit * 40:
             break
         order += 1
         score = _listing_fragment_score(node)
@@ -302,7 +376,7 @@ def _listing_card_html_fragments(
         return []
     return _sorted_listing_fragment_nodes(
         scored,
-        limit=int(LISTING_FALLBACK_FRAGMENT_LIMIT),
+        limit=fragment_limit,
     )
 
 
@@ -314,202 +388,6 @@ def _sorted_listing_fragment_nodes(
     scored.sort(key=lambda row: (-row[0], row[1]))
     rows = scored if limit is None else scored[:limit]
     return [node for _score, _order, node in rows]
-
-
-def _visual_listing_records(
-    visual_elements: list[dict[str, object]] | None,
-    *,
-    page_url: str,
-    surface: str,
-    max_records: int,
-) -> list[dict[str, Any]]:
-    elements = _normalized_visual_elements(visual_elements, page_url=page_url)
-    if not elements:
-        return []
-    clusters = _cluster_visual_elements(elements)
-    records: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    for cluster in clusters:
-        record = _visual_cluster_to_record(cluster, page_url=page_url, surface=surface)
-        if record is None:
-            continue
-        url = str(record.get("url") or "")
-        if not url or url in seen_urls:
-            continue
-        seen_urls.add(url)
-        records.append(record)
-        if len(records) >= max_records:
-            break
-    return records
-
-
-def _normalized_visual_elements(
-    visual_elements: list[dict[str, object]] | None,
-    *,
-    page_url: str,
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for item in list(visual_elements or [])[:300]:
-        if not isinstance(item, dict):
-            continue
-        width = _coerce_visual_number(item.get("width"))
-        height = _coerce_visual_number(item.get("height"))
-        if width <= 0 or height <= 0:
-            continue
-        href = absolute_url(page_url, item.get("href"))
-        src = absolute_url(page_url, item.get("src"))
-        text = clean_text(
-            " ".join(
-                str(value or "")
-                for value in (
-                    item.get("text"),
-                    item.get("alt"),
-                    item.get("ariaLabel"),
-                    item.get("title"),
-                )
-            )
-        )
-        rows.append(
-            {
-                "tag": str(item.get("tag") or "").strip().lower(),
-                "text": text,
-                "href": href,
-                "src": src,
-                "x": _coerce_visual_number(item.get("x")),
-                "y": _coerce_visual_number(item.get("y")),
-                "width": width,
-                "height": height,
-            }
-        )
-    return rows
-
-
-def _coerce_visual_number(value: object) -> int:
-    try:
-        return int(float(value or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _cluster_visual_elements(
-    elements: list[dict[str, Any]],
-) -> list[list[dict[str, Any]]]:
-    anchors = [item for item in elements if item.get("href")]
-    if not anchors:
-        return []
-    anchors.sort(key=lambda item: (int(item.get("y") or 0), int(item.get("x") or 0)))
-    clusters: list[list[dict[str, Any]]] = []
-    for anchor in anchors:
-        cluster = [anchor]
-        left = int(anchor.get("x") or 0) - 80
-        right = left + int(anchor.get("width") or 0) + 160
-        top = int(anchor.get("y") or 0) - 80
-        bottom = top + int(anchor.get("height") or 0) + 260
-        for item in elements:
-            if item is anchor:
-                continue
-            x = int(item.get("x") or 0)
-            y = int(item.get("y") or 0)
-            width = int(item.get("width") or 0)
-            height = int(item.get("height") or 0)
-            if x + width < left or x > right:
-                continue
-            if y + height < top or y > bottom:
-                continue
-            cluster.append(item)
-        if _visual_cluster_score(cluster) > 0:
-            clusters.append(cluster)
-    clusters.sort(key=lambda cluster: -_visual_cluster_score(cluster))
-    return clusters
-
-
-def _visual_cluster_score(cluster: list[dict[str, Any]]) -> int:
-    if not cluster:
-        return -100
-    hrefs = {str(item.get("href") or "") for item in cluster if item.get("href")}
-    if len(hrefs) != 1:
-        return -50
-    score = 10
-    if any(_visual_element_is_title(item) for item in cluster):
-        score += 8
-    if any(PRICE_RE.search(str(item.get("text") or "")) for item in cluster):
-        score += 4
-    if any(str(item.get("tag") or "") == "img" and item.get("src") for item in cluster):
-        score += 3
-    if len(cluster) > 8:
-        score -= len(cluster) - 8
-    return score
-
-
-def _visual_element_is_title(item: dict[str, Any]) -> bool:
-    text = str(item.get("text") or "")
-    if not text or _listing_title_is_noise(text) or PRICE_RE.search(text):
-        return False
-    return str(item.get("tag") or "") in {"a", "h1", "h2", "h3"} or len(text) <= 180
-
-
-def _visual_cluster_to_record(
-    cluster: list[dict[str, Any]],
-    *,
-    page_url: str,
-    surface: str,
-) -> dict[str, Any] | None:
-    href = next((str(item.get("href") or "") for item in cluster if item.get("href")), "")
-    if not href or _url_is_structural(href, page_url):
-        return None
-    title_candidates = [
-        str(item.get("text") or "")
-        for item in cluster
-        if _visual_element_is_title(item)
-    ]
-    title = next((text for text in title_candidates if not _listing_title_is_noise(text)), "")
-    if not title:
-        return None
-    image_url = next(
-        (str(item.get("src") or "") for item in cluster if item.get("src")),
-        "",
-    )
-    price_text = next(
-        (
-            str(item.get("text") or "")
-            for item in cluster
-            if PRICE_RE.search(str(item.get("text") or ""))
-        ),
-        "",
-    )
-    price_match = PRICE_RE.search(price_text)
-    is_job = surface.startswith("job_")
-    if not is_job and not price_match and not _visual_title_matches_url(title, href):
-        return None
-    record = {
-        "source_url": page_url,
-        "_source": "visual_listing",
-        "title": title,
-        "url": href,
-    }
-    if image_url:
-        record["image_url"] = image_url
-    if price_match:
-        record["price"] = (
-            price_match.group(0)
-            .strip()
-            .lstrip("$€£₹")
-            .strip()
-            .replace(",", "")
-        )
-    return finalize_record(record, surface=surface)
-
-
-def _visual_title_matches_url(title: str, href: str) -> bool:
-    return bool(
-        (title_tokens := _visual_match_tokens(title))
-        and (path_tokens := _visual_match_tokens(urlsplit(href).path))
-        and title_tokens & path_tokens
-    )
-
-
-def _visual_match_tokens(value: str) -> set[str]:
-    return {token for token in re.findall(r"[a-z0-9]+", clean_text(value).lower()) if len(token) >= 2 and token not in _VISUAL_URL_MATCH_STOPWORDS}
 
 
 def _listing_fragment_score(node) -> int:
@@ -665,20 +543,23 @@ def _card_title_score_parts(
     href_present: bool,
 ) -> int:
     score = 0
+    normalized_text = clean_text(text)
     if any(token in attrs for token in ("title", "name", "product", "item", "listing", "result", "job", "record", "release")):
         score += 6
     if any(token in attrs for token in ("brand", "seller", "vendor", "rating", "price", "size", "wishlist")):
         score -= 6
     if tag_name in {"h1", "h2", "h3", "h4", "h5", "a"}:
         score += 2
-    text_len = len(text)
+    if normalized_text.isdigit():
+        score -= 20
+    text_len = len(normalized_text)
     if 8 <= text_len <= 180:
         score += 3
     elif text_len < 4:
         score -= 6
     elif text_len > 220:
         score -= 2
-    if _listing_title_is_noise(text):
+    if _listing_title_is_noise(normalized_text):
         score -= 4
     if href_present:
         score += 2
@@ -772,7 +653,7 @@ def _extract_label_value_pairs_from_node(root) -> list[tuple[str, str]]:
             continue
         label = _node_text(cells[0])
         value = _node_text(cells[1])
-        if label and value:
+        if label and value and not _label_value_pair_is_noise(label):
             rows.append((label, value))
     for node in _node_css(root, "li, p, div, span"):
         text = _node_text(node)
@@ -785,6 +666,8 @@ def _extract_label_value_pairs_from_node(root) -> list[tuple[str, str]]:
             continue
         if len(label) > 40 or len(value) > 250:
             continue
+        if _label_value_pair_is_noise(label):
+            continue
         rows.append((label, value))
     deduped: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -795,6 +678,15 @@ def _extract_label_value_pairs_from_node(root) -> list[tuple[str, str]]:
         seen.add(key)
         deduped.append((label, value))
     return deduped
+
+
+def _label_value_pair_is_noise(label: str) -> bool:
+    normalized = clean_text(label).lower()
+    if not normalized:
+        return True
+    if any(token in normalized for token in LISTING_STRUCTURE_NEGATIVE_HINTS):
+        return True
+    return any(token in normalized for token in LISTING_LABEL_NOISE_TOKENS)
 
 
 def _listing_record_from_card(
@@ -888,6 +780,12 @@ def _listing_record_from_card(
     cleaned = finalize_record(record, surface=surface)
     if not cleaned.get("url") or not cleaned.get("title"):
         return None
+    if not _record_is_supported_listing_candidate(
+        cleaned,
+        page_url=page_url,
+        surface=surface,
+    ):
+        return None
     return cleaned
 
 
@@ -975,6 +873,15 @@ def extract_listing_records(
         title_is_noise=_listing_title_is_noise,
         url_is_structural=_url_is_structural,
     )
+    rendered_records = [
+        record
+        for record in rendered_records
+        if _record_is_supported_listing_candidate(
+            record,
+            page_url=page_url,
+            surface=surface,
+        )
+    ]
     best_non_visual = best_listing_candidate_set(
         [
             ("structured", structured_records),
@@ -989,11 +896,13 @@ def extract_listing_records(
     )
     if best_non_visual:
         return best_non_visual[:max_records]
-    visual_records = _visual_listing_records(
+    visual_records = visual_listing_records(
         artifacts.get("listing_visual_elements") if isinstance(artifacts, dict) else None,
         page_url=page_url,
         surface=surface,
         max_records=max_records,
+        title_is_noise=_listing_title_is_noise,
+        url_is_structural=_url_is_structural,
     )
     if visual_records:
         return visual_records[:max_records]

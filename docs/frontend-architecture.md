@@ -255,7 +255,7 @@ There is also Playwright e2e coverage under `frontend/e2e`.
 
 ## 9. Companion Docs
 
-- [../CLAUDE.md](../CLAUDE.md)
+- [../AGENTS.md](../AGENTS.md)
 - [backend-architecture.md](backend-architecture.md)
 - [ENGINEERING_STRATEGY.md](ENGINEERING_STRATEGY.md)
 - [INVARIANTS.md](INVARIANTS.md)

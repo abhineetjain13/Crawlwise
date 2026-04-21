@@ -1,14 +1,14 @@
 # Session Prompts
 
 Copy-paste these at the start of each session. Fill in the `[bracketed]` parts.
-Always attach `CLAUDE.md` alongside any of these prompts.
+Always attach `AGENTS.md` alongside any of these prompts.
 
 ---
 
 ## PROMPT: Start a New Session (Generic)
 
 ```
-Read CLAUDE.md fully before responding.
+Read AGENTS.md fully before responding.
 Then read docs/CODEBASE_MAP.md and docs/ENGINEERING_STRATEGY.md.
 Then check docs/plans/ACTIVE.md.
 
@@ -23,7 +23,7 @@ Do not write any code yet.
 ## PROMPT: Fix a Bug
 
 ```
-Read CLAUDE.md, docs/CODEBASE_MAP.md, and docs/agent/SKILLS.md before responding.
+Read AGENTS.md, docs/CODEBASE_MAP.md, and docs/agent/SKILLS.md before responding.
 
 Bug: [describe the bug — what's wrong, what surface/field/URL is affected, what the
 actual vs expected output is]
@@ -44,7 +44,7 @@ Do not add compensating logic in pipeline/core.py, publish/, or pipeline/persist
 ## PROMPT: Build a Feature
 
 ```
-Read CLAUDE.md, docs/CODEBASE_MAP.md, docs/ENGINEERING_STRATEGY.md, and
+Read AGENTS.md, docs/CODEBASE_MAP.md, docs/ENGINEERING_STRATEGY.md, and
 docs/agent/PLAN_PROTOCOL.md before responding.
 
 Feature: [describe the feature]
@@ -64,7 +64,7 @@ Anti-patterns to watch for: read docs/ENGINEERING_STRATEGY.md Anti-Patterns sect
 ## PROMPT: Create a Plan (Planning Session Only)
 
 ```
-Read CLAUDE.md, docs/CODEBASE_MAP.md, and docs/agent/PLAN_PROTOCOL.md.
+Read AGENTS.md, docs/CODEBASE_MAP.md, and docs/agent/PLAN_PROTOCOL.md.
 
 Task: [describe the task]
 
@@ -84,7 +84,7 @@ Output the plan as a markdown block. I will save it to docs/plans/[slug]-plan.md
 ## PROMPT: Run an Audit / Code Review
 
 ```
-Read CLAUDE.md, docs/CODEBASE_MAP.md, docs/ENGINEERING_STRATEGY.md, and docs/INVARIANTS.md.
+Read AGENTS.md, docs/CODEBASE_MAP.md, docs/ENGINEERING_STRATEGY.md, and docs/INVARIANTS.md.
 
 Audit scope: [subsystem name or file list — e.g., "Bucket 3: Acquisition" or
 "all files touched in the last plan"]
@@ -104,7 +104,7 @@ Do not report findings you are not confident about. Be forensic, not comprehensi
 ## PROMPT: Continue an Active Plan
 
 ```
-Read CLAUDE.md and docs/plans/ACTIVE.md. Then read the full active plan file it points to.
+Read AGENTS.md and docs/plans/ACTIVE.md. Then read the full active plan file it points to.
 
 Tell me:
 1. Which slice we are on and its current status.
@@ -120,7 +120,7 @@ Do not start the next slice without confirming with me.
 ## PROMPT: Clean Up / Delete Dead Code
 
 ```
-Read CLAUDE.md and docs/CODEBASE_MAP.md.
+Read AGENTS.md and docs/CODEBASE_MAP.md.
 
 Target: [file, symbol, or subsystem to clean up]
 
@@ -138,7 +138,7 @@ Steps:
 ## PROMPT: Update Docs After Implementation
 
 ```
-Read CLAUDE.md and docs/agent/SKILLS.md (the "Update Docs After Implementation" skill).
+Read AGENTS.md and docs/agent/SKILLS.md (the "Update Docs After Implementation" skill).
 
 What changed: [describe what was implemented — which files, what behavior, which contracts]
 
@@ -177,5 +177,5 @@ Group findings by ownership bucket.
 - **For Gemini:** Use "Full Codebase Analysis" for wide-scan audits across many files.
 - **For Claude:** Use "Create a Plan" or prompt engineering tasks.
 
-Always attach `CLAUDE.md`. For implementation sessions also attach the active plan file from `docs/plans/`.
+Always attach `AGENTS.md`. For implementation sessions also attach the active plan file from `docs/plans/`.
 For audit sessions also attach `docs/ENGINEERING_STRATEGY.md` and `docs/INVARIANTS.md`.

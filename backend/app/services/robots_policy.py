@@ -10,18 +10,19 @@ from cachetools import TTLCache
 import httpx
 
 from app.core.config import settings
-from app.services.pipeline.pipeline_config import PIPELINE_CONFIG
+from app.services.config.runtime_settings import crawler_runtime_settings
 
 ROBOTS_ALLOWED = "allowed"
 ROBOTS_DISALLOWED = "disallowed"
 ROBOTS_MISSING = "missing"
 ROBOTS_FETCH_FAILURE = "fetch_failure"
 _ROBOTS_CACHE = TTLCache(
-    maxsize=PIPELINE_CONFIG.robots_cache_size,
-    ttl=PIPELINE_CONFIG.robots_cache_ttl,
+    maxsize=crawler_runtime_settings.robots_cache_size,
+    ttl=crawler_runtime_settings.robots_cache_ttl,
 )
 _ROBOTS_CACHE_LOCK: asyncio.Lock | None = None
 _ROBOTS_INFLIGHT_FETCHES: dict[str, asyncio.Task["_RobotsSnapshot"]] | None = None
+_ROBOTS_FETCH_TASKS: set[asyncio.Task["_RobotsSnapshot"]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,22 @@ def _get_inflight() -> dict[str, asyncio.Task["_RobotsSnapshot"]]:
     return _ROBOTS_INFLIGHT_FETCHES
 
 
+def _get_tracked_tasks() -> set[asyncio.Task["_RobotsSnapshot"]]:
+    global _ROBOTS_FETCH_TASKS
+    if _ROBOTS_FETCH_TASKS is None:
+        with _INIT_LOCK:
+            if _ROBOTS_FETCH_TASKS is None:
+                _ROBOTS_FETCH_TASKS = set()
+    return _ROBOTS_FETCH_TASKS
+
+
+def _track_fetch_task(task: asyncio.Task["_RobotsSnapshot"]) -> asyncio.Task["_RobotsSnapshot"]:
+    tracked = _get_tracked_tasks()
+    tracked.add(task)
+    task.add_done_callback(lambda finished: tracked.discard(finished))
+    return task
+
+
 async def reset_robots_policy_cache() -> None:
     async with _get_lock():
         inflight = _get_inflight()
@@ -70,6 +87,16 @@ async def reset_robots_policy_cache() -> None:
             await asyncio.gather(*tasks, return_exceptions=True)
         inflight.clear()
         _ROBOTS_CACHE.clear()
+
+
+async def shutdown_robots_policy() -> None:
+    tracked_tasks = list(_get_tracked_tasks())
+    for task in tracked_tasks:
+        task.cancel()
+    if tracked_tasks:
+        await asyncio.gather(*tracked_tasks, return_exceptions=True)
+    _get_tracked_tasks().clear()
+    await reset_robots_policy_cache()
 
 
 async def check_url_crawlability(
@@ -107,7 +134,9 @@ async def _load_robots_snapshot(base_url: str) -> _RobotsSnapshot:
         inflight = _get_inflight()
         fetch_task = inflight.get(base_url)
         if fetch_task is None:
-            fetch_task = asyncio.create_task(_fetch_robots_snapshot(base_url))
+            fetch_task = _track_fetch_task(
+                asyncio.create_task(_fetch_robots_snapshot(base_url))
+            )
             inflight[base_url] = fetch_task
     try:
         snapshot = await fetch_task
@@ -130,7 +159,7 @@ async def _fetch_robots_snapshot(base_url: str) -> _RobotsSnapshot:
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=settings.http_timeout_seconds,
-            headers={"User-Agent": PIPELINE_CONFIG.robots_fetch_user_agent},
+            headers={"User-Agent": crawler_runtime_settings.robots_fetch_user_agent},
         ) as client:
             response = await client.get(robots_url)
     except httpx.RequestError as exc:

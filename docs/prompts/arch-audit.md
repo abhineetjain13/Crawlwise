@@ -13,7 +13,7 @@ Extraction source hierarchy (deterministic, first-match-wins):
 adapter → XHR/JSON / network payload mapping → JSON-LD / microdata / Open Graph →
 hydrated state (`__NEXT_DATA__`, `__NUXT_DATA__`) → DOM → LLM fallback.
 
-The codebase is post-refactor. Treat `CLAUDE.md` and `INVARIANTS.md` as the authoritative
+The codebase is post-refactor. Treat `AGENTS.md` and `INVARIANTS.md` as the authoritative
 intent. Every place where code contradicts these docs is a violation.
 
 Ownership buckets (from `ENGINEERING_STRATEGY.md`):
@@ -342,7 +342,7 @@ Techniques to evaluate if gaps were found (verify existence before recommending)
 
 ## AUDIT CONSTRAINTS
 
-- Treat `CLAUDE.md` and `INVARIANTS.md` as authoritative intent. Every contradiction is a violation.
+- Treat `AGENTS.md` and `INVARIANTS.md` as authoritative intent. Every contradiction is a violation.
 - Generic crawler paths must stay generic. Platform behavior must be adapter-owned or config-driven.
 - Do not audit test files for coverage. Audit them only for private-function imports (AP-7).
 - Do not suggest adding logging, monitoring, or observability infrastructure.
