@@ -219,8 +219,10 @@ def _looks_like_product_payload(value: Any) -> bool:
         key in value
         for key in (
             "variants",
+            "options",
             "product_type",
             "vendor",
+            "brand",
             "handle",
             "price",
             "sku",
@@ -230,6 +232,9 @@ def _looks_like_product_payload(value: Any) -> bool:
             "id",
             "product_id",
             "offers",
+            "description",
+            "images",
+            "image",
         )
     ) and any(key in value for key in ("title", "name"))
 
@@ -237,19 +242,87 @@ def _looks_like_product_payload(value: Any) -> bool:
 def _find_product_payload(value: Any, *, depth: int = 0, limit: int = 8) -> dict[str, Any] | None:
     if depth > limit:
         return None
+    best_payload: dict[str, Any] | None = None
+    best_score: tuple[int, ...] | None = None
     if _looks_like_product_payload(value):
-        return dict(value)
+        best_payload = dict(value)
+        best_score = _product_payload_score(best_payload)
     if isinstance(value, dict):
         for item in value.values():
             found = _find_product_payload(item, depth=depth + 1, limit=limit)
-            if found is not None:
-                return found
+            if found is None:
+                continue
+            score = _product_payload_score(found)
+            if best_payload is None or best_score is None or score > best_score:
+                best_payload = found
+                best_score = score
     elif isinstance(value, list):
         for item in value[:25]:
             found = _find_product_payload(item, depth=depth + 1, limit=limit)
-            if found is not None:
-                return found
-    return None
+            if found is None:
+                continue
+            score = _product_payload_score(found)
+            if best_payload is None or best_score is None or score > best_score:
+                best_payload = found
+                best_score = score
+    return best_payload
+
+
+def _product_payload_score(product: dict[str, Any]) -> tuple[int, ...]:
+    raw_variants = product.get("variants") if isinstance(product.get("variants"), list) else []
+    raw_options = product.get("options") if isinstance(product.get("options"), list) else []
+    product_keys = set(product)
+    strong_product_keys = {
+        "variants",
+        "options",
+        "product_type",
+        "vendor",
+        "brand",
+        "handle",
+        "price",
+        "sku",
+        "availability",
+        "category",
+        "type",
+        "offers",
+        "description",
+        "images",
+        "image",
+    }
+    variant_axis_keys = {
+        "color",
+        "size",
+        "style",
+        "material",
+        "flavor",
+        "scent",
+        "capacity",
+        "length",
+        "width",
+        "condition",
+        "grade",
+        "storage",
+        "memory",
+        "finish",
+        "model",
+    }
+    axis_signal_count = sum(
+        1
+        for variant in raw_variants
+        if isinstance(variant, dict)
+        and any(key in variant for key in variant_axis_keys)
+    )
+    return (
+        len(raw_variants),
+        len(raw_options),
+        axis_signal_count,
+        len(product_keys & strong_product_keys),
+        1 if product.get("description") not in (None, "", [], {}) else 0,
+        1 if product.get("price") not in (None, "", [], {}) else 0,
+        1 if product.get("offers") not in (None, "", [], {}) else 0,
+        1 if product.get("images") not in (None, "", [], {}) or product.get("image") not in (None, "", [], {}) else 0,
+        len(product_keys),
+    )
 
 
 def _map_product_payload(
@@ -574,6 +647,8 @@ def _variant_option_values(
         for possible_axis in (
             "color", "size", "style", "material", "flavor",
             "scent", "capacity", "length", "width",
+            "condition", "grade", "storage", "memory",
+            "finish", "model",
         ):
             val = variant.get(possible_axis)
             if val and isinstance(val, (str, int, float)):

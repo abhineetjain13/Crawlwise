@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services import platform_policy
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.platform_policy import (
     detect_platform_family,
     is_job_platform_signal,
@@ -99,6 +101,40 @@ def test_detect_platform_family_for_stable_spa_canaries() -> None:
     assert detect_platform_family("https://practicesoftwaretesting.com/#/shop") == "practicesoftwaretesting"
     assert detect_platform_family("https://demo.spreecommerce.org/products") == "spree_commerce"
     assert detect_platform_family("https://demo.saleor.io/products") == "saleor"
+
+
+def test_detect_platform_family_truncates_html_before_regex_scan(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        platform_policy,
+        "platform_configs",
+        lambda: [
+            platform_policy.PlatformConfig(
+                family="late_marker",
+                html_regex=[r"late-marker"],
+            )
+        ],
+    )
+    original_limit = crawler_runtime_settings.platform_detection_html_search_limit
+    crawler_runtime_settings.platform_detection_html_search_limit = 32
+    try:
+        assert (
+            detect_platform_family(
+                "https://example.com/catalog/widget",
+                "x" * 32 + "late-marker",
+            )
+            is None
+        )
+        assert (
+            detect_platform_family(
+                "https://example.com/catalog/widget",
+                "x" * 16 + "late-marker",
+            )
+            == "late_marker"
+        )
+    finally:
+        crawler_runtime_settings.platform_detection_html_search_limit = original_limit
 
 
 def test_resolve_browser_readiness_policy_requires_networkidle_for_platform_traversal_or_detail() -> None:

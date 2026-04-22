@@ -61,6 +61,7 @@ async def create_crawl_run(
         ).as_dict()
         settings_view = CrawlRunSettings.from_value(settings)
     settings = settings_view.with_updates(
+        requested_fields=requested_fields,
         llm_config_snapshot=await snapshot_active_configs(session),
         extraction_runtime_snapshot=snapshot_extraction_runtime_settings(),
     ).as_dict()

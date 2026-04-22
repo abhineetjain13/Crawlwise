@@ -17,10 +17,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.services.acquisition import (
-    AcquisitionRequest,
-    acquire,
-)
+from app.services.acquisition.acquirer import AcquisitionRequest, acquire
 from app.services.acquisition.runtime import is_blocked_html
 from app.services.acquisition_plan import AcquisitionPlan
 from app.services.adapters.registry import run_adapter

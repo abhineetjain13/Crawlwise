@@ -225,6 +225,10 @@ def surface_alias_lookup(
     for requested in list(requested_fields or []):
         normalized_requested = normalize_field_key(requested)
         exact_field = exact_requested_field_key(requested)
+        if normalized_requested:
+            lookup[normalized_requested] = exact_field or normalized_requested
+        if exact_field:
+            lookup[exact_field] = exact_field
         if normalized_requested and exact_field:
             lookup[normalized_requested] = exact_field
     for canonical in fields:

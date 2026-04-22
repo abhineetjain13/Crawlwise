@@ -39,7 +39,6 @@ from app.services.extraction_context import (
 from app.services.structured_sources import harvest_js_state_objects
 from app.services.field_value_core import (
     LONG_TEXT_FIELDS,
-    PRICE_RE,
     RATING_RE,
     REVIEW_COUNT_RE,
     STRUCTURED_OBJECT_FIELDS,
@@ -47,7 +46,6 @@ from app.services.field_value_core import (
     clean_text,
     coerce_field_value,
     extract_currency_code,
-    extract_price_text,
     finalize_record,
     surface_alias_lookup,
     surface_fields,
@@ -246,17 +244,6 @@ def _apply_dom_fallbacks(
     body_text = (
         clean_text(body_node.text(separator=" ", strip=True)) if body_node else ""
     )
-    if "price" in fields and not candidates.get("price"):
-        price_text = extract_price_text(body_text, prefer_last=False)
-        if price_text:
-            _add_sourced_candidate(
-                candidates,
-                candidate_sources,
-                field_sources,
-                "price",
-                price_text,
-                source="dom_text",
-            )
     if "currency" in fields and not candidates.get("currency"):
         for price_value in list(candidates.get("price") or []):
             currency_code = extract_currency_code(price_value)
@@ -585,6 +572,15 @@ def _looks_like_site_shell_record(record: dict[str, Any], *, page_url: str) -> b
     title = text_or_none(record.get("title")) or ""
     if not _title_needs_promotion(title, page_url=page_url):
         return False
+    if str(record.get("_source") or "").strip() in {
+        "adapter",
+        "network_payload",
+        "json_ld",
+        "microdata",
+        "embedded_json",
+        "js_state",
+    }:
+        return False
     strong_detail_fields = (
         "brand",
         "sku",
@@ -671,7 +667,7 @@ def _materialize_image_fields(
     return dedupe_image_urls(values), primary_source
 
 
-def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
+def _extract_variants_from_dom(soup: BeautifulSoup, *, page_url: str) -> dict[str, object]:
     option_groups: list[dict[str, object]] = []
     for select in iter_variant_select_groups(soup):
         cleaned_name = resolve_variant_group_name(select)
@@ -724,7 +720,7 @@ def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
             continue
         name = clean_text(group.get("name"))
         axis_key = normalized_variant_axis_key(name)
-        if axis_key not in {"color", "size"}:
+        if not axis_key:
             continue
         merged = merged_groups.setdefault(axis_key, {"name": name or axis_key, "values": []})
         if len(name) > len(str(merged.get("name") or "")):
@@ -783,7 +779,7 @@ def _extract_variants_from_dom(soup: BeautifulSoup) -> dict[str, object]:
         always_selectable_axes=frozenset({"size"}),
     )
     resolved_variants = resolve_variants(selectable_axes or variant_axes, variants) if variants else []
-    selected_variant = select_variant(resolved_variants, page_url="")
+    selected_variant = select_variant(resolved_variants, page_url=page_url)
     for axis_name, value in single_value_attributes.items():
         record.setdefault(axis_name, value)
     if selectable_axes:

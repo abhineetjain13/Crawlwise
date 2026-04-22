@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import sys
 import threading
@@ -9,7 +10,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import crawl_fetch_runtime
-from app.services.acquisition import browser_identity, runtime as acquisition_runtime
+from app.services.acquisition import (
+    browser_capture,
+    browser_identity,
+    runtime as acquisition_runtime,
+)
 from app.services.acquisition.browser_runtime import (
     classify_network_endpoint,
     read_network_payload_body,
@@ -391,6 +396,26 @@ async def test_read_network_payload_body_marks_generic_read_failures_explicitly(
     assert result.outcome == "read_error"
     assert result.body is None
     assert "socket reset" in str(result.error)
+
+
+@pytest.mark.asyncio
+async def test_read_network_payload_body_maps_read_timeouts_to_too_large(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeResponse(b"x")
+
+    async def _fake_wait_for(awaitable, timeout: float):
+        awaitable.close()
+        del timeout
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(browser_capture.asyncio, "wait_for", _fake_wait_for)
+
+    result = await read_network_payload_body(response)
+
+    assert result.outcome == "too_large"
+    assert result.body is None
+    assert response.body_calls == 0
 
 
 @pytest.mark.asyncio

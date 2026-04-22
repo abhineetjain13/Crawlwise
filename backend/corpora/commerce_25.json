@@ -1,0 +1,194 @@
+{
+  "groups": {
+    "sandbox_listing": [
+      {
+        "name": "S01 web-scraping.dev products",
+        "url": "https://web-scraping.dev/products",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.8, "price": 0.5}
+      },
+      {
+        "name": "S05 books.toscrape listing",
+        "url": "https://books.toscrape.com/catalogue/page-1.html",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 5,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.9, "price": 0.9}
+      },
+      {
+        "name": "S11 webscraper.io allinone laptops",
+        "url": "https://webscraper.io/test-sites/e-commerce/allinone/computers/laptops",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.8, "price": 0.8}
+      },
+      {
+        "name": "S18 oxylabs sandbox listing",
+        "url": "https://sandbox.oxylabs.io/products",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.8, "price": 0.5}
+      },
+      {
+        "name": "S20 scrapingcourse infinite scroll",
+        "url": "https://scrapingcourse.com/ecommerce/",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.8, "price": 0.5}
+      }
+    ],
+    "sandbox_detail": [
+      {
+        "name": "S02 web-scraping.dev product/1",
+        "url": "https://web-scraping.dev/product/1",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "S06 books.toscrape detail",
+        "url": "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "S19 oxylabs sandbox detail",
+        "url": "https://sandbox.oxylabs.io/products/1",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "S21 scrapingcourse variant PDP",
+        "url": "https://scrapingcourse.com/ecommerce/products/chaz-kangeroo-hoodie",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      }
+    ],
+    "real_listing": [
+      {
+        "name": "LC01 Reverb electric guitars",
+        "url": "https://www.reverb.com/marketplace?product_type=electric-guitars",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      },
+      {
+        "name": "LC03 MusiciansFriend snare heads",
+        "url": "https://www.musiciansfriend.com/snare-drum-heads",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      },
+      {
+        "name": "LC06 Uline boxes",
+        "url": "https://www.uline.com/BL_8421/Boxes",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      },
+      {
+        "name": "LC10 Chewy dry dog food",
+        "url": "https://www.chewy.com/b/dry-dog-food-294",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      },
+      {
+        "name": "LC12 BackMarket iPhones",
+        "url": "https://www.backmarket.com/en-us/l/iphone/e8724fea-197e-4815-85ce-21b8068020cc",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      },
+      {
+        "name": "LC13 iFixit parts",
+        "url": "https://www.ifixit.com/Parts",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      },
+      {
+        "name": "LC14 AbeBooks python books",
+        "url": "https://www.abebooks.com/servlet/SearchResults?kn=python&pt=book",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      },
+      {
+        "name": "LC15 ThriftBooks science",
+        "url": "https://www.thriftbooks.com/browse/?b.search=science",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 3,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.7, "price": 0.5}
+      }
+    ],
+    "real_detail": [
+      {
+        "name": "DC01 Thomann SM58",
+        "url": "https://www.thomann.de/gb/shure_sm58_lc.htm",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "DC03 Discogs release 1529440",
+        "url": "https://www.discogs.com/release/1529440",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "DC10 iFixit iPhone 14 battery",
+        "url": "https://www.ifixit.com/products/iphone-14-battery",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "DC12 Vitacost Omega-3",
+        "url": "https://www.vitacost.com/now-foods-ultra-omega-3-fish-oil-500-epa-250-dha-180-softgels",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "DC14 ThriftBooks Pragmatic Programmer",
+        "url": "https://www.thriftbooks.com/w/the-pragmatic-programmer_david-thomas_andrew-hunt/286697/",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      },
+      {
+        "name": "DC17 Rockler Jessem router lift",
+        "url": "https://www.rockler.com/jessem-mast-r-lift-ii-excel-router-lift",
+        "surface": "ecommerce_detail",
+        "expect_fields": ["title", "price"]
+      }
+    ],
+    "extended_listing": [
+      {
+        "name": "CE01 Zadig&Voltaire tshirts",
+        "url": "https://zadig-et-voltaire.com/eu/uk/c/tshirts-sweatshirts-for-men-127",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 2,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.5, "price": 0.3}
+      },
+      {
+        "name": "CE08 Todd Snyder suits",
+        "url": "https://www.toddsnyder.com/collections/slim-fit-suits-tuxedos",
+        "surface": "ecommerce_listing",
+        "expect_min_records": 2,
+        "required_record_fields": ["title", "price"],
+        "required_record_field_coverage": {"title": 0.5, "price": 0.3}
+      }
+    ]
+  }
+}

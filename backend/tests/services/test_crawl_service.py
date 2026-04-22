@@ -102,6 +102,7 @@ async def test_create_crawl_run_preserves_raw_additional_fields_and_keeps_domain
     assert "materials" in run.requested_fields
     assert "care instructions" in run.requested_fields
     assert "care" not in run.requested_fields
+    assert run.settings["requested_fields"] == run.requested_fields
 
 
 @pytest.mark.asyncio
@@ -121,6 +122,7 @@ async def test_create_crawl_run_preserves_exact_custom_additional_field_labels(
     )
 
     assert run.requested_fields == ["Features & Benefits", "Product Story"]
+    assert run.settings["requested_fields"] == ["Features & Benefits", "Product Story"]
 
 
 @pytest.mark.asyncio

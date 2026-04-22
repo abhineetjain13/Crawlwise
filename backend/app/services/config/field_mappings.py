@@ -12,7 +12,7 @@ for _name, _value in _STATIC_EXPORTS.items():
     globals()[_name] = _value
 
 DOM_HIGH_VALUE_FIELDS: dict[str, frozenset[str]] = {
-    "ecommerce_detail": frozenset({"description", "specifications"}),
+    "ecommerce_detail": frozenset({"additional_images", "description", "specifications"}),
     "job_detail": frozenset({"description", "responsibilities", "qualifications"}),
 }
 DOM_OPTIONAL_CUE_FIELDS: dict[str, frozenset[str]] = {

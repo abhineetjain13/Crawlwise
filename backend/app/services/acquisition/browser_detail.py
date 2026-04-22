@@ -202,6 +202,9 @@ async def expand_all_interactive_elements_impl(
                         for keyword in requested_keywords
                     )
                 )
+                matches_generic_requested_keywords = any(
+                    keyword in requested_keyword_probe for keyword in keywords
+                )
                 matches_generic_keywords = any(
                     keyword in keyword_probe for keyword in keywords
                 )
@@ -209,6 +212,7 @@ async def expand_all_interactive_elements_impl(
                     list(requested_fields or [])
                     and not (
                         matches_requested_keywords
+                        or matches_generic_requested_keywords
                         or size_toggle_hint
                     )
                 ):

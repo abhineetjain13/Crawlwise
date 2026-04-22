@@ -878,6 +878,61 @@ def test_extract_ecommerce_detail_merges_deduped_additional_images_across_js_sta
     ]
 
 
+def test_extract_detail_keeps_dom_images_live_when_structured_data_only_has_primary_image() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Trail Runner",
+          "image": "https://cdn.example.com/products/trail-runner-1.jpg",
+          "offers": {
+            "price": "99.00",
+            "priceCurrency": "USD",
+            "availability": "https://schema.org/InStock"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Trail Runner</h1>
+          <section class="gallery">
+            <img src="https://cdn.example.com/products/trail-runner-1.jpg" alt="Trail Runner front view" />
+            <a href="https://cdn.example.com/products/trail-runner-2.jpg">
+              <img src="https://cdn.example.com/products/trail-runner-2-thumb.jpg" alt="Trail Runner side view" />
+            </a>
+            <a href="https://cdn.example.com/products/trail-runner-3.jpg">
+              <img src="https://cdn.example.com/products/trail-runner-3-thumb.jpg" alt="Trail Runner outsole" />
+            </a>
+          </section>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/trail-runner",
+        "ecommerce_detail",
+        max_records=5,
+        extraction_runtime_snapshot={
+            "selector_self_heal": {"enabled": True, "min_confidence": 0.55}
+        },
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["_extraction_tiers"]["current"] == "dom"
+    assert record["_extraction_tiers"]["early_exit"] is None
+    assert record["additional_images"] == [
+        "https://cdn.example.com/products/trail-runner-2-thumb.jpg",
+        "https://cdn.example.com/products/trail-runner-3-thumb.jpg",
+    ]
+
+
 def test_extract_ecommerce_detail_filters_zara_copy_code_from_dom_variants() -> None:
     html = """
     <html>

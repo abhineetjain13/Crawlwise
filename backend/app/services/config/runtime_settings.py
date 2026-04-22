@@ -143,7 +143,9 @@ class CrawlerRuntimeSettings(BaseSettings):
     browser_capture_max_network_payloads: int = 25
     browser_capture_max_network_payload_bytes: int = 3000000
     browser_capture_total_network_payload_bytes: int = 12000000
+    browser_capture_read_timeout_seconds: float = 5.0
     browser_capture_queue_join_timeout_ms: int = 2000
+    platform_detection_html_search_limit: int = 500000
     fingerprint_browser: str = "chrome"
     fingerprint_os: tuple[str, ...] = ("windows", "macos", "linux")
     fingerprint_device: str = "desktop"
@@ -260,8 +262,12 @@ class CrawlerRuntimeSettings(BaseSettings):
             raise ValueError("browser_capture_max_network_payload_bytes must be > 0")
         if self.browser_capture_total_network_payload_bytes <= 0:
             raise ValueError("browser_capture_total_network_payload_bytes must be > 0")
+        if self.browser_capture_read_timeout_seconds <= 0:
+            raise ValueError("browser_capture_read_timeout_seconds must be > 0")
         if self.browser_capture_queue_join_timeout_ms <= 0:
             raise ValueError("browser_capture_queue_join_timeout_ms must be > 0")
+        if self.platform_detection_html_search_limit <= 0:
+            raise ValueError("platform_detection_html_search_limit must be > 0")
         if (
             self.browser_capture_total_network_payload_bytes
             < self.browser_capture_max_network_payload_bytes

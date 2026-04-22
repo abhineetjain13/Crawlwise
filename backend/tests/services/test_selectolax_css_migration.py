@@ -213,6 +213,42 @@ def test_listing_extractor_accepts_image_link_cards_with_separate_title_text() -
     ]
 
 
+def test_listing_extractor_does_not_emit_additional_images() -> None:
+    html = """
+    <html>
+      <body>
+        <article class="product-card">
+          <a href="/products/widget-prime">
+            <img src="/images/widget-prime-main.jpg" alt="Widget Prime">
+            <img src="/images/widget-prime-alt.jpg" alt="Widget Prime alternate">
+            <h2 class="product-title">Widget Prime</h2>
+          </a>
+          <div class="price">$19.99</div>
+        </article>
+      </body>
+    </html>
+    """
+
+    rows = extract_listing_records(
+        html,
+        "https://example.com/collections/widgets",
+        "ecommerce_listing",
+        max_records=10,
+    )
+
+    assert rows == [
+        {
+            "source_url": "https://example.com/collections/widgets",
+            "_source": "dom_listing",
+            "title": "Widget Prime",
+            "price": "19.99",
+            "currency": "USD",
+            "image_url": "https://example.com/images/widget-prime-main.jpg",
+            "url": "https://example.com/products/widget-prime",
+        }
+    ]
+
+
 def test_listing_extractor_prefers_explicit_price_node_over_description_mentions_and_keeps_currency() -> None:
     html = """
     <html>

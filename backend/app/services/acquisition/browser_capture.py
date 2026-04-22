@@ -431,7 +431,12 @@ async def read_network_payload_body(
     )
     headers = getattr(response, "headers", None)
     try:
-        body_bytes = await response.body()
+        body_bytes = await asyncio.wait_for(
+            response.body(),
+            timeout=_payload_read_timeout_seconds(),
+        )
+    except asyncio.TimeoutError:
+        return NetworkPayloadReadResult(body=None, outcome="too_large")
     except Exception as exc:
         if is_response_closed_error(exc):
             return NetworkPayloadReadResult(
@@ -501,6 +506,13 @@ def _queue_join_timeout_seconds() -> float:
     return max(
         0.1,
         float(crawler_runtime_settings.browser_capture_queue_join_timeout_ms) / 1000,
+    )
+
+
+def _payload_read_timeout_seconds() -> float:
+    return max(
+        0.1,
+        float(crawler_runtime_settings.browser_capture_read_timeout_seconds),
     )
 
 

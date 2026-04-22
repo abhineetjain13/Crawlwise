@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from app.services.config.runtime_settings import crawler_runtime_settings
 from app.services.config.surface_hints import surface_group
 from app.services.domain_utils import normalize_domain
 
@@ -238,7 +239,7 @@ def is_job_platform_signal(
 
 def detect_platform_family(url: str, html: str = "") -> str | None:
     normalized_url = str(url or "").strip().lower()
-    normalized_html = str(html or "").lower()
+    normalized_html = str(html or "").lower()[:_platform_detection_html_search_limit()]
     domain = normalize_domain(urlparse(normalized_url).netloc)
 
     for config in platform_configs():
@@ -322,6 +323,10 @@ def resolve_listing_readiness_platform(url: str) -> str | None:
                     exc,
                 )
     return None
+
+
+def _platform_detection_html_search_limit() -> int:
+    return max(1, int(crawler_runtime_settings.platform_detection_html_search_limit))
 
 
 def platform_domain_patterns(family: str | None) -> tuple[str, ...]:

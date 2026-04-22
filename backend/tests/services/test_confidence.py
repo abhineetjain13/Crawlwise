@@ -97,3 +97,26 @@ def test_score_record_confidence_marks_thin_job_sections_low() -> None:
         for penalty in confidence["penalties"]
         if penalty["kind"] == "thin_content"
     } >= {"description", "responsibilities", "qualifications"}
+
+
+def test_score_record_confidence_reports_raw_requested_field_counts() -> None:
+    record = {
+        "title": "Widget Prime",
+        "materials": "Cotton blend",
+        "care": "Machine wash",
+        "_field_sources": {
+            "title": ["json_ld"],
+            "materials": ["dom_sections"],
+            "care": ["dom_sections"],
+        },
+        "_source": "json_ld",
+    }
+
+    confidence = score_record_confidence(
+        record,
+        surface="ecommerce_detail",
+        requested_fields=["materials", "materials", "care instructions"],
+    )
+
+    assert confidence["requested_fields_total"] == 3
+    assert confidence["requested_fields_found_best"] == 3

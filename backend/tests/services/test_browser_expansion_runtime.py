@@ -1231,6 +1231,29 @@ async def test_expand_all_interactive_elements_prioritizes_requested_measurement
 
 
 @pytest.mark.asyncio
+async def test_expand_all_interactive_elements_allows_visible_generic_detail_toggle_for_requested_fields() -> None:
+    page = _FakeExpansionPage(
+        base_html="<html><body></body></html>",
+        labels=[
+            {
+                "label": "details",
+                "attributes": {"aria-controls": "details-panel"},
+                "tag_name": "button",
+            }
+        ],
+    )
+
+    diagnostics = await browser_runtime.expand_all_interactive_elements(
+        page,
+        surface="ecommerce_detail",
+        requested_fields=["materials"],
+    )
+
+    assert diagnostics["clicked_count"] == 1
+    assert diagnostics["expanded_elements"] == ["details"]
+
+
+@pytest.mark.asyncio
 async def test_expand_detail_content_if_needed_attempts_generic_ecommerce_expansion_when_ready() -> None:
     page = _FakeExpansionPage(
         base_html="<html><body></body></html>",
@@ -1309,6 +1332,51 @@ async def test_browser_fetch_records_extractable_sections_after_detail_expansion
 
     assert extractability["verified"] is True
     assert extractability["matched_requested_fields"] == ["materials"]
+
+
+@pytest.mark.asyncio
+async def test_browser_fetch_does_not_skip_requested_dom_pattern_when_selector_is_empty() -> None:
+    page = _FakeExpansionPage(
+        base_html="""
+        <html><body>
+          <main>
+            <h1>Widget Prime</h1>
+            <button aria-controls="specs-panel">Specifications</button>
+            <div class="specifications"></div>
+          </main>
+        </body></html>
+        """,
+        expanded_html="""
+        <html><body>
+          <main>
+            <h1>Widget Prime</h1>
+            <button aria-controls="specs-panel">Specifications</button>
+            <div class="specifications">Weight: 2kg</div>
+          </main>
+        </body></html>
+        """,
+        labels=[
+            {
+                "label": "specifications",
+                "attributes": {"aria-controls": "specs-panel"},
+                "tag_name": "button",
+            }
+        ],
+    )
+
+    async def _fake_runtime():
+        return _FakeRuntime(page)
+
+    result = await browser_runtime.browser_fetch(
+        "https://example.com/products/widget",
+        5,
+        surface="ecommerce_detail",
+        requested_fields=["specifications"],
+        runtime_provider=_fake_runtime,
+    )
+
+    assert result.browser_diagnostics["detail_expansion"]["clicked_count"] == 1
+    assert "Weight: 2kg" in result.html
 
 
 @pytest.mark.asyncio

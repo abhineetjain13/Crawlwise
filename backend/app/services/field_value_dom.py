@@ -965,7 +965,7 @@ def requested_content_extractability(
         for field_name in fields
         if (
             selector := str(dom_patterns.get(field_name) or "").strip()
-        ) and bool(safe_select(root, selector))
+        ) and _dom_pattern_has_extractable_content(safe_select(root, selector))
     }
     selector_backed_fields = {
         normalize_field_key(str(row.get("field_name") or ""))
@@ -988,6 +988,19 @@ def requested_content_extractability(
         "dom_pattern_fields": sorted(dom_pattern_fields),
         "selector_backed_fields": sorted(field for field in selector_backed_fields if field),
     }
+
+
+def _dom_pattern_has_extractable_content(nodes: list[Tag]) -> bool:
+    for node in list(nodes or [])[:12]:
+        if clean_text(node.get_text(" ", strip=True)):
+            return True
+        attrs = getattr(node, "attrs", None)
+        if not isinstance(attrs, dict):
+            continue
+        for key in ("content", "value", "src", "href", "alt", "title", "aria-label"):
+            if clean_text(attrs.get(key)):
+                return True
+    return False
 
 
 def apply_selector_fallbacks(

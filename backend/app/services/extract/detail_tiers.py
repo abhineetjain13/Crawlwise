@@ -140,7 +140,7 @@ def collect_dom_tier(
         selector_rules=selector_rules,
     )
     if state.surface == "ecommerce_detail":
-        dom_variants = extract_variants_from_dom(soup)
+        dom_variants = extract_variants_from_dom(soup, page_url=state.page_url)
     else:
         dom_variants = {}
     if state.surface == "ecommerce_detail" and should_collect_dom_variants(

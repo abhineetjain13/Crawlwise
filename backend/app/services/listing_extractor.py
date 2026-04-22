@@ -788,8 +788,6 @@ def _listing_record_from_card(
     )
     if image_urls and not candidates.get("image_url"):
         add_candidate(candidates, "image_url", image_urls[0])
-    if image_urls[1:] and not candidates.get("additional_images"):
-        add_candidate(candidates, "additional_images", image_urls[1:])
     for label, value in _extract_label_value_pairs_from_node(card):
         normalized_label = normalize_requested_field(label)
         if not normalized_label:

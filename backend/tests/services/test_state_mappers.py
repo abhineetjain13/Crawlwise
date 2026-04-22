@@ -312,6 +312,112 @@ def test_map_js_state_to_fields_recovers_nuxt_array_payload_variant() -> None:
     assert mapped["image_url"] == "https://store.example.com/images/commuter-1.jpg"
 
 
+def test_map_js_state_to_fields_prefers_richer_nested_product_payload_for_variant_recovery() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__INITIAL_STATE__": {
+                "navigation": {
+                    "landing": {
+                        "title": "iPhone",
+                        "id": "landing-node",
+                        "url": "/en-us/l/iphone/landing-node",
+                    }
+                },
+                "pdp": {
+                    "product": {
+                        "id": "phone-14-128",
+                        "name": "iPhone 14",
+                        "brand": {"name": "Apple"},
+                        "description": "Refurbished iPhone 14 with warranty.",
+                        "price": "399.00",
+                        "currency": "USD",
+                        "image": [
+                            "https://cdn.example.com/iphone-14-front.jpg",
+                            "https://cdn.example.com/iphone-14-back.jpg",
+                        ],
+                        "variants": [
+                            {
+                                "id": "good-128",
+                                "storage": "128 GB",
+                                "condition": "Good",
+                                "price": "399.00",
+                                "currency": "USD",
+                                "availability": "In Stock",
+                            },
+                            {
+                                "id": "excellent-128",
+                                "storage": "128 GB",
+                                "condition": "Excellent",
+                                "price": "459.00",
+                                "currency": "USD",
+                                "availability": "In Stock",
+                            },
+                        ],
+                    }
+                },
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/iphone-14?variant=excellent-128",
+    )
+
+    assert mapped["title"] == "iPhone 14"
+    assert mapped["brand"] == "Apple"
+    assert mapped["price"] == "459.00"
+    assert mapped["image_url"] == "https://cdn.example.com/iphone-14-front.jpg"
+    assert mapped["additional_images"] == ["https://cdn.example.com/iphone-14-back.jpg"]
+    assert mapped["variant_axes"] == {"condition": ["Good", "Excellent"]}
+    assert mapped["variant_count"] == 2
+    assert mapped["selected_variant"]["variant_id"] == "excellent-128"
+    assert mapped["selected_variant"]["option_values"] == {
+        "storage": "128 GB",
+        "condition": "Excellent",
+    }
+
+
+def test_map_js_state_to_fields_recovers_direct_grade_and_storage_axes_from_variants() -> None:
+    mapped = map_js_state_to_fields(
+        {
+            "__INITIAL_STATE__": {
+                "product": {
+                    "id": "console-1tb",
+                    "name": "Game Console",
+                    "variants": [
+                        {
+                            "id": "fair-512",
+                            "grade": "Fair",
+                            "storage": "512 GB",
+                            "price": "249.00",
+                            "currency": "USD",
+                        },
+                        {
+                            "id": "good-1tb",
+                            "grade": "Good",
+                            "storage": "1 TB",
+                            "price": "299.00",
+                            "currency": "USD",
+                        },
+                    ],
+                }
+            }
+        },
+        surface="ecommerce_detail",
+        page_url="https://store.example.com/products/game-console?variant=good-1tb",
+    )
+
+    assert mapped["title"] == "Game Console"
+    assert mapped["price"] == "299.00"
+    assert mapped["variant_axes"] == {
+        "grade": ["Fair", "Good"],
+        "storage": ["512 GB", "1 TB"],
+    }
+    assert mapped["variant_count"] == 2
+    assert mapped["selected_variant"]["option_values"] == {
+        "grade": "Good",
+        "storage": "1 TB",
+    }
+
+
 def test_map_js_state_to_fields_replaces_existing_variant_query_parameter() -> None:
     mapped = map_js_state_to_fields(
         {

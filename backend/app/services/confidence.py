@@ -5,7 +5,12 @@ import re
 from typing import Any
 
 from app.services.config.extraction_rules import SOURCE_TIERS, SURFACE_WEIGHTS
-from app.services.field_policy import canonical_requested_fields
+from app.services.field_policy import (
+    canonical_requested_fields,
+    exact_requested_field_key,
+    normalize_field_key,
+    normalize_requested_field,
+)
 
 _GENERIC_TITLE_RE = re.compile(
     r"^(product|item|details?|job|career opportunity|untitled|listing)$",
@@ -61,10 +66,31 @@ def score_record_confidence(
         source_tier_weights[tier_name] += weight
         penalties.extend(penalty_items)
 
-    requested = canonical_requested_fields(requested_fields or [])
+    raw_requested = [
+        " ".join(str(field_name or "").split()).strip()
+        for field_name in list(requested_fields or [])
+        if " ".join(str(field_name or "").split()).strip()
+    ]
+    requested = canonical_requested_fields(raw_requested)
     requested_found = [
         field_name for field_name in requested if record.get(field_name) not in (None, "", [], {})
     ]
+    requested_found_total = sum(
+        1
+        for field_name in raw_requested
+        if any(
+            record.get(candidate) not in (None, "", [], {})
+            for candidate in dict.fromkeys(
+                candidate
+                for candidate in (
+                    normalize_field_key(field_name),
+                    exact_requested_field_key(field_name),
+                    normalize_requested_field(field_name),
+                )
+                if candidate
+            )
+        )
+    )
     if requested:
         requested_bonus = 0.0
         for field_name in requested_found:
@@ -83,8 +109,8 @@ def score_record_confidence(
         "level": _confidence_level(normalized_score),
         "present_fields": present_fields,
         "missing_fields": missing_fields,
-        "requested_fields_total": len(requested),
-        "requested_fields_found_best": len(requested_found),
+        "requested_fields_total": len(raw_requested),
+        "requested_fields_found_best": requested_found_total,
         "penalties": [
             {
                 "field": str(item["field"]),

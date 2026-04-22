@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { redirect } from"next/navigation";
 
 export default function BulkCrawlPage() {
-  redirect("/crawl?module=pdp&mode=batch");
+ redirect("/crawl?module=pdp&mode=batch");
 }

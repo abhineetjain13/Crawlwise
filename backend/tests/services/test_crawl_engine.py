@@ -559,6 +559,46 @@ def test_extract_ecommerce_detail_rejects_site_shell_with_listing_payload_pollut
     assert rows == []
 
 
+def test_extract_ecommerce_detail_keeps_structured_product_when_title_still_needs_promotion() -> None:
+    html = """
+    <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Product",
+          "name": "Buy Widget Prime | Example",
+          "description": "A real widget with structured content.",
+          "image": "https://example.com/widget.jpg",
+          "offers": {
+            "price": "19.99",
+            "priceCurrency": "USD"
+          }
+        }
+        </script>
+      </head>
+      <body>
+        <main>
+          <h1>Buy Widget Prime | Example</h1>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://example.com/products/12345",
+        "ecommerce_detail",
+        max_records=5,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "Buy Widget Prime | Example"
+    assert record["price"] == "19.99"
+    assert record["image_url"] == "https://example.com/widget.jpg"
+
+
 def test_extract_job_detail_returns_requested_sections() -> None:
     html = """
     <html>
@@ -819,6 +859,7 @@ def test_extract_ecommerce_listing_returns_card_records() -> None:
     assert rows[0]["url"] == "https://example.com/products/widget-prime"
     assert rows[0]["price"] == "19.99"
     assert rows[0]["image_url"] == "https://example.com/images/widget-prime.jpg"
+    assert "additional_images" not in rows[0]
     assert rows[1]["title"] == "Widget Pro"
 
 
@@ -1296,6 +1337,69 @@ def test_extract_detail_allows_safe_early_exit_before_dom_when_structured_record
     record = rows[0]
     assert record["_extraction_tiers"]["early_exit"] == "structured_data"
     assert record["_extraction_tiers"]["current"] == "structured_data"
+
+
+def test_extract_ecommerce_detail_does_not_infer_price_from_shell_chrome_text() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="iPhone">
+      </head>
+      <body>
+        <aside>
+          <p>Trade-in</p>
+          <p>Get up to $20 for your old device</p>
+        </aside>
+        <main>
+          <h2>Category navigation</h2>
+          <a href="/en-us/l/iphone/example">See all iPhone deals</a>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.backmarket.com/en-us/p/iphone-14-128-gb-midnight/dba71a89-1e8e-4278-967e-0ef1c0d05f31",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "iPhone"
+    assert "price" not in record
+    assert "currency" not in record
+
+
+def test_extract_ecommerce_detail_does_not_infer_price_from_404_body_text() -> None:
+    html = """
+    <html>
+      <head>
+        <meta property="og:title" content="MacBook Pro 15-inch Retina Display Mid 2015 Battery">
+      </head>
+      <body>
+        <main>
+          <h1>404</h1>
+          <p>Page not found</p>
+          <p>Repair kits from $1.99 ship fast.</p>
+        </main>
+      </body>
+    </html>
+    """
+
+    rows = extract_records(
+        html,
+        "https://www.ifixit.com/products/macbook-pro-15-inch-retina-display-mid-2015-battery",
+        "ecommerce_detail",
+        max_records=1,
+    )
+
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["title"] == "MacBook Pro 15-inch Retina Display Mid 2015 Battery"
+    assert "price" not in record
+    assert "currency" not in record
 
 
 def test_extract_detail_normalizes_shopify_embedded_compare_at_price_from_cents() -> None:
